@@ -3,22 +3,27 @@ import { Window } from "happy-dom"
 import { type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { createCanvasDocument, createTextNode } from "../document"
-import type {
-  CanvasGenerateService,
-  CanvasGenerationToolDescription,
-  CanvasGenerationToolSummary,
-} from "../services"
-import { CanvasGenerationPanel } from "./canvas-generation-panel"
+import type { CanvasGenerateService, CanvasGenerationToolDescription, CanvasGenerationToolSummary } from "../services"
 
 const testWindow = new Window({ url: "https://convax.test/" })
 const originalGlobals = new Map<string, PropertyDescriptor | undefined>()
 for (const [name, value] of Object.entries({
+  cancelAnimationFrame: testWindow.cancelAnimationFrame.bind(testWindow),
+  CustomEvent: testWindow.CustomEvent,
   Element: testWindow.Element,
   Event: testWindow.Event,
+  FocusEvent: testWindow.FocusEvent,
+  getComputedStyle: testWindow.getComputedStyle.bind(testWindow),
   HTMLElement: testWindow.HTMLElement,
+  HTMLIFrameElement: testWindow.HTMLIFrameElement,
   HTMLInputElement: testWindow.HTMLInputElement,
   InputEvent: testWindow.InputEvent,
+  KeyboardEvent: testWindow.KeyboardEvent,
+  MouseEvent: testWindow.MouseEvent,
+  MutationObserver: testWindow.MutationObserver,
   Node: testWindow.Node,
+  PointerEvent: testWindow.PointerEvent,
+  requestAnimationFrame: testWindow.requestAnimationFrame.bind(testWindow),
   document: testWindow.document,
   navigator: testWindow.navigator,
   window: testWindow,
@@ -31,6 +36,8 @@ Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
   value: true,
   writable: true,
 })
+
+const { CanvasGenerationPanel } = await import("./canvas-generation-panel")
 
 let root: Root | undefined
 
@@ -68,6 +75,84 @@ function createService(listTools: CanvasGenerateService["listTools"]): CanvasGen
 }
 
 describe("CanvasGenerationPanel", () => {
+  test("marks the Canvas-owned generation surface for the shared panel motion policy", async () => {
+    const container = render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-generation-motion" })}
+        generateService={createService(mock(async () => []))}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    expect(container.querySelector(".convax-generation-panel")).not.toBeNull()
+  })
+
+  test("shows flat service and model names and submits the selected concrete model", async () => {
+    const onSubmit = mock(() => undefined)
+    const service = createService(
+      mock(async () => [
+        {
+          acceptedInputs: [],
+          description: "Creates an image with Image 2",
+          id: "nexus/image.image-2",
+          modelName: "Image 2",
+          output: "image" as const,
+          serviceId: "nexus-service",
+          serviceName: "Nexus",
+          title: "Nexus · OpenRouter Image",
+        },
+        {
+          acceptedInputs: [],
+          description: "Creates an image with Gemini",
+          id: "nexus/image.gemini",
+          modelName: "Gemini 2.5 Flash Image",
+          output: "image" as const,
+          serviceId: "nexus-service",
+          serviceName: "Nexus",
+          title: "Nexus · OpenRouter Image",
+        },
+      ]),
+    )
+    const container = render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-flat-models" })}
+        generateService={service}
+        initialPrompt="Create an image"
+        onSubmit={onSubmit}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    const toolSelect = container.querySelector<HTMLButtonElement>('button[aria-label="Generation tool"]')
+    expect(toolSelect?.textContent).toContain("Nexus · Image 2")
+    expect(toolSelect?.textContent).not.toContain("Nexus · OpenRouter Image")
+
+    await act(async () => toolSelect?.click())
+    await flushEffects()
+    expect(toolSelect?.getAttribute("aria-expanded")).toBe("true")
+    const modelOptions = [...document.querySelectorAll<HTMLElement>('[role="option"]')]
+    expect(modelOptions.map((option) => option.textContent)).toEqual([
+      expect.stringContaining("Nexus · Image 2"),
+      expect.stringContaining("Nexus · Gemini 2.5 Flash Image"),
+    ])
+
+    await act(async () => modelOptions[1]?.click())
+    await flushEffects()
+    expect(toolSelect?.textContent).toContain("Nexus · Gemini 2.5 Flash Image")
+
+    await act(async () => {
+      container.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
+    })
+    expect(onSubmit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tool: expect.objectContaining({ id: "nexus/image.gemini" }),
+      }),
+    )
+  })
+
   test("renders the selected tool's live model field and submits the chosen value", async () => {
     const onSubmit = mock(() => undefined)
     const service = createService(
@@ -288,6 +373,53 @@ describe("CanvasGenerationPanel", () => {
     expect(servicesButton).toBeDefined()
     await act(async () => servicesButton?.click())
     expect(onOpenServices).toHaveBeenCalledTimes(1)
+  })
+
+  test("reloads an initially empty catalog when the host availability version settles", async () => {
+    let catalogVersion = 0
+    let ready = false
+    const listTools = mock(async () =>
+      ready
+        ? [
+            {
+              acceptedInputs: [] as const,
+              description: "Connected image model",
+              id: "tools/connected-image",
+              modelName: "Connected Image",
+              output: "image" as const,
+              serviceId: "connected-service",
+              serviceName: "Connected Service",
+              title: "Image model",
+            },
+          ]
+        : [],
+    )
+    const service: CanvasGenerateService = {
+      ...createService(listTools),
+      get catalogVersion() {
+        return catalogVersion
+      },
+    }
+    const panel = () => (
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-catalog-settles" })}
+        generateService={service}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />
+    )
+    const container = render(panel())
+    await flushEffects()
+    expect(container.textContent).toContain("No available generation service provides a model.")
+
+    ready = true
+    catalogVersion += 1
+    await act(async () => root?.render(panel()))
+    await flushEffects()
+
+    expect(listTools).toHaveBeenCalledTimes(2)
+    expect(container.textContent).toContain("Connected Service · Connected Image")
+    expect(container.textContent).not.toContain("No available generation service provides a model.")
   })
 
   test("aborts catalog discovery, but does not own or cancel submitted operations", async () => {

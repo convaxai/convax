@@ -1,4 +1,5 @@
 import type { CanvasDocument } from "./types"
+import { sameCanvasJson } from "./json-equality"
 
 export interface CanvasHistoryState {
   document: CanvasDocument
@@ -39,12 +40,37 @@ function pushPast(past: CanvasDocument[], document: CanvasDocument) {
   return [...past, document].slice(-HISTORY_LIMIT)
 }
 
+function reuseEqualElements<T extends { id: string }>(current: T[], authoritative: T[]): T[] {
+  const currentById = new Map(current.map((element) => [element.id, element]))
+  let canReuseArray = current.length === authoritative.length
+  const reconciled = authoritative.map((element, index) => {
+    const previous = currentById.get(element.id)
+    const next = previous && sameCanvasJson(previous, element) ? previous : element
+    if (current[index] !== next) canReuseArray = false
+    return next
+  })
+  return canReuseArray ? current : reconciled
+}
+
+/** Accepts authoritative content while retaining renderer identity for unchanged elements. */
+function reconcileAuthoritativeDocument(current: CanvasDocument, authoritative: CanvasDocument): CanvasDocument {
+  if (current.id !== authoritative.id) return authoritative
+  return {
+    ...authoritative,
+    edges: reuseEqualElements(current.edges, authoritative.edges),
+    metadata: sameCanvasJson(current.metadata, authoritative.metadata) ? current.metadata : authoritative.metadata,
+    nodes: reuseEqualElements(current.nodes, authoritative.nodes),
+  }
+}
+
 export function canvasHistoryReducer(state: CanvasHistoryState, action: CanvasHistoryAction): CanvasHistoryState {
   if (action.type === "acknowledge") {
     if (state.document.revision !== action.expectedRevision || state.document.id !== action.document.id) return state
-    return { ...state, document: action.document }
+    return { ...state, document: reconcileAuthoritativeDocument(state.document, action.document) }
   }
-  if (action.type === "hydrate") return createCanvasHistory(action.document)
+  if (action.type === "hydrate") {
+    return createCanvasHistory(reconcileAuthoritativeDocument(state.document, action.document))
+  }
   if (action.type === "commit-update") {
     return canvasHistoryReducer(state, { type: "commit", document: action.update(state.document) })
   }

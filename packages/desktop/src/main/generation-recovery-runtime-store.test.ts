@@ -53,7 +53,7 @@ const tool: GenerationToolSummary = {
   toolId: "generate.image",
 }
 
-async function fixture(root: string, binding = "binding-one") {
+async function fixture(root: string, binding = "binding-one", modelBindingDigest?: string) {
   const executablePath = path.join(root, "sidecar")
   const bytes = Buffer.from("#!/bin/sh\nexit 0\n")
   await fs.writeFile(executablePath, bytes, { mode: 0o700 })
@@ -66,13 +66,14 @@ async function fixture(root: string, binding = "binding-one") {
   const authorizationIdentity = toolPluginAuthorizationIdentity(plugin, "path", sourceBinding)
   const runtimeAuthorizationDigest = createHash("sha256").update(authorizationIdentity).digest("hex")
   const recoveryBindingDigest = createHash("sha256").update(binding).digest("hex")
-  const executionBindingDigest = createHash("sha256")
-    .update(JSON.stringify([pluginPackageDigest, runtimeAuthorizationDigest, recoveryBindingDigest]))
-    .digest("hex")
+  const executionBindingParts = [pluginPackageDigest, runtimeAuthorizationDigest, recoveryBindingDigest]
+  if (modelBindingDigest !== undefined) executionBindingParts.push(modelBindingDigest)
+  const executionBindingDigest = createHash("sha256").update(JSON.stringify(executionBindingParts)).digest("hex")
   return {
     bindingKind: "path" as const,
     executablePath,
     executionBindingDigest,
+    ...(modelBindingDigest === undefined ? {} : { modelBindingDigest }),
     plugin,
     pluginPackageDigest,
     recoveryBindingDigest,
@@ -98,12 +99,37 @@ describe("GenerationRecoveryRuntimeStore", () => {
         runtimeAuthorizationDigest: input.runtimeAuthorizationDigest,
         tool,
       })
+      expect(reopened.modelBindingDigest).toBeUndefined()
       expect(reopened.executablePath).toBe(pinned.executablePath)
       expect(await fs.readFile(reopened.executablePath, "utf8")).toBe("#!/bin/sh\nexit 0\n")
       expect((await fs.stat(path.dirname(reopened.executablePath))).mode & 0o777).toBe(0o700)
       expect((await fs.stat(reopened.executablePath)).mode & 0o777).toBe(0o500)
       await store.remove(input.executionBindingDigest)
       await expect(store.open(input.executionBindingDigest)).rejects.toThrow()
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("pins and reopens a model-bound runtime without persisting the raw selector value", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-model-bound-recovery-runtime-test-"))
+    try {
+      const modelValue = "vendor/alpha:image"
+      const modelBindingDigest = createHash("sha256")
+        .update(JSON.stringify({ fieldId: "engine", value: modelValue }))
+        .digest("hex")
+      const input = await fixture(directory, "binding-model", modelBindingDigest)
+      const store = new GenerationRecoveryRuntimeStore(path.join(directory, "store", "runtime-v1"))
+      const pinned = await store.pin(input)
+      const reopened = await store.open(input.executionBindingDigest)
+
+      expect(reopened).toMatchObject({
+        executionBindingDigest: input.executionBindingDigest,
+        modelBindingDigest,
+      })
+      const serialized = await fs.readFile(path.join(path.dirname(pinned.executablePath), "record.json"), "utf8")
+      expect(serialized).toContain(modelBindingDigest)
+      expect(serialized).not.toContain(modelValue)
     } finally {
       await fs.rm(directory, { force: true, recursive: true })
     }

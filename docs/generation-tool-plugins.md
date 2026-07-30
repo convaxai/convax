@@ -70,7 +70,9 @@ the existing **Agent** conversation. The Generate tab is a direct caller of this
 same service and groups image, video and audio in one surface. The clicked card is
 never an implicit reference: direct generation includes only nodes the user
 explicitly mentions. Agent mode may prepare its own scoped Canvas context. Its model
-picker is the installed generation-tool list; it is not a second model or provider registry.
+picker is one flat list of concrete installed generation models; service/provider
+names are display metadata rather than an interactive first level. It is not a
+second model or provider registry.
 Tool-specific choices such as aspect ratio, resolution, duration and style come
 only from the selected MCP tool's own `tools/list.inputSchema`; they are not copied
 into the Plugin manifest or a host provider registry. Main projects that schema
@@ -555,6 +557,36 @@ are direct toggles. A required custom field using an unsupported shape makes the
 tool non-configurable and non-executable through this boundary. Optional unsupported
 fields are omitted from the host surface and cannot be submitted.
 
+A manifest-declared generation model may turn a dynamic bounded catalog into the
+host's concrete model list by marking exactly one of those properties:
+
+```json
+{
+  "model": {
+    "type": "string",
+    "oneOf": [
+      { "const": "model-a", "title": "Model A" },
+      { "const": "model-b", "title": "Model B" }
+    ],
+    "x-convax-role": "generation-model-id"
+  }
+}
+```
+
+The marked property must be top-level, required, and a string select with 1–64
+unique bounded choices. Exactly one such property may appear, and the role is valid
+only on a tool already classified as a model by the manifest. Main first verifies
+the owning Plugin service is connected, then projects each choice as one stable
+opaque model selection. It never derives the role from `model`, `title`, a provider
+name, or another convention. A missing, duplicated, free-text, optional or malformed
+role fails closed for that dynamic family without changing unmarked models.
+
+The marked selector never appears in the renderer's custom-option form. When Main
+describes or prepares a concrete selection, it reloads the current tool schema,
+checks that the same choice is still present, and merges the chosen value itself.
+Caller `toolInput` cannot contain or override the selector. Aspect ratio, duration,
+style and every other unmarked field continue through the ordinary validation path.
+
 The caller sends only scalar values for chosen custom fields. Omission is the
 host's Auto state. A UI may present a declared schema default as its explicit
 initial value, but Main never invents or inserts defaults. Immediately before staging/calling, Main reloads the
@@ -689,9 +721,9 @@ A Web surface with `generation.execute` receives exactly two generation methods 
 the protocol matching its manifest (`convax.plugin-host/2`, `/3`, or `/4`; v5 uses
 `convax.plugin-capability/1`):
 
-| Method                      | Params                                                                                      | Result                                                              |
-| --------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `generation.tools.list`     | optional `{ "output": "image" }` filter                                                     | sanitized installed tool summaries                                  |
+| Method                      | Params                                                                                                  | Result                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `generation.tools.list`     | optional `{ "output": "image" }` filter                                                                 | sanitized installed tool summaries                                                          |
 | `generation.canvas.execute` | `prompt`, optional `output`, `toolId`, `references` and `resultMode: "create-pending-node" \| "return"` | created node ids or bounded `outputText`, committed revision, selected tool id and warnings |
 
 Tool summaries contain only the bounded `id`, `title`, `description`, `kind`,

@@ -11,6 +11,7 @@ export interface CanvasShortcutActions {
   fitView: () => void
   generate: () => void
   group: () => void
+  hand?: () => void
   layout: () => void
   openSearch: () => void
   paste: () => void
@@ -110,6 +111,7 @@ export function createCanvasShortcutHandler(
     if (mod && !event.altKey && !event.shiftKey && (key === "c" || key === "v")) return
     if (event.key === "Escape") return run(actions.clearSelection)
     if (!mod && !event.altKey && !event.shiftKey && key === "v") return run(actions.select)
+    if (!mod && !event.altKey && !event.shiftKey && key === "h" && actions.hand) return run(actions.hand)
     if (readOnly) return
     if (mod && !event.altKey && key === "z") return run(event.shiftKey ? actions.redo : actions.undo)
     if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && key === "y") return run(actions.redo)

@@ -1,73 +1,136 @@
 import { describe, expect, test } from "bun:test"
-import { resolveWorkspaceLayout } from "./workspace-layout-model"
+import { resolveWorkspaceLayout, workspaceShellMetrics } from "./workspace-layout-model"
 
 describe("workspace layout policy", () => {
   test("keeps a wide Canvas full width when optional panels are closed", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: false,
-        projectDetailsPinned: false,
-        projectDetailsVisible: false,
+        projectSidebarVisible: false,
         viewportWidth: 1600,
       }),
     ).toEqual({
       agent: "hidden",
       canvasHasFullWidth: true,
-      projectDetails: "hidden",
+      projectSidebar: "hidden",
       tier: "wide",
+      utilityPresentation: "dock",
     })
   })
 
-  test("docks only explicitly pinned Project Details on wide viewports", () => {
+  test("docks both sidebars independently in a wide three-column workspace", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 1440,
       }),
     ).toMatchObject({
       agent: "dock",
       canvasHasFullWidth: false,
-      projectDetails: "dock",
+      projectSidebar: "dock",
       tier: "wide",
+      utilityPresentation: "dock",
     })
-    expect(
-      resolveWorkspaceLayout({
-        agentVisible: false,
-        projectDetailsPinned: false,
-        projectDetailsVisible: true,
-        viewportWidth: 1440,
-      }).projectDetails,
-    ).toBe("overlay")
   })
 
-  test("uses temporary overlays at medium width and sheets at the minimum window width", () => {
+  test("keeps a pinned Project sidebar in layout while the utility adapts on small windows", () => {
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 1100,
       }),
     ).toMatchObject({
-      agent: "overlay",
-      canvasHasFullWidth: true,
-      projectDetails: "overlay",
+      agent: "dock",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "medium",
+      utilityPresentation: "dock",
     })
     expect(
       resolveWorkspaceLayout({
         agentVisible: true,
-        projectDetailsPinned: true,
-        projectDetailsVisible: true,
+        projectSidebarVisible: true,
         viewportWidth: 720,
       }),
     ).toMatchObject({
       agent: "sheet",
-      canvasHasFullWidth: true,
-      projectDetails: "sheet",
+      canvasHasFullWidth: false,
+      projectSidebar: "dock",
       tier: "small",
+      utilityPresentation: "sheet",
+    })
+  })
+
+  test("switches utility presentation at the exact responsive boundaries", () => {
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: true,
+        projectSidebarVisible: false,
+        viewportWidth: 899,
+      }).utilityPresentation,
+    ).toBe("sheet")
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: true,
+        projectSidebarVisible: false,
+        viewportWidth: 900,
+      }).utilityPresentation,
+    ).toBe("dock")
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: true,
+        projectSidebarVisible: false,
+        viewportWidth: 1359,
+      }).utilityPresentation,
+    ).toBe("dock")
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: true,
+        projectSidebarVisible: false,
+        viewportWidth: 1360,
+      }).utilityPresentation,
+    ).toBe("dock")
+  })
+
+  test("keeps click-pinned Project navigation docked at every responsive boundary", () => {
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: false,
+        projectSidebarVisible: true,
+        viewportWidth: 1359,
+      }).projectSidebar,
+    ).toBe("dock")
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: false,
+        projectSidebarVisible: true,
+        viewportWidth: 1360,
+      }).projectSidebar,
+    ).toBe("dock")
+  })
+
+  test("keeps the responsive utility presentation available while the drawer is closed", () => {
+    expect(
+      resolveWorkspaceLayout({
+        agentVisible: false,
+        projectSidebarVisible: false,
+        viewportWidth: 1100,
+      }),
+    ).toMatchObject({
+      agent: "hidden",
+      utilityPresentation: "dock",
+    })
+  })
+
+  test("publishes the Desktop-owned shell measurements", () => {
+    expect(workspaceShellMetrics).toMatchObject({
+      primarySidebar: { defaultSize: 240, maxSize: 480, minSize: 220 },
+      sidebarOverlayInset: 12,
+      titlebarHeight: 44,
+      utilityOverlayInset: 16,
+      utilitySidebar: { defaultSize: 380 },
     })
   })
 
@@ -76,8 +139,7 @@ describe("workspace layout policy", () => {
       expect(
         resolveWorkspaceLayout({
           agentVisible: false,
-          projectDetailsPinned: false,
-          projectDetailsVisible: true,
+          projectSidebarVisible: true,
           viewportWidth,
         }).tier,
       ).toBe("small")

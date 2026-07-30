@@ -1,12 +1,7 @@
-import {
-  Button,
-  SegmentedTabs,
-  cn,
-  useTemporarySurfaceFocus,
-  type SegmentedTabItem,
-} from "@convax/ui"
-import { X } from "lucide-react"
-import { useEffect, useId, useRef, type ComponentPropsWithoutRef, type ReactNode } from "react"
+import { SegmentedTabs, cn, useTemporarySurfaceFocus, type SegmentedTabItem } from "@convax/ui"
+import { PanelRightClose } from "lucide-react"
+import { useId, useLayoutEffect, useRef, type ComponentPropsWithoutRef, type ReactNode } from "react"
+import type { WorkspaceVisiblePanelPresentation } from "./workspace-layout-model"
 import type { WorkspaceUtilityMode } from "./workspace-utility-drawer-state"
 
 export type WorkspaceUtilityActiveMode = Exclude<WorkspaceUtilityMode, "closed">
@@ -21,21 +16,21 @@ export interface WorkspaceUtilityModeOption {
 export interface WorkspaceUtilityAgentChrome {
   closeLabel: string
   modeNavigation: ReactNode | null
-  onClose(): void
+  onClose: () => void
 }
 
-export interface WorkspaceUtilityDrawerProps
-  extends Omit<ComponentPropsWithoutRef<"aside">, "children" | "onChange"> {
-  agent(chrome: WorkspaceUtilityAgentChrome): ReactNode
+export interface WorkspaceUtilityDrawerProps extends Omit<ComponentPropsWithoutRef<"aside">, "children" | "onChange"> {
+  agent: (chrome: WorkspaceUtilityAgentChrome) => ReactNode
   closeLabel: string
   collapsedEntry?: ReactNode
-  generate?: ReactNode
   inspector?: ReactNode
   modal?: boolean
   mode: WorkspaceUtilityMode
   modes: readonly WorkspaceUtilityModeOption[]
-  onClose(): void
-  onModeChange(mode: WorkspaceUtilityActiveMode): void
+  onClose: () => void
+  onModeChange: (mode: WorkspaceUtilityActiveMode) => void
+  presentation?: WorkspaceVisiblePanelPresentation
+  returnFocusTarget?: HTMLElement | null
   resizeHandle?: ReactNode
   unavailableLabel?: string
 }
@@ -44,21 +39,22 @@ export interface WorkspaceUtilityDrawerProps
  * Desktop-owned composition for the existing Workbench Secondary Sidebar.
  *
  * The caller continues to own part visibility and width. Agent is deliberately
- * retained in one stable slot across modes; Canvas-scoped utilities mount only
- * while active so stale Inspector/Generate content cannot outlive its scope.
+ * retained in one stable slot across modes; the Canvas-scoped Inspector mounts
+ * only while active so stale content cannot outlive its scope.
  */
 export function WorkspaceUtilityDrawer({
   agent,
   className,
   closeLabel,
   collapsedEntry,
-  generate,
   inspector,
   modal = false,
   mode,
   modes,
   onClose,
   onModeChange,
+  presentation = "dock",
+  returnFocusTarget,
   resizeHandle,
   style,
   unavailableLabel = "This utility is unavailable.",
@@ -66,11 +62,17 @@ export function WorkspaceUtilityDrawer({
 }: WorkspaceUtilityDrawerProps) {
   const id = useId()
   const drawerRef = useRef<HTMLElement>(null)
+  const onCloseRef = useRef(onClose)
   const returnFocusRef = useRef<HTMLElement | null>(null)
+  const restoreModeFocusRef = useRef(false)
   const wasOpenRef = useRef(false)
   const open = mode !== "closed"
+  onCloseRef.current = onClose
   const activeMode: WorkspaceUtilityActiveMode | null = mode === "closed" ? null : mode
-  const activeOption = activeMode ? modes.find((option) => option.value === activeMode) : undefined
+  const retainedModeRef = useRef<WorkspaceUtilityActiveMode>(activeMode ?? "agent")
+  if (activeMode) retainedModeRef.current = activeMode
+  const presentedMode = activeMode ?? (presentation === "dock" ? null : retainedModeRef.current)
+  const activeOption = presentedMode ? modes.find((option) => option.value === presentedMode) : undefined
   const items = modes.map(
     (option): SegmentedTabItem<WorkspaceUtilityActiveMode> => ({
       ariaLabel: option.ariaLabel,
@@ -82,67 +84,131 @@ export function WorkspaceUtilityDrawer({
     }),
   )
   const modeNavigation =
-    activeMode && items.length > 1 ? (
+    presentedMode && items.length > 1 ? (
       <SegmentedTabs
         aria-label="Utility mode"
         className="min-w-0 flex-1"
         items={items}
-        onValueChange={onModeChange}
+        onValueChange={(nextMode) => {
+          restoreModeFocusRef.current =
+            document.activeElement instanceof HTMLElement &&
+            document.activeElement.getAttribute("role") === "tab" &&
+            Boolean(drawerRef.current?.contains(document.activeElement))
+          onModeChange(nextMode)
+        }}
         tabClassName="truncate px-2 py-1"
-        value={activeMode}
+        value={presentedMode}
       />
     ) : null
   const agentChrome: WorkspaceUtilityAgentChrome = {
     closeLabel,
-    modeNavigation: null,
+    modeNavigation: presentedMode === "agent" ? modeNavigation : null,
     onClose,
   }
   const agentContent = agent(agentChrome)
-  const activeContent = activeMode === "inspector" ? inspector : undefined
+  const activeContent = presentedMode === "inspector" ? inspector : undefined
+  const drawerStyle =
+    presentation === "dock" && !open
+      ? {
+          ...style,
+          width: 0,
+        }
+      : style
+
+  useLayoutEffect(() => {
+    if (typeof document === "undefined") return undefined
+    let inertObserver: MutationObserver | undefined
+    let restoreTimer: number | undefined
+    if (open && !wasOpenRef.current) {
+      const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      returnFocusRef.current =
+        returnFocusTarget?.isConnected === true
+          ? returnFocusTarget
+          : activeElement && !drawerRef.current?.contains(activeElement)
+            ? activeElement
+            : null
+      queueMicrotask(() => {
+        drawerRef.current
+          ?.querySelector<HTMLElement>(
+            '[data-workspace-utility-close], [role="tab"][aria-selected="true"], button:not([disabled])',
+          )
+          ?.focus()
+      })
+    } else if (!open && wasOpenRef.current) {
+      const target = returnFocusRef.current
+      returnFocusRef.current = null
+      queueMicrotask(() => {
+        if (!target?.isConnected || drawerRef.current?.contains(target)) return
+        const restoreFocus = (attemptsRemaining: number) => {
+          if (!target.isConnected || drawerRef.current?.contains(target)) return
+          const inertAncestor = target.closest<HTMLElement>("[inert]")
+          if (!inertAncestor) {
+            inertObserver?.disconnect()
+            target.focus()
+            return
+          }
+          if (attemptsRemaining > 0) {
+            restoreTimer = window.setTimeout(() => restoreFocus(attemptsRemaining - 1), 16)
+          }
+        }
+        const inertAncestor = target.closest<HTMLElement>("[inert]")
+        if (!inertAncestor) return restoreFocus(0)
+        inertObserver = new window.MutationObserver(() => {
+          restoreFocus(0)
+        })
+        inertObserver.observe(inertAncestor, { attributeFilter: ["inert"], attributes: true })
+        restoreFocus(8)
+      })
+    }
+    wasOpenRef.current = open
+    const cleanUpFocusRestore = () => {
+      inertObserver?.disconnect()
+      if (restoreTimer !== undefined) window.clearTimeout(restoreTimer)
+    }
+    if (!open || modal) return cleanUpFocusRestore
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || !drawerRef.current?.contains(document.activeElement)) return
+      event.preventDefault()
+      event.stopPropagation()
+      onCloseRef.current()
+    }
+    document.addEventListener("keydown", handleKeyDown, true)
+    return () => {
+      cleanUpFocusRestore()
+      document.removeEventListener("keydown", handleKeyDown, true)
+    }
+  }, [modal, open, returnFocusTarget])
 
   useTemporarySurfaceFocus({
     containerRef: drawerRef,
     dismissOnEscape: true,
     onDismiss: onClose,
     open: open && modal,
+    restoreFocus: false,
   })
 
-  useEffect(() => {
-    if (modal || typeof document === "undefined") return undefined
-    if (open && !wasOpenRef.current) {
-      returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
-      queueMicrotask(() => {
-        drawerRef.current
-          ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button:not([disabled])')
-          ?.focus()
-      })
-    } else if (!open && wasOpenRef.current && returnFocusRef.current?.isConnected) {
-      const target = returnFocusRef.current
-      queueMicrotask(() => target.focus())
-    }
-    wasOpenRef.current = open
-    if (!open) return undefined
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || !drawerRef.current?.contains(document.activeElement)) return
-      event.preventDefault()
-      event.stopPropagation()
-      onClose()
-    }
-    document.addEventListener("keydown", handleKeyDown, true)
-    return () => document.removeEventListener("keydown", handleKeyDown, true)
-  }, [modal, onClose, open])
+  useLayoutEffect(() => {
+    if (!restoreModeFocusRef.current) return
+    restoreModeFocusRef.current = false
+    drawerRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus()
+  }, [presentedMode])
 
   return (
     <>
       {collapsedEntry ? (
-        <div className={cn(open && "hidden")} hidden={open}>
+        <div
+          aria-hidden={open || undefined}
+          className="workspace-utility-entry"
+          data-workspace-utility-entry-state={open ? "hidden" : "visible"}
+          inert={open || undefined}
+        >
           {collapsedEntry}
         </div>
       ) : null}
       {open && modal ? (
         <button
           aria-hidden="true"
-          className="fixed inset-0 z-40 cursor-default bg-backdrop"
+          className="workspace-utility-backdrop fixed inset-0 z-40 cursor-default bg-backdrop"
           onClick={onClose}
           tabIndex={-1}
           type="button"
@@ -152,69 +218,48 @@ export function WorkspaceUtilityDrawer({
         aria-label="Workspace utilities"
         aria-modal={modal || undefined}
         className={cn(
-          "relative z-40 flex min-h-0 shrink-0 flex-col overflow-hidden border-l border-border-subtle bg-surface-panel text-text-primary",
-          !open && "hidden",
+          "workspace-utility-drawer relative z-40 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface-panel text-text-primary",
+          presentation === "overlay" && "workspace-utility-drawer--overlay",
+          presentation === "sheet" && "workspace-utility-drawer--sheet",
           className,
         )}
+        aria-hidden={!open || undefined}
         data-workspace-utility-drawer=""
         data-workspace-utility-mode={mode}
-        hidden={!open}
+        data-workspace-utility-presentation={presentation}
+        data-workspace-utility-state={open ? "open" : "closed"}
+        inert={!open || undefined}
         ref={drawerRef}
         role={modal ? "dialog" : undefined}
-        style={style}
+        style={drawerStyle}
         {...props}
       >
         {resizeHandle}
-        <WorkspaceUtilityDrawerHeader
-          closeLabel={closeLabel}
-          modeNavigation={modeNavigation}
-          onClose={onClose}
-        />
         <div
-          aria-hidden={activeMode !== "agent"}
+          aria-hidden={presentedMode !== "agent"}
           aria-label={modeLabel(
             modes.find((option) => option.value === "agent"),
             "Agent",
           )}
-          className={cn("min-h-0 flex-1", activeMode !== "agent" && "hidden")}
+          className={cn("min-h-0 flex-1", presentedMode !== "agent" && "hidden")}
           data-workspace-utility-panel="agent"
-          hidden={activeMode !== "agent"}
+          hidden={presentedMode !== "agent"}
           id={`${id}-agent-panel`}
-          inert={activeMode !== "agent" || undefined}
+          inert={presentedMode !== "agent" || undefined}
           role="tabpanel"
         >
           {agentContent}
         </div>
-        {generate ? (
+        {presentedMode === "inspector" ? (
           <section
-            aria-hidden={activeMode !== "generate"}
-            aria-labelledby={`${id}-generate-tab`}
-            className={cn(
-              "min-h-0 flex-1 overflow-y-auto",
-              activeMode !== "generate" && "hidden",
-            )}
-            data-workspace-utility-panel="generate"
-            hidden={activeMode !== "generate"}
-            id={`${id}-generate-panel`}
-            inert={activeMode !== "generate" || undefined}
-            role="tabpanel"
-          >
-            {generate}
-          </section>
-        ) : activeMode === "generate" ? (
-          <p className="grid min-h-32 place-items-center px-5 text-center text-xs text-text-tertiary" role="status">
-            {unavailableLabel}
-          </p>
-        ) : null}
-        {activeMode === "inspector" ? (
-          <section
-            aria-label={modeNavigation ? undefined : modeLabel(activeOption, activeMode)}
-            aria-labelledby={modeNavigation ? `${id}-${activeMode}-tab` : undefined}
+            aria-label={modeNavigation ? undefined : modeLabel(activeOption, presentedMode)}
+            aria-labelledby={modeNavigation ? `${id}-${presentedMode}-tab` : undefined}
             className="min-h-0 flex-1 overflow-y-auto"
-            data-workspace-utility-panel={activeMode}
-            id={`${id}-${activeMode}-panel`}
+            data-workspace-utility-panel={presentedMode}
+            id={`${id}-${presentedMode}-panel`}
             role="tabpanel"
           >
+            <WorkspaceUtilityContentHeader closeLabel={closeLabel} modeNavigation={modeNavigation} onClose={onClose} />
             {activeContent ?? (
               <p className="grid min-h-32 place-items-center px-5 text-center text-xs text-text-tertiary" role="status">
                 {unavailableLabel}
@@ -232,27 +277,37 @@ function modeLabel(option: WorkspaceUtilityModeOption | undefined, fallback: str
   return typeof option?.label === "string" ? option.label : fallback
 }
 
-function WorkspaceUtilityDrawerHeader({
+function WorkspaceUtilityContentHeader({
   closeLabel,
   modeNavigation,
   onClose,
 }: {
   closeLabel: string
   modeNavigation: ReactNode
-  onClose(): void
+  onClose: () => void
 }) {
   return (
-    <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
+    <header
+      className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5"
+      data-workspace-utility-content-header=""
+    >
       {modeNavigation}
-      <Button
-        aria-label={closeLabel}
-        className="size-7 rounded-md text-text-tertiary active:scale-[0.96] [&_svg]:size-3.5"
-        onClick={onClose}
-        size="icon-sm"
-        variant="ghost"
-      >
-        <X />
-      </Button>
+      <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
     </header>
+  )
+}
+
+export function WorkspaceUtilityCollapseButton({ label, onClose }: { label: string; onClose: () => void }) {
+  return (
+    <button
+      aria-label={label}
+      className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+      data-workspace-utility-close=""
+      onClick={onClose}
+      title={label}
+      type="button"
+    >
+      <PanelRightClose className="size-3.5" />
+    </button>
   )
 }

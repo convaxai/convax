@@ -6,7 +6,7 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
-import { ServiceCatalogController } from "./service-catalog-controller"
+import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -56,6 +56,33 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
+  test("invalidates generation discovery when a target service finishes connecting", async () => {
+    const controller = new ServiceCatalogController(pluginClient(), {
+      listModels: mock(async () => ({ providers: [] })),
+    })
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+    const ready = controller.getSnapshot()
+    const loading = {
+      ...ready,
+      services: ready.services.map((service) =>
+        service.kind === "plugin" ? { ...service, loading: true, state: "unknown" as const } : service,
+      ),
+    }
+
+    expect(serviceGenerationAvailabilityVersion(loading, ["creative-service"])).not.toBe(
+      serviceGenerationAvailabilityVersion(ready, ["creative-service"]),
+    )
+    expect(serviceGenerationAvailabilityVersion(loading, ["unrelated-service"])).toBe(
+      serviceGenerationAvailabilityVersion(ready, ["unrelated-service"]),
+    )
+    expect(serviceGenerationAvailabilityVersion({ ...ready, loading: true }, ["unrelated-service"])).not.toBe(
+      serviceGenerationAvailabilityVersion(ready, ["unrelated-service"]),
+    )
+    controller.dispose()
+  })
+
   test("joins Plugin service metadata and OpenCode models without adding an execution router", async () => {
     const agentClient = {
       listModels: mock(async () => ({

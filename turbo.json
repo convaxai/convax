@@ -10,7 +10,11 @@
       "cache": false,
       "persistent": true,
       "dependsOn": ["^build"],
-      "env": ["CONVAX_FEATURE_SERVICES", "CONVAX_FEATURE_SKILLS_AND_PLUGINS"]
+      "env": [
+        "CONVAX_FEATURE_SERVICES",
+        "CONVAX_FEATURE_SKILLS_AND_PLUGINS",
+        "CONVAX_OFFICIAL_MARKETPLACE_ARTIFACT_ROOT"
+      ]
     },
     "build": {
       "dependsOn": ["^build"],

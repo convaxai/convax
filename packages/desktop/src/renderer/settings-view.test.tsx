@@ -4,6 +4,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { WebPluginClient } from "../plugin-contracts"
+import type { MarketplaceClient } from "../marketplace-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import { appMessage } from "./app-language"
 import type { PetSettingsHostClient, PetSettingsProvider, PetSettingsProviderSnapshot } from "./pet-settings-host"
@@ -12,6 +13,7 @@ import { defaultAppearancePreferences } from "./appearance-preferences"
 import { SettingsView } from "./settings-view"
 
 const noop = () => undefined
+const marketplaceClient = {} as MarketplaceClient
 
 const skillClient: DesktopSkillClient = {
   getSkillDetails: mock(async () => {
@@ -142,7 +144,9 @@ describe("SettingsView", () => {
     expect(markup).toContain('aria-label="Search settings"')
     expect(markup).toContain("Saved automatically")
     expect(markup).toContain('data-settings-layout="rail-content"')
-    expect(markup).toContain("background-color:var(--ui-surface-canvas)")
+    expect(markup).toContain("convax-settings-shell")
+    expect(markup).toContain("convax-settings-rail")
+    expect(markup).toContain("convax-settings-content")
     expect(markup).toContain("grid-cols-[13rem_minmax(0,1fr)]")
     expect(markup).toContain("<aside")
     expect(markup).toContain("min-w-0")
@@ -272,13 +276,14 @@ describe("SettingsView", () => {
     expect(markup).toContain(">简体中文</span>")
   })
 
-  test("embeds Skill and Plugin management as a settings page", () => {
+  test("embeds the unified Marketplace surface as the capabilities settings page", () => {
     const markup = renderToStaticMarkup(
       <SettingsView
         appearancePreferences={defaultAppearancePreferences}
         initialSection="capabilities"
         languagePreference="en"
         locale="en"
+        marketplaceClient={marketplaceClient}
         onClose={noop}
         onAppearancePreferencesChange={noop}
         onLanguageChange={noop}
@@ -292,8 +297,9 @@ describe("SettingsView", () => {
     )
 
     expect(markup).toContain(appMessage("en", "settings.capabilities").replace("&", "&amp;"))
-    expect(markup).toContain(`aria-label="${appMessage("en", "capabilities.title").replace("&", "&amp;")}"`)
-    expect(markup).toContain('role="tablist"')
+    expect(markup).toContain("Extensions")
+    expect(markup).toContain("Marketplaces")
+    expect(markup).toContain("Import…")
     expect(markup).not.toContain('role="dialog"')
     expect(markup).not.toContain('id="settings-language"')
   })
@@ -322,6 +328,9 @@ describe("SettingsView", () => {
     expect(markup).toContain("OpenCode")
     expect(markup).toContain(appMessage("en", "services.free"))
     expect(markup).toContain(`>${appMessage("en", "services.install")}</button>`)
+    expect(markup).toContain('data-settings-section="services"')
+    expect(markup).toContain("max-w-none px-5 py-6")
+    expect(markup).toContain("mb-4 pb-4")
     expect(markup).not.toContain("iframe")
   })
 

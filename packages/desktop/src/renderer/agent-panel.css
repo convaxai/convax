@@ -1,0 +1,331 @@
+.agent-panel {
+  --agent-message-enter-duration: 150ms;
+  --agent-message-enter-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --agent-composer-radius: 24px;
+  --agent-tool-radius: 10px;
+}
+
+.agent-conversation-viewport {
+  scroll-padding-block-end: 2.75rem;
+  scrollbar-gutter: stable;
+}
+
+.agent-conversation-stack {
+  padding-block: 0.125rem 0.5rem;
+}
+
+.agent-message {
+  animation: agent-message-enter var(--agent-message-enter-duration) var(--agent-message-enter-ease) both;
+}
+
+.agent-message[data-agent-message="assistant"] {
+  padding-inline-end: 0.25rem;
+}
+
+.agent-message[data-agent-message="user"] .agent-message__surface {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--ui-interactive-selected-border) 36%, transparent),
+    0 1px 2px rgb(24 26 25 / 5%);
+}
+
+.agent-message-actions {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition:
+    opacity var(--ui-motion-fast) var(--ui-ease-standard),
+    transform var(--ui-motion-fast) var(--ui-ease-standard);
+}
+
+.agent-message:focus-within .agent-message-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+@media (hover: hover) {
+  .agent-message:hover .agent-message-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+}
+
+@media (hover: none) {
+  .agent-message-actions {
+    opacity: 1;
+    pointer-events: auto;
+    transform: none;
+  }
+}
+
+.agent-activity {
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--ui-surface-inset) 46%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-border-subtle) 64%, transparent);
+}
+
+.agent-activity[data-agent-activity-state="running"] {
+  background: color-mix(in oklab, var(--ui-status-info-surface) 42%, var(--ui-surface-panel));
+}
+
+.agent-activity[data-agent-activity-state="failure"] {
+  background: color-mix(in oklab, var(--ui-status-danger-surface) 42%, var(--ui-surface-panel));
+}
+
+.agent-activity[data-agent-activity-state="warning"] {
+  background: color-mix(in oklab, var(--ui-status-warning-surface) 42%, var(--ui-surface-panel));
+}
+
+.agent-activity__trigger {
+  border-radius: 12px;
+}
+
+.agent-activity__content {
+  margin: 0 0.25rem 0.25rem;
+  background: color-mix(in oklab, var(--ui-surface-panel) 72%, var(--ui-surface-inset));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-border-subtle) 54%, transparent);
+}
+
+.agent-tool-call {
+  overflow: clip;
+  border-radius: var(--agent-tool-radius);
+  background: color-mix(in oklab, var(--ui-surface-raised) 78%, var(--ui-surface-inset));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-border-subtle) 68%, transparent);
+  color: var(--ui-text-tertiary);
+}
+
+.agent-tool-call__summary {
+  display: flex;
+  min-height: 2.25rem;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.5rem;
+  border-radius: var(--agent-tool-radius);
+}
+
+.agent-tool-call__status-icon {
+  display: grid;
+  width: 1.375rem;
+  height: 1.375rem;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9999px;
+  background: var(--ui-surface-inset);
+  color: var(--ui-text-tertiary);
+}
+
+.agent-tool-call__status-icon[data-state="running"],
+.agent-tool-call__status-icon[data-state="pending"] {
+  background: var(--ui-status-info-surface);
+  color: var(--ui-status-info);
+}
+
+.agent-tool-call__status-icon[data-state="success"] {
+  background: var(--ui-status-success-surface);
+  color: var(--ui-status-success);
+}
+
+.agent-tool-call__status-icon[data-state="failure"] {
+  background: var(--ui-status-danger-surface);
+  color: var(--ui-status-danger);
+}
+
+.agent-tool-call__status-icon[data-state="cancelled"] {
+  background: var(--ui-status-warning-surface);
+  color: var(--ui-status-warning);
+}
+
+.agent-tool-call__status {
+  flex: 0 0 auto;
+  border-radius: 9999px;
+  padding: 0.125rem 0.375rem;
+  background: color-mix(in oklab, var(--ui-surface-inset) 74%, transparent);
+  color: var(--ui-text-tertiary);
+  font-size: 0.625rem;
+  font-weight: var(--ui-font-weight-medium);
+  letter-spacing: 0.01em;
+  line-height: 1rem;
+}
+
+.agent-tool-call__status[data-state="running"],
+.agent-tool-call__status[data-state="pending"] {
+  color: var(--ui-status-info);
+}
+
+.agent-tool-call__status[data-state="success"] {
+  color: var(--ui-status-success);
+}
+
+.agent-tool-call__status[data-state="failure"] {
+  color: var(--ui-status-danger);
+}
+
+.agent-tool-call__status[data-state="cancelled"] {
+  color: var(--ui-status-warning);
+}
+
+.agent-tool-call__detail {
+  margin: 0 0.375rem 0.375rem;
+  padding: 0.5rem;
+  border-radius: calc(var(--agent-tool-radius) - 3px);
+  background: var(--ui-surface-inset);
+  color: var(--ui-text-secondary);
+  animation: agent-detail-enter 120ms var(--agent-message-enter-ease) both;
+}
+
+.agent-notice {
+  box-shadow: inset 0 0 0 1px currentcolor;
+}
+
+.agent-interaction-card {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--ui-border-default) 74%, transparent),
+    var(--ui-shadow-low);
+}
+
+.agent-interaction-card[data-agent-interaction-card="permission"] {
+  background: color-mix(in oklab, var(--ui-status-warning-surface) 36%, var(--ui-surface-raised));
+}
+
+.agent-interaction-card[data-agent-interaction-card="question"] {
+  background: color-mix(in oklab, var(--ui-interactive-selected) 32%, var(--ui-surface-raised));
+}
+
+.agent-skill-badge,
+.agent-resource-chip {
+  min-height: 1.75rem;
+}
+
+.agent-scroll-latest {
+  min-height: 1.75rem;
+  backdrop-filter: none;
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--ui-border-default) 72%, transparent),
+    var(--ui-shadow-medium);
+}
+
+.agent-empty-state {
+  color: var(--ui-text-secondary);
+}
+
+.agent-empty-state__icon {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-interactive-selected-border) 30%, transparent);
+}
+
+.agent-runtime-status[data-agent-runtime-status="running"],
+.agent-runtime-status[data-agent-runtime-status="stopping"] {
+  color: var(--ui-text-secondary);
+}
+
+.agent-composer-frame {
+  position: relative;
+  isolation: isolate;
+  border-radius: var(--agent-composer-radius);
+}
+
+.agent-composer-frame[data-agent-composer-surface="flat"] {
+  padding: 0.5rem;
+  background: var(--ui-surface-raised);
+  box-shadow: var(--ui-shadow-low);
+}
+
+.agent-composer-frame::before {
+  position: absolute;
+  z-index: 2;
+  inset: -1px;
+  border: 1px solid color-mix(in oklab, var(--ui-brand) 58%, transparent);
+  border-radius: inherit;
+  box-shadow: 0 0 12px color-mix(in oklab, var(--ui-brand) 18%, transparent);
+  content: "";
+  opacity: 0;
+  pointer-events: none;
+}
+
+.agent-composer-frame[data-agent-composer-state="running"]::before {
+  animation: agent-composer-edge 1.8s ease-in-out infinite;
+}
+
+.agent-composer-frame[data-agent-composer-state="stopping"]::before {
+  border-color: color-mix(in oklab, var(--ui-status-warning) 60%, transparent);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--ui-status-warning) 16%, transparent);
+  opacity: 0.5;
+}
+
+.agent-composer-editor {
+  min-block-size: 2.5rem;
+  field-sizing: content;
+  scrollbar-gutter: stable;
+}
+
+.agent-composer-toolbar {
+  min-height: 2rem;
+}
+
+.agent-composer-toolbar [data-agent-composer-action] {
+  flex: 0 0 auto;
+}
+
+.agent-composer-model {
+  min-height: 1.875rem;
+}
+
+@keyframes agent-message-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes agent-detail-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes agent-composer-edge {
+  0%,
+  100% {
+    opacity: 0.18;
+  }
+  50% {
+    opacity: 0.68;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-message,
+  .agent-tool-call__detail,
+  .agent-composer-frame[data-agent-composer-state="running"]::before {
+    animation: none;
+  }
+
+  .agent-message-actions {
+    transition: none;
+  }
+
+  .agent-composer-frame[data-agent-composer-state="running"]::before {
+    opacity: 0.45;
+  }
+}
+
+@media (forced-colors: active) {
+  .agent-activity,
+  .agent-tool-call,
+  .agent-interaction-card,
+  .agent-notice,
+  .agent-scroll-latest,
+  .agent-composer-frame {
+    border: 1px solid CanvasText;
+    box-shadow: none;
+  }
+}

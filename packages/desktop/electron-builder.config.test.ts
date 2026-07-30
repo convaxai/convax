@@ -67,8 +67,8 @@ describe("Desktop package contents", () => {
     expect(config.files).toEqual(["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"])
     expect(config.npmRebuild).toBe(false)
     expect(config.extraResources).toContainEqual({
-      from: ".packaging/default-capabilities",
-      to: "default-capabilities",
+      from: ".packaging/marketplace-product",
+      to: "marketplace-product",
       filter: ["**/*"],
     })
     expect(config.extraResources).toContainEqual({
@@ -106,10 +106,10 @@ describe("Desktop platform artifacts", () => {
       category: "public.app-category.productivity",
       gatekeeperAssess: false,
       hardenedRuntime: true,
-      icon: "resources/icon.svg",
+      icon: "resources/icon.png",
     })
-    expect(config.win?.icon).toBe("resources/icon.svg")
-    expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.svg" })
+    expect(config.win?.icon).toBe("resources/icon.png")
+    expect(config.linux).toMatchObject({ category: "Graphics", icon: "resources/icon.png" })
   })
 
   test("allows unsigned local builds but fails closed for release signing and notarization", () => {

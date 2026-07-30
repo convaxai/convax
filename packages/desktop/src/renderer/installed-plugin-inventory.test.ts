@@ -1,6 +1,6 @@
 import { describe, expect, mock, test } from "bun:test"
 import type { InstalledWebPluginSummary, WebPluginInventory } from "../plugin-contracts"
-import { subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
+import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -47,5 +47,36 @@ describe("subscribeInstalledPluginInventory", () => {
 
     expect(updates.map((plugins) => plugins.map((plugin) => plugin.id))).toEqual([["plugin-new"]])
     dispose()
+  })
+
+  test("refreshes for both legacy Plugin and Marketplace lifecycle publications", () => {
+    const listeners: Array<() => void> = []
+    const disposed: string[] = []
+    const runtimeChanged = mock(() => undefined)
+    const client = combineInstalledPluginInventoryChanges(
+      {
+        listPlugins: async () => inventory([]),
+        onDidChange(listener) {
+          listeners[0] = listener
+          return () => disposed.push("plugin")
+        },
+      },
+      {
+        onDidChange(listener) {
+          listeners[1] = listener
+          return () => disposed.push("marketplace")
+        },
+      },
+      runtimeChanged,
+    )
+    const refresh = mock(() => undefined)
+    const dispose = client.onDidChange(refresh)
+
+    listeners[0]?.()
+    listeners[1]?.()
+    expect(refresh).toHaveBeenCalledTimes(2)
+    expect(runtimeChanged).toHaveBeenCalledTimes(1)
+    dispose()
+    expect(disposed.sort()).toEqual(["marketplace", "plugin"])
   })
 })

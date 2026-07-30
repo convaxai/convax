@@ -173,7 +173,7 @@ export class PetProviderController {
   }
 
   refresh(mutation?: WebPluginMutationContext) {
-    return this.#exclusive(() => this.#refresh(mutation))
+    return this.#exclusive(() => (this.#initialized ? this.#refresh(mutation) : Promise.resolve()))
   }
 
   restoreProviderRuntime(pluginId: string) {

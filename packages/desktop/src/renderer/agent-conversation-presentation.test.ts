@@ -1,6 +1,12 @@
 import type { AgentMessage, AgentMessagePart, AgentToolState } from "@convax/agent-runtime"
 import { describe, expect, test } from "bun:test"
-import { agentConversationTurnHasFailure, buildAgentConversationTurns } from "./agent-conversation-presentation"
+import {
+  agentConversationAnnouncementState,
+  agentConversationCopyText,
+  agentConversationTurnHasFailure,
+  buildAgentConversationTurns,
+  resolveAgentConversationAnnouncement,
+} from "./agent-conversation-presentation"
 
 function message(id: string, role: AgentMessage["role"], parts: AgentMessagePart[] = [], error?: string): AgentMessage {
   return {
@@ -30,6 +36,79 @@ function tool(id: string, state: AgentToolState): AgentMessagePart {
 }
 
 describe("Agent conversation presentation", () => {
+  test("announces request, first chunk, appended delta, rewrite, and completion without replaying prior text", () => {
+    const requested = agentConversationAnnouncementState(undefined, true)
+    const firstMessage = message("assistant-1", "assistant", [text("first", "First chunk")])
+    const first = agentConversationAnnouncementState({ message: firstMessage, parts: firstMessage.parts }, true)
+    const appendedMessage = message("assistant-1", "assistant", [text("first", "First chunk and more")])
+    const appended = agentConversationAnnouncementState(
+      { message: appendedMessage, parts: appendedMessage.parts },
+      true,
+    )
+    const rewrittenMessage = message("assistant-1", "assistant", [text("first", "Rewritten response")])
+    const rewritten = agentConversationAnnouncementState(
+      { message: rewrittenMessage, parts: rewrittenMessage.parts },
+      true,
+    )
+    const completedMessage = { ...rewrittenMessage, completedAt: 5 }
+    const completed = agentConversationAnnouncementState(
+      { message: completedMessage, parts: completedMessage.parts },
+      false,
+    )
+
+    expect(resolveAgentConversationAnnouncement(undefined, requested)).toBe("Agent response requested.")
+    expect(resolveAgentConversationAnnouncement(requested, first)).toBe("Agent response started. First chunk")
+    expect(resolveAgentConversationAnnouncement(first, appended)).toBe("Agent response continued. and more")
+    expect(resolveAgentConversationAnnouncement(appended, rewritten)).toBe("Agent response updated.")
+    expect(resolveAgentConversationAnnouncement(rewritten, completed)).toBe("Agent response complete.")
+    expect(resolveAgentConversationAnnouncement(undefined, completed)).toBeUndefined()
+  })
+
+  test("projects submitted, streaming, ready, and error response phases without hiding partial delivery", () => {
+    const submitted = buildAgentConversationTurns([message("user-1", "user", [text("user-text", "Hello")])])[0]
+    const streamingMessage = message("assistant-2", "assistant", [text("streaming-text", "Partial response")])
+    const streaming = buildAgentConversationTurns([
+      message("user-2", "user", [text("user-text-2", "Stream")]),
+      streamingMessage,
+    ])[0]
+    const readyMessage = { ...streamingMessage, completedAt: 3 }
+    const ready = buildAgentConversationTurns([
+      message("user-3", "user", [text("user-text-3", "Finish")]),
+      readyMessage,
+    ])[0]
+    const failedMessage = message("assistant-4", "assistant", [], "Request failed")
+    const failed = buildAgentConversationTurns([
+      message("user-4", "user", [text("user-text-4", "Fail")]),
+      failedMessage,
+    ])[0]
+
+    expect(submitted?.delivery).toBeUndefined()
+    expect(streaming?.delivery).toEqual({ message: streamingMessage, parts: streamingMessage.parts })
+    expect(streaming?.delivery?.message.completedAt).toBeUndefined()
+    expect(streaming?.interrupted).toBeTrue()
+    expect(ready?.delivery).toEqual({ message: readyMessage, parts: readyMessage.parts })
+    expect(ready?.delivery?.message.completedAt).toBe(3)
+    expect(ready?.interrupted).toBeFalse()
+    expect(failed?.delivery).toEqual({ message: failedMessage, parts: [] })
+    expect(failed?.errors).toEqual([{ message: failedMessage, text: "Request failed" }])
+  })
+
+  test("builds clipboard text from visible authored text without synthetic instructions or attachments", () => {
+    const assistant = {
+      ...message("assistant-1", "assistant", [
+        text("first", "First paragraph"),
+        text("synthetic", "Host-only instruction", true),
+        file("attachment"),
+        text("second", "Second paragraph"),
+      ]),
+      completedAt: 2,
+    }
+
+    expect(agentConversationCopyText({ message: assistant, parts: assistant.parts })).toBe(
+      "First paragraph\n\nSecond paragraph",
+    )
+  })
+
   test("groups assistants with their user and separates the final delivery from activity", () => {
     const skill = { id: "user-skill", name: "review", type: "skill" } as AgentMessagePart
     const user = message("user-1", "user", [
@@ -196,15 +275,19 @@ describe("Agent conversation presentation", () => {
     expect(turn?.tools.outcome).toBe("none")
   })
 
-  test("marks a persisted activity-only assistant without completedAt as interrupted", () => {
+  test("marks any persisted assistant without completedAt as interrupted", () => {
     const interrupted = message("assistant-1", "assistant", [
       tool("failed", { error: "interrupted", input: {}, status: "error" }),
     ])
+    const partial = message("assistant-2", "assistant", [text("partial", "Partial response")])
     const completed = { ...interrupted, completedAt: 2 }
 
     expect(
       buildAgentConversationTurns([message("user-1", "user", [text("user-text", "Try it")]), interrupted])[0]
         ?.interrupted,
+    ).toBeTrue()
+    expect(
+      buildAgentConversationTurns([message("user-1", "user", [text("user-text", "Try it")]), partial])[0]?.interrupted,
     ).toBeTrue()
     expect(
       buildAgentConversationTurns([message("user-1", "user", [text("user-text", "Try it")]), completed])[0]

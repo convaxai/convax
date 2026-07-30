@@ -61,6 +61,29 @@ export interface ServiceCatalogSnapshot {
   services: readonly ServiceCatalogEntry[]
 }
 
+/**
+ * Generation model discovery is stricter than the display catalog: Main exposes
+ * models only after the owning service reports connected. Keep a small, stable
+ * renderer invalidation key so an initial unknown/loading result is retried when
+ * that live availability settles, without coupling UI code to a concrete service.
+ */
+export function serviceGenerationAvailabilityVersion(
+  snapshot: ServiceCatalogSnapshot,
+  generationPluginIds: readonly string[],
+) {
+  const included = new Set(generationPluginIds)
+  return JSON.stringify({
+    loading: snapshot.loading,
+    services: snapshot.services
+      .flatMap((service) =>
+        service.kind === "plugin" && included.has(service.pluginId)
+          ? [{ loading: service.loading, pluginId: service.pluginId, state: service.state }]
+          : [],
+      )
+      .sort((left, right) => left.pluginId.localeCompare(right.pluginId)),
+  })
+}
+
 function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentication {
   if (!service.status) return "unknown"
   if (service.status.credential.configured) return "authenticated"

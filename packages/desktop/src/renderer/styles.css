@@ -67,8 +67,505 @@
   box-sizing: border-box;
 }
 
+/* First-run Project onboarding. This surface is never used as a Project directory. */
+.project-home {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 28rem;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  color: var(--ui-text-primary);
+  background: var(--ui-surface-canvas);
+}
+
+.project-home__atmosphere {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.project-home__bloom,
+.project-home__grid {
+  position: absolute;
+  inset: 0;
+}
+
+.project-home__bloom {
+  background:
+    radial-gradient(
+      circle at 50% 39%,
+      color-mix(in oklab, var(--ui-brand) 13%, transparent) 0,
+      color-mix(in oklab, var(--ui-brand) 5%, transparent) 24rem,
+      transparent 40rem
+    );
+}
+
+.project-home__grid {
+  opacity: 0.56;
+  background-image:
+    radial-gradient(
+      circle,
+      color-mix(in oklab, var(--ui-border-default) 76%, transparent) 0.75px,
+      transparent 0.85px
+    );
+  background-position: center;
+  background-size: 1.5rem 1.5rem;
+  -webkit-mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+  mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+}
+
+.project-home__content {
+  width: min(100%, 34rem);
+  text-align: center;
+  animation: project-home-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
+}
+
+.project-home__canvas-mark {
+  position: relative;
+  width: 14rem;
+  height: 7.5rem;
+  margin: 0 auto 1.25rem;
+}
+
+.project-home__canvas-mark::before {
+  position: absolute;
+  inset: 1rem 3.25rem;
+  border: 1px solid color-mix(in oklab, var(--ui-brand) 25%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-pill);
+  background: color-mix(in oklab, var(--ui-brand) 6%, transparent);
+  content: "";
+  filter: blur(0.2px);
+}
+
+.project-home__connector {
+  position: absolute;
+  z-index: 0;
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--ui-border-strong) 72%, transparent),
+    color-mix(in oklab, var(--ui-brand) 68%, var(--ui-border-default))
+  );
+}
+
+.project-home__connector--left {
+  top: 2.85rem;
+  left: 3.1rem;
+  width: 4.25rem;
+  transform: rotate(15deg);
+}
+
+.project-home__connector--right {
+  top: 3.75rem;
+  left: 7.4rem;
+  width: 4.25rem;
+  transform: rotate(-22deg);
+}
+
+.project-home__node {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  place-items: center;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-text-secondary);
+  background: color-mix(in oklab, var(--ui-surface-raised) 92%, var(--ui-brand));
+  box-shadow: var(--ui-shadow-low);
+}
+
+.project-home__node svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.project-home__node--document {
+  top: 0.7rem;
+  left: 1.2rem;
+  transform: rotate(-4deg);
+}
+
+.project-home__node--brand {
+  top: 2.6rem;
+  left: 50%;
+  width: 3.1rem;
+  height: 3.1rem;
+  transform: translateX(-50%);
+  border-color: color-mix(in oklab, var(--ui-brand) 48%, var(--ui-border-default));
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-surface-raised) 90%, var(--ui-brand));
+  box-shadow:
+    var(--ui-shadow-low),
+    0 0 0 0.35rem color-mix(in oklab, var(--ui-brand) 7%, transparent);
+}
+
+.project-home__node--brand [data-convax-brand] > svg {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.project-home__node--image {
+  top: 0.5rem;
+  right: 1rem;
+  transform: rotate(5deg);
+}
+
+.project-home__node--message {
+  right: 2.35rem;
+  bottom: 0.15rem;
+  width: 2.35rem;
+  height: 2.35rem;
+  transform: rotate(-3deg);
+}
+
+.project-home__wordmark {
+  justify-content: center;
+  color: var(--ui-text-secondary);
+}
+
+.project-home__title {
+  margin: 0.85rem 0 0;
+  font-size: clamp(1.85rem, 4vw, 2.6rem);
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: -0.042em;
+  text-wrap: balance;
+}
+
+.project-home__description {
+  max-width: 29rem;
+  margin: 0.95rem auto 0;
+  color: var(--ui-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+  text-wrap: balance;
+}
+
+.project-home__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 1.75rem;
+}
+
+.project-home__action {
+  min-width: 10.75rem;
+}
+
+.project-home__error {
+  max-width: 28rem;
+  margin: 1rem auto 0;
+  border: 1px solid color-mix(in oklab, var(--ui-status-danger) 28%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-md);
+  padding: 0.7rem 0.85rem;
+  color: var(--ui-status-danger);
+  background: var(--ui-status-danger-surface);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+@keyframes project-home-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-3vh + 0.6rem)) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-3vh) scale(1);
+  }
+}
+
+@media (max-width: 32rem) {
+  .project-home__actions {
+    flex-direction: column;
+  }
+
+  .project-home__action {
+    width: 100%;
+  }
+}
+
+@media (max-height: 36rem) {
+  .project-home__content {
+    animation-name: project-home-reveal-compact;
+  }
+
+  .project-home__canvas-mark {
+    margin-bottom: 0.5rem;
+    transform: scale(0.84);
+  }
+}
+
+@keyframes project-home-reveal-compact {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-project-home-motion="reduce"] .project-home__content {
+  animation: none;
+  transform: translateY(-3vh);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-home__content {
+    animation: none;
+    transform: translateY(-3vh);
+  }
+}
+
+@media (forced-colors: active) {
+  .project-home__bloom,
+  .project-home__grid,
+  .project-home__connector,
+  .project-home__canvas-mark::before {
+    display: none;
+  }
+
+  .project-home__node {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+}
+
 .convax-settings-search__input {
   padding-inline-start: 2.25rem;
+}
+
+.convax-settings-shell {
+  /*
+   * Settings uses a deliberate low-to-high material stack:
+   * navigation rail -> workspace canvas -> focused management surface.
+   * These colors stay derived from the active theme instead of introducing a
+   * second palette that would drift across light, dark, and high-contrast modes.
+   */
+  --convax-settings-content-surface: var(--ui-surface-canvas);
+  --convax-settings-rail-surface: color-mix(in oklab, var(--ui-surface-canvas) 86%, var(--ui-surface-inset));
+  --convax-settings-directory-surface: color-mix(in oklab, var(--ui-surface-panel) 78%, var(--ui-surface-canvas));
+  --convax-settings-workspace-border: color-mix(in oklab, var(--ui-border-default) 82%, var(--ui-surface-canvas));
+
+  background: var(--convax-settings-content-surface);
+}
+
+.convax-settings-rail {
+  background: var(--convax-settings-rail-surface);
+}
+
+.convax-settings-content {
+  background: var(--convax-settings-content-surface);
+}
+
+.convax-services-surface {
+  container: service-surface / inline-size;
+}
+
+.convax-services-workspace {
+  display: grid;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--convax-settings-workspace-border, var(--ui-border-default));
+  border-color: var(--convax-settings-workspace-border, var(--ui-border-default));
+  background: var(--ui-surface-raised);
+}
+
+.convax-services-directory {
+  min-width: 0;
+  overflow: hidden;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  background: var(--convax-settings-directory-surface, var(--ui-surface-panel));
+}
+
+.convax-service-directory-tabs {
+  display: flex;
+  gap: 0.25rem;
+  overflow-x: auto;
+  padding: 0 0.5rem 0.625rem;
+  scrollbar-gutter: stable;
+}
+
+.convax-service-directory-item {
+  flex: 0 0 min(15rem, 82cqw);
+  transition:
+    background-color var(--ui-motion-fast, 120ms) ease,
+    box-shadow var(--ui-motion-fast, 120ms) ease;
+}
+
+.convax-service-directory-item[aria-selected="true"] {
+  box-shadow: inset 3px 0 0 var(--ui-brand);
+}
+
+.convax-services-detail {
+  container: service-detail / inline-size;
+  background: var(--ui-surface-raised);
+}
+
+.convax-service-detail-header {
+  display: grid;
+  min-width: 0;
+  gap: 1rem;
+  border-bottom: 1px solid var(--ui-border-subtle);
+  padding: 1.25rem;
+}
+
+.convax-service-detail-heading {
+  min-width: 0;
+}
+
+.convax-service-actions {
+  align-self: start;
+  justify-content: flex-start;
+}
+
+.convax-service-confirmation {
+  grid-column: 1 / -1;
+}
+
+.convax-service-detail-body {
+  display: grid;
+  gap: 1.5rem;
+  min-width: 0;
+  padding: 1.25rem;
+}
+
+.convax-service-section {
+  min-width: 0;
+}
+
+.convax-service-detail-grid {
+  display: grid;
+  min-width: 0;
+  gap: 1rem 2rem;
+}
+
+.convax-service-model-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.convax-service-model-list {
+  max-height: min(24rem, 50vh);
+  border-top: 1px solid var(--ui-border-subtle);
+  scrollbar-gutter: stable;
+}
+
+.convax-service-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.25rem 0.75rem;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.625rem 0.25rem;
+  border-bottom: 1px solid color-mix(in oklab, var(--ui-border-subtle) 62%, var(--ui-surface-raised));
+}
+
+.convax-service-model-row:hover {
+  background: color-mix(in oklab, var(--ui-interactive-hover) 58%, transparent);
+}
+
+.convax-service-model-provider {
+  grid-column: 1 / -1;
+}
+
+@container service-surface (min-width: 44rem) {
+  .convax-services-workspace {
+    grid-template-columns: 15rem minmax(0, 1fr);
+  }
+
+  .convax-services-directory {
+    border-right: 1px solid var(--ui-border-subtle);
+    border-bottom: 0;
+  }
+
+  .convax-service-directory-tabs {
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    padding: 0 0.5rem 0.75rem;
+  }
+
+  .convax-service-directory-item {
+    flex: none;
+    width: 100%;
+  }
+}
+
+@container service-detail (min-width: 29rem) {
+  .convax-service-detail-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@container service-detail (min-width: 36rem) {
+  .convax-service-model-row {
+    grid-template-columns: minmax(0, 1.4fr) minmax(7rem, 0.8fr) auto;
+    gap: 0.75rem;
+  }
+
+  .convax-service-model-provider {
+    grid-column: auto;
+  }
+}
+
+@container service-detail (min-width: 44rem) {
+  .convax-service-detail-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 1.5rem;
+  }
+
+  .convax-service-actions {
+    justify-content: flex-end;
+  }
+
+  .convax-service-detail-body {
+    gap: 1.75rem;
+    padding: 1.5rem;
+  }
+}
+
+:root[data-high-contrast="true"] .convax-service-directory-item[aria-selected="true"] {
+  outline: 2px solid var(--ui-interactive-selected-border);
+  outline-offset: -2px;
+}
+
+@media (prefers-contrast: more) {
+  :root:not([data-high-contrast="false"]) .convax-service-directory-item[aria-selected="true"] {
+    outline: 2px solid var(--ui-interactive-selected-border);
+    outline-offset: -2px;
+  }
+}
+
+@media (forced-colors: active) {
+  .convax-service-directory-item[aria-selected="true"] {
+    border-left: 3px solid Highlight;
+    box-shadow: none;
+  }
 }
 
 html,
@@ -85,6 +582,244 @@ body {
   overflow: hidden;
 }
 
+.project-sidebar-shell {
+  position: relative;
+  width: 0;
+  height: 100%;
+  flex: 0 0 auto;
+  z-index: 45;
+  overflow: visible;
+  pointer-events: auto;
+  transition: width var(--ui-motion-slow) var(--ui-ease-reveal);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] {
+  width: var(--project-sidebar-size);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] {
+  pointer-events: none;
+}
+
+.project-sidebar-shell__panel {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: min(var(--project-sidebar-size), calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: var(--ui-surface-panel);
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    inset var(--ui-motion-slow) var(--ui-ease-reveal),
+    left var(--ui-motion-slow) var(--ui-ease-reveal),
+    border-color var(--ui-motion-normal) ease-out,
+    border-radius var(--ui-motion-slow) var(--ui-ease-reveal),
+    box-shadow var(--ui-motion-slow) var(--ui-ease-reveal),
+    opacity var(--ui-motion-normal) ease-out,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
+    visibility 0s linear 0s;
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] .project-sidebar-shell__panel {
+  width: var(--project-sidebar-size);
+  border-right-color: color-mix(in oklab, var(--ui-border-subtle) 72%, transparent);
+  box-shadow: 18px 0 38px -32px rgb(0 0 0 / 58%);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="hover"] .project-sidebar-shell__panel {
+  inset-block: 8px;
+  left: 8px;
+  border-color: color-mix(in oklab, var(--ui-border-default) 68%, transparent);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: var(--ui-shadow-medium);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] .project-sidebar-shell__panel {
+  opacity: 0;
+  translate: -16px 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity var(--ui-motion-normal) ease-in,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
+    visibility 0s linear var(--ui-motion-slow);
+}
+
+.project-sidebar-entry {
+  opacity: 1;
+  translate: 0;
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1);
+}
+
+.workspace-utility-drawer--overlay {
+  border: 0;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--ui-surface-panel) 80%, transparent);
+  box-shadow:
+    0 8px 40px -12px rgb(0 0 0 / 50%),
+    0 2px 8px -2px rgb(0 0 0 / 30%);
+  -webkit-backdrop-filter: blur(40px) saturate(150%);
+  backdrop-filter: blur(40px) saturate(150%);
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"] {
+  box-shadow: -18px 0 38px -32px rgb(0 0 0 / 68%);
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 220ms ease-out,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"][data-workspace-utility-state="closed"] {
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  translate: 12px 0;
+  visibility: hidden;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 180ms ease-in,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 300ms;
+}
+
+.workspace-utility-drawer--sheet {
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-entry {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  opacity: 1;
+  pointer-events: none;
+  translate: 0;
+  visibility: visible;
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-entry[data-workspace-utility-entry-state="hidden"] {
+  opacity: 0;
+  translate: 16px 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 300ms;
+}
+
+.workspace-utility-drawer--overlay[data-workspace-utility-state="closed"],
+.workspace-utility-drawer--sheet[data-workspace-utility-state="closed"] {
+  opacity: 0;
+  translate: 12px 0;
+  visibility: hidden;
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 300ms;
+}
+
+[data-workbench-resizing] .workspace-utility-drawer--overlay {
+  transition:
+    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-backdrop {
+  animation: workspace-utility-backdrop-enter 300ms cubic-bezier(0.78, 0, 0.22, 1) both;
+}
+
+@keyframes workspace-utility-backdrop-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@supports not ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .workspace-utility-drawer--overlay {
+    background: var(--ui-surface-panel);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-sidebar-entry,
+  .project-sidebar-shell,
+  .project-sidebar-shell__panel,
+  .workspace-utility-drawer[data-workspace-utility-presentation="dock"],
+  .workspace-utility-drawer--overlay,
+  .workspace-utility-drawer--sheet,
+  .workspace-utility-entry,
+  .workspace-utility-backdrop {
+    animation: none;
+    transition-delay: 0ms;
+    transition-duration: 0ms;
+  }
+}
+
+@media (forced-colors: active) {
+  .project-sidebar-shell__panel {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  .workspace-utility-drawer--overlay {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/*
+ * A pointer stream cannot cross an iframe browsing-context boundary. Keep all
+ * Plugin frames out of hit testing while a gesture that began in the host DOM
+ * is active, including Workbench resize and Canvas drag/selection gestures.
+ */
+[data-host-pointer-gesture] iframe[data-web-plugin-iframe],
+[data-workbench-resizing] iframe[data-web-plugin-iframe] {
+  pointer-events: none !important;
+}
+
+[data-workbench-resizing],
+[data-workbench-resizing] * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 button,
 input,
 textarea {
@@ -93,9 +828,15 @@ textarea {
 
 .app-titlebar {
   -webkit-app-region: drag;
+  box-shadow: 0 12px 32px -32px rgb(0 0 0 / 72%);
 }
 
 .app-titlebar button {
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-no-drag,
+.app-titlebar-no-drag * {
   -webkit-app-region: no-drag;
 }
 

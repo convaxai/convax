@@ -858,6 +858,76 @@ describe("versioned Plugin manifest generation declarations", () => {
     }).toThrow("unknown generation tool")
   })
 
+  test("admits a confirmation action that returns a bounded result for one selected image or video", () => {
+    const base = { ...executableManifestV3(), schema: "convax.plugin/6" }
+    const generation = base.contributes.generation
+    const importTool = {
+      acceptedInputs: ["reference_image", "reference_video"],
+      delivery: "return",
+      description: "Import one selected Project media file.",
+      id: "media.import-selected",
+      output: "text",
+      title: "Import selected media",
+    }
+    const manifest = (target: "image" | "video", editor = "confirmation", steps = [{ tool: importTool.id }]) => ({
+      ...base,
+      contributes: {
+        canvas: {
+          selectionActions: [
+            {
+              description: { default: "Import the selected media.", "zh-CN": "导入选中的素材。" },
+              editor,
+              id: `import-${target}`,
+              steps,
+              target,
+              title: { default: "Import", "zh-CN": "导入" },
+            },
+          ],
+        },
+        generation: { ...generation, tools: [...generation.tools, importTool] },
+      },
+    })
+
+    expect(parseWebPluginManifest(manifest("image")).contributes.canvas?.selectionActions?.[0]).toMatchObject({
+      editor: "confirmation",
+      target: "image",
+    })
+    expect(parseWebPluginManifest(manifest("video")).contributes.canvas?.selectionActions?.[0]).toMatchObject({
+      editor: "confirmation",
+      target: "video",
+    })
+    expect(() => parseWebPluginManifest(manifest("image", "crop-region"))).toThrow(
+      "return-delivery operation requires a confirmation editor",
+    )
+    expect(() =>
+      parseWebPluginManifest(manifest("image", "confirmation", [{ tool: importTool.id }, { tool: importTool.id }])),
+    ).toThrow("return-delivery operation requires exactly one step")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest("image"),
+        contributes: {
+          ...manifest("image").contributes,
+          generation: {
+            ...generation,
+            tools: [...generation.tools, { ...importTool, inputBinding: "direct-incoming" }],
+          },
+        },
+      }),
+    ).toThrow("cannot reference an input-bound operation")
+    expect(() =>
+      parseWebPluginManifest({
+        ...manifest("image"),
+        contributes: {
+          ...manifest("image").contributes,
+          generation: {
+            ...generation,
+            tools: [...generation.tools, { ...importTool, acceptedInputs: ["reference_video"] }],
+          },
+        },
+      }),
+    ).toThrow("must accept reference_image")
+  })
+
   test("allows prompt-only tools with no optional Canvas reference roles", () => {
     const manifest = executableManifest()
     const parsed = parseWebPluginManifest({

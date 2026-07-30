@@ -464,6 +464,26 @@ export class PluginHookAuthorizationStore {
     }
   }
 
+  async authorizeInstalled(plugin: InstalledWebPluginSummary) {
+    if (!plugin.hooks) return null
+    const hookFile = await this.#resolveInstalledHook(plugin)
+    const root = plugin.hooks.split("/").reduce((current) => path.dirname(current), hookFile)
+    const transaction = await this.prepareInstall(plugin, { root })
+    try {
+      await transaction.publish()
+      await transaction.commit()
+    } catch (error) {
+      await transaction.rollback().catch(() => undefined)
+      throw error
+    }
+    return this.verifyInstalledIdentity(plugin)
+  }
+
+  async verifyInstalledIdentity(plugin: InstalledWebPluginSummary) {
+    const resolved = await this.resolve(plugin)
+    return resolved ? sha256(resolved) : null
+  }
+
   async resolve(plugin: InstalledWebPluginSummary) {
     if (!plugin.hooks) return null
     try {

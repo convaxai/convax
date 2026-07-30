@@ -56,3 +56,9 @@ Host tools may be long-running. The loopback Streamable HTTP bridge emits bounde
 content-free MCP progress only for a request's validated progress token, keeps the
 configured OpenCode timeout as an inactivity window, and still propagates explicit
 cancellation, transport closure and runtime disposal through `AbortSignal`.
+
+Every base and lazily resolved MCP entry passes the same admission function. Until
+OpenCode exposes a real socket-level outbound-policy hook, reject Internet MCP
+execution entirely. The only admitted remote is a Main-owned literal loopback URL
+with no credentials/query/fragment, one fixed Authorization header, and a
+32-256-character base64url bearer token; local command MCP entries remain rejected.

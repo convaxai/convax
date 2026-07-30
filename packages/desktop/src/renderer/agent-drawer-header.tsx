@@ -1,7 +1,8 @@
 import { Button, cn, Tooltip } from "@convax/ui"
-import { Bot, ChevronRight, History, Plus } from "lucide-react"
-import type { ReactNode } from "react"
+import { Bot, ChevronRight, History, PanelRightOpen, Plus } from "lucide-react"
+import { forwardRef, type ReactNode } from "react"
 import type { AgentCompactStatus, AgentCompactStatusKind } from "./agent-panel-state"
+import { WorkspaceUtilityCollapseButton } from "./workspace-utility-drawer"
 
 function statusTone(kind: AgentCompactStatusKind) {
   switch (kind) {
@@ -27,12 +28,7 @@ function StatusLabel(props: { status: AgentCompactStatus }) {
   )
 }
 
-function AgentIdentity(props: {
-  className?: string
-  status: AgentCompactStatus
-  title: string
-  toolCount?: number
-}) {
+function AgentIdentity(props: { className?: string; status: AgentCompactStatus; title: string; toolCount?: number }) {
   return (
     <div className={cn("flex min-w-0 items-center gap-2", props.className)}>
       <span className="truncate text-xs font-medium text-text-primary">{props.title}</span>
@@ -44,30 +40,40 @@ function AgentIdentity(props: {
   )
 }
 
-export function AgentDrawerTrigger(props: { onOpen(): void; status: AgentCompactStatus }) {
+export const AgentDrawerTrigger = forwardRef<
+  HTMLButtonElement,
+  { hidden?: boolean; onOpen(): void; status: AgentCompactStatus }
+>(function AgentDrawerTrigger(props, ref) {
   return (
     <div
-      className="pointer-events-auto rounded-lg bg-surface-raised p-1 shadow-[var(--ui-shadow-low)]"
+      aria-hidden={props.hidden || undefined}
+      className={cn(
+        "pointer-events-auto transition-[opacity,visibility] duration-150 motion-reduce:transition-none",
+        props.hidden && "pointer-events-none invisible opacity-0",
+      )}
       data-agent-drawer-entry
+      data-agent-drawer-entry-state={props.hidden ? "hidden" : "visible"}
+      inert={props.hidden || undefined}
     >
       <span aria-live="polite" className="sr-only" role="status">
         Agent status: {props.status.label}
       </span>
       <button
         aria-label="Open agent"
-        className="flex min-h-9 items-center gap-2 rounded-md px-2.5 text-xs font-medium text-text-secondary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
+        className="relative grid size-8 place-items-center rounded-md text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.96] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
         onClick={() => props.onOpen()}
+        ref={ref}
         type="button"
       >
-        <Bot className="size-3.5 text-brand" />
-        <StatusLabel status={props.status} />
+        <PanelRightOpen aria-hidden className="size-4" />
       </button>
     </div>
   )
-}
+})
 
 export function AgentDrawerHeader(props: {
   closeLabel?: string
+  collapse?: boolean
   createDisabled: boolean
   historyVisible: boolean
   onClose?(): void
@@ -86,12 +92,7 @@ export function AgentDrawerHeader(props: {
         {props.utilityNavigation ? (
           <div className="flex min-w-0 flex-1">{props.utilityNavigation}</div>
         ) : (
-          <AgentIdentity
-            className="flex-1"
-            status={props.status}
-            title={props.title}
-            toolCount={props.toolCount}
-          />
+          <AgentIdentity className="flex-1" status={props.status} title={props.title} toolCount={props.toolCount} />
         )}
         {props.onHistory ? (
           <Tooltip content="Conversation history">
@@ -123,17 +124,24 @@ export function AgentDrawerHeader(props: {
           </Button>
         </Tooltip>
         {props.onClose ? (
-          <Tooltip content={props.closeLabel ?? "Close agent"}>
-            <Button
-              aria-label={props.closeLabel ?? "Close agent"}
-              className="size-7 rounded-md text-text-tertiary active:scale-[0.96] [&_svg]:size-3.5"
-              onClick={() => props.onClose?.()}
-              size="icon-sm"
-              variant="ghost"
-            >
-              <ChevronRight />
-            </Button>
-          </Tooltip>
+          props.collapse ? (
+            <WorkspaceUtilityCollapseButton
+              label={props.closeLabel ?? "Collapse utility sidebar"}
+              onClose={props.onClose}
+            />
+          ) : (
+            <Tooltip content={props.closeLabel ?? "Close agent"}>
+              <Button
+                aria-label={props.closeLabel ?? "Close agent"}
+                className="size-7 rounded-md text-text-tertiary active:scale-[0.96] [&_svg]:size-3.5"
+                onClick={() => props.onClose?.()}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <ChevronRight />
+              </Button>
+            </Tooltip>
+          )
         ) : null}
       </div>
       {props.utilityNavigation ? (

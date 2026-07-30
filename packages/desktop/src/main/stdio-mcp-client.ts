@@ -285,11 +285,13 @@ export class StdioMcpClient {
   readonly #generationLifecycles = new Map<string, GenerationLifecycleDelivery>()
   #buffer = Buffer.alloc(0)
   #child?: ChildProcessWithoutNullStreams
+  #childExit?: Promise<void>
   #closed = false
   #connecting?: Promise<void>
   #generationRecoveryCapability?: GenerationRecoveryCapability
   #nextId = 1
   #shutdownChild?: ChildProcessWithoutNullStreams
+  #resolveChildExit?: () => void
   #serverRequestHandlerClosed = false
   #shutdownTimer?: ReturnType<typeof setTimeout>
 
@@ -472,6 +474,9 @@ export class StdioMcpClient {
       stdio: ["pipe", "pipe", "pipe"],
     })
     this.#child = child
+    this.#childExit = new Promise<void>((resolve) => {
+      this.#resolveChildExit = resolve
+    })
     const streamFailed = (error: Error) => {
       if (!this.#closed) this.#fail(error)
     }
@@ -486,6 +491,8 @@ export class StdioMcpClient {
     child.stderr.on("data", () => undefined)
     child.once("error", (error) => this.#fail(error))
     child.once("exit", (code, signal) => {
+      this.#resolveChildExit?.()
+      this.#resolveChildExit = undefined
       if (this.#closed) return
       this.#fail(
         new Error(`MCP command exited${code === null ? "" : ` with code ${code}`}${signal ? ` (${signal})` : ""}`),
@@ -800,6 +807,40 @@ export class StdioMcpClient {
         }, this.#options.shutdownGraceMs)
         this.#shutdownTimer.unref()
       }
+    }
+  }
+
+  /**
+   * Stops the owned process tree and waits for the process leader to exit before
+   * callers remove its immutable launch snapshot.
+   */
+  async closeAndWait(force = false) {
+    const childExit = this.#childExit
+    this.close(force)
+    if (!childExit) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        childExit,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(() => {
+            this.#forceShutdown()
+            resolve()
+          }, this.#options.shutdownGraceMs + 250)
+          timer.unref?.()
+        }),
+      ])
+      if (this.#resolveChildExit) {
+        await Promise.race([
+          childExit,
+          new Promise<void>((resolve) => {
+            const forceTimer = setTimeout(resolve, 1_000)
+            forceTimer.unref?.()
+          }),
+        ])
+      }
+    } finally {
+      if (timer) clearTimeout(timer)
     }
   }
 

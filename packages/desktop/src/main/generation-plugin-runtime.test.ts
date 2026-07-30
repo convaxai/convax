@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -34,6 +34,7 @@ import type { GenerationRecoveryMethod, GenerationRecoveryRequest } from "./gene
 import { ManagedPluginCompanionStore } from "./managed-plugin-companions"
 import { toolPluginAuthorizationIdentity } from "./tool-plugin-authorizations"
 import { toolPluginCanvasMcpMethods } from "./tool-plugin-canvas-capabilities"
+import { generationModelIdRole } from "./generation-tool-input-schema"
 
 async function rejection(promise: Promise<unknown>) {
   try {
@@ -209,6 +210,7 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   readonly forcedCloses: boolean[] = []
   tools: McpToolDefinition[] = [{ inputSchema: { type: "object" }, name: "generate.image" }]
   result: McpToolCallResult = { content: [{ text: "done", type: "text" }] }
+  readonly toolErrors = new Map<string, Error>()
   readonly toolResults = new Map<string, McpToolCallResult>()
   readonly recoveryCalls: Array<{ input: unknown; method: string }> = []
 
@@ -221,6 +223,8 @@ class FakeMcpClient implements GenerationPluginMcpClient {
   ): Promise<McpToolCallResult> {
     await lifecycleObserver?.({ type: "external-started" })
     this.calls.push({ input, name, requestTimeoutMs, signal })
+    const configuredError = this.toolErrors.get(name)
+    if (configuredError) throw configuredError
     const configuredResult = this.toolResults.get(name)
     if (configuredResult) return configuredResult
     if (name === "llm.gateway.start") {
@@ -337,6 +341,30 @@ function setup(
   })
   runtimes.add(runtime)
   return { clients, options, plugins, runtime }
+}
+
+function runtimeModelDefinition(
+  choices: readonly { id: string; name: string }[] = [
+    { id: "vendor/alpha:image", name: "Alpha Image" },
+    { id: "vendor/beta:image", name: "Beta Image" },
+  ],
+): McpToolDefinition {
+  return {
+    inputSchema: {
+      properties: {
+        engine: {
+          "x-convax-role": generationModelIdRole,
+          oneOf: choices.map(({ id, name }) => ({ const: id, title: name })),
+          title: "Engine",
+          type: "string",
+        },
+        quality: { enum: ["standard", "high"], title: "Quality", type: "string" },
+      },
+      required: ["engine"],
+      type: "object",
+    },
+    name: "generate.image",
+  }
 }
 
 describe("GenerationPluginRuntime", () => {
@@ -491,6 +519,129 @@ describe("GenerationPluginRuntime", () => {
     expect(clients).toHaveLength(0)
   })
 
+  test("expands an explicitly marked model selector into opaque stable host selections", async () => {
+    const { clients, runtime } = setup([declarativeGenerationPlugin()], [runtimeModelDefinition()])
+    const base = (await runtime.listTools()).find((tool) => tool.kind === "model")!
+
+    const first = await runtime.expandModelTool(base)
+    expect(first.map(({ modelName, toolId }) => ({ modelName, toolId }))).toEqual([
+      { modelName: "Alpha Image", toolId: "generate.image" },
+      { modelName: "Beta Image", toolId: "generate.image" },
+    ])
+    expect(first.map(({ id }) => id)).toEqual([
+      expect.stringMatching(/^declarative-tools\/generate\.image\.model-selection-[a-f0-9]{64}$/),
+      expect.stringMatching(/^declarative-tools\/generate\.image\.model-selection-[a-f0-9]{64}$/),
+    ])
+    expect(first[0]!.id).not.toContain("vendor/alpha:image")
+    expect(first[1]!.id).not.toContain("vendor/beta:image")
+    expect(new Set(first.map(({ id }) => id)).size).toBe(2)
+    expect(clients).toHaveLength(1)
+    expect(clients[0]!.calls).toEqual([])
+
+    clients[0]!.tools = [
+      runtimeModelDefinition([
+        { id: "vendor/beta:image", name: "Beta Renamed" },
+        { id: "vendor/alpha:image", name: "Alpha Renamed" },
+      ]),
+    ]
+    const reordered = await runtime.expandModelTool(base)
+    const firstIdsByValueOrder = [first[1]!.id, first[0]!.id]
+    expect(reordered.map(({ id }) => id)).toEqual(firstIdsByValueOrder)
+    expect(reordered.map(({ modelName }) => modelName)).toEqual(["Beta Renamed", "Alpha Renamed"])
+  })
+
+  test("hides and host-binds a concrete runtime model selector", async () => {
+    const { clients, runtime } = setup([declarativeGenerationPlugin()], [runtimeModelDefinition()])
+    const base = (await runtime.listTools()).find((tool) => tool.kind === "model")!
+    const [selected] = await runtime.expandModelTool(base)
+
+    expect(await runtime.describeTool(selected!.id)).toEqual({
+      fields: [
+        {
+          choices: [
+            { label: "standard", value: "standard" },
+            { label: "high", value: "high" },
+          ],
+          id: "quality",
+          kind: "select",
+          label: "Quality",
+          required: false,
+        },
+      ],
+      toolId: selected!.id,
+    })
+
+    const prepared = await runtime.prepareTool(selected!)
+    expect(prepared.validateInput({ quality: "high" })).toEqual({
+      engine: "vendor/alpha:image",
+      quality: "high",
+    })
+    expect(() => prepared.validateInput({ engine: "vendor/beta:image" })).toThrow("not declared")
+    await expect(prepared.call({ engine: "vendor/beta:image", quality: "high" })).rejects.toThrow(
+      "cannot override host-bound model selection",
+    )
+    expect(clients[0]!.calls).toEqual([])
+
+    const fresh = await runtime.prepareTool(selected!)
+    await fresh.call({ quality: "high" })
+    expect(clients.at(-1)!.calls).toEqual([
+      expect.objectContaining({
+        input: { engine: "vendor/alpha:image", quality: "high" },
+        name: "generate.image",
+        requestTimeoutMs: false,
+      }),
+    ])
+  })
+
+  test("isolates recovery bindings for base tools that expose the same runtime model selector", async () => {
+    const plugin = declarativeGenerationPlugin(webPluginManifestSchemaV7)
+    const generation = plugin.contributes.generation!
+    plugin.contributes.generation = {
+      ...generation,
+      models: [...(generation.models ?? []), { name: "Example Thumbnail 1", tool: "generate.thumbnail" }],
+      tools: [
+        ...generation.tools,
+        {
+          acceptedInputs: ["reference_image"],
+          description: "Generate thumbnail",
+          id: "generate.thumbnail",
+          output: "image",
+          recovery: {
+            mode: "long-running-operation",
+            schema: "convax.generation-lro/1",
+          },
+          title: "Thumbnail generation tool",
+        },
+      ],
+    }
+    const { runtime } = setup(
+      [plugin],
+      [runtimeModelDefinition(), { ...runtimeModelDefinition(), name: "generate.thumbnail" }],
+    )
+    const baseTools = (await runtime.listTools()).filter((tool) => tool.kind === "model")
+    const imageBase = baseTools.find((tool) => tool.toolId === "generate.image")!
+    const thumbnailBase = baseTools.find((tool) => tool.toolId === "generate.thumbnail")!
+    const imageSelection = (await runtime.expandModelTool(imageBase))[0]!
+    const thumbnailSelection = (await runtime.expandModelTool(thumbnailBase))[0]!
+
+    const image = await runtime.prepareTool(imageSelection)
+    const thumbnail = await runtime.prepareTool(thumbnailSelection)
+
+    expect(image.recovery!.executionBindingDigest).not.toBe(thumbnail.recovery!.executionBindingDigest)
+  })
+
+  test("rejects a stale runtime model selection before tools call", async () => {
+    const { clients, runtime } = setup([declarativeGenerationPlugin()], [runtimeModelDefinition()])
+    const base = (await runtime.listTools()).find((tool) => tool.kind === "model")!
+    const [selected] = await runtime.expandModelTool(base)
+    const prepared = await runtime.prepareTool(selected!)
+
+    clients[0]!.tools = [runtimeModelDefinition([{ id: "vendor/beta:image", name: "Beta Image" }])]
+    await expect(prepared.call({ quality: "high" })).rejects.toThrow("changed while inputs were being staged")
+    expect(clients[0]!.calls).toEqual([])
+    await expect(runtime.prepareTool(selected!)).rejects.toThrow("no longer installed")
+  })
+
   test("admits a v7 LRO only after the runtime handshake and binds fixed control calls", async () => {
     const { clients, runtime } = setup([declarativeGenerationPlugin(webPluginManifestSchemaV7)])
     const summary = (await runtime.listTools()).find((tool) => tool.toolId === "generate.image")!
@@ -517,6 +668,81 @@ describe("GenerationPluginRuntime", () => {
       "convax/generation/operations/get",
       "convax/generation/operations/acknowledge",
     ])
+  })
+
+  test("pins distinct reopenable recovery runtimes for static tools sharing one sidecar binding", async () => {
+    if (process.platform === "win32") return
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-static-tool-recovery-test-"))
+    const executable = path.join(directory, "sidecar")
+    const original = Buffer.from("#!/bin/sh\nexit 0\n")
+    try {
+      await fs.writeFile(executable, original, { mode: 0o700 })
+      const plugin = declarativeGenerationPlugin(webPluginManifestSchemaV7)
+      const generation = plugin.contributes.generation!
+      plugin.contributes.generation = {
+        ...generation,
+        models: [...(generation.models ?? []), { name: "Example Thumbnail 1", tool: "generate.thumbnail" }],
+        tools: [
+          ...generation.tools,
+          {
+            acceptedInputs: ["reference_image"],
+            description: "Generate thumbnail",
+            id: "generate.thumbnail",
+            output: "image",
+            recovery: {
+              mode: "long-running-operation",
+              schema: "convax.generation-lro/1",
+            },
+            title: "Thumbnail generation tool",
+          },
+        ],
+      }
+      const setupResult = setup(
+        [plugin],
+        ["generate.image", "generate.thumbnail"],
+        async () => undefined,
+        async () => ({
+          path: executable,
+          sha256: createHash("sha256").update(original).digest("hex"),
+          size: original.byteLength,
+        }),
+        {
+          materializeExecutable: materializeGenerationPluginExecutable,
+          recoveryRuntimeDirectory: path.join(directory, "runtime-v1"),
+          recoveryStateDirectory: path.join(directory, "operation-v1"),
+        },
+      )
+      const summaries = (await setupResult.runtime.listTools()).filter((entry) => entry.recovery)
+      const imageSummary = summaries.find((entry) => entry.toolId === "generate.image")!
+      const thumbnailSummary = summaries.find((entry) => entry.toolId === "generate.thumbnail")!
+      const image = await setupResult.runtime.prepareTool(imageSummary)
+      const thumbnail = await setupResult.runtime.prepareTool(thumbnailSummary)
+
+      expect(image.recovery!.executionBindingDigest).not.toBe(thumbnail.recovery!.executionBindingDigest)
+
+      setupResult.plugins.installed = []
+      await setupResult.runtime.listTools()
+      const reopened = await Promise.all(
+        [
+          { prepared: image, summary: imageSummary },
+          { prepared: thumbnail, summary: thumbnailSummary },
+        ].map(({ prepared, summary }) =>
+          setupResult.runtime.prepareRecoveryTool({
+            executionBindingDigest: prepared.recovery!.executionBindingDigest,
+            pluginPackageDigest: prepared.recovery!.pluginPackageDigest,
+            runtimeAuthorizationDigest: prepared.recovery!.runtimeAuthorizationDigest,
+            sidecarRecoveryBindingDigest: prepared.recovery!.bindingDigest,
+            toolId: summary.id,
+          }),
+        ),
+      )
+      expect(reopened.map(({ tool }) => tool.id)).toEqual([imageSummary.id, thumbnailSummary.id])
+      expect(setupResult.clients).toHaveLength(3)
+      setupResult.runtime.dispose()
+      runtimes.delete(setupResult.runtime)
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
   })
 
   test("recovers through pinned authorized bytes after the Plugin is removed and its source changes", async () => {
@@ -565,6 +791,70 @@ describe("GenerationPluginRuntime", () => {
       expect(setupResult.clients).toHaveLength(2)
       expect(setupResult.options[1]!.command).not.toBe(executable)
       expect(setupResult.options[1]!.command).toContain(path.join("runtime-v1", binding.executionBindingDigest))
+      setupResult.runtime.dispose()
+      runtimes.delete(setupResult.runtime)
+    } finally {
+      await fs.rm(directory, { force: true, recursive: true })
+    }
+  })
+
+  test("pins and reopens a recovery-capable runtime model after its live catalog changes", async () => {
+    if (process.platform === "win32") return
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-pinned-model-recovery-test-"))
+    const executable = path.join(directory, "sidecar")
+    const original = Buffer.from("#!/bin/sh\nexit 0\n")
+    try {
+      await fs.writeFile(executable, original, { mode: 0o700 })
+      const setupResult = setup(
+        [declarativeGenerationPlugin(webPluginManifestSchemaV7)],
+        [runtimeModelDefinition()],
+        async () => undefined,
+        async () => ({
+          path: executable,
+          sha256: createHash("sha256").update(original).digest("hex"),
+          size: original.byteLength,
+        }),
+        {
+          materializeExecutable: materializeGenerationPluginExecutable,
+          recoveryRuntimeDirectory: path.join(directory, "runtime-v1"),
+          recoveryStateDirectory: path.join(directory, "operation-v1"),
+        },
+      )
+      const base = (await setupResult.runtime.listTools()).find((tool) => tool.kind === "model")!
+      const [selected] = await setupResult.runtime.expandModelTool(base)
+      const live = await setupResult.runtime.prepareTool(selected!)
+      const requestDigest = "a".repeat(64)
+      await live.call(live.validateInput({ quality: "high" }), undefined, undefined, {
+        operationId: "operation-one",
+        recovery: "required",
+        requestDigest,
+      })
+      const binding = {
+        executionBindingDigest: live.recovery!.executionBindingDigest,
+        pluginPackageDigest: live.recovery!.pluginPackageDigest,
+        runtimeAuthorizationDigest: live.recovery!.runtimeAuthorizationDigest,
+        sidecarRecoveryBindingDigest: live.recovery!.bindingDigest,
+        toolId: selected!.id,
+      }
+
+      setupResult.clients[0]!.tools = [runtimeModelDefinition([{ id: "vendor/beta:image", name: "Beta Image" }])]
+      expect((await setupResult.runtime.expandModelTool(base)).map(({ modelName }) => modelName)).toEqual([
+        "Beta Image",
+      ])
+      await expect(setupResult.runtime.prepareTool(selected!)).rejects.toThrow("no longer installed")
+      await expect(live.recovery!.get({ operationId: "operation-one", requestDigest })).resolves.toMatchObject({
+        status: "running",
+        taskId: "task_123",
+      })
+
+      setupResult.plugins.installed = []
+      await setupResult.runtime.listTools()
+      const pinned = await setupResult.runtime.prepareRecoveryTool(binding)
+      expect(pinned.tool).toEqual(selected!)
+      await expect(
+        pinned.execution.recovery!.get({ operationId: "operation-one", requestDigest }),
+      ).resolves.toMatchObject({ status: "running", taskId: "task_123" })
+      expect(setupResult.clients).toHaveLength(2)
       setupResult.runtime.dispose()
       runtimes.delete(setupResult.runtime)
     } finally {
@@ -1075,6 +1365,28 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0].calls.map((call) => call.name)).toEqual(["generate.image", "service.status", "service.sign_out"])
   })
 
+  test("does not evict an accepted recovery runtime when a shared status probe fails", async () => {
+    const combined = declarativeGenerationPlugin(webPluginManifestSchemaV7)
+    const { clients, runtime } = setup([combined], ["generate.image", "transform.video", "service.status"])
+    const selected = (await runtime.listTools()).find(({ toolId }) => toolId === "generate.image")!
+    const prepared = await runtime.prepareTool(selected)
+    const statusError = new Error("Transient status transport failure")
+    clients[0]!.toolErrors.set("service.status", statusError)
+
+    await expect(runtime.callService(combined.id, "status")).rejects.toBe(statusError)
+    expect(clients).toHaveLength(1)
+    expect(clients[0]!.closed).toBe(0)
+
+    await expect(
+      prepared.recovery!.get({
+        operationId: "operation-shared-status",
+        requestDigest: "b".repeat(64),
+      }),
+    ).resolves.toMatchObject({ status: "running", taskId: "task_123" })
+    expect(clients[0]!.recoveryCalls).toHaveLength(1)
+    expect(clients[0]!.closed).toBe(0)
+  })
+
   test("lazily starts a manifest-scoped MCP command with a narrow environment", async () => {
     let verifications = 0
     const { clients, options, plugins, runtime } = setup([generationPlugin()], ["generate.image"], async () => {
@@ -1101,7 +1413,7 @@ describe("GenerationPluginRuntime", () => {
     expect(path.basename(options[0]!.cwd)).toStartWith("convax-generation-runtime-")
     expect(options[0]!.cwd).not.toContain("/installed/image-tools")
     expect(options[0].env).not.toHaveProperty("SECRET_API_KEY")
-    expect(clients[0].listSignals).toEqual([controller.signal])
+    expect(clients[0].listSignals).toEqual([controller.signal, controller.signal])
     expect(clients[0].calls).toEqual([
       {
         input: { prompt: "a fox" },
@@ -1114,7 +1426,7 @@ describe("GenerationPluginRuntime", () => {
     await runtime.callTool("image-tools/generate.image", { prompt: "a cat" })
     expect(verifications).toBe(1)
     expect(clients).toHaveLength(1)
-    expect(clients[0].listSignals).toEqual([controller.signal, undefined])
+    expect(clients[0].listSignals).toEqual([controller.signal, controller.signal, undefined, undefined])
     expect(clients[0].calls).toHaveLength(2)
   })
 
@@ -1421,15 +1733,41 @@ describe("GenerationPluginRuntime", () => {
     const { clients, plugins, runtime } = setup()
     const [declared] = await runtime.listTools()
     const prepared = await runtime.prepareTool(declared!)
+    const dispatchGuard = mock(async () => undefined)
 
     await expect(
-      prepared.call({ prompt: "must remain unbilled" }, undefined, async (event) => {
-        if (event.type === "external-started") {
+      prepared.call({ prompt: "must remain unbilled" }, undefined, undefined, undefined, {
+        guard: dispatchGuard,
+        validate: async () => {
           plugins.installed = [generationPlugin({ output: "video", version: "2.0.0" })]
-        }
+        },
       }),
     ).rejects.toThrow("changed before the external call")
+    expect(dispatchGuard).not.toHaveBeenCalled()
     expect(clients[0].calls).toHaveLength(0)
+  })
+
+  test("keeps a prepared runtime cached when a host guard rejects before dispatch", async () => {
+    const { clients, runtime } = setup()
+    const [declared] = await runtime.listTools()
+    const prepared = await runtime.prepareTool(declared!)
+    const guardError = new Error("Generation model service disconnected")
+
+    await expect(
+      prepared.call({ prompt: "must remain unbilled" }, undefined, undefined, undefined, {
+        guard: () => {
+          throw guardError
+        },
+      }),
+    ).rejects.toBe(guardError)
+    expect(clients).toHaveLength(1)
+    expect(clients[0].calls).toHaveLength(0)
+    expect(clients[0].closed).toBe(0)
+
+    await expect(prepared.call({ prompt: "safe follow-up" })).resolves.toBeDefined()
+    expect(clients).toHaveLength(1)
+    expect(clients[0].calls).toHaveLength(1)
+    expect(clients[0].closed).toBe(0)
   })
 
   test("supports sender cancellation and explicit Plugin/all disposal", async () => {

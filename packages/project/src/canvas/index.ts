@@ -1,4 +1,5 @@
 export * from "./contracts"
 export * from "./controller"
 export * from "./drag"
+export * from "./project-canvas-sidebar"
 export * from "./project-resources"

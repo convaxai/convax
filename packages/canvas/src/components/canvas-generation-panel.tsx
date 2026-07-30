@@ -1,6 +1,8 @@
 import {
   Button,
   Input,
+  Loading,
+  LoadingSpinner,
   Select,
   SelectContent,
   SelectItem,
@@ -12,7 +14,7 @@ import {
   type ToolInputValue,
   validateToolInputValues,
 } from "@convax/ui"
-import { LoaderCircle, Sparkles } from "lucide-react"
+import { Sparkles } from "lucide-react"
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   CanvasGenerationCatalogRequestTracker,
@@ -26,11 +28,7 @@ import {
   type CanvasGenerationComposerSubmission,
   type CanvasGenerationImageRole,
 } from "../generation-composer"
-import type {
-  CanvasGenerateService,
-  CanvasGenerationToolDescription,
-  CanvasGenerationToolSummary,
-} from "../services"
+import type { CanvasGenerateService, CanvasGenerationToolDescription, CanvasGenerationToolSummary } from "../services"
 import type { CanvasDocument } from "../types"
 
 export interface CanvasGenerationPanelProps {
@@ -42,6 +40,7 @@ export interface CanvasGenerationPanelProps {
   initialPrompt?: string
   onOpenServices?: () => void
   onSubmit: (submission: CanvasGenerationComposerSubmission) => void
+  reducedMotion?: boolean
   scopeId?: string
   selectedNodeIds: readonly string[]
   submitting?: boolean
@@ -51,6 +50,14 @@ type CanvasGenerationDescriptionState =
   | { scope: string; status: "idle" | "loading" }
   | { error: string; scope: string; status: "error" }
   | { scope: string; status: "ready"; value: CanvasGenerationToolDescription }
+
+function canvasGenerationToolSelectionTitle(tool: CanvasGenerationToolSummary) {
+  const modelName = tool.modelName?.trim() || tool.title
+  const serviceName = tool.serviceName?.trim()
+  return !serviceName || modelName === serviceName || modelName.startsWith(`${serviceName} · `)
+    ? modelName
+    : `${serviceName} · ${modelName}`
+}
 
 /**
  * Canvas-owned whole-document generation composer.
@@ -131,15 +138,9 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const selectedTool = projection.selectedTool
   const describedToolId = selectedTool?.id
   const descriptionScope = describedToolId
-    ? JSON.stringify([
-        scopeId,
-        props.document.id,
-        props.generateService.catalogVersion ?? null,
-        describedToolId,
-      ])
+    ? JSON.stringify([scopeId, props.document.id, props.generateService.catalogVersion ?? null, describedToolId])
     : ""
-  const currentDescription =
-    descriptionScope && description.scope === descriptionScope ? description : undefined
+  const currentDescription = descriptionScope && description.scope === descriptionScope ? description : undefined
   const toolInputValidation =
     currentDescription?.status === "ready"
       ? validateToolInputValues(currentDescription.value.fields, toolInput)
@@ -181,12 +182,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
 
   const submit = (event: FormEvent) => {
     event.preventDefault()
-    if (
-      props.disabled ||
-      props.submitting ||
-      currentDescription?.status !== "ready" ||
-      !toolInputValidation?.valid
-    )
+    if (props.disabled || props.submitting || currentDescription?.status !== "ready" || !toolInputValidation?.valid)
       return
     const submission = createCanvasGenerationComposerSubmission({
       catalogStatus,
@@ -207,16 +203,15 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const submissionDisabled = inputDisabled || currentDescription?.status !== "ready" || !toolInputValidation?.valid
 
   return (
-    <div className={cn("flex min-w-0 flex-col", props.className)}>
+    <div className={cn("convax-generation-panel flex min-w-0 flex-col", props.className)}>
       <form className="flex flex-col gap-2" onSubmit={submit}>
         {catalogStatus === "loading" ? (
-          <div
-            className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            <LoaderCircle className="size-4 animate-spin" />
-            Loading generation tools…
-          </div>
+          <Loading
+            className="rounded-md border border-border px-3 py-2"
+            label="Loading generation tools…"
+            reducedMotion={props.reducedMotion}
+            size="sm"
+          />
         ) : null}
         {catalogStatus === "error" ? (
           <div
@@ -274,13 +269,15 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             value={selectedToolId}
           >
             <SelectTrigger aria-label="Generation tool" className="w-full" data-canvas-shortcuts="ignore">
-              <SelectValue>{selectedTool?.title ?? "Choose a generation tool"}</SelectValue>
+              <SelectValue>
+                {selectedTool ? canvasGenerationToolSelectionTitle(selectedTool) : "Choose a generation tool"}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {projection.compatibleTools.map((tool) => (
                 <SelectItem key={tool.id} value={tool.id}>
                   <span className="flex min-w-0 flex-col">
-                    <span className="truncate">{tool.title}</span>
+                    <span className="truncate">{canvasGenerationToolSelectionTitle(tool)}</span>
                     <span className="truncate text-xs text-muted-foreground">
                       {tool.output} · {tool.description}
                     </span>
@@ -292,7 +289,11 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
         ) : null}
         {catalogStatus === "ready" && projection.compatibleTools.length === 1 ? (
           <div className="rounded-md border border-border px-3 py-2">
-            <div className="text-sm font-medium">{projection.compatibleTools[0]?.title}</div>
+            <div className="text-sm font-medium">
+              {projection.compatibleTools[0]
+                ? canvasGenerationToolSelectionTitle(projection.compatibleTools[0])
+                : undefined}
+            </div>
             <div className="mt-0.5 text-xs text-muted-foreground">
               {projection.compatibleTools[0]?.output} · {projection.compatibleTools[0]?.description}
             </div>
@@ -314,13 +315,12 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           </div>
         ) : null}
         {currentDescription?.status === "loading" ? (
-          <div
-            className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            <LoaderCircle className="size-4 animate-spin" />
-            Loading generation options…
-          </div>
+          <Loading
+            className="rounded-md border border-border px-3 py-2"
+            label="Loading generation options…"
+            reducedMotion={props.reducedMotion}
+            size="sm"
+          />
         ) : null}
         {currentDescription?.status === "error" ? (
           <div
@@ -362,7 +362,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             size="icon"
             type="submit"
           >
-            {props.submitting ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+            {props.submitting ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
           </Button>
         </div>
       </form>

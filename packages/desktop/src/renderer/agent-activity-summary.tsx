@@ -106,10 +106,10 @@ export function AgentActivitySummary(props: {
     busy: props.busy === true,
   })
   return (
-    <section className="text-xs" data-agent-activity>
+    <section className="agent-activity text-xs" data-agent-activity data-agent-activity-state={description.tone}>
       <button
         aria-expanded={expanded}
-        className="flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
+        className="agent-activity__trigger flex min-h-9 w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1 text-left text-text-tertiary outline-none transition-[background-color,color,transform] duration-100 ease-out [@media(hover:hover)]:hover:bg-surface-inset [@media(hover:hover)]:hover:text-text-primary active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
         onClick={() => setExpanded((current) => !current)}
         type="button"
       >
@@ -125,7 +125,10 @@ export function AgentActivitySummary(props: {
         {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
       </button>
       {expanded ? (
-        <div className="mt-1 space-y-0.5 rounded-md bg-surface-inset/65 px-1 py-1 text-text-tertiary" data-agent-activity-content>
+        <div
+          className="agent-activity__content mt-1 space-y-1 rounded-md bg-surface-inset/65 p-1 text-text-tertiary"
+          data-agent-activity-content
+        >
           {props.children}
         </div>
       ) : null}

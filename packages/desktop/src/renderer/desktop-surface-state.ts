@@ -15,10 +15,6 @@ export function createDesktopSurfaceState(): DesktopSurfaceState {
   return { kind: "home" }
 }
 
-export function openDesktopHome(_current: DesktopSurfaceState): DesktopSurfaceState {
-  return { kind: "home" }
-}
-
 export function openDesktopWorkspace(_current: DesktopSurfaceState): DesktopSurfaceState {
   return { kind: "workspace" }
 }

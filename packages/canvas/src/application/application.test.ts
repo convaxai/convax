@@ -308,6 +308,31 @@ describe("canvas application commands", () => {
     }
   })
 
+  test("keeps a viewport-scoped placement inside the visible world bounds", () => {
+    const occupied = {
+      ...createTextNode({
+        id: "occupied",
+        metadata: {},
+        position: { x: 400, y: 100 },
+        resourceState: { status: "ready" },
+      }),
+      style: { height: 150, width: 200 },
+    }
+
+    const open = findOpenCanvasPoint(
+      createCanvasDocument({ nodes: [occupied] }),
+      { x: 400, y: 100 },
+      { height: 150, width: 200 },
+      { bottom: 400, left: 0, right: 600, top: 0 },
+    )
+
+    expect(open.x).toBeGreaterThanOrEqual(0)
+    expect(open.y).toBeGreaterThanOrEqual(0)
+    expect(open.x + 200).toBeLessThanOrEqual(600)
+    expect(open.y + 150).toBeLessThanOrEqual(400)
+    expect(open).not.toEqual({ x: 400, y: 100 })
+  })
+
   test("commits one logical revision and rejects a stale caller", () => {
     const document = createCanvasDocument({
       id: "canvas_revision",

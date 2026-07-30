@@ -3,6 +3,7 @@ node_modules/
 out/
 dist/
 packages/desktop/.packaging/
+/.packaging/
 *.log
 .DS_Store
 /.convax/

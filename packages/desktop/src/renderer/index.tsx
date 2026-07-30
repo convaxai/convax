@@ -1,7 +1,5 @@
 import {
-  CanvasOutline,
   CanvasEditor,
-  CanvasGenerationPanel,
   CanvasInspector,
   type CanvasDocument,
   createDefaultCanvasFileRendererRegistry,
@@ -19,22 +17,21 @@ import {
   type CanvasSelectionDragSource,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
-import { ProjectFilesController } from "@convax/project-files"
+import { ProjectFilesController, type ProjectEntry } from "@convax/project-files"
 import {
   dehydrateProjectCanvasDocument,
   markProjectCanvasResourcesStale,
+  ProjectCanvasSidebar,
   ProjectCanvasController,
 } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
   CheckCircle2,
-  Crop,
   FileOutput,
-  ImageDown,
   Info,
   Layers3,
   MessageSquarePlus,
-  Scissors,
+  PanelLeftClose,
   TriangleAlert,
   XCircle,
 } from "lucide-react"
@@ -47,11 +44,13 @@ import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
 import { isGenerationModelTool } from "./agent-generation-models"
 import { resolveAgentCompactStatus, type AgentCompactStatus } from "./agent-panel-state"
-import { subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
+import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
 import { createAddSelectionToConversationAction } from "./agent-selection-action"
 import { ApplicationCommandPalette } from "./application-command-palette"
 import type { ApplicationCommand } from "./application-command-model"
+import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { ApplicationTitlebar } from "./application-titlebar"
+import { CanvasTitlebarTitle } from "./canvas-titlebar-title"
 import {
   readAppLanguagePreference,
   resolveAppLocale,
@@ -65,6 +64,11 @@ import {
   type AppearancePreferences,
 } from "./appearance-preferences"
 import { resolveCanvasAppearancePalette } from "./appearance-themes"
+import {
+  shouldMountResizeHandle,
+  startCapturedPointerDrag,
+  type CapturedPointerDragSession,
+} from "./captured-pointer-drag"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
 import { createInitialCanvasDocument } from "./canvas-document"
 import {
@@ -75,25 +79,27 @@ import {
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
+import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
-import { resolveCanvasUploadItems } from "./canvas-upload"
+import { addCanvasUploadResources } from "./canvas-upload"
 import {
   closeDesktopSettings,
   createDesktopSurfaceState,
-  openDesktopHome,
   openDesktopSettings,
   openDesktopWorkspace,
 } from "./desktop-surface-state"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import { reconcileGenerationExpectedRevision } from "./generation-expected-revision"
+import { MediaOperationActionIcon } from "./media-operation-action-icon"
 import {
   canResumeMediaOperation,
   canRunMediaOperation,
   createMediaOperationGenerateRequests,
+  createMediaOperationReturnRequest,
   isMediaOperationDialogInScope,
   listInstalledMediaOperationActions,
   localizedMediaOperationText,
   type MediaOperationDialogRequest,
-  type MediaOperationEditor,
   type MediaOperationInput,
 } from "./media-operation-selection-action"
 import { MediaOperationDialog } from "./media-operation-dialog"
@@ -106,32 +112,41 @@ import {
   MediaOperationPartialError,
   type MediaOperationProgress,
   runMediaOperationSequence,
+  runMediaOperationReturn,
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
-import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
-import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
+import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
-import { ProjectDetailsPanel } from "./project-details-panel"
+import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import { ProjectHome } from "./project-home"
+import {
+  enterSelectedProjectFromHome,
+  recoveryErrorAfterProjectSelection,
+  resolveProjectBootstrapView,
+  resolveProjectStartup,
+  type ProjectHomeEntryResult,
+} from "./project-home-model"
+import { ProjectSidebarShell } from "./project-sidebar-shell"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
-import { ServiceCatalogController } from "./service-catalog-controller"
+import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
 import { subscribeMountedCanvasResourceInvalidation } from "./project-resource-invalidation"
 import { SettingsView } from "./settings-view"
 import { readWorkbenchLayoutPreferences, writeWorkbenchLayoutPreferences } from "./workbench-layout-preferences"
 import { readLastCanvasPreference, writeLastCanvasPreference } from "./workbench-preferences"
 import { WorkspaceShell } from "./workspace-shell"
-import { WorkspaceStatusBar } from "./workspace-status-bar"
-import { summarizeWorkspaceCanvasActivity } from "./workspace-activity-model"
-import { WorkspaceTaskIndicator } from "./workspace-task-indicator"
-import { resolveWorkspaceLayout } from "./workspace-layout-model"
+import { resolveWorkspaceLayout, workspaceShellMetrics } from "./workspace-layout-model"
+import { WorkspaceResizeHandle } from "./workspace-resize-handle"
 import { WorkspaceEntryCoordinator, waitForMountedWorkspaceTarget } from "./workspace-entry"
-import { WorkspaceUtilityDrawer, type WorkspaceUtilityActiveMode } from "./workspace-utility-drawer"
+import {
+  WorkspaceUtilityCollapseButton,
+  WorkspaceUtilityDrawer,
+  type WorkspaceUtilityActiveMode,
+} from "./workspace-utility-drawer"
 import {
   closedWorkspaceUtilityDrawer,
   openAgentUtility,
-  openGenerateUtility,
   openInspectorUtility,
   reconcileWorkspaceUtilityDrawer,
   type WorkspaceUtilityDrawerState,
@@ -142,18 +157,10 @@ import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 import "./appearance-themes.css"
 
-const primarySidebarBounds = { defaultSize: 320, defaultVisible: false, maxSize: 480, minSize: 260 }
-const secondarySidebarBounds = { defaultSize: 380, defaultVisible: false, maxSize: 4096, minSize: 300 }
+const primarySidebarBounds = workspaceShellMetrics.primarySidebar
+const secondarySidebarBounds = workspaceShellMetrics.utilitySidebar
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
-const minimumCanvasPeekSize = 160
-
-function mediaOperationActionIcon(editor: MediaOperationEditor) {
-  if (editor === "time-point") return <ImageDown />
-  if (editor === "time-range") return <Scissors />
-  if (editor === "crop-region") return <Crop />
-  return <Layers3 />
-}
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -165,13 +172,27 @@ function App() {
   const [appearanceSaveState, setAppearanceSaveState] = useState<"error" | "idle" | "saved">("idle")
   const [desktopSurface, setDesktopSurface] = useState(createDesktopSurfaceState)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
+  const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
-  const [canvasGenerationRunning, setCanvasGenerationRunning] = useState(false)
   const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() => resolveAgentCompactStatus({}))
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
   const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
   const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0)
+  const [startupEntryAttempt, setStartupEntryAttempt] = useState(0)
+  const [startupEntryFailure, setStartupEntryFailure] = useState<{
+    message: string
+    projectId: string
+  } | null>(null)
+  const [startupRecoveryPending, setStartupRecoveryPending] = useState<"open" | "retry" | null>(null)
+  const [startupRecoveryError, setStartupRecoveryError] = useState<string | null>(null)
+  const startupAutoRestoreEnabledRef = useRef(true)
+  const startupRecoveryPendingRef = useRef(false)
+  const mountedProjectBindingRef = useRef<{
+    id: string
+    missing: boolean
+    rootPath: string
+  } | null>(null)
   const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const settingsSurface = desktopSurface.kind === "settings" ? desktopSurface : null
@@ -180,6 +201,10 @@ function App() {
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
+  const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
+  const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
+  const workspaceShellRef = useRef<HTMLElement>(null)
+  const workbenchResizeSessionRef = useRef<CapturedPointerDragSession | null>(null)
   const canvasEditorScopeRef = useRef<{
     canvasId: string
     handle: CanvasEditorHandle
@@ -190,35 +215,22 @@ function App() {
     handle: AgentPanelHandle
     projectId: string
   } | null>(null)
-  const projectDetailsTriggerRef = useRef<HTMLButtonElement>(null)
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const webPluginGenerationProjection = useMemo(() => new WebPluginGenerationProjectionCoordinator(), [])
   const [installedPlugins, setInstalledPlugins] = useState<InstalledWebPluginSummary[]>([])
-  const mediaOperationActions = useMemo(() => listInstalledMediaOperationActions(installedPlugins), [installedPlugins])
+  const [admittedOperationToolIds, setAdmittedOperationToolIds] = useState<ReadonlySet<string>>(() => new Set())
+  const mediaOperationActions = useMemo(
+    () => listInstalledMediaOperationActions(installedPlugins, admittedOperationToolIds),
+    [admittedOperationToolIds, installedPlugins],
+  )
   const pluginMaterializationActions = useMemo(
     () => listInstalledPluginMaterializationActions(installedPlugins),
     [installedPlugins],
   )
   const generationToolCatalogVersionRef = useRef("")
-  const generationToolCatalogVersion = JSON.stringify([
-    modelCatalogEpoch,
-    installedPlugins.flatMap((plugin) =>
-      plugin.contributes.generation
-        ? [
-            {
-              id: plugin.id,
-              generation: plugin.contributes.generation,
-              runtime: plugin.runtime,
-              version: plugin.version,
-            },
-          ]
-        : [],
-    ),
-  ])
-  generationToolCatalogVersionRef.current = generationToolCatalogVersion
   const pluginHostContextRef = useRef<{
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
@@ -270,7 +282,6 @@ function App() {
       secondarySidebar: secondarySidebarBounds,
     }),
   )
-  const [projectDetailsPinned, setProjectDetailsPinned] = useState(initialLayoutPreferences.primarySidebar.pinned)
   const workbenchLayoutController = useMemo(() => {
     return new WorkbenchLayoutController({
       parts: {
@@ -327,6 +338,18 @@ function App() {
     projectController.getSnapshot,
     projectController.getSnapshot,
   )
+  const projectStartup = useMemo(() => resolveProjectStartup(projectSnapshot), [projectSnapshot])
+  const startupProjectId = projectStartup.kind === "restore" ? projectStartup.projectId : null
+  const currentStartupEntryFailure =
+    startupEntryFailure?.projectId === startupProjectId ? startupEntryFailure.message : null
+  const projectBootstrapView = resolveProjectBootstrapView({
+    entryFailure: currentStartupEntryFailure,
+    recoveryError: startupRecoveryError,
+    registryError: projectSnapshot.error,
+    route: projectStartup,
+  })
+  const effectivePrimaryDesktopSurface = projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
+  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const projectCanvasSnapshot = useSyncExternalStore(
     projectCanvasController.subscribe,
     projectCanvasController.getSnapshot,
@@ -347,6 +370,46 @@ function App() {
     serviceCatalogController.getSnapshot,
     serviceCatalogController.getSnapshot,
   )
+  const generationPlugins = installedPlugins.flatMap((plugin) =>
+    plugin.contributes.generation
+      ? [
+          {
+            id: plugin.id,
+            generation: plugin.contributes.generation,
+            runtime: plugin.runtime,
+            version: plugin.version,
+          },
+        ]
+      : [],
+  )
+  const generationToolCatalogVersion = JSON.stringify([
+    modelCatalogEpoch,
+    generationPlugins,
+    serviceGenerationAvailabilityVersion(
+      serviceCatalogSnapshot,
+      generationPlugins.map((plugin) => plugin.id),
+    ),
+  ])
+  generationToolCatalogVersionRef.current = generationToolCatalogVersion
+  useEffect(
+    () => () => {
+      workbenchResizeSessionRef.current?.cancel()
+      workbenchResizeSessionRef.current = null
+    },
+    [],
+  )
+  useEffect(() => {
+    void projectController.initialize()
+  }, [projectController])
+  useEffect(() => {
+    if (projectBootstrapView.kind === "opening") return
+    setDesktopSurface((current) => {
+      if (current.kind === "settings") {
+        return current.returnTo === "home" ? current : { ...current, returnTo: "home" }
+      }
+      return current.kind === "home" ? current : createDesktopSurfaceState()
+    })
+  }, [projectBootstrapView.kind])
   useEffect(() => () => projectController.dispose(), [projectController])
   useEffect(() => () => projectFilesController.dispose(), [projectFilesController])
   useEffect(() => () => projectCanvasController.dispose(), [projectCanvasController])
@@ -375,6 +438,13 @@ function App() {
     applyAppearancePreferences(document.documentElement, appearancePreferences)
   }, [appearancePreferences])
   useEffect(() => {
+    if (window.convax.platform !== "darwin") return
+    void window.convax.mainWindowControls.setCustomControlsVisible(true).catch(() => undefined)
+    return () => {
+      void window.convax.mainWindowControls.setCustomControlsVisible(false).catch(() => undefined)
+    }
+  }, [])
+  useEffect(() => {
     const synchronizeStoredLanguage = () => setLanguagePreference(readAppLanguagePreference(localStorage))
     window.addEventListener("storage", synchronizeStoredLanguage)
     return () => {
@@ -385,12 +455,13 @@ function App() {
     const openSettingsShortcut = (event: KeyboardEvent) => {
       if ((!event.metaKey && !event.ctrlKey) || event.altKey || event.key !== ",") return
       event.preventDefault()
+      workspaceEntryCoordinator.cancelPendingEntry()
       closeMediaOperationDialog()
       setDesktopSurface((current) => openDesktopSettings(current, "general"))
     }
     window.addEventListener("keydown", openSettingsShortcut)
     return () => window.removeEventListener("keydown", openSettingsShortcut)
-  }, [closeMediaOperationDialog])
+  }, [closeMediaOperationDialog, workspaceEntryCoordinator])
   useEffect(() => {
     if (!settingsSection) return
     const closeSettings = (event: KeyboardEvent) => {
@@ -403,16 +474,96 @@ function App() {
   }, [settingsSection])
   useEffect(() => {
     if (!workbenchLayoutSnapshot.resize) {
-      writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot, { projectDetailsPinned })
+      writeWorkbenchLayoutPreferences(localStorage, workbenchLayoutSnapshot)
     }
-  }, [projectDetailsPinned, workbenchLayoutSnapshot])
+  }, [workbenchLayoutSnapshot])
   useEffect(() => {
     const projectId = projectSnapshot.activeProjectId
+    const binding = activeProject
+      ? {
+          id: activeProject.id,
+          missing: activeProject.missing === true,
+          rootPath: activeProject.rootPath,
+        }
+      : null
+    const previousBinding = mountedProjectBindingRef.current
+    const reboundActiveProject =
+      binding !== null &&
+      previousBinding?.id === binding.id &&
+      (previousBinding.rootPath !== binding.rootPath || previousBinding.missing !== binding.missing)
+    mountedProjectBindingRef.current = binding
+
+    if (!reboundActiveProject) {
+      workbenchController.setProject(projectId)
+      void projectFilesController.setProject(projectId)
+      void projectCanvasController.setProject(projectId)
+      return
+    }
+
+    workbenchController.setProject(null)
     workbenchController.setProject(projectId)
-    void projectFilesController.setProject(projectId)
-    void projectCanvasController.setProject(projectId)
-  }, [projectCanvasController, projectFilesController, projectSnapshot.activeProjectId, workbenchController])
-  const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
+    void Promise.all([projectFilesController.setProject(null), projectCanvasController.setProject(null)]).then(
+      async () => {
+        const currentBinding = mountedProjectBindingRef.current
+        if (
+          !projectId ||
+          currentBinding?.id !== projectId ||
+          currentBinding.rootPath !== binding.rootPath ||
+          currentBinding.missing !== binding.missing
+        ) {
+          return
+        }
+        await Promise.all([projectFilesController.setProject(projectId), projectCanvasController.setProject(projectId)])
+      },
+    )
+  }, [
+    activeProject?.missing,
+    activeProject?.rootPath,
+    projectCanvasController,
+    projectFilesController,
+    projectSnapshot.activeProjectId,
+    workbenchController,
+  ])
+  useEffect(() => {
+    if (
+      desktopSurface.kind !== "home" ||
+      !startupAutoRestoreEnabledRef.current ||
+      !startupProjectId ||
+      currentStartupEntryFailure ||
+      startupRecoveryPending
+    ) {
+      return
+    }
+    const abortController = new AbortController()
+    void workspaceEntryCoordinator
+      .enter({ projectId: startupProjectId, signal: abortController.signal })
+      .then((entered) => {
+        if (abortController.signal.aborted || entered) return
+        setStartupEntryFailure({
+          message:
+            locale === "zh-CN"
+              ? "Convax 未能恢复这个项目，请重试或重新打开项目文件夹。"
+              : "Convax could not restore this Project. Try again or reopen its folder.",
+          projectId: startupProjectId,
+        })
+      })
+      .catch((error) => {
+        if (abortController.signal.aborted) return
+        setStartupEntryFailure({
+          message: error instanceof Error ? error.message : String(error),
+          projectId: startupProjectId,
+        })
+      })
+    return () => abortController.abort()
+  }, [
+    currentStartupEntryFailure,
+    desktopSurface.kind,
+    locale,
+    startupEntryAttempt,
+    startupProjectId,
+    startupRecoveryPending,
+    workspaceEntryCoordinator,
+  ])
   const activeProjectId = activeProject?.id
   useEffect(() => {
     serviceCatalogController.setScopeId(activeProjectId)
@@ -421,7 +572,6 @@ function App() {
     workbenchSnapshot.surface.kind === "canvas" && workbenchSnapshot.surface.input.projectId === activeProjectId
       ? workbenchSnapshot.surface.input.canvasId
       : undefined
-  useEffect(() => setCanvasGenerationRunning(false), [activeCanvasId, activeProjectId])
   const mountCanvasEditor = useCallback(
     (handle: CanvasEditorHandle | null) => {
       canvasEditorRef.current = handle
@@ -720,10 +870,38 @@ function App() {
   }, [flushAuthoritativeCanvas, webPluginGenerationProjection])
 
   useEffect(() => {
-    return subscribeInstalledPluginInventory(window.convax.plugins, setInstalledPlugins, (error) =>
-      console.error("Could not load installed Canvas Plugins", error),
+    return subscribeInstalledPluginInventory(
+      combineInstalledPluginInventoryChanges(window.convax.plugins, window.convax.marketplaces, () =>
+        setModelCatalogEpoch((current) => current + 1),
+      ),
+      setInstalledPlugins,
+      (error) => console.error("Could not load installed Canvas Plugins", error),
     )
   }, [])
+
+  useEffect(() => {
+    let active = true
+    if (!activeProjectId) {
+      setAdmittedOperationToolIds(new Set())
+      return () => {
+        active = false
+      }
+    }
+    void window.convax.generation
+      .listTools({ scopeId: activeProjectId })
+      .then((tools) => {
+        if (!active) return
+        setAdmittedOperationToolIds(new Set(tools.filter((tool) => tool.kind === "operation").map((tool) => tool.id)))
+      })
+      .catch((error) => {
+        if (!active) return
+        setAdmittedOperationToolIds(new Set())
+        console.error("Could not load admitted Plugin operations", error)
+      })
+    return () => {
+      active = false
+    }
+  }, [activeProjectId, generationToolCatalogVersion])
 
   useEffect(() => {
     const disposers: Array<() => void> = []
@@ -746,7 +924,7 @@ function App() {
   }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, webPluginHost])
   useEffect(() => {
     if (
-      primaryDesktopSurface !== "workspace" ||
+      effectivePrimaryDesktopSurface !== "workspace" ||
       !activeProjectId ||
       projectCanvasSnapshot.projectId !== activeProjectId
     ) {
@@ -755,7 +933,7 @@ function App() {
     void projectCanvasWorkbench.reconcile(activeProjectId, readLastCanvasPreference(localStorage, activeProjectId))
   }, [
     activeProjectId,
-    primaryDesktopSurface,
+    effectivePrimaryDesktopSurface,
     projectCanvasSnapshot.busy,
     projectCanvasSnapshot.canvases,
     projectCanvasSnapshot.projectId,
@@ -777,10 +955,15 @@ function App() {
     },
     [activeProjectId],
   )
-  const openServices = useCallback(() => {
-    closeMediaOperationDialog()
-    setDesktopSurface((current) => openDesktopSettings(current, "services"))
-  }, [closeMediaOperationDialog])
+  const openSettings = useCallback(
+    (target: ApplicationMenuTarget) => {
+      workspaceEntryCoordinator.cancelPendingEntry()
+      closeMediaOperationDialog()
+      setDesktopSurface((current) => openDesktopSettings(current, target))
+    },
+    [closeMediaOperationDialog, workspaceEntryCoordinator],
+  )
+  const openServices = useCallback(() => openSettings("services"), [openSettings])
   const assistantHostRef = useRef({
     activeCanvas,
     activeProject,
@@ -824,10 +1007,6 @@ function App() {
       projectName: activeProject.name,
     })
   }, [activeCanvas, activeProject])
-  const [canvasOutlineDocument, setCanvasOutlineDocument] = useState<CanvasDocument | null>(initialDocument)
-  useEffect(() => {
-    setCanvasOutlineDocument(initialDocument)
-  }, [initialDocument])
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
       cancel(operationId) {
@@ -889,7 +1068,10 @@ function App() {
         const result = await window.convax.generation.generate({
           anchor: request.anchor,
           ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-          expectedRevision: authoritativeDocument.revision,
+          expectedRevision: reconcileGenerationExpectedRevision(
+            request.expectedRevision,
+            authoritativeDocument.revision,
+          ),
           operationId,
           ...(request.output ? { output: request.output } : {}),
           prompt: request.prompt,
@@ -978,32 +1160,20 @@ function App() {
           if (!activeProjectId || !activeCanvasId) {
             throw new Error("Open a Project Canvas before adding resources")
           }
-          const transport = resolveCanvasUploadItems(
+          return addCanvasUploadResources(
             {
-              files: request.files ?? [],
-              signal: request.signal,
-              transfer: request.transfer,
-            },
-            {
-              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              ...request,
+              canvasId: activeCanvasId,
               projectId: activeProjectId,
             },
+            {
+              add: (input) => window.convax.canvas.resources.add(input),
+              createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+              createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
+              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              flushAuthoritativeCanvas,
+            },
           )
-          const localFiles = transport.localFiles.map(({ file, ...source }) => {
-            const sourceToken = window.convax.canvas.resources.createLocalFileToken(file)
-            if (!sourceToken) throw new Error("Only files from the local disk can be added to a Project Canvas")
-            return { ...source, sourceToken }
-          })
-          return window.convax.canvas.resources.add({
-            anchor: request.anchor,
-            canvasId: activeCanvasId,
-            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
-            expectedRevision: request.expectedRevision,
-            localFiles,
-            projectId: activeProjectId,
-            ...(request.relation === undefined ? {} : { relation: request.relation }),
-            sources: [...request.sources, ...transport.sources],
-          })
         },
         async relink(request) {
           return runProjectCanvasResourceRelink({
@@ -1148,6 +1318,29 @@ function App() {
               ? `已完成部分结果，但后续步骤失败。可直接重试，已完成的步骤不会重复执行。\n${detail}`
               : `Some results were created, but a later step failed. Retry without repeating completed steps.\n${detail}`
           },
+          refreshProgress: async (current) => {
+            await flushCanvasForAgent()
+            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+            const snapshot = await window.convax.canvas.documents.load({
+              canvasId: request.canvasId,
+              scopeId: request.projectId,
+            })
+            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+            if (!snapshot.document || !canResumeMediaOperation(request, snapshot.document, current.createdNodeIds)) {
+              mediaOperationProgressRef.current.delete(request)
+              setMediaOperationDialog((active) => (active === request ? null : active))
+              setNotification({
+                description:
+                  locale === "zh-CN"
+                    ? "源视频或已创建的结果发生了变化，请重新选择源视频后再执行此操作。"
+                    : "The source video or a completed result changed. Select the source video and start the operation again.",
+                kind: "warning",
+                title: locale === "zh-CN" ? "无法继续媒体操作" : "Media operation cannot continue",
+              })
+              throw new Error("The Plugin media operation cannot continue because its Canvas inputs changed")
+            }
+            return { ...current, revision: snapshot.document.revision }
+          },
           requests,
           signal,
         })
@@ -1198,12 +1391,58 @@ function App() {
       ...mediaOperationActions.map((action) => ({
         id: `plugin-selection-action:${action.pluginId}/${action.id}`,
         label: localizedMediaOperationText(action.title, locale),
-        icon: mediaOperationActionIcon(action.editor),
+        icon: <MediaOperationActionIcon editor={action.editor} />,
         visible(context: CanvasSelectionActionContext) {
           return canRunMediaOperation(context, action)
         },
-        execute(context: CanvasSelectionActionContext) {
+        async execute(context: CanvasSelectionActionContext) {
           if (!activeCanvasId || !activeProjectId) return
+          if (action.delivery === "return") {
+            const sourceNodeId = context.selectedNodeIds[0]
+            if (!sourceNodeId) throw new Error("Select one Project media file before running this action")
+            const authoritative = await flushAuthoritativeCanvas()
+            if (context.signal.aborted) {
+              throw context.signal.reason ?? new DOMException("Canceled", "AbortError")
+            }
+            const live = pluginHostContextRef.current
+            if (
+              !authoritative ||
+              authoritative.id !== activeCanvasId ||
+              live.activeProject?.id !== activeProjectId ||
+              live.activeCanvas?.id !== activeCanvasId
+            ) {
+              throw new Error("The active Canvas changed before the media operation could start")
+            }
+            const authoritativeContext: CanvasSelectionActionContext = {
+              document: authoritative,
+              selectedEdgeIds: [],
+              selectedNodeIds: [sourceNodeId],
+              selectedNodes: authoritative.nodes.filter((node) => node.id === sourceNodeId),
+              signal: context.signal,
+            }
+            const request = createMediaOperationReturnRequest(
+              { action, canvasId: activeCanvasId, context: authoritativeContext, projectId: activeProjectId },
+              globalThis.crypto.randomUUID(),
+            )
+            const result = await runMediaOperationReturn({
+              cancel: (cancelRequest) => window.convax.generation.cancel(cancelRequest),
+              generate: (generateRequest) => window.convax.generation.generate(generateRequest),
+              request,
+              signal: context.signal,
+            })
+            if (context.signal.aborted) return
+            setNotification({
+              description:
+                result.warnings.length > 0
+                  ? result.warnings.join("\n")
+                  : locale === "zh-CN"
+                    ? "已完成操作。"
+                    : "The operation completed.",
+              kind: result.warnings.length > 0 ? "warning" : "success",
+              title: localizedMediaOperationText(action.title, locale),
+            })
+            return
+          }
           setMediaOperationDialog({ action, canvasId: activeCanvasId, context, projectId: activeProjectId })
         },
       })),
@@ -1309,9 +1548,13 @@ function App() {
 
   const startWorkbenchPartResize = useCallback(
     (partId: string, event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0 || !event.isPrimary || workbenchResizeSessionRef.current) return
+      const captureTarget = workspaceShellRef.current
+      if (!captureTarget) return
       const part = workbenchLayoutController.getSnapshot().parts[partId]
       if (!part || !workbenchLayoutController.beginResize(partId)) return
       event.preventDefault()
+      event.currentTarget.focus({ preventScroll: true })
       const startX = event.clientX
       const startSize = part.size
       const direction = partId === WorkbenchLayoutParts.PrimarySidebar ? 1 : -1
@@ -1322,50 +1565,42 @@ function App() {
         const secondary = layout.parts[WorkbenchLayoutParts.SecondarySidebar]!
         const presentation = resolveWorkspaceLayout({
           agentVisible: secondary.visible,
-          projectDetailsPinned,
-          projectDetailsVisible: primary.visible,
+          projectSidebarVisible: primary.visible,
           viewportWidth: window.innerWidth,
         })
-        const occupiedByPrimary = presentation.projectDetails === "dock" ? primary.size : 0
+        const occupiedByPrimary = presentation.projectSidebar === "dock" ? primary.size : 0
         const occupiedBySecondary = presentation.agent === "dock" ? secondary.size : 0
         const available =
           partId === WorkbenchLayoutParts.PrimarySidebar
-            ? window.innerWidth - occupiedBySecondary - minimumCanvasPeekSize
+            ? window.innerWidth - occupiedBySecondary - workspaceShellMetrics.minimumCanvasPeekSize
             : presentation.agent === "dock"
-              ? window.innerWidth - occupiedByPrimary - minimumCanvasPeekSize
-              : window.innerWidth - 24
+              ? window.innerWidth - occupiedByPrimary - workspaceShellMetrics.minimumCanvasPeekSize
+              : presentation.utilityPresentation === "overlay"
+                ? window.innerWidth - workspaceShellMetrics.utilityOverlayInset * 2
+                : window.innerWidth
         const requested = startSize + (clientX - startX) * direction
         const constrained = Math.min(requested, Math.max(0, available))
         workbenchLayoutController.updateResize(constrained - startSize)
       }
 
-      let settled = false
-      const cleanup = () => {
-        window.removeEventListener("pointermove", move)
-        window.removeEventListener("pointerup", finish)
-        window.removeEventListener("pointercancel", cancel)
-        window.removeEventListener("blur", cancel)
-      }
-      const move = (moveEvent: PointerEvent) => update(moveEvent.clientX)
-      const finish = (finishEvent: PointerEvent) => {
-        if (settled) return
-        settled = true
-        update(finishEvent.clientX)
-        cleanup()
-        workbenchLayoutController.endResize()
-      }
-      const cancel = () => {
-        if (settled) return
-        settled = true
-        cleanup()
-        workbenchLayoutController.cancelResize()
-      }
-      window.addEventListener("pointermove", move)
-      window.addEventListener("pointerup", finish)
-      window.addEventListener("pointercancel", cancel)
-      window.addEventListener("blur", cancel)
+      let session: CapturedPointerDragSession | null = null
+      session = startCapturedPointerDrag({
+        cancel: () => {
+          workbenchLayoutController.cancelResize()
+        },
+        captureTarget,
+        commit: () => {
+          workbenchLayoutController.endResize()
+        },
+        onSettled: () => {
+          if (workbenchResizeSessionRef.current === session) workbenchResizeSessionRef.current = null
+        },
+        pointerId: event.pointerId,
+        update,
+      })
+      if (session) workbenchResizeSessionRef.current = session
     },
-    [projectDetailsPinned, workbenchLayoutController],
+    [workbenchLayoutController],
   )
 
   const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
@@ -1389,39 +1624,43 @@ function App() {
   }, [activeProjectId, canvasInspector, workspaceUtilityDrawer.mode])
   const workspaceLayout = resolveWorkspaceLayout({
     agentVisible: secondarySidebar.visible,
-    projectDetailsPinned,
-    projectDetailsVisible: primarySidebar.visible,
+    projectSidebarVisible: primarySidebar.visible,
     viewportWidth,
   })
-  const primarySidebarOccupiedSize = workspaceLayout.projectDetails === "dock" ? primarySidebar.size : 0
+  const primarySidebarOccupiedSize =
+    activeProject && primarySidebar.visible && workspaceLayout.projectSidebar === "dock" ? primarySidebar.size : 0
   const secondarySidebarAvailableSize = Math.max(
     secondarySidebarBounds.minSize,
-    workspaceLayout.agent !== "dock"
-      ? viewportWidth - 24
-      : viewportWidth - primarySidebarOccupiedSize - minimumCanvasPeekSize,
+    workspaceLayout.utilityPresentation === "sheet"
+      ? viewportWidth
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? viewportWidth - workspaceShellMetrics.utilityOverlayInset * 2
+        : viewportWidth - primarySidebarOccupiedSize - workspaceShellMetrics.minimumCanvasPeekSize,
   )
   const secondarySidebarMaxWidthStyle =
-    workspaceLayout.agent === "sheet"
+    workspaceLayout.utilityPresentation === "sheet"
       ? "100vw"
-      : workspaceLayout.agent === "overlay"
-        ? "calc(100vw - 24px)"
-        : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? `calc(100vw - ${workspaceShellMetrics.utilityOverlayInset * 2}px)`
+        : `calc(100vw - ${primarySidebarOccupiedSize + workspaceShellMetrics.minimumCanvasPeekSize}px)`
   const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
-  const openWorkspaceSettings = useCallback(() => {
-    closeMediaOperationDialog()
-    setDesktopSurface((current) => openDesktopSettings(current, "general"))
-  }, [closeMediaOperationDialog])
-  const openAgentDrawer = useCallback(() => {
-    if (!activeProjectId) return
-    setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-    workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
-  }, [activeProjectId, workbenchLayoutController])
-  const openGenerateDrawer = useCallback(() => {
-    if (!activeProjectId || !activeCanvasId || !canvasOutlineDocument) return
-    setWorkspaceUtilityDrawer(openGenerateUtility({ canvasId: activeCanvasId, projectId: activeProjectId }))
-    workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
-  }, [activeCanvasId, activeProjectId, canvasOutlineDocument, workbenchLayoutController])
+  const openWorkspaceSettings = useCallback(() => openSettings("general"), [openSettings])
+  const openAgentDrawer = useCallback(
+    (returnFocusTarget?: HTMLElement | null) => {
+      if (!activeProjectId) return
+      utilityReturnFocusTargetRef.current = returnFocusTarget ?? null
+      setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
+      workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
+    },
+    [activeProjectId, workbenchLayoutController],
+  )
+  const openCanvasGenerate = useCallback(() => {
+    if (!activeProjectId || !activeCanvasId) return
+    const mounted = canvasEditorScopeRef.current
+    if (mounted?.projectId !== activeProjectId || mounted.canvasId !== activeCanvasId) return
+    mounted.handle.openGenerate()
+  }, [activeCanvasId, activeProjectId])
   const reportWorkspaceEntryFailure = useCallback(
     (error: unknown) =>
       setNotification({
@@ -1492,29 +1731,70 @@ function App() {
     setAppearanceSaveState(writeAppearancePreferences(localStorage, preferences) ? "saved" : "error")
   }, [])
   const enterHomeProject = useCallback(
-    (projectId: string) => workspaceEntryCoordinator.enter({ projectId }),
-    [workspaceEntryCoordinator],
+    async (projectId: string) => {
+      setStartupEntryFailure(null)
+      try {
+        const entered = await workspaceEntryCoordinator.enter({ projectId })
+        if (!entered) {
+          setStartupEntryFailure({
+            message:
+              locale === "zh-CN"
+                ? "Convax 未能恢复这个项目，请重试或重新打开项目文件夹。"
+                : "Convax could not restore this Project. Try again or reopen its folder.",
+            projectId,
+          })
+        }
+        return entered
+      } catch (error) {
+        setStartupEntryFailure({
+          message: error instanceof Error ? error.message : String(error),
+          projectId,
+        })
+        throw error
+      }
+    },
+    [locale, workspaceEntryCoordinator],
   )
-  const returnToProjectHome = useCallback(async () => {
-    workspaceEntryCoordinator.cancelPendingEntry()
-    try {
-      await flushAuthoritativeCanvas()
-      setDesktopSurface(openDesktopHome)
-    } catch (error) {
-      setNotification({
-        description: error instanceof Error ? error.message : String(error),
-        kind: "warning",
-        title: locale === "zh-CN" ? "返回项目主页前无法保存画布" : "Could not save before returning to Projects",
+  const openProjectFromRecovery = useCallback(() => {
+    if (startupRecoveryPendingRef.current) return
+    const recoveryErrorBeforeOpen = startupRecoveryError ?? currentStartupEntryFailure ?? projectSnapshot.error
+    startupRecoveryPendingRef.current = true
+    startupAutoRestoreEnabledRef.current = false
+    setStartupRecoveryPending("open")
+    setStartupRecoveryError(null)
+    void enterSelectedProjectFromHome(projectController, () => projectController.openProject(), enterHomeProject)
+      .then((result: ProjectHomeEntryResult) => {
+        setStartupRecoveryError(recoveryErrorAfterProjectSelection(result, recoveryErrorBeforeOpen))
       })
+      .catch((error: unknown) => {
+        setStartupRecoveryError(error instanceof Error ? error.message : String(error))
+      })
+      .finally(() => {
+        startupRecoveryPendingRef.current = false
+        setStartupRecoveryPending(null)
+      })
+  }, [currentStartupEntryFailure, enterHomeProject, projectController, projectSnapshot.error, startupRecoveryError])
+  const retryProjectStartup = useCallback(() => {
+    if (startupRecoveryPendingRef.current) return
+    startupRecoveryPendingRef.current = true
+    startupAutoRestoreEnabledRef.current = true
+    setStartupRecoveryPending("retry")
+    setStartupRecoveryError(null)
+    const finishRetry = () => {
+      startupRecoveryPendingRef.current = false
+      setStartupRecoveryPending(null)
     }
-  }, [flushAuthoritativeCanvas, locale, workspaceEntryCoordinator])
-  const openProjectHomeFromTitlebar = useCallback(() => {
-    if (primaryDesktopSurface === "workspace") {
-      void returnToProjectHome()
+    if (currentStartupEntryFailure && startupProjectId) {
+      setStartupEntryFailure(null)
+      setStartupEntryAttempt((current) => current + 1)
+      void Promise.resolve().then(finishRetry)
       return
     }
-    setDesktopSurface(openDesktopHome)
-  }, [primaryDesktopSurface, returnToProjectHome])
+    void projectController.initialize().finally(finishRetry)
+  }, [currentStartupEntryFailure, projectController, startupProjectId])
+  const handleTitlebarBrand = useCallback(() => {
+    if (desktopSurface.kind === "settings") setDesktopSurface(closeDesktopSettings)
+  }, [desktopSurface.kind])
   const rendererScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
   const rendererFailureCopy =
     locale === "zh-CN"
@@ -1591,10 +1871,56 @@ function App() {
     workbenchLayoutSnapshot.resize,
   ])
 
-  const projectDetails =
-    activeProject && workspaceLayout.projectDetails !== "hidden" ? (
-      <ProjectDetailsPanel
-        canvases={
+  const resolveProjectFilePreviewUrl = useCallback(
+    async ({ path, projectId }: { path: string; projectId: string }) =>
+      (await window.convax.projectFiles.readFile({ path, projectId })).dataUrl,
+    [],
+  )
+  const handleProjectFileActivate = useCallback(
+    ({ entry, projectId }: { entry: ProjectEntry; projectId: string }) => {
+      const current = pluginHostContextRef.current
+      const canvasId = current.activeCanvas?.id
+      if (!canvasId || current.activeProject?.id !== projectId) return
+      const scope = { canvasId, projectId }
+      void (async () => {
+        try {
+          await revealProjectFileOnCanvas({
+            currentScope: () => {
+              const live = pluginHostContextRef.current
+              return live.activeProject && live.activeCanvas
+                ? { canvasId: live.activeCanvas.id, projectId: live.activeProject.id }
+                : null
+            },
+            documents: window.convax.canvas.documents,
+            editor: () => {
+              const mounted = canvasEditorScopeRef.current
+              return mounted
+                ? {
+                    canvasId: mounted.canvasId,
+                    handle: mounted.handle,
+                    projectId: mounted.projectId,
+                  }
+                : null
+            },
+            path: entry.path,
+            scope,
+            views: canvasViewRegistry,
+          })
+        } catch (error) {
+          console.warn("Could not reveal the Project file on Canvas", error)
+        }
+      })()
+    },
+    [canvasViewRegistry],
+  )
+
+  const projectSidebar = activeProject ? (
+    <ProjectSidebar
+      className="w-full"
+      controller={projectController}
+      extension={{
+        busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
+        content: ({ query }) => (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
             controller={projectCanvasController}
@@ -1604,83 +1930,65 @@ function App() {
             onClearNavigationError={() => workbenchController.clearError()}
             onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
             onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+            query={query}
           />
-        }
-        mode={workspaceLayout.projectDetails}
-        onClose={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
-        onPinnedChange={setProjectDetailsPinned}
-        open={primarySidebar.visible}
-        outline={
-          canvasOutlineDocument && canvasOutlineDocument.id === activeCanvasId ? (
-            <CanvasOutline
-              document={canvasOutlineDocument}
-              onActivationError={(error) =>
-                setNotification({
-                  description: error instanceof Error ? error.message : String(error),
-                  kind: "warning",
-                  title: locale === "zh-CN" ? "无法定位画布内容" : "Could not reveal Canvas item",
-                })
-              }
-              viewSession={{
-                execute: (command) =>
-                  canvasViewRegistry.execute({
-                    command,
-                    expectedDocumentId: canvasOutlineDocument.id,
-                    expectedScopeId: activeProject.id,
-                    viewId: "desktop-main",
-                  }),
-              }}
-            />
-          ) : (
-            <div className="grid min-h-40 place-items-center px-6 text-center text-xs text-muted-foreground">
-              {locale === "zh-CN" ? "正在载入画布大纲…" : "Loading Canvas outline…"}
-            </div>
-          )
-        }
-        pinned={projectDetailsPinned}
-        projectName={activeProject.name}
-        resources={
-          <ProjectSidebar
-            className="w-full"
-            controller={projectController}
-            filesController={projectFilesController}
-            hideWhenNoProject
-            presentation="embedded-files"
-          />
-        }
-        returnFocusRef={projectDetailsTriggerRef}
-      />
-    ) : null
-  const agentPanelWidth = workspaceLayout.agent === "sheet" ? viewportWidth : secondarySidebar.size
+        ),
+        count: projectCanvasSnapshot.canvases.length,
+        createLabel: "New canvas",
+        label: "Canvases",
+        onCreate: () => void projectCanvasWorkbench.createCanvas(activeProject.id),
+      }}
+      filesController={projectFilesController}
+      footerActions={
+        <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
+      }
+      headerActions={
+        <button
+          aria-label={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+          data-project-sidebar-close=""
+          onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
+          title={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+          type="button"
+        >
+          <PanelLeftClose className="size-3.5" />
+        </button>
+      }
+      hideWhenNoProject
+      onFileActivate={handleProjectFileActivate}
+      presentation="workspace"
+      resolveFileUrl={resolveProjectFilePreviewUrl}
+      searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project"}
+    />
+  ) : null
+  const agentPanelWidth = workspaceLayout.utilityPresentation === "sheet" ? viewportWidth : secondarySidebar.size
   const agentPanelClassName =
-    workspaceLayout.agent === "sheet"
+    workspaceLayout.utilityPresentation === "sheet"
       ? "!fixed !inset-0 !z-50 !max-w-none !border-l-0"
-      : workspaceLayout.agent === "overlay"
-        ? "!absolute !inset-y-3 !right-3 !z-40 rounded-lg shadow-2xl"
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? "!absolute !inset-y-4 !right-4 !z-40"
         : undefined
-  const utilityDocument = canvasOutlineDocument?.id === activeCanvasId ? canvasOutlineDocument : null
-  const utilitySelectedNodeIds =
-    workbenchSnapshot.selection?.input.kind === "canvas" &&
-    workbenchSnapshot.selection.input.projectId === activeProjectId &&
-    workbenchSnapshot.selection.input.canvasId === activeCanvasId &&
-    workbenchSnapshot.selection.selection.kind === "canvas-nodes"
-      ? workbenchSnapshot.selection.selection.nodeIds
-      : []
+  const canvasViewportInsets = resolveWorkspaceCanvasViewportInsets({
+    presentation: workspaceLayout.utilityPresentation,
+    projectSidebarOverlaySize:
+      activeProject && primarySidebar.visible && workspaceLayout.projectSidebar === "overlay" ? primarySidebar.size : 0,
+    utilityPanelSize: secondarySidebar.size,
+    utilityVisible: secondarySidebar.visible,
+    viewportWidth,
+  })
   const utilityModes = [
     { label: locale === "zh-CN" ? "助手" : "Agent", value: "agent" as const },
-    ...(utilityDocument ? [{ label: locale === "zh-CN" ? "生成" : "Generate", value: "generate" as const }] : []),
     ...(canvasInspector ? [{ label: locale === "zh-CN" ? "检查器" : "Inspector", value: "inspector" as const }] : []),
   ]
   const closeWorkspaceUtility = () => {
     setWorkspaceUtilityDrawer(closedWorkspaceUtilityDrawer)
     workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, false)
+    utilityReturnFocusTargetRef.current = null
   }
   const changeWorkspaceUtilityMode = (mode: WorkspaceUtilityActiveMode) => {
     if (!activeProjectId) return
     if (mode === "agent") setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-    else if (mode === "generate" && activeCanvasId) {
-      setWorkspaceUtilityDrawer(openGenerateUtility({ canvasId: activeCanvasId, projectId: activeProjectId }))
-    } else if (mode === "inspector" && activeCanvasId && canvasInspector) {
+    else if (mode === "inspector" && activeCanvasId && canvasInspector) {
       setWorkspaceUtilityDrawer(
         openInspectorUtility(
           { canvasId: activeCanvasId, projectId: activeProjectId },
@@ -1691,13 +1999,6 @@ function App() {
   }
   const applicationCommands = useMemo<readonly ApplicationCommand[]>(
     () => [
-      {
-        group: "navigation",
-        id: "navigation.home",
-        keywords: ["projects"],
-        label: locale === "zh-CN" ? "返回项目主页" : "Go to Projects",
-        run: openProjectHomeFromTitlebar,
-      },
       {
         group: "navigation",
         id: "navigation.settings",
@@ -1718,7 +2019,7 @@ function App() {
         id: "utility.generate",
         keywords: ["create", "media"],
         label: locale === "zh-CN" ? "打开生成" : "Open Generate",
-        run: openGenerateDrawer,
+        run: openCanvasGenerate,
       },
       {
         disabled: !activeCanvasId,
@@ -1730,19 +2031,7 @@ function App() {
         shortcut: window.convax.platform === "darwin" ? "⌘F" : "Ctrl F",
       },
     ],
-    [
-      activeCanvasId,
-      activeProjectId,
-      locale,
-      openAgentDrawer,
-      openGenerateDrawer,
-      openProjectHomeFromTitlebar,
-      openWorkspaceSettings,
-    ],
-  )
-  const workspaceActivity = useMemo(
-    () => summarizeWorkspaceCanvasActivity(canvasOutlineDocument),
-    [canvasOutlineDocument],
+    [activeCanvasId, activeProjectId, locale, openAgentDrawer, openCanvasGenerate, openWorkspaceSettings],
   )
   useEffect(() => {
     const openCommands = (event: KeyboardEvent) => {
@@ -1756,35 +2045,65 @@ function App() {
 
   return (
     <AgentGenerationPreferenceProvider storage={localStorage}>
-      <div className="flex size-full flex-col overflow-hidden">
+      <div className="relative flex size-full flex-col overflow-hidden">
         <ApplicationTitlebar
-          canvasName={activeCanvas?.name ?? null}
+          centerAction={
+            effectivePrimaryDesktopSurface === "workspace" && activeCanvas ? (
+              <CanvasTitlebarTitle
+                disabled={projectCanvasSnapshot.busy || workbenchSnapshot.changingInput}
+                key={activeCanvas.id}
+                name={activeCanvas.name}
+                onRename={(name) => projectCanvasController.renameCanvas(activeCanvas.id, name)}
+              />
+            ) : null
+          }
           contextLabel={
             settingsSection
               ? locale === "zh-CN"
                 ? "设置"
                 : "Settings"
-              : primaryDesktopSurface === "home"
-                ? "Convax"
-                : ""
+              : effectivePrimaryDesktopSurface === "home"
+                ? ""
+                : (activeCanvas?.name ?? activeProject?.name ?? "")
           }
-          detailsButtonRef={projectDetailsTriggerRef}
-          detailsOpen={primarySidebar.visible}
-          commandsLabel={locale === "zh-CN" ? "打开命令" : "Open commands"}
-          homeLabel={locale === "zh-CN" ? "返回项目主页" : "Back to Projects"}
-          onBackToProjects={openProjectHomeFromTitlebar}
-          onOpenCommands={() => setCommandPaletteOpen(true)}
-          onOpenSettings={openWorkspaceSettings}
-          onToggleDetails={
-            !settingsSection && primaryDesktopSurface === "workspace" && activeProject
-              ? () =>
-                  workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, !primarySidebar.visible)
+          homeLabel={
+            desktopSurface.kind === "settings"
+              ? locale === "zh-CN"
+                ? "返回工作区"
+                : "Back to workspace"
+              : locale === "zh-CN"
+                ? "返回项目工作区"
+                : "Back to workspace"
+          }
+          leadingActionHostRef={setProjectTitlebarEntryHost}
+          onBackToProjects={handleTitlebarBrand}
+          platform={window.convax.platform}
+          productLabel={effectivePrimaryDesktopSurface === "workspace" && activeProject ? activeProject.name : "Convax"}
+          rightAction={
+            effectivePrimaryDesktopSurface === "workspace" && activeProjectId ? (
+              <AgentDrawerTrigger
+                hidden={secondarySidebar.visible}
+                onOpen={() => openAgentDrawer(agentTitlebarTriggerRef.current)}
+                ref={agentTitlebarTriggerRef}
+                status={agentCompactStatus}
+              />
+            ) : null
+          }
+          surface={settingsSection ? "settings" : effectivePrimaryDesktopSurface}
+          windowControls={
+            window.convax.platform === "darwin"
+              ? {
+                  closeLabel: locale === "zh-CN" ? "关闭窗口" : "Close window",
+                  fullScreenLabel: locale === "zh-CN" ? "切换全屏" : "Toggle full screen",
+                  groupLabel: locale === "zh-CN" ? "窗口控制" : "Window controls",
+                  minimizeLabel: locale === "zh-CN" ? "最小化窗口" : "Minimize window",
+                  onClose: () => void window.convax.mainWindowControls.close().catch(() => undefined),
+                  onMinimize: () => void window.convax.mainWindowControls.minimize().catch(() => undefined),
+                  onToggleFullScreen: () =>
+                    void window.convax.mainWindowControls.toggleFullScreen().catch(() => undefined),
+                }
               : undefined
           }
-          platform={window.convax.platform}
-          projectName={!settingsSection && primaryDesktopSurface === "workspace" ? activeProject?.name : undefined}
-          settingsLabel={locale === "zh-CN" ? "打开设置" : "Open Settings"}
-          surface={settingsSection ? "settings" : primaryDesktopSurface}
         />
         <ApplicationCommandPalette
           commands={applicationCommands}
@@ -1795,76 +2114,81 @@ function App() {
           placeholder={locale === "zh-CN" ? "搜索命令…" : "Search commands…"}
         />
         <div className="relative min-h-0 flex-1 overflow-hidden">
-          {primaryDesktopSurface === "home" ? (
+          {effectivePrimaryDesktopSurface === "home" ? (
             <div
               aria-hidden={settingsSection ? true : undefined}
               className="size-full"
               inert={Boolean(settingsSection) || undefined}
             >
-              <ProjectHome controller={projectController} locale={locale} onEnterProject={enterHomeProject} />
+              {projectBootstrapView.kind === "registry-loading" ? (
+                <ProjectRegistryLoadingState locale={locale} reducedMotion={appearancePreferences.reducedMotion} />
+              ) : projectBootstrapView.kind === "onboarding" ? (
+                <ProjectHome
+                  controller={projectController}
+                  locale={locale}
+                  onEnterProject={enterHomeProject}
+                  onSelectionStart={() => {
+                    startupAutoRestoreEnabledRef.current = false
+                    setStartupEntryFailure(null)
+                    setStartupRecoveryError(null)
+                  }}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                />
+              ) : projectBootstrapView.kind === "recovery" ? (
+                <ProjectRecoveryState
+                  error={projectBootstrapView.error}
+                  locale={locale}
+                  onOpenProject={openProjectFromRecovery}
+                  onRetry={retryProjectStartup}
+                  opening={startupRecoveryPending === "open"}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                  retrying={startupRecoveryPending === "retry"}
+                />
+              ) : (
+                <ProjectLoadingState
+                  projectName={projectBootstrapView.projectName}
+                  reducedMotion={appearancePreferences.reducedMotion}
+                />
+              )}
             </div>
           ) : (
             <WorkspaceShell
               blocked={Boolean(settingsSection || activeMediaOperationDialog)}
               resizing={Boolean(workbenchLayoutSnapshot.resize)}
-              statusBar={
-                <WorkspaceStatusBar
-                  client={window.convax.systemStatus}
-                  locale={locale}
-                  taskIndicator={
-                    <WorkspaceTaskIndicator
-                      label={
-                        locale === "zh-CN"
-                          ? `打开 ${workspaceActivity.total} 个画布任务`
-                          : `Open ${workspaceActivity.total} Canvas tasks`
-                      }
-                      onOpen={openGenerateDrawer}
-                      summary={workspaceActivity}
-                    />
-                  }
-                />
-              }
               utilityMode={workspaceUtilityDrawer.mode}
+              workspaceRef={workspaceShellRef}
             >
-              {workspaceLayout.projectDetails === "dock" ? (
-                <div
-                  className={`relative h-full shrink-0 overflow-hidden border-r border-border${
-                    !resizingPrimarySidebar
-                      ? " transition-[width] duration-200 ease-out motion-reduce:transition-none"
-                      : ""
-                  }`}
-                  style={{ width: primarySidebar.size }}
+              {activeProject ? (
+                <ProjectSidebarShell
+                  entryLabel={activeProject.name}
+                  entryPortal={settingsSection ? null : projectTitlebarEntryHost}
+                  onOpenChange={(open) =>
+                    workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, open)
+                  }
+                  open={primarySidebar.visible}
+                  resizeHandle={
+                    shouldMountResizeHandle(primarySidebar.visible, resizingPrimarySidebar) ? (
+                      <WorkspaceResizeHandle
+                        edge="end"
+                        label="Resize project sidebar"
+                        maximum={primarySidebarBounds.maxSize}
+                        minimum={primarySidebarBounds.minSize}
+                        onResizeBy={(delta) => resizeWorkbenchPartBy(WorkbenchLayoutParts.PrimarySidebar, delta)}
+                        onPointerDown={(pointerEvent) =>
+                          startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
+                        }
+                        value={primarySidebar.size}
+                      />
+                    ) : null
+                  }
+                  size={primarySidebar.size}
                 >
-                  {projectDetails}
-                  <div
-                    aria-label="Resize Project Details"
-                    aria-orientation="vertical"
-                    aria-valuemax={primarySidebarBounds.maxSize}
-                    aria-valuemin={primarySidebarBounds.minSize}
-                    aria-valuenow={primarySidebar.size}
-                    className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
-                    onKeyDown={(keyEvent) => {
-                      if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                      keyEvent.preventDefault()
-                      resizeWorkbenchPartBy(
-                        WorkbenchLayoutParts.PrimarySidebar,
-                        keyEvent.key === "ArrowLeft" ? -24 : 24,
-                      )
-                    }}
-                    onPointerDown={(pointerEvent) =>
-                      startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
-                    }
-                    role="separator"
-                    tabIndex={0}
-                  />
-                </div>
+                  {projectSidebar}
+                </ProjectSidebarShell>
               ) : null}
-              <section className="relative min-w-0 flex-1">
-                {workspaceLayout.projectDetails === "overlay" || workspaceLayout.projectDetails === "sheet"
-                  ? projectDetails
-                  : null}
+              <section className="workspace-canvas-region relative min-w-0 flex-1">
                 {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
-                  <ProjectEmptyState controller={projectController} initialized={projectSnapshot.initialized} />
+                  <ProjectRegistryLoadingState locale={locale} reducedMotion={appearancePreferences.reducedMotion} />
                 ) : workbenchSnapshot.surface.kind === "file" ? (
                   <div className="grid size-full place-items-center text-sm text-muted-foreground">
                     File surface is not available yet.
@@ -1873,7 +2197,10 @@ function App() {
                   !activeProject ||
                   !activeCanvas ||
                   !initialDocument ? (
-                  <ProjectLoadingState projectName={activeProject?.name ?? "Project"} />
+                  <ProjectLoadingState
+                    projectName={activeProject?.name ?? "Project"}
+                    reducedMotion={appearancePreferences.reducedMotion}
+                  />
                 ) : (
                   <RendererErrorBoundary
                     name="Canvas surface"
@@ -1910,23 +2237,20 @@ function App() {
                       fileRendererRegistry={canvasFileRendererRegistry}
                       initialDocument={initialDocument}
                       nodeRegistry={canvasNodeRegistry}
-                      onDocumentChange={(document) => {
-                        if (document.id === activeCanvas.id) setCanvasOutlineDocument(document)
-                      }}
                       onInspectorRequest={openCanvasInspector}
-                      onGenerateRequest={openGenerateDrawer}
-                      onGenerationStateChange={setCanvasGenerationRunning}
                       onSelectionProjectionChange={publishCanvasSelection}
                       readOnly={
                         workbenchSnapshot.changingInput ||
                         projectCanvasSnapshot.busy ||
                         projectSnapshot.changingActiveProject
                       }
+                      reducedMotion={appearancePreferences.reducedMotion}
                       ref={mountCanvasEditor}
                       selectionActions={selectionActions}
                       selectionDragSource={selectionDragSource}
                       services={services}
                       title={activeCanvas.name}
+                      viewportInsets={canvasViewportInsets}
                       viewId="desktop-main"
                       viewRegistry={canvasViewRegistry}
                       viewScopeId={activeProject.id}
@@ -1935,23 +2259,29 @@ function App() {
                 )}
               </section>
               <WorkspaceUtilityDrawer
-                agent={({ closeLabel, modeNavigation }) => (
+                agent={({ closeLabel, modeNavigation, onClose }) => (
                   <RendererErrorBoundary
                     name="Agent panel"
                     renderFallback={({ retry }) => (
-                      <div className="grid size-full place-items-center p-4 text-center" role="alert">
-                        <div>
-                          <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
-                          <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                            {rendererFailureCopy.agentDescription}
-                          </p>
-                          <button
-                            className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
-                            onClick={retry}
-                            type="button"
-                          >
-                            {rendererFailureCopy.retry}
-                          </button>
+                      <div className="flex size-full min-h-0 flex-col">
+                        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
+                          {modeNavigation}
+                          <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
+                        </header>
+                        <div className="grid min-h-0 flex-1 place-items-center p-4 text-center" role="alert">
+                          <div>
+                            <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
+                            <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                              {rendererFailureCopy.agentDescription}
+                            </p>
+                            <button
+                              className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
+                              onClick={retry}
+                              type="button"
+                            >
+                              {rendererFailureCopy.retry}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -1989,66 +2319,36 @@ function App() {
                       ref={mountAgentPanel}
                       utilityCloseLabel={closeLabel}
                       utilityNavigation={modeNavigation ?? undefined}
+                      utilityOnClose={onClose}
                     />
                   </RendererErrorBoundary>
                 )}
                 className={`${agentPanelClassName ?? ""} ${
                   resizingSecondarySidebar
                     ? ""
-                    : "transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                    : "transition-[width] duration-300 ease-[cubic-bezier(0.78,0,0.22,1)] motion-reduce:transition-none"
                 }`}
                 closeLabel={locale === "zh-CN" ? "关闭工具抽屉" : "Close utility drawer"}
-                collapsedEntry={
-                  activeProjectId ? (
-                    <aside aria-label="Agent status" className="pointer-events-none absolute right-3 top-3 z-40">
-                      <AgentDrawerTrigger onOpen={openAgentDrawer} status={agentCompactStatus} />
-                    </aside>
-                  ) : null
-                }
-                generate={
-                  utilityDocument ? (
-                    <CanvasGenerationPanel
-                      autoFocus
-                      className="p-3"
-                      disabled={workbenchSnapshot.changingInput || projectSnapshot.changingActiveProject}
-                      document={utilityDocument}
-                      generateService={services.require("generate")}
-                      onOpenServices={openServices}
-                      onSubmit={(submission) => canvasEditorRef.current?.submitGeneration(submission)}
-                      scopeId={activeProjectId}
-                      selectedNodeIds={utilitySelectedNodeIds}
-                      submitting={canvasGenerationRunning}
-                    />
-                  ) : null
-                }
                 inspector={canvasInspector ? <CanvasInspector className="pb-3" projection={canvasInspector} /> : null}
-                modal={workspaceLayout.agent !== "dock"}
+                modal={workspaceLayout.utilityPresentation === "sheet"}
                 mode={secondarySidebar.visible ? workspaceUtilityDrawer.mode : "closed"}
                 modes={utilityModes}
                 onClose={closeWorkspaceUtility}
                 onModeChange={changeWorkspaceUtilityMode}
+                presentation={workspaceLayout.utilityPresentation}
+                returnFocusTarget={utilityReturnFocusTargetRef.current}
                 resizeHandle={
-                  workspaceLayout.agent === "dock" ? (
-                    <div
-                      aria-label="Resize workspace utilities"
-                      aria-orientation="vertical"
-                      aria-valuemax={secondarySidebarBounds.maxSize}
-                      aria-valuemin={secondarySidebarBounds.minSize}
-                      aria-valuenow={secondarySidebar.size}
-                      className="absolute inset-y-0 -left-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-brand/20"
-                      onKeyDown={(keyEvent) => {
-                        if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                        keyEvent.preventDefault()
-                        resizeWorkbenchPartBy(
-                          WorkbenchLayoutParts.SecondarySidebar,
-                          keyEvent.key === "ArrowLeft" ? 24 : -24,
-                        )
-                      }}
+                  workspaceLayout.utilityPresentation !== "sheet" ? (
+                    <WorkspaceResizeHandle
+                      edge="start"
+                      label="Resize workspace utilities"
+                      maximum={secondarySidebarBounds.maxSize}
+                      minimum={secondarySidebarBounds.minSize}
+                      onResizeBy={(delta) => resizeWorkbenchPartBy(WorkbenchLayoutParts.SecondarySidebar, delta)}
                       onPointerDown={(pointerEvent) =>
                         startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent)
                       }
-                      role="separator"
-                      tabIndex={0}
+                      value={secondarySidebar.size}
                     />
                   ) : null
                 }

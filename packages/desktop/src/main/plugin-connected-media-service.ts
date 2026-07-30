@@ -21,6 +21,7 @@ import type {
   ManagedCanvasMediaResolutionPort,
   ResolvedManagedCanvasMedia,
 } from "./managed-canvas-media-resolver"
+import { parseSingleHttpByteRange } from "./http-byte-range"
 import type { InstalledPluginCapabilityIdentitySource } from "./plugin-principal-resolver"
 
 const maximumSessions = 128
@@ -199,7 +200,7 @@ export class PluginConnectedMediaService {
         return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
       }
       const resolved = await this.revalidate(session)
-      const range = parseByteRange(request.headers.get("range"), resolved.size)
+      const range = parseSingleHttpByteRange(request.headers.get("range"), resolved.size)
       if (range === "unsatisfiable") {
         return new Response(null, {
           headers: { "Accept-Ranges": "bytes", "Content-Range": `bytes */${resolved.size}` },
@@ -380,28 +381,6 @@ function parseConnectedMediaUrl(value: string) {
   validateIdentifier(sessionId, "sessionId", 128)
   validateIdentifier(segments[0], "token", 128)
   return { sessionId, token: segments[0] }
-}
-
-function parseByteRange(value: string | null, size: number): { end: number; start: number } | "unsatisfiable" | null {
-  if (!value) return null
-  const match = /^bytes=(\d*)-(\d*)$/.exec(value.trim())
-  if (!match || (!match[1] && !match[2]) || size === 0) return "unsatisfiable"
-  let start: number
-  let end: number
-  if (!match[1]) {
-    const suffix = Number(match[2])
-    if (!Number.isSafeInteger(suffix) || suffix <= 0) return "unsatisfiable"
-    start = Math.max(0, size - suffix)
-    end = size - 1
-  } else {
-    start = Number(match[1])
-    end = match[2] ? Number(match[2]) : size - 1
-    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= size || end < start) {
-      return "unsatisfiable"
-    }
-    end = Math.min(end, size - 1)
-  }
-  return { end, start }
 }
 
 function connectedMediaHeaders(mimeType: string, length: number) {

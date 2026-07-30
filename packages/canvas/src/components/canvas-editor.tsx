@@ -29,6 +29,8 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
   Input,
+  Loading,
+  LoadingSpinner,
   Shortcut,
   Tooltip,
   TooltipProvider,
@@ -55,13 +57,14 @@ import {
   FileUp,
   Focus,
   Group,
+  Hand,
   ImagePlus,
   LayoutGrid,
-  LoaderCircle,
   Magnet,
   MapPinned,
   MousePointer2,
   PanelRightOpen,
+  Plus,
   Redo2,
   Rows3,
   Search,
@@ -78,9 +81,12 @@ import {
   ZoomOut,
 } from "lucide-react"
 import {
+  type CSSProperties,
   type ChangeEvent,
   type ClipboardEvent as ReactClipboardEvent,
   type ForwardedRef,
+  type HTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   forwardRef,
   useCallback,
@@ -93,6 +99,19 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
+import {
+  CANVAS_POST_MUTATION_REVEAL,
+  isCanvasCameraMotionCurrent,
+  isCanvasPostMutationRevealGuardCurrent,
+  resolveCanvasAnchoredZoomViewport,
+  resolveCanvasFocusAvoidanceViewport,
+  resolveCanvasSafeViewportRect,
+  resolveCanvasVisibleWorldRect,
+  resolveInitialCanvasCameraFit,
+  shouldRevealCanvasNodes,
+  type CanvasPostMutationRevealGuard,
+  type CanvasViewportInsets,
+} from "../camera"
 import {
   applyCanvasBusinessCommand,
   findOpenCanvasPoint,
@@ -136,8 +155,26 @@ import {
   type CanvasInspectorProjection,
   type CanvasSelectionProjection,
 } from "../inspector"
+import {
+  CANVAS_MOTION_DURATION,
+  CANVAS_REDUCED_MOTION_QUERY,
+  CanvasNodeEntryTracker,
+  canvasMotionStyle,
+  canvasViewportEase,
+  resolveCanvasMotionDuration,
+  resolveCanvasReducedMotion,
+} from "../motion"
+import {
+  CANVAS_CONNECTION_RADIUS,
+  CANVAS_MULTI_SELECTION_KEYS,
+  CANVAS_ZOOM_ACTIVATION_KEYS,
+  resolveCanvasInteractionPolicy,
+  type CanvasInteractionTool,
+} from "../interaction"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
+import { createCanvasNodeSnapSession, type CanvasNodeSnapSession, type CanvasSnapLine } from "../snapping"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
+import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
 import type { CanvasNodeRegistry } from "../node-registry"
@@ -197,22 +234,56 @@ import {
 import { CanvasConnectionLine, CanvasEdgeView, shouldAnimateCanvasEdge } from "./canvas-edge"
 import { CanvasGenerationPanel } from "./canvas-generation-panel"
 import { bindCanvasSearchDismissal } from "./canvas-search-dismissal"
-import { createCanvasCardConnection, PendingConnectionMenu } from "./connection-node-menu"
+import { createCanvasCardConnection } from "./connection-node-menu"
 import { createCanvasDuplicateDragPlan, remapCanvasDuplicateDragChanges } from "./duplicate-drag"
 import { getCanvasNodeInsertionItems } from "./insertion-items"
+import { PendingConnectionMenu } from "./pending-connection-menu"
+import { useCanvasOverlayPresence } from "./use-overlay-presence"
 
 const edgeTypes = { canvas: CanvasEdgeView } satisfies EdgeTypes
-const CANVAS_FIT_DURATION = 220
+const CANVAS_FIT_DURATION = CANVAS_MOTION_DURATION.fit
 const CANVAS_FIT_MAX_ZOOM = 1
 const CANVAS_FIT_PADDING = 0.18
 const CANVAS_CENTER_FIT_MAX_ZOOM = 1.2
 const CANVAS_CENTER_FIT_PADDING = 0.08
 const CANVAS_MIN_ZOOM = CANVAS_VIEW_MIN_ZOOM
 const CANVAS_MAX_ZOOM = CANVAS_VIEW_MAX_ZOOM
-const CANVAS_FIT_VIEW_OPTIONS = { maxZoom: CANVAS_FIT_MAX_ZOOM, padding: CANVAS_FIT_PADDING }
-const CANVAS_PAN_ON_DRAG = [1]
 const CANVAS_SNAP_GRID: [number, number] = [8, 8]
-const CANVAS_ZOOM_ACTIVATION_KEYS = ["Meta", "Control"]
+const CANVAS_SNAP_TOLERANCE_SCREEN_PX = 8
+const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
+  "button",
+  "input",
+  "textarea",
+  "select",
+  "a",
+  "audio",
+  "video",
+  "iframe",
+  "[contenteditable]:not([contenteditable='false'])",
+  ".nodrag",
+  "[data-canvas-shortcuts='ignore']",
+].join(", ")
+const EMPTY_CANVAS_NODE_IDS: ReadonlySet<string> = new Set()
+
+function subscribeToCanvasMotionPreference(onChange: () => void) {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => undefined
+  const query = window.matchMedia(CANVAS_REDUCED_MOTION_QUERY)
+  query.addEventListener("change", onChange)
+  return () => query.removeEventListener("change", onChange)
+}
+
+function readCanvasMotionPreference() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia(CANVAS_REDUCED_MOTION_QUERY).matches
+  )
+}
+
+function useCanvasReducedMotion() {
+  return useSyncExternalStore(subscribeToCanvasMotionPreference, readCanvasMotionPreference, () => false)
+}
+
 type CanvasDirectedAutoLayoutStrategy = Extract<
   CanvasAutoLayoutStrategy,
   "horizontal-directed-cluster" | "vertical-directed-cluster"
@@ -311,12 +382,10 @@ function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
 interface PendingConnection {
   nodeId: string
   side: "left" | "right"
-  sourceScreen: CanvasPoint
   targetPosition: CanvasPoint
-  targetScreen: CanvasPoint
 }
 
-interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side" | "sourceScreen"> {
+interface ConnectionStart extends Pick<PendingConnection, "nodeId" | "side"> {
   pointerScreen: CanvasPoint
 }
 
@@ -368,7 +437,7 @@ export interface CanvasEditorProps {
   nodeRegistry?: CanvasNodeRegistry
   onlyRenderVisibleElements?: boolean
   onDocumentChange?: (document: CanvasDocument) => void
-  /** Lets the host present Canvas's generation composer in its own utility surface. */
+  /** @deprecated Prefer CanvasEditorHandle.openGenerate so Canvas owns the composer state. */
   onGenerateRequest?: () => void
   /** Publishes the Canvas-owned generation operation state without transferring ownership. */
   onGenerationStateChange?: (running: boolean) => void
@@ -377,10 +446,14 @@ export interface CanvasEditorProps {
   /** Requests host-owned Inspector presentation for the current eligible projection. */
   onInspectorRequest?: (projection: CanvasInspectorProjection) => void
   readOnly?: boolean
+  /** Explicit host policy wins; independent consumers fall back to the OS preference. */
+  reducedMotion?: boolean
   selectionActions?: readonly CanvasSelectionAction[]
   selectionDragSource?: CanvasSelectionDragSource
   services: CanvasServices
   title?: string
+  /** Host-owned geometry that is unavailable for Canvas overlays and focus. */
+  viewportInsets?: CanvasViewportInsets
   viewId?: string
   viewRegistry?: CanvasViewRegistry
   viewScopeId?: string
@@ -403,7 +476,7 @@ export interface CanvasEditorHandle {
   resumeAfterLeaveCanceled: () => void
   /** Selects existing nodes after a host-owned mutation has been reloaded. */
   selectNodes: (nodeIds: readonly string[]) => void
-  /** Transfers a host-rendered Canvas composer submission to Canvas's operation owner. */
+  /** @deprecated Prefer CanvasEditorHandle.openGenerate and the Canvas-owned composer. */
   submitGeneration: (submission: CanvasGenerationComposerSubmission) => void
 }
 
@@ -681,8 +754,10 @@ export function settleCanvasReloadFailure(input: {
 export async function completeCanvasResourceMutation(input: {
   currentScope: () => CanvasResourceMutationScopeToken
   operationScope: CanvasResourceMutationScopeToken
+  presentCreatedNodes?: (createdNodeIds: readonly string[]) => void
   reload: (signal: AbortSignal) => Promise<void>
   result: { createdNodeIds: readonly string[]; revision: number; warnings: readonly string[] }
+  runViewEffect?: (createdNodeIds: readonly string[]) => Promise<void>
   selectNodes: (nodeIds: readonly string[]) => void
   show: (notification: CanvasNotification) => void
   signal: AbortSignal
@@ -705,9 +780,20 @@ export async function completeCanvasResourceMutation(input: {
     return
   }
   if (!isActive()) return
-  const createdNodeIds = input.result.createdNodeIds
+  const createdNodeIds = [...new Set(input.result.createdNodeIds)]
+  try {
+    input.presentCreatedNodes?.(createdNodeIds)
+  } catch {
+    // Transient presentation never changes the committed resource outcome.
+  }
   if (!isActive()) return
   input.selectNodes(createdNodeIds)
+  if (!isActive()) return
+  try {
+    await input.runViewEffect?.(createdNodeIds)
+  } catch {
+    // A post-commit camera effect is optional and cannot reverse resource admission.
+  }
   if (!isActive()) return
   input.show({
     description: input.result.warnings.length ? input.result.warnings.join("\n") : undefined,
@@ -772,25 +858,51 @@ function CanvasEditorContent(
   const [selection, setSelection] = useState<CanvasSelection>(() => ({ nodeIds: new Set(), edgeIds: new Set() }))
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
+  const generatePresence = useCanvasOverlayPresence(generateOpen)
   const [searchOpen, setSearchOpen] = useState(false)
   const [edgesHidden, setEdgesHidden] = useState(false)
   const [miniMapVisible, setMiniMapVisible] = useState(true)
-  const [snapToGrid, setSnapToGrid] = useState(true)
+  const [snapEnabled, setSnapEnabled] = useState(true)
+  const [snapLines, setSnapLines] = useState<CanvasSnapLine[]>([])
   const [autoLayoutStrategy, setAutoLayoutStrategy] =
     useState<CanvasDirectedAutoLayoutStrategy>("horizontal-directed-cluster")
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved">("idle")
   const [saveError, setSaveError] = useState<string | null>(null)
   const [saveAttempt, setSaveAttempt] = useState(0)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const [leaving, setLeaving] = useState(false)
+  const [interactionTool, setInteractionTool] = useState<CanvasInteractionTool>("select")
   const [selectionDragModeActive, setSelectionDragModeActive] = useState(false)
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const [connectionTargetNodeId, setConnectionTargetNodeId] = useState<string | null>(null)
+  const [pendingNodeFocus, setPendingNodeFocus] = useState<{
+    guard: CanvasPostMutationRevealGuard
+    nodeIds: readonly string[]
+  } | null>(null)
   const spacePanning = useSpacePanning()
+  const osPrefersReducedMotion = useCanvasReducedMotion()
+  const prefersReducedMotion = resolveCanvasReducedMotion(props.reducedMotion, osPrefersReducedMotion)
+  const nodeEntryScopeKey = `${props.viewScopeId ?? ""}:${history.document.id}`
+  const nodeEntryTrackerRef = useRef<CanvasNodeEntryTracker | null>(null)
+  nodeEntryTrackerRef.current ??= new CanvasNodeEntryTracker(
+    nodeEntryScopeKey,
+    history.document.nodes.map((node) => node.id),
+  )
+  if (nodeEntryTrackerRef.current.scopeKey !== nodeEntryScopeKey) {
+    nodeEntryTrackerRef.current.reset(
+      nodeEntryScopeKey,
+      history.document.nodes.map((node) => node.id),
+    )
+  }
+  const [nodeEntryPresentation, setNodeEntryPresentation] = useState<{
+    nodeIds: ReadonlySet<string>
+    scopeKey: string
+  }>(() => ({ nodeIds: EMPTY_CANVAS_NODE_IDS, scopeKey: nodeEntryScopeKey }))
+  const enteringNodeIds =
+    nodeEntryPresentation.scopeKey === nodeEntryScopeKey ? nodeEntryPresentation.nodeIds : EMPTY_CANVAS_NODE_IDS
   const rootRef = useRef<HTMLDivElement>(null)
   const [overlayRoot, setOverlayRoot] = useState<HTMLDivElement | null>(null)
   const setCanvasRoot = useCallback((element: HTMLDivElement | null) => {
@@ -812,6 +924,20 @@ function CanvasEditorContent(
   const connectionTargetNodeIdRef = useRef<string | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ duplicatedNodeIdBySourceId: ReadonlyMap<string, string> } | null>(null)
+  const snapSessionRef = useRef<CanvasNodeSnapSession | null>(null)
+  const snapEnabledRef = useRef(snapEnabled)
+  const navigationRevisionRef = useRef(0)
+  const cameraMotionGenerationRef = useRef(0)
+  const nodeEntryTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>())
+  const initialCameraScopeRef = useRef("")
+  const viewportInsetsKeyRef = useRef(
+    [
+      props.viewportInsets?.top ?? 0,
+      props.viewportInsets?.right ?? 0,
+      props.viewportInsets?.bottom ?? 0,
+      props.viewportInsets?.left ?? 0,
+    ].join(":"),
+  )
   const documentRef = useRef(history.document)
   const resourceMutationScopeRef = useRef<CanvasResourceMutationScopeToken>({
     documentId: history.document.id,
@@ -840,6 +966,7 @@ function CanvasEditorContent(
   const reloadControllerRef = useRef<AbortController | undefined>(undefined)
   const operationControllersRef = useRef(new Set<AbortController>())
   const authoritativeLoadRequestedRef = useRef(false)
+  const presentedDocumentScopeRef = useRef<CanvasResourceMutationScopeToken | null>(null)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
@@ -863,13 +990,19 @@ function CanvasEditorContent(
     }
     setGenerateOpen(true)
   }, [generateService, props.onGenerateRequest])
+  const closeGenerate = useCallback(() => {
+    setGenerateOpen(false)
+    rootRef.current?.focus({ preventScroll: true })
+  }, [])
   const [hydrating, setHydrating] = useState(Boolean(persistenceService))
+  const [blockingLoad, setBlockingLoad] = useState(Boolean(persistenceService))
   const hydratingRef = useRef(Boolean(persistenceService))
   const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
   documentRef.current = history.document
   historyRef.current = history
   saveErrorRef.current = saveError
   selectionRef.current = selection
+  snapEnabledRef.current = snapEnabled
   const waitForAuthoritativeRender = useCallback(
     (document: CanvasDocument) =>
       new Promise<void>((resolve, reject) => {
@@ -907,7 +1040,20 @@ function CanvasEditorContent(
     for (const controller of operationControllersRef.current) controller.abort()
     operationControllersRef.current.clear()
     abortCanvasReload(reloadControllerRef.current)
+    snapSessionRef.current = null
+    setSnapLines([])
+    cameraMotionGenerationRef.current += 1
+    try {
+      void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
+    } catch {
+      // React Flow may not be mounted for the previous scope yet.
+    }
   }, [currentViewScopeId, history.document.id])
+  useEffect(() => {
+    if (history.gestureStart) return
+    snapSessionRef.current = null
+    setSnapLines([])
+  }, [history.gestureStart])
   const dispatch = useCallback((action: CanvasHistoryAction) => {
     if (leavingRef.current || hydratingRef.current) return
     if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
@@ -933,6 +1079,14 @@ function CanvasEditorContent(
   )
 
   const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
+  const baseInteractionPolicy = resolveCanvasInteractionPolicy({
+    readOnly,
+    selectionDragChordHeld: false,
+    spacePanning,
+    tool: interactionTool,
+  })
+  const canvasPointerNavigationOnly = baseInteractionPolicy.navigationOnly
+  const canvasPointerSelectionEnabled = baseInteractionPolicy.selectionEnabled
   const selectedNodeIds = useMemo(() => [...selection.nodeIds], [selection.nodeIds])
   const selectedEdgeIds = useMemo(() => [...selection.edgeIds], [selection.edgeIds])
   const selectionContext = useMemo(() => deriveCanvasSelectionContext(selection), [selection])
@@ -1060,6 +1214,80 @@ function CanvasEditorContent(
     },
     [replaceSelection],
   )
+  const finishNodeEntryForScope = useCallback((scopeKey: string, nodeId: string) => {
+    const timerKey = `${scopeKey}\u0000${nodeId}`
+    const timer = nodeEntryTimersRef.current.get(timerKey)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      nodeEntryTimersRef.current.delete(timerKey)
+    }
+    setNodeEntryPresentation((current) => {
+      if (current.scopeKey !== scopeKey || !current.nodeIds.has(nodeId)) return current
+      const nodeIds = new Set(current.nodeIds)
+      nodeIds.delete(nodeId)
+      return { nodeIds, scopeKey }
+    })
+  }, [])
+  const finishNodeEntry = useCallback(
+    (nodeId: string) => finishNodeEntryForScope(nodeEntryScopeKey, nodeId),
+    [finishNodeEntryForScope, nodeEntryScopeKey],
+  )
+  const startNodeEntryPresentation = useCallback(
+    (nodeIds: readonly string[]) => {
+      const availableNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
+      const activated = [...new Set(nodeIds)].filter((nodeId) => availableNodeIds.has(nodeId))
+      if (activated.length === 0 || prefersReducedMotion) return
+      setNodeEntryPresentation((current) => {
+        const next = current.scopeKey === nodeEntryScopeKey ? new Set(current.nodeIds) : new Set<string>()
+        for (const nodeId of activated) next.add(nodeId)
+        return { nodeIds: next, scopeKey: nodeEntryScopeKey }
+      })
+      for (const nodeId of activated) {
+        const timerKey = `${nodeEntryScopeKey}\u0000${nodeId}`
+        const currentTimer = nodeEntryTimersRef.current.get(timerKey)
+        if (currentTimer !== undefined) clearTimeout(currentTimer)
+        nodeEntryTimersRef.current.set(
+          timerKey,
+          setTimeout(() => finishNodeEntryForScope(nodeEntryScopeKey, nodeId), CANVAS_MOTION_DURATION.nodeEnter + 64),
+        )
+      }
+    },
+    [finishNodeEntryForScope, nodeEntryScopeKey, prefersReducedMotion],
+  )
+  const presentNodeEntries = useCallback(
+    (nodeIds: readonly string[]) => {
+      const tracker = nodeEntryTrackerRef.current
+      if (!tracker || tracker.scopeKey !== nodeEntryScopeKey) return
+      tracker.queue(nodeEntryScopeKey, nodeIds)
+      const availableNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
+      startNodeEntryPresentation(tracker.activate(nodeEntryScopeKey, availableNodeIds))
+    },
+    [nodeEntryScopeKey, startNodeEntryPresentation],
+  )
+  useLayoutEffect(() => {
+    const availableNodeIds = new Set(history.document.nodes.map((node) => node.id))
+    for (const nodeId of enteringNodeIds) {
+      if (!availableNodeIds.has(nodeId)) finishNodeEntryForScope(nodeEntryScopeKey, nodeId)
+    }
+    presentNodeEntries([])
+  }, [enteringNodeIds, finishNodeEntryForScope, history.document.nodes, nodeEntryScopeKey, presentNodeEntries])
+  useLayoutEffect(() => {
+    if (!prefersReducedMotion) return
+    for (const timer of nodeEntryTimersRef.current.values()) clearTimeout(timer)
+    nodeEntryTimersRef.current.clear()
+    setNodeEntryPresentation((current) =>
+      current.scopeKey === nodeEntryScopeKey && current.nodeIds.size > 0
+        ? { nodeIds: EMPTY_CANVAS_NODE_IDS, scopeKey: nodeEntryScopeKey }
+        : current,
+    )
+  }, [nodeEntryScopeKey, prefersReducedMotion])
+  useLayoutEffect(
+    () => () => {
+      for (const timer of nodeEntryTimersRef.current.values()) clearTimeout(timer)
+      nodeEntryTimersRef.current.clear()
+    },
+    [nodeEntryScopeKey],
+  )
   const getViewSnapshot = useCallback(
     (): CanvasViewSnapshot => ({
       documentId: documentRef.current.id,
@@ -1068,10 +1296,52 @@ function CanvasEditorContent(
       selectedEdgeIds: [...selectionRef.current.edgeIds],
       selectedNodeIds: [...selectionRef.current.nodeIds],
       viewId: props.viewId ?? "",
-      viewport: reactFlow.getViewport(),
+      viewport: reactFlowRef.current.getViewport(),
     }),
-    [props.viewId, props.viewScopeId, reactFlow],
+    [props.viewId, props.viewScopeId],
   )
+  const getPostMutationRevealGuard = useCallback(
+    (): CanvasPostMutationRevealGuard => ({
+      documentId: documentRef.current.id,
+      navigationRevision: navigationRevisionRef.current,
+      scopeId: props.viewScopeId ?? "",
+      viewId: props.viewId ?? "",
+    }),
+    [props.viewId, props.viewScopeId],
+  )
+  const confirmCanvasNodeGeometry = useCallback((nodeIds: readonly string[], isCurrent: () => boolean) => {
+    const uniqueNodeIds = [...new Set(nodeIds)]
+    if (uniqueNodeIds.length === 0 || !isCurrent()) return false
+    // Camera bounds are Canvas-owned. Mounted React Flow measurements may be
+    // stale or absent under virtualization, so readiness comes from the same
+    // authoritative geometry that fit/reveal consumes.
+    const document = documentRef.current
+    const ready = uniqueNodeIds.every((nodeId) => {
+      const node = document.nodes.find((item) => item.id === nodeId)
+      if (!node) return false
+      const size = getCanvasNodeSize(node)
+      return isPositiveFiniteDimension(size.width) && isPositiveFiniteDimension(size.height)
+    })
+    return ready && isCurrent()
+  }, [])
+  const getSafeViewportRect = useCallback(() => {
+    const bounds = rootRef.current?.getBoundingClientRect()
+    return bounds
+      ? resolveCanvasSafeViewportRect({ height: bounds.height, width: bounds.width }, props.viewportInsets)
+      : undefined
+  }, [props.viewportInsets?.bottom, props.viewportInsets?.left, props.viewportInsets?.right, props.viewportInsets?.top])
+  const interruptCameraMotion = useCallback(() => {
+    cameraMotionGenerationRef.current += 1
+    try {
+      void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
+    } catch {
+      // React Flow may not be ready during early mount or teardown.
+    }
+  }, [])
+  const markUserNavigation = useCallback(() => {
+    navigationRevisionRef.current += 1
+    interruptCameraMotion()
+  }, [interruptCameraMotion])
   const fitDocumentViewport = useCallback(
     async (
       document: CanvasDocument,
@@ -1085,14 +1355,17 @@ function CanvasEditorContent(
       if (!Number.isFinite(padding) || padding < 0) {
         throw new Error("Canvas fit padding must be a finite non-negative number")
       }
-      const bounds = rootRef.current?.getBoundingClientRect()
+      const motionGeneration = cameraMotionGenerationRef.current
+      const safeRect = getSafeViewportRect()
       const effect = resolveCanvasDocumentFitEffect({
-        bounds: bounds
+        bounds: safeRect
           ? {
-              height: bounds.height,
+              height: safeRect.height,
+              left: safeRect.left,
               maxZoom: CANVAS_MAX_ZOOM,
               minZoom: CANVAS_MIN_ZOOM,
-              width: bounds.width,
+              top: safeRect.top,
+              width: safeRect.width,
             }
           : undefined,
         document,
@@ -1100,9 +1373,12 @@ function CanvasEditorContent(
         nodeIds: options.nodeIds,
         padding,
       })
+      if (!isCanvasCameraMotionCurrent(motionGeneration, cameraMotionGenerationRef.current)) return
       if (effect.kind === "renderer-fallback") {
-        await reactFlow.fitView({
-          duration: options.duration ?? CANVAS_FIT_DURATION,
+        await reactFlowRef.current.fitView({
+          duration: resolveCanvasMotionDuration(options.duration ?? CANVAS_FIT_DURATION, prefersReducedMotion),
+          ease: canvasViewportEase,
+          interpolate: "smooth",
           maxZoom: effect.maxZoom,
           padding: effect.padding,
           ...(effect.nodeIds ? { nodes: effect.nodeIds.map((id) => ({ id })) } : {}),
@@ -1110,11 +1386,153 @@ function CanvasEditorContent(
         return
       }
       if (effect.kind === "viewport") {
-        await reactFlow.setViewport(effect.viewport, { duration: options.duration ?? CANVAS_FIT_DURATION })
+        await reactFlowRef.current.setViewport(effect.viewport, {
+          duration: resolveCanvasMotionDuration(options.duration ?? CANVAS_FIT_DURATION, prefersReducedMotion),
+          ease: canvasViewportEase,
+          interpolate: "smooth",
+        })
       }
     },
-    [reactFlow],
+    [getSafeViewportRect, prefersReducedMotion],
   )
+  useLayoutEffect(() => {
+    if (hydrating || loadError || !rootRef.current) return
+    const scope = `${currentViewScopeId}:${history.document.id}`
+    const action = resolveInitialCanvasCameraFit({
+      initializedScope: initialCameraScopeRef.current,
+      nodeCount: history.document.nodes.length,
+      scope,
+    })
+    if (action === "skip") return
+    initialCameraScopeRef.current = scope
+    if (action === "mark-and-fit") void fitDocumentViewport(history.document, { duration: 0 })
+  }, [currentViewScopeId, fitDocumentViewport, history.document, hydrating, loadError])
+  const revealCanvasNodesAfterMutation = useCallback(
+    async (nodeIds: readonly string[], guard: CanvasPostMutationRevealGuard) => {
+      if (
+        nodeIds.length === 0 ||
+        leavingRef.current ||
+        !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
+      )
+        return
+      if (
+        !confirmCanvasNodeGeometry(nodeIds, () =>
+          isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard()),
+        )
+      )
+        return
+      const safeRect = getSafeViewportRect()
+      if (
+        !safeRect ||
+        !shouldRevealCanvasNodes({
+          document: documentRef.current,
+          nodeIds,
+          safeRect,
+          viewport: reactFlowRef.current.getViewport(),
+        })
+      )
+        return
+      if (!isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())) return
+      const motionGeneration = cameraMotionGenerationRef.current
+      await fitDocumentViewport(documentRef.current, {
+        duration: CANVAS_MOTION_DURATION.postMutationReveal,
+        maxZoom: CANVAS_POST_MUTATION_REVEAL.maxZoom,
+        nodeIds,
+        padding: CANVAS_POST_MUTATION_REVEAL.padding,
+      })
+      if (
+        !isCanvasCameraMotionCurrent(motionGeneration, cameraMotionGenerationRef.current) ||
+        !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
+      ) {
+        return
+      }
+    },
+    [confirmCanvasNodeGeometry, fitDocumentViewport, getPostMutationRevealGuard, getSafeViewportRect],
+  )
+  const focusCanvasNodes = useCallback(
+    async (
+      nodeIds: readonly string[],
+      guard: CanvasPostMutationRevealGuard,
+      duration: number = CANVAS_MOTION_DURATION.postMutationReveal,
+    ) => {
+      if (
+        nodeIds.length === 0 ||
+        leavingRef.current ||
+        !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard()) ||
+        !confirmCanvasNodeGeometry(nodeIds, () =>
+          isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard()),
+        )
+      ) {
+        return false
+      }
+      interruptCameraMotion()
+      const motionGeneration = cameraMotionGenerationRef.current
+      await fitDocumentViewport(documentRef.current, {
+        duration,
+        maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+        nodeIds,
+        padding: CANVAS_CENTER_FIT_PADDING,
+      })
+      if (
+        !isCanvasCameraMotionCurrent(motionGeneration, cameraMotionGenerationRef.current) ||
+        !isCanvasPostMutationRevealGuardCurrent(guard, getPostMutationRevealGuard())
+      ) {
+        return false
+      }
+      startNodeEntryPresentation(nodeIds)
+      return true
+    },
+    [
+      confirmCanvasNodeGeometry,
+      fitDocumentViewport,
+      getPostMutationRevealGuard,
+      interruptCameraMotion,
+      startNodeEntryPresentation,
+    ],
+  )
+  useLayoutEffect(() => {
+    if (!pendingNodeFocus) return
+    if (!isCanvasPostMutationRevealGuardCurrent(pendingNodeFocus.guard, getPostMutationRevealGuard())) {
+      setPendingNodeFocus(null)
+      return
+    }
+    if (!pendingNodeFocus.nodeIds.every((nodeId) => history.document.nodes.some((node) => node.id === nodeId))) return
+    setPendingNodeFocus(null)
+    void focusCanvasNodes(pendingNodeFocus.nodeIds, pendingNodeFocus.guard)
+  }, [focusCanvasNodes, getPostMutationRevealGuard, history.document.nodes, pendingNodeFocus])
+  useEffect(() => {
+    const key = [
+      props.viewportInsets?.top ?? 0,
+      props.viewportInsets?.right ?? 0,
+      props.viewportInsets?.bottom ?? 0,
+      props.viewportInsets?.left ?? 0,
+    ].join(":")
+    if (viewportInsetsKeyRef.current === key) return
+    viewportInsetsKeyRef.current = key
+    const safeRect = getSafeViewportRect()
+    if (!safeRect || selectedNodeIds.length === 0) return
+    const viewport = resolveCanvasFocusAvoidanceViewport({
+      document: documentRef.current,
+      nodeIds: selectedNodeIds,
+      safeRect,
+      viewport: reactFlow.getViewport(),
+    })
+    if (!viewport) return
+    void reactFlow.setViewport(viewport, {
+      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.viewport, prefersReducedMotion),
+      ease: canvasViewportEase,
+      interpolate: "smooth",
+    })
+  }, [
+    getSafeViewportRect,
+    prefersReducedMotion,
+    props.viewportInsets?.bottom,
+    props.viewportInsets?.left,
+    props.viewportInsets?.right,
+    props.viewportInsets?.top,
+    reactFlow,
+    selectedNodeIds,
+  ])
   const waitForStableLoad = useCallback(async () => {
     while (true) {
       const barrier = loadBarrierRef.current
@@ -1134,7 +1552,10 @@ function CanvasEditorContent(
       })
       let foundNodeIds: string[] = []
       let missingNodeIds: string[] = []
-      const duration = "animation" in command && command.animation === "smooth" ? 220 : 0
+      const duration = resolveCanvasMotionDuration(
+        "animation" in command && command.animation === "smooth" ? CANVAS_MOTION_DURATION.fit : 0,
+        prefersReducedMotion,
+      )
 
       if (command.type === "selection.clear") updateSelection([])
       if (command.type === "selection.set") {
@@ -1153,13 +1574,25 @@ function CanvasEditorContent(
         missingNodeIds = resolved.missingNodeIds
         if (command.select) updateSelection(foundNodeIds)
         if ((command.fit ?? "contain") !== "none" && foundNodeIds.length > 0) {
+          const focusGuard = getPostMutationRevealGuard()
+          const geometryReady = confirmCanvasNodeGeometry(foundNodeIds, () =>
+            isCanvasPostMutationRevealGuardCurrent(focusGuard, getPostMutationRevealGuard()),
+          )
+          if (!geometryReady) {
+            return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
+          }
+          markUserNavigation()
           const center = command.fit === "center"
-          await fitDocumentViewport(document, {
-            duration,
-            maxZoom: center ? CANVAS_CENTER_FIT_MAX_ZOOM : CANVAS_FIT_MAX_ZOOM,
-            nodeIds: foundNodeIds,
-            padding: center ? CANVAS_CENTER_FIT_PADDING : CANVAS_FIT_PADDING,
-          })
+          if (center && command.animation === "smooth") {
+            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), CANVAS_MOTION_DURATION.fit)
+          } else {
+            await fitDocumentViewport(document, {
+              duration,
+              maxZoom: center ? CANVAS_CENTER_FIT_MAX_ZOOM : CANVAS_FIT_MAX_ZOOM,
+              nodeIds: foundNodeIds,
+              padding: center ? CANVAS_CENTER_FIT_PADDING : CANVAS_FIT_PADDING,
+            })
+          }
         }
       }
       if (command.type === "viewport.fit") {
@@ -1169,6 +1602,16 @@ function CanvasEditorContent(
         if (resolved.explicit && foundNodeIds.length === 0) {
           return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
         }
+        if (resolved.explicit) {
+          const focusGuard = getPostMutationRevealGuard()
+          const geometryReady = confirmCanvasNodeGeometry(foundNodeIds, () =>
+            isCanvasPostMutationRevealGuardCurrent(focusGuard, getPostMutationRevealGuard()),
+          )
+          if (!geometryReady) {
+            return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
+          }
+        }
+        markUserNavigation()
         await fitDocumentViewport(document, {
           duration,
           maxZoom: command.maxZoom,
@@ -1186,15 +1629,19 @@ function CanvasEditorContent(
         ) {
           throw new Error(`Canvas viewport zoom must be between ${CANVAS_MIN_ZOOM} and ${CANVAS_MAX_ZOOM}`)
         }
+        markUserNavigation()
         await reactFlow.setCenter(command.position.x, command.position.y, {
           duration,
+          ease: canvasViewportEase,
+          interpolate: "smooth",
           zoom: command.zoom,
         })
       }
       if (command.type === "viewport.zoom") {
         if (!Number.isFinite(command.zoom) || command.zoom < CANVAS_MIN_ZOOM || command.zoom > CANVAS_MAX_ZOOM)
           throw new Error(`Canvas viewport zoom must be between ${CANVAS_MIN_ZOOM} and ${CANVAS_MAX_ZOOM}`)
-        await reactFlow.zoomTo(command.zoom, { duration })
+        markUserNavigation()
+        await reactFlow.zoomTo(command.zoom, { duration, ease: canvasViewportEase, interpolate: "smooth" })
       }
       if (command.type === "notification.show") {
         notificationService?.show({
@@ -1205,7 +1652,19 @@ function CanvasEditorContent(
       }
       return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
     },
-    [fitDocumentViewport, getViewSnapshot, notificationService, reactFlow, updateSelection, waitForStableLoad],
+    [
+      confirmCanvasNodeGeometry,
+      fitDocumentViewport,
+      focusCanvasNodes,
+      getPostMutationRevealGuard,
+      getViewSnapshot,
+      markUserNavigation,
+      notificationService,
+      prefersReducedMotion,
+      reactFlow,
+      updateSelection,
+      waitForStableLoad,
+    ],
   )
   const viewSession = useMemo<CanvasViewSession | null>(
     () =>
@@ -1239,7 +1698,25 @@ function CanvasEditorContent(
       y: bounds.top + bounds.height / 2,
     })
   }, [])
-  const fitCanvas = useCallback(() => void fitDocumentViewport(documentRef.current), [fitDocumentViewport])
+  const nextViewportInsertPoint = useCallback(
+    (size = { height: 200, width: 320 }) => {
+      const safeRect = getSafeViewportRect()
+      const worldBounds = safeRect
+        ? resolveCanvasVisibleWorldRect({ safeRect, viewport: reactFlowRef.current.getViewport() })
+        : undefined
+      if (!worldBounds) return findOpenCanvasPoint(history.document, pointAtCenter(), size)
+      const preferred = {
+        x: worldBounds.left + (worldBounds.width - size.width) / 2,
+        y: worldBounds.top + (worldBounds.height - size.height) / 2,
+      }
+      return findOpenCanvasPoint(history.document, preferred, size, worldBounds)
+    },
+    [getSafeViewportRect, history.document, pointAtCenter],
+  )
+  const fitCanvas = useCallback(() => {
+    markUserNavigation()
+    void fitDocumentViewport(documentRef.current)
+  }, [fitDocumentViewport, markUserNavigation])
   const nextInsertPoint = useCallback(
     (index = 0) => {
       const point = insertPoint ?? pointerRef.current ?? pointAtCenter()
@@ -1351,9 +1828,24 @@ function CanvasEditorContent(
   selectionDragModeActiveRef.current = selectionDragModeActive
   selectionDragShortcutModifierRef.current = props.selectionDragSource?.shortcutModifier
   const selectionDragChordHeld = selectionDragGesture.held
+  const interactionPolicy = resolveCanvasInteractionPolicy({
+    readOnly,
+    selectionDragChordHeld,
+    spacePanning,
+    tool: interactionTool,
+  })
+  const canvasPointerMutationEnabled = interactionPolicy.mutationEnabled
   const selectionDragArmed = Boolean(
     selectionDragChordHeld && !selectionDragGesture.consumed && visibleSelectionDragSource,
   )
+  useEffect(() => {
+    if (canvasPointerMutationEnabled) return
+    connectionStartRef.current = null
+    updateConnectionTargetNode(null)
+    boxSelectionActiveRef.current = false
+    boxSelectionBaselineRef.current = null
+    setPendingConnection(null)
+  }, [canvasPointerMutationEnabled, updateConnectionTargetNode])
   useLayoutEffect(() => {
     selectionActionsMountedRef.current = true
     return () => {
@@ -1592,7 +2084,6 @@ function CanvasEditorContent(
       if (saveRevisionRef.current === document.revision && savePromiseRef.current) return savePromiseRef.current
 
       saveControllerRef.current?.abort()
-      setSaveState("saving")
       const controller = new AbortController()
       saveControllerRef.current = controller
       saveRevisionRef.current = document.revision
@@ -1613,7 +2104,6 @@ function CanvasEditorContent(
           }
           saveErrorRef.current = null
           setSaveError(null)
-          setSaveState("saved")
           return persisted
         },
         (error) => {
@@ -1621,7 +2111,6 @@ function CanvasEditorContent(
           const message = error instanceof Error ? error.message : String(error)
           saveErrorRef.current = message
           setSaveError(message)
-          setSaveState("idle")
           notifyError("Could not save canvas", error)
           throw error
         },
@@ -1745,10 +2234,16 @@ function CanvasEditorContent(
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
         const reloadScope = resourceMutationScopeRef.current
+        const presentedScope = presentedDocumentScopeRef.current
+        const blockWhileRecovering =
+          Boolean(loadError) ||
+          !presentedScope ||
+          !isCanvasResourceMutationScopeCurrent(() => presentedScope, reloadScope)
         const loadBarrier = createCanvasLoadBarrier()
         loadBarrierRef.current = loadBarrier
         hydratingRef.current = true
         setHydrating(true)
+        if (blockWhileRecovering) setBlockingLoad(true)
         setLoadError(null)
         const controller = new AbortController()
         abortCanvasReload(reloadControllerRef.current)
@@ -1772,6 +2267,7 @@ function CanvasEditorContent(
           }
           rendered = waitForAuthoritativeRender(document)
           acceptHydratedDocument(document)
+          presentedDocumentScopeRef.current = reloadScope
           loadBarrier.resolve()
         } catch (error) {
           if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
@@ -1799,6 +2295,7 @@ function CanvasEditorContent(
             effect: () => {
               hydratingRef.current = false
               setHydrating(false)
+              if (blockWhileRecovering) setBlockingLoad(false)
             },
             reloadScope,
           })
@@ -1807,7 +2304,7 @@ function CanvasEditorContent(
         await rendered
       })
     },
-    [acceptHydratedDocument, notifyError, persistenceService, waitForAuthoritativeRender],
+    [acceptHydratedDocument, loadError, notifyError, persistenceService, waitForAuthoritativeRender],
   )
   useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
   useEffect(() => {
@@ -1823,7 +2320,9 @@ function CanvasEditorContent(
   useEffect(() => {
     if (!persistenceService) {
       hydratingRef.current = false
+      presentedDocumentScopeRef.current = null
       setHydrating(false)
+      setBlockingLoad(false)
       setLoadError(null)
       loadBarrierRef.current.resolve()
       return
@@ -1837,6 +2336,10 @@ function CanvasEditorContent(
     loadBarrierRef.current = loadBarrier
     previousLoadBarrier.resolve()
     const loadScope = resourceMutationScopeRef.current
+    const presentedScope = presentedDocumentScopeRef.current
+    if (!presentedScope || !isCanvasResourceMutationScopeCurrent(() => presentedScope, loadScope)) {
+      setBlockingLoad(true)
+    }
     const documentId = history.document.id
     const isCurrentLoad = () =>
       !controller.signal.aborted &&
@@ -1848,6 +2351,7 @@ function CanvasEditorContent(
         if (isCurrentLoad() && authoritativeRetry && !document) {
           const error = new Error(`Canvas document was not found: ${documentId}`)
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           setLoadError(error.message)
           loadBarrier.reject(error)
@@ -1866,7 +2370,9 @@ function CanvasEditorContent(
           }
         }
         if (isCurrentLoad()) {
+          presentedDocumentScopeRef.current = loadScope
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           loadBarrier.resolve()
         }
@@ -1874,6 +2380,7 @@ function CanvasEditorContent(
       (error) => {
         if (isCurrentLoad()) {
           setHydrating(false)
+          setBlockingLoad(false)
           hydratingRef.current = false
           setLoadError(error instanceof Error ? error.message : String(error))
           loadBarrier.reject(error)
@@ -1942,10 +2449,15 @@ function CanvasEditorContent(
     }
   }, [history.document.nodes, pendingConnection])
   const runResourceMutation = useCallback(
-    (input: Omit<CanvasResourceMutationRequest, "expectedRevision" | "signal">) => {
+    (
+      input: Omit<CanvasResourceMutationRequest, "expectedRevision" | "signal">,
+      options: { focusCreatedNodes?: boolean; revealCreatedNodes?: boolean } = {},
+    ) => {
       if (!mutationService || readOnly) return
       const controller = new AbortController()
       operationControllersRef.current.add(controller)
+      const revealGuard =
+        options.focusCreatedNodes || options.revealCreatedNodes ? getPostMutationRevealGuard() : undefined
       void (async () => {
         const operationScope = resourceMutationScopeRef.current
         try {
@@ -1958,8 +2470,15 @@ function CanvasEditorContent(
           await completeCanvasResourceMutation({
             currentScope: () => resourceMutationScopeRef.current,
             operationScope,
+            presentCreatedNodes: options.focusCreatedNodes ? undefined : presentNodeEntries,
             reload: reloadAuthoritativeDocument,
             result,
+            runViewEffect: revealGuard
+              ? async (createdNodeIds) => {
+                  if (options.focusCreatedNodes) await focusCanvasNodes(createdNodeIds, revealGuard)
+                  else await revealCanvasNodesAfterMutation(createdNodeIds, revealGuard)
+                }
+              : undefined,
             selectNodes,
             show: (notification) => notificationService?.show(notification),
             signal: controller.signal,
@@ -1977,7 +2496,18 @@ function CanvasEditorContent(
         }
       })()
     },
-    [mutationService, notificationService, notifyError, readOnly, reloadAuthoritativeDocument, selectNodes],
+    [
+      getPostMutationRevealGuard,
+      focusCanvasNodes,
+      mutationService,
+      notificationService,
+      notifyError,
+      presentNodeEntries,
+      readOnly,
+      reloadAuthoritativeDocument,
+      revealCanvasNodesAfterMutation,
+      selectNodes,
+    ],
   )
   const runResourceRelink = useCallback(
     async (
@@ -2067,18 +2597,25 @@ function CanvasEditorContent(
     [mutationService, readOnly, runResourceRelink],
   )
   const addTextResource = useCallback(
-    (position?: CanvasPoint, relation?: CanvasResourceMutationRequest["relation"]) => {
-      runResourceMutation({
-        anchor: position ?? nextInsertPoint(),
-        files: [],
-        relation,
-        sources: [{ kind: "new-text", sourceId: createCanvasId("source"), text: "" }],
-      })
+    (
+      position?: CanvasPoint,
+      relation?: CanvasResourceMutationRequest["relation"],
+      focusAfterCreate = false,
+    ) => {
+      runResourceMutation(
+        {
+          anchor: position ?? (focusAfterCreate ? nextViewportInsertPoint() : nextInsertPoint()),
+          files: [],
+          relation,
+          sources: [{ kind: "new-text", sourceId: createCanvasId("source"), text: "" }],
+        },
+        focusAfterCreate ? { focusCreatedNodes: true } : {},
+      )
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type: "text" } })
     },
-    [nextInsertPoint, runResourceMutation, telemetryService],
+    [nextInsertPoint, nextViewportInsertPoint, runResourceMutation, telemetryService],
   )
   const createNodeForType = useCallback(
     (type: string, position: CanvasPoint, data?: Record<string, unknown>) => {
@@ -2094,22 +2631,31 @@ function CanvasEditorContent(
     [notifyError, props.fileRendererRegistry, props.nodeRegistry],
   )
   const addNode = useCallback(
-    (type: string, position?: CanvasPoint) => {
+    (type: string, position?: CanvasPoint, focusAfterCreate = false) => {
       if (readOnly || leavingRef.current || hydratingRef.current || saveErrorRef.current) return undefined
       if (type === "text") {
-        addTextResource(position)
+        addTextResource(position, undefined, focusAfterCreate)
         return undefined
       }
-      const preferredPosition = position ?? insertPoint ?? pointerRef.current ?? pointAtCenter()
-      const created = createNodeForType(type, preferredPosition)
-      if (!created) return undefined
+      const createdAt = position ?? insertPoint ?? pointAtCenter()
+      const provisional = createNodeForType(type, createdAt)
+      if (!provisional) return undefined
+      const size = getCanvasNodeSize(provisional)
+      const preferredPosition = focusAfterCreate ? nextViewportInsertPoint(size) : createdAt
+      const created = { ...provisional, position: preferredPosition }
       const node = {
         ...created,
-        position: findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
+        position: focusAfterCreate
+          ? preferredPosition
+          : findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
       }
       const result = addCanvasNodes(history.document, [node])
+      if (!focusAfterCreate) presentNodeEntries([node.id])
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
+      if (focusAfterCreate) {
+        setPendingNodeFocus({ guard: getPostMutationRevealGuard(), nodeIds: [node.id] })
+      }
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type } })
@@ -2119,8 +2665,11 @@ function CanvasEditorContent(
       addTextResource,
       createNodeForType,
       history.document,
+      getPostMutationRevealGuard,
       insertPoint,
+      nextViewportInsertPoint,
       pointAtCenter,
+      presentNodeEntries,
       readOnly,
       selectNodes,
       telemetryService,
@@ -2192,17 +2741,19 @@ function CanvasEditorContent(
   const duplicate = useCallback(() => {
     if (!hasNodeOnlySelection) return
     const result = duplicateCanvasSelection(history.document, selectedNodeIds)
+    presentNodeEntries(result.selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [hasNodeOnlySelection, history.document, selectedNodeIds, selectNodes])
+  }, [hasNodeOnlySelection, history.document, presentNodeEntries, selectedNodeIds, selectNodes])
   const duplicateNode = useCallback(
     (nodeId: string) => {
       const result = duplicateCanvasSelection(documentRef.current, [nodeId])
       if (result.selectedNodeIds.length === 0) return
+      presentNodeEntries(result.selectedNodeIds)
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
     },
-    [selectNodes],
+    [presentNodeEntries, selectNodes],
   )
   const quickConnect = useCallback(
     (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
@@ -2231,8 +2782,10 @@ function CanvasEditorContent(
         )
         return
       }
+      if (!documentRef.current.nodes.some((node) => node.id === nodeId)) return
       const created = createNodeForType(nodeType, targetPosition ?? { x: 0, y: 0 })
       if (!created) return
+      presentNodeEntries([created.id])
       commit((document) => {
         const anchor = document.nodes.find((node) => node.id === nodeId)
         if (!anchor) return document
@@ -2281,7 +2834,7 @@ function CanvasEditorContent(
       selectNodes([created.id])
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
-    [addTextResource, commit, createNodeForType, readOnly, selectNodes, telemetryService],
+    [addTextResource, commit, createNodeForType, presentNodeEntries, readOnly, selectNodes, telemetryService],
   )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
@@ -2297,9 +2850,10 @@ function CanvasEditorContent(
   const group = useCallback(() => {
     if (selectionContext.kind !== "multi-node") return
     const result = groupCanvasNodes(history.document, selectedNodeIds)
+    presentNodeEntries(result.selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [history.document, selectedNodeIds, selectNodes, selectionContext.kind])
+  }, [history.document, presentNodeEntries, selectedNodeIds, selectNodes, selectionContext.kind])
   const ungroup = useCallback(() => {
     if (!hasSingleGroupSelection || selectionContext.kind !== "single-node") return
     const groupId = selectionContext.nodeId
@@ -2387,6 +2941,7 @@ function CanvasEditorContent(
             }
           : undefined
       const prepared = prepareCanvasClipboardPaste(payload, offset)
+      presentNodeEntries(prepared.selectedNodeIds)
       dispatch({
         type: "commit-update",
         update: (document) => ({
@@ -2398,7 +2953,7 @@ function CanvasEditorContent(
       selectNodes(prepared.selectedNodeIds)
       return true
     },
-    [dispatch, insertPoint, notificationService, props.clipboardScope, selectNodes],
+    [dispatch, insertPoint, notificationService, presentNodeEntries, props.clipboardScope, selectNodes],
   )
   const copy = useCallback(() => {
     const payload = getClipboardPayload()
@@ -2462,7 +3017,7 @@ function CanvasEditorContent(
     ) => {
       if (!mutationService || (files.length === 0 && !transfer) || readOnly) return
       const anchor = position ?? pointerRef.current ?? pointAtCenter()
-      runResourceMutation({ anchor, files, sources: [], transfer })
+      runResourceMutation({ anchor, files, sources: [], transfer }, { revealCreatedNodes: position === undefined })
     },
     [mutationService, pointAtCenter, readOnly, runResourceMutation],
   )
@@ -2485,6 +3040,7 @@ function CanvasEditorContent(
       const document = currentDocument
       const documentId = document.id
       const expectedRevision = document.revision
+      const revealGuard = getPostMutationRevealGuard()
       const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
       generationControllerRef.current = { controller, documentId }
       void (async () => {
@@ -2513,9 +3069,33 @@ function CanvasEditorContent(
         })
       })()
         .then(
-          (result) => {
+          async (result) => {
             if (!result || controller.signal.aborted || documentRef.current.id !== documentId) return
             setGenerateOpen(false)
+            let refreshed = false
+            try {
+              await reloadAuthoritativeDocument(controller.signal)
+              refreshed = true
+            } catch {
+              if (!controller.signal.aborted) {
+                notificationService?.show({
+                  description: "Reload the Canvas to show the committed generation.",
+                  kind: "warning",
+                  title: "Generation completed, but refresh failed",
+                })
+              }
+            }
+            if (refreshed && !controller.signal.aborted && documentRef.current.id === documentId) {
+              presentNodeEntries(result.createdNodeIds)
+              selectNodes(result.createdNodeIds)
+              try {
+                await revealCanvasNodesAfterMutation(result.createdNodeIds, revealGuard)
+              } catch {
+                // A post-commit camera effect is optional and cannot turn
+                // successful generation into a refresh or mutation failure.
+              }
+            }
+            if (controller.signal.aborted || documentRef.current.id !== documentId) return
             notificationService?.show({
               description: result.warnings.length > 0 ? result.warnings.join("\n") : undefined,
               kind: result.warnings.length > 0 ? "warning" : "success",
@@ -2540,13 +3120,18 @@ function CanvasEditorContent(
     },
     [
       generateService,
+      getPostMutationRevealGuard,
       insertPoint,
       notificationService,
       notifyError,
       pointAtCenter,
+      presentNodeEntries,
       props.onGenerationStateChange,
       props.viewScopeId,
       readOnly,
+      reloadAuthoritativeDocument,
+      revealCanvasNodesAfterMutation,
+      selectNodes,
       startSave,
     ],
   )
@@ -2560,19 +3145,29 @@ function CanvasEditorContent(
   }, [exportService, history.document, notifyError, selectedNodeIds])
 
   const clearOverlays = useCallback(() => {
+    snapSessionRef.current = null
+    setSnapLines([])
     updateSelection([])
     setPendingConnection(null)
     setNodeMenuOpen(false)
     setGenerateOpen(false)
     setSearchOpen(false)
   }, [updateSelection])
-  const activateSelectTool = useCallback(() => {
-    setPendingConnection(null)
-    setNodeMenuOpen(false)
-    setGenerateOpen(false)
-    setSearchOpen(false)
-    rootRef.current?.focus()
-  }, [])
+  const activateInteractionTool = useCallback(
+    (tool: CanvasInteractionTool) => {
+      connectionStartRef.current = null
+      updateConnectionTargetNode(null)
+      boxSelectionActiveRef.current = false
+      boxSelectionBaselineRef.current = null
+      setInteractionTool(tool)
+      setPendingConnection(null)
+      setNodeMenuOpen(false)
+      setGenerateOpen(false)
+      setSearchOpen(false)
+      rootRef.current?.focus()
+    },
+    [updateConnectionTargetNode],
+  )
   const shortcutHandler = createCanvasShortcutHandler(
     {
       addNode: () => setNodeMenuOpen(true),
@@ -2592,6 +3187,7 @@ function CanvasEditorContent(
         requestGenerate()
       },
       group,
+      hand: () => activateInteractionTool("hand"),
       layout: () =>
         resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
           ? tidySelection()
@@ -2599,12 +3195,26 @@ function CanvasEditorContent(
       openSearch: () => setSearchOpen(true),
       paste,
       redo: () => dispatch({ type: "redo" }),
-      select: activateSelectTool,
+      select: () => activateInteractionTool("select"),
       selectAll: () => selectNodes(history.document.nodes.filter((node) => !node.parentId).map((node) => node.id)),
       undo: () => dispatch({ type: "undo" }),
       ungroup,
-      zoomIn: () => void reactFlow.zoomIn({ duration: 140 }),
-      zoomOut: () => void reactFlow.zoomOut({ duration: 140 }),
+      zoomIn: () => {
+        markUserNavigation()
+        void reactFlow.zoomIn({
+          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+          ease: canvasViewportEase,
+          interpolate: "smooth",
+        })
+      },
+      zoomOut: () => {
+        markUserNavigation()
+        void reactFlow.zoomOut({
+          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+          ease: canvasViewportEase,
+          interpolate: "smooth",
+        })
+      },
     },
     readOnly,
     {
@@ -2616,11 +3226,15 @@ function CanvasEditorContent(
   const controller = useMemo(
     () => ({
       document: history.document,
+      enteringNodeIds,
       hydrating,
+      reducedMotion: prefersReducedMotion,
       selection,
       selectionContext,
       readOnly,
       canUpload: Boolean(mutationService),
+      canRelinkResource:
+        mutationService !== undefined && typeof Reflect.get(mutationService, "relink") === "function",
       fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
       visibleSelectionActions,
@@ -2635,6 +3249,7 @@ function CanvasEditorContent(
       commit,
       duplicateNode,
       executeSelectionAction,
+      finishNodeEntry,
       isSelectionActionPending,
       finishSelectionDrag,
       setSelectionDragCandidateNode,
@@ -2658,6 +3273,8 @@ function CanvasEditorContent(
       connectionNodeTypes,
       duplicateNode,
       executeSelectionAction,
+      enteringNodeIds,
+      finishNodeEntry,
       history.document,
       hydrating,
       isSelectionActionPending,
@@ -2682,6 +3299,7 @@ function CanvasEditorContent(
       startSelectionDrag,
       setSelectionDragCandidateNode,
       mutationService,
+      prefersReducedMotion,
       visibleSelectionActions,
       visibleSelectionDragSource,
     ],
@@ -2689,27 +3307,40 @@ function CanvasEditorContent(
   const handleEdgesChange = useCallback(
     (changes: EdgeChange<CanvasEdge>[]) => {
       const selectionChanges = changes.filter((change) => change.type === "select")
-      if (selectionChanges.length > 0 && !boxSelectionActiveRef.current) {
+      if (canvasPointerSelectionEnabled && selectionChanges.length > 0 && !boxSelectionActiveRef.current) {
         replaceSelection(applyReactFlowEdgeSelectionChanges(selectionRef.current, selectionChanges))
       }
       const documentChanges = changes.filter((change) => change.type !== "select")
-      if (documentChanges.length === 0) return
+      if (!canvasPointerMutationEnabled || documentChanges.length === 0) return
       commit((document) => ({ ...document, edges: applyEdgeChanges(documentChanges, document.edges) }))
     },
-    [commit, replaceSelection],
+    [canvasPointerMutationEnabled, canvasPointerSelectionEnabled, commit, replaceSelection],
   )
   const handleNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
-      const effectiveChanges = altDragRef.current
+      let effectiveChanges = altDragRef.current
         ? remapCanvasDuplicateDragChanges(changes, altDragRef.current.duplicatedNodeIdBySourceId)
         : changes
+      const snapSession = snapSessionRef.current
+      if (snapEnabledRef.current && snapSession) {
+        const zoom = reactFlowRef.current.getViewport().zoom
+        const snapped = snapCanvasNodePositionChanges(
+          effectiveChanges,
+          snapSession,
+          CANVAS_SNAP_TOLERANCE_SCREEN_PX / Math.max(zoom, Number.EPSILON),
+        )
+        effectiveChanges = snapped.changes
+        setSnapLines(snapped.lines)
+      }
       const selectionChanges = effectiveChanges.filter((change) => change.type === "select")
-      if (selectionChanges.length > 0) {
+      if (canvasPointerSelectionEnabled && selectionChanges.length > 0) {
         replaceSelection(applyReactFlowNodeSelectionChanges(selectionRef.current, selectionChanges))
       }
       const documentChanges = effectiveChanges.filter((change) => change.type !== "select" && change.type !== "remove")
       if (documentChanges.length === 0) return
-      const measurementChanges = documentChanges.filter((change) => change.type === "dimensions")
+      const measurementChanges = canvasPointerNavigationOnly
+        ? []
+        : documentChanges.filter((change) => change.type === "dimensions")
       const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
       if (measurementChanges.length > 0) {
         dispatch({
@@ -2720,7 +3351,7 @@ function CanvasEditorContent(
           },
         })
       }
-      if (committedChanges.length > 0) {
+      if (canvasPointerMutationEnabled && committedChanges.length > 0) {
         dispatch({
           type: "preview-or-commit-update",
           update: (document) => {
@@ -2730,36 +3361,50 @@ function CanvasEditorContent(
         })
       }
     },
-    [dispatch, replaceSelection],
+    [
+      canvasPointerMutationEnabled,
+      canvasPointerNavigationOnly,
+      canvasPointerSelectionEnabled,
+      dispatch,
+      replaceSelection,
+    ],
   )
   const handleConnect = useCallback(
-    (connection: Connection) => commit((document) => connectCanvasNodes(document, connection)),
-    [commit],
+    (connection: Connection) => {
+      if (!canvasPointerMutationEnabled) return
+      commit((document) => connectCanvasNodes(document, connection))
+    },
+    [canvasPointerMutationEnabled, commit],
   )
   const handleConnectStart = useCallback<OnConnectStart>(
     (event, params) => {
       setPendingConnection(null)
       updateConnectionTargetNode(null)
+      if (!canvasPointerMutationEnabled) {
+        connectionStartRef.current = null
+        return
+      }
       const pointerScreen = getEventClientPoint(event)
       if (!params.nodeId || !params.handleId || !pointerScreen) {
         connectionStartRef.current = null
         return
       }
-      const handle = event.target instanceof Element ? event.target.closest(".react-flow__handle") : null
-      const bounds = handle?.getBoundingClientRect()
       connectionStartRef.current = {
         nodeId: params.nodeId,
         pointerScreen,
         side: params.handleId.includes("left") ? "left" : "right",
-        sourceScreen: bounds ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 } : pointerScreen,
       }
     },
-    [updateConnectionTargetNode],
+    [canvasPointerMutationEnabled, updateConnectionTargetNode],
   )
   const handleConnectEnd = useCallback<OnConnectEnd>(
     (event, connectionState) => {
       const start = connectionStartRef.current
       connectionStartRef.current = null
+      if (!canvasPointerMutationEnabled) {
+        updateConnectionTargetNode(null)
+        return
+      }
       const targetScreen = getEventClientPoint(event)
       const targetNodeId =
         start && targetScreen
@@ -2797,33 +3442,48 @@ function CanvasEditorContent(
       setPendingConnection({
         nodeId: start.nodeId,
         side: start.side,
-        sourceScreen: start.sourceScreen,
         targetPosition: reactFlow.screenToFlowPosition(targetScreen),
-        targetScreen,
       })
     },
-    [commit, reactFlow, updateConnectionTargetNode],
+    [canvasPointerMutationEnabled, commit, reactFlow, updateConnectionTargetNode],
   )
   const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
-    (event, node) => {
+    (event, node, draggedNodes) => {
+      if (!canvasPointerMutationEnabled) return
       dispatch({ type: "begin-gesture" })
       altDragRef.current = null
-      if (!event.altKey) return
-      const currentSelection = selectionRef.current
-      const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
-      const plan = createCanvasDuplicateDragPlan(documentRef.current, nodeIds, event.metaKey || event.ctrlKey)
-      if (!plan) return
-      altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
-      dispatch({ type: "commit", document: plan.document })
-      selectNodes(plan.selectedNodeIds)
+      setSnapLines([])
+      let snapDocument = documentRef.current
+      let draggingIds = draggedNodes.length > 0 ? draggedNodes.map((draggedNode) => draggedNode.id) : [node.id]
+      if (event.altKey) {
+        const currentSelection = selectionRef.current
+        const nodeIds = currentSelection.nodeIds.has(node.id) ? [...currentSelection.nodeIds] : [node.id]
+        const plan = createCanvasDuplicateDragPlan(documentRef.current, nodeIds, event.metaKey || event.ctrlKey)
+        if (plan) {
+          altDragRef.current = { duplicatedNodeIdBySourceId: plan.duplicatedNodeIdBySourceId }
+          snapDocument = plan.document
+          draggingIds = draggingIds.map((id) => plan.duplicatedNodeIdBySourceId.get(id) ?? id)
+          presentNodeEntries(plan.selectedNodeIds)
+          dispatch({ type: "commit", document: plan.document })
+          selectNodes(plan.selectedNodeIds)
+        }
+      }
+      snapSessionRef.current = snapEnabledRef.current ? createCanvasNodeSnapSession(snapDocument, draggingIds) : null
     },
-    [dispatch, selectNodes],
+    [canvasPointerMutationEnabled, dispatch, presentNodeEntries, selectNodes],
   )
   const handleNodeDragStop = useCallback(() => {
     altDragRef.current = null
+    snapSessionRef.current = null
+    setSnapLines([])
     dispatch({ type: "end-gesture" })
   }, [dispatch])
   const handleBoxSelectionStart = useCallback(() => {
+    if (!canvasPointerSelectionEnabled) {
+      boxSelectionActiveRef.current = false
+      boxSelectionBaselineRef.current = null
+      return
+    }
     boxSelectionActiveRef.current = true
     // React Flow clears the controlled selection immediately before this
     // callback, while its internal lookup still uses the pre-gesture selection
@@ -2837,12 +3497,51 @@ function CanvasEditorContent(
     boxSelectionBaselineRef.current = null
     selectionRef.current = baseline
     setSelection(baseline)
-  }, [])
+  }, [canvasPointerSelectionEnabled])
   const handleBoxSelectionEnd = useCallback(() => {
     boxSelectionActiveRef.current = false
     boxSelectionBaselineRef.current = null
   }, [])
-  const searchResults = queryCanvasNodes(history.document, { limit: 8, text: query })
+  const searchResults = useMemo(
+    () => (searchOpen ? queryCanvasNodes(history.document, { limit: 8, text: query }) : []),
+    [history.document, query, searchOpen],
+  )
+  const interactionProps = interactionPolicy
+  const viewportInsetStyle = useMemo(
+    () =>
+      ({
+        "--canvas-safe-bottom": `${Math.max(0, props.viewportInsets?.bottom ?? 0)}px`,
+        "--canvas-safe-left": `${Math.max(0, props.viewportInsets?.left ?? 0)}px`,
+        "--canvas-safe-right": `${Math.max(0, props.viewportInsets?.right ?? 0)}px`,
+        "--canvas-safe-top": `${Math.max(0, props.viewportInsets?.top ?? 0)}px`,
+      }) as CSSProperties,
+    [props.viewportInsets?.bottom, props.viewportInsets?.left, props.viewportInsets?.right, props.viewportInsets?.top],
+  )
+  const zoomToPreset = useCallback(
+    (zoom: number) => {
+      markUserNavigation()
+      const duration = resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.viewport, prefersReducedMotion)
+      const safeRect = getSafeViewportRect()
+      const viewport = reactFlow.getViewport()
+      const centeredViewport = safeRect
+        ? resolveCanvasAnchoredZoomViewport({
+            anchor: {
+              x: safeRect.left + safeRect.width / 2,
+              y: safeRect.top + safeRect.height / 2,
+            },
+            targetZoom: zoom,
+            viewport,
+          })
+        : undefined
+      const options = { duration, ease: canvasViewportEase, interpolate: "smooth" as const }
+      if (centeredViewport) {
+        void reactFlow.setViewport(centeredViewport, options)
+        return
+      }
+      void reactFlow.zoomTo(zoom, options)
+    },
+    [getSafeViewportRect, markUserNavigation, prefersReducedMotion, reactFlow],
+  )
 
   return (
     <CanvasEditorProvider controller={controller}>
@@ -2855,17 +3554,21 @@ function CanvasEditorContent(
                 className={cn(
                   "convax-canvas relative size-full overflow-hidden bg-background text-foreground outline-none",
                   spacePanning && "is-space-panning",
+                  interactionTool === "hand" && "is-hand-tool",
+                  leaving && "is-leaving",
                   props.className,
                 )}
                 data-canvas-color-scheme={appearance.colorScheme}
+                data-canvas-reduced-motion={String(prefersReducedMotion)}
+                data-canvas-tool={interactionTool}
                 onCopy={onCanvasCopy}
                 onDragOver={(event) => {
-                  if (!mutationService || readOnly) return
+                  if (!mutationService || !canvasPointerMutationEnabled) return
                   event.preventDefault()
                   event.dataTransfer.dropEffect = "copy"
                 }}
                 onDrop={(event) => {
-                  if (!mutationService || readOnly) return
+                  if (!mutationService || !canvasPointerMutationEnabled) return
                   event.preventDefault()
                   const types = Array.from(event.dataTransfer.types)
                   uploadFiles(
@@ -2880,17 +3583,47 @@ function CanvasEditorContent(
                 onDoubleClick={(event) => {
                   if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("react-flow__pane"))
                     return
-                  addNode("text", reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
+                  const bounds = rootRef.current?.getBoundingClientRect()
+                  if (!bounds) return
+                  const viewport = reactFlow.getViewport()
+                  const next = resolveCanvasAnchoredZoomViewport({
+                    anchor: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+                    targetZoom: Math.min(
+                      CANVAS_MAX_ZOOM,
+                      Math.max(CANVAS_MIN_ZOOM, viewport.zoom * (event.shiftKey ? 0.5 : 2)),
+                    ),
+                    viewport,
+                  })
+                  if (!next) return
+                  markUserNavigation()
+                  void reactFlow.setViewport(next, {
+                    duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.doubleClickZoom, prefersReducedMotion),
+                    ease: canvasViewportEase,
+                    interpolate: "smooth",
+                  })
                 }}
                 onKeyDown={shortcutHandler}
                 onPaste={onCanvasPaste}
                 onPointerCancelCapture={() => {
                   boxSelectionActiveRef.current = false
                   boxSelectionBaselineRef.current = null
+                  altDragRef.current = null
+                  snapSessionRef.current = null
+                  setSnapLines([])
+                  dispatch({ type: "cancel-gesture" })
                 }}
                 onPointerDownCapture={(event) => {
+                  const canvasRoot = rootRef.current
+                  const interactiveTarget =
+                    event.target instanceof Element
+                      ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
+                      : null
+                  if (event.button === 0 && (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))) {
+                    canvasRoot?.focus({ preventScroll: true })
+                  }
                   if (
                     event.button === 0 &&
+                    canvasPointerSelectionEnabled &&
                     event.target instanceof HTMLElement &&
                     event.target.classList.contains("react-flow__pane")
                   ) {
@@ -2919,39 +3652,43 @@ function CanvasEditorContent(
                     return
                   pointerRef.current = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
                 }}
-                style={canvasAppearanceStyle(appearance)}
+                style={{
+                  ...canvasAppearanceStyle(appearance),
+                  ...canvasMotionStyle(prefersReducedMotion),
+                  ...viewportInsetStyle,
+                }}
                 tabIndex={0}
               >
                 <ReactFlow
                   colorMode={appearance.colorScheme}
                   connectOnClick={false}
+                  connectionRadius={CANVAS_CONNECTION_RADIUS}
                   connectionDragThreshold={4}
                   connectionLineComponent={CanvasConnectionLine}
                   deleteKeyCode={null}
                   edgeTypes={edgeTypes}
                   edges={edges}
-                  elementsSelectable={!readOnly}
-                  fitView
-                  fitViewOptions={CANVAS_FIT_VIEW_OPTIONS}
+                  elementsSelectable={interactionProps.elementsSelectable}
                   maxZoom={CANVAS_MAX_ZOOM}
                   minZoom={CANVAS_MIN_ZOOM}
+                  multiSelectionKeyCode={[...CANVAS_MULTI_SELECTION_KEYS]}
                   nodeTypes={nodeTypes}
                   nodes={nodes}
-                  nodesConnectable={!readOnly}
-                  nodesDraggable={!readOnly && !spacePanning && !selectionDragChordHeld}
+                  nodesConnectable={interactionProps.nodesConnectable}
+                  nodesDraggable={interactionProps.nodesDraggable}
                   nodesFocusable
                   nodeDragThreshold={4}
                   onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                   autoPanOnNodeFocus={false}
                   panActivationKeyCode="Space"
-                  panOnDrag={CANVAS_PAN_ON_DRAG}
+                  panOnDrag={interactionProps.panOnDrag}
                   panOnScroll
                   selectionKeyCode={null}
-                  selectionOnDrag={!readOnly}
+                  selectionOnDrag={interactionProps.selectionOnDrag}
                   selectionMode={SelectionMode.Partial}
                   snapGrid={CANVAS_SNAP_GRID}
-                  snapToGrid={snapToGrid}
-                  zoomActivationKeyCode={CANVAS_ZOOM_ACTIVATION_KEYS}
+                  snapToGrid={snapEnabled}
+                  zoomActivationKeyCode={[...CANVAS_ZOOM_ACTIVATION_KEYS]}
                   zoomOnDoubleClick={false}
                   zoomOnPinch
                   zoomOnScroll={false}
@@ -2960,13 +3697,18 @@ function CanvasEditorContent(
                   onConnectStart={handleConnectStart}
                   onEdgesChange={handleEdgesChange}
                   onNodeContextMenu={(_, node) => {
-                    if (!selection.nodeIds.has(node.id)) selectNodes([node.id])
+                    if (canvasPointerSelectionEnabled && !selection.nodeIds.has(node.id)) selectNodes([node.id])
                     setInsertPoint(node.position)
                   }}
-                  onNodeDoubleClick={(_, node) => selectNodes([node.id])}
+                  onNodeDoubleClick={(_, node) => {
+                    if (canvasPointerSelectionEnabled) selectNodes([node.id])
+                  }}
                   onNodeDragStart={handleNodeDragStart}
                   onNodeDragStop={handleNodeDragStop}
                   onNodesChange={handleNodesChange}
+                  onMoveStart={(event) => {
+                    if (event) markUserNavigation()
+                  }}
                   onSelectionEnd={handleBoxSelectionEnd}
                   onSelectionStart={handleBoxSelectionStart}
                   onPaneClick={() => {
@@ -2976,8 +3718,10 @@ function CanvasEditorContent(
                       ignoreConnectionPaneClickRef.current = false
                       return
                     }
-                    updateSelection([])
-                    setPendingConnection(null)
+                    if (canvasPointerSelectionEnabled) {
+                      updateSelection([])
+                      setPendingConnection(null)
+                    }
                     rootRef.current?.focus()
                   }}
                   onPaneContextMenu={(event) => {
@@ -2987,15 +3731,16 @@ function CanvasEditorContent(
                 >
                   {appearance.gridStyle !== "none" ? (
                     <Background
-                      color="var(--canvas-grid)"
+                      color={`${appearance.gridColor}4d`}
                       gap={appearance.gridGap}
                       size={appearance.gridSize}
                       variant={appearance.gridStyle === "lines" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
                     />
                   ) : null}
+                  <CanvasSnapGuides lines={snapLines} />
                   {miniMapVisible ? (
                     <MiniMap
-                      className="!bottom-4 !right-4 !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
+                      className="convax-canvas-minimap !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
                       maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
                       nodeColor="var(--muted-foreground)"
                       pannable
@@ -3003,7 +3748,6 @@ function CanvasEditorContent(
                     />
                   ) : null}
                 </ReactFlow>
-
                 {pendingConnection ? (
                   <PendingConnectionMenu
                     items={connectionNodeTypes}
@@ -3013,8 +3757,17 @@ function CanvasEditorContent(
                       quickConnect(connection.nodeId, connection.side, type, connection.targetPosition)
                     }}
                     side={pendingConnection.side}
-                    sourceScreen={pendingConnection.sourceScreen}
-                    targetScreen={pendingConnection.targetScreen}
+                    sourceNodeId={pendingConnection.nodeId}
+                    targetPosition={pendingConnection.targetPosition}
+                  />
+                ) : null}
+
+                {selectionDragModeActive && props.selectionDragSource?.mode ? (
+                  <CanvasSelectionDragModeStatus
+                    description={props.selectionDragSource.mode.description}
+                    exitLabel={props.selectionDragSource.mode.exitLabel}
+                    icon={props.selectionDragSource.icon ?? <FileOutput className="size-4" />}
+                    onExit={exitSelectionDragMode}
                   />
                 ) : null}
 
@@ -3024,61 +3777,65 @@ function CanvasEditorContent(
                   canRedo={history.future.length > 0}
                   canUndo={history.past.length > 0}
                   canUpload={Boolean(mutationService)}
+                  createItems={connectionNodeTypes}
                   generating={generating}
-                  onAddText={() => addNode("text")}
+                  interactionTool={interactionTool}
+                  onAddNode={(type) => addNode(type, undefined, true)}
                   onExport={exportCanvas}
                   onGenerate={requestGenerate}
+                  onInteractionToolChange={activateInteractionTool}
+                  onRedo={() => dispatch({ type: "redo" })}
                   onSelectionDragModeChange={(active) => {
                     if (active) enterSelectionDragMode()
                     else exitSelectionDragMode()
                   }}
-                  onRedo={() => dispatch({ type: "redo" })}
-                  onSearch={() => setSearchOpen(true)}
-                  onSelect={activateSelectTool}
                   onUndo={() => dispatch({ type: "undo" })}
                   onUpload={() => uploadInputRef.current?.click()}
                   readOnly={readOnly}
-                  saveState={saveState}
+                  reducedMotion={prefersReducedMotion}
                   selectionDragMode={
                     props.selectionDragSource?.mode
                       ? {
-                          ...props.selectionDragSource.mode,
                           active: selectionDragModeActive,
                           icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                          label: props.selectionDragSource.mode.label,
                         }
                       : undefined
                   }
                 />
 
-                {hydrating || loadError ? (
+                {blockingLoad || loadError ? (
                   <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
-                    <div className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm">
-                      {loadError ? (
-                        <>
-                          <TriangleAlert className="size-5 text-destructive" />
-                          <div>
-                            <div className="font-medium text-foreground">Canvas could not be loaded</div>
-                            <div className="mt-1 text-xs">{loadError}</div>
-                          </div>
-                          <Button
-                            onClick={() => {
-                              authoritativeLoadRequestedRef.current = true
-                              loadBarrierRef.current = createCanvasLoadBarrier()
-                              setLoadAttempt((attempt) => attempt + 1)
-                            }}
-                            size="sm"
-                            variant="outline"
-                          >
-                            Retry
-                          </Button>
-                        </>
-                      ) : (
-                        <div className="flex items-center gap-2">
-                          <LoaderCircle className="size-4 animate-spin" />
-                          Loading canvas…
+                    {loadError ? (
+                      <div
+                        aria-live="assertive"
+                        className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm"
+                        role="alert"
+                      >
+                        <TriangleAlert className="size-5 text-destructive" />
+                        <div>
+                          <div className="font-medium text-foreground">Canvas could not be loaded</div>
+                          <div className="mt-1 text-xs">{loadError}</div>
                         </div>
-                      )}
-                    </div>
+                        <Button
+                          onClick={() => {
+                            authoritativeLoadRequestedRef.current = true
+                            loadBarrierRef.current = createCanvasLoadBarrier()
+                            setLoadAttempt((attempt) => attempt + 1)
+                          }}
+                          size="sm"
+                          variant="outline"
+                        >
+                          Retry
+                        </Button>
+                      </div>
+                    ) : (
+                      <Loading
+                        className="max-w-sm rounded-md border border-border bg-card px-5 py-4 shadow-sm"
+                        label="Loading canvas…"
+                        reducedMotion={prefersReducedMotion}
+                      />
+                    )}
                   </div>
                 ) : null}
 
@@ -3144,21 +3901,42 @@ function CanvasEditorContent(
                   onLayout={layoutCanvas}
                   onLayoutStrategyChange={changeAutoLayoutStrategy}
                   onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
-                  onSnapChange={() => setSnapToGrid((enabled) => !enabled)}
-                  onZoomIn={() => void reactFlow.zoomIn({ duration: 140 })}
-                  onZoomOut={() => void reactFlow.zoomOut({ duration: 140 })}
-                  snapToGrid={snapToGrid}
+                  onSearch={() => setSearchOpen(true)}
+                  onSnapChange={() =>
+                    setSnapEnabled((enabled) => {
+                      if (enabled) setSnapLines([])
+                      return !enabled
+                    })
+                  }
+                  onZoomIn={() => {
+                    markUserNavigation()
+                    void reactFlow.zoomIn({
+                      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+                      ease: canvasViewportEase,
+                      interpolate: "smooth",
+                    })
+                  }}
+                  onZoomOut={() => {
+                    markUserNavigation()
+                    void reactFlow.zoomOut({
+                      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+                      ease: canvasViewportEase,
+                      interpolate: "smooth",
+                    })
+                  }}
+                  onZoomPreset={zoomToPreset}
+                  snapEnabled={snapEnabled}
                 />
 
                 {nodeMenuOpen ? (
-                  <FloatingPanel className="left-1/2 top-20 w-64 -translate-x-1/2">
+                  <FloatingPanel className="convax-safe-centered-panel top-20 w-64">
                     <div className="mb-2 px-1 text-xs font-medium text-muted-foreground">Add to canvas</div>
                     <div className="grid grid-cols-2 gap-1">
                       {connectionNodeTypes.map((definition) => (
                         <Button
                           key={definition.type}
                           className="justify-start"
-                          onClick={() => addNode(definition.type)}
+                          onClick={() => addNode(definition.type, undefined, true)}
                           size="sm"
                           variant="ghost"
                         >
@@ -3176,18 +3954,46 @@ function CanvasEditorContent(
                   </FloatingPanel>
                 ) : null}
 
-                {generateOpen && generateService ? (
-                  <FloatingPanel className="left-1/2 top-20 w-[min(440px,calc(100%-32px))] -translate-x-1/2">
-                    <CanvasGenerationPanel
-                      autoFocus
-                      disabled={readOnly}
-                      document={history.document}
-                      generateService={generateService}
-                      onSubmit={runGenerate}
-                      scopeId={currentViewScopeId}
-                      selectedNodeIds={selectedNodeIds}
-                      submitting={generating}
-                    />
+                {generatePresence.present && generateService ? (
+                  <FloatingPanel
+                    aria-hidden={!generateOpen || undefined}
+                    className="convax-canvas-composer-overlay convax-generation-surface"
+                    data-canvas-presence={generatePresence.phase}
+                    inert={!generateOpen || undefined}
+                  >
+                    <div
+                      data-canvas-composer-overlay="generation"
+                      data-canvas-shortcuts="ignore"
+                      onKeyDownCapture={(event) => {
+                        if (event.key !== "Escape") return
+                        event.preventDefault()
+                        event.stopPropagation()
+                        closeGenerate()
+                      }}
+                    >
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <span className="text-xs font-medium text-muted-foreground">Generate on this canvas</span>
+                        <Button
+                          aria-label="Close generation composer"
+                          onClick={closeGenerate}
+                          size="icon-sm"
+                          variant="ghost"
+                        >
+                          <X />
+                        </Button>
+                      </div>
+                      <CanvasGenerationPanel
+                        autoFocus={generateOpen}
+                        disabled={!generateOpen || readOnly}
+                        document={history.document}
+                        generateService={generateService}
+                        onSubmit={runGenerate}
+                        reducedMotion={prefersReducedMotion}
+                        scopeId={currentViewScopeId}
+                        selectedNodeIds={selectedNodeIds}
+                        submitting={generating}
+                      />
+                    </div>
                   </FloatingPanel>
                 ) : null}
 
@@ -3201,7 +4007,7 @@ function CanvasEditorContent(
                   >
                     <div aria-hidden="true" className="convax-node-search__backdrop" />
                     <div data-convax-node-search-panel="true" ref={searchPanelRef}>
-                      <FloatingPanel className="convax-node-search__panel left-1/2 top-20 w-[min(380px,calc(100%-32px))] -translate-x-1/2">
+                      <FloatingPanel className="convax-node-search__panel convax-safe-centered-panel top-20 w-[min(380px,calc(100%-32px))]">
                         <div className="relative">
                           <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
                           <Input
@@ -3281,29 +4087,48 @@ function CanvasEditorContent(
             <CanvasContextMenu
               canArrange={hasNodeOnlySelection && canArrangeSelection}
               canDistribute={hasNodeOnlySelection && canDistributeSelection}
+              canExport={Boolean(exportService)}
+              canGenerate={Boolean(generateService)}
               canGroup={selectionContext.kind === "multi-node"}
               canRedo={history.future.length > 0}
               canUngroup={hasSingleGroupSelection}
               canUndo={history.past.length > 0}
               canUpload={Boolean(mutationService)}
               createItems={connectionNodeTypes}
+              generating={generating}
               hasNodeSelection={hasNodeOnlySelection}
               hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
-              onAddNode={addNode}
+              onAddNode={(type) => addNode(type)}
               onAlign={align}
               onCopy={copy}
               onDelete={remove}
               onDistribute={distribute}
               onDuplicate={duplicate}
+              onExport={exportCanvas}
               onFit={fitCanvas}
+              onGenerate={requestGenerate}
               onGroup={group}
               onLayout={tidySelection}
               onPaste={paste}
               onRedo={() => dispatch({ type: "redo" })}
+              onSelectionDragModeChange={(active) => {
+                if (active) enterSelectionDragMode()
+                else exitSelectionDragMode()
+              }}
               onUngroup={ungroup}
               onUndo={() => dispatch({ type: "undo" })}
               onUpload={() => uploadInputRef.current?.click()}
               readOnly={readOnly}
+              selectionDragMode={
+                props.selectionDragSource?.mode
+                  ? {
+                      active: selectionDragModeActive,
+                      icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                      label: props.selectionDragSource.mode.label,
+                    }
+                  : undefined
+              }
+              viewportInsets={props.viewportInsets}
             />
           </ContextMenu>
         </TooltipProvider>
@@ -3313,6 +4138,7 @@ function CanvasEditorContent(
 }
 
 function IconButton(props: {
+  buttonRef?: ForwardedRef<HTMLButtonElement>
   disabled?: boolean
   expanded?: boolean
   hasPopup?: "menu"
@@ -3335,11 +4161,13 @@ function IconButton(props: {
     >
       <span className="inline-flex">
         <Button
+          ref={props.buttonRef}
           aria-expanded={props.expanded}
           aria-haspopup={props.hasPopup}
           aria-label={props.label}
           aria-pressed={props.pressed}
           className={cn(props.pressed && "bg-accent text-accent-foreground")}
+          data-canvas-toolbar-control="true"
           disabled={props.disabled}
           onClick={props.onClick}
           size="icon-sm"
@@ -3356,7 +4184,7 @@ function ToolSurface(props: { children: ReactNode; className?: string }) {
   return (
     <div
       className={cn(
-        "convax-tool-surface absolute z-20 flex items-center rounded-md border p-1 text-card-foreground",
+        "convax-tool-surface convax-motion-surface convax-motion-surface--bottom absolute z-20 flex items-center rounded-md border p-1 text-card-foreground",
         props.className,
       )}
     >
@@ -3365,17 +4193,39 @@ function ToolSurface(props: { children: ReactNode; className?: string }) {
   )
 }
 
-function FloatingPanel(props: { children: ReactNode; className?: string }) {
+function FloatingPanel({ children, className, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
+      {...props}
       className={cn(
-        "convax-floating-panel absolute z-30 rounded-md border p-3 text-popover-foreground",
-        props.className,
+        "convax-floating-panel convax-motion-surface convax-motion-surface--top absolute z-30 rounded-md border p-3 text-popover-foreground",
+        className,
       )}
     >
-      {props.children}
+      {children}
     </div>
   )
+}
+
+function insertionIcon(type: string) {
+  if (type === "text") return <Type />
+  if (type === "agent") return <Bot />
+  if (type === "image") return <ImagePlus />
+  if (type === "video") return <Video />
+  return <FileUp />
+}
+
+function moveMenuFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowDown", "ArrowUp", "End", "Home"].includes(event.key)) return
+  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+  if (items.length === 0) return
+  event.preventDefault()
+  const currentIndex =
+    event.target instanceof Element ? items.indexOf(event.target.closest("button") as HTMLButtonElement) : -1
+  if (event.key === "Home") items[0]?.focus()
+  else if (event.key === "End") items.at(-1)?.focus()
+  else if (event.key === "ArrowDown") items[(currentIndex + 1 + items.length) % items.length]?.focus()
+  else items[currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length]?.focus()
 }
 
 function CanvasHeader(props: {
@@ -3384,36 +4234,49 @@ function CanvasHeader(props: {
   canRedo: boolean
   canUndo: boolean
   canUpload: boolean
+  createItems: readonly { label: string; type: string }[]
   generating: boolean
-  onAddText: () => void
+  interactionTool: CanvasInteractionTool
+  onAddNode: (type: string) => void
   onExport: () => void
   onGenerate: () => void
+  onInteractionToolChange: (tool: CanvasInteractionTool) => void
   onRedo: () => void
-  onSearch: () => void
-  onSelect: () => void
   onSelectionDragModeChange: (active: boolean) => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
-  saveState: "idle" | "saving" | "saved"
+  reducedMotion: boolean
   selectionDragMode?: {
     active: boolean
-    description: string
-    exitLabel: string
     icon: ReactNode
     label: string
   }
 }) {
+  const [addOpen, setAddOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
+  const addTriggerRef = useRef<HTMLButtonElement>(null)
   const moreMenuRef = useRef<HTMLDivElement>(null)
+  const moreTriggerRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!moreOpen) return
+    if (!addOpen && !moreOpen) return
     const close = (event: PointerEvent) => {
-      if (event.target instanceof Element && moreMenuRef.current?.contains(event.target)) return
+      if (
+        event.target instanceof Element &&
+        (addMenuRef.current?.contains(event.target) || moreMenuRef.current?.contains(event.target))
+      )
+        return
+      setAddOpen(false)
       setMoreOpen(false)
     }
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMoreOpen(false)
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      if (addOpen) addTriggerRef.current?.focus()
+      if (moreOpen) moreTriggerRef.current?.focus()
+      setAddOpen(false)
+      setMoreOpen(false)
     }
     window.addEventListener("pointerdown", close)
     window.addEventListener("keydown", closeOnEscape)
@@ -3421,11 +4284,66 @@ function CanvasHeader(props: {
       window.removeEventListener("pointerdown", close)
       window.removeEventListener("keydown", closeOnEscape)
     }
+  }, [addOpen, moreOpen])
+  useEffect(() => {
+    if (!props.readOnly) return
+    setAddOpen(false)
+  }, [props.readOnly])
+  useEffect(() => {
+    if (!addOpen) return
+    const frame = window.requestAnimationFrame(() =>
+      addMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus(),
+    )
+    return () => window.cancelAnimationFrame(frame)
+  }, [addOpen])
+  useEffect(() => {
+    if (!moreOpen) return
+    const frame = window.requestAnimationFrame(() =>
+      moreMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(),
+    )
+    return () => window.cancelAnimationFrame(frame)
   }, [moreOpen])
   return (
-    <>
-      <ToolSurface className="convax-creation-toolbar bottom-4 left-1/2 -translate-x-1/2 gap-0.5">
-        <IconButton icon={<MousePointer2 />} label="Select" onClick={props.onSelect} pressed shortcut="V" />
+    <div className="convax-creation-toolbar-frame">
+      <div
+        aria-label="Canvas tools"
+        className="convax-creation-toolbar convax-tool-surface convax-motion-surface convax-motion-surface--top"
+        data-canvas-shortcuts="ignore"
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "End", "Home"].includes(event.key)) return
+          if (!(event.target instanceof Element) || !event.target.matches("[data-canvas-toolbar-control='true']"))
+            return
+          const controls = [
+            ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+              "[data-canvas-toolbar-control='true']:not(:disabled)",
+            ),
+          ]
+          if (controls.length === 0) return
+          event.preventDefault()
+          const currentIndex = controls.indexOf(event.target as HTMLButtonElement)
+          if (event.key === "Home") controls[0]?.focus()
+          else if (event.key === "End") controls.at(-1)?.focus()
+          else if (event.key === "ArrowRight") controls[(currentIndex + 1 + controls.length) % controls.length]?.focus()
+          else controls[(currentIndex - 1 + controls.length) % controls.length]?.focus()
+        }}
+        role="toolbar"
+      >
+        <IconButton
+          icon={<MousePointer2 />}
+          label="Select"
+          onClick={() => props.onInteractionToolChange("select")}
+          pressed={props.interactionTool === "select"}
+          shortcut="V"
+          tooltipSide="bottom"
+        />
+        <IconButton
+          icon={<Hand />}
+          label="Hand"
+          onClick={() => props.onInteractionToolChange("hand")}
+          pressed={props.interactionTool === "hand"}
+          shortcut="H"
+          tooltipSide="bottom"
+        />
         {props.selectionDragMode ? (
           <IconButton
             disabled={props.readOnly}
@@ -3433,40 +4351,99 @@ function CanvasHeader(props: {
             label={props.selectionDragMode.label}
             onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
             pressed={props.selectionDragMode.active}
+            tooltipSide="bottom"
           />
         ) : null}
-        <span className="mx-1 h-5 w-px bg-border" />
-        <IconButton disabled={props.readOnly} icon={<Type />} label="Text" onClick={props.onAddText} />
+        <span aria-hidden="true" className="convax-toolbar-divider" />
+        <div className="relative" ref={addMenuRef}>
+          <IconButton
+            buttonRef={addTriggerRef}
+            disabled={props.readOnly || props.createItems.length === 0}
+            expanded={addOpen}
+            hasPopup="menu"
+            icon={<Plus />}
+            label="Add node"
+            onClick={() => {
+              setMoreOpen(false)
+              setAddOpen((open) => !open)
+            }}
+            pressed={addOpen}
+            tooltipSide="bottom"
+          />
+          <div
+            className="convax-canvas-create-menu convax-motion-menu"
+            data-canvas-shortcuts="ignore"
+            hidden={!addOpen}
+            onKeyDown={moveMenuFocus}
+            role="menu"
+          >
+            <div className="convax-canvas-menu__label">Create</div>
+            {props.createItems.map((item) => (
+              <button
+                aria-label={`Add ${item.label}`}
+                disabled={props.readOnly}
+                key={item.type}
+                onClick={() => {
+                  props.onAddNode(item.type)
+                  setAddOpen(false)
+                  addTriggerRef.current?.focus()
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {insertionIcon(item.type)}
+                <span>Add {item.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
         {props.canUpload ? (
-          <IconButton disabled={props.readOnly} icon={<FileUp />} label="Upload" onClick={props.onUpload} />
+          <IconButton
+            disabled={props.readOnly}
+            icon={<FileUp />}
+            label="Upload"
+            onClick={props.onUpload}
+            tooltipSide="bottom"
+          />
         ) : null}
         {props.canGenerate ? (
           <IconButton
             disabled={props.readOnly || props.generating}
-            icon={props.generating ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+            icon={props.generating ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
             label="Generate"
             onClick={props.onGenerate}
             shortcut="⌘↵"
+            tooltipSide="bottom"
           />
         ) : null}
-        <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="top" />
-        <span className="mx-1 h-5 w-px bg-border" />
-        <div ref={moreMenuRef} className="relative">
+        <span aria-hidden="true" className="convax-toolbar-divider" />
+        <div className="relative" ref={moreMenuRef}>
           <IconButton
+            buttonRef={moreTriggerRef}
             expanded={moreOpen}
             hasPopup="menu"
             icon={<Ellipsis />}
             label="More canvas actions"
-            onClick={() => setMoreOpen((open) => !open)}
+            onClick={() => {
+              setAddOpen(false)
+              setMoreOpen((open) => !open)
+            }}
             pressed={moreOpen}
-            tooltipSide="top"
+            tooltipSide="bottom"
           />
-          <div className="convax-canvas-more-menu" data-canvas-shortcuts="ignore" hidden={!moreOpen} role="menu">
+          <div
+            className="convax-canvas-more-menu convax-motion-menu"
+            data-canvas-shortcuts="ignore"
+            hidden={!moreOpen}
+            onKeyDown={moveMenuFocus}
+            role="menu"
+          >
             <button
               disabled={!props.canUndo || props.readOnly}
               onClick={() => {
                 props.onUndo()
                 setMoreOpen(false)
+                moreTriggerRef.current?.focus()
               }}
               role="menuitem"
               type="button"
@@ -3480,6 +4457,7 @@ function CanvasHeader(props: {
               onClick={() => {
                 props.onRedo()
                 setMoreOpen(false)
+                moreTriggerRef.current?.focus()
               }}
               role="menuitem"
               type="button"
@@ -3493,6 +4471,7 @@ function CanvasHeader(props: {
                 onClick={() => {
                   props.onExport()
                   setMoreOpen(false)
+                  moreTriggerRef.current?.focus()
                 }}
                 role="menuitem"
                 type="button"
@@ -3503,31 +4482,28 @@ function CanvasHeader(props: {
             ) : null}
           </div>
         </div>
-        {props.saveState !== "idle" ? (
-          <span aria-live="polite" className="convax-creation-toolbar__save-state">
-            {props.saveState === "saving" ? "Saving…" : "Saved"}
-          </span>
-        ) : null}
-      </ToolSurface>
-      {props.selectionDragMode?.active ? (
-        <ToolSurface className="bottom-16 left-1/2 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 gap-2 border-primary/30 bg-card/95 px-3 py-2 shadow-md">
-          <span className="shrink-0 text-primary">{props.selectionDragMode.icon}</span>
-          <span aria-live="polite" className="min-w-0 text-xs font-medium" role="status">
-            {props.selectionDragMode.description}
-          </span>
-          <Button
-            aria-label={props.selectionDragMode.exitLabel}
-            className="shrink-0 gap-1"
-            onClick={() => props.onSelectionDragModeChange(false)}
-            size="sm"
-            variant="ghost"
-          >
-            <X className="size-3.5" />
-            {props.selectionDragMode.exitLabel}
-          </Button>
-        </ToolSurface>
-      ) : null}
-    </>
+      </div>
+    </div>
+  )
+}
+
+function CanvasSelectionDragModeStatus(props: {
+  description: string
+  exitLabel: string
+  icon: ReactNode
+  onExit: () => void
+}) {
+  return (
+    <ToolSurface className="bottom-3 left-1/2 z-30 max-w-[calc(100%-32px)] -translate-x-1/2 gap-2 border-primary/30 bg-card/95 px-3 py-2 shadow-md">
+      <span className="shrink-0 text-primary">{props.icon}</span>
+      <span aria-live="polite" className="min-w-0 text-xs font-medium" role="status">
+        {props.description}
+      </span>
+      <Button aria-label={props.exitLabel} className="shrink-0 gap-1" onClick={props.onExit} size="sm" variant="ghost">
+        <X className="size-3.5" />
+        {props.exitLabel}
+      </Button>
+    </ToolSurface>
   )
 }
 
@@ -3611,7 +4587,7 @@ function SelectionToolbar(props: {
       position={Position.Top}
     >
       <div
-        className="convax-selection-toolbar__surface convax-tool-surface flex items-center gap-0.5 border text-card-foreground"
+        className="convax-selection-toolbar__surface convax-tool-surface convax-motion-surface convax-motion-surface--top flex items-center gap-0.5 border text-card-foreground"
         data-canvas-shortcuts="ignore"
       >
         <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" tooltipSide="top" />
@@ -3638,7 +4614,7 @@ function SelectionToolbar(props: {
             <IconButton
               key={action.id}
               disabled={pending}
-              icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+              icon={pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
               label={action.label}
               onClick={() => props.onAction(action)}
               tooltipSide="top"
@@ -3656,7 +4632,7 @@ function SelectionToolbar(props: {
             />
             {actionsMenuOpen ? (
               <div
-                className="absolute left-0 top-full z-50 mt-1 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
+                className="convax-motion-menu absolute left-0 top-full z-50 mt-1 min-w-40 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
                 data-canvas-shortcuts="ignore"
                 role="menu"
               >
@@ -3678,7 +4654,7 @@ function SelectionToolbar(props: {
                       type="button"
                     >
                       <span className="[&>svg]:size-3.5">
-                        {pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+                        {pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
                       </span>
                       <span>{action.label}</span>
                     </button>
@@ -3699,7 +4675,11 @@ function SelectionToolbar(props: {
             tooltipSide="top"
           />
           {arrangeMenuOpen ? (
-            <div className="convax-arrange-menu" data-canvas-shortcuts="ignore" role="menu">
+            <div
+              className="convax-arrange-menu convax-motion-menu convax-motion-menu--centered"
+              data-canvas-shortcuts="ignore"
+              role="menu"
+            >
               <div className="convax-arrange-menu__title">Align</div>
               <div className="convax-arrange-menu__grid" role="group">
                 {selectionAlignActions.map((action) => (
@@ -3818,6 +4798,26 @@ const canvasDirectedLayoutActions = [
   strategy: CanvasDirectedAutoLayoutStrategy
 }[]
 
+function CanvasSnapGuides({ lines }: { lines: readonly CanvasSnapLine[] }) {
+  const viewport = useViewport()
+  if (lines.length === 0) return null
+  return (
+    <div aria-hidden="true" className="convax-snap-guides">
+      {lines.map((line) => {
+        const position = line.value * viewport.zoom + (line.axis === "x" ? viewport.x : viewport.y)
+        return (
+          <div
+            key={`${line.axis}:${line.value}`}
+            className={cn("convax-snap-guide", line.axis === "x" ? "is-vertical" : "is-horizontal")}
+            data-canvas-snap-guide={line.axis}
+            style={line.axis === "x" ? { left: position } : { top: position }}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
 function ViewportToolbar(props: {
   autoLayoutStrategy: CanvasDirectedAutoLayoutStrategy
   canLayout: boolean
@@ -3828,17 +4828,19 @@ function ViewportToolbar(props: {
   onLayout: () => void
   onLayoutStrategyChange: (strategy: CanvasDirectedAutoLayoutStrategy) => void
   onMiniMapChange: () => void
+  onSearch: () => void
   onSnapChange: () => void
   onZoomIn: () => void
   onZoomOut: () => void
-  snapToGrid: boolean
+  snapEnabled: boolean
+  onZoomPreset: (zoom: number) => void
 }) {
   const viewport = useViewport()
-  const reactFlow = useReactFlow<CanvasNode>()
   const [layoutMenuOpen, setLayoutMenuOpen] = useState(false)
   const [zoomMenuOpen, setZoomMenuOpen] = useState(false)
   const layoutMenuRef = useRef<HTMLDivElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
+  const zoomTriggerRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
     if (!layoutMenuOpen) return
     const closeMenu = (event: PointerEvent) => {
@@ -3861,11 +4863,23 @@ function ViewportToolbar(props: {
       if (event.target instanceof Element && menuRef.current?.contains(event.target)) return
       setZoomMenuOpen(false)
     }
+    const closeMenuOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setZoomMenuOpen(false)
+      zoomTriggerRef.current?.focus()
+    }
     window.addEventListener("pointerdown", closeMenu)
-    return () => window.removeEventListener("pointerdown", closeMenu)
+    window.addEventListener("keydown", closeMenuOnEscape)
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu)
+      window.removeEventListener("keydown", closeMenuOnEscape)
+    }
   }, [zoomMenuOpen])
   return (
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
+      <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="top" />
+      <span className="mx-1 h-5 w-px bg-border" />
       <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
       <IconButton
         icon={<CanvasEdgeVisibilityIcon />}
@@ -3898,7 +4912,11 @@ function ViewportToolbar(props: {
           </Button>
         </Tooltip>
         {layoutMenuOpen ? (
-          <div className="convax-zoom-menu convax-layout-menu" data-canvas-shortcuts="ignore" role="menu">
+          <div
+            className="convax-zoom-menu convax-layout-menu convax-motion-menu convax-motion-menu--centered"
+            data-canvas-shortcuts="ignore"
+            role="menu"
+          >
             <div className="convax-zoom-menu__title">Tidy direction</div>
             {canvasDirectedLayoutActions.map((action) => (
               <button
@@ -3924,9 +4942,9 @@ function ViewportToolbar(props: {
       </div>
       <IconButton
         icon={<Magnet />}
-        label="Snap to grid"
+        label="Snap and alignment guides"
         onClick={props.onSnapChange}
-        pressed={props.snapToGrid}
+        pressed={props.snapEnabled}
         tooltipSide="top"
       />
       <IconButton
@@ -3941,6 +4959,7 @@ function ViewportToolbar(props: {
       <div ref={menuRef} className="relative">
         <Tooltip content="Zoom presets" side="top">
           <Button
+            ref={zoomTriggerRef}
             aria-expanded={zoomMenuOpen}
             aria-haspopup="menu"
             className="convax-zoom-trigger"
@@ -3953,15 +4972,20 @@ function ViewportToolbar(props: {
           </Button>
         </Tooltip>
         {zoomMenuOpen ? (
-          <div className="convax-zoom-menu" data-canvas-shortcuts="ignore" role="menu">
+          <div
+            className="convax-zoom-menu convax-motion-menu convax-motion-menu--centered"
+            data-canvas-shortcuts="ignore"
+            role="menu"
+          >
             <div className="convax-zoom-menu__title">Zoom</div>
             {zoomPresets.map((zoom) => (
               <button
                 key={zoom}
                 className="convax-zoom-menu__item"
                 onClick={() => {
-                  void reactFlow.zoomTo(zoom, { duration: 160 })
+                  props.onZoomPreset(zoom)
                   setZoomMenuOpen(false)
+                  zoomTriggerRef.current?.focus()
                 }}
                 role="menuitem"
                 type="button"
@@ -3981,12 +5005,15 @@ function ViewportToolbar(props: {
 function CanvasContextMenu(props: {
   canArrange: boolean
   canDistribute: boolean
+  canExport: boolean
+  canGenerate: boolean
   canGroup: boolean
   canRedo: boolean
   canUngroup: boolean
   canUndo: boolean
   canUpload: boolean
   createItems: readonly { label: string; type: string }[]
+  generating: boolean
   hasNodeSelection: boolean
   hasSelection: boolean
   onAddNode: (type: string) => void
@@ -3995,18 +5022,36 @@ function CanvasContextMenu(props: {
   onDelete: () => void
   onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
+  onExport: () => void
   onFit: () => void
+  onGenerate: () => void
   onGroup: () => void
   onLayout: () => void
   onPaste: () => void
   onRedo: () => void
+  onSelectionDragModeChange: (active: boolean) => void
   onUngroup: () => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
+  selectionDragMode?: {
+    active: boolean
+    icon: ReactNode
+    label: string
+  }
+  viewportInsets?: CanvasViewportInsets
 }) {
+  const collisionPadding = {
+    bottom: Math.max(12, (props.viewportInsets?.bottom ?? 0) + 12),
+    left: Math.max(12, (props.viewportInsets?.left ?? 0) + 12),
+    right: Math.max(12, (props.viewportInsets?.right ?? 0) + 12),
+    top: Math.max(12, (props.viewportInsets?.top ?? 0) + 12),
+  }
   return (
-    <ContextMenuContent className="w-60">
+    <ContextMenuContent
+      className="convax-canvas-context-menu convax-motion-menu w-60"
+      collisionPadding={collisionPadding}
+    >
       {!props.readOnly ? <ContextMenuLabel>Create</ContextMenuLabel> : null}
       {!props.readOnly
         ? props.createItems.map((item) => (
@@ -4030,6 +5075,12 @@ function CanvasContextMenu(props: {
         <ContextMenuItem onSelect={props.onUpload}>
           <FileUp />
           Upload files
+        </ContextMenuItem>
+      ) : null}
+      {props.canGenerate && !props.readOnly ? (
+        <ContextMenuItem disabled={props.generating} onSelect={props.onGenerate}>
+          {props.generating ? <LoadingSpinner size="sm" /> : <Sparkles />}
+          Generate<Shortcut>⌘↵</Shortcut>
         </ContextMenuItem>
       ) : null}
       {!props.readOnly ? <ContextMenuSeparator /> : null}
@@ -4056,6 +5107,19 @@ function CanvasContextMenu(props: {
         <Focus />
         Fit view<Shortcut>⌘0</Shortcut>
       </ContextMenuItem>
+      {props.canExport ? (
+        <ContextMenuItem onSelect={props.onExport}>
+          <Download />
+          Export
+        </ContextMenuItem>
+      ) : null}
+      {props.selectionDragMode && !props.readOnly ? (
+        <ContextMenuItem onSelect={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}>
+          {props.selectionDragMode.icon}
+          {props.selectionDragMode.active ? "Exit " : ""}
+          {props.selectionDragMode.label}
+        </ContextMenuItem>
+      ) : null}
       {props.hasSelection ? <ContextMenuSeparator /> : null}
       {props.hasSelection ? <ContextMenuLabel>Selection</ContextMenuLabel> : null}
       {props.hasNodeSelection ? (

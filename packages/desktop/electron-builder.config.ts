@@ -54,8 +54,8 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     files: ["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"],
     extraResources: [
       {
-        from: ".packaging/default-capabilities",
-        to: "default-capabilities",
+        from: ".packaging/marketplace-product",
+        to: "marketplace-product",
         filter: ["**/*"],
       },
       {
@@ -89,7 +89,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     },
     mac: {
       category: "public.app-category.productivity",
-      icon: "resources/icon.svg",
+      icon: "resources/icon.png",
       hardenedRuntime: true,
       gatekeeperAssess: false,
       notarize: release,
@@ -99,7 +99,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
       sign: release,
     },
     win: {
-      icon: "resources/icon.svg",
+      icon: "resources/icon.png",
       target: ["nsis"],
     },
     nsis: {
@@ -109,7 +109,7 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     linux: {
       category: "Graphics",
       executableName: identity.appId,
-      icon: "resources/icon.svg",
+      icon: "resources/icon.png",
       desktop: {
         entry: {
           StartupWMClass: identity.appId,

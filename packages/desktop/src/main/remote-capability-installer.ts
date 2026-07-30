@@ -2,6 +2,7 @@ import {
   compareWebPluginVersions,
   type InstalledWebPluginSummary,
   type WebPluginCatalogItem,
+  type WebPluginManifest,
   parseWebPluginManifest,
 } from "../plugin-contracts"
 import type {
@@ -11,6 +12,8 @@ import type {
   DesktopSkillShowcaseMedia,
   DesktopSkillSummary,
 } from "../skill-management-contracts"
+import { createHash } from "node:crypto"
+import type { RegistryPackage } from "@convax/marketplace"
 import path from "node:path"
 import type { DesktopBuiltinPluginBundle } from "./builtin-plugin-catalog"
 import type { DesktopBuiltinSkillBundle } from "./builtin-skill-catalog"
@@ -28,11 +31,19 @@ import {
   type RemoteCapabilityPackage,
   type RemoteCapabilityRegistryClient,
   type RemotePluginPackage,
+  type RemotePluginCompatibility,
   type RemoteSkillPackage,
+  remotePluginCapabilitySchemaV1,
+  remotePluginCapabilitySchemaV2,
+  remotePluginHostSchema,
+  remotePluginHostSchemaV2,
+  remotePluginHostSchemaV3,
+  remotePluginHostSchemaV4,
 } from "./remote-capability-registry"
 import type { DesktopSkillManager } from "./skill-manager"
 import { createSkillFilePreviews } from "./skill-details"
 import { composePluginPublicationTransactions, type PluginSkillLifecycle } from "./plugin-skill-lifecycle"
+import { unpackSafeZip } from "./safe-zip"
 
 export interface RemoteCapabilityRegistryPort {
   downloadBundle: RemoteCapabilityRegistryClient["downloadBundle"]
@@ -66,6 +77,7 @@ export interface RemoteCapabilityInstallerOptions {
   arch?: NodeJS.Architecture
   authorizationStore: Pick<ToolPluginAuthorizationStore, "prepareInstall">
   beforePluginPublish?(pluginId: string): Promise<void> | void
+  deferExecutionAuthorization?: boolean
   builtinPlugins: readonly DesktopBuiltinPluginBundle[]
   builtinSkills: readonly DesktopBuiltinSkillBundle[]
   companionStore: Pick<ManagedPluginCompanionStore, "install" | "reconcilePlugin">
@@ -79,6 +91,39 @@ export interface RemoteCapabilityInstallerOptions {
   preparePluginPublication?(pluginId: string): Promise<WebPluginPublicationTransaction>
   registry: RemoteCapabilityRegistryPort
   skillManager: Pick<DesktopSkillManager, "installFromFiles">
+}
+
+export interface VerifiedMarketplaceCandidate {
+  artifactBytes: Uint8Array
+  companionBytes?: Readonly<Record<string, Uint8Array>>
+  item: RegistryPackage
+}
+
+function noOpPublication(): WebPluginPublicationTransaction {
+  return {
+    async commit() {},
+    async publish() {},
+    async rollback() {},
+  }
+}
+
+function compatibilityForManifest(manifest: WebPluginManifest): RemotePluginCompatibility {
+  switch (manifest.schema) {
+    case "convax.plugin/1":
+      return { pluginHost: remotePluginHostSchema, pluginSchema: manifest.schema }
+    case "convax.plugin/2":
+      return { pluginHost: remotePluginHostSchemaV2, pluginSchema: manifest.schema }
+    case "convax.plugin/3":
+      return { pluginHost: remotePluginHostSchemaV3, pluginSchema: manifest.schema }
+    case "convax.plugin/4":
+      return { pluginHost: remotePluginHostSchemaV4, pluginSchema: manifest.schema }
+    case "convax.plugin/5":
+    case "convax.plugin/6":
+      return { pluginHost: remotePluginCapabilitySchemaV1, pluginSchema: manifest.schema }
+    case "convax.plugin/7":
+      return { pluginHost: remotePluginCapabilitySchemaV2, pluginSchema: manifest.schema }
+  }
+  throw new Error("Unsupported verified Marketplace Plugin schema")
 }
 
 function normalizedIdentity(value: string) {
@@ -150,6 +195,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
   readonly #arch: NodeJS.Architecture
   readonly #authorizationStore: RemoteCapabilityInstallerOptions["authorizationStore"]
   readonly #beforePluginPublish?: RemoteCapabilityInstallerOptions["beforePluginPublish"]
+  readonly #deferExecutionAuthorization: boolean
   readonly #companionStore: RemoteCapabilityInstallerOptions["companionStore"]
   readonly #hookAuthorizationStore: RemoteCapabilityInstallerOptions["hookAuthorizationStore"]
   readonly #platform: NodeJS.Platform
@@ -163,6 +209,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     this.#registry = options.registry
     this.#authorizationStore = options.authorizationStore
     this.#beforePluginPublish = options.beforePluginPublish
+    this.#deferExecutionAuthorization = options.deferExecutionAuthorization ?? false
     this.#pluginManager = options.pluginManager
     this.#pluginSkillLifecycle = options.pluginSkillLifecycle
     this.#prepareHostPublication = options.preparePluginPublication
@@ -173,6 +220,72 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     this.#skillManager = options.skillManager
     this.#builtinPluginIdentities = reservedIdentities(options.builtinPlugins.map((item) => item.manifest))
     this.#builtinSkillIdentities = reservedIdentities(options.builtinSkills)
+  }
+
+  async installVerifiedMarketplaceCandidate(
+    candidate: VerifiedMarketplaceCandidate,
+    options: { deferExecutionAuthorization?: boolean } = {},
+  ) {
+    const { item } = candidate
+    if (item.yanked) throw new Error("Yanked Marketplace package cannot be installed")
+    if (
+      item.delivery.kind !== "artifact" ||
+      candidate.artifactBytes.byteLength !== item.delivery.size ||
+      createHash("sha256").update(candidate.artifactBytes).digest("hex") !== item.delivery.sha256
+    ) {
+      throw new Error("Verified Marketplace candidate artifact identity is invalid")
+    }
+    const files = unpackSafeZip(candidate.artifactBytes)
+    if (item.kind === "skill") {
+      if (item.ownerPluginId) throw new Error(`Skill is provided by Plugin ${item.ownerPluginId}`)
+      return this.#skillManager.installFromFiles(files, undefined, item.id)
+    }
+    if (item.kind !== "plugin" || !item.manifest) {
+      throw new Error("MCP metadata does not use the Plugin or Skill publication owner")
+    }
+    const manifest = parseWebPluginManifest(item.manifest)
+    if (manifest.id !== item.id || manifest.version !== item.version) {
+      throw new Error("Verified Marketplace Plugin metadata does not match its manifest")
+    }
+    const remoteItem = {
+      artifact: item.delivery,
+      companions: item.companions,
+      compatibility: compatibilityForManifest(manifest),
+      description: item.presentation.description ?? "",
+      id: item.id,
+      kind: "plugin",
+      manifest,
+      name: item.presentation.name,
+      version: item.version,
+      yanked: false,
+    } satisfies RemotePluginPackage
+    decodePluginManifest(remoteItem, files)
+    const companionArtifacts = (remoteItem.companions ?? []).map((companion) => {
+      const target = companion.targets.find(
+        (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
+      )
+      if (!target) throw new Error("Verified Marketplace Plugin companion target is unavailable")
+      const bytes = candidate.companionBytes?.[companion.command]
+      if (
+        !bytes ||
+        bytes.byteLength !== target.artifact.size ||
+        createHash("sha256").update(bytes).digest("hex") !== target.artifact.sha256
+      ) {
+        throw new Error("Verified Marketplace Plugin companion identity is invalid")
+      }
+      return { bytes, companion, target }
+    })
+    return this.#pluginManager.withPluginMutation(item.id, async (mutation) => {
+      const current = (await this.#pluginManager.list()).find((plugin) => plugin.id === item.id)
+      return this.#publishPlugin(
+        remoteItem,
+        { files },
+        companionArtifacts,
+        current,
+        mutation,
+        options.deferExecutionAuthorization,
+      )
+    })
   }
 
   subscribe(listener: () => void) {
@@ -316,6 +429,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     }[],
     current: InstalledWebPluginSummary | undefined,
     mutation: WebPluginMutationContext,
+    deferExecutionAuthorization = this.#deferExecutionAuthorization,
   ) {
     const companionTransactions: Awaited<ReturnType<ManagedPluginCompanionStore["install"]>>[] = []
     const managedBindings = new Map<string, Awaited<ReturnType<ManagedPluginCompanionStore["install"]>>["binding"]>()
@@ -336,7 +450,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
         managedBindings.set(companion.command, transaction.binding)
       }
       const preparePublication = (plugin: InstalledWebPluginSummary, candidate: WebPluginPublicationCandidate) =>
-        this.#preparePluginPublication(plugin, candidate, managedBindings)
+        this.#preparePluginPublication(plugin, candidate, managedBindings, undefined, deferExecutionAuthorization)
       let installed: InstalledWebPluginSummary
       if (current && current.version === item.version) {
         const manifestFile = await this.#pluginManager.resolveAsset(current.id, "manifest.json")
@@ -349,6 +463,7 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
               throw new Error(`Installed Plugin changed during verified Registry repair: ${item.id}`)
             }
           },
+          deferExecutionAuthorization,
         )
         await this.#runCurrentPublication(publication, current.id)
         installed = current
@@ -388,16 +503,21 @@ export class RemoteCapabilityInstaller implements RemotePluginCatalogPort, Remot
     candidate: WebPluginPublicationCandidate,
     managedBindings: ReadonlyMap<string, Awaited<ReturnType<ManagedPluginCompanionStore["install"]>>["binding"]>,
     revalidateCurrent?: () => Promise<void>,
+    deferExecutionAuthorization = this.#deferExecutionAuthorization,
   ): Promise<WebPluginPublicationTransaction> {
     const managed = plugin.runtime ? managedBindings.get(plugin.runtime.command) : undefined
-    const authorization = await this.#authorizationStore.prepareInstall(
-      plugin,
-      managed ? { binding: managed, kind: "managed" } : undefined,
-    )
+    const authorization = deferExecutionAuthorization
+      ? noOpPublication()
+      : await this.#authorizationStore.prepareInstall(
+          plugin,
+          managed ? { binding: managed, kind: "managed" } : undefined,
+        )
     let hookAuthorization
     let ownedSkills
     try {
-      hookAuthorization = await this.#hookAuthorizationStore.prepareInstall(plugin, candidate)
+      hookAuthorization = deferExecutionAuthorization
+        ? noOpPublication()
+        : await this.#hookAuthorizationStore.prepareInstall(plugin, candidate)
       ownedSkills = await this.#pluginSkillLifecycle.prepareInstall(plugin, candidate)
     } catch (error) {
       await hookAuthorization?.rollback().catch(() => undefined)

@@ -173,3 +173,68 @@ test("selects the first real media model when a media tab is opened", async () =
     await restoreWindow()
   }
 })
+
+test("selects a concrete media model in one click without opening a service level", async () => {
+  const restoreWindow = installTestWindow()
+  const onSelect = mock(() => undefined)
+  let root: Root | undefined
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <AgentGenerationModelPicker
+          activeTab="image"
+          loading={false}
+          onClose={mock(() => undefined)}
+          onLlmSelect={mock(() => undefined)}
+          onOpenServices={mock(() => undefined)}
+          onSelect={onSelect}
+          onTabChange={mock(() => undefined)}
+          onToolInputChange={mock(() => undefined)}
+          selected={{ id: "first/image.generate", output: "image" }}
+          toolInput={{}}
+          tools={[
+            {
+              acceptedInputs: [],
+              description: "First model",
+              id: "first/image.generate",
+              kind: "model",
+              modelName: "First image",
+              output: "image",
+              pluginId: "first",
+              pluginName: "First service",
+              title: "First image",
+              toolId: "image.generate",
+            },
+            {
+              acceptedInputs: [],
+              description: "Second model",
+              id: "second/image.generate#model-selection-sha256:abc",
+              kind: "model",
+              modelName: "Second image",
+              output: "image",
+              pluginId: "second",
+              pluginName: "Second service",
+              title: "Second image",
+              toolId: "image.generate",
+            },
+          ]}
+        />,
+      )
+    })
+
+    expect(document.querySelector("details")).toBeNull()
+    const second = document.querySelector<HTMLButtonElement>('button[aria-label="Second image by Second service"]')
+    expect(second).not.toBeNull()
+    await act(async () => second?.click())
+    expect(onSelect).toHaveBeenLastCalledWith({
+      id: "second/image.generate#model-selection-sha256:abc",
+      output: "image",
+    })
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})

@@ -23,6 +23,7 @@ import {
   parseCanvasDocument,
 } from "../document"
 import { isCanvasConnectableNode } from "../connections"
+import { sameCanvasJson } from "../json-equality"
 import type {
   CanvasDocument,
   CanvasEdge,
@@ -338,7 +339,7 @@ export function createCanvasNodeContentGuard(node: CanvasNode): CanvasNodeConten
 
 /** Matches the portable content semantics used by Canvas persistence. */
 export function matchesCanvasNodeContentGuard(node: CanvasNode, expected: CanvasNodeContentGuard) {
-  return stableJson(durableCanvasNodeContent(node)) === stableJson(expected)
+  return sameCanvasJson(durableCanvasNodeContent(node), expected)
 }
 
 function durableCanvasNodeContent(node: CanvasNode): CanvasNodeContentGuard {
@@ -359,19 +360,19 @@ export function createCanvasDocumentPatchCommand(
     type: "document.patch",
     addedEdges: next.edges.filter((edge) => !baseEdges.has(edge.id)).map((edge) => structuredClone(edge)),
     addedNodes: next.nodes.filter((node) => !baseNodes.has(node.id)).map((node) => structuredClone(node)),
-    ...(sameJson(base.metadata, next.metadata) ? {} : { metadata: structuredClone(next.metadata) }),
+    ...(sameCanvasJson(base.metadata, next.metadata) ? {} : { metadata: structuredClone(next.metadata) }),
     removedEdgeIds: base.edges.filter((edge) => !nextEdges.has(edge.id)).map((edge) => edge.id),
     removedNodeIds: base.nodes.filter((node) => !nextNodes.has(node.id)).map((node) => node.id),
     updatedEdges: next.edges
       .filter((edge) => {
         const current = baseEdges.get(edge.id)
-        return current !== undefined && !sameJson(current, edge)
+        return current !== undefined && !sameCanvasJson(current, edge)
       })
       .map((edge) => structuredClone(edge)),
     updatedNodes: next.nodes
       .filter((node) => {
         const current = baseNodes.get(node.id)
-        return current !== undefined && !sameJson(current, node)
+        return current !== undefined && !sameCanvasJson(current, node)
       })
       .map((node) => structuredClone(node)),
   }
@@ -398,7 +399,8 @@ export function findOpenCanvasPoint(
   document: CanvasDocument,
   preferred: CanvasPoint,
   size: CanvasSize = { height: 200, width: 320 },
-) {
+  bounds?: { bottom: number; left: number; right: number; top: number },
+): CanvasPoint {
   requireFinitePoint(preferred, "Placement anchor")
   const gap = 24
   const occupied = document.nodes
@@ -408,6 +410,7 @@ export function findOpenCanvasPoint(
         Math.hypot(left.position.x - preferred.x, left.position.y - preferred.y) -
         Math.hypot(right.position.x - preferred.x, right.position.y - preferred.y),
     )
+  const boundedCandidates = bounds ? createBoundedCanvasPlacementCandidates(bounds, preferred, size, gap) : []
   const candidates = [
     preferred,
     ...occupied.flatMap((node) => {
@@ -419,25 +422,77 @@ export function findOpenCanvasPoint(
         { x: preferred.x, y: node.position.y - size.height - gap },
       ]
     }),
+    ...boundedCandidates,
   ]
     .filter((candidate) => Number.isFinite(candidate.x) && Number.isFinite(candidate.y))
+    .filter((candidate) => !bounds || canvasPlacementFitsBounds(candidate, size, bounds))
     .filter(
       (candidate, index, all) => all.findIndex((other) => other.x === candidate.x && other.y === candidate.y) === index,
     )
+  const open = candidates.find(
+    (candidate) =>
+      !occupied.some((node) => {
+        if (node.parentId) return false
+        const nodeSize = getCanvasNodeSize(node)
+        return (
+          candidate.x < node.position.x + nodeSize.width + gap &&
+          candidate.x + size.width + gap > node.position.x &&
+          candidate.y < node.position.y + nodeSize.height + gap &&
+          candidate.y + size.height + gap > node.position.y
+        )
+      }),
+  )
+  if (open) return open
+  return bounds ? findOpenCanvasPoint(document, preferred, size) : preferred
+}
+
+function createBoundedCanvasPlacementCandidates(
+  bounds: { bottom: number; left: number; right: number; top: number },
+  preferred: CanvasPoint,
+  size: CanvasSize,
+  gap: number,
+) {
+  if (
+    ![bounds.bottom, bounds.left, bounds.right, bounds.top, size.height, size.width].every(Number.isFinite) ||
+    size.width <= 0 ||
+    size.height <= 0 ||
+    bounds.right - bounds.left < size.width ||
+    bounds.bottom - bounds.top < size.height
+  ) {
+    return []
+  }
+  const maxX = bounds.right - size.width
+  const maxY = bounds.bottom - size.height
+  const xs = canvasPlacementAxisCandidates(bounds.left, maxX, size.width + gap)
+  const ys = canvasPlacementAxisCandidates(bounds.top, maxY, size.height + gap)
+  return xs
+    .flatMap((x) => ys.map((y) => ({ x, y })))
+    .sort(
+      (left, right) =>
+        Math.hypot(left.x - preferred.x, left.y - preferred.y) -
+          Math.hypot(right.x - preferred.x, right.y - preferred.y) ||
+        left.y - right.y ||
+        left.x - right.x,
+    )
+}
+
+function canvasPlacementAxisCandidates(start: number, end: number, step: number) {
+  const values: number[] = []
+  for (let value = start; value <= end; value += step) values.push(value)
+  if (values.at(-1) !== end) values.push(end)
+  return values
+}
+
+function canvasPlacementFitsBounds(
+  point: CanvasPoint,
+  size: CanvasSize,
+  bounds: { bottom: number; left: number; right: number; top: number },
+) {
   return (
-    candidates.find(
-      (candidate) =>
-        !occupied.some((node) => {
-          if (node.parentId) return false
-          const nodeSize = getCanvasNodeSize(node)
-          return (
-            candidate.x < node.position.x + nodeSize.width + gap &&
-            candidate.x + size.width + gap > node.position.x &&
-            candidate.y < node.position.y + nodeSize.height + gap &&
-            candidate.y + size.height + gap > node.position.y
-          )
-        }),
-    ) ?? preferred
+    point.x >= bounds.left &&
+    point.y >= bounds.top &&
+    point.x + size.width <= bounds.right &&
+    point.y + size.height <= bounds.bottom
   )
 }
 
@@ -744,7 +799,7 @@ function applyDocumentPatch(
   for (const edge of [...command.addedEdges, ...command.updatedEdges]) {
     requireConnectableNodeIds(parsed, [edge.source, edge.target])
   }
-  if (sameJson(document, parsed)) return result(document, document)
+  if (sameCanvasJson(document, parsed)) return result(document, document)
 
   const affectedNodeIds = new Set([...removedNodeIds, ...addedNodeIds, ...updatedNodeIds])
   for (const edgeId of [...removedEdgeIds, ...updatedEdgeIds]) {
@@ -1037,10 +1092,6 @@ function createNodeFromResource(item: CanvasUploadItem, nodeId: string, position
   return createMediaNode({ id: nodeId, position, resource: item })
 }
 
-function sameJson(left: unknown, right: unknown) {
-  return stableJson(left) === stableJson(right)
-}
-
 function requireUniqueIds(ids: readonly string[], label: string) {
   const unique = new Set<string>()
   for (const id of ids) {
@@ -1075,9 +1126,7 @@ function requireDisjointPatchIds(removedIds: readonly string[], updatedIds: read
 }
 
 function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGenerationTargetGuard) {
-  return (
-    stableJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }) === stableJson(expected)
-  )
+  return sameCanvasJson({ data: omitCanvasOwnedGenerationMetadataFromData(node.data), type: node.type }, expected)
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
@@ -1111,21 +1160,6 @@ function throwGenerationRunValidation(error: unknown): never {
     throw new CanvasCommandValidationError(error.message)
   }
   throw error
-}
-
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => (item === undefined ? "null" : stableJson(item))).join(",")}]`
-  }
-  if (isRecord(value)) {
-    const record = value
-    return `{${Object.keys(record)
-      .sort()
-      .filter((key) => record[key] !== undefined)
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
-      .join(",")}}`
-  }
-  return JSON.stringify(value) ?? "null"
 }
 
 function result(

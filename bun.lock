@@ -86,12 +86,29 @@
         "react-dom": "^18.2.0 || ^19.0.0",
       },
     },
+    "packages/create-convax-marketplace": {
+      "name": "create-convax-marketplace",
+      "version": "0.1.0",
+      "bin": {
+        "create-convax-marketplace": "./dist/cli.js",
+      },
+      "dependencies": {
+        "@convax/marketplace-kit": "workspace:^",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
     "packages/desktop": {
       "name": "@convax/desktop",
       "version": "0.0.0",
       "dependencies": {
         "@convax/agent-runtime": "workspace:*",
         "@convax/canvas": "workspace:*",
+        "@convax/marketplace": "workspace:*",
         "@convax/project": "workspace:*",
         "@convax/project-files": "workspace:*",
         "@convax/ui": "workspace:*",
@@ -117,6 +134,35 @@
         "tailwindcss": "catalog:",
         "typescript": "catalog:",
         "vite": "catalog:",
+      },
+    },
+    "packages/marketplace": {
+      "name": "@convax/marketplace",
+      "version": "0.1.1",
+      "dependencies": {
+        "ajv": "8.20.0",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/marketplace-kit": {
+      "name": "@convax/marketplace-kit",
+      "version": "0.1.1",
+      "bin": {
+        "convax-marketplace": "./dist/cli.js",
+      },
+      "dependencies": {
+        "@convax/marketplace": "workspace:^",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
       },
     },
     "packages/project": {
@@ -368,6 +414,10 @@
     "@convax/desktop": ["@convax/desktop@workspace:packages/desktop"],
 
     "@convax/docs": ["@convax/docs@workspace:apps/docs"],
+
+    "@convax/marketplace": ["@convax/marketplace@workspace:packages/marketplace"],
+
+    "@convax/marketplace-kit": ["@convax/marketplace-kit@workspace:packages/marketplace-kit"],
 
     "@convax/project": ["@convax/project@workspace:packages/project"],
 
@@ -1204,6 +1254,8 @@
     "cookie-es": ["cookie-es@1.2.3", "https://registry.npmjs.org/cookie-es/-/cookie-es-1.2.3.tgz", {}, "sha512-lXVyvUvrNXblMqzIRrxHb57UUVmqsSWlxqt3XIjCkUP0wDAf6uicO6KMbEgYrMNtEvWgWHwe42CKxPu9MYAnWw=="],
 
     "core-util-is": ["core-util-is@1.0.3", "https://registry.npmjs.org/core-util-is/-/core-util-is-1.0.3.tgz", {}, "sha512-ZQBvi1DcpJ4GDqanjucZ2Hj3wEO5pZDS89BWbkcrvdxksJorwUDDZamX9ldFkp9aw2lmBDLgkObEA4DWNJ9FYQ=="],
+
+    "create-convax-marketplace": ["create-convax-marketplace@workspace:packages/create-convax-marketplace"],
 
     "cross-dirname": ["cross-dirname@0.1.0", "https://registry.npmjs.org/cross-dirname/-/cross-dirname-0.1.0.tgz", {}, "sha512-+R08/oI0nl3vfPcqftZRpytksBXDzOUveBq/NBVx0sUp1axwzPQrKinNx5yd5sxPu8j1wIy8AfnVQ+5eFdha6Q=="],
 

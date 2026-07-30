@@ -285,6 +285,18 @@ describe("ToolPluginAuthorizationStore", () => {
     expect(await receiptEntries(authorizationRoot)).toEqual([])
   })
 
+  test("automatic setup requires a managed companion and never silently authorizes PATH", async () => {
+    const root = await temporaryRoot()
+    const authorizationRoot = path.join(root, "authorizations")
+    const pathBinding = binding("a", "/tools/image-tool")
+    const authorization = store(authorizationRoot, { managed: null, path: pathBinding })
+
+    await expect(authorization.authorizeInstalled(plugin(), { requireManaged: true })).rejects.toThrow(
+      "could not be verified during installation",
+    )
+    expect(await receiptEntries(authorizationRoot)).toEqual([])
+  })
+
   test("fails closed on a tampered receipt and removes authorization on uninstall", async () => {
     const root = await temporaryRoot()
     const authorizationRoot = path.join(root, "authorizations")

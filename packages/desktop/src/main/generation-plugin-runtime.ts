@@ -57,7 +57,29 @@ import {
   type ToolPluginCanvasCapabilityHost,
   type ToolPluginCanvasMcpBridge,
 } from "./tool-plugin-canvas-capabilities"
-import { normalizeGenerationToolInputSchema, validateGenerationToolInput } from "./generation-tool-input-schema"
+import {
+  projectGenerationToolInputSchema,
+  validateGenerationToolInput,
+  type GenerationModelInputSelector,
+} from "./generation-tool-input-schema"
+import type { GenerationToolDispatchHooks } from "./generation-canvas-service"
+
+class GenerationHostPreDispatchError extends Error {
+  override name = "GenerationHostPreDispatchError"
+
+  constructor(readonly original: unknown) {
+    super("Host generation pre-dispatch check failed")
+  }
+}
+
+async function runGenerationHostPreDispatch(callback: (() => void | Promise<void>) | undefined) {
+  if (!callback) return
+  try {
+    await callback()
+  } catch (error) {
+    throw new GenerationHostPreDispatchError(error)
+  }
+}
 
 export interface GenerationPluginSource {
   list(): Promise<readonly InstalledWebPluginSummary[]>
@@ -148,6 +170,8 @@ export interface GenerationPluginRuntimeOptions {
   /** Source environment. Only the explicit host allowlist is inherited. */
   environment?: Readonly<Record<string, string | undefined>>
   plugins: GenerationPluginSource
+  /** Main-owned activation gate for source-bound Marketplace runtime capabilities. */
+  isPluginEnabled?(pluginId: string): Promise<boolean>
   /** Resolves and fingerprints the host-owned executable before receipt verification. */
   resolveExecutable?: GenerationPluginExecutableResolver
   /** Copies the install-authorized entrypoint to a unique host-owned launch snapshot. */
@@ -198,7 +222,40 @@ interface PreparedPluginTool {
   pluginId: string
   runtime: CachedPluginRuntime
   recovery?: PreparedGenerationRecovery
+  modelBinding?: GenerationModelBinding
   toolId: string
+}
+
+interface GenerationModelBinding {
+  fieldId: string
+  value: string
+}
+
+interface SelectedPluginTool {
+  plugin: DiscoveredPlugin
+  tool: WebPluginGenerationToolContribution
+}
+
+interface ReadyPluginTool {
+  definition: McpToolDefinition
+  description: GenerationToolDescription
+  modelBinding?: GenerationModelBinding
+  runtime: CachedPluginRuntime
+  selected: SelectedPluginTool
+  summary: GenerationToolSummary
+  variants?: readonly {
+    binding: GenerationModelBinding
+    summary: GenerationToolSummary
+  }[]
+}
+
+interface ResolvedGenerationToolSelection {
+  binding?: GenerationModelBinding
+  summary: GenerationToolSummary
+  variants?: readonly {
+    binding: GenerationModelBinding
+    summary: GenerationToolSummary
+  }[]
 }
 
 export interface PreparedGenerationRecovery {
@@ -256,6 +313,11 @@ const generationToolEnvironmentKeys = [
 ] as const
 
 const generationToolIdPattern = /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/
+// The marker plus a full SHA-256 makes the Plugin-local selection component
+// longer than the manifest's 80-character tool-id ceiling, so it cannot collide
+// with a declared tool while remaining valid for the existing host-id grammar.
+const generationModelSelectionMarker = ".model-selection-"
+const generationModelSelectionDigestPattern = /^[a-f0-9]{64}$/
 const llmModelIdPattern = /^~?[A-Za-z0-9]+(?:[._/:-][A-Za-z0-9]+)*$/
 const bareCommandPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const maximumExecutableBytes = 512 * 1024 * 1024
@@ -502,6 +564,63 @@ function toolSummary(
   }
 }
 
+function generationModelSelectionHostId(baseToolId: string, fieldId: string, value: string) {
+  const digest = createHash("sha256")
+    .update(JSON.stringify([baseToolId, fieldId, value]))
+    .digest("hex")
+  return `${baseToolId}${generationModelSelectionMarker}${digest}`
+}
+
+function baseGenerationToolHostId(selectionId: string) {
+  const markerIndex = selectionId.lastIndexOf(generationModelSelectionMarker)
+  if (markerIndex < 0) return selectionId
+  const digest = selectionId.slice(markerIndex + generationModelSelectionMarker.length)
+  return generationModelSelectionDigestPattern.test(digest) ? selectionId.slice(0, markerIndex) : selectionId
+}
+
+function generationModelVariants(base: GenerationToolSummary, selector: GenerationModelInputSelector) {
+  if (base.kind !== "model") {
+    throw new Error(`Generation model selector is not allowed on an operation: ${base.id}`)
+  }
+  return selector.choices.map((choice) => ({
+    binding: { fieldId: selector.fieldId, value: choice.value },
+    summary: {
+      ...base,
+      id: generationModelSelectionHostId(base.id, selector.fieldId, choice.value),
+      modelName: choice.label,
+    },
+  }))
+}
+
+function resolveGenerationToolSelection(
+  base: GenerationToolSummary,
+  requestedId: string,
+  selector: GenerationModelInputSelector | undefined,
+  allowUnselectedModel = false,
+): ResolvedGenerationToolSelection {
+  if (!selector) {
+    if (requestedId !== base.id) throw new Error(`Generation model selection is no longer installed: ${requestedId}`)
+    return { summary: base }
+  }
+  const variants = generationModelVariants(base, selector)
+  if (requestedId === base.id) {
+    if (allowUnselectedModel) return { summary: base, variants }
+    throw new Error(`Generation model selection is required: ${base.id}`)
+  }
+  const selected = variants.find(({ summary }) => summary.id === requestedId)
+  if (!selected) throw new Error(`Generation model selection is no longer installed: ${requestedId}`)
+  return { ...selected, variants }
+}
+
+function sameGenerationModelBinding(
+  left: GenerationModelBinding | undefined,
+  right: GenerationModelBinding | undefined,
+) {
+  return left === undefined
+    ? right === undefined
+    : right !== undefined && left.fieldId === right.fieldId && left.value === right.value
+}
+
 function toolContractFingerprint(tool: GenerationToolSummary) {
   return JSON.stringify({
     acceptedInputs: [...tool.acceptedInputs],
@@ -663,6 +782,7 @@ export class GenerationPluginRuntime {
   readonly #materializeExecutable: GenerationPluginExecutableMaterializer
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
+  readonly #isPluginEnabled: (pluginId: string) => Promise<boolean>
   readonly #resolveManagedExecutable?: GenerationPluginManagedExecutableResolver
   readonly #resolveExecutable: GenerationPluginExecutableResolver
   readonly #recoveryStateDirectory?: string
@@ -684,6 +804,7 @@ export class GenerationPluginRuntime {
     }
     this.#bunRuntime = options.bunRuntime
     this.#plugins = options.plugins
+    this.#isPluginEnabled = options.isPluginEnabled ?? (async () => true)
     this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
@@ -723,6 +844,36 @@ export class GenerationPluginRuntime {
           left.title.localeCompare(right.title) ||
           left.toolId.localeCompare(right.toolId),
       )
+  }
+
+  /**
+   * Expands one manifest-declared model only after its owning service has been
+   * admitted by Main. Unmarked tools preserve their static manifest summary.
+   */
+  async expandModelTool(
+    expected: GenerationToolSummary,
+    signal?: AbortSignal,
+  ): Promise<readonly GenerationToolSummary[]> {
+    if (expected.kind !== "model" || expected.id !== generationPluginToolHostId(expected.pluginId, expected.toolId)) {
+      throw new Error(`Generation model catalog request is invalid: ${expected.id}`)
+    }
+    const ready = await this.#readyTool(expected.id, signal, expected, true)
+    const current = this.#selectTool(await this.#discover(), expected.id)
+    if (
+      current.plugin.fingerprint !== ready.selected.plugin.fingerprint ||
+      toolContractFingerprint(toolSummary(current.plugin.manifest, current.tool)) !==
+        toolContractFingerprint(expected) ||
+      this.#cache.get(current.plugin.manifest.id) !== ready.runtime ||
+      toolDefinitionFingerprint(ready.definition) !==
+        toolDefinitionFingerprint(ready.runtime.availableTools?.get(ready.selected.tool.id) ?? ready.definition)
+    ) {
+      throw new Error(`Generation Plugin changed while its model catalog was listed: ${current.plugin.manifest.id}`)
+    }
+    const summaries = ready.variants?.map(({ summary }) => summary) ?? [expected]
+    if (new Set(summaries.map(({ id }) => id)).size !== summaries.length) {
+      throw new Error(`Generation Plugin model catalog contains colliding selections: ${expected.pluginId}`)
+    }
+    return summaries
   }
 
   /** Starts only declared LLM sidecars and returns Main-only OpenCode connection material. */
@@ -911,31 +1062,35 @@ export class GenerationPluginRuntime {
       }
       return result
     } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+      // Status is a read-only availability probe and shares the process with
+      // generation/recovery. A transient probe failure must not tear down an
+      // accepted LRO or an in-flight authorization hosted by that runtime.
+      if (call !== "status" && !(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
       throw error
     }
   }
 
   async prepareTool(expected: GenerationToolSummary, signal?: AbortSignal) {
     const ready = await this.#readyTool(expected.id, signal, expected)
-    let description: GenerationToolDescription
-    try {
-      description = normalizeGenerationToolInputSchema(expected.id, ready.definition.inputSchema)
-    } catch (error) {
-      this.#evict(ready.runtime)
-      throw error
-    }
-    const recovery = await this.#prepareRecovery(expected, ready.runtime, ready.selected.plugin, signal)
-    const prepared: PreparedPluginTool = {
+    return this.#prepareReadyTool(expected, ready, signal)
+  }
+
+  async #prepareReadyTool(expected: GenerationToolSummary, ready: ReadyPluginTool, signal?: AbortSignal) {
+    const preparedBase: PreparedPluginTool = {
       contractFingerprint: toolContractFingerprint(expected),
       definitionFingerprint: toolDefinitionFingerprint(ready.definition),
-      description,
+      description: ready.description,
       hostToolId: expected.id,
       pluginFingerprint: ready.selected.plugin.fingerprint,
       pluginId: ready.selected.plugin.manifest.id,
       runtime: ready.runtime,
-      ...(recovery === undefined ? {} : { recovery }),
+      ...(ready.modelBinding === undefined ? {} : { modelBinding: ready.modelBinding }),
       toolId: ready.selected.tool.id,
+    }
+    const recovery = await this.#prepareRecovery(expected, ready.runtime, ready.selected.plugin, preparedBase, signal)
+    const prepared: PreparedPluginTool = {
+      ...preparedBase,
+      ...(recovery === undefined ? {} : { recovery }),
     }
     return {
       call: (
@@ -943,9 +1098,15 @@ export class GenerationPluginRuntime {
         callSignal?: AbortSignal,
         lifecycleObserver?: GenerationToolLifecycleObserver,
         operation?: GenerationToolOperationMetadata,
-      ) => this.#callPrepared(prepared, input, callSignal, lifecycleObserver, operation),
+        dispatchHooks?: GenerationToolDispatchHooks,
+      ) => this.#callPrepared(prepared, input, callSignal, lifecycleObserver, operation, dispatchHooks),
       ...(recovery === undefined ? {} : { recovery }),
-      validateInput: (input?: GenerationToolInput) => validateGenerationToolInput(description, input),
+      validateInput: (input?: GenerationToolInput) => {
+        const validated = validateGenerationToolInput(ready.description, input)
+        return ready.modelBinding === undefined
+          ? validated
+          : { ...validated, [ready.modelBinding.fieldId]: ready.modelBinding.value }
+      },
     }
   }
 
@@ -1027,28 +1188,27 @@ export class GenerationPluginRuntime {
    * renderer-safe projection of its current MCP input schema.
    */
   async describeTool(hostToolId: string, signal?: AbortSignal): Promise<GenerationToolDescription> {
-    const expected = (await this.listTools()).find((tool) => tool.id === hostToolId)
-    if (!expected) throw new Error(`Generation tool is not installed: ${hostToolId}`)
-    const ready = await this.#readyTool(hostToolId, signal, expected)
-    let description: GenerationToolDescription
-    try {
-      description = normalizeGenerationToolInputSchema(hostToolId, ready.definition.inputSchema)
-    } catch (error) {
-      this.#evict(ready.runtime)
-      throw error
-    }
+    const ready = await this.#readyTool(hostToolId, signal)
     const current = this.#selectTool(await this.#discover(), hostToolId)
+    const currentDefinition = ready.runtime.availableTools?.get(ready.selected.tool.id) ?? ready.definition
+    const currentProjection = projectGenerationToolInputSchema(
+      generationPluginToolHostId(current.plugin.manifest.id, current.tool.id),
+      currentDefinition.inputSchema,
+    )
+    const currentSummary = resolveGenerationToolSelection(
+      toolSummary(current.plugin.manifest, current.tool),
+      hostToolId,
+      currentProjection.modelSelector,
+    ).summary
     if (
       current.plugin.fingerprint !== ready.selected.plugin.fingerprint ||
-      toolContractFingerprint(toolSummary(current.plugin.manifest, current.tool)) !==
-        toolContractFingerprint(expected) ||
+      toolContractFingerprint(currentSummary) !== toolContractFingerprint(ready.summary) ||
       this.#cache.get(current.plugin.manifest.id) !== ready.runtime ||
-      toolDefinitionFingerprint(ready.definition) !==
-        toolDefinitionFingerprint(ready.runtime.availableTools?.get(ready.selected.tool.id) ?? ready.definition)
+      toolDefinitionFingerprint(ready.definition) !== toolDefinitionFingerprint(currentDefinition)
     ) {
       throw new Error(`Generation Plugin changed while its tool was described: ${current.plugin.manifest.id}`)
     }
-    return description
+    return ready.description
   }
 
   /** Convenience for runtime tests and non-staging callers; production uses prepareTool().call(). */
@@ -1058,9 +1218,8 @@ export class GenerationPluginRuntime {
     signal?: AbortSignal,
     lifecycleObserver?: GenerationToolLifecycleObserver,
   ): Promise<McpToolCallResult> {
-    const expected = (await this.listTools()).find((tool) => tool.id === hostToolId)
-    if (!expected) throw new Error(`Generation tool is not installed: ${hostToolId}`)
-    return (await this.prepareTool(expected, signal)).call(input, signal, lifecycleObserver)
+    const ready = await this.#readyTool(hostToolId, signal)
+    return (await this.#prepareReadyTool(ready.summary, ready, signal)).call(input, signal, lifecycleObserver)
   }
 
   async #callPrepared(
@@ -1069,18 +1228,39 @@ export class GenerationPluginRuntime {
     signal?: AbortSignal,
     lifecycleObserver?: GenerationToolLifecycleObserver,
     operation?: GenerationToolOperationMetadata,
+    dispatchHooks?: GenerationToolDispatchHooks,
   ): Promise<McpToolCallResult> {
     if (signal?.aborted) throw abortError(signal.reason)
-    await this.#assertPreparedToolCurrent(prepared, "while inputs were being staged")
-    const guardedLifecycleObserver: GenerationToolLifecycleObserver | undefined = lifecycleObserver
-      ? async (event) => {
-          await lifecycleObserver(event)
-          if (event.type === "external-started") {
-            if (signal?.aborted) throw abortError(signal.reason)
-            await this.#assertPreparedToolCurrent(prepared, "before the external call")
+    await this.#assertPreparedToolCurrent(prepared, "while inputs were being staged", signal, true)
+    const guardedLifecycleObserver: GenerationToolLifecycleObserver | undefined =
+      lifecycleObserver || dispatchHooks
+        ? async (event) => {
+            if (event.type === "external-started") {
+              await runGenerationHostPreDispatch(dispatchHooks?.validate)
+              if (signal?.aborted) throw abortError(signal.reason)
+              await this.#assertPreparedToolCurrent(prepared, "before the external call", signal, true)
+              await runGenerationHostPreDispatch(dispatchHooks?.guard)
+              // Runtime and service checks may perform bounded IPC. Re-run the
+              // caller's mutable-input guard after them so no stale Canvas
+              // snapshot can cross the final write boundary.
+              await runGenerationHostPreDispatch(dispatchHooks?.validate)
+              if (signal?.aborted) throw abortError(signal.reason)
+              await runGenerationHostPreDispatch(
+                lifecycleObserver === undefined ? undefined : () => lifecycleObserver(event),
+              )
+              return
+            }
+            await lifecycleObserver?.(event)
           }
-        }
-      : undefined
+        : undefined
+    let callInput = input
+    if (prepared.modelBinding) {
+      const { fieldId, value } = prepared.modelBinding
+      if (Object.prototype.hasOwnProperty.call(input, fieldId) && input[fieldId] !== value) {
+        throw new Error(`Generation tool input cannot override host-bound model selection: ${fieldId}`)
+      }
+      if (!Object.prototype.hasOwnProperty.call(input, fieldId)) callInput = { ...input, [fieldId]: value }
+    }
     try {
       if (signal?.aborted) throw abortError(signal.reason)
       // Generation jobs may legitimately remain queued or running for hours. The
@@ -1095,15 +1275,20 @@ export class GenerationPluginRuntime {
       }
       return await prepared.runtime.client.callTool(
         prepared.toolId,
-        input,
+        callInput,
         signal,
         guardedLifecycleObserver,
         false,
         operation,
       )
     } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(prepared.runtime)
-      throw error
+      if (
+        !(error instanceof GenerationHostPreDispatchError) &&
+        !(error instanceof Error && error.name === "AbortError")
+      ) {
+        this.#evict(prepared.runtime)
+      }
+      throw error instanceof GenerationHostPreDispatchError ? error.original : error
     }
   }
 
@@ -1111,6 +1296,7 @@ export class GenerationPluginRuntime {
     expected: GenerationToolSummary,
     runtime: CachedPluginRuntime,
     plugin: DiscoveredPlugin,
+    prepared: PreparedPluginTool,
     signal?: AbortSignal,
   ): Promise<PreparedGenerationRecovery | undefined> {
     if (expected.recovery === undefined) return undefined
@@ -1128,26 +1314,12 @@ export class GenerationPluginRuntime {
     const pluginPackageDigest = plugin.fingerprint
     const bindingDigest = createHash("sha256").update(capability.binding).digest("hex")
     const runtimeAuthorizationDigest = createHash("sha256").update(runtime.authorizationIdentity).digest("hex")
-    const executionBindingDigest = createHash("sha256")
-      .update(JSON.stringify([pluginPackageDigest, runtimeAuthorizationDigest, bindingDigest]))
+    const toolBindingDigest = createHash("sha256")
+      .update(stableJson({ binding: prepared.modelBinding ?? null, toolId: prepared.toolId }))
       .digest("hex")
-    const assertCurrent = () =>
-      this.#assertPreparedToolCurrent(
-        {
-          contractFingerprint: toolContractFingerprint(expected),
-          definitionFingerprint: toolDefinitionFingerprint(runtime.availableTools!.get(expected.toolId)!),
-          description: normalizeGenerationToolInputSchema(
-            expected.id,
-            runtime.availableTools!.get(expected.toolId)!.inputSchema,
-          ),
-          hostToolId: expected.id,
-          pluginFingerprint: pluginPackageDigest,
-          pluginId: expected.pluginId,
-          runtime,
-          toolId: expected.toolId,
-        },
-        "before recovery control",
-      )
+    const executionBindingParts = [pluginPackageDigest, runtimeAuthorizationDigest, bindingDigest, toolBindingDigest]
+    const executionBindingDigest = createHash("sha256").update(JSON.stringify(executionBindingParts)).digest("hex")
+    const assertCurrent = () => this.#assertPreparedRecoveryCurrent(prepared)
     const recovery = this.#createRecoveryControls({
       assertCurrent,
       bindingDigest,
@@ -1168,6 +1340,9 @@ export class GenerationPluginRuntime {
         pluginPackageDigest,
         recoveryBindingDigest: bindingDigest,
         runtimeAuthorizationDigest,
+        // Keep the persisted field name compatible with existing schema-1
+        // records; new records bind both the base tool and optional model.
+        modelBindingDigest: toolBindingDigest,
         sourceBinding: runtime.sourceBinding,
         tool: expected,
       })
@@ -1237,16 +1412,56 @@ export class GenerationPluginRuntime {
     }
   }
 
-  async #assertPreparedToolCurrent(prepared: PreparedPluginTool, context: string): Promise<void> {
+  async #assertPreparedRecoveryCurrent(prepared: PreparedPluginTool): Promise<void> {
     const plugins = await this.#discover()
     const selected = this.#selectTool(plugins, prepared.hostToolId)
-    const currentSummary = toolSummary(selected.plugin.manifest, selected.tool)
-    const currentDefinition = prepared.runtime.availableTools?.get(prepared.toolId)
     if (
       selected.plugin.fingerprint !== prepared.pluginFingerprint ||
       selected.plugin.manifest.id !== prepared.pluginId ||
       selected.tool.id !== prepared.toolId ||
+      this.#cache.get(prepared.pluginId) !== prepared.runtime
+    ) {
+      throw new Error(`Generation Plugin changed before recovery control: ${prepared.pluginId}`)
+    }
+  }
+
+  async #assertPreparedToolCurrent(
+    prepared: PreparedPluginTool,
+    context: string,
+    signal?: AbortSignal,
+    refreshDefinition = false,
+  ): Promise<void> {
+    const plugins = await this.#discover()
+    const selected = this.#selectTool(plugins, prepared.hostToolId)
+    if (
+      selected.plugin.fingerprint !== prepared.pluginFingerprint ||
+      selected.plugin.manifest.id !== prepared.pluginId ||
+      selected.tool.id !== prepared.toolId ||
+      this.#cache.get(prepared.pluginId) !== prepared.runtime
+    ) {
+      throw new Error(`Generation Plugin changed ${context}: ${prepared.pluginId}`)
+    }
+    const currentDefinition = (
+      refreshDefinition ? await this.#availableTools(prepared.runtime, signal, true) : prepared.runtime.availableTools
+    )?.get(prepared.toolId)
+    let currentSummary: GenerationToolSummary | undefined
+    let currentBinding: GenerationModelBinding | undefined
+    if (currentDefinition) {
+      try {
+        const baseSummary = toolSummary(selected.plugin.manifest, selected.tool)
+        const projection = projectGenerationToolInputSchema(baseSummary.id, currentDefinition.inputSchema)
+        const resolved = resolveGenerationToolSelection(baseSummary, prepared.hostToolId, projection.modelSelector)
+        currentSummary = resolved.summary
+        currentBinding = resolved.binding
+      } catch {
+        // The selected runtime model or its schema changed; report the same
+        // bounded host error as any other prepared-tool drift.
+      }
+    }
+    if (
+      !currentSummary ||
       toolContractFingerprint(currentSummary) !== prepared.contractFingerprint ||
+      !sameGenerationModelBinding(currentBinding, prepared.modelBinding) ||
       !currentDefinition ||
       toolDefinitionFingerprint(currentDefinition) !== prepared.definitionFingerprint ||
       this.#cache.get(prepared.pluginId) !== prepared.runtime
@@ -1315,31 +1530,57 @@ export class GenerationPluginRuntime {
     }
   }
 
-  async #readyTool(hostToolId: string, signal?: AbortSignal, expected?: GenerationToolSummary) {
+  async #readyTool(
+    hostToolId: string,
+    signal?: AbortSignal,
+    expected?: GenerationToolSummary,
+    allowUnselectedModel = false,
+  ): Promise<ReadyPluginTool> {
     if (signal?.aborted) throw abortError(signal.reason)
     const plugins = await this.#discover()
     const selected = this.#selectTool(plugins, hostToolId)
-    if (
-      expected &&
-      toolContractFingerprint(toolSummary(selected.plugin.manifest, selected.tool)) !==
-        toolContractFingerprint(expected)
-    ) {
+    const baseSummary = toolSummary(selected.plugin.manifest, selected.tool)
+    const runtime = await this.#runtimeFor(selected.plugin)
+    const { definition, projection } = await (async () => {
+      try {
+        const availableTools = await this.#availableTools(runtime, signal, true)
+        const definition = availableTools.get(selected.tool.id)
+        if (!definition) {
+          throw new Error(
+            `Generation Plugin ${selected.plugin.manifest.id} did not expose its declared MCP tool: ${selected.tool.id}`,
+          )
+        }
+        if (signal?.aborted) throw abortError(signal.reason)
+        const projection = projectGenerationToolInputSchema(baseSummary.id, definition.inputSchema)
+        if (projection.modelSelector && baseSummary.kind !== "model") {
+          throw new Error(`Generation model selector is not allowed on an operation: ${baseSummary.id}`)
+        }
+        return {
+          definition,
+          projection,
+        }
+      } catch (error) {
+        if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+        throw error
+      }
+    })()
+    const resolved = resolveGenerationToolSelection(
+      baseSummary,
+      hostToolId,
+      projection.modelSelector,
+      allowUnselectedModel,
+    )
+    if (expected && toolContractFingerprint(resolved.summary) !== toolContractFingerprint(expected)) {
       throw new Error(`Generation Plugin declaration changed before preparation: ${selected.plugin.manifest.id}`)
     }
-    const runtime = await this.#runtimeFor(selected.plugin)
-    try {
-      const availableTools = await this.#availableTools(runtime, signal, true)
-      const definition = availableTools.get(selected.tool.id)
-      if (!definition) {
-        throw new Error(
-          `Generation Plugin ${selected.plugin.manifest.id} did not expose its declared MCP tool: ${selected.tool.id}`,
-        )
-      }
-      if (signal?.aborted) throw abortError(signal.reason)
-      return { definition, runtime, selected }
-    } catch (error) {
-      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
-      throw error
+    return {
+      definition,
+      description: { ...projection.description, toolId: resolved.summary.id },
+      ...(resolved.binding === undefined ? {} : { modelBinding: resolved.binding }),
+      runtime,
+      selected,
+      summary: resolved.summary,
+      ...(resolved.variants === undefined ? {} : { variants: resolved.variants }),
     }
   }
 
@@ -1379,6 +1620,7 @@ export class GenerationPluginRuntime {
     if (this.#disposed) throw new Error("Generation Plugin runtime is disposed")
     for (const plugin of installed) {
       if (!isExecutablePlugin(plugin)) continue
+      if (!(await this.#isPluginEnabled(plugin.id))) continue
       requireBareCommand(plugin.runtime.command)
       if (discovered.has(plugin.id)) throw new Error(`Duplicate installed Plugin id: ${plugin.id}`)
       for (const tool of plugin.contributes.generation?.tools ?? []) requireGenerationToolId(tool.id)
@@ -1396,10 +1638,11 @@ export class GenerationPluginRuntime {
     return discovered
   }
 
-  #selectTool(plugins: ReadonlyMap<string, DiscoveredPlugin>, hostToolId: string) {
+  #selectTool(plugins: ReadonlyMap<string, DiscoveredPlugin>, hostToolId: string): SelectedPluginTool {
+    const baseToolId = baseGenerationToolHostId(hostToolId)
     for (const plugin of plugins.values()) {
       const tool = plugin.manifest.contributes.generation?.tools.find(
-        (candidate) => generationPluginToolHostId(plugin.manifest.id, candidate.id) === hostToolId,
+        (candidate) => generationPluginToolHostId(plugin.manifest.id, candidate.id) === baseToolId,
       )
       if (tool) return { plugin, tool }
     }

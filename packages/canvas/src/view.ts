@@ -12,8 +12,10 @@ export interface CanvasViewport {
 
 export interface CanvasFitViewportBounds {
   height: number
+  left?: number
   maxZoom?: number
   minZoom?: number
+  top?: number
   width: number
 }
 
@@ -108,6 +110,8 @@ export function resolveCanvasFitViewport({
   if (
     !Number.isFinite(bounds.width) ||
     !Number.isFinite(bounds.height) ||
+    (bounds.left !== undefined && !Number.isFinite(bounds.left)) ||
+    (bounds.top !== undefined && !Number.isFinite(bounds.top)) ||
     bounds.width <= 0 ||
     bounds.height <= 0 ||
     !isCanvasFitZoomLimit(bounds.minZoom) ||
@@ -164,8 +168,8 @@ export function resolveCanvasFitViewport({
   const centerX = (targetBounds.minX + targetBounds.maxX) / 2
   const centerY = (targetBounds.minY + targetBounds.maxY) / 2
   return {
-    x: bounds.width / 2 - centerX * zoom,
-    y: bounds.height / 2 - centerY * zoom,
+    x: (bounds.left ?? 0) + bounds.width / 2 - centerX * zoom,
+    y: (bounds.top ?? 0) + bounds.height / 2 - centerY * zoom,
     zoom,
   }
 }

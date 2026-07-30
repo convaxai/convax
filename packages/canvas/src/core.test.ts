@@ -158,6 +158,92 @@ describe("canvas history", () => {
     expect(hydrated.future).toEqual([])
   })
 
+  test("keeps unchanged card identities when Main acknowledges a renderer connection", () => {
+    const source = createTextNode({ id: "source", position: { x: 0, y: 0 } })
+    const target = createTextNode({ id: "target", position: { x: 400, y: 0 } })
+    const initial = createCanvasDocument({ id: "canvas_acknowledge", nodes: [source, target] })
+    const connected = canvasHistoryReducer(createCanvasHistory(initial), {
+      document: connectCanvasNodes(initial, { id: "connection", source: source.id, target: target.id }),
+      type: "commit",
+    })
+
+    const authoritative = {
+      ...structuredClone(connected.document),
+      revision: connected.document.revision + 1,
+    }
+    const acknowledged = canvasHistoryReducer(connected, {
+      document: authoritative,
+      expectedRevision: connected.document.revision,
+      type: "acknowledge",
+    })
+
+    expect(acknowledged).not.toBe(connected)
+    expect(acknowledged.document).not.toBe(connected.document)
+    expect(acknowledged.document.revision).toBe(authoritative.revision)
+    expect(acknowledged.document.nodes).toBe(connected.document.nodes)
+    expect(acknowledged.document.nodes[0]).toBe(source)
+    expect(acknowledged.document.nodes[1]).toBe(target)
+    expect(acknowledged.document.edges).toBe(connected.document.edges)
+  })
+
+  test("reuses only unchanged cards when hydrating an authoritative mutation", () => {
+    const source = createTextNode({ id: "source", position: { x: 0, y: 0 }, text: "Source" })
+    const target = createTextNode({ id: "target", position: { x: 400, y: 0 }, text: "Before" })
+    const currentDocument = {
+      ...connectCanvasNodes(createCanvasDocument({ id: "canvas_reconcile", nodes: [source, target] }), {
+        id: "connection",
+        source: source.id,
+        target: target.id,
+      }),
+      revision: 1,
+    }
+    const current = canvasHistoryReducer(createCanvasHistory(currentDocument), {
+      document: { ...currentDocument, metadata: { ...currentDocument.metadata, description: "Local edit" } },
+      type: "commit",
+    })
+    const authoritativeTarget = {
+      ...structuredClone(target),
+      data: { ...structuredClone(target.data), resourceState: { status: "ready" as const, text: "After" } },
+    }
+    const authoritative = {
+      ...structuredClone(current.document),
+      nodes: [structuredClone(source), authoritativeTarget],
+      revision: current.document.revision + 1,
+    }
+
+    const hydrated = canvasHistoryReducer(current, { document: authoritative, type: "hydrate" })
+
+    expect(hydrated.document.revision).toBe(authoritative.revision)
+    expect(hydrated.document.nodes[0]).toBe(current.document.nodes[0])
+    expect(hydrated.document.nodes[1]).toBe(authoritativeTarget)
+    expect(hydrated.document.nodes[1]?.data).toMatchObject({ resourceState: { text: "After" } })
+    expect(hydrated.document.edges[0]).toBe(current.document.edges[0])
+    expect(hydrated.past).toEqual([])
+    expect(hydrated.future).toEqual([])
+  })
+
+  test("does not reuse card identities when hydrating another Canvas document", () => {
+    const currentNode = createTextNode({ id: "shared-node", position: { x: 0, y: 0 }, text: "Current" })
+    const currentTarget = createTextNode({ id: "shared-target", position: { x: 400, y: 0 }, text: "Target" })
+    const currentDocument = connectCanvasNodes(
+      createCanvasDocument({ id: "canvas_current", nodes: [currentNode, currentTarget], title: "Current" }),
+      { id: "current-edge", source: currentNode.id, target: currentTarget.id },
+    )
+    const authoritative = {
+      ...structuredClone(currentDocument),
+      id: "canvas_next",
+      metadata: { title: "Next" },
+    }
+
+    const hydrated = canvasHistoryReducer(createCanvasHistory(currentDocument), { document: authoritative, type: "hydrate" })
+
+    expect(hydrated.document).toBe(authoritative)
+    expect(hydrated.document.nodes).not.toBe(currentDocument.nodes)
+    expect(hydrated.document.nodes[0]).not.toBe(currentDocument.nodes[0])
+    expect(hydrated.document.edges).not.toBe(currentDocument.edges)
+    expect(hydrated.document.metadata).not.toBe(currentDocument.metadata)
+  })
+
   test("keeps file and agent as internal roles while hiding generic and agent insertion", () => {
     const registry = createDefaultCanvasNodeRegistry()
     expect(registry.list().map((definition) => definition.type)).toEqual(["file", "agent"])

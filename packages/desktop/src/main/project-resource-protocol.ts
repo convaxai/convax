@@ -3,6 +3,7 @@ import {
   type ProjectResourceReference,
 } from "@convax/project/canvas"
 import type { ProjectManagedAssetStore } from "@convax/project/node"
+import { parseSingleHttpByteRange } from "./http-byte-range"
 
 type ProtocolReference = Exclude<ProjectResourceReference, { kind: "project-directory" }>
 
@@ -83,6 +84,43 @@ export async function resolveProjectResourceProtocolPath(
     absolutePath: await assets.resolve({ projectId: parsed.projectId, reference: parsed.reference }),
     kind: "managed-asset" as const,
   }
+}
+
+export function createProjectResourceProtocolResponse(input: {
+  cacheControl: string
+  request: Request
+  response: Response
+  size: number
+}) {
+  if (input.request.method !== "GET" && input.request.method !== "HEAD") {
+    return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
+  }
+  const range = parseSingleHttpByteRange(input.request.headers.get("range"), input.size)
+  if (range === "unsatisfiable") {
+    return new Response(null, {
+      headers: {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": input.cacheControl,
+        "Content-Range": `bytes */${input.size}`,
+      },
+      status: 416,
+    })
+  }
+  const headers = new Headers(input.response.headers)
+  headers.set("Accept-Ranges", "bytes")
+  headers.set("Cache-Control", input.cacheControl)
+  if (range) {
+    headers.set("Content-Length", String(range.end - range.start + 1))
+    headers.set("Content-Range", `bytes ${range.start}-${range.end}/${input.size}`)
+  } else {
+    headers.set("Content-Length", String(input.size))
+    headers.delete("Content-Range")
+  }
+  return new Response(input.request.method === "HEAD" ? null : input.response.body, {
+    headers,
+    status: range ? 206 : input.response.status,
+    statusText: range ? "Partial Content" : input.response.statusText,
+  })
 }
 
 function requireProtocolReference(value: unknown): ProtocolReference {

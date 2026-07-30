@@ -179,6 +179,13 @@ declared references, immutable input content digests, delivery mode, expected
 output contract, and target guard. It excludes volatile paths, process ids,
 timestamps, credentials, and renderer state.
 
+The execution binding digest always covers the exact Plugin bytes, authorized
+runtime identity, sidecar recovery binding, and base generation tool id. For a
+runtime model selection it also covers the Main-owned selector field and value.
+Existing schema-1 records remain addressable by their already-persisted digest;
+new records never let two tools sharing one sidecar binding reuse a pinned runtime
+record.
+
 Every lookup, query, await, result, cancel, replay, and acknowledgement must match:
 
 - the scoped operation owner;
@@ -345,6 +352,12 @@ interface GenerationOperationLedgerV1 {
 
 Time fields are Desktop-private retention data and use an injected clock. They do
 not order Canvas domain transitions.
+
+Main's `prepared` phase means immutable inputs and the exact runtime binding are
+durable, but the external dispatch has not been authorized. It is therefore proof
+that no `tools/call` was written and is never automatically replayed. This is
+distinct from a sidecar returning `prepared` after Main has already durably entered
+`dispatching`.
 
 The sidecar handshake returns a bounded opaque recovery-binding value representing
 the private service/account context that owns its journal. Desktop persists only
@@ -545,10 +558,11 @@ For a node-owning recovery-capable generation:
    protocol, and capability into the private ledger;
 6. persist ledger `prepared`;
 7. revalidate Canvas scope, references, target, cancellation, Plugin identity, and
-   runtime identity;
-8. persist Canvas `running` and ledger `dispatching` immediately before writing
-   `tools/call`;
-9. revalidate again, then dispatch with operation metadata;
+   runtime identity; perform the bounded service check; then revalidate Canvas
+   inputs again;
+8. persist Canvas `running`, revalidate the resulting target once more, and persist
+   ledger `dispatching` immediately before writing `tools/call`;
+9. dispatch with operation metadata;
 10. persist a structured `taskId` in the ledger first and Canvas second;
 11. await or poll the same operation;
 12. retrieve and verify the exact terminal result digest;
@@ -578,18 +592,21 @@ Startup recovery runs in Main before renderer hydration:
 1. load active Canvas runs and private ledgers;
 2. acquire a scoped recovery single-flight lease;
 3. cross-check Canvas owner, operation, request, task receipt, and ledger;
-4. launch only the pinned authorized runtime in recovery mode;
-5. verify the exact recovery handshake;
-6. call `lookupOperation(operationId, requestDigest)`;
-7. reconcile from the returned proof:
-   - `prepared` or `absent`: replay the exact immutable `tools/call` with the same
-     operation id and request digest;
+4. if Main's ledger is still `prepared`, persist a safe failed/cancelled Canvas
+   terminal state and reclaim the local snapshot without launching a sidecar;
+5. otherwise launch only the pinned authorized runtime in recovery mode;
+6. verify the exact recovery handshake;
+7. call `lookupOperation(operationId, requestDigest)`;
+8. reconcile from the returned proof:
+   - for a `dispatching` or later Main ledger, sidecar `prepared` or `absent`:
+     replay the exact immutable `tools/call` with the same operation id and request
+     digest;
    - `submitted` or `running`: persist a missing task receipt and reattach polling;
    - `succeeded`: replay and verify the terminal result, then attempt the guarded
      Canvas commit;
    - `failed` or `cancelled`: persist the matching safe terminal Canvas state;
    - `unknown`: persist `interrupted(unknown)` and never resubmit;
-8. publish Canvas invalidation, then hydrate Renderer from authoritative state.
+9. publish Canvas invalidation, then hydrate Renderer from authoritative state.
 
 Replaying after `absent` is safe only because a full-recovery sidecar proves absence,
 uses the same immutable request, and guarantees idempotent submit. It is not a new
@@ -731,7 +748,8 @@ boundary:
 | ---------------------------------------------- | -------------------------------------------- |
 | before Canvas `submitting`                     | no operation exists                          |
 | after Canvas `submitting`, before ledger       | interrupt unknown; no call                   |
-| after ledger/input snapshots, before dispatch  | get, then same-operation replay              |
+| after ledger/input snapshots, before dispatch  | fail safe locally; never call or replay      |
+| after Main `dispatching`, before provider call | get, then same-operation replay              |
 | after sidecar `prepared`, before provider call | get prepared; same-operation replay          |
 | provider accepted, before sidecar task journal | provider idempotency get; never second task  |
 | sidecar accepted, before lifecycle receipt     | operation get returns stable task            |

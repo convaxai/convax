@@ -72,6 +72,7 @@ describe("Agent drawer header", () => {
     const markup = renderToStaticMarkup(
       <AgentDrawerHeader
         closeLabel="Close utilities"
+        collapse
         createDisabled={false}
         historyVisible
         onClose={() => undefined}
@@ -91,6 +92,9 @@ describe("Agent drawer header", () => {
     expect(markup).toContain("8 tools")
     expect(markup).toContain("h-7")
     expect(markup).toContain("border-border-subtle")
+    expect(markup).toContain('data-workspace-utility-close=""')
+    expect(markup).toContain("lucide-panel-right-close")
+    expect(markup).not.toContain("lucide-chevron-right")
     expect(markup.match(/Atlas Agent/g)).toHaveLength(1)
   })
 
@@ -107,7 +111,7 @@ describe("Agent drawer header", () => {
       )
 
       const button = document.querySelector<HTMLButtonElement>('button[aria-label="Open agent"]')
-      expect(button?.textContent).toContain("Working")
+      expect(button?.textContent).not.toContain("Working")
       expect(document.querySelector('[role="status"]')?.textContent).toContain("Agent status: Working")
       expect(button?.closest("[data-agent-drawer-entry]")?.getAttribute("style")).toBeNull()
       await act(async () => button?.click())
@@ -118,10 +122,22 @@ describe("Agent drawer header", () => {
     }
   })
 
-  test("keeps an idle entry text-readable instead of relying on its status dot", () => {
+  test("keeps an icon-only idle entry accessible through its name and live status", () => {
     const markup = renderToStaticMarkup(<AgentDrawerTrigger onOpen={() => undefined} status={idle} />)
     expect(markup).toContain("Idle")
     expect(markup).toContain('aria-label="Open agent"')
     expect(markup).toContain('aria-live="polite"')
+    expect(markup).toContain("lucide-panel-right-open")
+    expect(markup).not.toContain("lucide-bot")
+    expect(markup).not.toContain("shadow")
+  })
+
+  test("keeps the titlebar opener mounted but inert while the Agent dock is open", () => {
+    const markup = renderToStaticMarkup(<AgentDrawerTrigger hidden onOpen={() => undefined} status={idle} />)
+
+    expect(markup).toContain('data-agent-drawer-entry-state="hidden"')
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup).toContain("inert")
+    expect(markup).toContain("invisible opacity-0")
   })
 })

@@ -137,6 +137,26 @@ whose URL contains no source path. Exact installed identity, Canvas topology,
 resource reference and file identity are rechecked at each boundary. Core runtime
 logic never branches on a concrete Plugin id.
 
+### Marketplace and MCP Server
+
+A Marketplace is a passive, source-qualified catalog of installable Plugins,
+standalone Skills, and MCP Servers. `@convax/marketplace` owns its public schemas,
+canonical `SourceKey`, validation, aggregation, presentation-representative rules,
+and source-conflict semantics. Desktop owns Builtin, Network, and Local adapters,
+durable source security state, installation/setup transitions, and user-facing
+composition. Source membership is routing and presentation only; it never grants
+execution authority.
+
+An MCP Server is a first-class installed capability whose identity and version come
+from a reviewed, fixed-schema `server.json`. A supported HTTP MCP Server has exactly
+one fixed HTTPS endpoint and is configured into OpenCode only after explicit setup;
+OpenCode remains the HTTP/OAuth client. A managed-stdio MCP Server is instead owned
+by Desktop, which verifies and snapshots an exact target companion, owns its process
+tree and MCP client, and exposes only an authenticated loopback Streamable HTTP
+configuration to Agent Runtime. These profiles never mix within one installed item.
+HTTP MCP is Agent-only in v1; fixed Convax product actions are available only through
+the Desktop-owned managed-stdio profile.
+
 ## 3. Packages and dependency graph
 
 | Package                  | Responsibility                                                                  |
@@ -149,6 +169,9 @@ logic never branches on a concrete Plugin id.
 | `@convax/project/node`   | Native Project, Project Files, private storage, and Canvas persistence adapters |
 | `@convax/workbench`      | Headless window Input/Selection/Surface and layout state machines               |
 | `@convax/agent-runtime`  | Host-agnostic OpenCode integration and protected execution boundary             |
+| `@convax/marketplace`    | Marketplace refs, schemas, source identity, validation and Catalog aggregation   |
+| `@convax/marketplace-kit` | Authoring-time deterministic Registry, Showcase, bundle and artifact generation |
+| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                      |
 | `@convax/desktop`        | Electron composition root, IPC, adapters, coordinators and product shell        |
 
 Allowed internal runtime dependencies:
@@ -158,10 +181,20 @@ Allowed internal runtime dependencies:
 @convax/project-files  -> none
 @convax/workbench      -> none
 @convax/agent-runtime  -> none
+@convax/marketplace    -> none
+@convax/marketplace-kit -> @convax/marketplace
+create-convax-marketplace -> @convax/marketplace-kit
 @convax/canvas         -> @convax/ui
 @convax/project        -> @convax/canvas, @convax/project-files, @convax/ui
-@convax/desktop        -> every package above
+@convax/desktop        -> agent-runtime, canvas, marketplace, project,
+                          project-files, ui and workbench
 ```
+
+The three Marketplace packages target the supported Node/Bun authoring and Desktop
+main runtimes. `@convax/marketplace` stays headless but may use Node cryptography for
+the single canonical digest/token implementation; it is never a Renderer import.
+Kit and create CLI are authoring-time tools and do not enter packaged Desktop or
+preload/renderer runtime.
 
 This is an allowlist, not a description generated from current manifests. Adding an
 edge requires an intentional architecture update. All cross-package imports use
@@ -210,6 +243,10 @@ boundary checker fails closed until those admissions are complete.
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence               |
 | Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
 | OpenCode Skill discovery                                 | `@convax/agent-runtime`                      | Runtime sees generic directories, never Desktop ownership metadata       |
+| Marketplace protocol and Catalog grouping                | `@convax/marketplace`                        | Headless validation and source-qualified projections only                |
+| Marketplace sources and source security decisions        | Desktop main                                 | Per-SourceKey isolation; cache is never authoritative                     |
+| Installed capability source binding                      | Desktop main `InstallRecord` store           | One exact SourceKey per `{kind,id}`; no cross-source update               |
+| MCP metadata, setup grant and runtime preference          | Desktop main                                 | Separate install/setup/enable decisions; Agent Runtime stays generic      |
 | Managed Skill filesystem publication                     | `@convax/agent-runtime/node`                 | Generic reversible transaction; no Plugin ownership knowledge            |
 | Standalone/Plugin-owned Skill management and provenance  | Desktop main                                 | Owner policy and atomic Plugin composition stay outside Agent runtime    |
 | Installed Plugin packages                                | Desktop main                                 | Global static packages; no active Project/Canvas state                   |
@@ -230,6 +267,25 @@ interaction contract and adapter rules.
 ```text
 Electron userData/
   projects.json                         per-user bindings and recency
+  marketplace-sources/index-v1.json     user-added Network Marketplace declarations
+  marketplace-source-security/<source-key>.json
+                                        authoritative accepted Catalog and rollback high-water
+  marketplace-cache/<source-key>/       disposable immutable source/cache snapshots
+  marketplace-installations/index-v1.json
+                                        exact installed identity and SourceKey bindings
+  marketplace-provisioning-decisions/index-v1.json
+                                        explicit preinstall removal decisions
+  marketplace-runtime-preferences/index-v1.json
+                                        durable runtime enable/disable intent
+  marketplace-transitions/<transition-id>.json
+                                        bounded install/setup/update/uninstall recovery envelopes
+  marketplaces/local-v1/sources/<source-instance-id>/
+                                        immutable Local Marketplace snapshots and index
+  mcp-servers/<identity-key>/           installed MCP metadata snapshots
+  mcp-server-companions/<identity-key>/<version-key>/
+                                        target-specific verified managed-stdio bytes
+  mcp-server-execution-grants/<identity-key>/
+                                        exact authorization-contract setup grants
   default-capabilities.json             one-time default Plugin/Skill provisioning receipt
   capability-registry/index-v1.json     last-known-good official remote catalog cache
   capability-registry/showcase-v1.json  verified showcase index for the current catalog revision
@@ -252,6 +308,7 @@ Electron userData/
   canvas-external-drags/                short-lived host-owned native drag copies
 
 Packaged app Resources/
+  marketplaces/                         product-lock-verified Builtin and Official immutable bytes
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
@@ -302,6 +359,35 @@ artifacts use a separate bounded content-addressed cache and receive one fresh-U
 retry after a transient transport failure; every hit is rechecked against the
 current Registry size and SHA-256 before use. Losing any cache never removes installed
 capabilities; an invalid or rolled-back network response never replaces it.
+
+The multi-Marketplace source graph supersedes that single Official-cache model
+without changing the cache's non-authoritative status. Builtin and Official are
+product-declared, user-added Network sources are durable settings, and Local sources
+are Host-provisioned immutable snapshot collections. Every accepted Network Catalog
+commits one atomic decision containing both its immutable snapshot identity and
+`SourceSecurityState`; a crash exposes either the complete previous decision or the
+complete next decision. Source removal retains the security high-water and installed
+runtime. Each installed `{kind,id}` is locked to the exact source identity in its
+`InstallRecord`; update from another source is rejected until uninstall.
+
+`marketplaces.lock.json` is the sole product input for packaged Marketplace bytes.
+Its policy declares Builtin/Official sources and `preinstalledPackages`; its resolved
+closure pins the Builtin bundle, Official descriptor/Registry/Showcase, package,
+owned-Skill, presentation, and target companion URLs, sizes, and SHA-256 values.
+Packaging consumes and verifies this closure without resolving “latest.” Startup
+installs every verified member of the Builtin bundle from its offline bytes, then
+applies the product preinstall policy. The v1 policy contains only
+`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup.
+Automatic setup remains an independent durable `CapabilityTransition` that
+publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
+only for the exact product-locked source, id, version, and target, and only for a
+verified managed Tool companion with no PATH fallback, Hook, Service, extra Plugin
+capability, credential, or secret input. User removal of a policy preinstall
+creates a per-entry `ProvisioningDecision` that startup cannot silently clear or
+override. Refreshing the fixed Official source reopens and verifies the packaged
+product closure; it never routes the reserved Official identity through the
+user-added Network source manager, resolves a runtime “latest,” or grants a changed
+candidate.
 
 Canvas JSON is an implementation detail behind `CanvasDocumentRepository` and Canvas
 application services. A schema change needs a new version and tests. It provides a
@@ -395,6 +481,61 @@ ProjectController activates Project
 Controllers use request generations/identities so late responses from the previous
 Project cannot overwrite current state.
 
+### Marketplace listing, install and setup
+
+```text
+Builtin + Official + user Network + Host Local adapters
+  -> source-qualified validated entries
+  -> @convax/marketplace display groups by {kind,id}
+  -> explicit exact-source confirmation and sender-scoped SelectionToken
+  -> Desktop install transition publishes static bytes and InstallRecord
+  -> optional independent setup transition publishes ExecutionGrant
+  -> InstalledCapability projects setup-required, ready, disabled or attention
+```
+
+Adding or refreshing a Marketplace fetches only descriptor, Registry, Showcase, and
+presentation metadata. It does not download packages/companions, connect an MCP or
+business endpoint, perform OAuth, or launch a process. Renderer may submit a pasted
+descriptor URL only to the dedicated add-Marketplace request; all other URLs,
+digests, native paths, commands, headers, source identities, and runtime methods are
+derived in Main. A short-lived `SelectionToken` binds the exact source, Catalog
+revision, version, metadata, artifact, and current-target companion that the user
+reviewed; any change produces a stale-selection result.
+
+Import uses one Main-owned directory chooser and accepts exactly one root marker:
+`manifest.json`, `SKILL.md`, or `server.json`. Main performs a bounded no-follow
+inventory, copies and rechecks an immutable Local snapshot, then routes it through
+the same installer and `CapabilityTransition`. Local is a multi-instance storage
+model even though the first product configuration creates only `convax-local`.
+Renderer neither selects a Local source nor receives its root.
+
+Install, setup, update, uninstall, enable, and disable are separate mutations under
+one identity/Skill-name-aware coordinator. Plugin and managed-Skill transactions
+retain their existing canonical decisions; the Marketplace transition is only their
+dependent recovery envelope. MCP metadata has its own canonical transition. Runtime
+revalidates immutable installed bytes, `InstallRecord`, `ExecutionGrant`, and
+`RuntimePreference` without consulting the active source graph, so removing or
+disconnecting a Marketplace disables updates but not a still-safe installed runtime.
+
+### MCP Server runtime boundary
+
+HTTP MCP definitions are configured into OpenCode only after explicit endpoint
+setup, including anonymous endpoints. The Agent Runtime accepts generic host
+configuration and owns no Marketplace or installed identity. HTTP execution is
+globally fail-closed unless the actual OpenCode socket path enforces HTTPS plus
+redirect, DNS, IPv4/IPv6, private/reserved/metadata-address, and rebinding policy;
+Desktop preflight cannot substitute for the socket gate.
+
+Managed stdio is a Desktop process boundary. Main matches one exact platform/arch
+companion or a setup-selected Local executable, verifies real path/size/SHA-256,
+copies an exact private launch snapshot, starts it without a shell in a private
+empty working directory and allowlisted environment, and owns process-tree
+cancellation. No secret/credential environment is injected in v1. Agent Runtime
+sees only an authenticated loopback configuration; Renderer and Agent never receive
+command, argv, environment, working directory, or native path. Product actions are
+the intersection of runtime `tools/list`, extension declarations, fixed Host
+schemas, and installed grants.
+
 ### Generation tool boundary
 
 Generation is an installed Tool Plugin capability, not a built-in provider
@@ -430,15 +571,20 @@ selected bytes below private, versioned `userData/plugin-companions`; a missing 
 target fails the Plugin install without replacing the working installation. Orphans
 are reconciled on startup, update and uninstall. A managed companion is resolved
 first, while an explicitly installed executable in the host `PATH` remains the
-fallback for Plugins without one. Choosing install or update is the execution
-consent event. Before package publication, Desktop resolves the exact managed or
-PATH binding and transactionally coordinates a private receipt keyed by the normalized
-manifest fingerprint, binding kind, real path, size and SHA-256 with the package
-switch. The old and new receipts may coexist during an update; any crash-partial or
-orphaned state is non-executable and startup reconciliation removes it. A Registry install
-that declares a managed companion cannot fall back to a same-named PATH command.
-Missing and changed bindings fail installation without replacing a working version.
-Listing or installing never starts the command.
+fallback for Plugins without one. Choosing install or update is normally the
+execution consent event. The sole product exception is an exact
+`setup: automatic` preinstall, which runs the independent setup transition only
+after installation and admits only its product-locked managed Tool companion; it
+rejects PATH fallback, Hooks, Services, extra Plugin capabilities, credentials, and
+identity or target drift. Before package publication, Desktop resolves the exact
+managed or PATH binding and transactionally coordinates a private receipt keyed by
+the normalized manifest fingerprint, binding kind, real path, size and SHA-256 with
+the package switch. The old and new receipts may coexist during an update; any
+crash-partial or orphaned state is non-executable and startup reconciliation removes
+it. A Registry install that declares a managed companion cannot fall back to a
+same-named PATH command. Missing and changed bindings fail installation without
+replacing a working version. Listing, installing, and automatic setup never start
+the command.
 Desktop stages bounded typed Canvas references, rechecks live scope and revision
 before the external call, admits only bounded signature-checked results, and commits
 generated content through `CanvasResourceBusinessService` after publishing it without
@@ -447,7 +593,14 @@ If Canvas insertion fails, the generated file remains available for a later retr
 unpublished staging is best-effort cleanup rather than a durable transaction. Tool-
 specific controls come only from the selected MCP tool's current
 `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
-validates them again immediately before execution.
+validates them again immediately before execution. A manifest-declared model tool
+may explicitly mark one required bounded string select with
+`x-convax-role: generation-model-id`. Once the owning service is connected, Main
+projects those choices into concrete opaque model selections instead of a second
+renderer control. The marker field is absent from ordinary tool options; Main
+reloads the live schema, rejects a removed choice and binds the exact value before
+the external call. No Plugin id, provider name, field name or choice value changes
+this behavior without that explicit role.
 
 On execution Desktop silently resolves and fingerprints the binding again and
 requires the matching persisted receipt; missing, tampered or drifted state fails
@@ -484,12 +637,19 @@ scope and references from the live owning node and its direct incoming edges.
 
 A return-delivery operation reuses the same verified executable, input staging,
 revision/source rechecks, cancellation, and at-most-once execution boundary, but
-returns one bounded text result to the Agent and performs no Canvas resource import
-or node mutation. It cannot be a model or selection action. A direct-incoming Agent
-operation requires an owning Canvas node id; Main verifies that the node belongs to
-the same installed Plugin principal and that every reference remains a direct
-incoming file node before staging and immediately before execution. This makes
-graph edges enforceable authority rather than prompt-only convention.
+returns one bounded text result and performs no Canvas resource import or node
+mutation. It cannot be a model. A v6-or-later manifest may expose one such operation
+as a confirmation-only image or video selection action when the tool has no input
+binding, accepts the exact selected media role, and is not part of a multi-step
+action. Desktop admits the action only while Main projects the exact operation as
+installed, authorized, enabled and outside a capability transition. The renderer
+flushes Main's authoritative Canvas and names one selected Project-backed media
+node; Main rechecks its revision and resource identity, stages only that resource,
+and returns only a bounded success result. A direct-incoming Agent operation instead
+requires an owning Canvas node id; Main verifies that the node belongs to the same
+installed Plugin principal and that every reference remains a direct incoming file
+node before staging and immediately before execution. This makes graph edges
+enforceable authority rather than prompt-only convention.
 
 A sandboxed Plugin may request the host-owned pending-result mode when the user
 expects immediate Canvas feedback. Canvas creates exactly one typed pending `file`
@@ -512,9 +672,22 @@ same live tool definition before execution. Those validated fields extend the
 `convax.generation-call/1` object without being allowed to replace its fixed
 host-reserved envelope; tools without extensions keep the original payload.
 
-The Agent generation model is a user-global renderer preference. Without an owning
-node override, a file card inherits that preference only when its output matches the
-card's intrinsic text/image/video/audio kind and accepts the current media references.
+Dynamic model identity is the one semantic projection on that schema. A declared
+model tool may mark exactly one required bounded string select with
+`x-convax-role: generation-model-id`. Service availability is established before
+Main starts or expands the family. Each choice receives a stable host-opaque
+selection id while retaining the same manifest tool id for service authorization.
+The selector is removed from `describeTool`; preparation enumerates it again and
+merges the Main-owned value only if the exact choice remains live. Renderer input
+cannot name or override that binding. Unmarked model tools keep their single static
+selection, and unmarked schema fields remain ordinary tool options.
+
+The Agent generation model is a user-global renderer preference. Agent and card
+pickers present concrete models in one selection layer; the contributing service is
+display metadata, not a provider choice that exposes a second model control.
+Without an owning node override, a file card inherits that preference only when its
+output matches the card's intrinsic text/image/video/audio kind and accepts the
+current media references.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
 catalog only when the owning Plugin contributes the same model through a service and
@@ -681,11 +854,17 @@ UI action, typed Agent tool, or principal-bound Plugin call
 ```
 
 The domain mutation commits before optional view behavior. Selection, reveal,
-fit-view, zoom, animation, and notification are legitimate Agent view capabilities;
-they remain explicitly scoped to the mounted view and cannot rewrite domain history.
-Ordinary UI mutations such as adding, importing, duplicating, or generating nodes
-preserve the user's current viewport. Moving, fitting, centering, or zooming the view
-requires a separate explicit user action or view command.
+fit-view, zoom, animation, and notification are legitimate view capabilities; they
+remain explicitly scoped to the mounted view and cannot rewrite domain history.
+Canvas may apply one post-mutation safe reveal after an eligible foreground mutation
+when the newly affected nodes are outside the host-provided safe viewport. The
+current eligible flows are batch picker import and creation of a pending generation;
+the effect runs only for the current mounted document/scope/view and is canceled by
+stale results, remount, background refresh/restore, or intervening user navigation.
+Its failure cannot reverse a successful domain commit. Reduced motion sets its
+duration to zero but retains necessary positioning. Pointer drops, ordinary paste,
+duplicate, and duplicate-drag preserve the camera by default; broader Fit, Reveal,
+and Zoom remain explicit view operations.
 
 Canvas application transactions execute a non-empty ordered command list against
 one starting revision, advance the revision once, and use one repository CAS save. This is the
@@ -1001,6 +1180,10 @@ threshold, begin/update/end/cancel resize, and restoration of an expanded size.
 Desktop owns viewport budgets, concrete pixel values, pointer/keyboard listeners,
 responsive overlay rules, CSS transitions, reduced-motion behavior, and localStorage
 adapters. Project Sidebar still owns its internal vertical Canvases/Files split.
+Desktop converts an overlapping utility surface into host-neutral edge insets and
+passes only that geometry to Canvas. Canvas owns its safe camera rectangle and clamps
+Canvas-owned toolbars, menus, MiniMap, selection controls, and composer surfaces
+without learning which Desktop utility produced the occlusion.
 
 This distinction applies to future panels: add generic state only when it is reusable
 window coordination; keep the product's visual implementation in the host.

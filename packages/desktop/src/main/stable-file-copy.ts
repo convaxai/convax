@@ -39,6 +39,8 @@ function sameFileIdentity(left: BigIntStats, right: BigIntStats) {
 function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
   return (
     sameFileIdentity(left, right) &&
+    left.nlink === 1n &&
+    right.nlink === 1n &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
@@ -109,8 +111,10 @@ async function assertUnchangedAfterCopy(
     if (
       extraBytes !== 0 ||
       !after.isFile() ||
+      after.nlink !== 1n ||
       !pathAfterCopy.isFile() ||
       pathAfterCopy.isSymbolicLink() ||
+      pathAfterCopy.nlink !== 1n ||
       !sameFileSnapshot(before, after) ||
       !sameFileSnapshot(after, pathAfterCopy) ||
       resolvedAfterCopy !== expectedRealPath
@@ -140,8 +144,8 @@ export async function copyStableFile(options: StableFileCopyOptions) {
   }
 
   const pathBeforeOpen = await fs.lstat(options.sourcePath, { bigint: true })
-  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink()) {
-    throw new Error(`${options.description} must be a regular file`)
+  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink() || pathBeforeOpen.nlink !== 1n) {
+    throw new Error(`${options.description} must be a regular single-link file`)
   }
   if (pathBeforeOpen.size < 1n || pathBeforeOpen.size > BigInt(options.maximumBytes)) {
     throw new Error(`${options.description} is empty or exceeds the configured size limit`)
@@ -161,6 +165,7 @@ export async function copyStableFile(options: StableFileCopyOptions) {
     const resolvedBeforeCopy = await fs.realpath(options.sourcePath)
     if (
       !before.isFile() ||
+      before.nlink !== 1n ||
       !sameFileSnapshot(pathBeforeOpen, before) ||
       resolvedBeforeCopy !== options.expectedRealPath
     ) {

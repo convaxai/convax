@@ -6,9 +6,10 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
-import type { GenerationToolExecutionPort, PreparedGenerationToolExecution } from "./generation-canvas-service"
+import type { PreparedGenerationToolExecution } from "./generation-canvas-service"
 import {
   ServiceAwareGenerationTools,
+  type GenerationModelCatalogExpansionPort,
   type GenerationPluginServiceAvailabilityPort,
 } from "./service-aware-generation-tools"
 
@@ -46,6 +47,14 @@ function operationTool(pluginId: string, toolId = "transform.image"): Generation
   }
 }
 
+function modelVariant(base: GenerationToolSummary, suffix: string, modelName: string): GenerationToolSummary {
+  return {
+    ...base,
+    id: `${base.id}.model-selection-${suffix.padEnd(64, "0")}`,
+    modelName,
+  }
+}
+
 function service(pluginId: string): PluginServiceSummary {
   return {
     actions: ["authorize"],
@@ -61,6 +70,7 @@ function service(pluginId: string): PluginServiceSummary {
 function setup(
   input: {
     availabilityTimeoutMs?: number
+    expandModelTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<readonly GenerationToolSummary[]>
     getStatus?: (pluginId: string, signal?: AbortSignal) => Promise<PluginServiceStatus>
     services?: readonly PluginServiceSummary[]
     statuses?: Readonly<Record<string, PluginServiceStatus | Error>>
@@ -69,15 +79,27 @@ function setup(
 ) {
   const listedTools = input.tools ?? [generationTool("remote-images")]
   const describeTool = mock(async (toolId: string): Promise<GenerationToolDescription> => ({ fields: [], toolId }))
+  const dispatch = mock(async () => ({ content: [] }))
+  const call: PreparedGenerationToolExecution["call"] = mock(
+    async (_input, _signal, lifecycleObserver, _operation, dispatchHooks) => {
+      await dispatchHooks?.validate?.()
+      await dispatchHooks?.guard?.()
+      await dispatchHooks?.validate?.()
+      await lifecycleObserver?.({ type: "external-started" })
+      return dispatch()
+    },
+  )
   const prepared: PreparedGenerationToolExecution = {
-    call: mock(async () => ({ content: [] })),
+    call,
     validateInput: mock(() => ({})),
   }
   const prepareTool = mock(async () => prepared)
   const prepareRecoveryTool = mock(async () => ({ execution: prepared, tool: listedTools[0]! }))
   const releaseRecoveryTool = mock(async () => undefined)
-  const toolPort: GenerationToolExecutionPort = {
+  const expandModelTool = mock(input.expandModelTool ?? (async (tool: GenerationToolSummary) => [tool]))
+  const toolPort: GenerationModelCatalogExpansionPort = {
     describeTool,
+    expandModelTool,
     listTools: mock(async (options = {}) =>
       options.output ? listedTools.filter((tool) => tool.output === options.output) : listedTools,
     ),
@@ -98,7 +120,10 @@ function setup(
     listServices: mock(async () => input.services ?? [service("remote-images")]),
   }
   return {
+    call,
     describeTool,
+    dispatch,
+    expandModelTool,
     getStatus,
     prepareRecoveryTool,
     prepareTool,
@@ -144,7 +169,95 @@ describe("ServiceAwareGenerationTools", () => {
     })
 
     expect(await subject.listTools({ output: "image" })).toEqual([available, operation])
-    expect(getStatus).toHaveBeenCalledTimes(3)
+    expect(getStatus).toHaveBeenCalledTimes(4)
+  })
+
+  test("expands model catalogs only after the owning service is connected", async () => {
+    const events: string[] = []
+    const available = generationTool("available-images")
+    const unavailable = generationTool("disconnected-images")
+    const operation = operationTool("local-images")
+    const alpha = modelVariant(available, "a", "Alpha Image")
+    const beta = modelVariant(available, "b", "Beta Image")
+    const { expandModelTool, subject } = setup({
+      expandModelTool: async (tool) => {
+        events.push(`expand:${tool.pluginId}`)
+        return [alpha, beta]
+      },
+      getStatus: async (pluginId) => {
+        events.push(`status:${pluginId}`)
+        return pluginId === available.pluginId
+          ? connected
+          : {
+              ...connected,
+              credential: { configured: false, verification: "unknown" },
+              state: "disconnected",
+            }
+      },
+      services: [service(available.pluginId), service(unavailable.pluginId)],
+      tools: [available, unavailable, operation],
+    })
+
+    expect(await subject.listTools()).toEqual([alpha, beta, operation])
+    expect(expandModelTool).toHaveBeenCalledTimes(1)
+    expect(expandModelTool.mock.calls[0]?.[0]).toEqual(available)
+    expect(events.indexOf(`status:${available.pluginId}`)).toBeLessThan(events.indexOf(`expand:${available.pluginId}`))
+    expect(events).not.toContain(`expand:${unavailable.pluginId}`)
+  })
+
+  test("isolates one connected service catalog failure", async () => {
+    const failed = generationTool("failed-images")
+    const available = generationTool("available-images")
+    const variant = modelVariant(available, "a", "Available Image")
+    const operation = operationTool("local-images")
+    const { subject } = setup({
+      expandModelTool: async (tool) => {
+        if (tool.pluginId === failed.pluginId) throw new Error("private catalog diagnostic")
+        return [variant]
+      },
+      services: [service(failed.pluginId), service(available.pluginId)],
+      tools: [failed, available, operation],
+    })
+
+    expect(await subject.listTools()).toEqual([variant, operation])
+  })
+
+  test("drops expanded model variants when their service disconnects during catalog loading", async () => {
+    const model = generationTool("remote-images")
+    const variant = modelVariant(model, "a", "Runtime Image")
+    const operation = operationTool("local-images")
+    let status = connected
+    const { expandModelTool, getStatus, subject } = setup({
+      expandModelTool: async () => {
+        status = {
+          ...connected,
+          credential: { configured: false, verification: "unknown" },
+          state: "disconnected",
+        }
+        return [variant]
+      },
+      getStatus: async () => status,
+      tools: [model, operation],
+    })
+
+    expect(await subject.listTools()).toEqual([operation])
+    expect(expandModelTool).toHaveBeenCalledTimes(1)
+    expect(getStatus).toHaveBeenCalledTimes(2)
+  })
+
+  test("keeps the declared base tool identity on runtime model variants", async () => {
+    const base = generationTool("remote-images")
+    const variant = modelVariant(base, "a", "Runtime Image")
+    const { describeTool, prepareTool, subject } = setup({
+      expandModelTool: async () => [variant],
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([variant])
+    await subject.describeTool(variant.id)
+    await subject.prepareTool(variant)
+    expect(describeTool).toHaveBeenCalledWith(variant.id, undefined)
+    expect(prepareTool).toHaveBeenCalledWith(variant, undefined)
   })
 
   test("treats connected as authoritative even when credential verification is not yet refreshed", async () => {
@@ -212,7 +325,7 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([model])
   })
 
-  test("checks one service once even when it owns several models", async () => {
+  test("checks one service once per availability phase even when it owns several models", async () => {
     const remoteService = service("remote-images")
     remoteService.models = [
       { capability: "image", id: "generate.one", name: "Image Model One" },
@@ -224,7 +337,7 @@ describe("ServiceAwareGenerationTools", () => {
     })
 
     expect(await subject.listTools()).toHaveLength(2)
-    expect(getStatus).toHaveBeenCalledTimes(1)
+    expect(getStatus).toHaveBeenCalledTimes(2)
   })
 
   test("requires the service model projection to match the exact tool id and output", async () => {
@@ -269,6 +382,54 @@ describe("ServiceAwareGenerationTools", () => {
     expect(prepareTool).not.toHaveBeenCalled()
   })
 
+  test("rechecks service availability immediately before a prepared model call", async () => {
+    const selected = generationTool("remote-images")
+    let status = connected
+    const { call, getStatus, prepareTool, subject } = setup({
+      getStatus: async () => status,
+      tools: [selected],
+    })
+    const prepared = await subject.prepareTool(selected)
+    status = {
+      ...connected,
+      credential: { configured: false, verification: "unknown" },
+      state: "disconnected",
+    }
+
+    await expect(prepared.call({ prompt: "must not dispatch" })).rejects.toThrow("Open Services")
+    expect(prepareTool).toHaveBeenCalledWith(selected, undefined)
+    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(call).not.toHaveBeenCalled()
+  })
+
+  test("blocks dispatch when a service disconnects after Canvas validation", async () => {
+    const selected = generationTool("remote-images")
+    let status = connected
+    const { call, dispatch, getStatus, subject } = setup({
+      getStatus: async () => status,
+      tools: [selected],
+    })
+    const prepared = await subject.prepareTool(selected)
+
+    const externalStarted = mock(async () => undefined)
+    await expect(
+      prepared.call({ prompt: "must remain unbilled" }, undefined, externalStarted, undefined, {
+        validate: async () => {
+          status = {
+            ...connected,
+            credential: { configured: false, verification: "unknown" },
+            state: "disconnected",
+          }
+        },
+      }),
+    ).rejects.toThrow("Open Services")
+
+    expect(call).toHaveBeenCalledTimes(1)
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(externalStarted).not.toHaveBeenCalled()
+    expect(getStatus).toHaveBeenCalledTimes(3)
+  })
+
   test("bounds concurrent service status checks", async () => {
     let active = 0
     let maximumActive = 0
@@ -301,6 +462,22 @@ describe("ServiceAwareGenerationTools", () => {
 
     expect(await subject.listTools()).toEqual([])
     expect(statusSignal?.aborted).toBeTrue()
+  })
+
+  test("times out an unresponsive model catalog without hiding other operations", async () => {
+    let catalogSignal: AbortSignal | undefined
+    const operation = operationTool("local-images")
+    const { subject } = setup({
+      availabilityTimeoutMs: 1,
+      expandModelTool: async (_tool, signal) => {
+        catalogSignal = signal
+        return new Promise<readonly GenerationToolSummary[]>(() => undefined)
+      },
+      tools: [generationTool("remote-images"), operation],
+    })
+
+    expect(await subject.listTools()).toEqual([operation])
+    expect(catalogSignal?.aborted).toBeTrue()
   })
 
   test("propagates caller cancellation before a stale model can be prepared", async () => {

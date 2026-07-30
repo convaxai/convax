@@ -1,4 +1,9 @@
 import type { CanvasGenerateRequest, CanvasGenerateResult } from "@convax/canvas"
+import {
+  isGenerationCanvasRevisionConflictFailure,
+  type GenerationCanvasRequest,
+  type GenerationCanvasResult,
+} from "../generation-contracts"
 
 export interface MediaOperationProgress {
   createdNodeIds: readonly string[]
@@ -48,6 +53,7 @@ export async function runMediaOperationSequence(options: {
   initialProgress: MediaOperationProgress
   onProgress: (progress: MediaOperationProgress) => void
   partialFailureMessage: (failure: unknown) => string
+  refreshProgress?: (progress: MediaOperationProgress) => Promise<MediaOperationProgress>
   requests: readonly CanvasGenerateRequest[]
   signal: AbortSignal
 }): Promise<MediaOperationProgress> {
@@ -56,19 +62,38 @@ export async function runMediaOperationSequence(options: {
   for (let index = progress.nextRequestIndex; index < options.requests.length; index += 1) {
     throwIfAborted(options.signal)
     let result: CanvasGenerateResult
-    try {
-      result = await options.generate({
-        ...options.requests[index],
-        expectedRevision: progress.revision,
-        ...(index > 0 && progress.createdNodeIds.length > 0
-          ? { relationAnchorNodeIds: [...progress.createdNodeIds] }
-          : {}),
-      })
-    } catch (failure) {
-      if (progress.nextRequestIndex > 0 && !options.signal.aborted) {
-        throw new MediaOperationPartialError(options.partialFailureMessage(failure), progress, { cause: failure })
+    let safeRevisionRetries = 0
+    while (true) {
+      try {
+        if (index > 0 && options.refreshProgress) {
+          progress = await options.refreshProgress(progress)
+          options.onProgress(progress)
+          throwIfAborted(options.signal)
+        }
+        result = await options.generate({
+          ...options.requests[index],
+          expectedRevision: progress.revision,
+          ...(index > 0 && progress.createdNodeIds.length > 0
+            ? { relationAnchorNodeIds: [...progress.createdNodeIds] }
+            : {}),
+        })
+        break
+      } catch (failure) {
+        if (
+          index > 0 &&
+          options.refreshProgress &&
+          safeRevisionRetries < 3 &&
+          !options.signal.aborted &&
+          isGenerationCanvasRevisionConflictFailure(failure)
+        ) {
+          safeRevisionRetries += 1
+          continue
+        }
+        if (progress.nextRequestIndex > 0 && !options.signal.aborted) {
+          throw new MediaOperationPartialError(options.partialFailureMessage(failure), progress, { cause: failure })
+        }
+        throw failure
       }
-      throw failure
     }
 
     progress = {
@@ -81,6 +106,33 @@ export async function runMediaOperationSequence(options: {
   }
 
   return progress
+}
+
+export async function runMediaOperationReturn(options: {
+  cancel: (request: { operationId: string }) => Promise<void>
+  generate: (request: GenerationCanvasRequest) => Promise<GenerationCanvasResult>
+  request: GenerationCanvasRequest
+  signal: AbortSignal
+}): Promise<{ outputText: string; warnings: readonly string[] }> {
+  throwIfAborted(options.signal)
+  const cancel = () => {
+    void options.cancel({ operationId: options.request.operationId }).catch(() => undefined)
+  }
+  options.signal.addEventListener("abort", cancel, { once: true })
+  try {
+    const result = await options.generate(options.request)
+    throwIfAborted(options.signal)
+    if (
+      result.createdNodeIds.length !== 0 ||
+      typeof result.outputText !== "string" ||
+      result.outputText.length === 0
+    ) {
+      throw new Error("Return-delivery media operation did not produce one bounded text result")
+    }
+    return { outputText: result.outputText, warnings: result.warnings }
+  } finally {
+    options.signal.removeEventListener("abort", cancel)
+  }
 }
 
 function throwIfAborted(signal: AbortSignal) {

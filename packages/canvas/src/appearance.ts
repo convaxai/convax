@@ -124,8 +124,8 @@ export function resolveCanvasAppearance(input?: CanvasAppearanceInput): Resolved
   return {
     ...palette,
     gridColor: palette.gridColor ?? palette.edge,
-    gridGap: safeNumber(input?.gridGap, 20, 8, 96),
-    gridSize: safeNumber(input?.gridSize, 1.3, 0.5, 3),
+    gridGap: safeNumber(input?.gridGap, 24, 8, 96),
+    gridSize: safeNumber(input?.gridSize, 1.5, 0.5, 3),
     gridStyle,
     nodeRadius: safeNumber(input?.nodeRadius, 10, 0, 24),
   }

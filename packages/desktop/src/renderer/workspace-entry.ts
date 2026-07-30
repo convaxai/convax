@@ -124,6 +124,7 @@ export class WorkspaceEntryCoordinator {
 
     const preferredCanvasId = input.canvasId ?? this.dependencies.readLastCanvas(input.projectId)
     const reconciled = await this.dependencies.reconcile(input.projectId, preferredCanvasId)
+    throwIfAborted(input.signal)
     if (!isCurrent() || !reconciled) return null
 
     project = this.dependencies.project.getSnapshot()
@@ -135,6 +136,7 @@ export class WorkspaceEntryCoordinator {
       mountedInput?.kind === "canvas" && mountedInput.projectId === input.projectId
         ? mountedInput.canvasId
         : undefined
+    throwIfAborted(input.signal)
     this.dependencies.showWorkspace()
     return {
       ...(canvasId ? { canvasId } : {}),

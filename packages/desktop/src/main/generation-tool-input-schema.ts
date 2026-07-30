@@ -2,6 +2,7 @@ import type {
   GenerationToolDescription,
   GenerationToolInput,
   GenerationToolInputField,
+  GenerationToolSelectField,
   GenerationToolInputValue,
 } from "../generation-contracts"
 
@@ -20,6 +21,19 @@ const maximumGenerationToolSchemaBytes = 64 * 1024
 const maximumGenerationToolStringLength = 4_096
 const maximumGenerationToolNumberMagnitude = 1_000_000_000_000
 const unsafeDisplayTextCharacters = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+
+export const generationModelIdRole = "generation-model-id"
+const generationInputRoleKeyword = "x-convax-role"
+
+export interface GenerationModelInputSelector {
+  choices: GenerationToolSelectField["choices"]
+  fieldId: string
+}
+
+export interface GenerationToolInputSchemaProjection {
+  description: GenerationToolDescription
+  modelSelector?: GenerationModelInputSelector
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value)
@@ -238,10 +252,10 @@ function normalizeProperty(id: string, value: unknown, required: boolean): Gener
  * Projects a raw MCP inputSchema into a small renderer-safe form. The raw JSON
  * Schema, host paths and fixed generation envelope fields never cross preload.
  */
-export function normalizeGenerationToolInputSchema(
+export function projectGenerationToolInputSchema(
   toolId: string,
   inputSchema: Record<string, unknown>,
-): GenerationToolDescription {
+): GenerationToolInputSchemaProjection {
   const serialized = JSON.stringify(inputSchema)
   if (Buffer.byteLength(serialized, "utf8") > maximumGenerationToolSchemaBytes) {
     throw new Error("Generation tool input schema is too large")
@@ -282,15 +296,52 @@ export function normalizeGenerationToolInputSchema(
       throw new Error(`Required generation tool input ${id} has no property schema`)
     }
   }
+  const roleEntries: Array<readonly [string, Record<string, unknown>]> = []
+  for (const [id, schema] of Object.entries(properties)) {
+    if (isRecord(schema) && Object.prototype.hasOwnProperty.call(schema, generationInputRoleKeyword)) {
+      roleEntries.push([id, schema])
+    }
+  }
+  for (const [id, schema] of roleEntries) {
+    if (schema[generationInputRoleKeyword] !== generationModelIdRole) {
+      throw new Error(`Generation tool input ${id} declares an unsupported Convax role`)
+    }
+    if (hostReservedGenerationInputFields.has(id)) {
+      throw new Error(`Generation model selector cannot use host field: ${id}`)
+    }
+  }
+  if (roleEntries.length > 1) {
+    throw new Error("Generation tool input schema declares more than one generation model selector")
+  }
+  const modelSelectorId = roleEntries[0]?.[0]
   const fields: GenerationToolInputField[] = []
+  let modelSelector: GenerationModelInputSelector | undefined
   for (const [id, schema] of customEntries) {
     if (!generationToolInputIdPattern.test(id) || hostReservedGenerationInputFields.has(id)) {
       throw new Error("Generation tool input schema contains an invalid custom field id")
     }
     const field = normalizeProperty(id, schema, required.has(id))
-    if (field) fields.push(field)
+    if (id === modelSelectorId) {
+      if (!required.has(id)) throw new Error("Generation model selector must be required")
+      if (!field || field.kind !== "select") {
+        throw new Error("Generation model selector must be a bounded string select")
+      }
+      modelSelector = { choices: field.choices, fieldId: id }
+    } else if (field) {
+      fields.push(field)
+    }
   }
-  return { fields, toolId }
+  return {
+    description: { fields, toolId },
+    ...(modelSelector === undefined ? {} : { modelSelector }),
+  }
+}
+
+export function normalizeGenerationToolInputSchema(
+  toolId: string,
+  inputSchema: Record<string, unknown>,
+): GenerationToolDescription {
+  return projectGenerationToolInputSchema(toolId, inputSchema).description
 }
 
 function validateValue(field: GenerationToolInputField, value: unknown): GenerationToolInputValue {

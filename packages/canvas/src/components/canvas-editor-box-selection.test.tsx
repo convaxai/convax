@@ -1,9 +1,10 @@
 import { afterAll, expect, mock, test } from "bun:test"
-import { Window } from "happy-dom"
+import { Window as HappyDOMWindow } from "happy-dom"
 import { StrictMode, type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { CanvasDocument, CanvasNode } from "../types"
 
-const testWindow = new Window({ url: "https://convax.test/" })
+const testWindow = new HappyDOMWindow({ url: "https://convax.test/" })
 const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
 const globals = {
   DOMRect: testWindow.DOMRect,
@@ -61,7 +62,24 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 mock.module("@convax/ui", () => ({
-  Button: (props: { children?: ReactNode }) => <button>{props.children}</button>,
+  Button: (props: {
+    children?: ReactNode
+    className?: string
+    disabled?: boolean
+    onClick?: React.MouseEventHandler<HTMLButtonElement>
+    onPointerDown?: React.PointerEventHandler<HTMLButtonElement>
+    type?: "button" | "submit" | "reset"
+  }) => (
+    <button
+      className={props.className}
+      disabled={props.disabled}
+      onClick={props.onClick}
+      onPointerDown={props.onPointerDown}
+      type={props.type}
+    >
+      {props.children}
+    </button>
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: Passthrough,
@@ -69,6 +87,8 @@ mock.module("@convax/ui", () => ({
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
   Input: () => <input />,
+  Loading: (props: { label?: ReactNode }) => <div role="status">{props.label}</div>,
+  LoadingSpinner: () => <span aria-hidden="true" data-ui-loading-spinner="" />,
   Select: Passthrough,
   SelectContent: Passthrough,
   SelectItem: Passthrough,
@@ -85,6 +105,8 @@ mock.module("@convax/ui", () => ({
 
 const { createCanvasDocument, createTextNode } = await import("../document")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
+const { finishCanvasNodeGenerationRun, markCanvasNodeGenerationRunRunning, startCanvasNodeGenerationRun } =
+  await import("../generation-run")
 const { useCanvasEditor } = await import("../editor-context")
 const { createCanvasNodeRegistry } = await import("../node-registry")
 const { createCanvasServices } = await import("../services")
@@ -157,6 +179,7 @@ test("box-selects connected nodes without feeding controlled selection back into
     return rect(0, 0, 1000, 800)
   }
   let root: Root | undefined
+  let focusProbe: HTMLInputElement | undefined
 
   try {
     const first = {
@@ -191,6 +214,7 @@ test("box-selects connected nodes without feeding controlled selection back into
       },
     ])
     const container = document.createElement("div")
+    container.className = "nodrag"
     document.body.append(container)
     root = createRoot(container, {
       onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
@@ -212,15 +236,68 @@ test("box-selects connected nodes without feeding controlled selection back into
     })
 
     expect(errors).toEqual([])
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
     const pane = container.querySelector<HTMLElement>(".react-flow__pane")
     const firstNode = container.querySelector<HTMLElement>('.react-flow__node[data-id="first"]')
+    expect(canvasRoot).not.toBeNull()
     expect(pane).not.toBeNull()
     expect(firstNode).not.toBeNull()
     expect(emitConnectedEdgeSelection).toBeFunction()
+
+    focusProbe = document.createElement("input")
+    document.body.append(focusProbe)
+    const pointerDown = (target: Element, pointerId: number, button = 0) =>
+      target.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button,
+          clientX: 20,
+          clientY: 20,
+          isPrimary: true,
+          pointerId,
+        }),
+      )
+    const editableTarget = document.createElement("div")
+    editableTarget.contentEditable = "true"
+    const noDragTarget = document.createElement("div")
+    noDragTarget.className = "nodrag"
+    const shortcutIgnoredTarget = document.createElement("div")
+    shortcutIgnoredTarget.dataset.canvasShortcuts = "ignore"
+    const interactiveTargets = [
+      document.createElement("button"),
+      document.createElement("input"),
+      document.createElement("textarea"),
+      document.createElement("select"),
+      document.createElement("a"),
+      document.createElement("audio"),
+      document.createElement("video"),
+      document.createElement("iframe"),
+      editableTarget,
+      noDragTarget,
+      shortcutIgnoredTarget,
+    ]
+    for (const [index, target] of interactiveTargets.entries()) {
+      canvasRoot?.append(target)
+      focusProbe.focus()
+      pointerDown(target, 20 + index)
+      expect(document.activeElement).toBe(focusProbe)
+      target.remove()
+    }
+    const passiveTarget = document.createElement("div")
+    canvasRoot?.append(passiveTarget)
+    focusProbe.focus()
+    pointerDown(passiveTarget, 40)
+    expect(document.activeElement).toBe(canvasRoot)
+    focusProbe.focus()
+    pointerDown(passiveTarget, 41, 1)
+    expect(document.activeElement).toBe(focusProbe)
+    passiveTarget.remove()
+
     await act(async () => {
       firstNode?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
     })
     expect(observedSelection).toEqual({ edgeIds: [], nodeIds: ["first"] })
+    focusProbe.focus()
     await act(async () => {
       pane?.dispatchEvent(
         new PointerEvent("pointerdown", {
@@ -243,6 +320,7 @@ test("box-selects connected nodes without feeding controlled selection back into
         }),
       )
     })
+    expect(document.activeElement).toBe(canvasRoot)
     await act(async () => {
       pane?.dispatchEvent(
         new PointerEvent("pointerup", {
@@ -328,5 +406,430 @@ test("box-selects connected nodes without feeding controlled selection back into
   } finally {
     HTMLElement.prototype.getBoundingClientRect = originalRect
     if (root) await act(async () => root?.unmount())
+    focusProbe?.remove()
+  }
+})
+
+test("isolates card-assistant wheel gestures only while its input owns focus", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const imageNode: CanvasNode = {
+    data: {
+      kind: "image",
+      label: "Image",
+      metadata: {},
+      resourceState: { status: "ready", url: "" },
+    },
+    id: "image",
+    measured: { height: 160, width: 240 },
+    position: { x: 80, y: 80 },
+    style: { height: 160, width: 240 },
+    type: "file",
+  }
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [imageNode] })
+  const servicesWithAssistant = createCanvasServices({
+    assistant: {
+      render: () => <textarea aria-label="Card assistant input" />,
+    },
+  })
+  const renderEditor = (services = servicesWithAssistant) => (
+    <CanvasEditor initialDocument={initialDocument} onlyRenderVisibleElements={false} services={services} />
+  )
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+
+    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="image"]')
+    expect(nodeElement).not.toBeNull()
+    await act(async () => {
+      nodeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
+    const toolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    const input = container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Card assistant input"]')
+    expect(canvasRoot).not.toBeNull()
+    expect(toolbar).not.toBeNull()
+    expect(input).not.toBeNull()
+    expect(toolbar?.classList.contains("nodrag")).toBe(true)
+    expect(toolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      input?.focus()
+    })
+    expect(document.activeElement).toBe(input)
+    expect(toolbar?.classList.contains("nowheel")).toBe(true)
+
+    await act(async () => {
+      root?.render(renderEditor(createCanvasServices()))
+    })
+    expect(container.querySelector(".convax-node-assistant")).toBeNull()
+
+    await act(async () => {
+      root?.render(renderEditor())
+    })
+    const reopenedToolbar = container.querySelector<HTMLElement>(".convax-node-assistant")
+    expect(reopenedToolbar).not.toBeNull()
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+
+    await act(async () => {
+      canvasRoot?.focus()
+    })
+    expect(document.activeElement).toBe(canvasRoot)
+    expect(reopenedToolbar?.classList.contains("nowheel")).toBe(false)
+    expect(errors).toEqual([])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
+test("drags a generating card from its overlay while generation controls keep the node fixed", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const originalRect = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.classList.contains("react-flow__node")) {
+      return this.getAttribute("data-id") === "generating" ? rect(80, 80, 240, 160) : rect(400, 80, 240, 160)
+    }
+    return rect(0, 0, 1000, 800)
+  }
+
+  const generatingNode: CanvasNode = {
+    data: { kind: "image", label: "Generating image", metadata: {} },
+    id: "generating",
+    measured: { height: 160, width: 240 },
+    position: { x: 80, y: 80 },
+    type: "file",
+  }
+  const blockedNode: CanvasNode = {
+    data: { kind: "image", label: "Interrupted image", metadata: {} },
+    id: "blocked",
+    measured: { height: 160, width: 240 },
+    position: { x: 400, y: 80 },
+    type: "file",
+  }
+  let initialDocument = createCanvasDocument({
+    id: "generation-overlay-drag",
+    nodes: [generatingNode, blockedNode],
+  })
+  initialDocument = markCanvasNodeGenerationRunRunning(
+    startCanvasNodeGenerationRun(initialDocument, generatingNode.id, {
+      operationId: "generating-operation",
+      prompt: "Generate",
+      toolId: "plugin.example:image",
+    }),
+    generatingNode.id,
+    "generating-operation",
+    "generating-task",
+  )
+  initialDocument = markCanvasNodeGenerationRunRunning(
+    startCanvasNodeGenerationRun(initialDocument, blockedNode.id, {
+      operationId: "blocked-operation",
+      prompt: "Generate",
+      toolId: "plugin.example:image",
+    }),
+    blockedNode.id,
+    "blocked-operation",
+    "blocked-task",
+  )
+  initialDocument = finishCanvasNodeGenerationRun(
+    initialDocument,
+    blockedNode.id,
+    "blocked-operation",
+    "interrupted",
+    "unknown",
+  )
+
+  const container = document.createElement("div")
+  document.body.append(container)
+  let latestDocument: CanvasDocument = initialDocument
+  let root: Root | undefined
+
+  const dragWithMouse = async (target: Element, start: { x: number; y: number }, end: { x: number; y: number }) => {
+    const eventWindow = window
+    const thresholdPoint = {
+      x: start.x + (end.x - start.x) / 2,
+      y: start.y + (end.y - start.y) / 2,
+    }
+    await act(async () => {
+      target.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: start.x,
+          clientY: start.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: thresholdPoint.x,
+          clientY: thresholdPoint.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: end.x,
+          clientY: end.y,
+          view: eventWindow,
+        }),
+      )
+      eventWindow.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          clientX: end.x,
+          clientY: end.y,
+          view: eventWindow,
+        }),
+      )
+      await Promise.resolve()
+    })
+  }
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          onlyRenderVisibleElements={false}
+          onDocumentChange={(document) => {
+            latestDocument = document
+          }}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    expect(errors).toEqual([])
+    const activeOverlay = container.querySelector<HTMLElement>('[data-canvas-file-generation-activity="running"]')
+    const cancelButton = [...(activeOverlay?.querySelectorAll("button") ?? [])].find(
+      (button) => button.textContent === "取消",
+    )
+    const blockedWrapper = container.querySelector<HTMLElement>('[data-canvas-generation-retry-blocked="true"]')
+    expect(activeOverlay).not.toBeNull()
+    expect(cancelButton).toBeDefined()
+    expect(blockedWrapper).not.toBeNull()
+    expect(blockedWrapper?.classList.contains("nodrag")).toBe(true)
+    expect(blockedWrapper?.querySelector("button")?.disabled).toBe(true)
+    const generatingNodeElement = activeOverlay?.closest<HTMLElement>(".react-flow__node")
+    expect(generatingNodeElement?.classList.contains("draggable")).toBe(true)
+
+    await dragWithMouse(activeOverlay!, { x: 120, y: 120 }, { x: 184, y: 168 })
+    const movedPosition = latestDocument.nodes.find((node) => node.id === generatingNode.id)?.position
+    expect(movedPosition).not.toEqual(generatingNode.position)
+
+    const positionBeforeCancelDrag = { ...movedPosition! }
+    await dragWithMouse(cancelButton!, { x: 184, y: 168 }, { x: 248, y: 216 })
+    expect(latestDocument.nodes.find((node) => node.id === generatingNode.id)?.position).toEqual(
+      positionBeforeCancelDrag,
+    )
+
+    const blockedPosition = latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position
+    await dragWithMouse(blockedWrapper!, { x: 440, y: 120 }, { x: 504, y: 168 })
+    expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).toEqual(blockedPosition)
+    expect(errors).toEqual([])
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = originalRect
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
+test("renders alignment guides while a real React Flow node drag is snapped", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+  for (const name of ["requestAnimationFrame", "cancelAnimationFrame"] as const) {
+    Object.defineProperty(globalThis, name, {
+      configurable: true,
+      value: testWindow[name].bind(testWindow),
+      writable: true,
+    })
+  }
+
+  const errors: Error[] = []
+  const source = {
+    ...createTextNode({
+      id: "snap-source",
+      metadata: {},
+      position: { x: 80, y: 80 },
+      resourceState: { status: "ready" },
+    }),
+    measured: { height: 80, width: 120 },
+  }
+  const target = {
+    ...createTextNode({
+      id: "snap-target",
+      metadata: {},
+      position: { x: 300, y: 200 },
+      resourceState: { status: "ready" },
+    }),
+    measured: { height: 80, width: 120 },
+  }
+  const initialDocument = createCanvasDocument({
+    id: "node-snap-guides",
+    nodes: [source, target],
+  })
+  const originalRect = HTMLElement.prototype.getBoundingClientRect
+  HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
+    if (this.classList.contains("react-flow__node")) {
+      const node = this.getAttribute("data-id") === source.id ? source : target
+      const transform = this.style.transform.match(/translate\(\s*(-?\d+(?:\.\d+)?)px,\s*(-?\d+(?:\.\d+)?)px\s*\)/)
+      return rect(
+        transform ? Number(transform[1]) : node.position.x,
+        transform ? Number(transform[2]) : node.position.y,
+        node.measured.width,
+        node.measured.height,
+      )
+    }
+    return rect(0, 0, 1000, 800)
+  }
+
+  const container = document.createElement("div")
+  document.body.append(container)
+  let latestDocument: CanvasDocument = initialDocument
+  let root: Root | undefined
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          onlyRenderVisibleElements={false}
+          onDocumentChange={(document) => {
+            latestDocument = document
+          }}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const sourceElement = container.querySelector<HTMLElement>(`.react-flow__node[data-id="${source.id}"]`)
+    expect(sourceElement).not.toBeNull()
+
+    await act(async () => {
+      sourceElement?.dispatchEvent(
+        new MouseEvent("mousedown", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 100,
+          clientY: 100,
+          view: window,
+        }),
+      )
+      window.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 105,
+          clientY: 105,
+          view: window,
+        }),
+      )
+      window.dispatchEvent(
+        new MouseEvent("mousemove", {
+          bubbles: true,
+          button: 0,
+          buttons: 1,
+          clientX: 205,
+          clientY: 145,
+          view: window,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(latestDocument.nodes.find((node) => node.id === source.id)?.position).toEqual({
+      x: 180,
+      y: 120,
+    })
+    expect(container.querySelector('[data-canvas-snap-guide="x"]')).not.toBeNull()
+    expect(container.querySelector('[data-canvas-snap-guide="y"]')).not.toBeNull()
+
+    await act(async () => {
+      window.dispatchEvent(
+        new MouseEvent("mouseup", {
+          bubbles: true,
+          button: 0,
+          buttons: 0,
+          clientX: 205,
+          clientY: 145,
+          view: window,
+        }),
+      )
+      await Promise.resolve()
+    })
+
+    expect(container.querySelector("[data-canvas-snap-guide]")).toBeNull()
+    expect(errors).toEqual([])
+  } finally {
+    HTMLElement.prototype.getBoundingClientRect = originalRect
+    if (root) await act(async () => root?.unmount())
+    container.remove()
   }
 })
