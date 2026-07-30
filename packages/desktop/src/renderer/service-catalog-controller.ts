@@ -54,8 +54,15 @@ export interface BuiltinServiceCatalogEntry extends ServiceCatalogEntryBase {
 
 export type ServiceCatalogEntry = PluginServiceCatalogEntry | BuiltinServiceCatalogEntry
 
+export interface ServiceCatalogAgentModelState {
+  catalog?: AgentModelCatalog
+  error?: string
+  loading: boolean
+}
+
 export interface ServiceCatalogSnapshot {
   action?: { action: WebPluginServiceAction; pluginId: string }
+  agentModels?: ServiceCatalogAgentModelState
   error?: string
   loading: boolean
   services: readonly ServiceCatalogEntry[]
@@ -63,25 +70,24 @@ export interface ServiceCatalogSnapshot {
 
 /**
  * Generation model discovery is stricter than the display catalog: Main exposes
- * models only after the owning service reports connected. Keep a small, stable
- * renderer invalidation key so an initial unknown/loading result is retried when
- * that live availability settles, without coupling UI code to a concrete service.
+ * models only after the owning service reports connected. Keep a small renderer
+ * invalidation key that changes with settled authority availability, not with
+ * transient refresh/loading presentation state.
  */
 export function serviceGenerationAvailabilityVersion(
   snapshot: ServiceCatalogSnapshot,
   generationPluginIds: readonly string[],
 ) {
   const included = new Set(generationPluginIds)
-  return JSON.stringify({
-    loading: snapshot.loading,
-    services: snapshot.services
+  return JSON.stringify(
+    snapshot.services
       .flatMap((service) =>
         service.kind === "plugin" && included.has(service.pluginId)
-          ? [{ loading: service.loading, pluginId: service.pluginId, state: service.state }]
+          ? [{ pluginId: service.pluginId, state: service.state }]
           : [],
       )
       .sort((left, right) => left.pluginId.localeCompare(right.pluginId)),
-  })
+  )
 }
 
 function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentication {
@@ -105,7 +111,11 @@ function pluginProviderPrefix(pluginId: string) {
   return `plugin-${pluginId}-`
 }
 
-function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalog): PluginServiceCatalogEntry {
+function pluginEntry(
+  service: PluginServiceViewEntry,
+  catalog?: AgentModelCatalog,
+  stableState?: PluginServiceState,
+): PluginServiceCatalogEntry {
   const connectedLlmProviders =
     catalog?.providers.filter(
       (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
@@ -137,7 +147,7 @@ function pluginEntry(service: PluginServiceViewEntry, catalog?: AgentModelCatalo
     name: service.pluginName,
     pluginId: service.pluginId,
     serviceId: `plugin:${service.pluginId}`,
-    state: service.status?.state ?? "unknown",
+    state: service.status?.state ?? stableState ?? "unknown",
     status: service.status,
     version: service.version,
   }
@@ -196,6 +206,7 @@ export class ServiceCatalogController {
   #pluginSnapshot: PluginServicesSnapshot
   #scopeId?: string
   #snapshot: ServiceCatalogSnapshot
+  readonly #stablePluginStates = new Map<string, PluginServiceState>()
   #started = false
   #unsubscribeModelChanges?: () => void
   #unsubscribePlugins?: () => void
@@ -221,6 +232,7 @@ export class ServiceCatalogController {
     this.#started = true
     this.#unsubscribePlugins = this.#plugins.subscribe(() => {
       this.#pluginSnapshot = this.#plugins.getSnapshot()
+      this.#rememberStablePluginStates()
       this.#publish()
     })
     this.#unsubscribeModelChanges = this.pluginClient.onDidChange(() => {
@@ -288,7 +300,6 @@ export class ServiceCatalogController {
       this.#publish()
     } catch (error) {
       if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return
-      this.#agentCatalog = undefined
       this.#agentError = errorMessage(error)
       this.#agentLoading = false
       this.#publish()
@@ -298,12 +309,33 @@ export class ServiceCatalogController {
   #compose(): ServiceCatalogSnapshot {
     return {
       action: this.#pluginSnapshot.action,
+      agentModels: {
+        catalog: this.#agentCatalog,
+        error: this.#agentError,
+        loading: this.#agentLoading,
+      },
       error: this.#pluginSnapshot.error,
       loading: this.#pluginSnapshot.loading || this.#agentLoading,
       services: [
         openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
-        ...this.#pluginSnapshot.services.map((service) => pluginEntry(service, this.#agentCatalog)),
+        ...this.#pluginSnapshot.services.map((service) =>
+          pluginEntry(service, this.#agentCatalog, this.#stablePluginStates.get(service.pluginId)),
+        ),
       ],
+    }
+  }
+
+  #rememberStablePluginStates() {
+    if (!this.#pluginSnapshot.loading) {
+      const presentPluginIds = new Set(this.#pluginSnapshot.services.map((service) => service.pluginId))
+      for (const pluginId of this.#stablePluginStates.keys()) {
+        if (!presentPluginIds.has(pluginId)) this.#stablePluginStates.delete(pluginId)
+      }
+    }
+    for (const service of this.#pluginSnapshot.services) {
+      if (!service.loading && service.status) {
+        this.#stablePluginStates.set(service.pluginId, service.status.state)
+      }
     }
   }
 
