@@ -3,10 +3,41 @@ import {
   createProjectResourceUrl,
   createProjectResourceProtocolResponse,
   parseProjectResourceUrl,
+  projectResourceAccessControlAllowOrigin,
   resolveProjectResourceProtocolPath,
 } from "./project-resource-protocol"
 
 describe("Project resource protocol", () => {
+  test("grants pixel-readable image responses only to the exact trusted renderer", () => {
+    expect(
+      projectResourceAccessControlAllowOrigin(
+        new Request("convax-asset://project-one/project-file", {
+          headers: { Origin: "http://localhost:5173" },
+        }),
+        "http://localhost:5173/",
+      ),
+    ).toBe("http://localhost:5173")
+    expect(
+      projectResourceAccessControlAllowOrigin(
+        new Request("convax-asset://project-one/project-file", {
+          headers: { Origin: "https://untrusted.example" },
+        }),
+        "http://localhost:5173/",
+      ),
+    ).toBeUndefined()
+    expect(
+      projectResourceAccessControlAllowOrigin(
+        new Request("convax-asset://project-one/project-file", {
+          headers: {
+            Origin: "null",
+            Referer: "file:///Applications/Convax/resources/app.asar/out/renderer/index.html",
+          },
+        }),
+        "file:///Applications/Convax/resources/app.asar/out/renderer/index.html",
+      ),
+    ).toBe("null")
+  })
+
   test("round trips typed Project files with runtime revisions and no native path", () => {
     const url = createProjectResourceUrl({
       contentRevision: "a".repeat(64),
@@ -86,6 +117,7 @@ describe("Project resource protocol", () => {
 
   test("reports byte-range responses honestly so media elements can seek", async () => {
     const ranged = createProjectResourceProtocolResponse({
+      accessControlAllowOrigin: "https://convax.example",
       cacheControl: "no-store",
       request: new Request("convax-asset://project-one/project-file", {
         headers: { Range: "bytes=1000-1999" },
@@ -102,6 +134,8 @@ describe("Project resource protocol", () => {
     expect(ranged.headers.get("content-range")).toBe("bytes 1000-1999/10000")
     expect(ranged.headers.get("content-length")).toBe("1000")
     expect(ranged.headers.get("content-type")).toBe("video/mp4")
+    expect(ranged.headers.get("access-control-allow-origin")).toBe("https://convax.example")
+    expect(ranged.headers.get("vary")).toBe("Origin")
     expect(await ranged.arrayBuffer()).toHaveLength(1_000)
   })
 

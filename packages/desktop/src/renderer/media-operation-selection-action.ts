@@ -11,7 +11,7 @@ import { getProjectResourceReference } from "@convax/project/canvas"
 import type { GenerationCanvasRequest } from "../generation-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
-export type MediaOperationEditor = "confirmation" | "crop-region" | "time-point" | "time-range"
+export type MediaOperationEditor = "confirmation" | "crop-region" | "immediate" | "time-point" | "time-range"
 
 export interface MediaOperationLocalizedText {
   default: string
@@ -29,6 +29,7 @@ export interface MediaOperationAction {
   editor: MediaOperationEditor
   id: string
   pluginId: string
+  presentation?: "cutout-scan"
   steps: readonly MediaOperationStep[]
   target: "image" | "video"
   title: MediaOperationLocalizedText
@@ -113,7 +114,13 @@ export function listInstalledMediaOperationActions(
           (action.editor !== "confirmation" ||
             action.steps.length !== 1 ||
             tools.some((tool) => tool?.output !== "text"))) ||
-        (!returnDelivery && (action.target === "image" || tools.some((tool) => tool?.delivery === "return")))
+        (!returnDelivery &&
+          (tools.some((tool) => tool?.delivery === "return") ||
+            (action.target === "image" &&
+              (action.editor !== "immediate" ||
+                action.presentation !== "cutout-scan" ||
+                action.steps.length !== 1 ||
+                tools.some((tool) => tool?.output !== "image")))))
       ) {
         return []
       }
@@ -124,6 +131,7 @@ export function listInstalledMediaOperationActions(
           editor: action.editor,
           id: action.id,
           pluginId: plugin.id,
+          ...("presentation" in action && action.presentation ? { presentation: action.presentation } : {}),
           steps,
           target: action.target,
           title: action.title,
@@ -203,7 +211,7 @@ export function validateMediaOperationInput(
   input: MediaOperationInput,
   context: MediaOperationValidationContext = {},
 ): string | undefined {
-  if (editor === "confirmation") return undefined
+  if (editor === "confirmation" || editor === "immediate") return undefined
   if (editor === "time-point") {
     if (!("timeSeconds" in input) || !isNonNegativeFinite(input.timeSeconds)) {
       return "Frame time must be zero or a positive number."
@@ -269,7 +277,7 @@ export function createMediaOperationGenerateRequests(
   }
   const validationError = validateMediaOperationInput(request.action.editor, input)
   if (validationError) throw new Error(validationError)
-  const node = requireRequestVideoNode(request)
+  const node = requireRequestMediaNode(request)
   const anchor = mediaOperationResultAnchor(node, request.context.document.nodes)
   const toolInput = editorToolInput(request.action.editor, input)
   return request.action.steps.map((step, index) => ({
@@ -283,7 +291,12 @@ export function createMediaOperationGenerateRequests(
     expectedRevision: request.context.document.revision,
     output: step.output,
     prompt: request.action.description.default,
-    references: [{ nodeId: node.id, role: "reference_video" }],
+    references: [
+      {
+        nodeId: node.id,
+        role: request.action.target === "image" ? "reference_image" : "reference_video",
+      },
+    ],
     signal,
     toolId: step.toolId,
     ...(toolInput ? { toolInput } : {}),
@@ -345,7 +358,7 @@ function editorToolInput(
   editor: MediaOperationEditor,
   input: MediaOperationInput,
 ): Readonly<Record<string, string | number | boolean>> | undefined {
-  if (editor === "confirmation") return undefined
+  if (editor === "confirmation" || editor === "immediate") return undefined
   if (editor === "time-point") {
     if (!("timeSeconds" in input)) throw new Error("Frame time is missing.")
     return { time_seconds: input.timeSeconds }
@@ -358,13 +371,6 @@ function editorToolInput(
     throw new Error("Crop geometry is missing.")
   }
   return { height: input.height, width: input.width, x: input.x, y: input.y }
-}
-
-function requireRequestVideoNode(request: MediaOperationDialogRequest) {
-  if (!isManagedProjectVideoSelection(request.context)) {
-    throw new Error("The selected video is no longer available as a Project-backed file.")
-  }
-  return request.context.selectedNodes[0]
 }
 
 function requireRequestMediaNode(request: MediaOperationDialogRequest) {

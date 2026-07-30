@@ -222,7 +222,12 @@ export interface WebPluginLocalizedText {
   "zh-CN"?: string
 }
 
-export type WebPluginCanvasSelectionActionEditor = "time-point" | "time-range" | "crop-region" | "confirmation"
+export type WebPluginCanvasSelectionActionEditor =
+  | "time-point"
+  | "time-range"
+  | "crop-region"
+  | "confirmation"
+  | "immediate"
 
 export interface WebPluginCanvasSelectionActionStep {
   /** Plugin-local generation operation tool id. */
@@ -233,6 +238,7 @@ export interface WebPluginCanvasGenerationSelectionActionContribution {
   description: WebPluginLocalizedText
   editor: WebPluginCanvasSelectionActionEditor
   id: string
+  presentation?: "cutout-scan"
   steps: WebPluginCanvasSelectionActionStep[]
   target: "image" | "video"
   title: WebPluginLocalizedText
@@ -249,8 +255,25 @@ export interface WebPluginCanvasMaterializeSelectionActionContribution {
   title: WebPluginLocalizedText
 }
 
+/**
+ * Read-only compatibility shape for already-installed v7 packages.
+ * The renderer does not expose or execute this retired in-place action.
+ */
+export interface WebPluginCanvasLegacyReplacementSelectionActionContribution {
+  action: {
+    presentation: "cutout-scan"
+    tool: string
+    type: "replace-selection-with-generation"
+  }
+  description: WebPluginLocalizedText
+  id: string
+  target: "image"
+  title: WebPluginLocalizedText
+}
+
 export type WebPluginCanvasSelectionActionContribution =
   | WebPluginCanvasGenerationSelectionActionContribution
+  | WebPluginCanvasLegacyReplacementSelectionActionContribution
   | WebPluginCanvasMaterializeSelectionActionContribution
 
 export interface WebPluginCanvasContribution {
@@ -373,6 +396,7 @@ const allowedSelectionActionEditors = new Set<WebPluginCanvasSelectionActionEdit
   "time-range",
   "crop-region",
   "confirmation",
+  "immediate",
 ])
 const agentToolIdPattern = /^[a-z][a-z0-9_]{0,63}$/
 const windowsReservedName = /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³]|CONIN\$|CONOUT\$)$/i
@@ -579,7 +603,7 @@ function parseLocalizedText(value: unknown, label: string, maxLength: number): W
 
 function parseSelectionActions(
   value: unknown,
-  allowMaterializeOwnPluginNode = false,
+  allowV7Extensions = false,
 ): WebPluginCanvasSelectionActionContribution[] | undefined {
   if (value === undefined) return undefined
   if (!Array.isArray(value) || value.length === 0 || value.length > 32) {
@@ -588,14 +612,36 @@ function parseSelectionActions(
   const actions = value.map((item, index) => {
     const label = `Canvas selection action ${index}`
     const input = asRecord(item, label)
-    if (allowMaterializeOwnPluginNode && input.action !== undefined) {
+    if (allowV7Extensions && input.action !== undefined) {
       assertKeys(input, ["action", "description", "id", "target", "title"], label)
       const id = requireString(input.id, `${label} id`, 80)
       if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) {
         throw new Error(`Invalid Canvas selection action id: ${id}`)
       }
-      if (input.target !== "video") throw new Error(`${label} target must be video`)
       const action = asRecord(input.action, `${label} action`)
+      if (action.type === "replace-selection-with-generation") {
+        if (input.target !== "image") throw new Error(`${label} legacy replacement target must be image`)
+        assertKeys(action, ["presentation", "tool", "type"], `${label} action`)
+        if (action.presentation !== "cutout-scan") {
+          throw new Error(`${label} legacy replacement presentation is not supported`)
+        }
+        const tool = requireString(action.tool, `${label} action tool`, 80)
+        if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(tool)) {
+          throw new Error(`Invalid Canvas selection action tool: ${tool}`)
+        }
+        return {
+          action: {
+            presentation: "cutout-scan" as const,
+            tool,
+            type: "replace-selection-with-generation" as const,
+          },
+          description: parseLocalizedText(input.description, `${label} description`, 2_000),
+          id,
+          target: "image" as const,
+          title: parseLocalizedText(input.title, `${label} title`, 120),
+        }
+      }
+      if (input.target !== "video") throw new Error(`${label} target must be video`)
       assertKeys(action, ["connect", "type"], `${label} action`)
       if (action.type !== "materialize-own-plugin-node" || action.connect !== "selection-to-created") {
         throw new Error(`${label} materialization action is not supported`)
@@ -608,7 +654,11 @@ function parseSelectionActions(
         title: parseLocalizedText(input.title, `${label} title`, 120),
       }
     }
-    assertKeys(input, ["description", "editor", "id", "steps", "target", "title"], label)
+    assertKeys(
+      input,
+      ["description", "editor", "id", ...(allowV7Extensions ? ["presentation"] : []), "steps", "target", "title"],
+      label,
+    )
     const id = requireString(input.id, `${label} id`, 80)
     if (!/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/.test(id)) {
       throw new Error(`Invalid Canvas selection action id: ${id}`)
@@ -617,8 +667,20 @@ function parseSelectionActions(
       throw new Error(`${label} target must be image or video`)
     }
     const target = input.target as "image" | "video"
-    if (!allowedSelectionActionEditors.has(input.editor as WebPluginCanvasSelectionActionEditor)) {
+    if (
+      !allowedSelectionActionEditors.has(input.editor as WebPluginCanvasSelectionActionEditor) ||
+      (input.editor === "immediate" && !allowV7Extensions)
+    ) {
       throw new Error(`${label} editor is not supported`)
+    }
+    if (
+      input.presentation !== undefined &&
+      (!allowV7Extensions ||
+        input.editor !== "immediate" ||
+        target !== "image" ||
+        input.presentation !== "cutout-scan")
+    ) {
+      throw new Error(`${label} presentation is not supported`)
     }
     if (!Array.isArray(input.steps) || input.steps.length === 0 || input.steps.length > 16) {
       throw new Error(`${label} steps must be a non-empty array with at most 16 items`)
@@ -636,6 +698,7 @@ function parseSelectionActions(
       description: parseLocalizedText(input.description, `${label} description`, 2_000),
       editor: input.editor as WebPluginCanvasSelectionActionEditor,
       id,
+      ...(input.presentation === undefined ? {} : { presentation: "cutout-scan" as const }),
       steps,
       target,
       title: parseLocalizedText(input.title, `${label} title`, 120),
@@ -1055,7 +1118,22 @@ function validateDeclarativeToolReferences(input: {
     }
   }
   for (const action of input.selectionActions ?? []) {
-    if (!("steps" in action)) continue
+    if (!("steps" in action)) {
+      if (action.action.type === "replace-selection-with-generation") {
+        const tool = tools.get(action.action.tool)
+        if (
+          !tool ||
+          modelToolIds.has(action.action.tool) ||
+          tool.delivery === "return" ||
+          tool.inputBinding !== undefined ||
+          tool.output !== "image" ||
+          !tool.acceptedInputs.includes("reference_image")
+        ) {
+          throw new Error(`Legacy Canvas replacement references an invalid generation tool: ${action.action.tool}`)
+        }
+      }
+      continue
+    }
     for (const step of action.steps) {
       const tool = tools.get(step.tool)
       if (!tool) throw new Error(`Canvas selection action references an unknown generation tool: ${step.tool}`)
@@ -1079,8 +1157,16 @@ function validateDeclarativeToolReferences(input: {
         if (tool.output !== "text") {
           throw new Error(`Canvas return-delivery operation must return text: ${step.tool}`)
         }
-      } else if (action.target === "image") {
-        throw new Error(`Canvas image selection action requires a return-delivery operation: ${step.tool}`)
+      } else if (
+        action.target === "image" &&
+        (action.editor !== "immediate" ||
+          action.presentation !== "cutout-scan" ||
+          action.steps.length !== 1 ||
+          tool.output !== "image")
+      ) {
+        throw new Error(
+          `Canvas image output requires one immediate image operation with cutout-scan presentation: ${step.tool}`,
+        )
       }
     }
   }

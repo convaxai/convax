@@ -148,6 +148,90 @@
   background: transparent;
 }
 
+.convax-canvas .convax-cutout-media {
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.convax-canvas .convax-cutout-media__dissolve-canvas,
+.convax-canvas .convax-cutout-media__dissolve-source {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.convax-canvas .convax-cutout-media__dissolve-canvas {
+  z-index: 3;
+  visibility: hidden;
+}
+
+.convax-canvas .convax-cutout-media__dissolve-source {
+  z-index: 4;
+}
+
+.convax-canvas .convax-cutout-media__scan {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.convax-canvas .convax-cutout-media__scan-tint {
+  position: absolute;
+  inset: 0;
+  background: rgb(34 211 238 / 5%);
+  animation: convax-cutout-tint 1.2s ease-in-out infinite;
+}
+
+.convax-canvas .convax-cutout-media__scan-beam {
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 33.333%;
+  mix-blend-mode: screen;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgb(34 211 238 / 0%) 12%,
+    rgb(34 211 238 / 35%) 40%,
+    rgb(255 255 255 / 55%) 50%,
+    rgb(163 230 53 / 35%) 60%,
+    rgb(34 211 238 / 0%) 88%,
+    transparent 100%
+  );
+  filter: blur(6px);
+  animation: convax-cutout-scan 1.21s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes convax-cutout-scan {
+  0% {
+    transform: translateX(-130%);
+  }
+  100% {
+    transform: translateX(430%);
+  }
+}
+
+@keyframes convax-cutout-tint {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .convax-canvas .convax-cutout-media__scan-beam {
+    animation: none;
+    transform: translateX(150%);
+  }
+}
+
 .convax-canvas .convax-node:hover .convax-node__surface {
   border-color: var(--canvas-edge-active);
   box-shadow: 0 13px 30px -13px color-mix(in srgb, var(--canvas-accent) 28%, transparent);

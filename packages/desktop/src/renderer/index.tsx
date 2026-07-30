@@ -1443,7 +1443,12 @@ function App() {
             })
             return
           }
-          setMediaOperationDialog({ action, canvasId: activeCanvasId, context, projectId: activeProjectId })
+          const request = { action, canvasId: activeCanvasId, context, projectId: activeProjectId }
+          if (action.editor === "immediate") {
+            await runMediaOperation(request, {}, context.signal)
+            return
+          }
+          setMediaOperationDialog(request)
         },
       })),
       ...pluginMaterializationActions.map((action) => ({
@@ -1500,6 +1505,7 @@ function App() {
       locale,
       mediaOperationActions,
       pluginMaterializationActions,
+      runMediaOperation,
     ],
   )
 

@@ -186,6 +186,7 @@ import {
 import {
   createProjectResourceProtocolResponse,
   createProjectResourceUrl,
+  projectResourceAccessControlAllowOrigin,
   resolveProjectResourceProtocolPath,
 } from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
@@ -1660,6 +1661,7 @@ function startApplication() {
         ])
         if (!file.isFile()) throw new Error("Project resource is not a file")
         return createProjectResourceProtocolResponse({
+          accessControlAllowOrigin: projectResourceAccessControlAllowOrigin(request, trustedRendererUrl),
           cacheControl: resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
           request,
           response,

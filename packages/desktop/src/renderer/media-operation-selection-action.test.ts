@@ -223,6 +223,45 @@ function returnOperationPlugin(): InstalledWebPluginSummary {
   }
 }
 
+function immediateImageOperationPlugin(): InstalledWebPluginSummary {
+  return {
+    capabilities: [],
+    contributes: {
+      canvas: {
+        selectionActions: [
+          {
+            description: { default: "Create a transparent PNG beside the selected image." },
+            editor: "immediate",
+            id: "remove-background",
+            presentation: "cutout-scan",
+            steps: [{ tool: "background.remove" }],
+            target: "image",
+            title: { default: "Remove background", "zh-CN": "抠图" },
+          },
+        ],
+      },
+      generation: {
+        models: [],
+        tools: [
+          {
+            acceptedInputs: ["reference_image"],
+            description: "Remove the image background.",
+            id: "background.remove",
+            output: "image",
+            title: "Remove background",
+          },
+        ],
+      },
+    },
+    description: "Local cutout",
+    id: "cutout-studio",
+    name: "Cutout Studio",
+    runtime: { command: "convax-cutout-mcp", type: "mcp-stdio" },
+    schema: "convax.plugin/7",
+    version: "0.2.0",
+  }
+}
+
 describe("manifest-driven media operation visibility", () => {
   test("discovers actions from an arbitrary installed Plugin without knowing its id", () => {
     const actions = listInstalledMediaOperationActions([operationPlugin()])
@@ -273,6 +312,19 @@ describe("manifest-driven media operation visibility", () => {
     expect(canRunMediaOperation(selection([managedVideo.id]), videoAction)).toBe(true)
     expect(isManagedProjectMediaSelection(selection([managedImage.id]), "image")).toBe(true)
     expect(isManagedProjectMediaSelection(selection([remoteVideo.id]), "video")).toBe(false)
+  })
+
+  test("discovers one immediate adjacent-image operation with its bounded presentation", () => {
+    const action = listInstalledMediaOperationActions([immediateImageOperationPlugin()])[0]!
+    expect(action).toMatchObject({
+      delivery: "canvas",
+      editor: "immediate",
+      presentation: "cutout-scan",
+      steps: [{ output: "image", toolId: "cutout-studio/background.remove" }],
+      target: "image",
+    })
+    expect(canRunMediaOperation(selection([managedImage.id]), action)).toBe(true)
+    expect(canRunMediaOperation(selection([managedVideo.id]), action)).toBe(false)
   })
 
   test("hides executable actions unless Main currently admits their exact operation tools", () => {
@@ -347,6 +399,27 @@ describe("manifest-driven media operation requests", () => {
     expect(() =>
       createMediaOperationGenerateRequest({ action: split, canvasId: "canvas", context, projectId: "project" }, {}),
     ).toThrow("creates multiple Canvas results")
+  })
+
+  test("creates an adjacent pending image request from the selected image", () => {
+    const context = selection([managedImage.id])
+    const action = listInstalledMediaOperationActions([immediateImageOperationPlugin()])[0]!
+    const request = createMediaOperationGenerateRequest(
+      { action, canvasId: "canvas", context, projectId: "project" },
+      {},
+    )
+    expect(request).toMatchObject({
+      context: {
+        documentId: "canvas",
+        selectedNodeIds: [managedImage.id],
+        source: "desktop:plugin-selection-action:cutout-studio/remove-background",
+      },
+      output: "image",
+      references: [{ nodeId: managedImage.id, role: "reference_image" }],
+      toolId: "cutout-studio/background.remove",
+    })
+    expect(request.anchor.x).toBeGreaterThan(managedImage.position.x)
+    expect(request.toolInput).toBeUndefined()
   })
 
   test("rejects invalid time ranges and crop geometry before execution", () => {

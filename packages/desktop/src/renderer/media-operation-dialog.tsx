@@ -391,7 +391,9 @@ function defaultValues(request: MediaOperationDialogRequest) {
   const width = evenDimension(data?.width, 1_280)
   const height = evenDimension(data?.height, 720)
   if (request.action.editor === "time-point") return { first: "0", fourth: "", second: "", third: "" }
-  if (request.action.editor === "confirmation") return { first: "", fourth: "", second: "", third: "" }
+  if (request.action.editor === "confirmation" || request.action.editor === "immediate") {
+    return { first: "", fourth: "", second: "", third: "" }
+  }
   if (request.action.editor === "time-range") {
     return { first: "0", fourth: "", second: String(Number(durationSeconds.toFixed(3))), third: "" }
   }
@@ -403,7 +405,7 @@ function parseInput(
   values: { first: string; fourth: string; second: string; third: string },
 ): MediaOperationInput {
   if (editor === "time-point") return { timeSeconds: parseNumber(values.first) }
-  if (editor === "confirmation") return {}
+  if (editor === "confirmation" || editor === "immediate") return {}
   if (editor === "time-range") {
     return mediaTrimInputFromRange({
       endSeconds: parseNumber(values.second),
