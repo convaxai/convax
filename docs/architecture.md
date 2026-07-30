@@ -159,20 +159,22 @@ the Desktop-owned managed-stdio profile.
 
 ## 3. Packages and dependency graph
 
-| Package                  | Responsibility                                                                  |
-| ------------------------ | ------------------------------------------------------------------------------- |
-| `@convax/ui`             | Product-agnostic components, styling primitives, and theme                      |
-| `@convax/project-files`  | Renderer-safe scoped file contracts, controller, and drag protocol              |
-| `@convax/canvas`         | Canvas core, application/business layer, view layer, editor and plugins         |
-| `@convax/project`        | Project lifecycle/registry/private storage and Project capability composition   |
-| `@convax/project/canvas` | Project Canvas catalog, relationships, controller, drag and resource references |
-| `@convax/project/node`   | Native Project, Project Files, private storage, and Canvas persistence adapters |
-| `@convax/workbench`      | Headless window Input/Selection/Surface and layout state machines               |
-| `@convax/agent-runtime`  | Host-agnostic OpenCode integration and protected execution boundary             |
-| `@convax/marketplace`    | Marketplace refs, schemas, source identity, validation and Catalog aggregation   |
-| `@convax/marketplace-kit` | Authoring-time deterministic Registry, Showcase, bundle and artifact generation |
-| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                      |
-| `@convax/desktop`        | Electron composition root, IPC, adapters, coordinators and product shell        |
+| Package                     | Responsibility                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------- |
+| `@convax/ui`                | Product-agnostic components, styling primitives, and theme                      |
+| `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol              |
+| `@convax/canvas`            | Canvas core, application/business layer, view layer, editor and plugins         |
+| `@convax/project`           | Project lifecycle/registry/private storage and Project capability composition   |
+| `@convax/project/canvas`    | Project Canvas catalog, relationships, controller, drag and resource references |
+| `@convax/project/node`      | Native Project, Project Files, private storage, and Canvas persistence adapters |
+| `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines               |
+| `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary             |
+| `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation  |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation |
+| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                         |
+| `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell        |
+| `@convax/web`               | Public marketing site and responsive product storytelling                       |
+| `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition       |
 
 Allowed internal runtime dependencies:
 
@@ -188,7 +190,16 @@ create-convax-marketplace -> @convax/marketplace-kit
 @convax/project        -> @convax/canvas, @convax/project-files, @convax/ui
 @convax/desktop        -> agent-runtime, canvas, marketplace, project,
                           project-files, ui and workbench
+@convax/deploy-cloudflare -> @convax/web build output; future @convax/api through
+                             a Cloudflare Service Binding
 ```
+
+The private applications under `apps/*` are delivery surfaces rather than
+publishable domain libraries. `@convax/web` owns no product state and
+`@convax/deploy-cloudflare` owns no API business logic. The latter is the single
+public origin for `convax.microvoid.io`: static Web assets own normal navigation,
+while the exact `/api` and `/api/**` path family is reserved for a separately
+deployed API service.
 
 The three Marketplace packages target the supported Node/Bun authoring and Desktop
 main runtimes. `@convax/marketplace` stays headless but may use Node cryptography for
@@ -244,9 +255,9 @@ boundary checker fails closed until those admissions are complete.
 | Agent sessions                                           | `@convax/agent-runtime` scoped by the host   | Never stored in Project Canvas state                                     |
 | OpenCode Skill discovery                                 | `@convax/agent-runtime`                      | Runtime sees generic directories, never Desktop ownership metadata       |
 | Marketplace protocol and Catalog grouping                | `@convax/marketplace`                        | Headless validation and source-qualified projections only                |
-| Marketplace sources and source security decisions        | Desktop main                                 | Per-SourceKey isolation; cache is never authoritative                     |
-| Installed capability source binding                      | Desktop main `InstallRecord` store           | One exact SourceKey per `{kind,id}`; no cross-source update               |
-| MCP metadata, setup grant and runtime preference          | Desktop main                                 | Separate install/setup/enable decisions; Agent Runtime stays generic      |
+| Marketplace sources and source security decisions        | Desktop main                                 | Per-SourceKey isolation; cache is never authoritative                    |
+| Installed capability source binding                      | Desktop main `InstallRecord` store           | One exact SourceKey per `{kind,id}`; no cross-source update              |
+| MCP metadata, setup grant and runtime preference         | Desktop main                                 | Separate install/setup/enable decisions; Agent Runtime stays generic     |
 | Managed Skill filesystem publication                     | `@convax/agent-runtime/node`                 | Generic reversible transaction; no Plugin ownership knowledge            |
 | Standalone/Plugin-owned Skill management and provenance  | Desktop main                                 | Owner policy and atomic Plugin composition stay outside Agent runtime    |
 | Installed Plugin packages                                | Desktop main                                 | Global static packages; no active Project/Canvas state                   |

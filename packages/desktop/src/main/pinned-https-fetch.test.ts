@@ -89,6 +89,7 @@ describe("PinnedHttpsFetcher", () => {
         connectPort: address.port,
         isPublicAddress: (candidate) => candidate === "127.0.0.1",
         resolve: (async () => [{ address: "127.0.0.1", family: 4 }]) as never,
+        tlsServername: "owner.github.io",
       },
     })
     expect(
@@ -97,6 +98,69 @@ describe("PinnedHttpsFetcher", () => {
     await expect(
       fetcher.fetch("https://owner.github.io/repo/marketplace.json", "descriptor", { ca: cert, maxBytes: 4 }),
     ).rejects.toThrow("byte limit")
+  })
+
+  test("treats the request timeout as an inactivity limit for streamed release bytes", async () => {
+    const server = https.createServer({ cert, key }, (_request, response) => {
+      response.write("a")
+      setTimeout(() => response.write("b"), 300)
+      setTimeout(() => response.end("c"), 600)
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("TLS fixture did not bind")
+    const fetcher = new PinnedHttpsFetcher({
+      testing: {
+        connectPort: address.port,
+        isPublicAddress: (candidate) => candidate === "127.0.0.1",
+        resolve: (async () => [{ address: "127.0.0.1", family: 4 }]) as never,
+        tlsServername: "owner.github.io",
+      },
+    })
+
+    expect(
+      await fetcher.fetch(
+        "https://github.com/owner/repo/releases/download/v1.0.0/plugin.zip",
+        "release",
+        {
+          ca: cert,
+          repository: { owner: "owner", repository: "repo" },
+          timeoutMs: 500,
+        },
+      ),
+    ).toEqual(Buffer.from("abc"))
+  })
+
+  test("still rejects a release response that stops making progress", async () => {
+    const server = https.createServer({ cert, key }, (_request, response) => {
+      response.write("a")
+      setTimeout(() => response.end("b"), 500)
+    })
+    servers.push(server)
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!address || typeof address === "string") throw new Error("TLS fixture did not bind")
+    const fetcher = new PinnedHttpsFetcher({
+      testing: {
+        connectPort: address.port,
+        isPublicAddress: (candidate) => candidate === "127.0.0.1",
+        resolve: (async () => [{ address: "127.0.0.1", family: 4 }]) as never,
+        tlsServername: "owner.github.io",
+      },
+    })
+
+    await expect(
+      fetcher.fetch(
+        "https://github.com/owner/repo/releases/download/v1.0.0/plugin.zip",
+        "release",
+        {
+          ca: cert,
+          repository: { owner: "owner", repository: "repo" },
+          timeoutMs: 50,
+        },
+      ),
+    ).rejects.toThrow("timed out")
   })
 
   test("admits only exact GitHub Pages descriptor ownership", () => {

@@ -45,7 +45,7 @@ PLAN                            SUBSCRIPTION
 Free · monthly                  No active subscription
 
 CREDITS                         USAGE
-剩余 72 Nexus quota units       已用 28 Nexus quota units
+剩余 0.9988 USD                 已用 0.0012 USD
 
 Capabilities
 LLM
@@ -84,8 +84,8 @@ https://nexus.microvoid.io/workspace/convax/auth/sign-in
 - `account.displayName`：Nexus 账号邮箱或显示名称；
 - `credential.configured`：本地是否存在可用的 Refresh Grant；
 - `credential.verification`：最近一次有界的验证结果；
-- `credits.remaining`：当前剩余额度及单位；
-- `usage.consumed`：当前周期已使用额度及单位；
+- `credits.remaining`：当前剩余 AI Budget，以 USD 展示；
+- `usage.consumed`：当前周期已使用 AI Cost，以 USD 展示；
 - `plan`：Nexus 当前有效 Plan 的 Key、名称和月付/年付周期；
 - `billing.subscriptionStatus`：可选的权威订阅状态；
 - `billing.checkout.plans`：当前 Workspace 配置允许购买的有界 Plan 目录；
@@ -558,6 +558,8 @@ Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式�
 - 日志中不包含 Prompt、Completion、Token、Cookie 或 Provider Secret。
 - Checkout 重试复用同一 Idempotency-Key，持久化记录不包含 Access Token 或 Checkout URL。
 - 当前 Plan 与可购买 Plan 只来自 Nexus 的复合 Access 响应。
+- AI Budget 优先读取 Nexus 的 `availableUsd`/`consumedUsd`；滚动升级期间仅将旧
+  micro-USD Units 字段换算为 USD，不直接展示原始整数。
 
 ### 11.3 Nexus
 
@@ -627,7 +629,7 @@ OS Credential Vault、跨平台构建，以及 Webhook 延迟/乱序、多用户
 3. 通过标准输入运行本地 Bootstrap，创建 `convax` Workspace、Free/Pro Plan、Hosted Auth 配置、
    Hosted BillingConnection、Plan Mapping 和 OpenRouter ProviderConnection。
 4. 构建、校验并打包 `nexus-service` Plugin 与 `nexus-mcp` Companion。
-5. 启动 Convax，安装 Nexus Plugin，在 Settings > Services 选择 `Nexus · OpenRouter`。
+5. 启动 Convax，安装 `Convax Account` Plugin，在 Settings > Services 选择 `Nexus · OpenRouter`。
 6. 使用系统浏览器完成一个全新用户注册和 PKCE Loopback 回调。
 7. 确认 Service 为 Connected，显示当前 Free Plan、可升级 Pro Plan，并列出 OpenRouter 运行时模型。
 8. 选择该模型发起对话，确认请求路径为

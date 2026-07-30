@@ -195,7 +195,7 @@ describe("ServiceCatalogController", () => {
             description: "Nexus OpenRouter",
             models: [{ capability: "llm", id: "fallback", name: "Fallback" }],
             pluginId: "nexus-service",
-            pluginName: "Nexus · OpenRouter",
+            pluginName: "Convax Account",
             version: "0.2.0",
           },
         ],
@@ -245,7 +245,7 @@ describe("ServiceCatalogController", () => {
           name: "DeepSeek V4 Flash Free",
         },
       ],
-      name: "Nexus · OpenRouter",
+      name: "Convax Account",
     })
     controller.dispose()
   })

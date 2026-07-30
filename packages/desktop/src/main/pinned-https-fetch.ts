@@ -16,6 +16,7 @@ export interface PinnedHttpsFetchOptions {
   redirectLimit?: number
   repository?: MarketplaceRepositoryIdentity
   signal?: AbortSignal
+  /** Maximum time without TLS, response, or body progress. */
   timeoutMs?: number
 }
 
@@ -227,9 +228,18 @@ export class PinnedHttpsFetcher {
       status: number
     }>((resolve, reject) => {
       let settled = false
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let destroyIncoming: ((error: Error) => void) | undefined
+      let resetTimeout: () => void = () => undefined
+      const clearRequestTimeout = () => {
+        if (!timer) return
+        clearTimeout(timer)
+        timer = undefined
+      }
       const fail = (error: unknown) => {
         if (settled) return
         settled = true
+        clearRequestTimeout()
         reject(error)
       }
       const request = https.request(
@@ -254,6 +264,8 @@ export class PinnedHttpsFetcher {
           servername: this.#tlsServername ?? url.hostname,
         },
         (incoming) => {
+          destroyIncoming = (error) => incoming.destroy(error)
+          resetTimeout()
           const status = incoming.statusCode ?? 0
           const location = incoming.headers.location
           if (status >= 300 && status < 400) {
@@ -261,6 +273,7 @@ export class PinnedHttpsFetcher {
             if (!location) return fail(new Error("Marketplace redirect is missing Location"))
             if (!settled) {
               settled = true
+              clearRequestTimeout()
               resolve({ body: new Uint8Array(), location, status })
             }
             return
@@ -282,6 +295,7 @@ export class PinnedHttpsFetcher {
           const chunks: Buffer[] = []
           let size = 0
           incoming.on("data", (chunk: Buffer) => {
+            resetTimeout()
             size += chunk.byteLength
             if (size > maxBytes) {
               incoming.destroy()
@@ -293,6 +307,7 @@ export class PinnedHttpsFetcher {
           incoming.once("end", () => {
             if (settled) return
             settled = true
+            clearRequestTimeout()
             resolve({ body: Buffer.concat(chunks, size), status })
           })
           incoming.once("error", fail)
@@ -307,12 +322,21 @@ export class PinnedHttpsFetcher {
             !pinned.check(socket.remoteAddress, selected.family === 4 ? "ipv4" : "ipv6")
           ) {
             request.destroy(new Error("Marketplace TLS socket address did not match the pinned DNS answer"))
+          } else {
+            resetTimeout()
           }
         })
       })
-      const timer = setTimeout(() => request.destroy(new Error("Marketplace request timed out")), timeoutMs)
-      timer.unref?.()
-      request.once("close", () => clearTimeout(timer))
+      resetTimeout = () => {
+        clearRequestTimeout()
+        timer = setTimeout(() => {
+          const error = new Error("Marketplace request timed out")
+          fail(error)
+          destroyIncoming?.(error)
+          request.destroy(error)
+        }, timeoutMs)
+      }
+      resetTimeout()
       request.once("error", fail)
       const onAbort = () => request.destroy(abortError(options.signal?.reason))
       options.signal?.addEventListener("abort", onAbort, { once: true })
