@@ -145,7 +145,7 @@ import {
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
-import { CanvasEditorProvider, CanvasOverlayRootProvider } from "../editor-context"
+import { CanvasEditorNodeEntryProvider, CanvasOverlayRootProvider } from "../editor-context"
 import {
   isCanvasGenerationComposerSubmissionCurrent,
   type CanvasGenerationComposerSubmission,
@@ -157,7 +157,10 @@ import {
 } from "../inspector"
 import {
   CANVAS_MOTION_DURATION,
+  CANVAS_NODE_ENTRY_FINISH_GRACE,
+  CANVAS_NODE_ENTRY_MOUNT_TIMEOUT,
   CANVAS_REDUCED_MOTION_QUERY,
+  CanvasNodeEntryPresentationStore,
   CanvasNodeEntryTracker,
   canvasMotionStyle,
   canvasViewportEase,
@@ -263,8 +266,6 @@ const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
   ".nodrag",
   "[data-canvas-shortcuts='ignore']",
 ].join(", ")
-const EMPTY_CANVAS_NODE_IDS: ReadonlySet<string> = new Set()
-
 function subscribeToCanvasMotionPreference(onChange: () => void) {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") return () => undefined
   const query = window.matchMedia(CANVAS_REDUCED_MOTION_QUERY)
@@ -752,9 +753,15 @@ export function settleCanvasReloadFailure(input: {
 }
 
 export async function completeCanvasResourceMutation(input: {
+  cancelPreparedNodes?: (createdNodeIds: readonly string[]) => void
   currentScope: () => CanvasResourceMutationScopeToken
   operationScope: CanvasResourceMutationScopeToken
+  /**
+   * @deprecated Use prepareCreatedNodes when presentation must exist for the authoritative first paint.
+   * Ignored when prepareCreatedNodes is provided.
+   */
   presentCreatedNodes?: (createdNodeIds: readonly string[]) => void
+  prepareCreatedNodes?: (createdNodeIds: readonly string[]) => void
   reload: (signal: AbortSignal) => Promise<void>
   result: { createdNodeIds: readonly string[]; revision: number; warnings: readonly string[] }
   runViewEffect?: (createdNodeIds: readonly string[]) => Promise<void>
@@ -765,11 +772,32 @@ export async function completeCanvasResourceMutation(input: {
   const isActive = () =>
     !input.signal.aborted && isCanvasResourceMutationScopeCurrent(input.currentScope, input.operationScope)
   if (!isActive()) return
+  const createdNodeIds = [...new Set(input.result.createdNodeIds)]
+  let prepared = false
+  try {
+    input.prepareCreatedNodes?.(createdNodeIds)
+    prepared = Boolean(input.prepareCreatedNodes)
+  } catch {
+    // Transient presentation never changes the committed resource outcome.
+  }
+  const cancelPreparedNodes = () => {
+    if (!prepared) return
+    prepared = false
+    try {
+      input.cancelPreparedNodes?.(createdNodeIds)
+    } catch {
+      // Transient presentation cleanup never changes the committed resource outcome.
+    }
+  }
   const reload = input.reload
-  if (!isActive()) return
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
+  }
   try {
     await reload(input.signal)
   } catch {
+    cancelPreparedNodes()
     if (isActive()) {
       input.show({
         description: "Reload the Canvas to show the committed resources.",
@@ -779,22 +807,33 @@ export async function completeCanvasResourceMutation(input: {
     }
     return
   }
-  if (!isActive()) return
-  const createdNodeIds = [...new Set(input.result.createdNodeIds)]
-  try {
-    input.presentCreatedNodes?.(createdNodeIds)
-  } catch {
-    // Transient presentation never changes the committed resource outcome.
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
   }
-  if (!isActive()) return
+  try {
+    if (!input.prepareCreatedNodes) input.presentCreatedNodes?.(createdNodeIds)
+  } catch {
+    // Compatibility presentation never changes the committed resource outcome.
+  }
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
+  }
   input.selectNodes(createdNodeIds)
-  if (!isActive()) return
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
+  }
   try {
     await input.runViewEffect?.(createdNodeIds)
   } catch {
     // A post-commit camera effect is optional and cannot reverse resource admission.
   }
-  if (!isActive()) return
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
+  }
   input.show({
     description: input.result.warnings.length ? input.result.warnings.join("\n") : undefined,
     kind: input.result.warnings.length ? "warning" : "success",
@@ -897,12 +936,12 @@ function CanvasEditorContent(
       history.document.nodes.map((node) => node.id),
     )
   }
-  const [nodeEntryPresentation, setNodeEntryPresentation] = useState<{
-    nodeIds: ReadonlySet<string>
-    scopeKey: string
-  }>(() => ({ nodeIds: EMPTY_CANVAS_NODE_IDS, scopeKey: nodeEntryScopeKey }))
-  const enteringNodeIds =
-    nodeEntryPresentation.scopeKey === nodeEntryScopeKey ? nodeEntryPresentation.nodeIds : EMPTY_CANVAS_NODE_IDS
+  const nodeEntryPresentation = useMemo(
+    () => new CanvasNodeEntryPresentationStore(nodeEntryScopeKey),
+    [nodeEntryScopeKey],
+  )
+  const activeNodeEntryIds = nodeEntryPresentation.activeNodeIds
+  const enteringNodeIds = nodeEntryPresentation.enteringNodeIds
   const rootRef = useRef<HTMLDivElement>(null)
   const [overlayRoot, setOverlayRoot] = useState<HTMLDivElement | null>(null)
   const setCanvasRoot = useCallback((element: HTMLDivElement | null) => {
@@ -1214,45 +1253,59 @@ function CanvasEditorContent(
     },
     [replaceSelection],
   )
-  const finishNodeEntryForScope = useCallback((scopeKey: string, nodeId: string) => {
-    const timerKey = `${scopeKey}\u0000${nodeId}`
-    const timer = nodeEntryTimersRef.current.get(timerKey)
-    if (timer !== undefined) {
-      clearTimeout(timer)
-      nodeEntryTimersRef.current.delete(timerKey)
-    }
-    setNodeEntryPresentation((current) => {
-      if (current.scopeKey !== scopeKey || !current.nodeIds.has(nodeId)) return current
-      const nodeIds = new Set(current.nodeIds)
-      nodeIds.delete(nodeId)
-      return { nodeIds, scopeKey }
-    })
-  }, [])
+  const finishNodeEntryForScope = useCallback(
+    (scopeKey: string, nodeId: string) => {
+      const timerKey = `${scopeKey}\u0000${nodeId}`
+      const timer = nodeEntryTimersRef.current.get(timerKey)
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        nodeEntryTimersRef.current.delete(timerKey)
+      }
+      nodeEntryPresentation.finish(scopeKey, nodeId)
+    },
+    [nodeEntryPresentation],
+  )
   const finishNodeEntry = useCallback(
     (nodeId: string) => finishNodeEntryForScope(nodeEntryScopeKey, nodeId),
     [finishNodeEntryForScope, nodeEntryScopeKey],
+  )
+  const notifyNodeEntryAnimationStartForScope = useCallback(
+    (scopeKey: string, nodeId: string) => {
+      if (!nodeEntryPresentation.has(nodeId)) return
+      const timerKey = `${scopeKey}\u0000${nodeId}`
+      const currentTimer = nodeEntryTimersRef.current.get(timerKey)
+      if (currentTimer !== undefined) clearTimeout(currentTimer)
+      nodeEntryTimersRef.current.set(
+        timerKey,
+        setTimeout(
+          () => finishNodeEntryForScope(scopeKey, nodeId),
+          CANVAS_MOTION_DURATION.nodeEnter + CANVAS_NODE_ENTRY_FINISH_GRACE,
+        ),
+      )
+    },
+    [finishNodeEntryForScope, nodeEntryPresentation],
+  )
+  const notifyNodeEntryAnimationStart = useCallback(
+    (nodeId: string) => notifyNodeEntryAnimationStartForScope(nodeEntryScopeKey, nodeId),
+    [nodeEntryScopeKey, notifyNodeEntryAnimationStartForScope],
   )
   const startNodeEntryPresentation = useCallback(
     (nodeIds: readonly string[]) => {
       const availableNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
       const activated = [...new Set(nodeIds)].filter((nodeId) => availableNodeIds.has(nodeId))
       if (activated.length === 0 || prefersReducedMotion) return
-      setNodeEntryPresentation((current) => {
-        const next = current.scopeKey === nodeEntryScopeKey ? new Set(current.nodeIds) : new Set<string>()
-        for (const nodeId of activated) next.add(nodeId)
-        return { nodeIds: next, scopeKey: nodeEntryScopeKey }
-      })
+      nodeEntryPresentation.start(nodeEntryScopeKey, activated)
       for (const nodeId of activated) {
         const timerKey = `${nodeEntryScopeKey}\u0000${nodeId}`
         const currentTimer = nodeEntryTimersRef.current.get(timerKey)
         if (currentTimer !== undefined) clearTimeout(currentTimer)
         nodeEntryTimersRef.current.set(
           timerKey,
-          setTimeout(() => finishNodeEntryForScope(nodeEntryScopeKey, nodeId), CANVAS_MOTION_DURATION.nodeEnter + 64),
+          setTimeout(() => finishNodeEntryForScope(nodeEntryScopeKey, nodeId), CANVAS_NODE_ENTRY_MOUNT_TIMEOUT),
         )
       }
     },
-    [finishNodeEntryForScope, nodeEntryScopeKey, prefersReducedMotion],
+    [finishNodeEntryForScope, nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion],
   )
   const presentNodeEntries = useCallback(
     (nodeIds: readonly string[]) => {
@@ -1264,23 +1317,38 @@ function CanvasEditorContent(
     },
     [nodeEntryScopeKey, startNodeEntryPresentation],
   )
+  const prepareFocusedNodeEntries = useCallback(
+    (nodeIds: readonly string[]) => {
+      const tracker = nodeEntryTrackerRef.current
+      if (!tracker || tracker.scopeKey !== nodeEntryScopeKey) return
+      const claimed = tracker.claim(nodeEntryScopeKey, nodeIds)
+      if (prefersReducedMotion) return
+      nodeEntryPresentation.prepare(nodeEntryScopeKey, claimed)
+    },
+    [nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion],
+  )
+  const cancelNodeEntries = useCallback(
+    (nodeIds: readonly string[]) => {
+      const tracker = nodeEntryTrackerRef.current
+      if (!tracker || tracker.scopeKey !== nodeEntryScopeKey) return
+      tracker.cancel(nodeEntryScopeKey, nodeIds)
+      for (const nodeId of nodeIds) finishNodeEntryForScope(nodeEntryScopeKey, nodeId)
+    },
+    [finishNodeEntryForScope, nodeEntryScopeKey],
+  )
   useLayoutEffect(() => {
     const availableNodeIds = new Set(history.document.nodes.map((node) => node.id))
-    for (const nodeId of enteringNodeIds) {
+    for (const nodeId of activeNodeEntryIds) {
       if (!availableNodeIds.has(nodeId)) finishNodeEntryForScope(nodeEntryScopeKey, nodeId)
     }
     presentNodeEntries([])
-  }, [enteringNodeIds, finishNodeEntryForScope, history.document.nodes, nodeEntryScopeKey, presentNodeEntries])
+  }, [activeNodeEntryIds, finishNodeEntryForScope, history.document.nodes, nodeEntryScopeKey, presentNodeEntries])
   useLayoutEffect(() => {
     if (!prefersReducedMotion) return
     for (const timer of nodeEntryTimersRef.current.values()) clearTimeout(timer)
     nodeEntryTimersRef.current.clear()
-    setNodeEntryPresentation((current) =>
-      current.scopeKey === nodeEntryScopeKey && current.nodeIds.size > 0
-        ? { nodeIds: EMPTY_CANVAS_NODE_IDS, scopeKey: nodeEntryScopeKey }
-        : current,
-    )
-  }, [nodeEntryScopeKey, prefersReducedMotion])
+    nodeEntryPresentation.clear(nodeEntryScopeKey)
+  }, [nodeEntryPresentation, nodeEntryScopeKey, prefersReducedMotion])
   useLayoutEffect(
     () => () => {
       for (const timer of nodeEntryTimersRef.current.values()) clearTimeout(timer)
@@ -1493,13 +1561,19 @@ function CanvasEditorContent(
   useLayoutEffect(() => {
     if (!pendingNodeFocus) return
     if (!isCanvasPostMutationRevealGuardCurrent(pendingNodeFocus.guard, getPostMutationRevealGuard())) {
+      cancelNodeEntries(pendingNodeFocus.nodeIds)
       setPendingNodeFocus(null)
       return
     }
     if (!pendingNodeFocus.nodeIds.every((nodeId) => history.document.nodes.some((node) => node.id === nodeId))) return
     setPendingNodeFocus(null)
-    void focusCanvasNodes(pendingNodeFocus.nodeIds, pendingNodeFocus.guard)
-  }, [focusCanvasNodes, getPostMutationRevealGuard, history.document.nodes, pendingNodeFocus])
+    void focusCanvasNodes(pendingNodeFocus.nodeIds, pendingNodeFocus.guard).then(
+      (focused) => {
+        if (!focused) cancelNodeEntries(pendingNodeFocus.nodeIds)
+      },
+      () => cancelNodeEntries(pendingNodeFocus.nodeIds),
+    )
+  }, [cancelNodeEntries, focusCanvasNodes, getPostMutationRevealGuard, history.document.nodes, pendingNodeFocus])
   useEffect(() => {
     const key = [
       props.viewportInsets?.top ?? 0,
@@ -2468,15 +2542,23 @@ function CanvasEditorContent(
             signal: controller.signal,
           })
           await completeCanvasResourceMutation({
+            cancelPreparedNodes: cancelNodeEntries,
             currentScope: () => resourceMutationScopeRef.current,
             operationScope,
-            presentCreatedNodes: options.focusCreatedNodes ? undefined : presentNodeEntries,
+            prepareCreatedNodes: options.focusCreatedNodes ? prepareFocusedNodeEntries : presentNodeEntries,
             reload: reloadAuthoritativeDocument,
             result,
             runViewEffect: revealGuard
               ? async (createdNodeIds) => {
-                  if (options.focusCreatedNodes) await focusCanvasNodes(createdNodeIds, revealGuard)
-                  else await revealCanvasNodesAfterMutation(createdNodeIds, revealGuard)
+                  if (options.focusCreatedNodes) {
+                    try {
+                      const focused = await focusCanvasNodes(createdNodeIds, revealGuard)
+                      if (!focused) cancelNodeEntries(createdNodeIds)
+                    } catch (error) {
+                      cancelNodeEntries(createdNodeIds)
+                      throw error
+                    }
+                  } else await revealCanvasNodesAfterMutation(createdNodeIds, revealGuard)
                 }
               : undefined,
             selectNodes,
@@ -2497,12 +2579,14 @@ function CanvasEditorContent(
       })()
     },
     [
+      cancelNodeEntries,
       getPostMutationRevealGuard,
       focusCanvasNodes,
       mutationService,
       notificationService,
       notifyError,
       presentNodeEntries,
+      prepareFocusedNodeEntries,
       readOnly,
       reloadAuthoritativeDocument,
       revealCanvasNodesAfterMutation,
@@ -2597,11 +2681,7 @@ function CanvasEditorContent(
     [mutationService, readOnly, runResourceRelink],
   )
   const addTextResource = useCallback(
-    (
-      position?: CanvasPoint,
-      relation?: CanvasResourceMutationRequest["relation"],
-      focusAfterCreate = false,
-    ) => {
+    (position?: CanvasPoint, relation?: CanvasResourceMutationRequest["relation"], focusAfterCreate = false) => {
       runResourceMutation(
         {
           anchor: position ?? (focusAfterCreate ? nextViewportInsertPoint() : nextInsertPoint()),
@@ -2641,16 +2721,18 @@ function CanvasEditorContent(
       const provisional = createNodeForType(type, createdAt)
       if (!provisional) return undefined
       const size = getCanvasNodeSize(provisional)
-      const preferredPosition = focusAfterCreate ? nextViewportInsertPoint(size) : createdAt
+      const preferredPosition = focusAfterCreate && position === undefined ? nextViewportInsertPoint(size) : createdAt
       const created = { ...provisional, position: preferredPosition }
       const node = {
         ...created,
-        position: focusAfterCreate
-          ? preferredPosition
-          : findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
+        position:
+          focusAfterCreate && position === undefined
+            ? preferredPosition
+            : findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
       }
       const result = addCanvasNodes(history.document, [node])
-      if (!focusAfterCreate) presentNodeEntries([node.id])
+      if (focusAfterCreate) prepareFocusedNodeEntries([node.id])
+      else presentNodeEntries([node.id])
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
       if (focusAfterCreate) {
@@ -2670,6 +2752,7 @@ function CanvasEditorContent(
       nextViewportInsertPoint,
       pointAtCenter,
       presentNodeEntries,
+      prepareFocusedNodeEntries,
       readOnly,
       selectNodes,
       telemetryService,
@@ -3233,8 +3316,7 @@ function CanvasEditorContent(
       selectionContext,
       readOnly,
       canUpload: Boolean(mutationService),
-      canRelinkResource:
-        mutationService !== undefined && typeof Reflect.get(mutationService, "relink") === "function",
+      canRelinkResource: mutationService !== undefined && typeof Reflect.get(mutationService, "relink") === "function",
       fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
       visibleSelectionActions,
@@ -3544,7 +3626,11 @@ function CanvasEditorContent(
   )
 
   return (
-    <CanvasEditorProvider controller={controller}>
+    <CanvasEditorNodeEntryProvider
+      controller={controller}
+      onAnimationStart={notifyNodeEntryAnimationStart}
+      presentation={nodeEntryPresentation}
+    >
       <CanvasOverlayRootProvider root={overlayRoot}>
         <TooltipProvider>
           <ContextMenu>
@@ -4098,7 +4184,7 @@ function CanvasEditorContent(
               generating={generating}
               hasNodeSelection={hasNodeOnlySelection}
               hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
-              onAddNode={(type) => addNode(type)}
+              onAddNode={(type) => addNode(type, nextInsertPoint(), true)}
               onAlign={align}
               onCopy={copy}
               onDelete={remove}
@@ -4133,7 +4219,7 @@ function CanvasEditorContent(
           </ContextMenu>
         </TooltipProvider>
       </CanvasOverlayRootProvider>
-    </CanvasEditorProvider>
+    </CanvasEditorNodeEntryProvider>
   )
 }
 

@@ -104,9 +104,7 @@ test("mounting the expanded text editor does not feed BubbleMenu option updates 
       })
       useEffect(() => {
         if (!editor) return
-        const countBubbleMenuOptionUpdate = ({
-          transaction,
-        }: import("@tiptap/core").EditorEvents["transaction"]) => {
+        const countBubbleMenuOptionUpdate = ({ transaction }: import("@tiptap/core").EditorEvents["transaction"]) => {
           if (transaction.getMeta("convaxTextInlineMenu")?.type === "updateOptions") {
             optionUpdateTransactions += 1
           }
@@ -122,7 +120,15 @@ test("mounting the expanded text editor does not feed BubbleMenu option updates 
           setRerenderCount((count) => count + 1)
         }
       }, [rerenderCount])
-      return <ExpandedTextEditorDialog editor={editor} label="Stable expanded editor" onClose={() => {}} />
+      return (
+        <ExpandedTextEditorDialog
+          editor={editor}
+          onClose={() => {}}
+          onTitleChange={() => {}}
+          onTitleCommit={() => {}}
+          title="Stable expanded editor"
+        />
+      )
     }
     const container = document.createElement("div")
     document.body.append(container)
@@ -142,6 +148,10 @@ test("mounting the expanded text editor does not feed BubbleMenu option updates 
     expect(errors).toEqual([])
     expect(optionUpdateTransactions).toBe(0)
     expect(document.querySelector('[data-testid="error"]')).toBeNull()
+    const dialog = document.querySelector<HTMLDialogElement>(".convax-text-editor-modal")
+    expect(dialog).not.toBeNull()
+    expect(dialog?.parentElement).toBe(document.body)
+    expect(dialog?.hasAttribute("open")).toBeTrue()
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()

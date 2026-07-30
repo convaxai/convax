@@ -53,6 +53,7 @@ import {
   cloneElement,
   createContext,
   isValidElement,
+  type CSSProperties,
   type DragEvent,
   type ErrorInfo,
   type Ref,
@@ -66,14 +67,20 @@ import {
   useState,
 } from "react"
 import { createPortal } from "react-dom"
-import { updateCanvasNodeData } from "../commands"
+import {
+  mentionCanvasResource,
+  normalizeCanvasTextNodeTitle,
+  setCanvasTextNodeTitle,
+  updateCanvasNodeData,
+} from "../commands"
+import { isCanvasEmptyImageNodeData } from "../document"
 import { useCanvasOverlayPresence } from "./use-overlay-presence"
 import {
   CANVAS_NODE_INPUT_HANDLE_ID,
   CANVAS_NODE_OUTPUT_HANDLE_ID,
   getIncomingConnectedCanvasFileNodeIds,
 } from "../connections"
-import { useCanvasEditor, useCanvasOverlayRoot } from "../editor-context"
+import { useCanvasEditor, useCanvasNodeEntryPresentation, useCanvasOverlayRoot } from "../editor-context"
 import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import {
@@ -102,6 +109,13 @@ import type {
 import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
 import { ConnectionNodeMenu } from "./connection-node-menu"
 import { FileRendererBoundary } from "./file-renderer-boundary"
+import {
+  createCanvasTextMentionExtension,
+  getCanvasTextMentionCandidates,
+  isCanvasTextMentionCandidate,
+} from "./text-editor-mention"
+
+export { isCanvasEmptyImageNodeData } from "../document"
 
 function ToolbarButton(props: {
   destructive?: boolean
@@ -284,6 +298,11 @@ function NodeChrome(props: {
   toolbar?: ReactNode
 }) {
   const editor = useCanvasEditor()
+  const {
+    entering: nodeEntering,
+    notifyAnimationStart,
+    phase: nodeEntryPhase,
+  } = useCanvasNodeEntryPresentation(props.node.id, editor.enteringNodeIds)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.node.id)
   const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.node.id, editor.readOnly)
   const selectionActionsHandledByContribution = useContext(ContributedToolbarSelectionActionContext)
@@ -295,6 +314,7 @@ function NodeChrome(props: {
   if (ownsSingleNodeContext && assistantTrigger && !assistantTriggerHandledByContribution) {
     toolbar = prependNodeToolbarContent(toolbar, <FileAssistantTriggerButton trigger={assistantTrigger} />)
   }
+  const showEntryToolbar = Boolean(toolbar && showMutationToolbar)
   const [connectMenuSide, setConnectMenuSide] = useState<"left" | "right" | null>(null)
   const connectionInProgress = useConnection((connection) => connection.inProgress)
   useEffect(() => {
@@ -310,7 +330,8 @@ function NodeChrome(props: {
         "convax-node group relative size-full text-card-foreground",
         ownsSingleNodeContext && "is-selected",
       )}
-      data-canvas-node-entering={editor.enteringNodeIds.has(props.node.id) || undefined}
+      data-canvas-node-entry-phase={nodeEntryPhase === "idle" ? undefined : nodeEntryPhase}
+      data-canvas-node-entering={nodeEntering || undefined}
       data-canvas-node-kind={props.node.data.kind}
       data-canvas-node-status={props.node.data.status ?? "idle"}
       ref={props.nodeRef}
@@ -327,14 +348,47 @@ function NodeChrome(props: {
         onResizeEnd={editor.endGesture}
       />
       {toolbar && showMutationToolbar ? (
-        <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={36} position={Position.Top}>
+        <NodeToolbar
+          className="convax-node-toolbar nodrag nowheel"
+          data-canvas-node-entry-phase={nodeEntryPhase === "idle" ? undefined : nodeEntryPhase}
+          data-canvas-node-entering={nodeEntering || undefined}
+          offset={36}
+          onAnimationEnd={(event) => {
+            if (
+              event.currentTarget !== event.target ||
+              event.animationName !== "convax-node-chrome-enter" ||
+              !nodeEntering
+            ) {
+              return
+            }
+            editor.finishNodeEntry(props.node.id)
+          }}
+          onAnimationStart={(event) => {
+            if (
+              event.currentTarget !== event.target ||
+              event.animationName !== "convax-node-chrome-enter" ||
+              !nodeEntering
+            ) {
+              return
+            }
+            notifyAnimationStart()
+          }}
+          position={Position.Top}
+        >
           {toolbar}
         </NodeToolbar>
       ) : null}
       <div
         className="convax-node__entry-shell relative size-full"
+        onAnimationStart={(event) => {
+          if (event.currentTarget !== event.target || event.animationName !== "convax-node-enter" || !nodeEntering)
+            return
+          notifyAnimationStart()
+        }}
         onAnimationEnd={(event) => {
-          if (event.currentTarget !== event.target || !editor.enteringNodeIds.has(props.node.id)) return
+          if (event.currentTarget !== event.target || event.animationName !== "convax-node-enter" || !nodeEntering)
+            return
+          if (showEntryToolbar) return
           editor.finishNodeEntry(props.node.id)
         }}
       >
@@ -573,7 +627,7 @@ export function createCanvasTextDraftSaveQueue(): CanvasTextDraftSaveQueue {
   }
 }
 
-function createTextEditorExtensions() {
+function createTextEditorExtensions(mentionExtension?: ReturnType<typeof createCanvasTextMentionExtension>) {
   return [
     StarterKit.configure({
       heading: { levels: [1, 2, 3] },
@@ -584,6 +638,7 @@ function createTextEditorExtensions() {
     }),
     TextAlign.configure({ types: ["heading", "paragraph"] }),
     Placeholder.configure({ placeholder: "Start writing...", showOnlyWhenEditable: false }),
+    ...(mentionExtension ? [mentionExtension] : []),
     Markdown.configure({ markedOptions: { breaks: true, gfm: true } }),
   ]
 }
@@ -1140,7 +1195,10 @@ function ReadyTextEditorContextMenus(props: { editor: Editor }) {
   )
 
   return (
-    <div className="group/text-editor relative min-h-0 flex-1 overflow-hidden" ref={surfaceRef}>
+    <div
+      className="convax-text-editor-context-surface group/text-editor relative min-h-0 flex-1 overflow-visible"
+      ref={surfaceRef}
+    >
       <DragHandle
         className="convax-text-block-handle-anchor"
         editor={props.editor}
@@ -1188,7 +1246,7 @@ function ReadyTextEditorContextMenus(props: { editor: Editor }) {
       </BubbleMenu>
       {lineMenuOpen ? menu(true) : null}
       <EditorContent
-        className="convax-text-editor convax-text-editor--expanded nodrag nowheel size-full overflow-auto"
+        className="convax-text-editor convax-text-editor--expanded nodrag nowheel min-h-full w-full overflow-visible"
         data-canvas-shortcuts="ignore"
         editor={props.editor}
         onKeyDown={(event) => {
@@ -1243,9 +1301,13 @@ function ReadyTextEditorContextMenus(props: { editor: Editor }) {
 
 export function ExpandedTextEditorDialog(props: {
   editor: Editor | null
-  label: string
   onClose: () => void
   onSave?: () => void
+  onTitleChange?: (title: string) => void
+  onTitleCommit?: () => void
+  title?: string
+  /** @deprecated Use title. Legacy callers receive a read-only title field. */
+  label?: string
   error?: string | null
   discardLabel?: string
   onDiscard?: () => void
@@ -1254,11 +1316,76 @@ export function ExpandedTextEditorDialog(props: {
   reducedMotion?: boolean
   saving?: boolean
   sourceRect?: { height: number; left: number; top: number; width: number }
+  /** @deprecated Formatting is contextual inside the editor. */
   toolbar?: ReactNode
 }) {
+  const title = props.title ?? props.label ?? "Untitled"
   const titleId = useId()
   const overlayRoot = useCanvasOverlayRoot()
+  const modalRef = useRef<HTMLDialogElement>(null)
   const dialogRef = useRef<HTMLElement>(null)
+  const titleRef = useRef<HTMLTextAreaElement>(null)
+  const [themeStyle, setThemeStyle] = useState<CSSProperties>()
+  useLayoutEffect(() => {
+    if (!overlayRoot || typeof getComputedStyle !== "function") return
+    const computed = getComputedStyle(overlayRoot)
+    const variables = [
+      "--accent",
+      "--accent-foreground",
+      "--background",
+      "--border",
+      "--card",
+      "--card-foreground",
+      "--canvas-accent",
+      "--canvas-accent-foreground",
+      "--canvas-background",
+      "--canvas-edge",
+      "--canvas-edge-active",
+      "--canvas-edge-flow",
+      "--canvas-grid",
+      "--canvas-interactive-hover",
+      "--canvas-interactive-pressed",
+      "--canvas-interactive-selected",
+      "--canvas-node-background",
+      "--canvas-node-border",
+      "--canvas-node-radius",
+      "--canvas-surface",
+      "--canvas-text",
+      "--canvas-text-muted",
+      "--foreground",
+      "--input",
+      "--muted",
+      "--muted-foreground",
+      "--popover",
+      "--popover-foreground",
+      "--primary",
+      "--primary-foreground",
+      "--ring",
+    ] as const
+    const next = { colorScheme: computed.colorScheme } as CSSProperties
+    const custom = next as CSSProperties & Record<(typeof variables)[number], string>
+    for (const variable of variables) {
+      const value = computed.getPropertyValue(variable).trim()
+      if (value) custom[variable] = value
+    }
+    setThemeStyle(next)
+  }, [overlayRoot])
+  useLayoutEffect(() => {
+    const modal = modalRef.current
+    if (!modal || modal.open) return undefined
+    if (typeof modal.showModal === "function") modal.showModal()
+    else modal.setAttribute("open", "")
+    return () => {
+      if (typeof modal.close === "function" && modal.open) modal.close()
+      else modal.removeAttribute("open")
+    }
+  }, [])
+  useLayoutEffect(() => {
+    const title = titleRef.current
+    if (!title) return
+    title.style.height = "auto"
+    title.style.height = `${title.scrollHeight}px`
+  }, [title])
   useLayoutEffect(() => {
     const dialog = dialogRef.current
     if (
@@ -1294,54 +1421,56 @@ export function ExpandedTextEditorDialog(props: {
     props.sourceRect?.top,
     props.sourceRect?.width,
   ])
+  const close = () => {
+    props.onTitleCommit?.()
+    props.onClose()
+  }
   const layer = (
-    <div
-      className="convax-text-editor-dialog-layer absolute inset-0 z-[120] grid place-items-center bg-foreground/25 p-4 backdrop-blur-[2px]"
+    <dialog
+      aria-labelledby={titleId}
+      aria-modal="true"
+      className="convax-canvas convax-text-editor-modal fixed inset-0 z-[2147483647] m-0 size-full max-h-none max-w-none border-0 bg-transparent p-[clamp(12px,3vw,32px)] text-foreground"
+      data-canvas-reduced-motion={String(Boolean(props.reducedMotion))}
       data-canvas-shortcuts="ignore"
+      onCancel={(event) => {
+        event.preventDefault()
+        close()
+      }}
       onKeyDown={(event) => {
         if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
           event.preventDefault()
+          props.onTitleCommit?.()
           props.onSave?.()
-          return
         }
-        if (event.key !== "Escape") return
-        event.preventDefault()
-        event.stopPropagation()
-        props.onClose()
       }}
       onMouseDown={(event) => {
-        if (event.currentTarget === event.target) props.onClose()
+        if (event.currentTarget === event.target) close()
       }}
-      role="presentation"
+      ref={modalRef}
+      role="dialog"
+      style={themeStyle}
     >
       <section
-        aria-labelledby={titleId}
-        aria-modal="true"
-        className="convax-text-editor-dialog relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-surface-panel text-foreground shadow-[var(--ui-shadow-high)]"
+        className="convax-text-editor-dialog relative mx-auto flex size-full min-h-0 min-w-0 max-w-[1080px] flex-col overflow-hidden rounded-xl bg-surface-panel text-foreground shadow-[var(--ui-shadow-high)]"
         data-canvas-rect-enter={props.sourceRect ? "true" : undefined}
         ref={dialogRef}
-        role="dialog"
       >
-        <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-raised/95 px-4 py-3">
-          <div className="min-w-0 flex-1">
-            <h2 className="truncate text-base font-semibold" id={titleId}>
-              {props.label}
-            </h2>
-            <p className="text-xs text-muted-foreground">Expanded text editor</p>
-          </div>
-          <Button
-            aria-label={props.saving ? "Saving text" : "Close expanded editor"}
-            disabled={props.saving}
-            onClick={props.onClose}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <X />
-          </Button>
-        </header>
+        <h2 className="sr-only" id={titleId}>
+          Edit text document
+        </h2>
+        <Button
+          aria-label={props.saving ? "Saving text" : "Close expanded editor"}
+          className="absolute right-4 top-4 z-30 rounded-md bg-surface-panel/85 text-muted-foreground shadow-[var(--ui-shadow-low)] transition-[background-color,color,transform] duration-100 hover:bg-surface-inset hover:text-foreground active:scale-95 focus-visible:ring-2 focus-visible:ring-focus-ring motion-reduce:transition-none"
+          disabled={props.saving}
+          onClick={close}
+          size="icon-sm"
+          variant="ghost"
+        >
+          <X />
+        </Button>
         {props.error ? (
           <div
-            className="flex shrink-0 items-center gap-2 border-b border-border bg-surface-raised/95 px-4 py-2 text-xs"
+            className="absolute left-1/2 top-4 z-30 flex max-w-[min(720px,calc(100%-112px))] -translate-x-1/2 items-center gap-2 rounded-lg bg-surface-raised px-3 py-2 text-xs shadow-[var(--ui-shadow-medium)]"
             role="alert"
           >
             <span className="min-w-0 flex-1">{props.error}</span>
@@ -1355,21 +1484,30 @@ export function ExpandedTextEditorDialog(props: {
             </Button>
           </div>
         ) : null}
-        {props.toolbar ? (
-          <div
-            aria-label="Text formatting"
-            className="convax-text-editor-dialog__toolbar shrink-0 overflow-x-auto border-b border-border bg-surface-raised/95 px-4 py-2"
-            role="toolbar"
-          >
-            <div className="convax-text-editor-dialog__toolbar-inner">{props.toolbar}</div>
+        <div className="convax-text-editor-dialog__document flex min-h-0 flex-1 flex-col overflow-y-auto">
+          <div className="convax-text-editor-dialog__title-wrap">
+            <textarea
+              aria-label="Document title"
+              className="convax-text-editor-dialog__title"
+              disabled={props.saving}
+              maxLength={200}
+              onBlur={props.onTitleCommit}
+              onChange={props.onTitleChange ? (event) => props.onTitleChange?.(event.currentTarget.value) : undefined}
+              placeholder="Untitled"
+              readOnly={!props.onTitleChange}
+              ref={titleRef}
+              rows={1}
+              spellCheck
+              value={title}
+            />
           </div>
-        ) : null}
-        <TextEditorContextMenus editor={props.editor} />
+          <TextEditorContextMenus editor={props.editor} />
+        </div>
       </section>
-    </div>
+    </dialog>
   )
   if (typeof document === "undefined") return layer
-  return overlayRoot ? createPortal(layer, overlayRoot) : layer
+  return createPortal(layer, document.body)
 }
 
 /** @deprecated Use ExpandedTextEditorDialog. */
@@ -1381,6 +1519,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const ownsSingleNodeContext = isSingleNodeSelectionContext(canvasEditor.selectionContext, props.id)
   const data = props.data as CanvasTextNodeData
   const dataRef = useRef(data)
+  const canvasEditorRef = useRef(canvasEditor)
   const appliedFingerprintRef = useRef(textDataFingerprint(data))
   const initialSourceRef = useRef(textEditorSource(data))
   const [editing, setEditing] = useState(false)
@@ -1392,7 +1531,10 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const [reloading, setReloading] = useState(false)
   const [savingEditableCopy, setSavingEditableCopy] = useState(false)
   const [draft, setDraft] = useState(() => createCanvasTextDraftState(data.resourceState ?? {}))
+  const [titleDraft, setTitleDraft] = useState(data.label)
   const draftRef = useRef(draft)
+  const titleDraftRef = useRef(titleDraft)
+  const mentionEnabledRef = useRef(false)
   const returnFocusRef = useRef<HTMLElement | null>(null)
   const nodeFocusRef = useRef<HTMLDivElement>(null)
   const discardAfterReloadRef = useRef(false)
@@ -1400,8 +1542,29 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const saveControllerRef = useRef<AbortController | null>(null)
   const saveGenerationRef = useRef(0)
   const saveQueueRef = useRef(createCanvasTextDraftSaveQueue())
+  const mentionExtensionRef = useRef<ReturnType<typeof createCanvasTextMentionExtension> | null>(null)
+  if (!mentionExtensionRef.current) {
+    mentionExtensionRef.current = createCanvasTextMentionExtension({
+      enabled: () => mentionEnabledRef.current,
+      items: (query) => getCanvasTextMentionCandidates(canvasEditorRef.current.document, props.id, query),
+      onSelect: (candidate) => {
+        const current = canvasEditorRef.current
+        if (!isCanvasTextMentionCandidate(current.document, props.id, candidate.id)) return false
+        current.commit((document) =>
+          mentionCanvasResource(document, {
+            mentionedNodeId: candidate.id,
+            textNodeId: props.id,
+          }),
+        )
+        return true
+      },
+    })
+  }
   dataRef.current = data
+  canvasEditorRef.current = canvasEditor
   draftRef.current = draft
+  titleDraftRef.current = titleDraft
+  mentionEnabledRef.current = expandedOpen && editing && !saving
   const editableResource = isCanvasTextResourceEditable(data.resourceState)
 
   const textEditor = useEditor({
@@ -1414,7 +1577,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
         spellcheck: "true",
       },
     },
-    extensions: createTextEditorExtensions(),
+    extensions: createTextEditorExtensions(mentionExtensionRef.current),
     shouldRerenderOnTransaction: true,
     onUpdate: ({ editor }) => {
       const next = updateCanvasTextDraft(draftRef.current, textEditorValue(dataRef.current, editor))
@@ -1422,6 +1585,13 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       setDraft(next)
     },
   })
+
+  useEffect(() => {
+    if (!expandedOpen) {
+      titleDraftRef.current = data.label
+      setTitleDraft(data.label)
+    }
+  }, [data.label, expandedOpen])
 
   useEffect(() => {
     if (!textEditor) return
@@ -1503,6 +1673,8 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   const openExpandedEditor = (invoker?: HTMLElement) => {
     if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+    titleDraftRef.current = dataRef.current.label
+    setTitleDraft(dataRef.current.label)
     const source = nodeFocusRef.current ?? invoker
     if (source) {
       const rect = source.getBoundingClientRect()
@@ -1518,6 +1690,13 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     else beginEditing("start")
     setExpandedOpen(true)
   }
+
+  const commitTitle = useCallback(() => {
+    const next = normalizeCanvasTextNodeTitle(titleDraftRef.current)
+    titleDraftRef.current = next
+    setTitleDraft(next)
+    canvasEditorRef.current.commit((document) => setCanvasTextNodeTitle(document, props.id, next))
+  }, [props.id])
 
   const closeExpandedEditor = useCallback(() => {
     setExpandedOpen(false)
@@ -1547,8 +1726,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       contentType: source.contentType,
       emitUpdate: false,
     })
+    commitTitle()
     closeExpandedEditor()
-  }, [closeExpandedEditor, textEditor])
+  }, [closeExpandedEditor, commitTitle, textEditor])
 
   const saveDraft = useCallback(
     () =>
@@ -1603,6 +1783,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   )
 
   const closeAndSaveTextEditor = useCallback(() => {
+    commitTitle()
     if (!draftRef.current.dirty) {
       closeExpandedEditor()
       return
@@ -1613,7 +1794,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
         textEditor?.setEditable(true)
         textEditor?.commands.focus()
       })
-  }, [closeExpandedEditor, saveDraft, textEditor])
+  }, [closeExpandedEditor, commitTitle, saveDraft, textEditor])
 
   useEffect(() => {
     if (!expandedOpen || (ownsSingleNodeContext && !canvasEditor.readOnly && editableResource)) return
@@ -1654,17 +1835,6 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       save: saveDraft,
     })
   }, [canvasEditor, discardDraft, draft.dirty, saveDraft])
-
-  const runTextCommand = (command: (editor: Editor) => void) => {
-    if (!textEditor || !editableResource || saving) return
-    beginEditing()
-    command(textEditor)
-  }
-
-  const formattingToolbar =
-    textEditor && editableResource ? (
-      <CanvasTextFormattingToolbar disabled={saving} editor={textEditor} onCommand={runTextCommand} />
-    ) : null
 
   const resourceActionToolbar =
     data.resourceState?.status === "missing" ? (
@@ -1765,7 +1935,6 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           discardLabel={
             draft.error === "This file changed outside Convax. Your draft was kept." ? "Discard and reload" : undefined
           }
-          label={data.label}
           onClose={closeAndSaveTextEditor}
           onDiscard={
             draft.error === "This file changed outside Convax. Your draft was kept."
@@ -1776,11 +1945,16 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
             draft.error === "This file changed outside Convax. Your draft was kept." ? reloadLatestText : undefined
           }
           onSave={closeAndSaveTextEditor}
+          onTitleChange={(title) => {
+            titleDraftRef.current = title
+            setTitleDraft(title)
+          }}
+          onTitleCommit={commitTitle}
           reloading={reloading}
           reducedMotion={canvasEditor.reducedMotion}
           saving={saving}
           sourceRect={expandedSourceRect}
-          toolbar={formattingToolbar}
+          title={titleDraft}
         />
       ) : null}
     </>
@@ -1909,29 +2083,6 @@ function mediaLabel(kind: CanvasMediaKind) {
   if (kind === "video") return "video"
   if (kind === "audio") return "audio"
   return "file"
-}
-
-export function isCanvasEmptyImageNodeData(data: CanvasMediaNodeData) {
-  if (
-    data.kind !== "image" ||
-    data.status !== "idle" ||
-    data.name?.trim() ||
-    data.mimeType?.trim() ||
-    Object.keys(data.metadata).length > 0
-  ) {
-    return false
-  }
-  const state = data.resourceState
-  // A durable empty card has no runtime state after serialization. Any persisted
-  // resource identity above, or any non-ready runtime state, fails closed.
-  if (!state) return true
-  return (
-    state?.status === "ready" &&
-    !state.url?.trim() &&
-    !state.name?.trim() &&
-    !state.mediaType?.trim() &&
-    !state.text?.trim()
-  )
 }
 
 function EmptyMedia(props: {

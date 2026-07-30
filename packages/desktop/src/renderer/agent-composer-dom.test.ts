@@ -1,9 +1,36 @@
 import { describe, expect, test } from "bun:test"
+import { Window } from "happy-dom"
 import {
   agentComposerTokenPresentation,
+  findAgentComposerQueryRange,
   parseAgentComposerResource,
+  repairAgentComposerInsertedTriggerSelection,
   serializeAgentComposerResource,
 } from "./agent-composer-dom"
+
+function installTestWindow() {
+  const testWindow = new Window({ url: "https://convax.test/" })
+  const globals = {
+    Element: testWindow.Element,
+    HTMLElement: testWindow.HTMLElement,
+    Node: testWindow.Node,
+    Text: testWindow.Text,
+    document: testWindow.document,
+    window: testWindow,
+  }
+  const originalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, value] of Object.entries(globals)) {
+    originalDescriptors.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  return async () => {
+    await testWindow.happyDOM.close()
+    for (const [name, descriptor] of originalDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
+}
 
 describe("Agent composer DOM resource codec", () => {
   test("round trips every AgentResource family through a versioned attribute", () => {
@@ -49,5 +76,40 @@ describe("Agent composer DOM resource codec", () => {
       label: "guide.md",
       prefix: "@",
     })
+  })
+})
+
+describe("Agent composer DOM query selection", () => {
+  test("moves a newly inserted trigger behind the caret before resolving its query", async () => {
+    const restore = installTestWindow()
+    try {
+      const root = document.createElement("div")
+      const trigger = document.createTextNode("@")
+      root.append(trigger)
+      document.body.append(root)
+      const range = document.createRange()
+      range.setStart(trigger, 0)
+      range.collapse(true)
+      const selection = window.getSelection()
+      selection?.removeAllRanges()
+      selection?.addRange(range)
+
+      expect(
+        repairAgentComposerInsertedTriggerSelection(root, {
+          data: "@",
+          inputType: "insertText",
+        }),
+      ).toBe(true)
+      expect(selection?.anchorNode).toBe(trigger)
+      expect(selection?.anchorOffset).toBe(1)
+      expect(findAgentComposerQueryRange(root)).toMatchObject({
+        end: 1,
+        query: "",
+        start: 0,
+        trigger: "reference",
+      })
+    } finally {
+      await restore()
+    }
   })
 })

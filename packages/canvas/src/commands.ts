@@ -97,6 +97,30 @@ export function connectCanvasNodes(
   return { ...document, edges: [...document.edges, edge] }
 }
 
+export function mentionCanvasResource(
+  document: CanvasDocument,
+  input: { mentionedNodeId: string; textNodeId: string },
+): CanvasDocument {
+  if (input.mentionedNodeId === input.textNodeId) return document
+  const mentionedNode = document.nodes.find((node) => node.id === input.mentionedNodeId)
+  const textNode = document.nodes.find((node) => node.id === input.textNodeId)
+  if (
+    !mentionedNode ||
+    mentionedNode.type !== "file" ||
+    mentionedNode.data.kind === "group" ||
+    mentionedNode.data.kind === "folder" ||
+    !textNode ||
+    textNode.type !== "file" ||
+    textNode.data.kind !== "text"
+  ) {
+    return document
+  }
+  return connectCanvasNodes(document, {
+    source: mentionedNode.id,
+    target: textNode.id,
+  })
+}
+
 export function removeCanvasElements(
   document: CanvasDocument,
   input: { nodeIds?: readonly string[]; edgeIds?: readonly string[] },
@@ -122,6 +146,17 @@ export function updateCanvasNodeData(
     if (node.id !== nodeId) return node
     return { ...node, data: update(node.data) }
   })
+}
+
+export function normalizeCanvasTextNodeTitle(title: string) {
+  return title.trim().slice(0, 200) || "Untitled"
+}
+
+export function setCanvasTextNodeTitle(document: CanvasDocument, nodeId: string, title: string): CanvasDocument {
+  const normalized = normalizeCanvasTextNodeTitle(title)
+  const node = document.nodes.find((candidate) => candidate.id === nodeId)
+  if (!node || node.type !== "file" || node.data.kind !== "text" || node.data.label === normalized) return document
+  return updateCanvasNodeData(document, nodeId, (data) => ({ ...data, label: normalized }))
 }
 
 export function moveCanvasNodes(

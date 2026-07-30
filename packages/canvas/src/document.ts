@@ -19,6 +19,7 @@ import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
 type PersistedCanvasNode = Node<CanvasNodeData, string>
+const emptyImageRuntimeStateKeys = new Set(["mediaType", "name", "status", "text", "url"])
 
 export function createCanvasId(prefix: string) {
   const value =
@@ -140,6 +141,41 @@ export function createMediaNode(input: {
     data,
     style: { width: size.width, height: size.height },
   }
+}
+
+export function isCanvasEmptyImageNodeData(data: CanvasNodeData) {
+  const name = data.name
+  const mimeType = data.mimeType
+  const metadata = data.metadata
+  const error = data.error
+  if (
+    data.kind !== "image" ||
+    data.status !== "idle" ||
+    (name !== undefined && (typeof name !== "string" || name.trim())) ||
+    (mimeType !== undefined && (typeof mimeType !== "string" || mimeType.trim())) ||
+    (error !== undefined && (typeof error !== "string" || error.trim())) ||
+    !isRecord(metadata) ||
+    Object.keys(metadata).length > 0
+  ) {
+    return false
+  }
+  const state = data.resourceState
+  // A durable empty card has no runtime state after serialization. Any persisted
+  // resource identity above, or any non-ready runtime state, fails closed.
+  if (state === undefined) return true
+  return (
+    isRecord(state) &&
+    Object.keys(state).every((key) => emptyImageRuntimeStateKeys.has(key)) &&
+    state.status === "ready" &&
+    isEmptyOptionalString(state.url) &&
+    isEmptyOptionalString(state.name) &&
+    isEmptyOptionalString(state.mediaType) &&
+    isEmptyOptionalString(state.text)
+  )
+}
+
+function isEmptyOptionalString(value: unknown) {
+  return value === undefined || (typeof value === "string" && !value.trim())
 }
 
 export function createFolderNode(input: {

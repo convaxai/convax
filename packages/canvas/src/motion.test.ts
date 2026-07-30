@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import {
   CANVAS_MOTION_DURATION,
+  CanvasNodeEntryPresentationStore,
   CanvasNodeEntryTracker,
   canvasMotionStyle,
   canvasViewportEase,
@@ -89,6 +90,38 @@ describe("Canvas motion policy", () => {
     tracker.queue("scope-b", ["fresh"])
     expect(tracker.activate("scope-b", new Set(["fresh"]))).toEqual(["fresh"])
     expect(tracker.hasPresented("hydrated-b")).toBeTrue()
+  })
+
+  test("notifies only the node whose transient entry presentation changes", () => {
+    const presentation = new CanvasNodeEntryPresentationStore("scope-a")
+    let firstNotifications = 0
+    let secondNotifications = 0
+    presentation.subscribe("first", () => firstNotifications++)
+    presentation.subscribe("second", () => secondNotifications++)
+
+    presentation.prepare("scope-a", ["first"])
+    expect(presentation.has("first")).toBeTrue()
+    expect(presentation.phase("first")).toBe("pending-focus")
+    expect(presentation.enteringNodeIds.has("first")).toBeFalse()
+    expect(firstNotifications).toBe(1)
+    expect(secondNotifications).toBe(0)
+
+    presentation.start("scope-a", ["first"])
+    expect(presentation.phase("first")).toBe("entering")
+    expect(presentation.enteringNodeIds.has("first")).toBeTrue()
+    expect(firstNotifications).toBe(2)
+    expect(secondNotifications).toBe(0)
+
+    presentation.finish("scope-a", "first")
+    expect(presentation.has("first")).toBeFalse()
+    expect(presentation.phase("first")).toBe("idle")
+    expect(presentation.enteringNodeIds.has("first")).toBeFalse()
+    expect(firstNotifications).toBe(3)
+    expect(secondNotifications).toBe(0)
+
+    presentation.start("stale-scope", ["second"])
+    expect(presentation.has("second")).toBeFalse()
+    expect(secondNotifications).toBe(0)
   })
 
   test("derives a transient rect-to-expanded transform without changing layout", () => {

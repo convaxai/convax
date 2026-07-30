@@ -46,6 +46,9 @@ export const CANVAS_MOTION_EASING = {
 export const CANVAS_REDUCED_MOTION_QUERY = "(prefers-reduced-motion: reduce)"
 export const CANVAS_FORCED_COLORS_QUERY = "(forced-colors: active)"
 export const CANVAS_NODE_ENTRY_TRACK_LIMIT = 512
+export const CANVAS_NODE_ENTRY_FINISH_GRACE = 64
+export const CANVAS_NODE_ENTRY_MOUNT_TIMEOUT = 2_000
+export type CanvasNodeEntryPhase = "entering" | "idle" | "pending-focus"
 
 export function resolveCanvasReducedMotion(hostPreference: boolean | undefined, osPreference: boolean) {
   return hostPreference ?? osPreference
@@ -121,6 +124,18 @@ export class CanvasNodeEntryTracker {
     for (const nodeId of nodeIds) this.#pending.delete(nodeId)
   }
 
+  claim(scopeKey: string, nodeIds: readonly string[]) {
+    if (scopeKey !== this.#scopeKey) return []
+    const claimed: string[] = []
+    for (const nodeId of new Set(nodeIds)) {
+      if (!nodeId || this.#presented.has(nodeId)) continue
+      this.#pending.delete(nodeId)
+      claimed.push(nodeId)
+    }
+    this.#rememberPresented(claimed)
+    return claimed
+  }
+
   #rememberPresented(nodeIds: readonly string[]) {
     for (const nodeId of nodeIds) {
       if (!nodeId) continue
@@ -132,6 +147,90 @@ export class CanvasNodeEntryTracker {
         this.#presented.delete(oldest)
       }
     }
+  }
+}
+
+/**
+ * Keeps node-entry presentation outside the editor-wide React context update
+ * cycle. Subscribers are keyed by node id so finishing one animation cannot
+ * repaint every mounted Canvas node.
+ */
+export class CanvasNodeEntryPresentationStore {
+  readonly #activeNodeIds = new Set<string>()
+  readonly #enteringNodeIds = new Set<string>()
+  readonly #listeners = new Map<string, Set<() => void>>()
+  readonly #phases = new Map<string, Exclude<CanvasNodeEntryPhase, "idle">>()
+  readonly scopeKey: string
+
+  constructor(scopeKey: string) {
+    this.scopeKey = scopeKey
+  }
+
+  get activeNodeIds(): ReadonlySet<string> {
+    return this.#activeNodeIds
+  }
+
+  get enteringNodeIds(): ReadonlySet<string> {
+    return this.#enteringNodeIds
+  }
+
+  has(nodeId: string) {
+    return this.#activeNodeIds.has(nodeId)
+  }
+
+  phase(nodeId: string): CanvasNodeEntryPhase {
+    return this.#phases.get(nodeId) ?? "idle"
+  }
+
+  subscribe(nodeId: string, listener: () => void) {
+    const listeners = this.#listeners.get(nodeId) ?? new Set<() => void>()
+    listeners.add(listener)
+    this.#listeners.set(nodeId, listeners)
+    return () => {
+      listeners.delete(listener)
+      if (listeners.size === 0) this.#listeners.delete(nodeId)
+    }
+  }
+
+  prepare(scopeKey: string, nodeIds: readonly string[]) {
+    if (scopeKey !== this.scopeKey) return
+    for (const nodeId of new Set(nodeIds)) {
+      if (!nodeId || this.#phases.has(nodeId)) continue
+      this.#activeNodeIds.add(nodeId)
+      this.#phases.set(nodeId, "pending-focus")
+      this.#notify(nodeId)
+    }
+  }
+
+  start(scopeKey: string, nodeIds: readonly string[]) {
+    if (scopeKey !== this.scopeKey) return
+    for (const nodeId of new Set(nodeIds)) {
+      if (!nodeId || this.#phases.get(nodeId) === "entering") continue
+      this.#activeNodeIds.add(nodeId)
+      this.#enteringNodeIds.add(nodeId)
+      this.#phases.set(nodeId, "entering")
+      this.#notify(nodeId)
+    }
+  }
+
+  finish(scopeKey: string, nodeId: string) {
+    if (scopeKey !== this.scopeKey || !this.#activeNodeIds.delete(nodeId)) return
+    this.#enteringNodeIds.delete(nodeId)
+    this.#phases.delete(nodeId)
+    this.#notify(nodeId)
+  }
+
+  clear(scopeKey: string) {
+    if (scopeKey !== this.scopeKey || this.#activeNodeIds.size === 0) return
+    const activeNodeIds = [...this.#activeNodeIds]
+    this.#activeNodeIds.clear()
+    this.#enteringNodeIds.clear()
+    this.#phases.clear()
+    for (const nodeId of activeNodeIds) this.#notify(nodeId)
+  }
+
+  #notify(nodeId: string) {
+    for (const listener of this.#listeners.get(nodeId) ?? []) listener()
   }
 }
 

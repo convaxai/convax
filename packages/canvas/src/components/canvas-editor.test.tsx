@@ -128,12 +128,7 @@ mock.module("@convax/ui", () => ({
     return <>{props.children}</>
   },
   Input: (props: { className?: string }) => <input className={props.className} />,
-  Loading: (props: {
-    className?: string
-    description?: ReactNode
-    label?: ReactNode
-    reducedMotion?: boolean
-  }) => (
+  Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
       aria-live="polite"
       className={props.className}
@@ -732,11 +727,15 @@ describe("CanvasEditor resource mutation", () => {
     const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     const selectNodes = mock(() => undefined)
     const show = mock(() => undefined)
+    const calls: string[] = []
 
     await completeCanvasResourceMutation({
+      cancelPreparedNodes: (nodeIds) => calls.push(`cancel:${nodeIds.join(",")}`),
       currentScope: () => scope,
       operationScope: scope,
+      prepareCreatedNodes: (nodeIds) => calls.push(`prepare:${nodeIds.join(",")}`),
       reload: async () => {
+        calls.push("reload")
         throw new Error("ENOENT: /native/private/project")
       },
       result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
@@ -745,6 +744,7 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
 
+    expect(calls).toEqual(["prepare:note", "reload", "cancel:note"])
     expect(selectNodes).not.toHaveBeenCalled()
     expect(show).toHaveBeenCalledWith({
       description: "Reload the Canvas to show the committed resources.",
@@ -774,13 +774,14 @@ describe("CanvasEditor resource mutation", () => {
     expect(show).toHaveBeenCalledWith({ description: undefined, kind: "success", title: "1 item added" })
   })
 
-  test("presents an authoritative batch once before selection and optional camera work", async () => {
+  test("prepares an authoritative batch before reload so its first paint can animate", async () => {
     const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     const calls: string[] = []
     await completeCanvasResourceMutation({
       currentScope: () => scope,
       operationScope: scope,
-      presentCreatedNodes: (nodeIds) => calls.push(`present:${nodeIds.join(",")}`),
+      presentCreatedNodes: () => calls.push("legacy-present"),
+      prepareCreatedNodes: (nodeIds) => calls.push(`present:${nodeIds.join(",")}`),
       reload: async () => {
         calls.push("reload")
       },
@@ -793,7 +794,26 @@ describe("CanvasEditor resource mutation", () => {
       signal: new AbortController().signal,
     })
 
-    expect(calls).toEqual(["reload", "present:one,two", "select:one,two", "view:one,two", "show"])
+    expect(calls).toEqual(["present:one,two", "reload", "select:one,two", "view:one,two", "show"])
+  })
+
+  test("keeps the deprecated presentation callback after reload for published callers", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const calls: string[] = []
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      presentCreatedNodes: (nodeIds) => calls.push(`present:${nodeIds.join(",")}`),
+      reload: async () => {
+        calls.push("reload")
+      },
+      result: { createdNodeIds: ["one", "one"], revision: 1, warnings: [] },
+      selectNodes: (nodeIds) => calls.push(`select:${nodeIds.join(",")}`),
+      show: () => calls.push("show"),
+      signal: new AbortController().signal,
+    })
+
+    expect(calls).toEqual(["reload", "present:one", "select:one", "show"])
   })
 
   test("ignores an aborted success in the same scope before and during refresh completion", async () => {
@@ -836,16 +856,40 @@ describe("CanvasEditor resource mutation", () => {
 
     const abortedBeforeNotify = new AbortController()
     const showAfterSelect = mock(() => undefined)
+    const presentationAfterSelect: string[] = []
     await completeCanvasResourceMutation({
+      cancelPreparedNodes: (nodeIds) => presentationAfterSelect.push(`cancel:${nodeIds.join(",")}`),
       currentScope: () => scope,
       operationScope: scope,
+      prepareCreatedNodes: (nodeIds) => presentationAfterSelect.push(`prepare:${nodeIds.join(",")}`),
       reload: async () => undefined,
       result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
       selectNodes: () => abortedBeforeNotify.abort(),
       show: showAfterSelect,
       signal: abortedBeforeNotify.signal,
     })
+    expect(presentationAfterSelect).toEqual(["prepare:note", "cancel:note"])
     expect(showAfterSelect).not.toHaveBeenCalled()
+
+    let currentScope = scope
+    const presentationAfterView: string[] = []
+    const showAfterView = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      cancelPreparedNodes: (nodeIds) => presentationAfterView.push(`cancel:${nodeIds.join(",")}`),
+      currentScope: () => currentScope,
+      operationScope: scope,
+      prepareCreatedNodes: (nodeIds) => presentationAfterView.push(`prepare:${nodeIds.join(",")}`),
+      reload: async () => undefined,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      runViewEffect: async () => {
+        currentScope = { ...scope, generation: 1 }
+      },
+      selectNodes: () => undefined,
+      show: showAfterView,
+      signal: new AbortController().signal,
+    })
+    expect(presentationAfterView).toEqual(["prepare:note", "cancel:note"])
+    expect(showAfterView).not.toHaveBeenCalled()
   })
 
   test("passes the mutation signal through a slow persistence reload and aborts it", async () => {
@@ -972,7 +1016,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(notifyError).not.toHaveBeenCalled()
   })
 
-  test("routes context-menu text creation through new-text mutation without fitting the viewport", async () => {
+  test("routes context-menu text creation through the new-text mutation boundary", async () => {
     const additions: unknown[] = []
     renderEditor(
       createCanvasServices({
@@ -996,8 +1040,6 @@ describe("CanvasEditor resource mutation", () => {
       sources: [{ kind: "new-text", text: "" }],
     })
     expect((additions[0] as { sources: Array<{ sourceId: unknown }> }).sources[0]?.sourceId).toBeString()
-
-    expectViewportUnchanged()
   })
 
   test("routes a drop through resource mutation and preserves the viewport", async () => {

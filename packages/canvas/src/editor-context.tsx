@@ -1,5 +1,6 @@
-import { createContext, type ReactNode, useContext } from "react"
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useSyncExternalStore } from "react"
 import type { CanvasFileRendererRegistry } from "./file-renderer-registry"
+import type { CanvasNodeEntryPhase } from "./motion"
 import type { CanvasSelectionContext } from "./selection-context"
 import type { CanvasSelectionAction } from "./selection-actions"
 import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "./selection-drag-source"
@@ -11,8 +12,15 @@ export interface CanvasConnectionNodeType {
   type: string
 }
 
+export interface CanvasNodeEntryPresentation {
+  has: (nodeId: string) => boolean
+  phase: (nodeId: string) => CanvasNodeEntryPhase
+  subscribe: (nodeId: string, listener: () => void) => () => void
+}
+
 export interface CanvasEditorController {
   document: CanvasDocument
+  /** @deprecated Use useCanvasNodeEntryPresentation for reactive node-local presentation. */
   enteringNodeIds: ReadonlySet<string>
   hydrating: boolean
   reducedMotion: boolean
@@ -53,9 +61,30 @@ export interface CanvasEditorController {
 
 const CanvasEditorContext = createContext<CanvasEditorController | null>(null)
 const CanvasOverlayRootContext = createContext<HTMLElement | null>(null)
+const CanvasNodeEntryPresentationContext = createContext<{
+  onAnimationStart: (nodeId: string) => void
+  presentation: CanvasNodeEntryPresentation
+} | null>(null)
 
 export function CanvasEditorProvider(props: { children: ReactNode; controller: CanvasEditorController }) {
   return <CanvasEditorContext value={props.controller}>{props.children}</CanvasEditorContext>
+}
+
+export function CanvasEditorNodeEntryProvider(props: {
+  children: ReactNode
+  controller: CanvasEditorController
+  onAnimationStart: (nodeId: string) => void
+  presentation: CanvasNodeEntryPresentation
+}) {
+  const value = useMemo(
+    () => ({ onAnimationStart: props.onAnimationStart, presentation: props.presentation }),
+    [props.onAnimationStart, props.presentation],
+  )
+  return (
+    <CanvasEditorProvider controller={props.controller}>
+      <CanvasNodeEntryPresentationContext value={value}>{props.children}</CanvasNodeEntryPresentationContext>
+    </CanvasEditorProvider>
+  )
 }
 
 export function CanvasOverlayRootProvider(props: { children: ReactNode; root: HTMLElement | null }) {
@@ -70,4 +99,18 @@ export function useCanvasEditor() {
   const editor = useContext(CanvasEditorContext)
   if (editor) return editor
   throw new Error("CanvasEditorProvider is missing")
+}
+
+export function useCanvasNodeEntryPresentation(nodeId: string, fallback: ReadonlySet<string>) {
+  const context = useContext(CanvasNodeEntryPresentationContext)
+  const phase = useSyncExternalStore(
+    useCallback(
+      (listener) => context?.presentation.subscribe(nodeId, listener) ?? (() => undefined),
+      [context, nodeId],
+    ),
+    () => context?.presentation.phase(nodeId) ?? (fallback.has(nodeId) ? "entering" : "idle"),
+    () => context?.presentation.phase(nodeId) ?? (fallback.has(nodeId) ? "entering" : "idle"),
+  )
+  const notifyAnimationStart = useCallback(() => context?.onAnimationStart(nodeId), [context, nodeId])
+  return { entering: phase === "entering", notifyAnimationStart, phase }
 }

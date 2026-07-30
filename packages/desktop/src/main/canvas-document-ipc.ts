@@ -7,7 +7,12 @@ import {
   type CanvasResourcePreparationResult,
   type CanvasResourceSource,
 } from "@convax/canvas/application"
-import { getIncomingConnectedCanvasFileNodeIds, type CanvasNode, type CanvasPoint } from "@convax/canvas/core"
+import {
+  getIncomingConnectedCanvasFileNodeIds,
+  isCanvasEmptyImageNodeData,
+  type CanvasNode,
+  type CanvasPoint,
+} from "@convax/canvas/core"
 import {
   getProjectResourceReference,
   markProjectCanvasResourcesStale,
@@ -32,10 +37,7 @@ import {
   canvasResourceSaveEditableCopyIpcChannel,
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
-import {
-  canvasDocumentIpcChannels,
-  type CanvasRendererCommandRequest,
-} from "../canvas-document-contracts"
+import { canvasDocumentIpcChannels, type CanvasRendererCommandRequest } from "../canvas-document-contracts"
 
 const commandIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
@@ -477,7 +479,10 @@ export function registerCanvasResourceIpc(
       { input, kind: "relink" },
       async () => {
         requireRelinkRevision(active, input)
-        const live = await loadLiveRelinkNode(active, input.nodeId, options.documents)
+        const live =
+          input.source.kind === "local-file"
+            ? await loadLiveRelinkNode(active, input.nodeId, options.documents, { allowEmptyImage: true })
+            : await loadLiveRelinkNode(active, input.nodeId, options.documents)
         const request = canvasRelinkBusinessRequest(active, input)
         try {
           let result
@@ -853,6 +858,18 @@ async function loadLiveRelinkNode(
   active: ActiveCanvasScope,
   nodeId: string,
   documents: Pick<CanvasDocumentClient, "load"> | undefined,
+): Promise<{ node: CanvasNode; reference: ProjectResourceReference }>
+async function loadLiveRelinkNode(
+  active: ActiveCanvasScope,
+  nodeId: string,
+  documents: Pick<CanvasDocumentClient, "load"> | undefined,
+  options: { allowEmptyImage: true },
+): Promise<{ node: CanvasNode; reference: ProjectResourceReference | null }>
+async function loadLiveRelinkNode(
+  active: ActiveCanvasScope,
+  nodeId: string,
+  documents: Pick<CanvasDocumentClient, "load"> | undefined,
+  options?: { allowEmptyImage: true },
 ) {
   if (!documents) throw new Error("Canvas resource relink document service is unavailable")
   const loaded = await documents.load({ canvasId: active.canvasId, scopeId: active.projectId })
@@ -863,7 +880,9 @@ async function loadLiveRelinkNode(
   const node = matches.length === 1 ? matches[0] : undefined
   const reference = node ? getProjectResourceReference(node.data.metadata) : null
   if (!node) throw new Error(`Canvas node was not found: ${nodeId}`)
-  if (!reference) throw new Error("Canvas resource reference is invalid")
+  if (!reference && (!options?.allowEmptyImage || node.type !== "file" || !isCanvasEmptyImageNodeData(node.data))) {
+    throw new Error("Canvas resource reference is invalid")
+  }
   return { node, reference }
 }
 
@@ -871,14 +890,17 @@ async function recheckLiveRelinkScope(
   event: IpcMainInvokeEvent,
   active: ActiveCanvasScope,
   nodeId: string,
-  reference: ProjectResourceReference,
+  reference: ProjectResourceReference | null,
   options: Parameters<typeof registerCanvasResourceIpc>[2],
 ) {
   const current = await options.resolveActiveCanvas(event)
   if (!sameActiveCanvasScope(active, current)) {
     throw new Error("Canvas resource relink does not match the invoking window's live Workbench scope")
   }
-  const live = await loadLiveRelinkNode(active, nodeId, options.documents)
+  const live =
+    reference === null
+      ? await loadLiveRelinkNode(active, nodeId, options.documents, { allowEmptyImage: true })
+      : await loadLiveRelinkNode(active, nodeId, options.documents)
   if (JSON.stringify(live.reference) !== JSON.stringify(reference)) {
     throw new Error("Canvas resource changed while it was being relinked")
   }

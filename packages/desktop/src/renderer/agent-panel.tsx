@@ -123,6 +123,7 @@ import {
   parseAgentComposerResource,
   readAgentComposerDraft,
   removeAgentComposerToken,
+  repairAgentComposerInsertedTriggerSelection,
   replaceAgentComposerQuery,
   replaceAgentComposerToken,
   writeAgentComposerDraft,
@@ -2383,7 +2384,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       )
                     }}
                     onCompositionStart={() => compositionControllerRef.current.start()}
-                    onInput={() => {
+                    onInput={(event) => {
+                      repairAgentComposerInsertedTriggerSelection(event.currentTarget, event.nativeEvent as InputEvent)
                       syncComposerDraft()
                       compositionControllerRef.current.runWhenIdle(updateComposerQuery)
                     }}

@@ -7,7 +7,9 @@ import {
   duplicateCanvasSelection,
   groupCanvasNodes,
   layoutCanvasNodes,
+  mentionCanvasResource,
   removeCanvasElements,
+  setCanvasTextNodeTitle,
   ungroupCanvasNode,
 } from "./commands"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "./builtin-registry"
@@ -84,6 +86,67 @@ function createFolderNode(
     },
   })
 }
+
+describe("canvas text mentions", () => {
+  test("creates one incoming material relationship and keeps repeated mentions idempotent", () => {
+    const source = createMediaNode({
+      id: "source-image",
+      position: { x: 0, y: 0 },
+      resource: { id: "image", kind: "image", name: "Reference image" },
+    })
+    const target = createTextNode({
+      id: "target-text",
+      label: "Draft",
+      position: { x: 400, y: 0 },
+    })
+    const document = createCanvasDocument({ id: "canvas-mentions", nodes: [source, target] })
+
+    const mentioned = mentionCanvasResource(document, {
+      mentionedNodeId: source.id,
+      textNodeId: target.id,
+    })
+    const repeated = mentionCanvasResource(mentioned, {
+      mentionedNodeId: source.id,
+      textNodeId: target.id,
+    })
+
+    expect(mentioned.edges).toHaveLength(1)
+    expect(mentioned.edges[0]).toMatchObject({ source: source.id, target: target.id })
+    expect(repeated).toBe(mentioned)
+  })
+
+  test("rejects self, group, Agent, and non-text mention relationships", () => {
+    const text = createTextNode({ id: "text", position: { x: 0, y: 0 } })
+    const otherText = createTextNode({ id: "other-text", position: { x: 320, y: 0 } })
+    const group = createGroupNode({
+      height: 320,
+      id: "group",
+      label: "Group",
+      position: { x: 0, y: 320 },
+      width: 480,
+    })
+    const agent = createAgentNode({ id: "agent", position: { x: 640, y: 0 } })
+    const document = createCanvasDocument({ id: "canvas-invalid-mentions", nodes: [text, otherText, group, agent] })
+
+    expect(mentionCanvasResource(document, { mentionedNodeId: text.id, textNodeId: text.id })).toBe(document)
+    expect(mentionCanvasResource(document, { mentionedNodeId: group.id, textNodeId: text.id })).toBe(document)
+    expect(mentionCanvasResource(document, { mentionedNodeId: agent.id, textNodeId: text.id })).toBe(document)
+    expect(mentionCanvasResource(document, { mentionedNodeId: text.id, textNodeId: agent.id })).toBe(document)
+  })
+
+  test("updates only the text node display title with a bounded non-empty value", () => {
+    const text = createTextNode({ id: "text", label: "Before", position: { x: 0, y: 0 } })
+    const document = createCanvasDocument({ id: "canvas-title", nodes: [text] })
+
+    const renamed = setCanvasTextNodeTitle(document, text.id, `  ${"T".repeat(240)}  `)
+    const untitled = setCanvasTextNodeTitle(renamed, text.id, "   ")
+    const multiline = setCanvasTextNodeTitle(untitled, text.id, "  First line\nSecond line  ")
+
+    expect(renamed.nodes[0]?.data.label).toBe("T".repeat(200))
+    expect(untitled.nodes[0]?.data.label).toBe("Untitled")
+    expect(multiline.nodes[0]?.data.label).toBe("First line\nSecond line")
+  })
+})
 
 describe("canvas history", () => {
   test("resource factories keep prepared bytes only in transient resource state", () => {
@@ -235,7 +298,10 @@ describe("canvas history", () => {
       metadata: { title: "Next" },
     }
 
-    const hydrated = canvasHistoryReducer(createCanvasHistory(currentDocument), { document: authoritative, type: "hydrate" })
+    const hydrated = canvasHistoryReducer(createCanvasHistory(currentDocument), {
+      document: authoritative,
+      type: "hydrate",
+    })
 
     expect(hydrated.document).toBe(authoritative)
     expect(hydrated.document.nodes).not.toBe(currentDocument.nodes)
