@@ -550,6 +550,44 @@ describe("GenerationPluginRuntime", () => {
     expect(reordered.map(({ modelName }) => modelName)).toEqual(["Beta Renamed", "Alpha Renamed"])
   })
 
+  test("inspects every model family from one tools/list and keeps preparation live", async () => {
+    const plugin = declarativeGenerationPlugin()
+    plugin.contributes.generation = {
+      models: [
+        ...(plugin.contributes.generation?.models ?? []),
+        { name: "Example Thumbnail", tool: "generate.thumbnail" },
+      ],
+      tools: [
+        ...(plugin.contributes.generation?.tools ?? []),
+        {
+          acceptedInputs: [],
+          description: "Generate thumbnail",
+          id: "generate.thumbnail",
+          output: "image",
+          title: "Generate thumbnail",
+        },
+      ],
+    }
+    const { clients, runtime } = setup(
+      [plugin],
+      [runtimeModelDefinition(), { ...runtimeModelDefinition(), name: "generate.thumbnail" }],
+    )
+    const models = (await runtime.listTools()).filter((tool) => tool.kind === "model")
+
+    const inspected = await runtime.inspectModelCatalog(models)
+
+    expect(inspected).toHaveLength(4)
+    expect(new Set(inspected.map(({ summary }) => summary.toolId))).toEqual(
+      new Set(["generate.image", "generate.thumbnail"]),
+    )
+    expect(inspected.every(({ description, summary }) => description.toolId === summary.id)).toBeTrue()
+    expect(inspected.every(({ description }) => description.fields.every(({ id }) => id !== "engine"))).toBeTrue()
+    expect(clients[0].listSignals).toHaveLength(1)
+
+    await runtime.prepareTool(inspected[0].summary)
+    expect(clients[0].listSignals).toHaveLength(2)
+  })
+
   test("hides and host-binds a concrete runtime model selector", async () => {
     const { clients, runtime } = setup([declarativeGenerationPlugin()], [runtimeModelDefinition()])
     const base = (await runtime.listTools()).find((tool) => tool.kind === "model")!

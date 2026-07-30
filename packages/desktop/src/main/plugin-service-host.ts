@@ -132,65 +132,74 @@ export class PluginServiceHost {
   }
 
   async authorize(pluginId: string, signal?: AbortSignal) {
-    const status = await this.#callAuthorization(pluginId, "authorize", signal)
-    this.#notifyServiceMutation()
-    return status
+    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "authorize", signal))
   }
 
   async reauthorize(pluginId: string, signal?: AbortSignal) {
-    const status = await this.#callAuthorization(pluginId, "reauthorize", signal)
-    this.#notifyServiceMutation()
-    return status
+    return this.#withServiceMutationNotification(() => this.#callAuthorization(pluginId, "reauthorize", signal))
   }
 
   async cancelAuthorization(pluginId: string, signal?: AbortSignal) {
-    const status = await this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
-      await this.#discardPlugin(pluginId)
-      return this.#call(pluginId, "authorization.cancel", controlSignal)
-    })
-    this.#notifyServiceMutation()
-    return status
+    return this.#withServiceMutationNotification(() =>
+      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+        await this.#discardPlugin(pluginId)
+        return this.#call(pluginId, "authorization.cancel", controlSignal)
+      }),
+    )
   }
 
   async signOut(pluginId: string, signal?: AbortSignal) {
-    const status = await this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
-      await this.#discardPlugin(pluginId)
-      return this.#call(pluginId, "sign_out", controlSignal)
-    })
-    this.#notifyServiceMutation()
-    return status
+    return this.#withServiceMutationNotification(() =>
+      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+        await this.#discardPlugin(pluginId)
+        return this.#call(pluginId, "sign_out", controlSignal)
+      }),
+    )
+  }
+
+  async #withServiceMutationNotification<T>(operation: () => Promise<T>) {
+    try {
+      return await operation()
+    } finally {
+      // A sidecar or remote service may have committed a mutation before a
+      // transport, parsing, cleanup, or final status failure became visible.
+      this.#notifyServiceMutation()
+    }
   }
 
   #notifyServiceMutation() {
     try {
       void Promise.resolve(this.onServiceMutation?.()).catch((error) => {
-        console.warn("Could not refresh Agent configuration after a Plugin service mutation", error)
+        console.warn("Could not refresh host state after a Plugin service mutation", error)
       })
     } catch (error) {
-      console.warn("Could not refresh Agent configuration after a Plugin service mutation", error)
+      console.warn("Could not refresh host state after a Plugin service mutation", error)
     }
   }
 
   async checkout(pluginId: string, planKey: string, signal?: AbortSignal) {
-    return this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
-      if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
-      const before = await this.#installed(pluginId)
-      if (!before.actions.includes("checkout")) throw new Error(`Plugin service Checkout is not declared: ${pluginId}`)
-      const result = await this.runtime.callService(pluginId, "checkout", controlSignal, { planKey })
-      if (result.isError || !result.structuredContent) {
-        throw new Error(`Plugin service Checkout failed: ${pluginId}`)
-      }
-      await this.#assertCurrent(before)
-      let checkout: ReturnType<typeof parsePluginServiceCheckoutResult>
-      try {
-        checkout = parsePluginServiceCheckoutResult(result.structuredContent)
-      } catch {
-        throw new Error(`Plugin service returned an invalid Checkout result: ${pluginId}`)
-      }
-      await this.checkoutNavigation.open(checkout.checkoutUrl)
-      await this.#assertCurrent(before)
-      return this.#call(pluginId, "status", controlSignal)
-    })
+    return this.#withServiceMutationNotification(() =>
+      this.#withExclusiveControl(pluginId, signal, async (controlSignal) => {
+        if (!this.checkoutNavigation) throw new Error("Plugin service Checkout navigation is unavailable")
+        const before = await this.#installed(pluginId)
+        if (!before.actions.includes("checkout"))
+          throw new Error(`Plugin service Checkout is not declared: ${pluginId}`)
+        const result = await this.runtime.callService(pluginId, "checkout", controlSignal, { planKey })
+        if (result.isError || !result.structuredContent) {
+          throw new Error(`Plugin service Checkout failed: ${pluginId}`)
+        }
+        await this.#assertCurrent(before)
+        let checkout: ReturnType<typeof parsePluginServiceCheckoutResult>
+        try {
+          checkout = parsePluginServiceCheckoutResult(result.structuredContent)
+        } catch {
+          throw new Error(`Plugin service returned an invalid Checkout result: ${pluginId}`)
+        }
+        await this.checkoutNavigation.open(checkout.checkoutUrl)
+        await this.#assertCurrent(before)
+        return this.#call(pluginId, "status", controlSignal)
+      }),
+    )
   }
 
   /** Explicit Plugin lifecycle changes must not hand old Cookies to new bytes. */

@@ -62,7 +62,7 @@ import {
   validateGenerationToolInput,
   type GenerationModelInputSelector,
 } from "./generation-tool-input-schema"
-import type { GenerationToolDispatchHooks } from "./generation-canvas-service"
+import type { GenerationToolDispatchHooks, InspectedGenerationModel } from "./generation-canvas-service"
 
 class GenerationHostPreDispatchError extends Error {
   override name = "GenerationHostPreDispatchError"
@@ -854,26 +854,94 @@ export class GenerationPluginRuntime {
     expected: GenerationToolSummary,
     signal?: AbortSignal,
   ): Promise<readonly GenerationToolSummary[]> {
-    if (expected.kind !== "model" || expected.id !== generationPluginToolHostId(expected.pluginId, expected.toolId)) {
-      throw new Error(`Generation model catalog request is invalid: ${expected.id}`)
-    }
-    const ready = await this.#readyTool(expected.id, signal, expected, true)
-    const current = this.#selectTool(await this.#discover(), expected.id)
+    return (await this.inspectModelCatalog([expected], signal)).map(({ summary }) => summary)
+  }
+
+  /**
+   * Inspects every declared model family for one Plugin from one exact
+   * tools/list response. The returned descriptions are safe to cache for
+   * display; preparation still reloads and binds the live schema.
+   */
+  async inspectModelCatalog(
+    expectedModels: readonly GenerationToolSummary[],
+    signal?: AbortSignal,
+  ): Promise<readonly InspectedGenerationModel[]> {
+    if (signal?.aborted) throw abortError(signal.reason)
+    if (expectedModels.length === 0) return []
+    const pluginId = expectedModels[0]!.pluginId
     if (
-      current.plugin.fingerprint !== ready.selected.plugin.fingerprint ||
-      toolContractFingerprint(toolSummary(current.plugin.manifest, current.tool)) !==
-        toolContractFingerprint(expected) ||
-      this.#cache.get(current.plugin.manifest.id) !== ready.runtime ||
-      toolDefinitionFingerprint(ready.definition) !==
-        toolDefinitionFingerprint(ready.runtime.availableTools?.get(ready.selected.tool.id) ?? ready.definition)
+      expectedModels.some(
+        (expected) =>
+          expected.kind !== "model" ||
+          expected.pluginId !== pluginId ||
+          expected.id !== generationPluginToolHostId(expected.pluginId, expected.toolId),
+      )
     ) {
-      throw new Error(`Generation Plugin changed while its model catalog was listed: ${current.plugin.manifest.id}`)
+      throw new Error(`Generation model catalog request is invalid: ${pluginId}`)
     }
-    const summaries = ready.variants?.map(({ summary }) => summary) ?? [expected]
-    if (new Set(summaries.map(({ id }) => id)).size !== summaries.length) {
-      throw new Error(`Generation Plugin model catalog contains colliding selections: ${expected.pluginId}`)
+    const plugins = await this.#discover()
+    const selectedModels = expectedModels.map((expected) => {
+      const selected = this.#selectTool(plugins, expected.id)
+      const declared = toolSummary(selected.plugin.manifest, selected.tool)
+      if (
+        selected.plugin.manifest.id !== pluginId ||
+        toolContractFingerprint(declared) !== toolContractFingerprint(expected)
+      ) {
+        throw new Error(`Generation Plugin declaration changed before catalog inspection: ${pluginId}`)
+      }
+      return { expected, selected }
+    })
+    const selectedPlugin = selectedModels[0]!.selected.plugin
+    const runtime = await this.#runtimeFor(selectedPlugin)
+    let availableTools: ReadonlyMap<string, McpToolDefinition>
+    try {
+      availableTools = await this.#availableTools(runtime, signal, true)
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+      throw error
     }
-    return summaries
+    let inspected: readonly InspectedGenerationModel[]
+    try {
+      inspected = selectedModels.flatMap(({ expected, selected }) => {
+        const definition = availableTools.get(selected.tool.id)
+        if (!definition) {
+          throw new Error(`Generation Plugin ${pluginId} did not expose its declared MCP tool: ${selected.tool.id}`)
+        }
+        const projection = projectGenerationToolInputSchema(expected.id, definition.inputSchema)
+        const resolved = resolveGenerationToolSelection(expected, expected.id, projection.modelSelector, true)
+        const summaries = resolved.variants?.map(({ summary }) => summary) ?? [expected]
+        return summaries.map((summary) => ({
+          description: { ...projection.description, toolId: summary.id },
+          summary,
+        }))
+      })
+    } catch (error) {
+      if (!(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+      throw error
+    }
+    if (new Set(inspected.map(({ summary }) => summary.id)).size !== inspected.length) {
+      throw new Error(`Generation Plugin model catalog contains colliding selections: ${pluginId}`)
+    }
+    const current = (await this.#discover()).get(pluginId)
+    if (
+      !current ||
+      current.fingerprint !== selectedPlugin.fingerprint ||
+      this.#cache.get(pluginId) !== runtime ||
+      selectedModels.some(({ expected, selected }) => {
+        const currentTool = current.manifest.contributes.generation?.tools.find(({ id }) => id === selected.tool.id)
+        const currentDefinition = runtime.availableTools?.get(selected.tool.id)
+        return (
+          !currentTool ||
+          !currentDefinition ||
+          toolContractFingerprint(toolSummary(current.manifest, currentTool)) !== toolContractFingerprint(expected) ||
+          toolDefinitionFingerprint(currentDefinition) !==
+            toolDefinitionFingerprint(availableTools.get(selected.tool.id)!)
+        )
+      })
+    ) {
+      throw new Error(`Generation Plugin changed while its model catalog was listed: ${pluginId}`)
+    }
+    return inspected
   }
 
   /** Starts only declared LLM sidecars and returns Main-only OpenCode connection material. */

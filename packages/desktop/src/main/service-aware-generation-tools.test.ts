@@ -72,6 +72,9 @@ function setup(
     availabilityTimeoutMs?: number
     expandModelTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<readonly GenerationToolSummary[]>
     getStatus?: (pluginId: string, signal?: AbortSignal) => Promise<PluginServiceStatus>
+    inspectModelCatalog?: GenerationModelCatalogExpansionPort["inspectModelCatalog"]
+    now?: () => number
+    refreshAfterMs?: number
     services?: readonly PluginServiceSummary[]
     statuses?: Readonly<Record<string, PluginServiceStatus | Error>>
     tools?: readonly GenerationToolSummary[]
@@ -97,12 +100,15 @@ function setup(
   const prepareRecoveryTool = mock(async () => ({ execution: prepared, tool: listedTools[0]! }))
   const releaseRecoveryTool = mock(async () => undefined)
   const expandModelTool = mock(input.expandModelTool ?? (async (tool: GenerationToolSummary) => [tool]))
+  const inspectModelCatalog = input.inspectModelCatalog ? mock(input.inspectModelCatalog) : undefined
+  const listTools = mock(async (options: { output?: GenerationToolSummary["output"] } = {}) =>
+    options.output ? listedTools.filter((tool) => tool.output === options.output) : listedTools,
+  )
   const toolPort: GenerationModelCatalogExpansionPort = {
     describeTool,
     expandModelTool,
-    listTools: mock(async (options = {}) =>
-      options.output ? listedTools.filter((tool) => tool.output === options.output) : listedTools,
-    ),
+    ...(inspectModelCatalog ? { inspectModelCatalog } : {}),
+    listTools,
     prepareRecoveryTool,
     prepareTool,
     releaseRecoveryTool,
@@ -119,24 +125,32 @@ function setup(
     getStatus,
     listServices: mock(async () => input.services ?? [service("remote-images")]),
   }
+  const options = {
+    ...(input.availabilityTimeoutMs === undefined ? {} : { availabilityTimeoutMs: input.availabilityTimeoutMs }),
+    ...(input.now === undefined ? {} : { now: input.now }),
+    ...(input.refreshAfterMs === undefined ? {} : { refreshAfterMs: input.refreshAfterMs }),
+  }
   return {
     call,
     describeTool,
     dispatch,
     expandModelTool,
     getStatus,
+    inspectModelCatalog,
+    listTools,
     prepareRecoveryTool,
     prepareTool,
     releaseRecoveryTool,
-    subject: new ServiceAwareGenerationTools(
-      toolPort,
-      servicePort,
-      input.availabilityTimeoutMs === undefined ? {} : { availabilityTimeoutMs: input.availabilityTimeoutMs },
-    ),
+    subject: new ServiceAwareGenerationTools(toolPort, servicePort, options),
   }
 }
 
 describe("ServiceAwareGenerationTools", () => {
+  test("bounds the session catalog refresh age", () => {
+    expect(() => setup({ refreshAfterMs: 0 })).toThrow("refresh age is invalid")
+    expect(() => setup({ refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow("refresh age is invalid")
+  })
+
   test("hides models without service contributions and keeps service-independent operations", async () => {
     const model = generationTool("local-images")
     const operation = operationTool("local-images")
@@ -256,8 +270,137 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([variant])
     await subject.describeTool(variant.id)
     await subject.prepareTool(variant)
-    expect(describeTool).toHaveBeenCalledWith(variant.id, undefined)
+    expect(describeTool).toHaveBeenCalledWith(variant.id, expect.any(AbortSignal))
     expect(prepareTool).toHaveBeenCalledWith(variant, undefined)
+  })
+
+  test("reuses one session snapshot across repeated model listings and descriptions", async () => {
+    const selected = generationTool("remote-images")
+    const { describeTool, getStatus, listTools, subject } = setup({ tools: [selected] })
+
+    expect(await subject.listTools()).toEqual([selected])
+    expect(await subject.listTools({ output: "image" })).toEqual([selected])
+    expect(await subject.describeTool(selected.id)).toEqual({ fields: [], toolId: selected.id })
+    expect(await subject.describeTool(selected.id)).toEqual({ fields: [], toolId: selected.id })
+
+    expect(listTools).toHaveBeenCalledTimes(1)
+    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(describeTool).toHaveBeenCalledTimes(1)
+  })
+
+  test("coalesces concurrent cold catalog refreshes", async () => {
+    const selected = generationTool("remote-images")
+    let release!: () => void
+    const inspected = new Promise<
+      readonly { description: GenerationToolDescription; summary: GenerationToolSummary }[]
+    >((resolve) => {
+      release = () => resolve([{ description: { fields: [], toolId: selected.id }, summary: selected }])
+    })
+    const { inspectModelCatalog, subject } = setup({
+      inspectModelCatalog: async () => inspected,
+      tools: [selected],
+    })
+
+    const first = subject.refresh()
+    const second = subject.refresh()
+    expect(second).toBe(first)
+    release()
+    await Promise.all([first, second])
+
+    expect(inspectModelCatalog).toHaveBeenCalledTimes(1)
+    expect(await subject.listTools()).toEqual([selected])
+  })
+
+  test("serves a stale snapshot while an age-triggered refresh commits the next catalog", async () => {
+    const base = generationTool("remote-images")
+    const alpha = modelVariant(base, "a", "Alpha")
+    const beta = modelVariant(base, "b", "Beta")
+    let now = 0
+    let next = alpha
+    let releaseRefresh: (() => void) | undefined
+    const { inspectModelCatalog, subject } = setup({
+      inspectModelCatalog: async () => {
+        if (!releaseRefresh) {
+          return [{ description: { fields: [], toolId: next.id }, summary: next }]
+        }
+        return new Promise((resolve) => {
+          const release = releaseRefresh!
+          releaseRefresh = () => {
+            release()
+            resolve([{ description: { fields: [], toolId: next.id }, summary: next }])
+          }
+        })
+      },
+      now: () => now,
+      refreshAfterMs: 1,
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([alpha])
+    next = beta
+    now = 2
+    releaseRefresh = () => undefined
+    expect(await subject.listTools()).toEqual([alpha])
+    while (inspectModelCatalog!.mock.calls.length < 2) await Promise.resolve()
+    const refreshing = subject.refresh()
+    releaseRefresh()
+    await refreshing
+    expect(await subject.listTools()).toEqual([beta])
+  })
+
+  test("ignores a late catalog refresh from an invalidated epoch", async () => {
+    const base = generationTool("remote-images")
+    const initial = modelVariant(base, "a", "Initial")
+    const stale = modelVariant(base, "b", "Stale")
+    const current = modelVariant(base, "c", "Current")
+    let inspection = 0
+    let resolveStale!: () => void
+    let signalStaleStarted!: () => void
+    const staleStarted = new Promise<void>((resolve) => {
+      signalStaleStarted = resolve
+    })
+    const { subject } = setup({
+      inspectModelCatalog: async () => {
+        inspection += 1
+        const selected = inspection === 1 ? initial : inspection === 2 ? stale : current
+        if (inspection === 2) {
+          signalStaleStarted()
+          await new Promise<void>((resolve) => {
+            resolveStale = resolve
+          })
+        }
+        return [{ description: { fields: [], toolId: selected.id }, summary: selected }]
+      },
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([initial])
+    const staleRefresh = subject.refresh()
+    await staleStarted
+    subject.invalidate()
+    await subject.refresh()
+    resolveStale()
+    await staleRefresh
+
+    expect(await subject.listTools()).toEqual([current])
+  })
+
+  test("keeps the same-epoch last-good catalog when a background inspection fails", async () => {
+    const base = generationTool("remote-images")
+    const variant = modelVariant(base, "a", "Available")
+    let fail = false
+    const { subject } = setup({
+      inspectModelCatalog: async () => {
+        if (fail) throw new Error("private model catalog failure")
+        return [{ description: { fields: [], toolId: variant.id }, summary: variant }]
+      },
+      tools: [base],
+    })
+
+    expect(await subject.listTools()).toEqual([variant])
+    fail = true
+    await subject.refresh()
+    expect(await subject.listTools()).toEqual([variant])
   })
 
   test("treats connected as authoritative even when credential verification is not yet refreshed", async () => {
@@ -294,6 +437,19 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await available.subject.isPluginAvailable("remote-images")).toBeTrue()
   })
 
+  test("keeps Agent provider admission live after warming the display catalog", async () => {
+    let status = connected
+    const { getStatus, subject } = setup({
+      getStatus: async () => status,
+    })
+    expect(await subject.listTools()).toHaveLength(1)
+    const catalogStatusCalls = getStatus.mock.calls.length
+    status = { ...connected, state: "disconnected" }
+
+    expect(await subject.isPluginAvailable("remote-images")).toBeFalse()
+    expect(getStatus).toHaveBeenCalledTimes(catalogStatusCalls + 1)
+  })
+
   test("treats one failed status check as unavailable without hiding other usable tools", async () => {
     const failed = generationTool("failed-images")
     const available = generationTool("available-images")
@@ -306,7 +462,7 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([available])
   })
 
-  test("reflects sign-out and reauthorization on the next live model listing", async () => {
+  test("reflects sign-out and reauthorization after an explicit background refresh", async () => {
     let status = connected
     const model = generationTool("remote-images")
     const { subject } = setup({
@@ -320,8 +476,10 @@ describe("ServiceAwareGenerationTools", () => {
       credential: { configured: false, verification: "unknown" },
       state: "disconnected",
     }
+    await subject.refresh()
     expect(await subject.listTools()).toEqual([])
     status = connected
+    await subject.refresh()
     expect(await subject.listTools()).toEqual([model])
   })
 
@@ -352,15 +510,19 @@ describe("ServiceAwareGenerationTools", () => {
     expect(getStatus).not.toHaveBeenCalled()
   })
 
-  test("rechecks service availability before model description and preparation", async () => {
+  test("serves the cached model description but rechecks service availability before preparation", async () => {
     const selected = generationTool("remote-images")
     const { describeTool, getStatus, prepareTool, subject } = setup({ tools: [selected] })
 
     await subject.describeTool(selected.id)
+    const statusCallsAfterDescription = getStatus.mock.calls.length
+    await subject.describeTool(selected.id)
     await subject.prepareTool(selected)
-    expect(describeTool).toHaveBeenCalledWith(selected.id, undefined)
+    expect(describeTool).toHaveBeenCalledWith(selected.id, expect.any(AbortSignal))
+    expect(describeTool).toHaveBeenCalledTimes(1)
     expect(prepareTool).toHaveBeenCalledWith(selected, undefined)
-    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(statusCallsAfterDescription).toBe(2)
+    expect(getStatus).toHaveBeenCalledTimes(3)
   })
 
   test("blocks a stale model before description or preparation when its service disconnects", async () => {
@@ -376,7 +538,7 @@ describe("ServiceAwareGenerationTools", () => {
       tools: [selected],
     })
 
-    await expect(subject.describeTool(selected.id)).rejects.toThrow("Open Services")
+    await expect(subject.describeTool(selected.id)).rejects.toThrow("not installed")
     await expect(subject.prepareTool(selected)).rejects.toThrow("Open Services")
     expect(describeTool).not.toHaveBeenCalled()
     expect(prepareTool).not.toHaveBeenCalled()

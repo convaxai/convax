@@ -542,11 +542,16 @@ Its host-reserved envelope fields are stable and use snake case where shown:
 The fixed host-reserved keys are `schema`, `operation_id`, `prompt`, `output`,
 `output_directory`, and `references`. A tool may add top-level custom inputs only
 by declaring them in that exact MCP tool's current `tools/list.inputSchema`.
-Desktop lazily starts only the selected sidecar when configuration is opened,
-projects direct top-level scalar properties into a bounded renderer-safe form, and
-supports string/select, finite number, safe integer, and boolean fields. Raw JSON
-Schema, nested values, native paths, arbitrary MCP methods, and unsupported
-constraints never cross preload.
+For each connected Plugin, Desktop may inspect all admitted model families from one
+exact `tools/list` response and cache the resulting model summaries and descriptions
+in one bounded, display-only session snapshot. It warms that snapshot asynchronously
+after startup provisioning and Plugin or service lifecycle changes; concurrent
+refreshes are single-flight, and aged reads may use the prior snapshot while a
+same-epoch refresh runs. The snapshot is never persisted. Desktop projects direct
+top-level scalar properties into a bounded renderer-safe form and supports
+string/select, finite number, safe integer, and boolean fields. Raw JSON Schema,
+nested values, native paths, arbitrary MCP methods, and unsupported constraints
+never cross preload.
 
 The current bounded projection accepts at most 32 custom fields from a 64 KiB
 schema. Field ids are 1–64 ASCII alphanumeric/dot/dash/underscore characters and
@@ -581,11 +586,12 @@ opaque model selection. It never derives the role from `model`, `title`, a provi
 name, or another convention. A missing, duplicated, free-text, optional or malformed
 role fails closed for that dynamic family without changing unmarked models.
 
-The marked selector never appears in the renderer's custom-option form. When Main
-describes or prepares a concrete selection, it reloads the current tool schema,
-checks that the same choice is still present, and merges the chosen value itself.
-Caller `toolInput` cannot contain or override the selector. Aspect ratio, duration,
-style and every other unmarked field continue through the ordinary validation path.
+The marked selector never appears in the renderer's custom-option form. A cached
+description may serve the picker and custom-option form, but when Main prepares a
+concrete selection it reloads the current tool schema, checks that the same choice
+is still present, and merges the chosen value itself. Caller `toolInput` cannot
+contain or override the selector. Aspect ratio, duration, style and every other
+unmarked field continue through the ordinary validation path.
 
 The caller sends only scalar values for chosen custom fields. Omission is the
 host's Auto state. A UI may present a declared schema default as its explicit
