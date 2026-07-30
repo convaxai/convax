@@ -37,6 +37,7 @@ import {
 } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { createRoot } from "react-dom/client"
+import { I18nextProvider } from "react-i18next"
 import { createAgentCanvasInstructions, createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { hasWebPluginCanvasSurface, type InstalledWebPluginSummary, type WebPluginManifest } from "../plugin-contracts"
 import { AgentPanel, type AgentPanelHandle } from "./agent-panel"
@@ -53,6 +54,8 @@ import { ApplicationMenu, type ApplicationMenuTarget } from "./application-menu"
 import { ApplicationTitlebar } from "./application-titlebar"
 import { CanvasTitlebarTitle } from "./canvas-titlebar-title"
 import {
+  appI18n,
+  changeAppLanguage,
   readAppLanguagePreference,
   resolveAppLocale,
   writeAppLanguagePreference,
@@ -456,6 +459,7 @@ function App() {
     return () => window.removeEventListener("resize", updateViewportWidth)
   }, [])
   useEffect(() => {
+    void changeAppLanguage(locale)
     document.documentElement.lang = locale
   }, [locale])
   useEffect(() => {
@@ -2485,37 +2489,40 @@ const root = document.getElementById("app")
 if (!(root instanceof HTMLElement)) throw new Error("App root was not found")
 const reactRoot = import.meta.hot?.data.root ?? createRoot(root)
 if (import.meta.hot) import.meta.hot.data.root = reactRoot
+void changeAppLanguage(readAppLanguagePreference(localStorage))
 reactRoot.render(
-  <RendererErrorBoundary
-    name="Desktop root"
-    renderFallback={({ error }) => (
-      <main
-        className="grid size-full place-items-center bg-background p-8 text-foreground"
-        data-testid="desktop-fatal-renderer-error"
-        role="alert"
-      >
-        <div className="w-full max-w-lg rounded-lg border border-destructive/30 bg-card p-6 shadow-sm">
-          <h1 className="text-lg font-semibold">Convax 遇到渲染错误 / could not render</h1>
-          <p className="mt-2 text-sm leading-6 text-muted-foreground">
-            当前窗口已被安全保留。请重新加载应用；如果问题持续发生，可在开发者工具中查看已记录的错误。
-          </p>
-          <details className="mt-3 text-xs text-muted-foreground">
-            <summary className="cursor-pointer">Error details</summary>
-            <code className="mt-2 block whitespace-pre-wrap break-words">{error.message}</code>
-          </details>
-          <button
-            className="mt-5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-            onClick={() => window.location.reload()}
-            type="button"
-          >
-            重新加载 Convax / Reload
-          </button>
-        </div>
-      </main>
-    )}
-  >
-    <DesktopProtocolGate>
-      <App />
-    </DesktopProtocolGate>
-  </RendererErrorBoundary>,
+  <I18nextProvider i18n={appI18n}>
+    <RendererErrorBoundary
+      name="Desktop root"
+      renderFallback={({ error }) => (
+        <main
+          className="grid size-full place-items-center bg-background p-8 text-foreground"
+          data-testid="desktop-fatal-renderer-error"
+          role="alert"
+        >
+          <div className="w-full max-w-lg rounded-lg border border-destructive/30 bg-card p-6 shadow-sm">
+            <h1 className="text-lg font-semibold">Convax 遇到渲染错误 / could not render</h1>
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              当前窗口已被安全保留。请重新加载应用；如果问题持续发生，可在开发者工具中查看已记录的错误。
+            </p>
+            <details className="mt-3 text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Error details</summary>
+              <code className="mt-2 block whitespace-pre-wrap break-words">{error.message}</code>
+            </details>
+            <button
+              className="mt-5 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              onClick={() => window.location.reload()}
+              type="button"
+            >
+              重新加载 Convax / Reload
+            </button>
+          </div>
+        </main>
+      )}
+    >
+      <DesktopProtocolGate>
+        <App />
+      </DesktopProtocolGate>
+    </RendererErrorBoundary>
+  </I18nextProvider>,
 )

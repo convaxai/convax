@@ -34,10 +34,12 @@
     "@convax/ui": "workspace:*",
     "@convax/workbench": "workspace:*",
     "acorn": "8.17.0",
+    "i18next": "26.3.6",
     "lucide-react": "catalog:",
     "marked": "17.0.6",
     "react": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "react-i18next": "17.0.11"
   },
   "devDependencies": {
     "@types/bun": "catalog:",
