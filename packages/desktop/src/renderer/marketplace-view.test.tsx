@@ -198,6 +198,155 @@ test("requires exact-source confirmation even when the aggregated identity has o
   expect(marketplace.install).toHaveBeenCalledWith({ selectionToken: "s".repeat(24) })
 })
 
+test("shows loading only on the capability being installed and leaves other installs enabled", async () => {
+  let finishInstall: (() => void) | undefined
+  const installPending = new Promise<void>((resolve) => {
+    finishInstall = resolve
+  })
+  const marketplace = client({
+    beginInstall: mock(async ({ id }) => [
+      {
+        description: `${id} version`,
+        marketplaceLabel: "Convax Official",
+        name: id,
+        permissionSummary: [],
+        confirmationToken: id.repeat(24).slice(0, 24),
+        setup: "none" as const,
+        version: "1.0.0",
+      },
+    ]),
+    install: mock(async () => {
+      await installPending
+      return {
+        id: "alpha",
+        kind: "plugin" as const,
+        name: "Alpha",
+        sourceLabel: "Convax Official",
+        state: "ready" as const,
+        updateAvailable: false,
+        version: "1.0.0",
+      }
+    }),
+    listCatalog: mock(async () => ({
+      cards: [
+        {
+          description: "Alpha capability",
+          id: "alpha",
+          kind: "plugin" as const,
+          name: "Alpha",
+          otherSourceCount: 0,
+        },
+        {
+          description: "Beta capability",
+          id: "beta",
+          kind: "plugin" as const,
+          name: "Beta",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Install Alpha").click())
+  await act(async () => button("Confirm and install").click())
+
+  const alphaInstall = button("Install Alpha")
+  const betaInstall = button("Install Beta")
+  expect(alphaInstall.disabled).toBe(true)
+  expect(alphaInstall.getAttribute("aria-busy")).toBe("true")
+  expect(alphaInstall.querySelector('[data-ui-loading-spinner=""]')).not.toBeNull()
+  expect(betaInstall.disabled).toBe(false)
+  expect(betaInstall.getAttribute("aria-busy")).toBe("false")
+
+  await act(async () => betaInstall.click())
+  expect(marketplace.beginInstall).toHaveBeenLastCalledWith({ id: "beta", kind: "plugin" })
+  expect(button("Install Alpha").getAttribute("aria-busy")).toBe("true")
+
+  await act(async () => {
+    finishInstall?.()
+    await installPending
+  })
+})
+
+test("ignores an older catalog refresh after a newer refresh has completed", async () => {
+  type CatalogResult = Awaited<ReturnType<MarketplaceClient["listCatalog"]>>
+  let notify = () => undefined
+  let catalogRequest = 0
+  let resolveOlder: ((result: CatalogResult) => void) | undefined
+  let resolveNewer: ((result: CatalogResult) => void) | undefined
+  const older = new Promise<CatalogResult>((resolve) => {
+    resolveOlder = resolve
+  })
+  const newer = new Promise<CatalogResult>((resolve) => {
+    resolveNewer = resolve
+  })
+  const marketplace = client({
+    listCatalog: mock(async () => {
+      catalogRequest += 1
+      if (catalogRequest === 2) return older
+      if (catalogRequest === 3) return newer
+      return {
+        cards: [
+          {
+            description: "Initial capability",
+            id: "initial",
+            kind: "plugin" as const,
+            name: "Initial",
+            otherSourceCount: 0,
+          },
+        ],
+        revision: 1,
+      }
+    }),
+    onDidChange: mock((listener) => {
+      notify = listener
+      return () => undefined
+    }),
+  })
+  await render(marketplace)
+
+  await act(async () => {
+    notify()
+    notify()
+    await Promise.resolve()
+  })
+  await act(async () => {
+    resolveNewer?.({
+      cards: [
+        {
+          description: "Newest capability",
+          id: "newest",
+          kind: "plugin",
+          name: "Newest",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 3,
+    })
+    await newer
+  })
+  expect(document.body.textContent).toContain("Newest")
+
+  await act(async () => {
+    resolveOlder?.({
+      cards: [
+        {
+          description: "Stale capability",
+          id: "stale",
+          kind: "plugin",
+          name: "Stale",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 2,
+    })
+    await older
+  })
+  expect(document.body.textContent).toContain("Newest")
+  expect(document.body.textContent).not.toContain("Stale")
+})
+
 test("discards one-time source tokens after a failed install and begins a fresh retry", async () => {
   let attempt = 0
   const marketplace = client({

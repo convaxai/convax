@@ -1,6 +1,6 @@
-import { Button, Input, cn } from "@convax/ui"
+import { Button, Input, LoadingSpinner, cn } from "@convax/ui"
 import { Download, PackagePlus, RefreshCw, Store, Trash2 } from "lucide-react"
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
   MarketplaceAddPreview,
@@ -19,6 +19,15 @@ export interface MarketplaceSurfaceProps {
 
 type Page = "catalog" | "installed" | "marketplaces"
 
+interface SourceChoiceRequest {
+  mode: "install" | "update"
+  pendingKey: string
+}
+
+function capabilityPendingKey(kind: MarketplaceCatalogCard["kind"], id: string) {
+  return `capability:${kind}:${id}`
+}
+
 export function MarketplaceSurface({ className, client, locale }: MarketplaceSurfaceProps) {
   const [page, setPage] = useState<Page>("catalog")
   const [catalog, setCatalog] = useState<MarketplaceCatalogCard[]>([])
@@ -26,22 +35,26 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   const [sources, setSources] = useState<MarketplaceSettingsSource[]>([])
   const [sourceChoices, setSourceChoices] = useState<MarketplaceCatalogSourceChoice[]>([])
   const [selectedChoice, setSelectedChoice] = useState<MarketplaceCatalogSourceChoice>()
-  const [choiceMode, setChoiceMode] = useState<"install" | "update">("install")
+  const [sourceChoiceRequest, setSourceChoiceRequest] = useState<SourceChoiceRequest>()
   const [marketplaceUrl, setMarketplaceUrl] = useState("")
   const [preview, setPreview] = useState<MarketplaceAddPreview>()
-  const [busy, setBusy] = useState<string>()
+  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [error, setError] = useState<string>()
+  const pendingKeysRef = useRef(new Set<string>())
+  const refreshRequestRef = useRef(0)
   const safeFailure =
     locale === "zh-CN"
       ? "无法完成此操作。请重试或在 Marketplace 设置中检查状态。"
       : "The operation could not be completed. Try again or check Marketplace settings."
 
   const refresh = useCallback(async () => {
+    const request = ++refreshRequestRef.current
     const [nextCatalog, nextInstalled, nextSources] = await Promise.all([
       client.listCatalog(),
       client.listInstalled(),
       client.listMarketplaces(),
     ])
+    if (request !== refreshRequestRef.current) return
     setCatalog(nextCatalog.cards)
     setInstalled(nextInstalled.capabilities)
     setSources(nextSources)
@@ -53,7 +66,9 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   }, [client, refresh, safeFailure])
 
   const mutate = async (key: string, operation: () => Promise<unknown>) => {
-    setBusy(key)
+    if (pendingKeysRef.current.has(key)) return
+    pendingKeysRef.current.add(key)
+    setPendingKeys(new Set(pendingKeysRef.current))
     setError(undefined)
     try {
       await operation()
@@ -61,7 +76,8 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
     } catch {
       setError(safeFailure)
     } finally {
-      setBusy(undefined)
+      pendingKeysRef.current.delete(key)
+      setPendingKeys(new Set(pendingKeysRef.current))
     }
   }
 
@@ -149,12 +165,13 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           ))}
         </div>
         <Button
-          disabled={busy !== undefined}
+          aria-busy={pendingKeys.has("import")}
+          disabled={pendingKeys.has("import")}
           onClick={() => void mutate("import", () => client.importCapability())}
           size="sm"
           variant="outline"
         >
-          <PackagePlus />
+          {pendingKeys.has("import") ? <LoadingSpinner className="text-current" size="sm" /> : <PackagePlus />}
           {text.import}
         </Button>
       </div>
@@ -167,48 +184,53 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
 
       {page === "catalog" ? (
         <div className="grid gap-3">
-          {catalog.map((card) => (
-            <article
-              className="rounded-xl border border-border-subtle bg-surface-panel p-4"
-              key={`${card.kind}:${card.id}`}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="font-semibold">{card.name}</h3>
-                    <span className="rounded bg-control-background px-1.5 py-0.5 text-[10px] uppercase text-text-tertiary">
-                      {kindLabel(card.kind)}
-                    </span>
+          {catalog.map((card) => {
+            const pendingKey = capabilityPendingKey(card.kind, card.id)
+            const installing = pendingKeys.has(pendingKey)
+            return (
+              <article
+                className="rounded-xl border border-border-subtle bg-surface-panel p-4"
+                key={`${card.kind}:${card.id}`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold">{card.name}</h3>
+                      <span className="rounded bg-control-background px-1.5 py-0.5 text-[10px] uppercase text-text-tertiary">
+                        {kindLabel(card.kind)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-text-secondary">{card.description}</p>
+                    {card.otherSourceCount > 0 ? (
+                      <p className="mt-2 text-xs text-text-tertiary">
+                        {locale === "zh-CN"
+                          ? `另有 ${card.otherSourceCount} 个来源`
+                          : `${card.otherSourceCount} other source${card.otherSourceCount === 1 ? "" : "s"}`}
+                      </p>
+                    ) : null}
                   </div>
-                  <p className="mt-1 text-sm text-text-secondary">{card.description}</p>
-                  {card.otherSourceCount > 0 ? (
-                    <p className="mt-2 text-xs text-text-tertiary">
-                      {locale === "zh-CN"
-                        ? `另有 ${card.otherSourceCount} 个来源`
-                        : `${card.otherSourceCount} other source${card.otherSourceCount === 1 ? "" : "s"}`}
-                    </p>
-                  ) : null}
+                  <Button
+                    aria-busy={installing}
+                    aria-label={`${text.install} ${card.name}`}
+                    disabled={installing || card.installed !== undefined}
+                    onClick={() =>
+                      void mutate(pendingKey, async () => {
+                        const choices = await client.beginInstall({ id: card.id, kind: card.kind })
+                        if (choices.length === 0) throw new Error("No installable source is available")
+                        setSourceChoiceRequest({ mode: "install", pendingKey })
+                        setSourceChoices(choices)
+                        setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                      })
+                    }
+                    size="sm"
+                  >
+                    {installing ? <LoadingSpinner className="text-current" size="sm" /> : <Download />}
+                    {text.install}
+                  </Button>
                 </div>
-                <Button
-                  aria-label={`${text.install} ${card.name}`}
-                  disabled={busy !== undefined || card.installed !== undefined}
-                  onClick={() =>
-                    void mutate(`begin:${card.kind}:${card.id}`, async () => {
-                      const choices = await client.beginInstall({ id: card.id, kind: card.kind })
-                      if (choices.length === 0) throw new Error("No installable source is available")
-                      setChoiceMode("install")
-                      setSourceChoices(choices)
-                      setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
-                    })
-                  }
-                  size="sm"
-                >
-                  <Download />
-                  {text.install}
-                </Button>
-              </div>
-            </article>
-          ))}
+              </article>
+            )
+          })}
         </div>
       ) : null}
 
@@ -228,18 +250,19 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
               <div className="flex gap-2">
                 {capability.updateAvailable ? (
                   <Button
-                    onClick={() =>
-                      void mutate(`update:${capability.kind}:${capability.id}`, async () => {
+                    onClick={() => {
+                      const pendingKey = capabilityPendingKey(capability.kind, capability.id)
+                      void mutate(pendingKey, async () => {
                         const choices = await client.beginUpdate({
                           id: capability.id,
                           kind: capability.kind,
                         })
                         if (choices.length === 0) throw new Error("No update source is available")
-                        setChoiceMode("update")
+                        setSourceChoiceRequest({ mode: "update", pendingKey })
                         setSourceChoices(choices)
                         setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
                       })
-                    }
+                    }}
                     size="sm"
                     variant="outline"
                   >
@@ -421,27 +444,31 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
             </div>
             <Button
               className="mt-4 w-full"
-              disabled={!selectedChoice || busy !== undefined}
+              disabled={!selectedChoice || !sourceChoiceRequest || pendingKeys.has(sourceChoiceRequest.pendingKey)}
               onClick={() =>
-                void mutate("install", async () => {
-                  if (!selectedChoice) return
-                  const choice = selectedChoice
-                  setSelectedChoice(undefined)
-                  setSourceChoices([])
-                  const confirmed =
-                    choiceMode === "update"
-                      ? await client.confirmUpdate({
-                          confirmationToken: choice.confirmationToken,
-                        })
-                      : await client.confirmInstall({
-                          confirmationToken: choice.confirmationToken,
-                        })
-                  if (choiceMode === "update") await client.update(confirmed)
-                  else await client.install(confirmed)
-                })
+                sourceChoiceRequest
+                  ? void mutate(sourceChoiceRequest.pendingKey, async () => {
+                      if (!selectedChoice) return
+                      const request = sourceChoiceRequest
+                      const choice = selectedChoice
+                      setSelectedChoice(undefined)
+                      setSourceChoices([])
+                      setSourceChoiceRequest(undefined)
+                      const confirmed =
+                        request.mode === "update"
+                          ? await client.confirmUpdate({
+                              confirmationToken: choice.confirmationToken,
+                            })
+                          : await client.confirmInstall({
+                              confirmationToken: choice.confirmationToken,
+                            })
+                      if (request.mode === "update") await client.update(confirmed)
+                      else await client.install(confirmed)
+                    })
+                  : undefined
               }
             >
-              {choiceMode === "update"
+              {sourceChoiceRequest?.mode === "update"
                 ? locale === "zh-CN"
                   ? "确认并更新"
                   : "Confirm and update"
@@ -449,7 +476,15 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                   ? "确认并安装"
                   : "Confirm and install"}
             </Button>
-            <Button className="mt-4 w-full" onClick={() => setSourceChoices([])} variant="ghost">
+            <Button
+              className="mt-4 w-full"
+              onClick={() => {
+                setSelectedChoice(undefined)
+                setSourceChoices([])
+                setSourceChoiceRequest(undefined)
+              }}
+              variant="ghost"
+            >
               {locale === "zh-CN" ? "取消" : "Cancel"}
             </Button>
           </div>
