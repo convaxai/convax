@@ -254,6 +254,14 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - Treat connected media as a narrow input capability: derive it from direct incoming
   edges, use the bounded Main-owned typed Project-resource read, and reject stale or
   caller-selected paths.
+- Give every connected-media session one owner-scoped abort lifecycle. Track each
+  active audio/video response stream under that session so explicit close,
+  frame/sender or Plugin revocation, Canvas invalidation, expiry cleanup, and
+  dispose stop subsequent disk reads and release the stream-owned file descriptor.
+  Already delivered or buffered bytes are not retractable. Image sessions hold
+  bounded immutable memory snapshots: revocation blocks later fetches and
+  validation, but cannot retract a response body already constructed from that
+  snapshot.
 - Connected-input metadata is pathless and read-only. Return only
   bounded direct-incoming media descriptors, send edge/source changes as
   invalidations, and never let an invalidation trigger upload or another external

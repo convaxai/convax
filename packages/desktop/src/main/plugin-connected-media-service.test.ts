@@ -24,6 +24,22 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
+async function drainReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  initialBytes: number,
+): Promise<{ bytesRead: number; error?: unknown }> {
+  let bytesRead = initialBytes
+  try {
+    while (true) {
+      const next = await reader.read()
+      if (next.done) return { bytesRead }
+      bytesRead += next.value.byteLength
+    }
+  } catch (error) {
+    return { bytesRead, error }
+  }
+}
+
 function plugin(
   version = "1.0.0",
   capabilities = ["canvas.connectedImages.read", "canvas.connectedMedia.stream"] as string[],
@@ -289,6 +305,7 @@ describe("PluginConnectedMediaService", () => {
     ] as const) {
       const document = imageCanvas()
       const currentPlugin = plugin()
+      const sourceBytes = Buffer.from(fixture.bytes)
       let observedSignal: AbortSignal | undefined
       const service = new PluginConnectedMediaService({
         changes: new CanvasDocumentChangeBus(),
@@ -310,7 +327,7 @@ describe("PluginConnectedMediaService", () => {
             expect(input.projectId).toBe("project-1")
             expect(input.reference).toEqual({ kind: "project-file", path: "Images/source.png" })
             observedSignal = input.signal
-            return imageRead(fixture.bytes, fixture.mimeType, fixture.name)
+            return imageRead(sourceBytes, fixture.mimeType, fixture.name)
           },
         },
       })
@@ -329,6 +346,7 @@ describe("PluginConnectedMediaService", () => {
         7,
         controller.signal,
       )
+      sourceBytes[sourceBytes.length - 1] = sourceBytes[sourceBytes.length - 1]! ^ 1
       expect(observedSignal).toBeInstanceOf(AbortSignal)
       expect(result.url).toStartWith("convax-connected-media://")
       expect(new URL(result.url).pathname).toMatch(/^\/[a-f0-9]{32}$/u)
@@ -348,6 +366,17 @@ describe("PluginConnectedMediaService", () => {
       const partial = await service.handle(new Request(result.url, { headers: { Range: "bytes=1-3" } }))
       expect(partial.status).toBe(206)
       expect(Buffer.from(await partial.arrayBuffer())).toEqual(fixture.bytes.subarray(1, 4))
+      const head = await service.handle(new Request(result.url, { method: "HEAD" }))
+      expect(head.status).toBe(200)
+      expect(head.headers.get("content-length")).toBe(String(fixture.bytes.byteLength))
+      expect((await head.arrayBuffer()).byteLength).toBe(0)
+      const rangedHead = await service.handle(
+        new Request(result.url, { headers: { Range: "bytes=1-3" }, method: "HEAD" }),
+      )
+      expect(rangedHead.status).toBe(206)
+      expect(rangedHead.headers.get("content-range")).toBe(`bytes 1-3/${fixture.bytes.byteLength}`)
+      expect(rangedHead.headers.get("content-length")).toBe("3")
+      expect((await rangedHead.arrayBuffer()).byteLength).toBe(0)
       const forgedBearer = new URL(result.url)
       forgedBearer.pathname = `/${"0".repeat(32)}`
       expect((await service.handle(new Request(forgedBearer))).status).toBe(404)
@@ -379,6 +408,8 @@ describe("PluginConnectedMediaService", () => {
           8,
         ),
       ).toBeFalse()
+      const retainedResponse = await service.handle(new Request(result.url))
+      expect(retainedResponse.status).toBe(200)
       expect(
         service.closeImage(
           {
@@ -393,6 +424,7 @@ describe("PluginConnectedMediaService", () => {
           7,
         ),
       ).toBeTrue()
+      expect(Buffer.from(await retainedResponse.arrayBuffer())).toEqual(fixture.bytes)
       expect(
         service.closeImage(
           {
@@ -833,6 +865,20 @@ describe("PluginConnectedMediaService", () => {
     expect(partial.status).toBe(206)
     expect(partial.headers.get("content-range")).toBe(`bytes 4-7/${stat.size}`)
     expect(await partial.text()).toBe("ftyp")
+    const head = await service.handle(new Request(opened.url, { method: "HEAD" }))
+    expect(head.status).toBe(200)
+    expect(head.headers.get("content-length")).toBe(String(stat.size))
+    expect((await head.arrayBuffer()).byteLength).toBe(0)
+    const rangedHead = await service.handle(
+      new Request(opened.url, { headers: { Range: "bytes=4-7" }, method: "HEAD" }),
+    )
+    expect(rangedHead.status).toBe(206)
+    expect(rangedHead.headers.get("content-range")).toBe(`bytes 4-7/${stat.size}`)
+    expect(rangedHead.headers.get("content-length")).toBe("4")
+    expect((await rangedHead.arrayBuffer()).byteLength).toBe(0)
+    const unsatisfiable = await service.handle(new Request(opened.url, { headers: { Range: `bytes=${stat.size}-` } }))
+    expect(unsatisfiable.status).toBe(416)
+    expect(unsatisfiable.headers.get("content-range")).toBe(`bytes */${stat.size}`)
 
     document = { ...document, edges: [] }
     expect((await service.handle(new Request(opened.url))).status).toBe(404)
@@ -871,6 +917,106 @@ describe("PluginConnectedMediaService", () => {
     })
     expect((await service.handle(new Request(canvasChanged.url))).status).toBe(404)
     service.dispose()
+  })
+
+  test("interrupts concurrent slow-consumer file responses on close, frame, Plugin, Canvas and service revocation", async () => {
+    const mediaBytes = Buffer.alloc(4 * 1024 * 1024, 0x61)
+    mediaBytes.write("0000ftyp", 0, "ascii")
+    for (const revoke of ["close", "frame", "plugin", "canvas", "dispose"] as const) {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), `convax-connected-media-${revoke}-`))
+      roots.push(root)
+      const sourcePath = path.join(root, "source.mp4")
+      await fs.writeFile(sourcePath, mediaBytes)
+      const stat = await fs.lstat(sourcePath)
+      const identity = {
+        ctimeMs: stat.ctimeMs,
+        dev: stat.dev,
+        ino: stat.ino,
+        mtimeMs: stat.mtimeMs,
+        size: stat.size,
+      }
+      const document = canvas()
+      const currentPlugin = plugin()
+      const changes = new CanvasDocumentChangeBus()
+      const service = new PluginConnectedMediaService({
+        changes,
+        documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+        images: testImageInspector,
+        media: {
+          resolve: async () => [
+            {
+              identity,
+              kind: "video" as const,
+              mimeType: "video/mp4",
+              name: "source.mp4",
+              path: sourcePath,
+              resourcePath: ".convax/assets/source.mp4",
+              size: identity.size,
+            },
+          ],
+        },
+        plugins: {
+          resolveCapabilityIdentity: async () => ({
+            activeRevision: 1,
+            activeSetDigest: "a".repeat(64),
+            digest: `${currentPlugin.version}:digest`,
+            plugin: currentPlugin,
+            snapshotDigest: "b".repeat(64),
+          }),
+        },
+        resources: unusedImageResources,
+      })
+      const frame = {
+        canvasId: "canvas-1",
+        expectedRevision: 4,
+        frameId: "frame-1",
+        nodeId: "plugin-1",
+        pluginId: "media-surface",
+        pluginVersion: "1.0.0",
+        projectId: "project-1",
+        sourceNodeId: "video-1",
+      }
+      const opened = await service.open(frame, 7)
+      const responses = await Promise.all([
+        service.handle(new Request(opened.url)),
+        service.handle(new Request(opened.url)),
+      ])
+      const readers = responses.map((response) => {
+        expect(response.status).toBe(200)
+        expect(response.body).not.toBeNull()
+        return response.body!.getReader()
+      })
+      const firstChunks = await Promise.all(readers.map((reader) => reader.read()))
+      const firstByteCounts = firstChunks.map((chunk) => {
+        expect(chunk.done).toBeFalse()
+        if (chunk.done || !chunk.value) throw new Error("Connected-media response ended before its first chunk")
+        expect(chunk.value.byteLength).toBeGreaterThan(0)
+        return chunk.value.byteLength
+      })
+
+      if (revoke === "close") {
+        expect(service.close({ ...frame, sessionId: opened.sessionId }, 7)).toBeTrue()
+      } else if (revoke === "frame") {
+        expect(service.revokeFrame(frame, 7)).toBeGreaterThan(0)
+      } else if (revoke === "plugin") {
+        expect(service.revokePlugin("media-surface")).toBeGreaterThan(0)
+      } else if (revoke === "canvas") {
+        changes.publish({
+          ref: { canvasId: "canvas-1", projectId: "project-1" },
+          revision: 5,
+          source: "renderer",
+        })
+      } else {
+        service.dispose()
+      }
+
+      const outcomes = await Promise.all(readers.map((reader, index) => drainReader(reader, firstByteCounts[index])))
+      for (const outcome of outcomes) {
+        expect(outcome.bytesRead).toBeLessThan(mediaBytes.byteLength)
+      }
+      expect((await service.handle(new Request(opened.url))).status).toBe(404)
+      service.dispose()
+    }
   })
 
   test("does not create a stream session after caller cancellation wins an unresolved media lookup", async () => {
