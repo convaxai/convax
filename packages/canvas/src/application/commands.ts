@@ -1130,11 +1130,7 @@ function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGeneratio
 }
 
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
-  const clonedData = structuredClone(data)
-  const durableData =
-    clonedData.status === "pending" && isEmptyPendingResourceState(clonedData.resourceState)
-      ? (({ resourceState: _resourceState, ...withoutRuntimeState }) => withoutRuntimeState)(clonedData)
-      : clonedData
+  const durableData = normalizePendingGenerationData(structuredClone(data))
   const withoutRun = omitCanvasNodeGenerationRunFromData(durableData as CanvasNode["data"])
   const metadata = withoutRun.metadata
   if (!isRecord(metadata)) return withoutRun
@@ -1145,6 +1141,16 @@ function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): Ca
     return withoutMetadata as CanvasNode["data"]
   }
   return { ...withoutRun, metadata: nextMetadata }
+}
+
+function normalizePendingGenerationData(data: CanvasNode["data"]): CanvasNode["data"] {
+  if (data.status !== "pending") return data
+  const normalized = { ...data } as CanvasNode["data"] & Record<string, unknown>
+  if (isEmptyPendingResourceState(normalized.resourceState)) delete normalized.resourceState
+  for (const key of ["durationMs", "height", "mimeType", "name", "width"] as const) {
+    if (normalized[key] === null) delete normalized[key]
+  }
+  return normalized
 }
 
 function isEmptyPendingResourceState(value: unknown) {

@@ -345,8 +345,13 @@ describe("Canvas node generation run", () => {
       ...source.nodes[0]!,
       data: {
         ...source.nodes[0]!.data,
+        durationMs: null,
+        height: null,
+        mimeType: null,
+        name: null,
         resourceState: undefined,
         status: "pending" as const,
+        width: null,
       },
     }
     const before = createCanvasGenerationTargetGuard(pending)
@@ -354,7 +359,12 @@ describe("Canvas node generation run", () => {
       ...pending,
       data: {
         ...pending.data,
+        durationMs: undefined,
+        height: undefined,
+        mimeType: undefined,
+        name: undefined,
         resourceState: { status: "ready" as const, url: "" },
+        width: undefined,
       },
     }
 
