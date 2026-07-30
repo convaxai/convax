@@ -409,6 +409,17 @@ only files admitted from outside the Project into deterministic content-addresse
 paths below `.convax/assets`. Files already inside the Project are referenced
 directly. The rest of `.convax` remains hidden and protected.
 
+`convax-asset:` is the trusted-renderer projection of a Project-owned resource,
+not a filesystem capability. Its URL carries a typed Project reference and, for a
+mutable Project file, the exact SHA-256 content revision. `@convax/project/node`
+resolves and opens the resource, rejects path replacement and final symbolic
+links, validates the revision or managed-asset digest on that opened handle, and
+serves HEAD or one byte range from the same handle. Desktop receives only the
+bounded response body and metadata; it never receives a native path or reopens the
+resource through `file:`. Failure and cancellation close the handle. This
+Project-specific authority remains separate from session-bearing resource
+protocols and does not introduce a global URI broker.
+
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
 non-authoritative. Builtin and Official are
 product-declared, user-added Network sources are durable settings, and Local sources

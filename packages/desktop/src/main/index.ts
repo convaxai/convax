@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { stat as statFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -28,6 +27,7 @@ import {
   ProjectCanvasResourceHydrator,
   ProjectCanvasResourcePreparation,
   ProjectManagedAssetStore,
+  ProjectResourceReader,
 } from "@convax/project/node"
 import {
   app,
@@ -166,8 +166,8 @@ import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 import {
   createProjectResourceProtocolResponse,
   createProjectResourceUrl,
+  parseProjectResourceUrl,
   projectResourceAccessControlAllowOrigin,
-  resolveProjectResourceProtocolPath,
 } from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
@@ -404,6 +404,7 @@ function startApplication() {
       projectAssets,
       createProjectResourceUrl,
     )
+    const projectResourceReader = new ProjectResourceReader(projectManager, projectAssets)
     const canvasDocumentChanges = new CanvasDocumentChangeBus()
     // The application service uses the initializing document service so a
     // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
@@ -1555,21 +1556,19 @@ function startApplication() {
         if (request.method !== "GET" && request.method !== "HEAD") {
           return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
         }
-        const resolved = await resolveProjectResourceProtocolPath(request.url, projectManager, projectAssets)
-        const [response, file] = await Promise.all([
-          net.fetch(pathToFileURL(resolved.absolutePath).href, {
-            headers: request.headers,
-            method: request.method,
-          }),
-          statFile(resolved.absolutePath),
-        ])
-        if (!file.isFile()) throw new Error("Project resource is not a file")
+        const parsed = parseProjectResourceUrl(request.url)
+        const resource = await projectResourceReader.read({
+          ...parsed,
+          head: request.method === "HEAD",
+          range: request.headers.get("range"),
+          signal: request.signal,
+        })
         return createProjectResourceProtocolResponse({
           accessControlAllowOrigin: projectResourceAccessControlAllowOrigin(request, trustedRendererUrl),
-          cacheControl: resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+          cacheControl:
+            resource.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
           request,
-          response,
-          size: file.size,
+          resource,
         })
       } catch {
         return new Response("Asset was not found", { status: 404 })

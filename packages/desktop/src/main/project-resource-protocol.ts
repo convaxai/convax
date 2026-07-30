@@ -1,9 +1,5 @@
-import {
-  requireProjectResourceReference,
-  type ProjectResourceReference,
-} from "@convax/project/canvas"
-import type { ProjectManagedAssetStore } from "@convax/project/node"
-import { parseSingleHttpByteRange } from "./http-byte-range"
+import { requireProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
+import type { ProjectResourceReadResult } from "@convax/project/node"
 
 type ProtocolReference = Exclude<ProjectResourceReference, { kind: "project-directory" }>
 
@@ -50,14 +46,7 @@ export function createProjectResourceUrl(input: ProjectResourceProtocolInput) {
 
 export function parseProjectResourceUrl(value: string): ProjectResourceProtocolInput {
   const url = new URL(value)
-  if (
-    url.protocol !== "convax-asset:" ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.hash ||
-    !url.hostname
-  ) {
+  if (url.protocol !== "convax-asset:" || url.username || url.password || url.port || url.hash || !url.hostname) {
     throw new Error("Project resource URL is invalid")
   }
   const projectId = requireProjectId(url.hostname)
@@ -85,65 +74,54 @@ export function parseProjectResourceUrl(value: string): ProjectResourceProtocolI
   throw new Error("Project resource URL kind is invalid")
 }
 
-export async function resolveProjectResourceProtocolPath(
-  value: string,
-  files: { resolveEntryPath(input: { path?: string; projectId: string }): Promise<string> },
-  assets: Pick<ProjectManagedAssetStore, "resolve">,
-) {
-  const parsed = parseProjectResourceUrl(value)
-  if (parsed.reference.kind === "project-file") {
-    return {
-      absolutePath: await files.resolveEntryPath({ path: parsed.reference.path, projectId: parsed.projectId }),
-      contentRevision: parsed.contentRevision!,
-      kind: "project-file" as const,
-    }
-  }
-  return {
-    absolutePath: await assets.resolve({ projectId: parsed.projectId, reference: parsed.reference }),
-    kind: "managed-asset" as const,
-  }
-}
-
 export function createProjectResourceProtocolResponse(input: {
   accessControlAllowOrigin?: string
   cacheControl: string
   request: Request
-  response: Response
-  size: number
+  resource: ProjectResourceReadResult
 }) {
   if (input.request.method !== "GET" && input.request.method !== "HEAD") {
     return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
   }
-  const range = parseSingleHttpByteRange(input.request.headers.get("range"), input.size)
-  if (range === "unsatisfiable") {
+  if (input.resource.status === "range-not-satisfiable") {
+    const headers = protocolResponseHeaders(input)
+    headers.set("Content-Range", `bytes */${input.resource.size}`)
     return new Response(null, {
-      headers: {
-        "Accept-Ranges": "bytes",
-        "Cache-Control": input.cacheControl,
-        "Content-Range": `bytes */${input.size}`,
-      },
+      headers,
       status: 416,
     })
   }
-  const headers = new Headers(input.response.headers)
-  headers.set("Accept-Ranges", "bytes")
+  const headers = protocolResponseHeaders(input)
+  headers.set("Content-Length", String(input.resource.contentLength))
+  if (input.resource.contentRange) {
+    headers.set(
+      "Content-Range",
+      `bytes ${input.resource.contentRange.start}-${input.resource.contentRange.end}/${input.resource.size}`,
+    )
+  }
+  return new Response(input.request.method === "HEAD" ? null : input.resource.body, {
+    headers,
+    status: input.resource.contentRange ? 206 : 200,
+    statusText: input.resource.contentRange ? "Partial Content" : "OK",
+  })
+}
+
+function protocolResponseHeaders(input: {
+  accessControlAllowOrigin?: string
+  cacheControl: string
+  resource: ProjectResourceReadResult
+}) {
+  const headers = new Headers({
+    "Accept-Ranges": "bytes",
+    "Cache-Control": input.cacheControl,
+    "Content-Type": input.resource.mediaType,
+    "X-Content-Type-Options": "nosniff",
+  })
   if (input.accessControlAllowOrigin) {
     headers.set("Access-Control-Allow-Origin", input.accessControlAllowOrigin)
     headers.set("Vary", "Origin")
   }
-  headers.set("Cache-Control", input.cacheControl)
-  if (range) {
-    headers.set("Content-Length", String(range.end - range.start + 1))
-    headers.set("Content-Range", `bytes ${range.start}-${range.end}/${input.size}`)
-  } else {
-    headers.set("Content-Length", String(input.size))
-    headers.delete("Content-Range")
-  }
-  return new Response(input.request.method === "HEAD" ? null : input.response.body, {
-    headers,
-    status: range ? 206 : input.response.status,
-    statusText: range ? "Partial Content" : input.response.statusText,
-  })
+  return headers
 }
 
 function requireProtocolReference(value: unknown): ProtocolReference {
