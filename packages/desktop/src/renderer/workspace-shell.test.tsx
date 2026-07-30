@@ -101,6 +101,33 @@ describe("WorkspaceShell", () => {
     expect(source).toContain("viewportInsets={canvasViewportInsets}")
   })
 
+  test("composes one Project entry, keeps the account menu in the sidebar, and removes titlebar search chrome", async () => {
+    const indexSource = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+    const titlebarSource = await Bun.file(new URL("./application-titlebar.tsx", import.meta.url)).text()
+
+    expect(indexSource.match(/<ProjectSidebarShell/g)?.length).toBe(1)
+    expect(indexSource).not.toContain("<ProjectSidebarTrigger")
+    expect(
+      indexSource.match(
+        /footerActions=\{\s*<ApplicationMenu locale=\{locale\} onOpenSettings=\{openSettings\} services=\{serviceCatalogSnapshot\} \/>\s*\}/,
+      ),
+    ).not.toBeNull()
+    expect(indexSource.match(/<ApplicationMenu[\s\S]{0,80}\bcompact/)).toBeNull()
+    expect(titlebarSource).toContain('from "lucide-react"')
+    expect(titlebarSource).not.toContain("onOpenCommands")
+    expect(indexSource).toContain('event.key.toLocaleLowerCase() !== "k"')
+    expect(indexSource).toContain("leadingActionHostRef={setProjectTitlebarEntryHost}")
+    expect(indexSource).toContain("entryPortal={settingsSection ? null : projectTitlebarEntryHost}")
+    expect(indexSource).toContain("<AgentDrawerTrigger")
+    expect(indexSource.match(/collapsedEntry=/g)).toHaveLength(1)
+    expect(indexSource).toContain("collapsedEntry={false}")
+    expect(indexSource).toContain("<CanvasTitlebarTitle")
+    expect(titlebarSource).toContain('data-application-titlebar-leading=""')
+    expect(titlebarSource).toContain('data-application-titlebar-center=""')
+    expect(titlebarSource).toContain('data-application-titlebar-right=""')
+    expect(titlebarSource).not.toContain("ConvaxBrand")
+  })
+
   test("opens whole-Canvas Generate through the mounted Canvas handle, not the utility drawer", async () => {
     const source = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
 

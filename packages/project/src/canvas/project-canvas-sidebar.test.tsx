@@ -19,7 +19,7 @@ const controller = {
 } as unknown as ProjectCanvasController
 
 describe("ProjectCanvasSidebar", () => {
-  test("renders the active canvas with vertical breathing room", () => {
+  test("renders the active canvas as a compact neutral workspace row", () => {
     const markup = renderToStaticMarkup(
       <ProjectCanvasSidebar
         activeCanvasId="canvas-1"
@@ -32,9 +32,11 @@ describe("ProjectCanvasSidebar", () => {
 
     expect(markup).toContain('data-project-canvas-id="canvas-1"')
     expect(markup).toContain('aria-selected="true"')
-    expect(markup).toContain("group my-0.5 flex min-h-8")
-    expect(markup).toContain("ring-1 ring-primary/20")
+    expect(markup).toContain("group my-0.5 flex min-h-9")
+    expect(markup).toContain("bg-interactive-selected")
+    expect(markup).not.toContain("ring-1 ring-primary/20")
     expect(markup).toContain('aria-label="More actions for Canvas 1"')
+    expect(markup).toContain("overscroll-contain")
   })
 
   test("filters Canvas rows from the shared sidebar query without changing active ownership", () => {

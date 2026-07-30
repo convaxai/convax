@@ -108,7 +108,11 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
 
   return (
     <>
-      <div aria-label="Project canvases" className="min-h-0 flex-1 overflow-auto px-2 pb-2" role="listbox">
+      <div
+        aria-label="Project canvases"
+        className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
+        role="listbox"
+      >
         {visibleCanvases.map((canvas) => {
           const active = canvas.id === props.activeCanvasId
           const canDelete = snapshot.canvases.length > 1
@@ -117,10 +121,10 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
             <div
               aria-selected={active}
               className={cn(
-                "group my-0.5 flex min-h-8 items-center gap-2 rounded-lg px-2.5 py-2 text-[13px] outline-none transition-colors duration-150 motion-reduce:transition-none",
+                "group my-0.5 flex min-h-9 items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-[13px] outline-none transition-transform duration-100 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none",
                 active
-                  ? "bg-primary/10 font-medium text-foreground ring-1 ring-primary/20"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+                  ? "bg-interactive-selected font-medium text-text-primary"
+                  : "text-text-secondary hover:bg-interactive-hover hover:text-text-primary active:bg-interactive-pressed",
               )}
               data-project-canvas-id={canvas.id}
               draggable={!editing}
@@ -156,7 +160,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
               role="option"
               tabIndex={active || (!props.activeCanvasId && visibleCanvases[0]?.id === canvas.id) ? 0 : -1}
             >
-              <PanelsTopLeft className={cn("size-4 shrink-0", active ? "text-primary" : "text-muted-foreground")} />
+              <PanelsTopLeft className={cn("size-4 shrink-0", active ? "text-brand" : "text-text-tertiary")} />
               {editing ? (
                 <InlineInput
                   label={`Rename ${canvas.name}`}
@@ -172,7 +176,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
                 <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
                   <button
                     aria-label={`More actions for ${canvas.name}`}
-                    className="grid size-5 place-items-center rounded text-muted-foreground hover:bg-background/80 hover:text-foreground"
+                    className="grid size-7 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
                     onClick={(event) => {
                       event.preventDefault()
                       event.stopPropagation()
