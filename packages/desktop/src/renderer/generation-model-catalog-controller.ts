@@ -47,6 +47,7 @@ interface CatalogRequest {
 
 export interface GenerationModelCatalogControllerOptions {
   refreshAfterMs?: number
+  retryAfterMs?: number
   scheduleRefresh?: (callback: () => void, delayMs: number) => () => void
 }
 
@@ -55,7 +56,9 @@ const emptyDescriptionSnapshot: GenerationToolDescriptionSnapshot = Object.freez
   refreshing: false,
 })
 const defaultCatalogRefreshAgeMs = 5 * 60_000
+const defaultCatalogRetryAgeMs = 5_000
 const maximumCatalogRefreshAgeMs = 24 * 60 * 60_000
+const maximumCatalogRetryExponent = 6
 
 function scheduleRefresh(callback: () => void, delayMs: number) {
   const timer = globalThis.setTimeout(callback, delayMs)
@@ -86,6 +89,7 @@ export class GenerationModelCatalogController {
   readonly #descriptions = new Map<string, DescriptionEntry>()
   readonly #listeners = new Set<() => void>()
   readonly #refreshAfterMs: number
+  readonly #retryAfterMs: number
   readonly #scheduleRefresh: (callback: () => void, delayMs: number) => () => void
   #authorityVersion?: GenerationCatalogAuthorityVersion
   #cancelScheduledRefresh?: () => void
@@ -94,6 +98,7 @@ export class GenerationModelCatalogController {
   #disposed = false
   #epoch = 0
   #ready = false
+  #retryAttempt = 0
   #scopeId?: string
   #snapshot: GenerationModelCatalogSnapshot = {
     loading: false,
@@ -109,12 +114,20 @@ export class GenerationModelCatalogController {
     options: GenerationModelCatalogControllerOptions = {},
   ) {
     this.#refreshAfterMs = options.refreshAfterMs ?? defaultCatalogRefreshAgeMs
+    this.#retryAfterMs = options.retryAfterMs ?? defaultCatalogRetryAgeMs
     if (
       !Number.isFinite(this.#refreshAfterMs) ||
       this.#refreshAfterMs < 1 ||
       this.#refreshAfterMs > maximumCatalogRefreshAgeMs
     ) {
       throw new Error("Generation model catalog refresh age is invalid")
+    }
+    if (
+      !Number.isFinite(this.#retryAfterMs) ||
+      this.#retryAfterMs < 1 ||
+      this.#retryAfterMs > maximumCatalogRefreshAgeMs
+    ) {
+      throw new Error("Generation model catalog retry age is invalid")
     }
     this.#scheduleRefresh = options.scheduleRefresh ?? scheduleRefresh
   }
@@ -144,6 +157,7 @@ export class GenerationModelCatalogController {
     this.#authorityVersion = scope.authorityVersion
     this.#catalogError = undefined
     this.#catalogRequest = undefined
+    this.#retryAttempt = 0
 
     if (scopeChanged) {
       this.#ready = false
@@ -300,14 +314,18 @@ export class GenerationModelCatalogController {
           for (const toolId of this.#descriptions.keys()) {
             if (!availableToolIds.has(toolId)) this.#descriptions.delete(toolId)
           }
-          this.#scheduleCatalogRefresh(epoch, scopeId)
+          this.#scheduleCatalogRefresh(
+            epoch,
+            scopeId,
+            !readyTools.some((tool) => tool.kind === "model"),
+          )
         }
         return readyTools
       })
       .catch((error: unknown) => {
         if (this.#isCurrent(epoch, scopeId)) {
           this.#catalogError = errorMessage(error)
-          this.#scheduleCatalogRefresh(epoch, scopeId)
+          this.#scheduleCatalogRefresh(epoch, scopeId, true)
         }
         throw error
       })
@@ -322,13 +340,25 @@ export class GenerationModelCatalogController {
     return request
   }
 
-  #scheduleCatalogRefresh(epoch: number, scopeId: string) {
+  #scheduleCatalogRefresh(epoch: number, scopeId: string, retry = false) {
+    // A connected service may fail closed while its runtime catalog is still
+    // settling. Keep the ready projection visible and retry once per window
+    // cache, with capped backoff instead of making composer remounts rediscover.
+    const delayMs = retry
+      ? Math.min(
+          this.#refreshAfterMs,
+          this.#retryAfterMs * 2 ** Math.min(this.#retryAttempt, maximumCatalogRetryExponent),
+        )
+      : this.#refreshAfterMs
+    this.#retryAttempt = retry
+      ? Math.min(this.#retryAttempt + 1, maximumCatalogRetryExponent + 1)
+      : 0
     this.#cancelScheduledRefresh?.()
     this.#cancelScheduledRefresh = this.#scheduleRefresh(() => {
       this.#cancelScheduledRefresh = undefined
       if (!this.#isCurrent(epoch, scopeId)) return
       void this.#refreshCatalog().catch(() => undefined)
-    }, this.#refreshAfterMs)
+    }, delayMs)
   }
 
   #replaceTools(tools: readonly GenerationToolSummary[]) {

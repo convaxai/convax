@@ -32,6 +32,11 @@ function tool(id: string, output: GenerationOutputModality = "image"): Generatio
   }
 }
 
+function operation(id: string, output: GenerationOutputModality = "image"): GenerationToolSummary {
+  const { modelName: _modelName, ...base } = tool(id, output)
+  return { ...base, kind: "operation" }
+}
+
 function description(toolId: string, label = "Quality"): GenerationToolDescription {
   return {
     fields: [
@@ -56,6 +61,10 @@ describe("GenerationModelCatalogController", () => {
     expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 0 })).toThrow("refresh age is invalid")
     expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
       "refresh age is invalid",
+    )
+    expect(() => new GenerationModelCatalogController(client, { retryAfterMs: 0 })).toThrow("retry age is invalid")
+    expect(() => new GenerationModelCatalogController(client, { retryAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
+      "retry age is invalid",
     )
   })
 
@@ -133,6 +142,66 @@ describe("GenerationModelCatalogController", () => {
     while (controller.getSnapshot().refreshing) await Promise.resolve()
     expect(controller.peekTools()).toEqual([tool("model-v2")])
     expect(scheduleRefresh).toHaveBeenCalledTimes(2)
+    controller.dispose()
+  })
+
+  test("retries an empty shared catalog with bounded backoff without remount loading", async () => {
+    const localOperation = operation("local-operation")
+    const listTools = mock()
+      .mockResolvedValueOnce([localOperation])
+      .mockResolvedValueOnce([localOperation])
+      .mockResolvedValueOnce([localOperation, tool("recovered-model")])
+    let scheduledRefresh: (() => void) | undefined
+    const scheduledDelays: number[] = []
+    const scheduleRefresh = mock((callback: () => void, delayMs: number) => {
+      scheduledDelays.push(delayMs)
+      scheduledRefresh = callback
+      return () => {
+        if (scheduledRefresh === callback) scheduledRefresh = undefined
+      }
+    })
+    const controller = new GenerationModelCatalogController(
+      {
+        describeTool: mock(async ({ toolId }) => description(toolId)),
+        listTools,
+      },
+      { refreshAfterMs: 100, retryAfterMs: 10, scheduleRefresh },
+    )
+
+    controller.setScope({ authorityVersion: "stable", scopeId: "project-a" })
+    expect(await controller.listTools()).toEqual([localOperation])
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      ready: true,
+      refreshing: false,
+      tools: [localOperation],
+    })
+    expect(scheduledDelays).toEqual([10])
+    expect(await controller.listTools()).toEqual([localOperation])
+    expect(listTools).toHaveBeenCalledTimes(1)
+
+    scheduledRefresh?.()
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      ready: true,
+      refreshing: true,
+      tools: [localOperation],
+    })
+    while (controller.getSnapshot().refreshing) await Promise.resolve()
+    expect(controller.peekTools()).toEqual([localOperation])
+    expect(scheduledDelays).toEqual([10, 20])
+
+    scheduledRefresh?.()
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      ready: true,
+      refreshing: true,
+      tools: [localOperation],
+    })
+    while (controller.getSnapshot().refreshing) await Promise.resolve()
+    expect(controller.peekTools()).toEqual([localOperation, tool("recovered-model")])
+    expect(scheduledDelays).toEqual([10, 20, 100])
+    expect(listTools).toHaveBeenCalledTimes(3)
     controller.dispose()
   })
 
