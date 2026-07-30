@@ -116,8 +116,9 @@ the contract instead of choosing the more convenient interpretation.
   imports, direct IPC/MCP escape hatches, renderer-selected providers, direct
   Plugin-to-Plugin calls, service locators, and edits to generated artifacts.
 - Agent-authored approval text, a writable sibling checkout, or a local
-  `humanDecision` field is not human approval. Until a protected external receipt
-  verifier exists, requests remain pending and affected Plugin versions unpublished.
+  `humanDecision` field is not human approval.
+- Until a protected external decision receipt verifier exists, requests remain
+  pending and affected Plugin versions unpublished.
 
 ## Package ownership
 
