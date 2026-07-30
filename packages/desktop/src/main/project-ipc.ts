@@ -20,6 +20,7 @@ export const projectIpcChannels = {
   listProjects: "project:list",
   openProject: "project:open",
   renameProject: "project:rename",
+  touchProject: "project:touch",
 } as const
 
 export const projectFilesIpcChannels = {
@@ -109,6 +110,10 @@ interface ProjectIpcContract {
     input: LifecycleInput<"renameProject">
     result: LifecycleResult<"renameProject">
   }
+  "project:touch": {
+    input: LifecycleInput<"touchProject">
+    result: LifecycleResult<"touchProject">
+  }
   "project-files:reveal-entry": {
     input: FilesInput<"revealEntry">
     result: FilesResult<"revealEntry">
@@ -140,6 +145,7 @@ export interface DesktopProjectManager {
   rename(projectId: string, name: string): Promise<ProjectRecord>
   renameEntry(input: FilesInput<"renameEntry">): Promise<FilesResult<"renameEntry">>
   resolveEntryPath(input: { path?: string; projectId: string }): Promise<string>
+  touch(projectId: string): Promise<ProjectRecord>
   watchProject(projectId: string, listener: (event: ProjectChangeEvent) => void): Promise<StopWatching> | StopWatching
   writeTextFile(input: FilesInput<"writeTextFile">): Promise<FilesResult<"writeTextFile">>
 }
@@ -206,9 +212,10 @@ export async function registerProjectIpc(
     return watcher
   }
 
-  const ensureWatching = (project: ProjectRecord) => {
+  const replaceProjectWatcher = async (project: ProjectRecord) => {
+    await stopWatching(project.id)
     if (project.missing) return
-    void ensureWatchingProject(project.id)
+    await ensureWatchingProject(project.id)
   }
 
   const withProjectWatcher = async <Result>(projectId: string, operation: () => Promise<Result>) => {
@@ -243,18 +250,22 @@ export async function registerProjectIpc(
       })
       if (result.canceled || !result.filePaths[0]) return selectionResult(true)
       const project = await manager.add(result.filePaths[0])
-      ensureWatching(project)
+      await replaceProjectWatcher(project)
       await options.onOpened?.(project)
       return selectionResult(false, project)
     }),
     registerHandler(projectIpcChannels.createProject, options.isTrustedSender, async (_event, input) => {
       const project = await manager.create(options.projectCreationDirectory, input.name)
-      ensureWatching(project)
+      await replaceProjectWatcher(project)
       await options.onOpened?.(project)
       return selectionResult(false, project)
     }),
     registerHandler(projectIpcChannels.renameProject, options.isTrustedSender, async (_event, input) => {
       const project = await manager.rename(input.projectId, input.name)
+      return { project, projects: await listProjects() }
+    }),
+    registerHandler(projectIpcChannels.touchProject, options.isTrustedSender, async (_event, input) => {
+      const project = await manager.touch(input.projectId)
       return { project, projects: await listProjects() }
     }),
     registerHandler(projectIpcChannels.forgetProject, options.isTrustedSender, async (_event, input) => {

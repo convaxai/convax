@@ -76,6 +76,40 @@ describe("NodeProjectManager registry", () => {
     })
   })
 
+  test("atomically records a strictly ordered last-opened project only while its root is available", async () => {
+    const stateRoot = path.join(temporaryRoot, "touch-state")
+    const firstRoot = path.join(temporaryRoot, "touch-first")
+    const secondRoot = path.join(temporaryRoot, "touch-second")
+    await fs.mkdir(firstRoot)
+    await fs.mkdir(secondRoot)
+    const clock = 100
+    const touchManager = new NodeProjectManager({
+      now: () => clock,
+      registryFile: path.join(stateRoot, "projects.json"),
+    })
+    const first = await touchManager.addProject(firstRoot)
+    const second = await touchManager.addProject(secondRoot)
+    expect(first.lastOpenedAt).toBe(0)
+    expect(second.lastOpenedAt).toBeLessThan(first.lastOpenedAt)
+
+    const firstTouched = await touchManager.touchProject(first.id)
+    const secondTouched = await touchManager.touchProject(second.id)
+
+    expect(firstTouched.lastOpenedAt).toBeGreaterThanOrEqual(clock)
+    expect(secondTouched.lastOpenedAt).toBeGreaterThan(firstTouched.lastOpenedAt)
+    expect((await touchManager.listProjects()).map((project) => project.id)).toEqual([second.id, first.id])
+    expect((await touchManager.addProject(firstRoot)).lastOpenedAt).toBe(firstTouched.lastOpenedAt)
+    expect((await touchManager.listProjects()).map((project) => project.id)).toEqual([second.id, first.id])
+
+    await fs.rename(firstRoot, `${firstRoot}-missing`)
+    const registryFile = path.join(stateRoot, "projects.json")
+    const beforeRejectedTouch = await fs.readFile(registryFile, "utf8")
+    await expect(touchManager.touchProject(first.id)).rejects.toThrow("Project folder is unavailable")
+    expect(await fs.readFile(registryFile, "utf8")).toBe(beforeRejectedTouch)
+    await expect(touchManager.touchProject("project_unknown")).rejects.toThrow("Project was not found")
+    expect(await fs.readFile(registryFile, "utf8")).toBe(beforeRejectedTouch)
+  })
+
   test("creates a project under a host-owned workspace that does not exist yet", async () => {
     const workspaceRoot = path.join(temporaryRoot, "Documents", "Convax")
     const created = await manager.createProject({ name: "Fresh project", parentPath: workspaceRoot })

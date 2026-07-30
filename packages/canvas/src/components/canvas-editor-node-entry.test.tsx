@@ -474,7 +474,7 @@ test("centers an outline reveal before starting the inner-shell focus animation"
   }
 })
 
-test("places a context-menu-created node in a visible gap and presents its entry without camera focus", async () => {
+test("places a top-toolbar-created node in a visible gap and focuses it before entry presentation", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({
     id: "header-create-focus",
@@ -544,13 +544,17 @@ test("places a context-menu-created node in a visible gap and presents its entry
       value: () => ({ bottom: 800, height: 800, left: 0, right: 1200, top: 0, width: 1200 }),
     })
 
+    const addTrigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
     await act(async () => {
-      ;[...container.querySelectorAll<HTMLButtonElement>("button")]
-        .find((button) => button.textContent?.trim() === "Add Text")
-        ?.click()
+      addTrigger?.click()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add Text"]')?.click()
       await Promise.resolve()
       await Promise.resolve()
     })
+    expect(document.activeElement).toBe(addTrigger)
 
     expect(requestedAnchor).toBeDefined()
     expect(requestedAnchor!.x).toBeGreaterThanOrEqual(0)
@@ -563,11 +567,12 @@ test("places a context-menu-created node in a visible gap and presents its entry
         requestedAnchor!.y < 400 &&
         requestedAnchor!.y + 200 > 200,
     ).toBeFalse()
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
     expect(
       container
         .querySelector('[data-id="header-created"] .convax-node')
         ?.hasAttribute("data-canvas-node-entering"),
-    ).toBeTrue()
+    ).toBeFalse()
 
     await act(async () => {
       resolveCamera()

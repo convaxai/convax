@@ -1,20 +1,17 @@
 import type { ProjectController, ProjectControllerSnapshot, ProjectRecord } from "@convax/project"
 import { describe, expect, mock, test } from "bun:test"
 import {
-  buildProjectHomeModel,
-  enterProjectFromHome,
   enterSelectedProjectFromHome,
+  recoveryErrorAfterProjectSelection,
+  resolveProjectBootstrapView,
+  resolveProjectStartup,
 } from "./project-home-model"
 
-function project(
-  id: string,
-  lastOpenedAt: number,
-  input: Partial<ProjectRecord> = {},
-): ProjectRecord {
+function project(id: string, input: Partial<ProjectRecord> = {}): ProjectRecord {
   return {
     createdAt: 1,
     id,
-    lastOpenedAt,
+    lastOpenedAt: 1,
     name: id,
     rootPath: `/projects/${id}`,
     ...input,
@@ -32,128 +29,126 @@ function snapshot(input: Partial<ProjectControllerSnapshot> = {}): ProjectContro
   }
 }
 
-describe("Project Home model", () => {
-  test("orders valid recency newest-first and exposes the active available Project as Continue", () => {
-    const model = buildProjectHomeModel(
-      snapshot({
-        activeProjectId: "older",
-        projects: [project("older", 20), project("newest", 80), project("middle", 50)],
-      }),
-    )
-
-    expect(model.projects.map((item) => item.id)).toEqual(["newest", "middle", "older"])
-    expect(model.continueProject?.id).toBe("older")
-    expect(model.empty).toBeFalse()
+describe("Project startup routing", () => {
+  test("waits for the Project registry without flashing first-run onboarding", () => {
+    expect(resolveProjectStartup(snapshot({ initialized: false }))).toEqual({ kind: "loading" })
   })
 
-  test("uses stable id ordering for equal and invalid timestamps", () => {
-    const model = buildProjectHomeModel(
-      snapshot({
-        projects: [
-          project("invalid-z", Number.NaN),
-          project("equal-b", 50),
-          project("invalid-a", Number.POSITIVE_INFINITY),
-          project("invalid-date", Number.MAX_VALUE),
-          project("equal-a", 50),
-        ],
-      }),
-    )
-
-    expect(model.projects.map((item) => item.id)).toEqual([
-      "equal-a",
-      "equal-b",
-      "invalid-a",
-      "invalid-date",
-      "invalid-z",
-    ])
+  test("shows onboarding only for a successfully loaded empty registry", () => {
+    expect(resolveProjectStartup(snapshot())).toEqual({ kind: "onboarding" })
   })
 
-  test("does not offer Continue for a missing active Project", () => {
-    const model = buildProjectHomeModel(
-      snapshot({
-        activeProjectId: "missing",
-        projects: [project("missing", 100, { missing: true })],
-      }),
-    )
+  test("restores the active available Project selected by ProjectController", () => {
+    expect(
+      resolveProjectStartup(
+        snapshot({
+          activeProjectId: "selected",
+          projects: [project("newest"), project("selected")],
+        }),
+      ),
+    ).toEqual({
+      kind: "restore",
+      projectId: "selected",
+      projectName: "selected",
+    })
+  })
 
-    expect(model.continueProject).toBeNull()
-    expect(model.projects[0]?.available).toBeFalse()
+  test("falls back to the first available Project while skipping missing entries", () => {
+    expect(
+      resolveProjectStartup(
+        snapshot({
+          projects: [
+            project("missing", { missing: true }),
+            project("available", { name: "Available" }),
+          ],
+        }),
+      ),
+    ).toEqual({
+      kind: "restore",
+      projectId: "available",
+      projectName: "Available",
+    })
+  })
+
+  test("keeps registry failures and all-missing Projects out of first-run onboarding", () => {
+    expect(
+      resolveProjectStartup(snapshot({ error: "Registry could not be read." })),
+    ).toEqual({ kind: "recovery", reason: "registry-error" })
+    expect(
+      resolveProjectStartup(
+        snapshot({ projects: [project("missing", { missing: true })] }),
+      ),
+    ).toEqual({ kind: "recovery", reason: "projects-unavailable" })
+  })
+
+  test("does not turn a runtime Project action error into startup recovery", () => {
+    expect(
+      resolveProjectStartup(
+        snapshot({
+          activeProjectId: "selected",
+          error: "Rename failed.",
+          projects: [project("selected", { name: "Selected" })],
+        }),
+      ),
+    ).toEqual({
+      kind: "restore",
+      projectId: "selected",
+      projectName: "Selected",
+    })
+  })
+
+  test("keeps a failed first activation recoverable after its binding was registered", () => {
+    expect(
+      resolveProjectStartup(
+        snapshot({
+          error: "Project registry is read-only.",
+          projects: [project("registered")],
+        }),
+      ),
+    ).toEqual({ kind: "recovery", reason: "registry-error" })
+  })
+
+  test("promotes an explicit workspace-entry failure above a restore spinner", () => {
+    expect(
+      resolveProjectBootstrapView({
+        entryFailure: "Canvas reconciliation failed.",
+        route: {
+          kind: "restore",
+          projectId: "selected",
+          projectName: "Selected",
+        },
+      }),
+    ).toEqual({
+      error: "Canvas reconciliation failed.",
+      kind: "recovery",
+    })
+  })
+
+  test("keeps first-run onboarding exclusive to the empty registry route", () => {
+    expect(
+      resolveProjectBootstrapView({
+        recoveryError: "A stale recovery error",
+        route: { kind: "onboarding" },
+      }),
+    ).toEqual({ kind: "onboarding" })
   })
 })
 
-describe("Project Home entry", () => {
-  test("activates through ProjectController before asking the coordinator to restore the Project", async () => {
-    let activeProjectId: string | null = "first"
-    const activate = mock(async (projectId: string) => {
-      activeProjectId = projectId
-    })
-    const controller = {
-      activate,
-      getSnapshot: () =>
-        snapshot({
-          activeProjectId,
-          projects: [project("first", 1), project("second", 2)],
-        }),
-    } as unknown as ProjectController
-    const onEnterProject = mock(async () => true)
-
-    expect(await enterProjectFromHome(controller, "second", onEnterProject)).toEqual({ status: "entered" })
-    expect(activate).toHaveBeenCalledWith("second")
-    expect(onEnterProject).toHaveBeenCalledWith("second")
-  })
-
-  test("keeps Home recoverable when activation or Canvas restoration fails", async () => {
-    const activationFailure = {
-      activate: mock(async () => undefined),
-      getSnapshot: () =>
-        snapshot({
-          activeProjectId: "first",
-          error: "The Project could not be activated.",
-          projects: [project("first", 1), project("second", 2)],
-        }),
-    } as unknown as ProjectController
-    const shouldNotEnter = mock(async () => true)
-
-    expect(await enterProjectFromHome(activationFailure, "second", shouldNotEnter)).toEqual({
-      message: "The Project could not be activated.",
-      status: "failed",
-    })
-    expect(shouldNotEnter).not.toHaveBeenCalled()
-
-    const restorationFailure = {
-      activate: mock(async () => undefined),
-      getSnapshot: () =>
-        snapshot({
-          activeProjectId: "second",
-          projects: [project("second", 2)],
-        }),
-    } as unknown as ProjectController
-
+describe("Project onboarding entry", () => {
+  test("keeps the prior recovery actionable when the native picker is canceled", () => {
     expect(
-      await enterProjectFromHome(restorationFailure, "second", async () => false),
-    ).toEqual({
-      message: "Convax could not restore this Project. Try opening it again.",
-      status: "failed",
-    })
-  })
-
-  test("never activates a missing Project", async () => {
-    const activate = mock(async () => undefined)
-    const controller = {
-      activate,
-      getSnapshot: () =>
-        snapshot({
-          projects: [project("missing", 2, { missing: true })],
-        }),
-    } as unknown as ProjectController
-    const onEnterProject = mock(async () => true)
-
-    expect(await enterProjectFromHome(controller, "missing", onEnterProject)).toEqual({
-      message: "Project folder is unavailable: /projects/missing",
-      status: "failed",
-    })
-    expect(activate).not.toHaveBeenCalled()
-    expect(onEnterProject).not.toHaveBeenCalled()
+      recoveryErrorAfterProjectSelection(
+        { status: "canceled" },
+        "The previous Project did not finish opening.",
+      ),
+    ).toBe("The previous Project did not finish opening.")
+    expect(
+      recoveryErrorAfterProjectSelection(
+        { message: "The selected folder is unavailable.", status: "failed" },
+        "Previous failure",
+      ),
+    ).toBe("The selected folder is unavailable.")
+    expect(recoveryErrorAfterProjectSelection({ status: "entered" }, "Previous failure")).toBeNull()
   })
 
   test("preserves native open/create cancellation without reporting an error", async () => {
@@ -171,13 +166,13 @@ describe("Project Home entry", () => {
     ).toEqual({ status: "canceled" })
   })
 
-  test("re-enters an already-active Project selected from the native picker", async () => {
+  test("enters the Project selected by the native picker", async () => {
     const onEnterProject = mock(async () => true)
     const controller = {
       getSnapshot: () =>
         snapshot({
-          activeProjectId: "first",
-          projects: [project("first", 1), project("second", 2)],
+          activeProjectId: "selected",
+          projects: [project("selected")],
         }),
       openProject: mock(async () => true),
     } as unknown as ProjectController
@@ -189,6 +184,23 @@ describe("Project Home entry", () => {
         onEnterProject,
       ),
     ).toEqual({ status: "entered" })
-    expect(onEnterProject).toHaveBeenCalledWith("first")
+    expect(onEnterProject).toHaveBeenCalledWith("selected")
+  })
+
+  test("keeps onboarding recoverable when workspace restoration fails", async () => {
+    const controller = {
+      getSnapshot: () =>
+        snapshot({
+          activeProjectId: "selected",
+          projects: [project("selected")],
+        }),
+    } as unknown as ProjectController
+
+    expect(
+      await enterSelectedProjectFromHome(controller, async () => true, async () => false),
+    ).toEqual({
+      message: "Convax could not restore this Project. Try opening it again.",
+      status: "failed",
+    })
   })
 })

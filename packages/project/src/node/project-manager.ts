@@ -145,6 +145,10 @@ export class NodeProjectManager
     return this.forgetProject(projectId)
   }
 
+  touch(projectId: string) {
+    return this.touchProject(projectId)
+  }
+
   async flushPendingWrites() {
     const failures: unknown[] = []
     while (true) {
@@ -246,6 +250,29 @@ export class NodeProjectManager
     ).then((records) => records.sort(compareProjects))
   }
 
+  touchProject(projectId: string) {
+    return this.mutateRegistry(async (projects) => {
+      const current = projects.find((project) => project.id === projectId)
+      if (!current) throw new Error(`Project was not found: ${projectId}`)
+      if (!(await isSafeProjectRoot(current.rootPath))) {
+        throw new Error(`Project folder is unavailable: ${current.rootPath}`)
+      }
+      const latestTimestamp = projects.reduce(
+        (latest, project) => Math.max(latest, project.lastOpenedAt),
+        0,
+      )
+      const { missing: _derivedMissing, ...persistedCurrent } = current
+      const project: ProjectRegistryRecord = {
+        ...persistedCurrent,
+        lastOpenedAt: Math.max(this.now(), latestTimestamp + 1),
+      }
+      return {
+        projects: projects.map((candidate) => (candidate.id === projectId ? project : candidate)),
+        value: toProjectRecord(project),
+      }
+    })
+  }
+
   async addProject(rootPath: string) {
     const realRoot = await fs.realpath(path.resolve(rootPath))
     const stat = await fs.stat(realRoot)
@@ -269,12 +296,29 @@ export class NodeProjectManager
       }
       const existing = projects.find((project) => project.id === id || sameNativePath(project.rootPath, realRoot))
       const timestamp = this.now()
+      // Native selection registers the binding before the renderer's leave guard
+      // runs. Keep a new binding behind every selected Project until activate()
+      // records the successful choice through touchProject().
+      const oldestOpenedAt = projects.reduce(
+        (oldest, candidate) => Math.min(oldest, candidate.lastOpenedAt),
+        Number.POSITIVE_INFINITY,
+      )
+      const unopenedTimestamp =
+        projects.length === 0
+          ? 0
+          : oldestOpenedAt - 1
       const project: ProjectRegistryRecord = existing
-        ? { ...toProjectRecord(existing), id, lastOpenedAt: timestamp, missing: false, rootPath: realRoot }
+        ? {
+            createdAt: existing.createdAt,
+            id,
+            lastOpenedAt: existing.lastOpenedAt,
+            name: existing.name,
+            rootPath: realRoot,
+          }
         : {
             createdAt: timestamp,
             id,
-            lastOpenedAt: timestamp,
+            lastOpenedAt: unopenedTimestamp,
             name: path.basename(realRoot) || "Project",
             rootPath: realRoot,
           }
@@ -993,11 +1037,15 @@ export class NodeProjectManager
   }
 
   private mutateRegistry<T>(
-    mutate: (projects: ProjectRegistryRecord[]) => { projects: ProjectRegistryRecord[]; value: T },
+    mutate: (
+      projects: ProjectRegistryRecord[],
+    ) =>
+      | { projects: ProjectRegistryRecord[]; value: T }
+      | Promise<{ projects: ProjectRegistryRecord[]; value: T }>,
   ) {
     const result = this.registryQueue.then(async () => {
       const current = await this.readRegistry()
-      const next = mutate(current)
+      const next = await mutate(current)
       await this.writeRegistry(next.projects)
       return next.value
     })

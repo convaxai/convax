@@ -210,6 +210,13 @@ describe("Canvas-first visual hierarchy", () => {
 
   test("clamps Canvas-owned overlays to host-provided safe viewport insets", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const creationFrameRule = cssRule(styles, ".convax-canvas .convax-creation-toolbar-frame")
+    expect(creationFrameRule).toContain("--canvas-safe-top")
+    expect(creationFrameRule).toContain("--canvas-safe-right")
+    expect(creationFrameRule).toContain("--canvas-safe-left")
+    expect(creationFrameRule).toContain(
+      "translateX(calc((var(--canvas-safe-left, 0px) - var(--canvas-safe-right, 0px)) / 2))",
+    )
     expect(cssRule(styles, ".convax-canvas .convax-viewport-toolbar")).toContain("--canvas-safe-left")
     expect(cssRule(styles, ".convax-canvas .convax-canvas-minimap")).toContain("--canvas-safe-right")
     expect(cssRule(styles, ".convax-canvas .convax-selection-toolbar")).toContain("--canvas-safe-right")
@@ -229,13 +236,17 @@ describe("Canvas-first visual hierarchy", () => {
     )
   })
 
-  test("keeps the viewport toolbar compact without reserving space for a creation bar", async () => {
+  test("anchors creation at safe top center while keeping viewport tools at the bottom", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const creationRule = cssRule(styles, ".convax-canvas .convax-creation-toolbar")
     const viewportRule = cssRule(styles, ".convax-canvas .convax-viewport-toolbar")
 
+    expect(creationRule).toContain("min-height: 42px")
+    expect(creationRule).toContain("border: 0")
+    expect(creationRule).toContain("border-radius: 8px")
+    expect(creationRule).toContain("backdrop-filter: blur(18px)")
     expect(viewportRule).toContain("min-height: 42px")
     expect(viewportRule).toContain("--canvas-safe-bottom")
-    expect(styles).not.toContain("convax-creation-toolbar")
   })
 
   test("keeps the node-search glyph clear of its input text across host stylesheet order", async () => {
@@ -294,6 +305,25 @@ describe("Canvas-first visual hierarchy", () => {
 })
 
 describe("Canvas theme closure", () => {
+  test("opens both top-toolbar menus below their triggers", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const createMenuRule = cssRule(styles, ".convax-canvas .convax-canvas-create-menu")
+    const moreMenuRule =
+      styles
+        .match(/\.convax-canvas \.convax-canvas-more-menu \{[^}]+\}/gs)
+        ?.find((rule) => rule.includes("right: 0")) ?? ""
+
+    expect(createMenuRule).toContain("left: 0")
+    expect(moreMenuRule).toContain("right: 0")
+    expect(moreMenuRule).toContain("bottom: auto")
+    expect(
+      cssRule(styles, ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu"),
+    ).toContain("top: calc(100% + 10px)")
+    expect(
+      cssRule(styles, ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu"),
+    ).toContain("overflow-y: auto")
+  })
+
   test("keeps the pending connection overlay inside the Canvas coordinate space", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const overlayRule = cssRule(styles, ".convax-pending-connection")
@@ -321,6 +351,7 @@ describe("Canvas theme closure", () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const selectors = [
       ":is(.convax-canvas, .convax-pending-connection) .convax-connect-menu",
+      ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu",
       ".convax-canvas .convax-arrange-menu",
       ".convax-canvas .convax-zoom-menu",
       ".convax-canvas .convax-tool-surface,\n.convax-canvas .convax-floating-panel",

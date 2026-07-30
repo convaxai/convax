@@ -44,6 +44,7 @@ const channels = {
   listProjects: "project:list",
   openProject: "project:open",
   renameProject: "project:rename",
+  touchProject: "project:touch",
 } as const
 
 const projectFilesChannels = {
@@ -309,6 +310,7 @@ const projectClient = {
   listProjects: () => ipcRenderer.invoke(channels.listProjects),
   openProject: () => ipcRenderer.invoke(channels.openProject),
   renameProject: (input) => ipcRenderer.invoke(channels.renameProject, input),
+  touchProject: (input) => ipcRenderer.invoke(channels.touchProject, input),
 } satisfies ProjectLifecycleClient
 
 const projectFilesClient = {
