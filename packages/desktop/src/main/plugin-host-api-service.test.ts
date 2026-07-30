@@ -72,7 +72,7 @@ function resolvedPrincipal(input: PluginPrincipal = principal): PluginHostResolv
     activeRevision: input.activeRevision,
     activeSetDigest: input.activeSetDigest,
     capabilities,
-    hostApi: { major: 1, optional: [], required: allApiIds },
+    hostApi: { major: 2, optional: [], required: allApiIds },
     manifestDigest: input.manifestDigest,
     pluginId: input.pluginId,
     pluginName: "Fixture Plugin",
@@ -166,7 +166,7 @@ function operations(log: string[]): PluginHostNodeOperationsPort {
     },
     async listInputs() {
       log.push("canvas.inputs.list")
-      return [{ id: "source-1", kind: "image", label: "Input" }]
+      return [{ inputKey: "opaque-source-1", kind: "image", label: "Input" }]
     },
     async openInput() {
       log.push("canvas.inputs.open")
@@ -278,8 +278,6 @@ describe("PluginHostApiService", () => {
     const calls = [
       { method: "host.context.get" },
       { method: "canvas.inputs.list" },
-      { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
-      { method: "canvas.inputs.image.close", params: { sessionId: "image-session-1" } },
       { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
       { method: "canvas.inputs.close", params: { sessionId: "session-1" } },
       { method: "canvas.node.get" },
@@ -293,7 +291,12 @@ describe("PluginHostApiService", () => {
       { method: "generation.tools.list", params: { output: "image" } },
       {
         method: "generation.execute",
-        params: { output: "image", prompt: "Create", toolId: "tool-1" },
+        params: {
+          output: "image",
+          prompt: "Create",
+          references: [{ inputKey: "opaque-source-1", role: "reference_image" }],
+          toolId: "tool-1",
+        },
       },
       { method: "projects.list" },
       { method: "canvas.catalog.list", params: { projectId: "project-1" } },
@@ -319,12 +322,30 @@ describe("PluginHostApiService", () => {
         params: { ref: { canvasId: "canvas-1", projectId: "project-1" } },
       },
       { method: "canvas.events.unsubscribe", params: { subscriptionId: "subscription-1" } },
+      { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
+      { method: "canvas.inputs.image.close", params: { sessionId: "image-session-1" } },
     ] as const
 
     expect(calls.map(({ method }) => method)).toEqual(allApiIds)
     for (const call of calls) {
       expect(connected.supports(call.method as PluginApiId)).toBe(true)
-      await connected.execute(call as never, { operationId: `operation-${call.method}` })
+      const result = await connected.execute(call as never, { operationId: `operation-${call.method}` })
+      if (call.method === "host.context.get") {
+        expect(result).toMatchObject({
+          hostApi: {
+            availability: expect.arrayContaining([
+              {
+                available: true,
+                catalogVersion: "2.0.0",
+                contractSince: "2.0.0",
+                id: "generation.execute",
+                since: "1.0.0",
+              },
+            ]),
+            catalogVersion: "2.0.0",
+          },
+        })
+      }
     }
     expect(log).toContain("canvas.node.state.replace")
     expect(log).toContain("canvas.resource.image.create")
@@ -350,6 +371,10 @@ describe("PluginHostApiService", () => {
       { method: "project.file.text.read", params: { path: "../secret.txt" } },
       { method: "agent.prompt", params: { text: " padded " } },
       { method: "generation.execute", params: { prompt: "\ncreate" } },
+      {
+        method: "generation.execute",
+        params: { prompt: "create", references: [{ nodeId: "must-not-cross-wire", role: "reference_image" }] },
+      },
     ] as const
 
     for (const [index, call] of invalidCalls.entries()) {
@@ -531,6 +556,95 @@ describe("PluginHostApiService", () => {
     expect(closedSessionId).toBe("image-session-1")
   })
 
+  test("revokes an opened stream when reauthorization or output validation fails", async () => {
+    for (const failure of ["principal", "output"] as const) {
+      let current = true
+      let closedSessionId: string | undefined
+      const base = operations([])
+      const { connected } = await connection({
+        current: () => current,
+        operations: {
+          ...base,
+          async closeInput({ sessionId }) {
+            closedSessionId = sessionId
+            return true
+          },
+          async openInput() {
+            if (failure === "principal") current = false
+            return {
+              probe: {
+                duration: { estimated: false, milliseconds: 100 },
+                height: 10,
+                kind: "video",
+                mediaRevision: "revision",
+                mimeType: "video/mp4",
+                size: 100,
+                width: 10,
+              },
+              sessionId: "stream-session-1",
+              url:
+                failure === "output"
+                  ? "convax-connected-media://stream-session-1"
+                  : `convax-connected-media://stream-session-1/${"a".repeat(32)}`,
+            }
+          },
+        },
+      })
+
+      await expect(
+        connected.execute(
+          { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
+          { operationId: `operation-stream-${failure}` },
+        ),
+      ).rejects.toThrow(failure === "principal" ? "no longer current" : "bearer URL")
+      expect(closedSessionId).toBe("stream-session-1")
+    }
+  })
+
+  test("rolls back a stream created after the connection closed while its open port was pending", async () => {
+    const opened = deferred<void>()
+    const continueOpen = deferred<void>()
+    let closedSessionId: string | undefined
+    const base = operations([])
+    const { connected } = await connection({
+      operations: {
+        ...base,
+        async closeInput({ sessionId }) {
+          closedSessionId = sessionId
+          return true
+        },
+        async openInput() {
+          opened.resolve()
+          await continueOpen.promise
+          return {
+            probe: {
+              duration: { estimated: false, milliseconds: 100 },
+              height: 10,
+              kind: "video",
+              mediaRevision: "revision",
+              mimeType: "video/mp4",
+              size: 100,
+              width: 10,
+            },
+            sessionId: "late-stream-session",
+            url: `convax-connected-media://late-stream-session/${"a".repeat(32)}`,
+          }
+        },
+      },
+    })
+    const opening = connected.execute(
+      { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
+      { operationId: "operation-stream-close-race" },
+    )
+    await opened.promise
+
+    connected.close()
+    continueOpen.resolve()
+
+    await expect(opening).rejects.toThrow("connection is closed")
+    expect(closedSessionId).toBe("late-stream-session")
+  })
+
   test("closes the connection when connected-image rollback cannot revoke the exact session", async () => {
     let current = true
     const log: string[] = []
@@ -569,6 +683,48 @@ describe("PluginHostApiService", () => {
     expect(log).toContain("connection.close")
     await expect(
       connected.execute({ method: "host.context.get" }, { operationId: "operation-after-rollback" }),
+    ).rejects.toThrow("connection is closed")
+  })
+
+  test("closes the connection when targeted session rollback reports no exact revocation", async () => {
+    let current = true
+    const log: string[] = []
+    const base = operations(log)
+    const { connected } = await connection({
+      current: () => current,
+      operations: {
+        ...base,
+        async closeInput() {
+          return false
+        },
+        async openInput() {
+          current = false
+          return {
+            probe: {
+              duration: { estimated: false, milliseconds: 100 },
+              height: 10,
+              kind: "video",
+              mediaRevision: "revision",
+              mimeType: "video/mp4",
+              size: 100,
+              width: 10,
+            },
+            sessionId: "stream-session-1",
+            url: `convax-connected-media://stream-session-1/${"a".repeat(32)}`,
+          }
+        },
+      },
+    })
+
+    await expect(
+      connected.execute(
+        { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
+        { operationId: "operation-stream-rollback-false" },
+      ),
+    ).rejects.toThrow("no longer current")
+    expect(log).toContain("connection.close")
+    await expect(
+      connected.execute({ method: "host.context.get" }, { operationId: "operation-after-stream-rollback" }),
     ).rejects.toThrow("connection is closed")
   })
 

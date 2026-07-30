@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, mock, test } from "bun:test"
 import { PluginApiUnavailableError, type ApiAvailability } from "@convax/plugin-api"
 
 import { parsePluginManifestV8 } from "./manifest"
@@ -10,6 +10,7 @@ import {
   isPluginHostCapabilityInvokeRequest,
   isPluginHostCommand,
   isPluginHostConnect,
+  isPluginHostDisconnect,
   isPluginHostRequest,
   isPluginHostResponse,
   maximumPluginHostInFlightRequests,
@@ -67,7 +68,7 @@ const manifest = parsePluginManifestV8({
   description: "Client test Plugin",
   entry: "web/index.html",
   hostApi: {
-    major: 1,
+    major: 2,
     optional: ["canvas.resource.image.create"],
     required: ["host.context.get"],
   },
@@ -88,6 +89,8 @@ void [declaredHostApi, declaredImportedCapability, undeclaredHostApi, undeclared
 class FakePort implements PluginHostMessagePort {
   readonly sent: unknown[] = []
   readonly #listeners = new Set<(event: PluginHostMessageEvent) => void>()
+  closeCalls = 0
+  failPost = false
   started = false
 
   addEventListener(_type: "message", listener: (event: PluginHostMessageEvent) => void) {
@@ -99,7 +102,12 @@ class FakePort implements PluginHostMessagePort {
   }
 
   postMessage(message: unknown) {
+    if (this.failPost) throw new Error("transport failed")
     this.sent.push(message)
+  }
+
+  close() {
+    this.closeCalls += 1
   }
 
   start() {
@@ -151,7 +159,7 @@ function failure(
 function hostContextResult(revision = 1, availability: readonly ApiAvailability[] = []) {
   return {
     canvas: { id: "c1" },
-    hostApi: { availability, catalogVersion: "1.0.0" },
+    hostApi: { availability, catalogVersion: "2.0.0" },
     node: {
       data: { kind: "plugin", label: "Plugin" },
       id: "n1",
@@ -165,7 +173,7 @@ function hostContextResult(revision = 1, availability: readonly ApiAvailability[
 }
 
 describe("@convax/plugin-sdk/client envelopes", () => {
-  test("owns strict host/8 connect, request, response, command, capability, and cancel shapes", () => {
+  test("owns strict host/8 connect, request, response, command, capability, cancel, and disconnect shapes", () => {
     expect(
       isPluginHostConnect({
         pluginId: "client-test",
@@ -226,6 +234,14 @@ describe("@convax/plugin-sdk/client envelopes", () => {
       }),
     ).toBeTrue()
     expect(isPluginHostCancel({ id: "invoke-1", protocol: pluginHostProtocolV8, type: "cancel" })).toBeTrue()
+    expect(isPluginHostDisconnect({ protocol: pluginHostProtocolV8, type: "disconnect" })).toBeTrue()
+    expect(
+      isPluginHostDisconnect({
+        frameId: "forbidden",
+        protocol: pluginHostProtocolV8,
+        type: "disconnect",
+      }),
+    ).toBeFalse()
     expect(
       isPluginHostCapabilityInvokeRequest({
         capabilityId: "media.transform",
@@ -253,6 +269,51 @@ describe("@convax/plugin-sdk/client envelopes", () => {
 })
 
 describe("createPluginHostClient", () => {
+  test("disconnects synchronously, rejects in-flight work, closes the port, and remains idempotent", async () => {
+    const port = new FakePort()
+    const fatal = mock(() => undefined)
+    const client = createPluginHostClient({
+      manifest,
+      onFatalError: fatal,
+      port,
+      requestIdPrefix: "close",
+    })
+    const pending = client.callHostApi("host.context.get")
+
+    client.close()
+    expect(client.closed).toBeTrue()
+    expect(port.sent).toEqual([
+      {
+        id: "close-1",
+        method: "host.context.get",
+        protocol: pluginHostProtocolV8,
+        type: "request",
+      },
+      {
+        protocol: pluginHostProtocolV8,
+        type: "disconnect",
+      },
+    ])
+    expect(port.closeCalls).toBe(1)
+    await expect(pending).rejects.toMatchObject({ code: "closed" })
+    expect(fatal).not.toHaveBeenCalled()
+
+    client.close()
+    expect(port.sent).toHaveLength(2)
+    expect(port.closeCalls).toBe(1)
+  })
+
+  test("still closes locally when posting the disconnect control envelope fails", () => {
+    const port = new FakePort()
+    const client = createPluginHostClient({ manifest, port, requestIdPrefix: "failed-close" })
+    port.failPost = true
+
+    expect(() => client.close()).not.toThrow()
+    expect(client.closed).toBeTrue()
+    expect(port.closeCalls).toBe(1)
+    expect(port.sent).toHaveLength(0)
+  })
+
   test("requires the Web client negotiation baseline without constraining static Plugins", () => {
     const staticManifest = parsePluginManifestV8({
       capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
@@ -265,7 +326,7 @@ describe("createPluginHostClient", () => {
         },
       },
       description: "Static Plugin",
-      hostApi: { major: 1, optional: [], required: [] },
+      hostApi: { major: 2, optional: [], required: [] },
       id: "static-plugin",
       name: "Static Plugin",
       schema: "convax.plugin/8",
@@ -364,6 +425,7 @@ describe("createPluginHostClient", () => {
         hostContextResult(1, [
           {
             available: false,
+            contractSince: "2.0.0",
             id: "canvas.resource.image.create",
             reason: "setup-required",
             recoverable: true,
@@ -374,6 +436,7 @@ describe("createPluginHostClient", () => {
     )
     await expect(first).resolves.toEqual({
       available: false,
+      contractSince: "2.0.0",
       id: "canvas.resource.image.create",
       reason: "setup-required",
       recoverable: true,
@@ -393,7 +456,8 @@ describe("createPluginHostClient", () => {
         hostContextResult(2, [
           {
             available: true,
-            catalogVersion: "1.0.0",
+            catalogVersion: "2.0.0",
+            contractSince: "2.0.0",
             id: "canvas.resource.image.create",
             since: "1.0.0",
           },
@@ -403,6 +467,14 @@ describe("createPluginHostClient", () => {
     await expect(refreshed).resolves.toMatchObject({ available: true })
     await expect(client.requireHostApi("canvas.resource.image.create")).resolves.toMatchObject({
       available: true,
+    })
+    await expect(client.getHostApiAvailability("host.context.get")).resolves.toEqual({
+      available: false,
+      contractSince: "2.0.0",
+      id: "host.context.get",
+      reason: "unsupported-host",
+      recoverable: false,
+      since: "1.0.0",
     })
     expect(port.sent).toHaveLength(2)
   })

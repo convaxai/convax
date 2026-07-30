@@ -80,9 +80,7 @@ describe("inter-Plugin capability contracts", () => {
       ]),
     ).not.toThrow()
     expect(() =>
-      assertPluginCapabilityRuntimeTools(declaration.exports, [
-        { inputSchema: boundedObject, name: "text.transform" },
-      ]),
+      assertPluginCapabilityRuntimeTools(declaration.exports, [{ inputSchema: boundedObject, name: "text.transform" }]),
     ).toThrow("must declare outputSchema")
     expect(() =>
       assertPluginCapabilityRuntimeTools(declaration.exports, [
@@ -264,6 +262,14 @@ describe("inter-Plugin capability contracts", () => {
     expect(rendered).toContain("`createPluginHostClient` from `@convax/plugin-sdk/client`")
     expect(rendered).toContain("`client.invokeCapability(...)`")
     expect(rendered).toContain("`convax.plugin-capability/3` is Host-internal")
+    expect(rendered).toContain("This generated file is the sandboxed Web Plugin client reference")
+    expect(rendered).toContain("An Agent following the owning Skill cannot create the Web Plugin MessagePort")
+    expect(rendered).toContain("Skill instructions and generated references grant no authority")
+    expect(rendered).toContain("may consult `convax-capabilities.md` as the generated Host API reference")
+    expect(rendered).toContain("`since` for the API id's first introduction")
+    expect(rendered).toContain("compatibility uses `contractSince`")
+    expect(rendered).toContain("Call `client.close()` during explicit Plugin teardown")
+    expect(rendered).toContain("without awaiting `beforeunload`")
     expect(rendered).toContain('client.invokeCapability("media.timeline.render", input, { signal })')
     expect(rendered).toBe(renderPluginCapabilityReference(declaration))
   })

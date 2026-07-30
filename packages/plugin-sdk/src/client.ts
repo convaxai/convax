@@ -1,4 +1,5 @@
 import {
+  getPluginApiDefinition,
   getPluginApiWireContract,
   isPluginApiDeclared,
   parsePluginApiParams,
@@ -24,6 +25,7 @@ import {
   isPluginHostCommand,
   isPluginHostRequestId,
   isPluginHostResponse,
+  maximumPluginHostControlBytes,
   maximumPluginHostInFlightRequests,
   maximumPluginHostResponseBytes,
   maximumPluginCapabilityRequestBytes,
@@ -37,6 +39,7 @@ import {
   type PluginHostCapabilityAvailabilityRequest,
   type PluginHostCapabilityInvokeRequest,
   type PluginHostCommand,
+  type PluginHostDisconnect,
   type PluginHostRequest,
   type PluginHostRemoteFailure,
 } from "./host-protocol"
@@ -54,6 +57,7 @@ export interface PluginHostMessageEvent {
  */
 export interface PluginHostMessagePort {
   addEventListener(type: "message", listener: (event: PluginHostMessageEvent) => void): void
+  close(): void
   removeEventListener(type: "message", listener: (event: PluginHostMessageEvent) => void): void
   postMessage(message: unknown): void
   start?(): void
@@ -315,12 +319,34 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
     pending.clear()
   }
 
-  const closeWith = (error: PluginHostProtocolError) => {
+  const closeWith = (error: PluginHostProtocolError, fatal = true) => {
     if (closed) return
     closed = true
     options.port.removeEventListener("message", onMessage)
     commandListeners.clear()
+    cachedHostContext = undefined
+    pendingHostContextRefresh = undefined
     rejectPending(error)
+
+    // MessagePort.close() does not give the renderer-to-Main connection an
+    // observable lifecycle signal. Settle local callers first, then send one
+    // closed, sender-scoped control envelope while the port is still usable.
+    const disconnect: PluginHostDisconnect = {
+      protocol: pluginHostProtocolV8,
+      type: "disconnect",
+    }
+    try {
+      assertPluginHostMessageByteLength(disconnect, maximumPluginHostControlBytes, "Plugin Host disconnect")
+      post(disconnect)
+    } catch {
+      // Local disposal must not depend on transport delivery.
+    }
+    try {
+      options.port.close()
+    } catch {
+      // A broken transport cannot keep the local client alive.
+    }
+    if (!fatal) return
     try {
       options.onFatalError?.(error)
     } catch {
@@ -564,11 +590,14 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
         !cachedHostContext || availabilityOptions?.refresh
           ? await client.refreshHostApiContext(availabilityOptions)
           : cachedHostContext
+      const definition = getPluginApiDefinition(apiId)
       return (context.hostApi.availability.find(({ id }) => id === apiId) ?? {
         available: false,
+        contractSince: definition.contractSince,
         id: apiId,
         reason: "unsupported-host",
         recoverable: false,
+        since: definition.since,
       }) as ApiAvailability<typeof apiId>
     },
     refreshHostApiContext(callOptions) {
@@ -656,7 +685,7 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
       }
     },
     close() {
-      closeWith(new PluginHostProtocolError("closed", "Plugin Host client was closed"))
+      closeWith(new PluginHostProtocolError("closed", "Plugin Host client was closed"), false)
     },
   }
   return client

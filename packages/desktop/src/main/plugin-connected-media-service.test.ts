@@ -6,6 +6,12 @@ import path from "node:path"
 import { createCanvasDocument, type CanvasDocument } from "@convax/canvas/core"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
 
+import type { PluginPrincipal } from "../plugin-capability-contracts"
+import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
+import { desktopPluginHostProtocolV8, pluginCapabilityProtocolV3 } from "../plugin-host-protocol"
+import { RendererPluginHostConnection } from "../renderer/plugin-host-connection"
+import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
+import { PluginHostApiService } from "./plugin-host-api-service"
 import { parseWebPluginManifest } from "../plugin-contracts"
 import { PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
@@ -35,7 +41,7 @@ function plugin(
     description: "Media preview",
     entry: "index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: optionalHostApis,
       required: ["host.context.get"],
     },
@@ -70,6 +76,34 @@ function imageCanvas(): CanvasDocument {
             id: "image-1",
           },
     ),
+  }
+}
+
+function mixedMediaCanvas(): CanvasDocument {
+  const document = imageCanvas()
+  return {
+    ...document,
+    edges: [...document.edges, { id: "edge-video", source: "video-1", target: "plugin-1" }],
+    nodes: [
+      ...document.nodes,
+      {
+        data: {
+          durationMs: 2_000,
+          height: 1080,
+          kind: "video",
+          label: "Video source",
+          metadata: {
+            [projectResourceReferenceKey]: { kind: "project-file", path: "Videos/source.mp4" },
+          },
+          mimeType: "video/mp4",
+          name: "source.mp4",
+          width: 1920,
+        },
+        id: "video-1",
+        position: { x: 0, y: 300 },
+        type: "file",
+      },
+    ],
   }
 }
 
@@ -169,6 +203,84 @@ function canvas(): CanvasDocument {
 }
 
 describe("PluginConnectedMediaService", () => {
+  test("uses one monotonic deadline domain for idle refresh, absolute expiry, and capacity cleanup", async () => {
+    const document = imageCanvas()
+    const currentPlugin = plugin()
+    let monotonicNow = 10_000
+    let wallNow = 2_000_000_000_000
+    const originalDateNow = Date.now
+    Date.now = () => wallNow
+    const service = new PluginConnectedMediaService({
+      changes: new CanvasDocumentChangeBus(),
+      clock: { now: () => monotonicNow },
+      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      images: testImageInspector,
+      media: { resolve: async () => Promise.reject(new Error("Native media resolver must not read images")) },
+      plugins: {
+        resolveCapabilityIdentity: async () => ({
+          activeRevision: 1,
+          activeSetDigest: "a".repeat(64),
+          digest: `${currentPlugin.version}:digest`,
+          plugin: currentPlugin,
+          snapshotDigest: "b".repeat(64),
+        }),
+      },
+      resources: { readImage: async () => imageRead(validPng, "image/png", "source.png") },
+    })
+    const frame = (frameId: string) => ({
+      canvasId: "canvas-1",
+      expectedRevision: 4,
+      frameId,
+      nodeId: "plugin-1",
+      pluginId: "media-surface",
+      pluginVersion: "1.0.0",
+      projectId: "project-1",
+      sourceNodeId: "image-1",
+    })
+
+    try {
+      const opened = await service.openImage(frame("lifetime-frame"), 7)
+      const openedAt = monotonicNow
+      const absoluteLifetime = 4 * 60 * 60_000
+      const accessInterval = 14 * 60_000
+      for (let elapsed = accessInterval; elapsed < absoluteLifetime; elapsed += accessInterval) {
+        monotonicNow = openedAt + elapsed
+        wallNow -= 24 * 60 * 60_000
+        expect((await service.handle(new Request(opened.url, { method: "HEAD" }))).status).toBe(200)
+      }
+      monotonicNow = openedAt + absoluteLifetime - 1
+      wallNow -= 365 * 24 * 60 * 60_000
+      expect((await service.handle(new Request(opened.url, { method: "HEAD" }))).status).toBe(200)
+      monotonicNow = openedAt + absoluteLifetime
+      expect((await service.handle(new Request(opened.url, { method: "HEAD" }))).status).toBe(404)
+      expect(service.revokeFrame(frame("lifetime-frame"), 7)).toBe(0)
+
+      const capacitySessions = []
+      capacitySessions.push(await service.openImage(frame("capacity-frame-1"), 7))
+      capacitySessions.push(await service.openImage(frame("capacity-frame-1"), 7))
+      capacitySessions.push(await service.openImage(frame("capacity-frame-2"), 7))
+      capacitySessions.push(await service.openImage(frame("capacity-frame-2"), 7))
+      const capacityError = await service.openImage(frame("capacity-frame-3"), 7).then(
+        () => undefined,
+        (error: unknown) => error,
+      )
+      expect(capacityError).toBeInstanceOf(PluginHostApiResourceUnavailableError)
+      expect(capacityError).toMatchObject({ message: "Connected-image session capacity is exhausted" })
+      monotonicNow += 15 * 60_000
+      const replacement = await service.openImage(frame("capacity-frame-3"), 7)
+      expect(service.revokeFrame(frame("capacity-frame-3"), 7)).toBe(1)
+      expect((await service.handle(new Request(replacement.url))).status).toBe(404)
+
+      service.dispose()
+      for (const session of capacitySessions) {
+        expect((await service.handle(new Request(session.url))).status).toBe(404)
+      }
+    } finally {
+      Date.now = originalDateNow
+      service.dispose()
+    }
+  })
+
   test("opens bounded PNG, JPEG, and WebP snapshots through the typed Project image port", async () => {
     for (const fixture of [
       { bytes: validPng, height: 4, mimeType: "image/png", name: "source.png", width: 2 },
@@ -759,6 +871,401 @@ describe("PluginConnectedMediaService", () => {
     })
     expect((await service.handle(new Request(canvasChanged.url))).status).toBe(404)
     service.dispose()
+  })
+
+  test("does not create a stream session after caller cancellation wins an unresolved media lookup", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-connected-media-open-abort-"))
+    roots.push(root)
+    const sourcePath = path.join(root, "source.mp4")
+    await fs.writeFile(sourcePath, Buffer.from("0000ftypabcdefgh"))
+    const stat = await fs.lstat(sourcePath)
+    const identity = {
+      ctimeMs: stat.ctimeMs,
+      dev: stat.dev,
+      ino: stat.ino,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    }
+    const document = canvas()
+    const currentPlugin = plugin()
+    const resolution = deferred<
+      readonly [
+        {
+          identity: typeof identity
+          kind: "video"
+          mimeType: string
+          name: string
+          path: string
+          resourcePath: string
+          size: number
+        },
+      ]
+    >()
+    const resolutionStarted = deferred<void>()
+    let observedSignal: AbortSignal | undefined
+    const service = new PluginConnectedMediaService({
+      changes: new CanvasDocumentChangeBus(),
+      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      images: testImageInspector,
+      media: {
+        resolve: async (_request, _options, signal) => {
+          observedSignal = signal
+          resolutionStarted.resolve()
+          return resolution.promise
+        },
+      },
+      plugins: {
+        resolveCapabilityIdentity: async () => ({
+          activeRevision: 1,
+          activeSetDigest: "a".repeat(64),
+          digest: `${currentPlugin.version}:digest`,
+          plugin: currentPlugin,
+          snapshotDigest: "b".repeat(64),
+        }),
+      },
+      resources: unusedImageResources,
+    })
+    const frame = {
+      canvasId: "canvas-1",
+      expectedRevision: 4,
+      frameId: "frame-1",
+      nodeId: "plugin-1",
+      pluginId: "media-surface",
+      pluginVersion: "1.0.0",
+      projectId: "project-1",
+      sourceNodeId: "video-1",
+    }
+    const controller = new AbortController()
+    const opening = service.open(frame, 7, controller.signal)
+    await resolutionStarted.promise
+    controller.abort(new Error("frame disposed"))
+    resolution.resolve([
+      {
+        identity,
+        kind: "video",
+        mimeType: "video/mp4",
+        name: "source.mp4",
+        path: sourcePath,
+        resourcePath: "Videos/source.mp4",
+        size: stat.size,
+      },
+    ])
+
+    await expect(opening).rejects.toThrow("frame disposed")
+    expect(observedSignal?.aborted).toBeTrue()
+    expect(service.revokeFrame(frame, 7)).toBe(0)
+    service.dispose()
+  })
+
+  test("rechecks per-frame stream capacity after concurrent asynchronous preparation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-connected-media-capacity-"))
+    roots.push(root)
+    const sourcePath = path.join(root, "source.mp4")
+    await fs.writeFile(sourcePath, Buffer.from("0000ftypabcdefgh"))
+    const stat = await fs.lstat(sourcePath)
+    const identity = {
+      ctimeMs: stat.ctimeMs,
+      dev: stat.dev,
+      ino: stat.ino,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    }
+    const document = canvas()
+    const currentPlugin = plugin()
+    const release = deferred<void>()
+    let started = 0
+    const allStarted = deferred<void>()
+    const service = new PluginConnectedMediaService({
+      changes: new CanvasDocumentChangeBus(),
+      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      images: testImageInspector,
+      media: {
+        resolve: async () => {
+          started += 1
+          if (started === 17) allStarted.resolve()
+          await release.promise
+          return [
+            {
+              identity,
+              kind: "video" as const,
+              mimeType: "video/mp4",
+              name: "source.mp4",
+              path: sourcePath,
+              resourcePath: "Videos/source.mp4",
+              size: stat.size,
+            },
+          ]
+        },
+      },
+      plugins: {
+        resolveCapabilityIdentity: async () => ({
+          activeRevision: 1,
+          activeSetDigest: "a".repeat(64),
+          digest: `${currentPlugin.version}:digest`,
+          plugin: currentPlugin,
+          snapshotDigest: "b".repeat(64),
+        }),
+      },
+      resources: unusedImageResources,
+    })
+    const frame = {
+      canvasId: "canvas-1",
+      expectedRevision: 4,
+      frameId: "frame-1",
+      nodeId: "plugin-1",
+      pluginId: "media-surface",
+      pluginVersion: "1.0.0",
+      projectId: "project-1",
+      sourceNodeId: "video-1",
+    }
+    const openings = Array.from({ length: 17 }, () => service.open(frame, 7))
+    await allStarted.promise
+    release.resolve()
+    const settled = await Promise.allSettled(openings)
+
+    expect(settled.filter(({ status }) => status === "fulfilled")).toHaveLength(16)
+    const rejected = settled.filter(({ status }) => status === "rejected")
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringContaining("exceeds 16") }),
+    })
+    expect(service.revokeFrame(frame, 7)).toBe(16)
+    service.dispose()
+  })
+
+  test("payload-free renderer disconnect synchronously revokes image and stream bearers through the real Host adapter", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-connected-media-host-close-"))
+    roots.push(root)
+    const sourcePath = path.join(root, "source.mp4")
+    await fs.writeFile(sourcePath, Buffer.from("0000ftypabcdefgh"))
+    const stat = await fs.lstat(sourcePath)
+    const identity = {
+      ctimeMs: stat.ctimeMs,
+      dev: stat.dev,
+      ino: stat.ino,
+      mtimeMs: stat.mtimeMs,
+      size: stat.size,
+    }
+    const document = mixedMediaCanvas()
+    const currentPlugin = plugin("1.0.0", [
+      "canvas.connectedImages.read",
+      "canvas.connectedInputs.read",
+      "canvas.connectedMedia.stream",
+    ])
+    const principal: PluginPrincipal = {
+      activeRevision: 1,
+      activeSetDigest: "a".repeat(64),
+      manifestDigest: "c".repeat(64),
+      pluginId: currentPlugin.id,
+      pluginVersion: currentPlugin.version,
+      runtime: "web",
+      snapshotDigest: "b".repeat(64),
+    }
+    const documents = { load: async () => ({ document, storageVersion: "stored-1" }) }
+    const media = new PluginConnectedMediaService({
+      changes: new CanvasDocumentChangeBus(),
+      documents,
+      images: testImageInspector,
+      media: {
+        resolve: async () => [
+          {
+            identity,
+            kind: "video" as const,
+            mimeType: "video/mp4",
+            name: "source.mp4",
+            path: sourcePath,
+            resourcePath: "Videos/source.mp4",
+            size: stat.size,
+          },
+        ],
+      },
+      plugins: {
+        resolveCapabilityIdentity: async () => ({
+          activeRevision: principal.activeRevision,
+          activeSetDigest: principal.activeSetDigest,
+          digest: principal.manifestDigest,
+          plugin: currentPlugin,
+          snapshotDigest: principal.snapshotDigest,
+        }),
+      },
+      resources: { readImage: async () => imageRead(validPng, "image/png", "source.png") },
+    })
+    const adapter = new PluginHostApiMainAdapter({
+      agent: {} as never,
+      application: {} as never,
+      canvases: {
+        async getCanvasCatalog({ projectId }: { projectId: string }) {
+          return {
+            canvases: [{ createdAt: 1, id: "canvas-1", name: "Canvas", updatedAt: 1 }],
+            projectId,
+          }
+        },
+      } as never,
+      documents,
+      generation: {} as never,
+      images: {} as never,
+      media,
+      projects: {
+        async list() {
+          return [
+            {
+              createdAt: 1,
+              id: "project-1",
+              lastOpenedAt: 1,
+              name: "Project",
+              rootPath: "/must-not-cross-the-host-boundary",
+            },
+          ]
+        },
+        async readTextFile(): Promise<never> {
+          throw new Error("unused")
+        },
+        async resolveEntryPath(): Promise<never> {
+          throw new Error("unused")
+        },
+      },
+    })
+    const host = new PluginHostApiService({
+      createId: () => "connection-1",
+      nodes: adapter,
+      operations: adapter,
+      principals: {
+        async liveState() {
+          return { disabled: false, recovering: false, setupComplete: true }
+        },
+        async resolve() {
+          return {
+            activeRevision: principal.activeRevision,
+            activeSetDigest: principal.activeSetDigest,
+            capabilities: currentPlugin.capabilities,
+            hostApi: currentPlugin.hostApi!,
+            manifestDigest: principal.manifestDigest,
+            pluginId: principal.pluginId,
+            pluginName: currentPlugin.name,
+            pluginVersion: principal.pluginVersion,
+            snapshotDigest: principal.snapshotDigest,
+          }
+        },
+      },
+    })
+    const connect = (frameId: string) =>
+      host.connect({
+        canvas: {} as never,
+        node: { canvasId: "canvas-1", nodeId: "plugin-1", projectId: "project-1" },
+        principal,
+        scope: { kind: "project", projectId: "project-1" },
+        transport: { frameId, senderId: 7 },
+      })
+    const first = await connect("frame-1")
+    const listed = (await first.execute({ method: "canvas.inputs.list" }, { operationId: "list-first" })) as {
+      inputs: Array<{ inputKey: string; kind: string }>
+    }
+    const imageKey = listed.inputs.find(({ kind }) => kind === "image")?.inputKey
+    const videoKey = listed.inputs.find(({ kind }) => kind === "video")?.inputKey
+    if (!imageKey || !videoKey) throw new Error("Expected image and video input keys")
+    const openedImage = (await first.execute(
+      { method: "canvas.inputs.image.open", params: { inputKey: imageKey } },
+      { operationId: "open-image-first" },
+    )) as { sessionId: string; url: string }
+    const openedStream = (await first.execute(
+      { method: "canvas.inputs.open", params: { inputKey: videoKey } },
+      { operationId: "open-stream-first" },
+    )) as { sessionId: string; url: string }
+    expect((await media.handle(new Request(openedImage.url, { method: "HEAD" }))).status).toBe(200)
+    expect((await media.handle(new Request(openedStream.url, { method: "HEAD" }))).status).toBe(200)
+
+    const rendererClient: PluginCapabilityRendererClient = {
+      async cancel() {
+        return false
+      },
+      async call() {
+        throw new Error("unused")
+      },
+      async connect() {
+        return { connectionId: "isolated-renderer-connection", protocol: pluginCapabilityProtocolV3 }
+      },
+      async disconnect({ connectionId }) {
+        expect(connectionId).toBe("isolated-renderer-connection")
+        first.close()
+        return true
+      },
+      async getPluginAvailability() {
+        throw new Error("unused")
+      },
+      async invokePlugin() {
+        throw new Error("unused")
+      },
+      onEvent() {
+        return () => undefined
+      },
+    }
+    const rendererConnection = new RendererPluginHostConnection(
+      rendererClient,
+      {
+        activeRevision: principal.activeRevision,
+        activeSetDigest: principal.activeSetDigest,
+        canvasId: "canvas-1",
+        nodeId: "plugin-1",
+        pluginId: principal.pluginId,
+        pluginVersion: principal.pluginVersion,
+        projectId: "project-1",
+        runtime: "web",
+        snapshotDigest: principal.snapshotDigest,
+      },
+      () => undefined,
+    )
+    await rendererConnection.dispatch({
+      protocol: desktopPluginHostProtocolV8,
+      type: "disconnect",
+    })
+    for (const url of [openedImage.url, openedStream.url]) {
+      expect((await media.handle(new Request(url))).status).toBe(404)
+      expect((await media.handle(new Request(url, { method: "HEAD" }))).status).toBe(404)
+    }
+    expect(
+      media.closeImage(
+        {
+          canvasId: "canvas-1",
+          frameId: "frame-1",
+          nodeId: "plugin-1",
+          pluginId: principal.pluginId,
+          pluginVersion: principal.pluginVersion,
+          projectId: "project-1",
+          sessionId: openedImage.sessionId,
+        },
+        7,
+      ),
+    ).toBeFalse()
+    expect(
+      media.close(
+        {
+          canvasId: "canvas-1",
+          frameId: "frame-1",
+          nodeId: "plugin-1",
+          pluginId: principal.pluginId,
+          pluginVersion: principal.pluginVersion,
+          projectId: "project-1",
+          sessionId: openedStream.sessionId,
+        },
+        7,
+      ),
+    ).toBeFalse()
+
+    const replacement = await connect("frame-2")
+    const replacementInputs = (await replacement.execute(
+      { method: "canvas.inputs.list" },
+      { operationId: "list-replacement" },
+    )) as { inputs: Array<{ inputKey: string; kind: string }> }
+    const replacementImageKey = replacementInputs.inputs.find(({ kind }) => kind === "image")?.inputKey
+    if (!replacementImageKey) throw new Error("Expected replacement image input key")
+    const replacementImage = (await replacement.execute(
+      { method: "canvas.inputs.image.open", params: { inputKey: replacementImageKey } },
+      { operationId: "open-image-replacement" },
+    )) as { url: string }
+    expect((await media.handle(new Request(replacementImage.url))).status).toBe(200)
+    replacement.close()
+    expect((await media.handle(new Request(replacementImage.url))).status).toBe(404)
+    media.dispose()
   })
 
   test("rejects missing grants, undeclared APIs, inactive identities, and legacy schemas", async () => {

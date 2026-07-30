@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto"
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
 import type { AgentRuntime } from "@convax/agent-runtime"
 import {
@@ -7,13 +7,15 @@ import {
   type CanvasDocumentClient,
 } from "@convax/canvas/application"
 import {
-  getIncomingConnectedCanvasFileNodeIds,
+  isCanvasFileNode,
   type CanvasDocument,
+  type CanvasEdge,
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas/core"
-import type { ProjectCanvasClient } from "@convax/project/canvas"
+import { getProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
+import type { PluginApiGenerationReference } from "@convax/plugin-api"
 
 import {
   GenerationPublicationPartialSuccessError,
@@ -33,7 +35,7 @@ import type {
   PluginHostNodeOperationsPort,
 } from "../plugin-host-api-main-contracts"
 import type { PluginPrincipal } from "../plugin-capability-contracts"
-import type { PluginConnectedInputDescriptor, PluginGenerationReference } from "../plugin-host-types"
+import type { PluginConnectedInputDescriptor } from "../plugin-host-types"
 import type { WebPluginGenerationInputRole } from "../plugin-contracts"
 import {
   PluginHostApiError,
@@ -67,6 +69,8 @@ export interface PluginHostApiMainAdapterOptions {
  * It does not trust renderer state and never returns native paths.
  */
 export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, PluginHostNodeOperationsPort {
+  readonly #inputKeySecret = randomBytes(32)
+
   constructor(private readonly options: PluginHostApiMainAdapterOptions) {}
 
   async resolve(input: {
@@ -136,7 +140,13 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
       throw new PluginHostApiError("stale-context", "Canvas changed during generation preparation")
     }
     const owner = requireOwnedNode(snapshot, input.binding, input.principal.pluginId)
-    const references = generationReferences(snapshot, input.binding.nodeId, input.references)
+    const references = generationReferences(
+      snapshot,
+      input.binding,
+      input.principal,
+      this.#inputKeySecret,
+      input.references,
+    )
     return this.options.generation
       .generate(
         {
@@ -191,12 +201,8 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
   async listInputs(input: Parameters<PluginHostNodeOperationsPort["listInputs"]>[0]) {
     const document = await this.loadDocument(input.binding, input.signal)
     requireOwnedNode(document, input.binding, input.principal.pluginId)
-    const byId = new Map(document.nodes.map((node) => [node.id, node]))
-    return Promise.all(
-      getIncomingConnectedCanvasFileNodeIds(document, input.binding.nodeId).flatMap((nodeId) => {
-        const node = byId.get(nodeId)
-        return node ? [connectedInputDescriptor(node)] : []
-      }),
+    return connectedInputs(document, input.binding, input.principal, this.#inputKeySecret).map(({ inputKey, node }) =>
+      connectedInputDescriptor(node, inputKey),
     )
   }
 
@@ -209,13 +215,19 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     if (!context) {
       throw new PluginHostApiError("stale-context", "Plugin input owner is no longer current")
     }
+    const document = await this.loadDocument(input.binding, input.signal)
+    if (document.revision !== context.documentRevision) {
+      throw new PluginHostApiError("stale-context", "Canvas changed during Plugin input preparation")
+    }
+    const source = resolveConnectedInput(document, input.binding, input.principal, this.#inputKeySecret, input.inputKey)
     return this.options.media.open(
       {
         ...mediaFrame(input.binding, input.principal, input.transport.frameId),
         expectedRevision: context.documentRevision,
-        sourceNodeId: input.inputKey,
+        sourceNodeId: source.id,
       },
       input.transport.senderId,
+      input.signal,
     )
   }
 
@@ -228,11 +240,16 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     if (!context) {
       throw new PluginHostApiError("stale-context", "Plugin image input owner is no longer current")
     }
+    const document = await this.loadDocument(input.binding, input.signal)
+    if (document.revision !== context.documentRevision) {
+      throw new PluginHostApiError("stale-context", "Canvas changed during Plugin image input preparation")
+    }
+    const source = resolveConnectedInput(document, input.binding, input.principal, this.#inputKeySecret, input.inputKey)
     return this.options.media.openImage(
       {
         ...mediaFrame(input.binding, input.principal, input.transport.frameId),
         expectedRevision: context.documentRevision,
-        sourceNodeId: input.inputKey,
+        sourceNodeId: source.id,
       },
       input.transport.senderId,
       input.signal,
@@ -406,11 +423,14 @@ function generationRole(node: CanvasNode): WebPluginGenerationInputRole | undefi
 
 function generationReferences(
   document: CanvasDocument,
-  ownerNodeId: string,
-  requested?: readonly PluginGenerationReference[],
+  binding: PluginHostNodeBinding,
+  principal: PluginPrincipal,
+  inputKeySecret: Uint8Array,
+  requested?: readonly PluginApiGenerationReference[],
 ) {
   const byId = new Map(document.nodes.map((node) => [node.id, node]))
-  const incoming = new Set(getIncomingConnectedCanvasFileNodeIds(document, ownerNodeId))
+  const connected = connectedInputs(document, binding, principal, inputKeySecret)
+  const incoming = new Set(connected.map(({ node }) => node.id))
   if (!requested) {
     return [...incoming].flatMap((nodeId) => {
       const node = byId.get(nodeId)
@@ -419,9 +439,12 @@ function generationReferences(
     })
   }
   return requested.map((reference) => {
-    const node = byId.get(reference.nodeId)
-    if (!node || !incoming.has(reference.nodeId)) {
-      throw new Error("Generation references must be direct incoming Canvas file nodes")
+    const node = connected.find(({ inputKey }) => sameOpaqueInputKey(inputKey, reference.inputKey))?.node
+    if (!node || !incoming.has(node.id)) {
+      throw new PluginHostApiError(
+        "stale-context",
+        "Generation input key is invalid or no longer names a direct incoming Canvas file node",
+      )
     }
     const expectedKind =
       reference.role === "text"
@@ -432,45 +455,157 @@ function generationReferences(
             ? "audio"
             : "image"
     if (node.data.kind !== expectedKind) {
-      throw new Error(`Generation role ${reference.role} requires an incoming ${expectedKind} node`)
+      throw new PluginHostApiError(
+        "resource-unavailable",
+        `Generation role ${reference.role} requires an incoming ${expectedKind} node`,
+      )
     }
-    return structuredClone(reference)
+    return { nodeId: node.id, role: reference.role }
   })
 }
 
-async function connectedInputDescriptor(node: CanvasNode): Promise<PluginConnectedInputDescriptor> {
+interface ConnectedInput {
+  edge: CanvasEdge
+  inputKey: string
+  mediaRevision: string
+  node: CanvasNode
+}
+
+const maximumConnectedInputs = 256
+
+function connectedInputs(
+  document: CanvasDocument,
+  binding: PluginHostNodeBinding,
+  principal: PluginPrincipal,
+  inputKeySecret: Uint8Array,
+): ConnectedInput[] {
+  requireOwnedNode(document, binding, principal.pluginId)
+  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
+  const seen = new Set<string>()
+  const connected: ConnectedInput[] = []
+  for (const edge of document.edges) {
+    if (edge.target !== binding.nodeId || edge.source === binding.nodeId || seen.has(edge.source)) continue
+    const node = nodes.get(edge.source)
+    if (!node || !isCanvasFileNode(node)) continue
+    if (connected.length >= maximumConnectedInputs) {
+      throw new PluginHostApiError("resource-unavailable", "Plugin input catalog exceeds the Host limit")
+    }
+    seen.add(node.id)
+    const mediaRevision = connectedInputMediaRevision(node)
+    connected.push({
+      edge,
+      inputKey: createConnectedInputKey(inputKeySecret, principal, binding, edge, node, mediaRevision),
+      mediaRevision,
+      node,
+    })
+  }
+  return connected
+}
+
+function resolveConnectedInput(
+  document: CanvasDocument,
+  binding: PluginHostNodeBinding,
+  principal: PluginPrincipal,
+  inputKeySecret: Uint8Array,
+  inputKey: string,
+) {
+  const connected = connectedInputs(document, binding, principal, inputKeySecret).find((candidate) =>
+    sameOpaqueInputKey(candidate.inputKey, inputKey),
+  )
+  if (!connected) {
+    throw new PluginHostApiError(
+      "stale-context",
+      "Plugin input key is invalid or no longer names a direct incoming Canvas file node",
+    )
+  }
+  return connected.node
+}
+
+function createConnectedInputKey(
+  secret: Uint8Array,
+  principal: PluginPrincipal,
+  binding: PluginHostNodeBinding,
+  edge: CanvasEdge,
+  node: CanvasNode,
+  mediaRevision: string,
+) {
+  return `v1.${createHmac("sha256", secret)
+    .update(
+      JSON.stringify([
+        "convax.plugin-connected-input/1",
+        principal.activeRevision,
+        principal.activeSetDigest,
+        principal.manifestDigest,
+        principal.pluginId,
+        principal.pluginVersion,
+        principal.runtime,
+        principal.snapshotDigest,
+        binding.projectId,
+        binding.canvasId,
+        binding.nodeId,
+        edge.id,
+        edge.source,
+        edge.target,
+        edge.sourceHandle ?? null,
+        edge.targetHandle ?? null,
+        edge.type ?? null,
+        node.id,
+        node.type,
+        node.data.kind,
+        mediaRevision,
+      ]),
+    )
+    .digest("base64url")}`
+}
+
+function sameOpaqueInputKey(expected: string, received: string) {
+  const expectedBytes = Buffer.from(expected, "utf8")
+  const receivedBytes = Buffer.from(received, "utf8")
+  return expectedBytes.byteLength === receivedBytes.byteLength && timingSafeEqual(expectedBytes, receivedBytes)
+}
+
+function connectedInputDescriptor(node: CanvasNode, inputKey: string): PluginConnectedInputDescriptor {
   const data = node.data
   const dimension = (value: unknown) =>
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
   const text = (value: unknown, maximum: number) =>
     typeof value === "string" && value && value === value.trim() && value.length <= maximum ? value : undefined
-  const mediaRevision = createHash("sha256")
-    .update(
-      JSON.stringify([
-        data.kind,
-        data.label,
-        data.name,
-        data.mimeType,
-        data.status,
-        data.width,
-        data.height,
-        data.durationMs,
-        metadata(data),
-      ]),
-    )
-    .digest("hex")
   return {
     ...(dimension(data.durationMs) === undefined ? {} : { durationMs: dimension(data.durationMs) }),
     ...(dimension(data.height) === undefined ? {} : { height: dimension(data.height) }),
-    id: node.id,
+    inputKey,
     kind: text(data.kind, 80) ?? "file",
     label: text(data.label, 512) ?? "Untitled",
-    mediaRevision,
+    mediaRevision: connectedInputMediaRevision(node),
     ...(text(data.mimeType, 256) ? { mimeType: text(data.mimeType, 256) } : {}),
     ...(text(data.name, 512) ? { name: text(data.name, 512) } : {}),
     ...(data.status === "idle" || data.status === "pending" || data.status === "error" ? { status: data.status } : {}),
     ...(dimension(data.width) === undefined ? {} : { width: dimension(data.width) }),
   }
+}
+
+function connectedInputMediaRevision(node: CanvasNode) {
+  const data = node.data
+  const resourceState =
+    data.resourceState && typeof data.resourceState === "object" && !Array.isArray(data.resourceState)
+      ? (data.resourceState as Record<string, unknown>)
+      : undefined
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        node.type,
+        data.kind,
+        data.mimeType ?? null,
+        data.status ?? null,
+        data.width ?? null,
+        data.height ?? null,
+        data.durationMs ?? null,
+        getProjectResourceReference(metadata(data)),
+        resourceState?.contentRevision ?? null,
+        resourceState?.status ?? null,
+      ]),
+    )
+    .digest("hex")
 }
 
 function throwIfAborted(signal?: AbortSignal) {

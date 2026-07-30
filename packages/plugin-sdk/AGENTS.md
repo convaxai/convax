@@ -13,6 +13,9 @@ the current Convax Plugin package contract.
   cached/refreshable Host API availability helpers, declaration checks, schema
   validation, discriminated API/capability/protocol failures, per-contract byte
   limits, cancellation, and bounded request correlation.
+- Its payload-free sender-scoped disconnect control envelope is protocol lifecycle,
+  not a Host API or Plugin capability. `client.close()` settles local work, posts
+  it best-effort, then closes the MessagePort; teardown never awaits `beforeunload`.
 - The rule that an exported operation is one exact verified sidecar MCP tool,
   including the pure `tools/list` input/output schema matcher used by Desktop
   readiness.

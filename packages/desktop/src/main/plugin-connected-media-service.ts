@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { constants as fsConstants, type Stats } from "node:fs"
 import fs from "node:fs/promises"
+import { performance } from "node:perf_hooks"
 import { Readable } from "node:stream"
 import type { CanvasDocumentClient } from "@convax/canvas/application"
 import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
@@ -96,17 +97,27 @@ type ConnectedMediaSession = ConnectedImageSession | ConnectedStreamSession
 
 type ConnectedMediaDocumentStore = Pick<CanvasDocumentClient, "load">
 
+interface ConnectedMediaMonotonicClock {
+  now(): number
+}
+
+const systemMonotonicClock: ConnectedMediaMonotonicClock = {
+  now: () => performance.now(),
+}
+
 export class PluginConnectedMediaService {
   private readonly sessions = new Map<string, ConnectedMediaSession>()
   private readonly imageValidationsByFrame = new Map<string, number>()
   private activeImageValidations = 0
   private readonly imageValidationControllers = new Set<AbortController>()
   private readonly canvasSubscription
+  private lastMonotonicNow = 0
   private disposed = false
 
   constructor(
     private readonly input: {
       changes: Pick<CanvasDocumentChangeBus, "subscribeAll">
+      clock?: ConnectedMediaMonotonicClock
       documents: ConnectedMediaDocumentStore
       images: PluginConnectedImageInspector
       media: ManagedCanvasMediaResolutionPort
@@ -192,7 +203,7 @@ export class PluginConnectedMediaService {
 
     this.cleanupExpired()
     this.requireImageSessionCapacity(request, senderId)
-    const now = Date.now()
+    const now = this.monotonicNow()
     const sessionId = randomUUID()
     const bearerToken = randomBytes(16).toString("hex")
     const session: ConnectedImageSession = {
@@ -237,21 +248,20 @@ export class PluginConnectedMediaService {
     }
   }
 
-  async open(request: PluginConnectedMediaOpenInput, senderId: number): Promise<PluginConnectedMediaOpenResult> {
+  async open(
+    request: PluginConnectedMediaOpenInput,
+    senderId: number,
+    signal?: AbortSignal,
+  ): Promise<PluginConnectedMediaOpenResult> {
     validateOpenInput(request)
     validateSenderId(senderId)
+    throwIfAborted(signal)
     if (this.disposed) throw new Error("Connected-media service is disposed")
     this.cleanupExpired()
-    if (this.sessions.size >= maximumSessions) throw new Error("Connected-media session capacity is exhausted")
-    const frameSessions = [...this.sessions.values()].filter(
-      (session) => session.senderId === senderId && sameFrame(session, request),
-    )
-    if (frameSessions.length >= maximumSessionsPerFrame) {
-      throw new Error(`Plugin frame exceeds ${maximumSessionsPerFrame} connected-media sessions`)
-    }
+    this.requireStreamSessionCapacity(request, senderId)
 
-    const principal = await this.requirePrincipal(request, "canvas.inputs.open")
-    const { document, source } = await this.requireLiveBinding(request)
+    const principal = await this.requirePrincipal(request, "canvas.inputs.open", signal)
+    const { document, source } = await this.requireLiveBinding(request, signal)
     const [resolved] = await this.input.media
       .resolve(
         {
@@ -265,6 +275,7 @@ export class PluginConnectedMediaService {
           allowedKindsDescription: "audio or video",
           operationLabel: "Plugin connected-media preview",
         },
+        signal,
       )
       .catch((error: unknown) => {
         if (error instanceof ManagedCanvasMediaResourceUnavailableError) {
@@ -282,13 +293,16 @@ export class PluginConnectedMediaService {
     if (!resolved || resolved.size > maximumMediaBytes) {
       throw new PluginHostApiResourceUnavailableError("Connected media is unavailable or exceeds the size limit")
     }
-    const currentPrincipal = await this.requirePrincipal(request, "canvas.inputs.open", undefined, principal)
+    const currentPrincipal = await this.requirePrincipal(request, "canvas.inputs.open", signal, principal)
     if (!sameActivePluginIdentity(currentPrincipal, principal)) {
       throw new Error("Plugin changed while its connected-media session was opening")
     }
-    await this.requireLiveBinding(request)
+    await this.requireLiveBinding(request, signal)
+    throwIfAborted(signal)
+    this.cleanupExpired()
+    this.requireStreamSessionCapacity(request, senderId)
 
-    const now = Date.now()
+    const now = this.monotonicNow()
     const sessionId = randomUUID()
     const bearerToken = randomBytes(16).toString("hex")
     const session: ConnectedMediaSession = {
@@ -493,10 +507,43 @@ export class PluginConnectedMediaService {
     }
   }
 
-  private cleanupExpired(now = Date.now()) {
+  private requireStreamSessionCapacity(request: PluginConnectedMediaOpenInput, senderId: number) {
+    if (this.disposed) throw new Error("Connected-media service is disposed")
+    if (this.sessions.size >= maximumSessions) throw new Error("Connected-media session capacity is exhausted")
+    const frameSessions = [...this.sessions.values()].filter(
+      (session) => session.senderId === senderId && sameFrame(session, request),
+    )
+    if (frameSessions.length >= maximumSessionsPerFrame) {
+      throw new Error(`Plugin frame exceeds ${maximumSessionsPerFrame} connected-media sessions`)
+    }
+  }
+
+  private cleanupExpired(now = this.monotonicNow()) {
     for (const [sessionId, session] of this.sessions) {
       if (session.idleExpiresAt <= now || session.absoluteExpiresAt <= now) this.sessions.delete(sessionId)
     }
+  }
+
+  private renewIdleDeadline(session: ConnectedMediaSession) {
+    const now = this.monotonicNow()
+    if (
+      this.sessions.get(session.sessionId) !== session ||
+      session.idleExpiresAt <= now ||
+      session.absoluteExpiresAt <= now
+    ) {
+      if (this.sessions.get(session.sessionId) === session) this.sessions.delete(session.sessionId)
+      throw new Error("Connected-media session expired while it was being revalidated")
+    }
+    session.idleExpiresAt = Math.min(now + idleLifetimeMs, session.absoluteExpiresAt)
+  }
+
+  private monotonicNow() {
+    const observed = (this.input.clock ?? systemMonotonicClock).now()
+    if (!Number.isFinite(observed) || observed < 0) {
+      throw new Error("Connected-media monotonic clock returned an invalid value")
+    }
+    this.lastMonotonicNow = Math.max(this.lastMonotonicNow, observed)
+    return this.lastMonotonicNow
   }
 
   private async requirePrincipal(
@@ -578,8 +625,10 @@ export class PluginConnectedMediaService {
     return image
   }
 
-  private async requireLiveBinding(request: PluginConnectedMediaOpenInput) {
+  private async requireLiveBinding(request: PluginConnectedMediaOpenInput, signal?: AbortSignal) {
+    throwIfAborted(signal)
     const snapshot = await this.input.documents.load({ canvasId: request.canvasId, scopeId: request.projectId })
+    throwIfAborted(signal)
     const document = snapshot.document
     if (!document || document.id !== request.canvasId) throw new Error("Plugin Canvas was not found")
     if (document.revision !== request.expectedRevision) {
@@ -619,7 +668,7 @@ export class PluginConnectedMediaService {
       if (!sameProjectResourceReference(reference, session.reference)) {
         throw new Error("Connected image reference changed after the session opened")
       }
-      session.idleExpiresAt = Math.min(Date.now() + idleLifetimeMs, session.absoluteExpiresAt)
+      this.renewIdleDeadline(session)
       return
     }
     const { source } = await this.requireLiveBinding({
@@ -650,7 +699,7 @@ export class PluginConnectedMediaService {
     ) {
       throw new Error("Connected media source changed after the session opened")
     }
-    session.idleExpiresAt = Math.min(Date.now() + idleLifetimeMs, session.absoluteExpiresAt)
+    this.renewIdleDeadline(session)
     return resolved
   }
 }

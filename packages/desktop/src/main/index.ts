@@ -161,6 +161,7 @@ import { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
 import { createElectronPluginConnectedImageInspector } from "./plugin-connected-image-inspector"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
+import { PluginFrameBindingRegistry } from "./plugin-frame-binding-registry"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 import {
@@ -261,20 +262,43 @@ function createWindow(
   mainWindow = window
   if (pendingMainWindowActivation) activateMainWindow()
   const webContentsId = window.webContents.id
-  const pluginFrameBindings = new Map<number, string>()
+  const pluginFrameBindings = new PluginFrameBindingRegistry(window.webContents)
+  const pluginFrameBindingSweep = setInterval(() => {
+    pluginFrameBindings.retireUnavailable(window.webContents)
+  }, 30_000)
+  pluginFrameBindingSweep.unref()
+  let pluginFrameBindingsDisposed = false
+  const disposePluginFrameBindings = () => {
+    if (pluginFrameBindingsDisposed) return
+    pluginFrameBindingsDisposed = true
+    clearInterval(pluginFrameBindingSweep)
+    pluginFrameBindings.dispose(window.webContents)
+  }
   trustedWebContents.add(webContentsId)
   window.once("closed", () => {
-    pluginFrameBindings.clear()
+    disposePluginFrameBindings()
     trustedWebContents.delete(webContentsId)
     if (mainWindow === window) mainWindow = null
     projectAssetGcScheduler.closeAll()
   })
+  window.webContents.once("destroyed", disposePluginFrameBindings)
+  window.webContents.on("frame-created", () => {
+    pluginFrameBindings.retireUnavailable(window.webContents)
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   const restoreNativeMainWindowControls = () => setNativeMainWindowControlsVisible(process.platform, window, true)
-  window.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
-    if (isMainFrame) restoreNativeMainWindowControls()
+  window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame) {
+      restoreNativeMainWindowControls()
+      if (!isInPlace) pluginFrameBindings.clear(window.webContents)
+      return
+    }
+    pluginFrameBindings.retireUnavailable(window.webContents)
   })
-  window.webContents.on("render-process-gone", restoreNativeMainWindowControls)
+  window.webContents.on("render-process-gone", () => {
+    restoreNativeMainWindowControls()
+    pluginFrameBindings.clear(window.webContents)
+  })
   window.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault()
   })
@@ -288,9 +312,9 @@ function createWindow(
       event.preventDefault()
       return
     }
-    const frameId = frame.frameTreeNodeId
-    const boundIdentity = webPluginFrameBindingForNavigation(frame.url, event.url, pluginFrameBindings.get(frameId))
-    if (boundIdentity && !pluginFrameBindings.has(frameId)) pluginFrameBindings.set(frameId, boundIdentity)
+    const existingBinding = pluginFrameBindings.bindingFor(window.webContents, frame)
+    const boundIdentity = webPluginFrameBindingForNavigation(frame.url, event.url, existingBinding)
+    if (boundIdentity && !existingBinding) pluginFrameBindings.bind(window.webContents, frame, boundIdentity)
     if (!isAllowedWebPluginFrameNavigation(frame.url, event.url, boundIdentity)) {
       event.preventDefault()
     }
@@ -302,8 +326,8 @@ function createWindow(
       const binding = webPluginFrameBindingForNavigation("", url)
       const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
       if (!binding || !frame) return
-      const bound = pluginFrameBindings.get(frame.frameTreeNodeId)
-      if (!bound) pluginFrameBindings.set(frame.frameTreeNodeId, binding)
+      const bound = pluginFrameBindings.bindingFor(window.webContents, frame)
+      if (!bound) pluginFrameBindings.bind(window.webContents, frame, binding)
     },
   )
   let closeGate: CloseGate = "idle"

@@ -44,7 +44,7 @@ describe("@convax/marketplace-kit", () => {
     expect(packageMetadata.schema).toBe("convax.package/2")
     expect(manifest).toMatchObject({
       schema: "convax.plugin/8",
-      hostApi: { major: 1, required: ["host.context.get"], optional: [] },
+      hostApi: { major: 2, required: ["host.context.get"], optional: [] },
     })
     await checkMarketplace(root)
 
@@ -57,15 +57,16 @@ describe("@convax/marketplace-kit", () => {
 
     for (const [index, invalidManifest] of [
       { ...manifest, schema: "convax.plugin/7" },
-      { ...manifest, hostApi: { major: 1, required: ["unknown.api"], optional: [] } },
+      { ...manifest, hostApi: { major: 2, required: ["unknown.api"], optional: [] } },
       {
         ...manifest,
-        hostApi: { major: 1, required: ["host.context.get", "host.context.get"], optional: [] },
+        hostApi: { major: 2, required: ["host.context.get", "host.context.get"], optional: [] },
       },
       {
         ...manifest,
-        hostApi: { major: 1, required: ["host.context.get"], optional: ["host.context.get"] },
+        hostApi: { major: 2, required: ["host.context.get"], optional: ["host.context.get"] },
       },
+      { ...manifest, hostApi: { major: 1, required: ["host.context.get"], optional: [] } },
       { ...manifest, hostApi: { major: 2, required: [], optional: [] } },
     ].entries()) {
       await Bun.write(manifestPath, `${JSON.stringify(invalidManifest, null, 2)}\n`)
@@ -162,7 +163,7 @@ describe("@convax/marketplace-kit", () => {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
           contributes: {},
-          hostApi: { major: 1, required: [], optional: [] },
+          hostApi: { major: 2, required: [], optional: [] },
           id: "imported-plugin",
           name: "Imported Plugin",
           description: "Imported Plugin description",
@@ -308,7 +309,7 @@ describe("@convax/marketplace-kit", () => {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
           contributes: {},
-          hostApi: { major: 1, required: [], optional: [] },
+          hostApi: { major: 2, required: [], optional: [] },
           id: "example-plugin",
           name: "Example Plugin",
           description: "Example Plugin",
@@ -445,7 +446,7 @@ describe("@convax/marketplace-kit", () => {
             schema: "convax.plugin/8",
             capabilities: ["projects.read"],
             contributes: {},
-            hostApi: { major: 1, required: [], optional: [] },
+            hostApi: { major: 2, required: [], optional: [] },
             id,
             name: id,
             description,
@@ -632,7 +633,7 @@ describe("@convax/marketplace-kit", () => {
         {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
-          hostApi: { major: 1, required: [], optional: [] },
+          hostApi: { major: 2, required: [], optional: [] },
           id: "ffmpeg-tools",
           name: "FFmpeg Tools",
           description: "FFmpeg tools",
@@ -688,7 +689,7 @@ describe("@convax/marketplace-kit", () => {
         {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
-          hostApi: { major: 1, required: [], optional: [] },
+          hostApi: { major: 2, required: [], optional: [] },
           id: "headless-workflows",
           name: "Headless Workflows",
           description: "Skill-only headless Plugin",
@@ -770,7 +771,7 @@ describe("@convax/marketplace-kit", () => {
             schema: "convax.plugin/8",
             capabilities: ["projects.read"],
             contributes: {},
-            hostApi: { major: 1, required: [], optional: [] },
+            hostApi: { major: 2, required: [], optional: [] },
             id: "nexus-service",
             name: "Nexus Service",
             description,
@@ -802,6 +803,11 @@ describe("@convax/marketplace-kit", () => {
     expect(ffmpegPluginArchive).toContain("`client.invokeCapability(...)`")
     expect(ffmpegPluginArchive).toContain("`client.getHostApiAvailability(id)`")
     expect(ffmpegPluginArchive).toContain("`convax.plugin-capability/3` is Host-internal")
+    expect(ffmpegPluginArchive).toContain("This generated file is the sandboxed Web Plugin client reference")
+    expect(ffmpegPluginArchive).toContain(
+      "An Agent following the owning Skill cannot create the Web Plugin MessagePort",
+    )
+    expect(ffmpegPluginArchive).toContain("Skill instructions and generated references grant no authority")
     const reservedReference = join(ffmpegSkillRoot, "package/references/plugin-capabilities.md")
     await mkdir(join(ffmpegSkillRoot, "package/references"), { recursive: true })
     await Bun.write(reservedReference, "hand-maintained drift\n")

@@ -4,6 +4,7 @@ import {
   isPluginHostCapabilityInvokeRequest,
   isPluginHostCommand,
   isPluginHostConnect,
+  isPluginHostDisconnect,
   isPluginHostRequest,
   isPluginHostResponse,
   pluginHostFailure as sdkPluginHostFailure,
@@ -13,14 +14,12 @@ import {
   type PluginHostCapabilityInvokeRequest,
   type PluginHostCommand,
   type PluginHostConnect,
+  type PluginHostDisconnect,
   type PluginHostRequest,
   type PluginHostResponse,
   type PluginHostRemoteFailure,
 } from "@convax/plugin-sdk/client"
-import {
-  pluginHostApiRemoteFailure,
-  pluginHostProtocolRemoteFailure,
-} from "./plugin-host-errors"
+import { pluginHostApiRemoteFailure, pluginHostProtocolRemoteFailure } from "./plugin-host-errors"
 
 /**
  * Sandboxed iframe/Web MessagePort ABI.
@@ -83,6 +82,7 @@ export type DesktopPluginHostRequest = PluginHostRequest
 export type DesktopPluginHostResponse = PluginHostResponse
 export type DesktopPluginHostCommand = PluginHostCommand
 export type DesktopPluginHostConnect = PluginHostConnect
+export type DesktopPluginHostDisconnect = PluginHostDisconnect
 export type DesktopPluginCapabilityInvokeRequest = PluginHostCapabilityInvokeRequest
 export type DesktopPluginCapabilityAvailabilityRequest = PluginHostCapabilityAvailabilityRequest
 
@@ -91,6 +91,7 @@ export type PluginCapabilityResponse = PluginCapabilityProtocolResponse
 export type PluginCapabilityCommand = PluginCapabilityProtocolCommand
 
 export const isDesktopPluginHostConnect = isPluginHostConnect
+export const isDesktopPluginHostDisconnect = isPluginHostDisconnect
 export const isDesktopPluginHostRequest = isPluginHostRequest
 export const isDesktopPluginHostResponse = isPluginHostResponse
 export const isDesktopPluginHostCommand = isPluginHostCommand
@@ -125,10 +126,7 @@ export function pluginCapabilitySuccess(id: string, result: unknown): PluginCapa
   return { id, ok: true, protocol: pluginCapabilityProtocolV3, result, type: "response" }
 }
 
-export function pluginCapabilityFailure(
-  id: string,
-  error: PluginHostRemoteFailure,
-): PluginCapabilityResponse {
+export function pluginCapabilityFailure(id: string, error: PluginHostRemoteFailure): PluginCapabilityResponse {
   return {
     error,
     id,
@@ -138,17 +136,10 @@ export function pluginCapabilityFailure(
   }
 }
 
-export function pluginCapabilityApiFailure(
-  id: string,
-  method: PluginApiId,
-  error: unknown,
-): PluginCapabilityResponse {
+export function pluginCapabilityApiFailure(id: string, method: PluginApiId, error: unknown): PluginCapabilityResponse {
   return pluginCapabilityFailure(id, pluginHostApiRemoteFailure(method, error))
 }
 
-export function pluginCapabilityProtocolFailure(
-  id: string,
-  error: unknown,
-): PluginCapabilityResponse {
+export function pluginCapabilityProtocolFailure(id: string, error: unknown): PluginCapabilityResponse {
   return pluginCapabilityFailure(id, pluginHostProtocolRemoteFailure(error))
 }
