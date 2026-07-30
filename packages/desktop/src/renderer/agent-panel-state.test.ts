@@ -17,6 +17,7 @@ import {
   selectAgentSessionAfterRefresh,
   resolveAgentCompactStatus,
   type StorageLike,
+  withAgentStoppingState,
 } from "./agent-panel-state"
 
 class MemoryStorage implements StorageLike {
@@ -248,6 +249,57 @@ describe("agent message scrolling", () => {
     }
     expect(agentSessionContentKey(state)).toBe(agentSessionContentKey(structuredClone(state)))
     expect(agentSessionContentKey({ ...state, status: { type: "idle" } })).not.toBe(agentSessionContentKey(state))
+  })
+})
+
+describe("Agent abort presentation state", () => {
+  test("settles local stopping state after abort completion and failure", async () => {
+    const completedStates: boolean[] = []
+    expect(
+      await withAgentStoppingState(
+        (stopping) => completedStates.push(stopping),
+        async () => "aborted",
+      ),
+    ).toBe("aborted")
+    expect(completedStates).toEqual([true, false])
+
+    const failedStates: boolean[] = []
+    const failure = await withAgentStoppingState(
+      (stopping) => failedStates.push(stopping),
+      async () => {
+        throw new Error("abort failed")
+      },
+    ).then(
+      () => "resolved",
+      (cause: unknown) => (cause instanceof Error ? cause.message : String(cause)),
+    )
+    expect(failure).toBe("abort failed")
+    expect(failedStates).toEqual([true, false])
+  })
+
+  test("does not let a deferred abort settle a replacement scope or an unmounted panel", async () => {
+    let resolveAbort: () => void = () => undefined
+    const abortRequest = new Promise<void>((resolve) => {
+      resolveAbort = () => resolve()
+    })
+    let oldScopeIsCurrent = true
+    let displayedStopping = false
+    const pending = withAgentStoppingState(
+      (stopping) => {
+        displayedStopping = stopping
+      },
+      () => abortRequest,
+      () => oldScopeIsCurrent,
+    )
+
+    expect(displayedStopping).toBeTrue()
+    oldScopeIsCurrent = false
+    displayedStopping = false
+    displayedStopping = true
+    resolveAbort()
+    await pending
+
+    expect(displayedStopping).toBeTrue()
   })
 })
 

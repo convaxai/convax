@@ -1,6 +1,8 @@
 import {
   Button,
   Input,
+  Loading,
+  LoadingSpinner,
   Select,
   SelectContent,
   SelectItem,
@@ -12,7 +14,7 @@ import {
   type ToolInputValue,
   validateToolInputValues,
 } from "@convax/ui"
-import { LoaderCircle, Sparkles } from "lucide-react"
+import { Sparkles } from "lucide-react"
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react"
 import {
   CanvasGenerationCatalogRequestTracker,
@@ -38,6 +40,7 @@ export interface CanvasGenerationPanelProps {
   initialPrompt?: string
   onOpenServices?: () => void
   onSubmit: (submission: CanvasGenerationComposerSubmission) => void
+  reducedMotion?: boolean
   scopeId?: string
   selectedNodeIds: readonly string[]
   submitting?: boolean
@@ -200,16 +203,15 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
   const submissionDisabled = inputDisabled || currentDescription?.status !== "ready" || !toolInputValidation?.valid
 
   return (
-    <div className={cn("flex min-w-0 flex-col", props.className)}>
+    <div className={cn("convax-generation-panel flex min-w-0 flex-col", props.className)}>
       <form className="flex flex-col gap-2" onSubmit={submit}>
         {catalogStatus === "loading" ? (
-          <div
-            className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            <LoaderCircle className="size-4 animate-spin" />
-            Loading generation tools…
-          </div>
+          <Loading
+            className="rounded-md border border-border px-3 py-2"
+            label="Loading generation tools…"
+            reducedMotion={props.reducedMotion}
+            size="sm"
+          />
         ) : null}
         {catalogStatus === "error" ? (
           <div
@@ -313,13 +315,12 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
           </div>
         ) : null}
         {currentDescription?.status === "loading" ? (
-          <div
-            className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-xs text-muted-foreground"
-            role="status"
-          >
-            <LoaderCircle className="size-4 animate-spin" />
-            Loading generation options…
-          </div>
+          <Loading
+            className="rounded-md border border-border px-3 py-2"
+            label="Loading generation options…"
+            reducedMotion={props.reducedMotion}
+            size="sm"
+          />
         ) : null}
         {currentDescription?.status === "error" ? (
           <div
@@ -361,7 +362,7 @@ export function CanvasGenerationPanel(props: CanvasGenerationPanelProps) {
             size="icon"
             type="submit"
           >
-            {props.submitting ? <LoaderCircle className="animate-spin" /> : <Sparkles />}
+            {props.submitting ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
           </Button>
         </div>
       </form>

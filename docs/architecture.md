@@ -854,11 +854,17 @@ UI action, typed Agent tool, or principal-bound Plugin call
 ```
 
 The domain mutation commits before optional view behavior. Selection, reveal,
-fit-view, zoom, animation, and notification are legitimate Agent view capabilities;
-they remain explicitly scoped to the mounted view and cannot rewrite domain history.
-Ordinary UI mutations such as adding, importing, duplicating, or generating nodes
-preserve the user's current viewport. Moving, fitting, centering, or zooming the view
-requires a separate explicit user action or view command.
+fit-view, zoom, animation, and notification are legitimate view capabilities; they
+remain explicitly scoped to the mounted view and cannot rewrite domain history.
+Canvas may apply one post-mutation safe reveal after an eligible foreground mutation
+when the newly affected nodes are outside the host-provided safe viewport. The
+current eligible flows are batch picker import and creation of a pending generation;
+the effect runs only for the current mounted document/scope/view and is canceled by
+stale results, remount, background refresh/restore, or intervening user navigation.
+Its failure cannot reverse a successful domain commit. Reduced motion sets its
+duration to zero but retains necessary positioning. Pointer drops, ordinary paste,
+duplicate, and duplicate-drag preserve the camera by default; broader Fit, Reveal,
+and Zoom remain explicit view operations.
 
 Canvas application transactions execute a non-empty ordered command list against
 one starting revision, advance the revision once, and use one repository CAS save. This is the
@@ -1174,6 +1180,10 @@ threshold, begin/update/end/cancel resize, and restoration of an expanded size.
 Desktop owns viewport budgets, concrete pixel values, pointer/keyboard listeners,
 responsive overlay rules, CSS transitions, reduced-motion behavior, and localStorage
 adapters. Project Sidebar still owns its internal vertical Canvases/Files split.
+Desktop converts an overlapping utility surface into host-neutral edge insets and
+passes only that geometry to Canvas. Canvas owns its safe camera rectangle and clamps
+Canvas-owned toolbars, menus, MiniMap, selection controls, and composer surfaces
+without learning which Desktop utility produced the occlusion.
 
 This distinction applies to future panels: add generic state only when it is reusable
 window coordination; keep the product's visual implementation in the host.

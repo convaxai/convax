@@ -233,6 +233,23 @@ export function isAgentScrollNearBottom(
 }
 
 /**
+ * Owns the short-lived renderer-only stopping indicator and guarantees that
+ * it settles after either a successful or failed abort request.
+ */
+export async function withAgentStoppingState<T>(
+  setStopping: (stopping: boolean) => void,
+  abortRequest: () => Promise<T>,
+  shouldSettle: () => boolean = () => true,
+) {
+  setStopping(true)
+  try {
+    return await abortRequest()
+  } finally {
+    if (shouldSettle()) setStopping(false)
+  }
+}
+
+/**
  * OpenCode polling returns fresh arrays even when nothing changed. A stable
  * content key prevents those no-op polls from repeatedly forcing scroll work.
  */

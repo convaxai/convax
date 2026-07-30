@@ -9,6 +9,9 @@ function Passthrough(props: { children?: ReactNode }) {
 
 mock.module("@convax/ui", () => ({
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
+  LoadingSpinner: (props: { className?: string }) => (
+    <span aria-hidden="true" className={props.className} data-slot="loading-spinner" data-ui-loading-spinner="" />
+  ),
   Tooltip: Passthrough,
   cn: (...values: unknown[]) => values.filter((value) => typeof value === "string").join(" "),
 }))

@@ -13,11 +13,14 @@ export interface CanvasConnectionNodeType {
 
 export interface CanvasEditorController {
   document: CanvasDocument
+  enteringNodeIds: ReadonlySet<string>
   hydrating: boolean
+  reducedMotion: boolean
   selection: CanvasSelection
   selectionContext: CanvasSelectionContext
   readOnly: boolean
   canUpload: boolean
+  canRelinkResource: boolean
   fileRenderers: CanvasFileRendererRegistry
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
   visibleSelectionActions: readonly CanvasSelectionAction[]
@@ -32,6 +35,7 @@ export interface CanvasEditorController {
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
   duplicateNode: (nodeId: string) => void
   executeSelectionAction: (action: CanvasSelectionAction) => void
+  finishNodeEntry: (nodeId: string) => void
   isSelectionActionPending: (actionId: string) => boolean
   finishSelectionDrag: () => void
   setSelectionDragCandidateNode: (nodeId: string | null) => void

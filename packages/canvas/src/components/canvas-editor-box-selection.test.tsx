@@ -87,6 +87,8 @@ mock.module("@convax/ui", () => ({
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
   Input: () => <input />,
+  Loading: (props: { label?: ReactNode }) => <div role="status">{props.label}</div>,
+  LoadingSpinner: () => <span aria-hidden="true" data-ui-loading-spinner="" />,
   Select: Passthrough,
   SelectContent: Passthrough,
   SelectItem: Passthrough,

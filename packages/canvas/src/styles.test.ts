@@ -8,11 +8,24 @@ function cssRule(styles: string, selector: string) {
 }
 
 describe("Canvas file-card assistant sizing", () => {
-  test("leaves visual chrome to one wider host-rendered composer surface", async () => {
+  test("anchors the host-rendered composer to the Canvas viewport overlay", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const overlayRule = cssRule(styles, ".convax-canvas .convax-canvas-composer-overlay")
     const assistantRule = styles.match(/\.convax-canvas \.convax-node-assistant \{[^}]+\}/s)?.[0] ?? ""
 
-    expect(assistantRule).toContain("width: min(720px")
+    expect(overlayRule).toContain("position: absolute")
+    expect(overlayRule).toContain("--canvas-safe-bottom")
+    expect(overlayRule).toContain("--canvas-safe-left")
+    expect(overlayRule).toContain("--canvas-safe-right")
+    expect(overlayRule).toContain("right: calc(")
+    expect(overlayRule).toContain("left: calc(")
+    expect(overlayRule).toContain("display: flex")
+    expect(overlayRule).toContain("justify-content: center")
+    expect(overlayRule).toContain("z-index: 50")
+    expect(overlayRule).toContain("pointer-events: none")
+    expect(styles).toMatch(
+      /\.convax-canvas \.convax-canvas-composer-overlay > \* \{[^}]*width: min\(600px, 100%\)[^}]*pointer-events: auto/s,
+    )
     expect(assistantRule).toContain("height: auto")
     expect(assistantRule).toContain("border: 0")
     expect(assistantRule).toContain("background: transparent")
@@ -48,7 +61,7 @@ describe("Canvas file-card assistant sizing", () => {
     expect(styles).toContain(".convax-text-block-handle-anchor")
     expect(styles).toContain(".convax-text-inline-menu")
     expect(styles).toMatch(
-      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.convax-text-inline-menu \{\s*animation: none;/,
+      /\.convax-canvas\[data-canvas-reduced-motion="true"\] \.convax-text-inline-menu,[\s\S]*animation: none;/,
     )
   })
 })
@@ -76,23 +89,26 @@ describe("Canvas-first visual hierarchy", () => {
     expect(styles).not.toContain("fill: #8f63ff")
   })
 
-  test("keeps the dot grid visible without competing with canvas content", async () => {
+  test("does not apply a second opacity pass to the dot grid", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
-    const backgroundRule = styles.match(/\.convax-canvas \.react-flow__background \{[^}]+\}/s)?.[0] ?? ""
 
-    expect(backgroundRule).toContain("opacity: 0.78")
+    expect(styles).not.toMatch(/\.convax-canvas \.react-flow__background \{[^}]*opacity:/s)
   })
 
-  test("renders alignment guides above the viewport without intercepting drag input", async () => {
+  test("renders dashed alignment guides above the viewport without intercepting drag input", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const guidesRule = cssRule(styles, ".convax-canvas .convax-snap-guides")
     const guideRule = cssRule(styles, ".convax-canvas .convax-snap-guide")
 
     expect(guidesRule).toContain("position: absolute")
     expect(guidesRule).toContain("pointer-events: none")
-    expect(guideRule).toContain("background: var(--canvas-accent)")
-    expect(styles).toContain(".convax-canvas .convax-snap-guide.is-vertical")
-    expect(styles).toContain(".convax-canvas .convax-snap-guide.is-horizontal")
+    expect(guideRule).toContain("background: transparent")
+    expect(cssRule(styles, ".convax-canvas .convax-snap-guide.is-vertical")).toContain(
+      "border-left: 1px dashed var(--canvas-accent)",
+    )
+    expect(cssRule(styles, ".convax-canvas .convax-snap-guide.is-horizontal")).toContain(
+      "border-top: 1px dashed var(--canvas-accent)",
+    )
   })
 
   test("keeps Canvas-owned node chrome available as a drag target", async () => {
@@ -104,12 +120,113 @@ describe("Canvas-first visual hierarchy", () => {
     expect(titleRule).toContain("user-select: none")
   })
 
-  test("removes the node surface shadow immediately while dragging", async () => {
+  test("keeps line resizing without rendering four corner dots", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const handleRule = cssRule(styles, ".convax-canvas .react-flow__resize-control.convax-node-resizer__handle::after")
+
+    expect(handleRule).toContain("display: none")
+    expect(handleRule).toContain("content: none")
+    expect(handleRule).not.toContain("border-radius")
+  })
+
+  test("uses opacity and shadow without scaling the node surface while dragging", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const draggingSurfaceRule = cssRule(styles, ".convax-canvas .react-flow__node.dragging .convax-node__surface")
 
     expect(draggingSurfaceRule).toContain("box-shadow: none")
-    expect(draggingSurfaceRule).toContain("transition: none")
+    expect(draggingSurfaceRule).toContain("opacity: 0.94")
+    expect(draggingSurfaceRule).not.toContain("transform:")
+    expect(draggingSurfaceRule).toContain("--canvas-motion-ease-standard")
+  })
+
+  test("uses one motion hierarchy for nodes, ports, selection, edges, menus, and panels", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const defaults = cssRule(styles, ":root")
+    const nodeRule = cssRule(
+      styles,
+      '.convax-canvas .convax-node[data-canvas-node-entering="true"] > .convax-node__entry-shell',
+    )
+    const portRule = cssRule(styles, ".convax-canvas .convax-node__connection-icon")
+    const pendingConnectionRule = cssRule(styles, ".convax-pending-connection__line")
+    const liveConnectionRule = cssRule(styles, ".convax-canvas .convax-connection__line")
+    const selectedEdgeRule = cssRule(styles, ".convax-canvas .react-flow__edge.selected .convax-edge__line")
+    const referenceEdgeRule = cssRule(styles, ".convax-canvas .react-flow__edge.animated .convax-edge__line")
+    const menuRule = cssRule(styles, ".convax-motion-menu")
+    const generationRule = cssRule(styles, ".convax-canvas .convax-generation-surface")
+    const generationEnterRule = cssRule(
+      styles,
+      '.convax-canvas .convax-canvas-composer-overlay[data-canvas-presence="enter"]',
+    )
+    const generationExitRule = cssRule(
+      styles,
+      '.convax-canvas .convax-canvas-composer-overlay[data-canvas-presence="exit"]',
+    )
+    const generationKeyframes = styles.slice(
+      styles.indexOf("@keyframes convax-generation-panel-enter"),
+      styles.indexOf("@keyframes convax-selection-toolbar-enter"),
+    )
+
+    expect(defaults).toContain("--canvas-motion-edge-loop: 500ms")
+    expect(defaults).toContain("--canvas-motion-node-enter: 220ms")
+    expect(defaults).toContain("--canvas-motion-port: 156ms")
+    expect(defaults).toContain("--canvas-motion-menu: 100ms")
+    expect(defaults).toContain("--canvas-motion-generation-panel: 200ms")
+    expect(defaults).toContain("--canvas-motion-selection-toolbar: 150ms")
+    expect(defaults).toContain("--canvas-motion-viewport: 300ms")
+    expect(nodeRule).toContain("animation: convax-node-enter var(--canvas-motion-node-enter)")
+    expect(styles).not.toMatch(/\.convax-node\.is-selected > \.convax-node__entry-shell/)
+    expect(portRule).toContain("transform var(--canvas-motion-port) var(--canvas-motion-ease-elastic)")
+    expect(portRule).toContain("transform: scale(0.55)")
+    expect(styles).toMatch(
+      /\.convax-node__connection:hover \.convax-node__connection-icon,[\s\S]*?transform: scale\(1\.35\)/,
+    )
+    expect(styles).toContain(".convax-canvas .react-flow__node.selected .convax-node__surface")
+    expect(pendingConnectionRule).toContain("stroke: var(--canvas-edge")
+    expect(pendingConnectionRule).toContain("stroke-dasharray: 7 6")
+    expect(liveConnectionRule).toContain("stroke: var(--canvas-edge)")
+    expect(liveConnectionRule).toContain("stroke-dasharray: 7 6")
+    expect(selectedEdgeRule).not.toContain("animation:")
+    expect(selectedEdgeRule).not.toContain("stroke-dasharray")
+    expect(referenceEdgeRule).toContain("stroke-dasharray: 8 7")
+    expect(referenceEdgeRule).toContain("var(--canvas-motion-edge-loop) linear infinite")
+    expect(menuRule).toContain("var(--canvas-motion-menu, 100ms)")
+    expect(styles).toMatch(/@keyframes convax-menu-enter \{[\s\S]*?transform: scale\(0\.95\)/)
+    expect(styles).toContain("@keyframes convax-surface-enter-top")
+    expect(styles).toContain("@keyframes convax-surface-enter-bottom")
+    expect(styles).toContain("@keyframes convax-surface-exit-top")
+    expect(styles).toContain("@keyframes convax-surface-exit-bottom")
+    expect(styles).toContain(".convax-canvas.is-leaving .convax-motion-surface--top")
+    expect(styles).toContain(".convax-canvas.is-leaving .convax-motion-surface--bottom")
+    expect(generationRule).toContain("pointer-events: auto")
+    expect(generationEnterRule).toContain("convax-generation-panel-enter")
+    expect(generationEnterRule).toContain("var(--canvas-motion-generation-panel)")
+    expect(generationExitRule).toContain("convax-generation-panel-exit")
+    expect(generationExitRule).toContain("var(--canvas-motion-generation-panel)")
+    expect(generationKeyframes).toContain("translateY(8px)")
+    expect(generationKeyframes).toContain("translateY(0)")
+    expect(generationKeyframes).not.toContain("scale(")
+    expect(styles).toMatch(/@keyframes convax-selection-toolbar-enter \{[\s\S]*?translateY\(5px\) scale\(0\.92\)/)
+  })
+
+  test("clamps Canvas-owned overlays to host-provided safe viewport insets", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    expect(cssRule(styles, ".convax-canvas .convax-viewport-toolbar")).toContain("--canvas-safe-left")
+    expect(cssRule(styles, ".convax-canvas .convax-canvas-minimap")).toContain("--canvas-safe-right")
+    expect(cssRule(styles, ".convax-canvas .convax-selection-toolbar")).toContain("--canvas-safe-right")
+  })
+
+  test("renders drag snap guides as dashed lines in normal and forced colors", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const guideRule = cssRule(styles, ".convax-canvas .convax-snap-guide")
+    const verticalGuideRule = cssRule(styles, ".convax-canvas .convax-snap-guide.is-vertical")
+    const horizontalGuideRule = cssRule(styles, ".convax-canvas .convax-snap-guide.is-horizontal")
+
+    expect(guideRule).toContain("background: transparent")
+    expect(verticalGuideRule).toContain("border-left: 1px dashed var(--canvas-accent)")
+    expect(horizontalGuideRule).toContain("border-top: 1px dashed var(--canvas-accent)")
+    expect(styles).toMatch(
+      /@media \(forced-colors: active\)[\s\S]*\.convax-snap-guide\.is-vertical \{[\s\S]*border-left-color: CanvasText;[\s\S]*\.convax-snap-guide\.is-horizontal \{[\s\S]*border-top-color: CanvasText;/,
+    )
   })
 
   test("keeps the viewport toolbar compact without reserving space for a creation bar", async () => {
@@ -117,8 +234,8 @@ describe("Canvas-first visual hierarchy", () => {
     const viewportRule = cssRule(styles, ".convax-canvas .convax-viewport-toolbar")
 
     expect(viewportRule).toContain("min-height: 42px")
+    expect(viewportRule).toContain("--canvas-safe-bottom")
     expect(styles).not.toContain("convax-creation-toolbar")
-    expect(styles).not.toMatch(/\.convax-canvas \.convax-viewport-toolbar \{\s*bottom:/)
   })
 
   test("keeps the node-search glyph clear of its input text across host stylesheet order", async () => {
@@ -145,6 +262,33 @@ describe("Canvas-first visual hierarchy", () => {
     expect(outlineRule).toContain("min-height: 36px")
     expect(styles).toMatch(
       /\.convax-canvas-outline__item:focus-visible \{\s*outline: 2px solid var\(--canvas-accent,\s*var\(--ui-focus-ring\)\)/,
+    )
+  })
+
+  test("removes Canvas transitions and animations from the resolved host policy", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+
+    expect(styles).toContain('.convax-canvas[data-canvas-reduced-motion="true"] *,')
+    expect(styles).toContain('.convax-canvas[data-canvas-reduced-motion="true"] *::before,')
+    expect(styles).toContain('.convax-canvas[data-canvas-reduced-motion="true"] *::after')
+    expect(styles).toContain("animation: none !important")
+    expect(styles).toContain("transition: none !important")
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
+  })
+
+  test("keeps node entrance inside Convax chrome and presents the final frame in forced colors", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const reactFlowNodeRule = cssRule(styles, ".convax-canvas .react-flow__node")
+    const entryRule = cssRule(
+      styles,
+      '.convax-canvas .convax-node[data-canvas-node-entering="true"] > .convax-node__entry-shell',
+    )
+
+    expect(reactFlowNodeRule).not.toContain("animation:")
+    expect(reactFlowNodeRule).not.toContain("transform:")
+    expect(entryRule).toContain("animation: convax-node-enter")
+    expect(styles).toMatch(
+      /@media \(forced-colors: active\)[\s\S]*data-canvas-node-entering="true"[\s\S]*animation: none;[\s\S]*transform: none;/,
     )
   })
 })
@@ -218,13 +362,20 @@ describe("Canvas theme closure", () => {
     const mediaContentRule = cssRule(styles, ".convax-canvas .convax-media-empty__content")
     const mediaIconRule = cssRule(styles, ".convax-canvas .convax-media-empty__icon")
     const mediaHintRule = cssRule(styles, ".convax-canvas .convax-media-empty__hint")
+    const mediaActionsRule = cssRule(styles, ".convax-canvas .convax-media-empty__actions")
+    const mediaButtonRule = cssRule(styles, ".convax-canvas .convax-media-empty__button")
     const outlineEmptyRule = cssRule(styles, ".convax-canvas-outline__empty")
 
     expect(mediaEmptyRule).toContain("var(--canvas-node-background)")
     expect(mediaContentRule).toContain("color: var(--canvas-text)")
     expect(mediaIconRule).toContain("background: var(--canvas-node-background)")
     expect(mediaHintRule).toContain("color: var(--canvas-text-muted)")
+    expect(mediaActionsRule).toContain("flex-wrap: wrap")
+    expect(mediaButtonRule).toContain("min-height: 40px")
     expect(outlineEmptyRule).toContain("var(--canvas-text-muted")
+    expect(styles).toMatch(
+      /@media \(forced-colors: active\)[\s\S]*\.convax-canvas \.convax-media-empty--image[\s\S]*border-color: CanvasText/,
+    )
     expect(styles).toMatch(
       /\.convax-canvas-outline__item\[aria-current="location"\]\s*\{[^}]*background:\s*var\(--canvas-interactive-selected,\s*var\(--ui-interactive-selected\)\)/s,
     )

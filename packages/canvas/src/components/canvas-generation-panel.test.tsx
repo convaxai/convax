@@ -75,6 +75,20 @@ function createService(listTools: CanvasGenerateService["listTools"]): CanvasGen
 }
 
 describe("CanvasGenerationPanel", () => {
+  test("marks the Canvas-owned generation surface for the shared panel motion policy", async () => {
+    const container = render(
+      <CanvasGenerationPanel
+        document={createCanvasDocument({ id: "canvas-generation-motion" })}
+        generateService={createService(mock(async () => []))}
+        onSubmit={() => undefined}
+        selectedNodeIds={[]}
+      />,
+    )
+
+    await flushEffects()
+    expect(container.querySelector(".convax-generation-panel")).not.toBeNull()
+  })
+
   test("shows flat service and model names and submits the selected concrete model", async () => {
     const onSubmit = mock(() => undefined)
     const service = createService(

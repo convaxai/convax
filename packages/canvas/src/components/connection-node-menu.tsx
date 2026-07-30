@@ -28,7 +28,7 @@ export function ConnectionNodeMenu(props: {
   onSelect: (type: string) => void
 }) {
   return (
-    <div className="convax-connect-menu nodrag nowheel" data-convax-connect-menu="true" role="menu">
+    <div className="convax-connect-menu convax-motion-menu nodrag nowheel" data-convax-connect-menu="true" role="menu">
       <div className="convax-connect-menu__title">Add and connect</div>
       <div className="convax-connect-menu__items">
         {props.items.map((item) => (

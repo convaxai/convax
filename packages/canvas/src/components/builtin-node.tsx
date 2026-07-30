@@ -1,4 +1,4 @@
-import { Button, Tooltip, cn } from "@convax/ui"
+import { Button, LoadingSpinner, Tooltip, cn } from "@convax/ui"
 import type { Editor, JSONContent } from "@tiptap/core"
 import DragHandle, { type DragHandleProps } from "@tiptap/extension-drag-handle-react"
 import Placeholder from "@tiptap/extension-placeholder"
@@ -29,7 +29,6 @@ import {
   Italic,
   List,
   ListOrdered,
-  LoaderCircle,
   Maximize2,
   Music2,
   Pause,
@@ -40,6 +39,7 @@ import {
   RefreshCw,
   Save,
   Scan,
+  Sparkles,
   Strikethrough,
   Trash2,
   Type,
@@ -61,11 +61,13 @@ import {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
 import { createPortal } from "react-dom"
 import { updateCanvasNodeData } from "../commands"
+import { useCanvasOverlayPresence } from "./use-overlay-presence"
 import {
   CANVAS_NODE_INPUT_HANDLE_ID,
   CANVAS_NODE_OUTPUT_HANDLE_ID,
@@ -80,6 +82,7 @@ import {
   type CanvasNodeGenerationRun,
 } from "../generation-run"
 import { fitCanvasMediaNodeToIntrinsicSize } from "../media-sizing"
+import { CANVAS_FORCED_COLORS_QUERY, CANVAS_MOTION_DURATION, resolveCanvasRectEnterTransform } from "../motion"
 import { partitionCanvasSelectionActions, type CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import { CanvasTextResourceConflictError, useCanvasService, type CanvasTextResourceService } from "../services"
@@ -176,7 +179,7 @@ function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAc
           <ToolbarButton
             key={action.id}
             disabled={pending}
-            icon={pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+            icon={pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
             label={action.label}
             onClick={() => editor.executeSelectionAction(action)}
           />
@@ -214,7 +217,7 @@ function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAc
                     type="button"
                   >
                     <span className="[&>svg]:size-3.5">
-                      {pending ? <LoaderCircle className="animate-spin" /> : (action.icon ?? <Workflow />)}
+                      {pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
                     </span>
                     <span>{action.label}</span>
                   </button>
@@ -302,6 +305,7 @@ function NodeChrome(props: {
         "convax-node group relative size-full text-card-foreground",
         ownsSingleNodeContext && "is-selected",
       )}
+      data-canvas-node-entering={editor.enteringNodeIds.has(props.node.id) || undefined}
       data-canvas-node-kind={props.node.data.kind}
       data-canvas-node-status={props.node.data.status ?? "idle"}
       ref={props.nodeRef}
@@ -322,84 +326,92 @@ function NodeChrome(props: {
           {toolbar}
         </NodeToolbar>
       ) : null}
-      <div className="convax-node__title flex items-center gap-1.5" data-canvas-node-drag-handle="true">
-        <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
-        <span className="truncate">{props.label}</span>
-        {props.node.data.status === "pending" ? <LoaderCircle className="ml-auto size-3.5 animate-spin" /> : null}
-      </div>
-      <div className={cn("convax-node__surface size-full overflow-hidden border bg-card", props.className)}>
-        {props.children}
-      </div>
-      <>
-        <Handle
-          aria-disabled={editor.readOnly}
-          aria-expanded={!editor.readOnly && connectMenuSide === "left"}
-          aria-label="Connect input on left"
-          className="convax-node__connection convax-node__connection--left"
-          id={CANVAS_NODE_INPUT_HANDLE_ID}
-          isConnectable={!editor.readOnly}
-          onClick={
-            editor.readOnly
-              ? undefined
-              : (event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setConnectMenuSide((current) => (current === "left" ? null : "left"))
-                }
-          }
-          position={Position.Left}
-          style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
-          type="target"
-        >
-          {!editor.readOnly ? (
-            <span className="convax-node__connection-icon">
-              <Plus />
-            </span>
+      <div
+        className="convax-node__entry-shell relative size-full"
+        onAnimationEnd={(event) => {
+          if (event.currentTarget !== event.target || !editor.enteringNodeIds.has(props.node.id)) return
+          editor.finishNodeEntry(props.node.id)
+        }}
+      >
+        <div className="convax-node__title flex items-center gap-1.5" data-canvas-node-drag-handle="true">
+          <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
+          <span className="truncate">{props.label}</span>
+          {props.node.data.status === "pending" ? (
+            <LoadingSpinner className="ml-auto" reducedMotion={editor.reducedMotion} size="sm" />
           ) : null}
-        </Handle>
-        <Handle
-          aria-disabled={editor.readOnly}
-          aria-expanded={!editor.readOnly && connectMenuSide === "right"}
-          aria-label="Connect output on right"
-          className="convax-node__connection convax-node__connection--right"
-          id={CANVAS_NODE_OUTPUT_HANDLE_ID}
-          isConnectable={!editor.readOnly}
-          onClick={
-            editor.readOnly
-              ? undefined
-              : (event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  setConnectMenuSide((current) => (current === "right" ? null : "right"))
-                }
-          }
-          position={Position.Right}
-          style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
-          type="source"
-        >
-          {!editor.readOnly ? (
-            <span className="convax-node__connection-icon">
-              <Plus />
-            </span>
-          ) : null}
-        </Handle>
-        {!editor.readOnly && connectMenuSide ? (
-          <NodeToolbar
-            className="convax-connect-menu-positioner nodrag nowheel"
-            isVisible
-            offset={50}
-            position={connectMenuSide === "left" ? Position.Left : Position.Right}
-          >
-            <ConnectionNodeMenu
-              items={editor.connectionNodeTypes}
-              onSelect={(type) => {
-                editor.quickConnect(props.node.id, connectMenuSide, type)
-                setConnectMenuSide(null)
-              }}
-            />
-          </NodeToolbar>
+        </div>
+        <div className={cn("convax-node__surface size-full overflow-hidden border bg-card", props.className)}>
+          {props.children}
+        </div>
+      </div>
+      <Handle
+        aria-disabled={editor.readOnly}
+        aria-expanded={!editor.readOnly && connectMenuSide === "left"}
+        aria-label="Connect input on left"
+        className="convax-node__connection convax-node__connection--left"
+        id={CANVAS_NODE_INPUT_HANDLE_ID}
+        isConnectable={!editor.readOnly}
+        onClick={
+          editor.readOnly
+            ? undefined
+            : (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setConnectMenuSide((current) => (current === "left" ? null : "left"))
+              }
+        }
+        position={Position.Left}
+        style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
+        type="target"
+      >
+        {!editor.readOnly ? (
+          <span className="convax-node__connection-icon">
+            <Plus />
+          </span>
         ) : null}
-      </>
+      </Handle>
+      <Handle
+        aria-disabled={editor.readOnly}
+        aria-expanded={!editor.readOnly && connectMenuSide === "right"}
+        aria-label="Connect output on right"
+        className="convax-node__connection convax-node__connection--right"
+        id={CANVAS_NODE_OUTPUT_HANDLE_ID}
+        isConnectable={!editor.readOnly}
+        onClick={
+          editor.readOnly
+            ? undefined
+            : (event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setConnectMenuSide((current) => (current === "right" ? null : "right"))
+              }
+        }
+        position={Position.Right}
+        style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
+        type="source"
+      >
+        {!editor.readOnly ? (
+          <span className="convax-node__connection-icon">
+            <Plus />
+          </span>
+        ) : null}
+      </Handle>
+      {!editor.readOnly && connectMenuSide ? (
+        <NodeToolbar
+          className="convax-connect-menu-positioner nodrag nowheel"
+          isVisible
+          offset={50}
+          position={connectMenuSide === "left" ? Position.Left : Position.Right}
+        >
+          <ConnectionNodeMenu
+            items={editor.connectionNodeTypes}
+            onSelect={(type) => {
+              editor.quickConnect(props.node.id, connectMenuSide, type)
+              setConnectMenuSide(null)
+            }}
+          />
+        </NodeToolbar>
+      ) : null}
     </div>
   )
 }
@@ -1234,11 +1246,49 @@ export function ExpandedTextEditorDialog(props: {
   onDiscard?: () => void
   onReload?: () => void
   reloading?: boolean
+  reducedMotion?: boolean
   saving?: boolean
+  sourceRect?: { height: number; left: number; top: number; width: number }
   toolbar?: ReactNode
 }) {
   const titleId = useId()
   const overlayRoot = useCanvasOverlayRoot()
+  const dialogRef = useRef<HTMLElement>(null)
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current
+    if (
+      !dialog ||
+      !props.sourceRect ||
+      props.reducedMotion ||
+      typeof dialog.animate !== "function" ||
+      (typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia(CANVAS_FORCED_COLORS_QUERY).matches)
+    )
+      return undefined
+    const initial = resolveCanvasRectEnterTransform(props.sourceRect, dialog.getBoundingClientRect())
+    if (!initial) return undefined
+    const animation = dialog.animate(
+      [
+        { opacity: 0.72, transform: initial.transform, transformOrigin: initial.transformOrigin },
+        { opacity: 1, transform: "none", transformOrigin: initial.transformOrigin },
+      ],
+      {
+        duration: CANVAS_MOTION_DURATION.viewport,
+        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
+        fill: "both",
+      },
+    )
+    return () => {
+      animation.cancel()
+    }
+  }, [
+    props.reducedMotion,
+    props.sourceRect?.height,
+    props.sourceRect?.left,
+    props.sourceRect?.top,
+    props.sourceRect?.width,
+  ])
   const layer = (
     <div
       className="convax-text-editor-dialog-layer absolute inset-0 z-[120] grid place-items-center bg-foreground/25 p-4 backdrop-blur-[2px]"
@@ -1263,6 +1313,8 @@ export function ExpandedTextEditorDialog(props: {
         aria-labelledby={titleId}
         aria-modal="true"
         className="convax-text-editor-dialog relative flex size-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border bg-surface-panel text-foreground shadow-[var(--ui-shadow-high)]"
+        data-canvas-rect-enter={props.sourceRect ? "true" : undefined}
+        ref={dialogRef}
         role="dialog"
       >
         <header className="flex shrink-0 items-center gap-3 border-b border-border bg-surface-raised/95 px-4 py-3">
@@ -1328,6 +1380,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const initialSourceRef = useRef(textEditorSource(data))
   const [editing, setEditing] = useState(false)
   const [expandedOpen, setExpandedOpen] = useState(false)
+  const [expandedSourceRect, setExpandedSourceRect] = useState<
+    { height: number; left: number; top: number; width: number } | undefined
+  >()
   const [saving, setSaving] = useState(false)
   const [reloading, setReloading] = useState(false)
   const [savingEditableCopy, setSavingEditableCopy] = useState(false)
@@ -1382,6 +1437,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       textEditor.setEditable(false)
       setEditing(false)
       setExpandedOpen(false)
+      setExpandedSourceRect(undefined)
       const returnTarget = returnFocusRef.current
       returnFocusRef.current = null
       if (returnTarget) {
@@ -1442,6 +1498,13 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   const openExpandedEditor = (invoker?: HTMLElement) => {
     if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+    const source = nodeFocusRef.current ?? invoker
+    if (source) {
+      const rect = source.getBoundingClientRect()
+      setExpandedSourceRect({ height: rect.height, left: rect.left, top: rect.top, width: rect.width })
+    } else {
+      setExpandedSourceRect(undefined)
+    }
     returnFocusRef.current =
       nodeFocusRef.current ??
       invoker ??
@@ -1453,6 +1516,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   const closeExpandedEditor = useCallback(() => {
     setExpandedOpen(false)
+    setExpandedSourceRect(undefined)
     textEditor?.setEditable(false)
     setEditing(false)
     const returnTarget = returnFocusRef.current
@@ -1620,7 +1684,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
         <ToolbarButton
           disabled={savingEditableCopy}
-          icon={savingEditableCopy ? <LoaderCircle className="animate-spin" /> : <Save />}
+          icon={savingEditableCopy ? <LoadingSpinner reducedMotion={canvasEditor.reducedMotion} size="sm" /> : <Save />}
           label="Save editable copy"
           onClick={() => {
             setSavingEditableCopy(true)
@@ -1708,7 +1772,9 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           }
           onSave={closeAndSaveTextEditor}
           reloading={reloading}
+          reducedMotion={canvasEditor.reducedMotion}
           saving={saving}
+          sourceRect={expandedSourceRect}
           toolbar={formattingToolbar}
         />
       ) : null}
@@ -1840,11 +1906,89 @@ function mediaLabel(kind: CanvasMediaKind) {
   return "file"
 }
 
-function EmptyMedia(props: { kind: CanvasMediaKind }) {
+export function isCanvasEmptyImageNodeData(data: CanvasMediaNodeData) {
+  if (
+    data.kind !== "image" ||
+    data.status !== "idle" ||
+    data.name?.trim() ||
+    data.mimeType?.trim() ||
+    Object.keys(data.metadata).length > 0
+  ) {
+    return false
+  }
+  const state = data.resourceState
+  // A durable empty card has no runtime state after serialization. Any persisted
+  // resource identity above, or any non-ready runtime state, fails closed.
+  if (!state) return true
+  return (
+    state?.status === "ready" &&
+    !state.url?.trim() &&
+    !state.name?.trim() &&
+    !state.mediaType?.trim() &&
+    !state.text?.trim()
+  )
+}
+
+function EmptyMedia(props: {
+  actions?: {
+    generateDisabled: boolean
+    onGenerate: () => void
+    onUpload: () => void
+    uploadDisabled: boolean
+  }
+  kind: CanvasMediaKind
+}) {
   const label = mediaLabel(props.kind)
+  if (props.actions) {
+    return (
+      <div className="convax-media-empty convax-media-empty--image size-full" data-canvas-empty-image="true">
+        <div className="convax-media-empty__content">
+          <span className="convax-media-empty__icon">
+            <ImageIcon />
+          </span>
+          <span className="convax-media-empty__title">Add an image</span>
+          <span className="convax-media-empty__hint">Upload your own or create one with Generate.</span>
+          <div className="convax-media-empty__actions nodrag nowheel" data-canvas-shortcuts="ignore">
+            <Button
+              aria-label="Upload image"
+              className="convax-media-empty__button"
+              disabled={props.actions.uploadDisabled}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.actions?.onUpload()
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              size="sm"
+              type="button"
+              variant="outline"
+            >
+              <FileUp />
+              Upload
+            </Button>
+            <Button
+              aria-label="Generate image"
+              className="convax-media-empty__button"
+              disabled={props.actions.generateDisabled}
+              onClick={(event) => {
+                event.stopPropagation()
+                props.actions?.onGenerate()
+              }}
+              onPointerDown={(event) => event.stopPropagation()}
+              size="sm"
+              type="button"
+              variant="secondary"
+            >
+              <Sparkles />
+              Generate
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
+  }
   return (
     <div className="convax-media-empty size-full">
-      <div className="convax-media-empty__action">
+      <div className="convax-media-empty__content">
         <span className="convax-media-empty__icon">{mediaIcon(props.kind)}</span>
         <span className="convax-media-empty__title">{label} unavailable</span>
         <span className="convax-media-empty__hint">Relink a selected Project resource or choose a local file</span>
@@ -1854,6 +1998,12 @@ function EmptyMedia(props: { kind: CanvasMediaKind }) {
 }
 
 function MediaBody(props: {
+  emptyImageActions?: {
+    generateDisabled: boolean
+    onGenerate: () => void
+    onUpload: () => void
+    uploadDisabled: boolean
+  }
   data: CanvasMediaNodeData
   onMediaLoad?: (size: { height: number; width: number }) => void
   selected: boolean
@@ -1861,7 +2011,7 @@ function MediaBody(props: {
   const fit = props.data.fit ?? "contain"
   const url = props.data.resourceState?.url ?? ""
   if (!url.trim()) {
-    return <EmptyMedia kind={props.data.kind} />
+    return <EmptyMedia actions={props.emptyImageActions} kind={props.data.kind} />
   }
   if (props.data.kind === "image") {
     return (
@@ -1912,9 +2062,11 @@ function downloadMedia(data: CanvasMediaNodeData) {
 
 export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  const assistant = useCanvasService("assistant")
   const data = props.data as CanvasMediaNodeData
   const url = data.resourceState?.url
   const supportsFit = data.kind === "image" || data.kind === "video"
+  const emptyImage = isCanvasEmptyImageNodeData(data)
   const toolbar = (
     <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
       {data.resourceState?.status === "missing" ? (
@@ -1965,6 +2117,16 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
     >
       <MediaBody
         data={data}
+        emptyImageActions={
+          emptyImage
+            ? {
+                generateDisabled: editor.readOnly || editor.hydrating || !assistant,
+                onGenerate: () => editor.selectNodes([props.id]),
+                onUpload: () => editor.relinkResource(props.id),
+                uploadDisabled: editor.readOnly || editor.hydrating || !editor.canRelinkResource,
+              }
+            : undefined
+        }
         onMediaLoad={
           supportsFit
             ? (size) => {
@@ -2047,6 +2209,7 @@ function FileGenerationActivityOverlay(props: {
   onRecover: () => void
   run: CanvasNodeGenerationRun
 }) {
+  const editor = useCanvasEditor()
   if (isCanvasNodeGenerationRunActive(props.run)) {
     return (
       <div
@@ -2058,7 +2221,7 @@ function FileGenerationActivityOverlay(props: {
         role="status"
       >
         <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
-          <LoaderCircle className="size-6 animate-spin text-primary motion-reduce:animate-none" />
+          <LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />
           <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
           <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">{props.run.toolId}</span>
           <Button
@@ -2128,6 +2291,7 @@ function FileGenerationActivityOverlay(props: {
 }
 
 function PersistedResourceStatusOverlay(props: { error?: string; status: "error" | "pending" }) {
+  const editor = useCanvasEditor()
   if (props.status === "pending") {
     return (
       <div
@@ -2138,7 +2302,7 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
         role="status"
       >
         <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
-          <LoaderCircle className="size-6 animate-spin text-primary motion-reduce:animate-none" />
+          <LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />
           <span>正在生成…</span>
         </div>
       </div>
@@ -2167,6 +2331,7 @@ function FileAssistantAccessory(
   },
 ) {
   const editor = useCanvasEditor()
+  const overlayRoot = useCanvasOverlayRoot()
   const assistant = useCanvasService("assistant")
   const [focusWithin, setFocusWithin] = useState(false)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
@@ -2174,28 +2339,33 @@ function FileAssistantAccessory(
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationOutput = props.data.kind === "image" || props.data.kind === "video" ? props.data.kind : undefined
   const mentionedNodeIds = getIncomingConnectedCanvasFileNodeIds(editor.document, props.id)
+  const open = visible
   useEffect(() => {
-    if (!visible) setFocusWithin(false)
-  }, [visible])
-  if (!props.open || !assistant || !ownsSingleNodeContext || (editor.readOnly && !editor.hydrating)) return null
-  return (
-    <NodeToolbar
-      className={cn("convax-node-assistant nodrag", focusWithin && "nowheel")}
-      offset={28}
+    if (!open) setFocusWithin(false)
+  }, [open])
+  const presence = useCanvasOverlayPresence(open)
+  if (!presence.present || !assistant) return null
+  const layer = (
+    <div
+      aria-hidden={!open || undefined}
+      className={cn("convax-canvas-composer-overlay convax-node-assistant nodrag", focusWithin && "nowheel")}
+      data-canvas-composer-overlay="file-assistant"
+      data-canvas-presence={presence.phase}
+      data-canvas-shortcuts="ignore"
+      inert={!open || undefined}
       onBlurCapture={(event) => {
         if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) {
           setFocusWithin(false)
         }
       }}
       onFocusCapture={() => setFocusWithin(true)}
-      position={Position.Bottom}
     >
       <div data-canvas-shortcuts="ignore">
         <fieldset
           aria-busy={editor.hydrating || undefined}
           className="m-0 size-full min-w-0 border-0 p-0"
-          disabled={editor.readOnly}
-          inert={editor.readOnly || undefined}
+          disabled={!open || editor.readOnly}
+          inert={!open || editor.readOnly || undefined}
         >
           {assistant.render({
             document: editor.document,
@@ -2219,8 +2389,10 @@ function FileAssistantAccessory(
           })}
         </fieldset>
       </div>
-    </NodeToolbar>
+    </div>
   )
+  if (typeof document === "undefined") return layer
+  return overlayRoot ? createPortal(layer, overlayRoot) : null
 }
 
 function AgentNode(props: NodeProps<CanvasNode>) {
@@ -2297,7 +2469,7 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
           data-canvas-selection-drag-hint
           role="status"
         >
-          {preparing ? <LoaderCircle className="size-3 animate-spin" /> : source?.icon}
+          {preparing ? <LoadingSpinner reducedMotion={editor.reducedMotion} size="sm" /> : source?.icon}
           <span className="truncate">{preparing ? preparingLabel : label}</span>
         </div>
       ) : null}

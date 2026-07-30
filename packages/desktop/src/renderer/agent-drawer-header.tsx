@@ -2,6 +2,7 @@ import { Button, cn, Tooltip } from "@convax/ui"
 import { Bot, ChevronRight, History, Plus } from "lucide-react"
 import type { ReactNode } from "react"
 import type { AgentCompactStatus, AgentCompactStatusKind } from "./agent-panel-state"
+import { WorkspaceUtilityCollapseButton } from "./workspace-utility-drawer"
 
 function statusTone(kind: AgentCompactStatusKind) {
   switch (kind) {
@@ -68,6 +69,7 @@ export function AgentDrawerTrigger(props: { onOpen(): void; status: AgentCompact
 
 export function AgentDrawerHeader(props: {
   closeLabel?: string
+  collapse?: boolean
   createDisabled: boolean
   historyVisible: boolean
   onClose?(): void
@@ -123,17 +125,24 @@ export function AgentDrawerHeader(props: {
           </Button>
         </Tooltip>
         {props.onClose ? (
-          <Tooltip content={props.closeLabel ?? "Close agent"}>
-            <Button
-              aria-label={props.closeLabel ?? "Close agent"}
-              className="size-7 rounded-md text-text-tertiary active:scale-[0.96] [&_svg]:size-3.5"
-              onClick={() => props.onClose?.()}
-              size="icon-sm"
-              variant="ghost"
-            >
-              <ChevronRight />
-            </Button>
-          </Tooltip>
+          props.collapse ? (
+            <WorkspaceUtilityCollapseButton
+              label={props.closeLabel ?? "Collapse utility sidebar"}
+              onClose={props.onClose}
+            />
+          ) : (
+            <Tooltip content={props.closeLabel ?? "Close agent"}>
+              <Button
+                aria-label={props.closeLabel ?? "Close agent"}
+                className="size-7 rounded-md text-text-tertiary active:scale-[0.96] [&_svg]:size-3.5"
+                onClick={() => props.onClose?.()}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <ChevronRight />
+              </Button>
+            </Tooltip>
+          )
         ) : null}
       </div>
       {props.utilityNavigation ? (

@@ -14,11 +14,13 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  Input,
   Tooltip,
   TooltipProvider,
   cn,
 } from "@convax/ui"
 import {
+  Check,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -37,12 +39,7 @@ import {
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from "react"
 import type { ProjectRecord } from "./contracts"
 import type { ProjectController } from "./controller"
-import {
-  EntryIcon,
-  FilePreviewPortal,
-  InlineInput,
-  getFilePreviewKind,
-} from "./project-sidebar-items"
+import { EntryIcon, FilePreviewPortal, InlineInput, getFilePreviewKind } from "./project-sidebar-items"
 import { bindProjectSwitcherDismissal } from "./project-switcher-dismissal"
 
 export interface ProjectSidebarProps {
@@ -50,7 +47,7 @@ export interface ProjectSidebarProps {
   controller: ProjectController
   extension?: {
     busy?: boolean
-    content: ReactNode
+    content: ReactNode | ((context: { query: string }) => ReactNode)
     count?: number
     createLabel?: string
     label: string
@@ -58,9 +55,11 @@ export interface ProjectSidebarProps {
   }
   filesController: ProjectFilesController
   footerActions?: ReactNode
+  headerActions?: ReactNode
   hideWhenNoProject?: boolean
-  presentation?: "sidebar" | "embedded-files"
+  presentation?: "sidebar" | "embedded-files" | "workspace" | "workspace-tabs"
   resolveFileUrl?: (input: { path: string; projectId: string }) => string
+  searchLabel?: string
 }
 
 type EntryEditor =
@@ -88,17 +87,25 @@ export function ProjectSidebar({
   extension,
   filesController,
   footerActions,
+  headerActions,
   hideWhenNoProject = false,
   presentation = "sidebar",
   resolveFileUrl,
+  searchLabel = "Search project",
 }: ProjectSidebarProps) {
   const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
-  const latestFilesSnapshot = useSyncExternalStore(filesController.subscribe, filesController.getSnapshot, filesController.getSnapshot)
-  const filesSnapshot = latestFilesSnapshot.projectId === projectSnapshot.activeProjectId
-    ? latestFilesSnapshot
-    : emptyProjectFilesSnapshot
+  const latestFilesSnapshot = useSyncExternalStore(
+    filesController.subscribe,
+    filesController.getSnapshot,
+    filesController.getSnapshot,
+  )
+  const filesSnapshot =
+    latestFilesSnapshot.projectId === projectSnapshot.activeProjectId ? latestFilesSnapshot : emptyProjectFilesSnapshot
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const embeddedFiles = presentation === "embedded-files"
+  // Keep the old value as an input-only compatibility alias; this presentation
+  // Keep the Canvas-over-Project hierarchy explicit instead of presenting both as tabs.
+  const workspaceTabs = presentation === "workspace" || presentation === "workspace-tabs"
   const displayedExtension = embeddedFiles ? undefined : extension
   const [switcherOpen, setSwitcherOpen] = useState(false)
   const [createProjectOpen, setCreateProjectOpen] = useState(false)
@@ -108,17 +115,21 @@ export function ProjectSidebar({
   const [editor, setEditor] = useState<EntryEditor | null>(null)
   const [filesExpanded, setFilesExpanded] = useState(true)
   const [extensionExpanded, setExtensionExpanded] = useState(true)
-  const [sectionSplitRatio, setSectionSplitRatio] = useState(defaultSectionSplitRatio)
+  const [sectionSplitRatio, setSectionSplitRatio] = useState(workspaceTabs ? 0.3 : defaultSectionSplitRatio)
   const [resizingSections, setResizingSections] = useState(false)
   const [layoutProjectId, setLayoutProjectId] = useState<string | null>(null)
   const [treeDragActive, setTreeDragActive] = useState(false)
   const [dropTargetPath, setDropTargetPath] = useState<string | null>(null)
   const [confirmDeletePaths, setConfirmDeletePaths] = useState<string[] | null>(null)
   const [confirmForget, setConfirmForget] = useState<ProjectRecord | null>(null)
+  const [projectEditor, setProjectEditor] = useState<{ name: string; projectId: string } | null>(null)
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
   const suppressClickAfterDragRef = useRef(false)
   const sectionsRef = useRef<HTMLDivElement | null>(null)
   const projectSwitcherRef = useRef<HTMLDivElement | null>(null)
   const projectSwitcherTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const searchTriggerRef = useRef<HTMLButtonElement | null>(null)
   const openCreateProject = () => {
     controller.clearError()
     setCreateProjectOpen(true)
@@ -133,12 +144,14 @@ export function ProjectSidebar({
     setSwitcherOpen(false)
     setDropTargetPath(null)
     setTreeDragActive(false)
+    setSearchOpen(false)
+    setSearchQuery("")
+    setProjectEditor(null)
   }, [projectSnapshot.activeProjectId])
 
   useEffect(() => {
     if (!switcherOpen) return
-    const ownerDocument = projectSwitcherRef.current?.ownerDocument
-      ?? projectSwitcherTriggerRef.current?.ownerDocument
+    const ownerDocument = projectSwitcherRef.current?.ownerDocument ?? projectSwitcherTriggerRef.current?.ownerDocument
     const switcher = projectSwitcherRef.current
     const trigger = projectSwitcherTriggerRef.current
     if (!ownerDocument || !switcher || !trigger) return
@@ -162,25 +175,40 @@ export function ProjectSidebar({
       setLayoutProjectId(null)
       return
     }
-    const layout = readProjectSidebarLayout(projectId)
+    const layout = readProjectSidebarLayout(projectId, workspaceTabs)
     setFilesExpanded(layout.filesExpanded)
     setExtensionExpanded(layout.extensionExpanded)
     setSectionSplitRatio(layout.sectionSplitRatio)
     setLayoutProjectId(projectId)
-  }, [projectSnapshot.activeProjectId])
+  }, [projectSnapshot.activeProjectId, workspaceTabs])
 
   useEffect(() => {
     const projectId = projectSnapshot.activeProjectId
     if (!projectId || layoutProjectId !== projectId) return
-    writeProjectSidebarLayout(projectId, { extensionExpanded, filesExpanded, sectionSplitRatio })
-  }, [extensionExpanded, filesExpanded, layoutProjectId, sectionSplitRatio, projectSnapshot.activeProjectId])
+    writeProjectSidebarLayout(projectId, { extensionExpanded, filesExpanded, sectionSplitRatio }, workspaceTabs)
+  }, [
+    extensionExpanded,
+    filesExpanded,
+    layoutProjectId,
+    projectSnapshot.activeProjectId,
+    sectionSplitRatio,
+    workspaceTabs,
+  ])
 
-  useEffect(() => () => {
-    suppressClickAfterDragRef.current = false
-  }, [])
+  useEffect(
+    () => () => {
+      suppressClickAfterDragRef.current = false
+    },
+    [],
+  )
 
   const visibleEntries = useMemo(() => flattenVisibleEntries(filesSnapshot), [filesSnapshot])
   const entryByPath = useMemo(() => new Map(visibleEntries.map((entry) => [entry.path, entry])), [visibleEntries])
+  const matchingPaths = useMemo(() => findMatchingEntryPaths(filesSnapshot, searchQuery), [filesSnapshot, searchQuery])
+  const renderedExtensionContent =
+    typeof displayedExtension?.content === "function"
+      ? displayedExtension.content({ query: searchQuery })
+      : displayedExtension?.content
 
   const beginCreate = async (entryKind: ProjectEntryKind, parentPath = "") => {
     const activeProjectId = projectSnapshot.activeProjectId
@@ -198,7 +226,11 @@ export function ProjectSidebar({
       return
     }
     if (editor.kind === "create") {
-      await filesController.createEntry({ kind: editor.entryKind, name: editor.name.trim(), parentPath: editor.parentPath })
+      await filesController.createEntry({
+        kind: editor.entryKind,
+        name: editor.name.trim(),
+        parentPath: editor.parentPath,
+      })
     } else {
       await filesController.renameEntry(editor.path, editor.name.trim())
     }
@@ -225,7 +257,10 @@ export function ProjectSidebar({
     setDropTargetPath(null)
     const payload = parseProjectEntryDrag(event.dataTransfer.getData(PROJECT_ENTRY_DRAG_TYPE))
     if (payload && payload.projectId === filesSnapshot.projectId) {
-      await filesController.moveEntries(payload.entries.map((entry) => entry.path), destinationPath)
+      await filesController.moveEntries(
+        payload.entries.map((entry) => entry.path),
+        destinationPath,
+      )
       return
     }
     if (event.dataTransfer.files.length > 0) {
@@ -262,7 +297,7 @@ export function ProjectSidebar({
   }
 
   const sectionSplitBounds = getSectionSplitBounds(sectionsRef.current?.clientHeight ?? 0)
-  const bothSectionsExpanded = Boolean(displayedExtension) && filesExpanded && extensionExpanded
+  const bothSectionsExpanded = Boolean(displayedExtension) && (workspaceTabs || (filesExpanded && extensionExpanded))
   const expandedSectionMinHeight = `min(${minimumExpandedSectionSize}px, calc((100% - ${sectionSplitterSize}px) / 2))`
 
   if ((hideWhenNoProject || embeddedFiles) && !activeProject) return null
@@ -273,322 +308,661 @@ export function ProjectSidebar({
         aria-busy={projectSnapshot.changingActiveProject}
         className={cn(
           "relative flex h-full shrink-0 flex-col bg-card text-card-foreground",
-          embeddedFiles ? "w-full" : "w-[292px] border-r border-border",
+          embeddedFiles || workspaceTabs ? "w-full" : "w-[292px] border-r border-border",
           projectSnapshot.changingActiveProject && "pointer-events-none opacity-80",
           className,
         )}
         data-project-files-view={embeddedFiles ? "embedded" : undefined}
       >
-      {!embeddedFiles ? <header className="relative flex h-16 shrink-0 items-center gap-2 border-b border-border px-3">
-        <button
-          aria-expanded={switcherOpen}
-          aria-haspopup="dialog"
-          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-          onClick={() => setSwitcherOpen((open) => !open)}
-          ref={projectSwitcherTriggerRef}
-          type="button"
-        >
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-sm font-semibold">{activeProject?.name ?? "Convax"}</span>
-            {activeProject ? (
-              <Tooltip content={<span className="break-all">{activeProject.rootPath}</span>} side="right">
-                <span
-                  aria-label={`Project path: ${activeProject.rootPath}`}
-                  className="mt-0.5 block truncate text-[10px] font-normal leading-4 text-muted-foreground"
-                  data-project-header-path={activeProject.rootPath}
-                >
-                  {activeProject.rootPath}
-                </span>
-              </Tooltip>
+        {!embeddedFiles ? (
+          <header
+            className={cn(
+              "group/header relative flex shrink-0 items-center border-b border-border",
+              workspaceTabs ? "h-10 gap-1 py-2 pl-3 pr-2" : "h-16 gap-2 px-3",
+            )}
+          >
+            {workspaceTabs && activeProject ? (
+              <span
+                aria-hidden
+                className="grid size-6 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"
+              >
+                <Folder className="size-3.5" />
+              </span>
             ) : null}
-          </span>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </button>
-        {switcherOpen ? (
-          <ProjectSwitcher
-            activeProjectId={projectSnapshot.activeProjectId}
-            projects={projectSnapshot.projects}
-            rootRef={projectSwitcherRef}
-            onActivate={(projectId) => {
-              setSwitcherOpen(false)
-              void controller.activate(projectId)
-            }}
-            onClose={() => setSwitcherOpen(false)}
-            onCreate={() => {
-              setSwitcherOpen(false)
-              openCreateProject()
-            }}
-            onForget={(project) => {
-              setSwitcherOpen(false)
-              setConfirmForget(project)
-            }}
-            onOpen={() => {
-              setSwitcherOpen(false)
-              void controller.openProject()
-            }}
-          />
-        ) : null}
-      </header> : null}
-
-      {!activeProject ? (
-        <ProjectEmptyState
-          loading={!projectSnapshot.initialized}
-          onCreate={openCreateProject}
-          onOpen={() => void controller.openProject()}
-        />
-      ) : (
-        <>
-          <div className={cn("flex min-h-0 flex-1 flex-col", resizingSections && "select-none")} ref={sectionsRef}>
-            <section
-              className="flex min-h-0 flex-col overflow-hidden"
-              style={{
-                flex: filesExpanded ? (displayedExtension && extensionExpanded ? `${sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
-                minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
-              }}
-            >
-              <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+            {workspaceTabs && activeProject && projectEditor?.projectId === activeProject.id ? (
+              <ProjectNameInput
+                name={projectEditor.name}
+                onCancel={() => setProjectEditor(null)}
+                onChange={(name) => setProjectEditor((current) => (current ? { ...current, name } : null))}
+                onCommit={async () => {
+                  const current = projectEditor
+                  setProjectEditor(null)
+                  if (!current || current.projectId !== projectSnapshot.activeProjectId) return
+                  await controller.renameProject(current.projectId, current.name)
+                }}
+              />
+            ) : (
+              <button
+                aria-expanded={switcherOpen}
+                aria-haspopup="dialog"
+                className={cn(
+                  "flex min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                  workspaceTabs
+                    ? "h-6 gap-1 rounded px-1 text-xs font-medium hover:bg-accent"
+                    : "gap-2 rounded-md px-2 py-1.5",
+                )}
+                onClick={() => setSwitcherOpen((open) => !open)}
+                onDoubleClick={(event) => {
+                  event.preventDefault()
+                  setSwitcherOpen(false)
+                  if (activeProject) setProjectEditor({ name: activeProject.name, projectId: activeProject.id })
+                }}
+                ref={projectSwitcherTriggerRef}
+                title={workspaceTabs ? "Switch Project · Double-click to rename" : undefined}
+                type="button"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className={cn("block truncate font-semibold", workspaceTabs ? "text-xs" : "text-sm")}>
+                    {activeProject?.name ?? "Convax"}
+                  </span>
+                  {!workspaceTabs && activeProject ? (
+                    <Tooltip content={<span className="break-all">{activeProject.rootPath}</span>} side="right">
+                      <span
+                        aria-label={`Project path: ${activeProject.rootPath}`}
+                        className="mt-0.5 block truncate text-[10px] font-normal leading-4 text-muted-foreground"
+                        data-project-header-path={activeProject.rootPath}
+                      >
+                        {activeProject.rootPath}
+                      </span>
+                    </Tooltip>
+                  ) : null}
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "shrink-0 text-muted-foreground transition-transform duration-150 motion-reduce:transition-none",
+                    workspaceTabs ? "size-3" : "size-4",
+                    switcherOpen && "rotate-180",
+                  )}
+                />
+              </button>
+            )}
+            {workspaceTabs && activeProject && !projectEditor ? (
+              <button
+                aria-label={`Rename ${activeProject.name}`}
+                className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground opacity-0 transition-opacity duration-100 hover:bg-accent hover:text-foreground group-hover/header:opacity-100 focus:opacity-100 motion-reduce:transition-none"
+                onClick={() => setProjectEditor({ name: activeProject.name, projectId: activeProject.id })}
+                title={`Rename ${activeProject.name}`}
+                type="button"
+              >
+                <Pencil className="size-3.5" />
+              </button>
+            ) : null}
+            {workspaceTabs && activeProject ? (
+              <>
                 <button
-                  aria-expanded={filesExpanded}
-                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
-                  onClick={() => setFilesExpanded((expanded) => !expanded)}
+                  aria-label={searchLabel}
+                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+                  onClick={() => setSearchOpen(true)}
+                  ref={searchTriggerRef}
                   type="button"
                 >
-                  <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", filesExpanded && "rotate-90")} />
-                  <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">Files</span>
+                  <Search className="size-3.5" />
                 </button>
-                <Tooltip content="New file">
-                  <Button aria-label="New file" onClick={() => {
-                    setFilesExpanded(true)
-                    void beginCreate("file")
-                  }} size="icon-sm" variant="ghost"><Plus /></Button>
-                </Tooltip>
-                <Tooltip content="New folder">
-                  <Button aria-label="New folder" onClick={() => {
-                    setFilesExpanded(true)
-                    void beginCreate("directory")
-                  }} size="icon-sm" variant="ghost"><FolderPlus /></Button>
-                </Tooltip>
-                <Tooltip content="Refresh">
-                  <Button aria-label="Refresh files" onClick={() => void filesController.refreshVisibleDirectories()} size="icon-sm" variant="ghost">
-                    <RefreshCw className={cn(filesSnapshot.loadingPaths.length > 0 && "animate-spin")} />
-                  </Button>
-                </Tooltip>
-              </div>
-              {filesExpanded ? (
-                <div
-                  className={cn("min-h-0 flex-1 overflow-auto px-2 pb-2", dropTargetPath === "" && "bg-accent/50")}
-                  onDragLeave={(event) => {
-                    if (event.currentTarget === event.target && dropTargetPath === "") setDropTargetPath(null)
+                {displayedExtension?.onCreate ? (
+                  <button
+                    aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}
+                    className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+                    disabled={displayedExtension.busy}
+                    onClick={displayedExtension.onCreate}
+                    type="button"
+                  >
+                    <Plus className="size-3.5" />
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+            {headerActions}
+            {switcherOpen ? (
+              <ProjectSwitcher
+                activeProjectId={projectSnapshot.activeProjectId}
+                projects={projectSnapshot.projects}
+                rootRef={projectSwitcherRef}
+                onActivate={(projectId) => {
+                  setSwitcherOpen(false)
+                  void controller.activate(projectId)
+                }}
+                onClose={() => setSwitcherOpen(false)}
+                onCreate={() => {
+                  setSwitcherOpen(false)
+                  openCreateProject()
+                }}
+                onForget={(project) => {
+                  setSwitcherOpen(false)
+                  setConfirmForget(project)
+                }}
+                onOpen={() => {
+                  setSwitcherOpen(false)
+                  void controller.openProject()
+                }}
+              />
+            ) : null}
+          </header>
+        ) : null}
+
+        {workspaceTabs && activeProject && searchOpen ? (
+          <div className="flex h-10 shrink-0 items-center border-b border-border px-2">
+            <Input
+              aria-label={searchLabel}
+              autoFocus
+              className="h-7 min-w-0 flex-1 text-xs"
+              onInput={(event) => setSearchQuery(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Escape") return
+                event.preventDefault()
+                event.stopPropagation()
+                setSearchQuery("")
+                setSearchOpen(false)
+                queueMicrotask(() => searchTriggerRef.current?.focus())
+              }}
+              placeholder={searchLabel}
+              type="search"
+              value={searchQuery}
+            />
+          </div>
+        ) : null}
+
+        {!activeProject ? (
+          <ProjectEmptyState
+            loading={!projectSnapshot.initialized}
+            onCreate={openCreateProject}
+            onOpen={() => void controller.openProject()}
+          />
+        ) : (
+          <>
+            <div className={cn("flex min-h-0 flex-1 flex-col", resizingSections && "select-none")} ref={sectionsRef}>
+              {workspaceTabs && displayedExtension ? (
+                <section
+                  aria-busy={displayedExtension.busy}
+                  className={cn("flex min-h-0 flex-col overflow-hidden", displayedExtension.busy && "opacity-70")}
+                  style={{
+                    flex: `${sectionSplitRatio} 1 0px`,
+                    minHeight: expandedSectionMinHeight,
                   }}
-                  onDragOver={(event) => handleDragOver(event)}
-                  onDrop={(event) => void handleDrop(event)}
-                  role="tree"
-                  aria-label={`${activeProject.name} files`}
-                  aria-multiselectable="true"
                 >
-                  {editor?.kind === "create" && editor.parentPath === "" ? (
-                    <EntryEditorRow editor={editor} level={1} onCancel={() => setEditor(null)} onChange={setEditor} onCommit={commitEditor} />
-                  ) : null}
-                  {(filesSnapshot.listings[""]?.entries ?? []).map((entry) => (
-                    <ProjectTreeNode
-                      controller={filesController}
-                      dropTargetPath={dropTargetPath}
-                      editor={editor}
-                      entry={entry}
-                      entryByPath={entryByPath}
-                      firstPath={visibleEntries[0]?.path}
-                      key={entry.path}
-                      level={1}
-                      onBeginCreate={beginCreate}
-                      onCancelEditor={() => setEditor(null)}
-                      onChangeEditor={setEditor}
-                      onCommitEditor={commitEditor}
-                      onDragEnd={finishTreeDrag}
-                      onDragOver={handleDragOver}
-                      onDragStart={() => {
-                        suppressClickAfterDragRef.current = true
-                        setTreeDragActive(true)
-                      }}
-                      onDrop={handleDrop}
-                      onRequestDelete={requestDelete}
-                      onStartRename={(target) => setEditor({ kind: "rename", name: target.name, path: target.path })}
-                      previewDisabled={Boolean(editor) || treeDragActive}
-                      resolveFileUrl={resolveFileUrl}
-                      shouldSuppressClick={() => suppressClickAfterDragRef.current}
-                      snapshot={filesSnapshot}
-                    />
-                  ))}
-                  {filesSnapshot.listings[""]?.entries.length === 0 && !editor ? (
-                    <div className="flex h-32 flex-col items-center justify-center gap-2 px-5 text-center text-xs text-muted-foreground">
-                      <FolderOpen className="size-7 opacity-60" />
-                      <span>This project is empty.</span>
-                      <button className="font-medium text-primary hover:underline" onClick={() => void beginCreate("file")} type="button">Create a file</button>
-                    </div>
-                  ) : null}
+                  <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                    <span className="min-w-0 flex-1 truncate px-1.5 text-[11px] font-semibold text-muted-foreground">
+                      Canvas
+                    </span>
+                    {displayedExtension.count === undefined ? null : (
+                      <span className="mr-1 text-[10px] tabular-nums text-muted-foreground/70">
+                        {displayedExtension.count}
+                      </span>
+                    )}
+                  </div>
+                  {renderedExtensionContent}
+                </section>
+              ) : null}
+              {workspaceTabs && displayedExtension ? (
+                <div
+                  aria-label="Resize Canvas and Project sections"
+                  aria-orientation="horizontal"
+                  aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
+                  aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
+                  aria-valuenow={Math.round(sectionSplitRatio * 100)}
+                  aria-valuetext={`${Math.round(sectionSplitRatio * 100)}% for Canvas`}
+                  className={cn(
+                    "group relative h-1.5 shrink-0 cursor-row-resize touch-none outline-none",
+                    resizingSections && "bg-accent/40",
+                  )}
+                  onKeyDown={(event) => {
+                    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
+                    event.preventDefault()
+                    adjustSectionSplit(event.key, event.shiftKey)
+                  }}
+                  onLostPointerCapture={() => setResizingSections(false)}
+                  onPointerCancel={() => setResizingSections(false)}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0 || !event.isPrimary) return
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    setResizingSections(true)
+                    resizeSectionsAt(event.clientY)
+                  }}
+                  onPointerMove={(event) => {
+                    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+                    resizeSectionsAt(event.clientY)
+                  }}
+                  onPointerUp={(event) => {
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(event.pointerId)
+                    setResizingSections(false)
+                  }}
+                  role="separator"
+                  tabIndex={0}
+                  title="Drag to resize. Use arrow keys when focused."
+                >
+                  <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-all group-hover:h-0.5 group-hover:bg-primary/45 group-focus-visible:h-0.5 group-focus-visible:bg-ring" />
                 </div>
               ) : null}
-            </section>
-
-            {bothSectionsExpanded ? (
-              <div
-                aria-label={`Resize Files and ${displayedExtension?.label ?? "extension"} sections`}
-                aria-orientation="horizontal"
-                aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
-                aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
-                aria-valuenow={Math.round(sectionSplitRatio * 100)}
-                aria-valuetext={`${Math.round(sectionSplitRatio * 100)}% for Files`}
-                className={cn(
-                  "group relative h-1.5 shrink-0 cursor-row-resize touch-none outline-none",
-                  resizingSections && "bg-accent/40",
-                )}
-                onKeyDown={(event) => {
-                  if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
-                  event.preventDefault()
-                  adjustSectionSplit(event.key, event.shiftKey)
-                }}
-                onLostPointerCapture={() => setResizingSections(false)}
-                onPointerCancel={() => setResizingSections(false)}
-                onPointerDown={(event) => {
-                  if (event.button !== 0 || !event.isPrimary) return
-                  event.preventDefault()
-                  event.currentTarget.setPointerCapture(event.pointerId)
-                  setResizingSections(true)
-                  resizeSectionsAt(event.clientY)
-                }}
-                onPointerMove={(event) => {
-                  if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
-                  resizeSectionsAt(event.clientY)
-                }}
-                onPointerUp={(event) => {
-                  if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
-                  setResizingSections(false)
-                }}
-                role="separator"
-                tabIndex={0}
-                title="Drag to resize. Use arrow keys when focused."
-              >
-                <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-all group-hover:h-0.5 group-hover:bg-primary/45 group-focus-visible:h-0.5 group-focus-visible:bg-ring" />
-              </div>
-            ) : null}
-
-            {displayedExtension ? (
               <section
-                aria-busy={displayedExtension.busy}
-                className={cn(
-                  "flex min-h-0 flex-col overflow-hidden",
-                  !bothSectionsExpanded && "border-t border-border",
-                  displayedExtension.busy && "opacity-70",
-                )}
+                className={cn("flex min-h-0 flex-col overflow-hidden", workspaceTabs && "border-t border-border/70")}
                 style={{
-                  flex: extensionExpanded ? (filesExpanded ? `${1 - sectionSplitRatio} 1 0px` : "1 1 0") : "0 0 36px",
+                  flex: workspaceTabs
+                    ? `${1 - sectionSplitRatio} 1 0px`
+                    : filesExpanded
+                      ? displayedExtension && extensionExpanded
+                        ? `${sectionSplitRatio} 1 0px`
+                        : "1 1 0"
+                      : "0 0 36px",
                   minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
                 }}
               >
-                <div className="flex h-9 shrink-0 items-center gap-1 px-2">
-                  <button
-                    aria-expanded={extensionExpanded}
-                    className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
-                    onClick={() => setExtensionExpanded((expanded) => !expanded)}
-                    type="button"
-                  >
-                    <ChevronRight className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform", extensionExpanded && "rotate-90")} />
-                    <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{displayedExtension.label}</span>
-                    {displayedExtension.count === undefined ? null : (
-                      <span className="text-[10px] tabular-nums text-muted-foreground/70">{displayedExtension.count}</span>
-                    )}
-                  </button>
-                  {displayedExtension.onCreate ? (
-                    <Tooltip content={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}>
-                      <Button aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`} disabled={displayedExtension.busy} onClick={() => {
-                        setExtensionExpanded(true)
-                        displayedExtension.onCreate?.()
-                      }} size="icon-sm" variant="ghost"><Plus /></Button>
+                {workspaceTabs ? (
+                  <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                    <span className="min-w-0 flex-1 truncate px-1.5 text-[11px] font-semibold text-muted-foreground">
+                      Project
+                    </span>
+                    <span className="mr-0.5 text-[10px] tabular-nums text-muted-foreground/70">
+                      {visibleEntries.length}
+                    </span>
+                    <Tooltip content="New file">
+                      <Button
+                        aria-label="New file"
+                        onClick={() => void beginCreate("file")}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <Plus />
+                      </Button>
                     </Tooltip>
-                  ) : null}
-                </div>
-                {extensionExpanded ? displayedExtension.content : null}
+                    <Tooltip content="New folder">
+                      <Button
+                        aria-label="New folder"
+                        onClick={() => void beginCreate("directory")}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <FolderPlus />
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content="Refresh">
+                      <Button
+                        aria-label="Refresh files"
+                        onClick={() => void filesController.refreshVisibleDirectories()}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <RefreshCw className={cn(filesSnapshot.loadingPaths.length > 0 && "animate-spin")} />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                ) : (
+                  <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                    <button
+                      aria-expanded={filesExpanded}
+                      className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
+                      onClick={() => setFilesExpanded((expanded) => !expanded)}
+                      type="button"
+                    >
+                      <ChevronRight
+                        className={cn(
+                          "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                          filesExpanded && "rotate-90",
+                        )}
+                      />
+                      <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                        Files
+                      </span>
+                    </button>
+                    <Tooltip content="New file">
+                      <Button
+                        aria-label="New file"
+                        onClick={() => {
+                          setFilesExpanded(true)
+                          void beginCreate("file")
+                        }}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <Plus />
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content="New folder">
+                      <Button
+                        aria-label="New folder"
+                        onClick={() => {
+                          setFilesExpanded(true)
+                          void beginCreate("directory")
+                        }}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <FolderPlus />
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content="Refresh">
+                      <Button
+                        aria-label="Refresh files"
+                        onClick={() => void filesController.refreshVisibleDirectories()}
+                        size="icon-sm"
+                        variant="ghost"
+                      >
+                        <RefreshCw className={cn(filesSnapshot.loadingPaths.length > 0 && "animate-spin")} />
+                      </Button>
+                    </Tooltip>
+                  </div>
+                )}
+                {workspaceTabs || filesExpanded ? (
+                  <div
+                    className={cn("min-h-0 flex-1 overflow-auto px-2 pb-2", dropTargetPath === "" && "bg-accent/50")}
+                    onDragLeave={(event) => {
+                      if (event.currentTarget === event.target && dropTargetPath === "") setDropTargetPath(null)
+                    }}
+                    onDragOver={(event) => handleDragOver(event)}
+                    onDrop={(event) => void handleDrop(event)}
+                    role="tree"
+                    aria-label={`${activeProject.name} files`}
+                    aria-multiselectable="true"
+                  >
+                    {editor?.kind === "create" && editor.parentPath === "" ? (
+                      <EntryEditorRow
+                        editor={editor}
+                        level={1}
+                        onCancel={() => setEditor(null)}
+                        onChange={setEditor}
+                        onCommit={commitEditor}
+                      />
+                    ) : null}
+                    {(filesSnapshot.listings[""]?.entries ?? [])
+                      .filter((entry) => !matchingPaths || matchingPaths.has(entry.path))
+                      .map((entry) => (
+                        <ProjectTreeNode
+                          controller={filesController}
+                          dropTargetPath={dropTargetPath}
+                          editor={editor}
+                          entry={entry}
+                          entryByPath={entryByPath}
+                          firstPath={visibleEntries[0]?.path}
+                          key={entry.path}
+                          level={1}
+                          matchingPaths={matchingPaths}
+                          onBeginCreate={beginCreate}
+                          onCancelEditor={() => setEditor(null)}
+                          onChangeEditor={setEditor}
+                          onCommitEditor={commitEditor}
+                          onDragEnd={finishTreeDrag}
+                          onDragOver={handleDragOver}
+                          onDragStart={() => {
+                            suppressClickAfterDragRef.current = true
+                            setTreeDragActive(true)
+                          }}
+                          onDrop={handleDrop}
+                          onRequestDelete={requestDelete}
+                          onStartRename={(target) =>
+                            setEditor({ kind: "rename", name: target.name, path: target.path })
+                          }
+                          previewDisabled={Boolean(editor) || treeDragActive}
+                          resolveFileUrl={resolveFileUrl}
+                          shouldSuppressClick={() => suppressClickAfterDragRef.current}
+                          snapshot={filesSnapshot}
+                        />
+                      ))}
+                    {matchingPaths?.size === 0 ? (
+                      <div
+                        className="grid h-32 place-items-center px-5 text-center text-xs text-muted-foreground"
+                        role="status"
+                      >
+                        No matching project files.
+                      </div>
+                    ) : filesSnapshot.listings[""]?.entries.length === 0 && !editor ? (
+                      <div className="flex h-32 flex-col items-center justify-center gap-2 px-5 text-center text-xs text-muted-foreground">
+                        <FolderOpen className="size-7 opacity-60" />
+                        <span>This project is empty.</span>
+                        <button
+                          className="font-medium text-primary hover:underline"
+                          onClick={() => void beginCreate("file")}
+                          type="button"
+                        >
+                          Create a file
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </section>
+
+              {bothSectionsExpanded && !workspaceTabs ? (
+                <div
+                  aria-label={
+                    workspaceTabs
+                      ? "Resize Canvas and Project sections"
+                      : `Resize Files and ${displayedExtension?.label ?? "extension"} sections`
+                  }
+                  aria-orientation="horizontal"
+                  aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
+                  aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
+                  aria-valuenow={Math.round(sectionSplitRatio * 100)}
+                  aria-valuetext={`${Math.round(sectionSplitRatio * 100)}% for ${workspaceTabs ? "Canvas" : "Files"}`}
+                  className={cn(
+                    "group relative h-1.5 shrink-0 cursor-row-resize touch-none outline-none",
+                    resizingSections && "bg-accent/40",
+                  )}
+                  onKeyDown={(event) => {
+                    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return
+                    event.preventDefault()
+                    adjustSectionSplit(event.key, event.shiftKey)
+                  }}
+                  onLostPointerCapture={() => setResizingSections(false)}
+                  onPointerCancel={() => setResizingSections(false)}
+                  onPointerDown={(event) => {
+                    if (event.button !== 0 || !event.isPrimary) return
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    setResizingSections(true)
+                    resizeSectionsAt(event.clientY)
+                  }}
+                  onPointerMove={(event) => {
+                    if (!event.currentTarget.hasPointerCapture(event.pointerId)) return
+                    resizeSectionsAt(event.clientY)
+                  }}
+                  onPointerUp={(event) => {
+                    if (event.currentTarget.hasPointerCapture(event.pointerId))
+                      event.currentTarget.releasePointerCapture(event.pointerId)
+                    setResizingSections(false)
+                  }}
+                  role="separator"
+                  tabIndex={0}
+                  title="Drag to resize. Use arrow keys when focused."
+                >
+                  <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-all group-hover:h-0.5 group-hover:bg-primary/45 group-focus-visible:h-0.5 group-focus-visible:bg-ring" />
+                </div>
+              ) : null}
+
+              {displayedExtension && !workspaceTabs ? (
+                <section
+                  aria-busy={displayedExtension.busy}
+                  className={cn(
+                    "flex min-h-0 flex-col overflow-hidden",
+                    !workspaceTabs && !bothSectionsExpanded && "border-t border-border",
+                    displayedExtension.busy && "opacity-70",
+                  )}
+                  style={{
+                    flex: workspaceTabs
+                      ? `${sectionSplitRatio} 1 0px`
+                      : extensionExpanded
+                        ? filesExpanded
+                          ? `${1 - sectionSplitRatio} 1 0px`
+                          : "1 1 0"
+                        : "0 0 36px",
+                    minHeight: bothSectionsExpanded ? expandedSectionMinHeight : undefined,
+                  }}
+                >
+                  {workspaceTabs ? (
+                    <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                      <span className="min-w-0 flex-1 truncate px-1.5 text-[11px] font-semibold text-muted-foreground">
+                        Canvas
+                      </span>
+                      {displayedExtension.count === undefined ? null : (
+                        <span className="mr-1 text-[10px] tabular-nums text-muted-foreground/70">
+                          {displayedExtension.count}
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="flex h-9 shrink-0 items-center gap-1 px-2">
+                      <button
+                        aria-expanded={extensionExpanded}
+                        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
+                        onClick={() => setExtensionExpanded((expanded) => !expanded)}
+                        type="button"
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                            extensionExpanded && "rotate-90",
+                          )}
+                        />
+                        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                          {displayedExtension.label}
+                        </span>
+                        {displayedExtension.count === undefined ? null : (
+                          <span className="text-[10px] tabular-nums text-muted-foreground/70">
+                            {displayedExtension.count}
+                          </span>
+                        )}
+                      </button>
+                      {displayedExtension.onCreate ? (
+                        <Tooltip content={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}>
+                          <Button
+                            aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}
+                            disabled={displayedExtension.busy}
+                            onClick={() => {
+                              setExtensionExpanded(true)
+                              displayedExtension.onCreate?.()
+                            }}
+                            size="icon-sm"
+                            variant="ghost"
+                          >
+                            <Plus />
+                          </Button>
+                        </Tooltip>
+                      ) : null}
+                    </div>
+                  )}
+                  {workspaceTabs || extensionExpanded ? renderedExtensionContent : null}
+                </section>
+              ) : null}
+            </div>
+            {!embeddedFiles && footerActions ? (
+              <div className="shrink-0 border-t border-border p-2">{footerActions}</div>
             ) : null}
+          </>
+        )}
+
+        {projectSnapshot.error || filesSnapshot.error ? (
+          <div className="absolute inset-x-3 bottom-11 z-30 flex items-start gap-2 rounded-lg border border-destructive/25 bg-popover p-2.5 text-xs text-popover-foreground shadow-lg">
+            <span className="min-w-0 flex-1">{projectSnapshot.error ?? filesSnapshot.error}</span>
+            <button
+              aria-label="Dismiss error"
+              onClick={() => {
+                if (projectSnapshot.error) controller.clearError()
+                else filesController.clearError()
+              }}
+              type="button"
+            >
+              <X className="size-3.5" />
+            </button>
           </div>
-          {!embeddedFiles && footerActions ? <div className="shrink-0 border-t border-border p-2">{footerActions}</div> : null}
-        </>
-      )}
+        ) : null}
 
-      {projectSnapshot.error || filesSnapshot.error ? (
-        <div className="absolute inset-x-3 bottom-11 z-30 flex items-start gap-2 rounded-lg border border-destructive/25 bg-popover p-2.5 text-xs text-popover-foreground shadow-lg">
-          <span className="min-w-0 flex-1">{projectSnapshot.error ?? filesSnapshot.error}</span>
-          <button aria-label="Dismiss error" onClick={() => {
-            if (projectSnapshot.error) controller.clearError()
-            else filesController.clearError()
-          }} type="button"><X className="size-3.5" /></button>
-        </div>
-      ) : null}
-
-      {createProjectOpen ? (
-        <Modal title="New project" onClose={() => { if (!creatingProject) setCreateProjectOpen(false) }}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault()
-              if (!projectName.trim() || creatingProjectRef.current) return
-              creatingProjectRef.current = true
-              setCreatingProject(true)
-              void controller.createProject(projectName.trim()).then((created) => {
-                if (!created) return
-                setProjectName("")
-                setCreateProjectOpen(false)
-              }).finally(() => {
-                creatingProjectRef.current = false
-                setCreatingProject(false)
-              })
+        {createProjectOpen ? (
+          <Modal
+            title="New project"
+            onClose={() => {
+              if (!creatingProject) setCreateProjectOpen(false)
             }}
           >
-            <label className="mb-1.5 block text-xs font-medium" htmlFor="project-name">Project name</label>
-            <input
-              autoFocus
-              className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/25"
-              disabled={creatingProject}
-              id="project-name"
-              onChange={(event) => {
-                setProjectName(event.currentTarget.value)
-                if (projectSnapshot.error) controller.clearError()
+            <form
+              onSubmit={(event) => {
+                event.preventDefault()
+                if (!projectName.trim() || creatingProjectRef.current) return
+                creatingProjectRef.current = true
+                setCreatingProject(true)
+                void controller
+                  .createProject(projectName.trim())
+                  .then((created) => {
+                    if (!created) return
+                    setProjectName("")
+                    setCreateProjectOpen(false)
+                  })
+                  .finally(() => {
+                    creatingProjectRef.current = false
+                    setCreatingProject(false)
+                  })
               }}
-              placeholder="My project"
-              value={projectName}
-            />
-            {projectSnapshot.error ? (
-              <p className="mt-2 text-xs leading-5 text-destructive" role="alert">{projectSnapshot.error}</p>
-            ) : (
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">It will be created in your Documents/Convax workspace.</p>
-            )}
-            <div className="mt-5 flex justify-end gap-2">
-              <Button disabled={creatingProject} onClick={() => setCreateProjectOpen(false)} size="sm" variant="ghost">Cancel</Button>
-              <Button disabled={!projectName.trim() || creatingProject} size="sm" type="submit">
-                {creatingProject ? <LoaderCircle className="animate-spin" /> : null}
-                Create project
-              </Button>
-            </div>
-          </form>
-        </Modal>
-      ) : null}
-      {confirmDeletePaths ? (
-        <ConfirmDialog
-          confirmLabel="Move to Trash"
-          description={`${confirmDeletePaths.length} item${confirmDeletePaths.length === 1 ? "" : "s"} will be moved to the system Trash.`}
-          destructive
-          onCancel={() => setConfirmDeletePaths(null)}
-          onConfirm={() => void filesController.deleteEntries(confirmDeletePaths).then(() => setConfirmDeletePaths(null))}
-          title="Delete selected items?"
-        />
-      ) : null}
-      {confirmForget ? (
-        <ConfirmDialog
-          confirmLabel="Remove"
-          description="This removes the project from Convax. Files on disk will not be deleted."
-          onCancel={() => setConfirmForget(null)}
-          onConfirm={() => void controller.forgetProject(confirmForget.id).then(() => setConfirmForget(null))}
-          title={`Remove “${confirmForget.name}”?`}
-        />
-      ) : null}
+            >
+              <label className="mb-1.5 block text-xs font-medium" htmlFor="project-name">
+                Project name
+              </label>
+              <input
+                autoFocus
+                className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/25"
+                disabled={creatingProject}
+                id="project-name"
+                onChange={(event) => {
+                  setProjectName(event.currentTarget.value)
+                  if (projectSnapshot.error) controller.clearError()
+                }}
+                placeholder="My project"
+                value={projectName}
+              />
+              {projectSnapshot.error ? (
+                <p className="mt-2 text-xs leading-5 text-destructive" role="alert">
+                  {projectSnapshot.error}
+                </p>
+              ) : (
+                <p className="mt-2 text-xs leading-5 text-muted-foreground">
+                  It will be created in your Documents/Convax workspace.
+                </p>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <Button
+                  disabled={creatingProject}
+                  onClick={() => setCreateProjectOpen(false)}
+                  size="sm"
+                  variant="ghost"
+                >
+                  Cancel
+                </Button>
+                <Button disabled={!projectName.trim() || creatingProject} size="sm" type="submit">
+                  {creatingProject ? <LoaderCircle className="animate-spin" /> : null}
+                  Create project
+                </Button>
+              </div>
+            </form>
+          </Modal>
+        ) : null}
+        {confirmDeletePaths ? (
+          <ConfirmDialog
+            confirmLabel="Move to Trash"
+            description={`${confirmDeletePaths.length} item${confirmDeletePaths.length === 1 ? "" : "s"} will be moved to the system Trash.`}
+            destructive
+            onCancel={() => setConfirmDeletePaths(null)}
+            onConfirm={() =>
+              void filesController.deleteEntries(confirmDeletePaths).then(() => setConfirmDeletePaths(null))
+            }
+            title="Delete selected items?"
+          />
+        ) : null}
+        {confirmForget ? (
+          <ConfirmDialog
+            confirmLabel="Remove"
+            description="This removes the project from Convax. Files on disk will not be deleted."
+            onCancel={() => setConfirmForget(null)}
+            onConfirm={() => void controller.forgetProject(confirmForget.id).then(() => setConfirmForget(null))}
+            title={`Remove “${confirmForget.name}”?`}
+          />
+        ) : null}
       </aside>
     </TooltipProvider>
   )
@@ -602,6 +976,7 @@ function ProjectTreeNode(props: {
   entryByPath: Map<string, ProjectEntry>
   firstPath?: string
   level: number
+  matchingPaths: ReadonlySet<string> | null
   onBeginCreate: (kind: ProjectEntryKind, parentPath: string) => Promise<void>
   onCancelEditor: () => void
   onChangeEditor: (editor: EntryEditor) => void
@@ -620,11 +995,13 @@ function ProjectTreeNode(props: {
   const { entry, snapshot } = props
   const directory = entry.kind === "directory"
   const dropDestinationPath = directory ? entry.path : entry.parentPath
-  const expanded = snapshot.expandedPaths.includes(entry.path)
-  const selected = snapshot.selectedPaths.includes(entry.path)
   const listing = snapshot.listings[entry.path]
-  const loading = snapshot.loadingPaths.includes(entry.path)
   const children = listing?.entries ?? []
+  const expanded =
+    snapshot.expandedPaths.includes(entry.path) ||
+    Boolean(props.matchingPaths && children.some((child) => props.matchingPaths?.has(child.path)))
+  const selected = snapshot.selectedPaths.includes(entry.path)
+  const loading = snapshot.loadingPaths.includes(entry.path)
   const editing = props.editor?.kind === "rename" && props.editor.path === entry.path
   const previewKind = getFilePreviewKind(entry)
   const previewUrl = useMemo(() => {
@@ -658,9 +1035,7 @@ function ProjectTreeNode(props: {
       const bounds = rowRef.current?.getBoundingClientRect()
       if (!bounds || props.previewDisabled) return
       const preferredLeft = bounds.right + 10
-      const left = preferredLeft + 320 <= window.innerWidth - 12
-        ? preferredLeft
-        : Math.max(12, bounds.left - 330)
+      const left = preferredLeft + 320 <= window.innerWidth - 12 ? preferredLeft : Math.max(12, bounds.left - 330)
       const top = Math.max(12, Math.min(bounds.top - 104, window.innerHeight - 320))
       setPreviewPosition({ left, top })
       setPreviewOpen(true)
@@ -682,10 +1057,13 @@ function ProjectTreeNode(props: {
     setPreviewOpen(false)
   }, [props.previewDisabled])
 
-  useEffect(() => () => {
-    clearPreviewTimer(previewOpenTimerRef)
-    clearPreviewTimer(previewCloseTimerRef)
-  }, [])
+  useEffect(
+    () => () => {
+      clearPreviewTimer(previewOpenTimerRef)
+      clearPreviewTimer(previewCloseTimerRef)
+    },
+    [],
+  )
 
   const startDrag = (event: DragEvent<HTMLDivElement>) => {
     props.onDragStart()
@@ -697,11 +1075,14 @@ function ProjectTreeNode(props: {
     })
     if (!selected) props.controller.selectEntry(entry.path, { range: false, toggle: false })
     event.dataTransfer.effectAllowed = "copyMove"
-    event.dataTransfer.setData(PROJECT_ENTRY_DRAG_TYPE, serializeProjectEntryDrag({
-      entries,
-      projectId: snapshot.projectId ?? "",
-      version: 1,
-    }))
+    event.dataTransfer.setData(
+      PROJECT_ENTRY_DRAG_TYPE,
+      serializeProjectEntryDrag({
+        entries,
+        projectId: snapshot.projectId ?? "",
+        version: 1,
+      }),
+    )
     event.dataTransfer.setData("text/plain", entries.map((item) => item.path).join("\n"))
   }
   const row = (
@@ -723,7 +1104,9 @@ function ProjectTreeNode(props: {
         props.controller.selectEntry(entry.path, { range, toggle })
         if (directory && event.detail === 1 && !range && !toggle) void props.controller.toggleDirectory(entry.path)
       }}
-      onDoubleClick={() => { if (!directory) void props.controller.openEntry(entry.path) }}
+      onDoubleClick={() => {
+        if (!directory) void props.controller.openEntry(entry.path)
+      }}
       onDragEnd={props.onDragEnd}
       onDragOver={(event) => props.onDragOver(event, dropDestinationPath)}
       onDragStart={startDrag}
@@ -735,7 +1118,8 @@ function ProjectTreeNode(props: {
         if (event.key === "Delete" || event.key === "Backspace") props.onRequestDelete(entry.path)
         if (directory && event.key === "ArrowRight" && !expanded) void props.controller.toggleDirectory(entry.path)
         if (directory && event.key === "ArrowLeft" && expanded) void props.controller.toggleDirectory(entry.path)
-        if (event.key === "ArrowDown" || event.key === "ArrowUp") focusAdjacentTreeRow(event.currentTarget, event.key === "ArrowDown" ? 1 : -1)
+        if (event.key === "ArrowDown" || event.key === "ArrowUp")
+          focusAdjacentTreeRow(event.currentTarget, event.key === "ArrowDown" ? 1 : -1)
       }}
       role="treeitem"
       tabIndex={selected || (!snapshot.selectedPaths.length && props.firstPath === entry.path) ? 0 : -1}
@@ -754,7 +1138,9 @@ function ProjectTreeNode(props: {
         >
           <ChevronRight className={cn("size-3.5 transition-transform", expanded && "rotate-90")} />
         </button>
-      ) : <span className="size-6 shrink-0" />}
+      ) : (
+        <span className="size-6 shrink-0" />
+      )}
       <EntryIcon entry={entry} expanded={expanded} previewKind={previewKind} previewUrl={previewUrl} />
       {editing ? (
         <InlineInput
@@ -764,7 +1150,9 @@ function ProjectTreeNode(props: {
           onCommit={props.onCommitEditor}
           value={props.editor?.name ?? ""}
         />
-      ) : <span className="min-w-0 flex-1 truncate px-1.5">{entry.name}</span>}
+      ) : (
+        <span className="min-w-0 flex-1 truncate px-1.5">{entry.name}</span>
+      )}
       {!editing ? <MoreHorizontal className="size-3.5 opacity-0 group-hover:opacity-35" /> : null}
     </div>
   )
@@ -775,16 +1163,34 @@ function ProjectTreeNode(props: {
         <ContextMenuContent>
           {directory ? (
             <>
-              <ContextMenuItem onSelect={() => void props.onBeginCreate("file", entry.path)}><Plus />New file</ContextMenuItem>
-              <ContextMenuItem onSelect={() => void props.onBeginCreate("directory", entry.path)}><FolderPlus />New folder</ContextMenuItem>
+              <ContextMenuItem onSelect={() => void props.onBeginCreate("file", entry.path)}>
+                <Plus />
+                New file
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => void props.onBeginCreate("directory", entry.path)}>
+                <FolderPlus />
+                New folder
+              </ContextMenuItem>
               <ContextMenuSeparator />
             </>
           ) : null}
-          <ContextMenuItem onSelect={() => void props.controller.openEntry(entry.path)}><FolderInput />Open</ContextMenuItem>
-          <ContextMenuItem onSelect={() => void props.controller.revealEntry(entry.path)}><Search />Show in File Manager</ContextMenuItem>
+          <ContextMenuItem onSelect={() => void props.controller.openEntry(entry.path)}>
+            <FolderInput />
+            Open
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => void props.controller.revealEntry(entry.path)}>
+            <Search />
+            Show in File Manager
+          </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => props.onStartRename(entry)}><Pencil />Rename</ContextMenuItem>
-          <ContextMenuItem className="text-destructive" onSelect={() => props.onRequestDelete(entry.path)}><Trash2 />Move to Trash</ContextMenuItem>
+          <ContextMenuItem onSelect={() => props.onStartRename(entry)}>
+            <Pencil />
+            Rename
+          </ContextMenuItem>
+          <ContextMenuItem className="text-destructive" onSelect={() => props.onRequestDelete(entry.path)}>
+            <Trash2 />
+            Move to Trash
+          </ContextMenuItem>
         </ContextMenuContent>
         {directory && expanded ? (
           <div role="group">
@@ -797,11 +1203,20 @@ function ProjectTreeNode(props: {
                 onCommit={props.onCommitEditor}
               />
             ) : null}
-            {loading ? <TreeStateRow icon={<LoaderCircle className="animate-spin" />} label="Loading…" level={props.level + 1} /> : null}
-            {!loading && listing && children.length === 0 && !(props.editor?.kind === "create" && props.editor.parentPath === entry.path)
-              ? <TreeStateRow label="Empty folder" level={props.level + 1} />
-              : null}
-            {children.map((child) => <ProjectTreeNode key={child.path} {...props} entry={child} level={props.level + 1} />)}
+            {loading ? (
+              <TreeStateRow icon={<LoaderCircle className="animate-spin" />} label="Loading…" level={props.level + 1} />
+            ) : null}
+            {!loading &&
+            listing &&
+            children.length === 0 &&
+            !(props.editor?.kind === "create" && props.editor.parentPath === entry.path) ? (
+              <TreeStateRow label="Empty folder" level={props.level + 1} />
+            ) : null}
+            {children
+              .filter((child) => !props.matchingPaths || props.matchingPaths.has(child.path))
+              .map((child) => (
+                <ProjectTreeNode key={child.path} {...props} entry={child} level={props.level + 1} />
+              ))}
           </div>
         ) : null}
       </ContextMenu>
@@ -829,7 +1244,11 @@ function EntryEditorRow(props: {
   onCommit: () => Promise<void>
 }) {
   return (
-    <div className="my-0.5 flex h-7 items-center rounded-md bg-accent/60 pr-1 text-[13px]" role="treeitem" aria-level={props.level}>
+    <div
+      className="my-0.5 flex h-7 items-center rounded-md bg-accent/60 pr-1 text-[13px]"
+      role="treeitem"
+      aria-level={props.level}
+    >
       <span style={{ width: `${(props.level - 1) * 14 + 24}px` }} />
       <EntryIcon entry={{ kind: props.editor.entryKind, name: props.editor.name }} />
       <InlineInput
@@ -845,11 +1264,55 @@ function EntryEditorRow(props: {
 
 function TreeStateRow({ icon, label, level }: { icon?: ReactNode; label: string; level: number }) {
   return (
-    <div className="my-0.5 flex h-7 items-center gap-1.5 text-xs text-muted-foreground" role="treeitem" aria-level={level}>
+    <div
+      className="my-0.5 flex h-7 items-center gap-1.5 text-xs text-muted-foreground"
+      role="treeitem"
+      aria-level={level}
+    >
       <span style={{ width: `${(level - 1) * 14 + 24}px` }} />
       {icon ? <span className="[&>svg]:size-3.5">{icon}</span> : null}
       <span>{label}</span>
     </div>
+  )
+}
+
+function ProjectNameInput(props: {
+  name: string
+  onCancel: () => void
+  onChange: (name: string) => void
+  onCommit: () => Promise<void>
+}) {
+  const canceledRef = useRef(false)
+  const committingRef = useRef(false)
+  const commit = () => {
+    if (canceledRef.current || committingRef.current) return
+    committingRef.current = true
+    void props.onCommit().finally(() => {
+      committingRef.current = false
+    })
+  }
+  return (
+    <input
+      aria-label="Rename active project"
+      autoFocus
+      className="h-6 min-w-0 flex-1 rounded border border-input bg-background px-1.5 text-xs font-medium outline-none focus:ring-2 focus:ring-ring/25"
+      onBlur={commit}
+      onInput={(event) => props.onChange(event.currentTarget.value)}
+      onFocus={(event) => event.currentTarget.select()}
+      onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.key === "Enter") {
+          event.preventDefault()
+          commit()
+        }
+        if (event.key === "Escape") {
+          event.preventDefault()
+          canceledRef.current = true
+          props.onCancel()
+        }
+      }}
+      value={props.name}
+    />
   )
 }
 
@@ -866,51 +1329,102 @@ function ProjectSwitcher(props: {
   return (
     <div
       aria-label="Projects"
-      className="absolute left-3 right-3 top-[50px] z-50 overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
+      className="absolute left-2 right-2 top-[44px] z-[91] overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-xl"
       data-project-switcher
       ref={props.rootRef}
       role="dialog"
     >
       <div className="flex items-center justify-between px-2 py-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         <span>Projects</span>
-        <button aria-label="Close projects" onClick={props.onClose} type="button"><X className="size-3.5" /></button>
+        <button aria-label="Close projects" onClick={props.onClose} type="button">
+          <X className="size-3.5" />
+        </button>
       </div>
       <div className="max-h-56 overflow-auto">
         {props.projects.map((project) => (
-          <div className={cn("group my-0.5 flex items-center rounded-lg", project.id === props.activeProjectId && "bg-accent")} key={project.id}>
-            <button className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left" onClick={() => props.onActivate(project.id)} type="button">
+          <div
+            className={cn(
+              "group my-0.5 flex items-center rounded-lg",
+              project.id === props.activeProjectId && "bg-primary/10 text-foreground",
+            )}
+            key={project.id}
+          >
+            <button
+              className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left"
+              onClick={() => props.onActivate(project.id)}
+              type="button"
+            >
               <Folder className="size-4 shrink-0 text-primary" />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-xs font-medium">{project.name}</span>
-                <span className="block truncate text-[10px] text-muted-foreground">{project.missing ? "Folder unavailable" : project.rootPath}</span>
+                <span className="block truncate text-[10px] text-muted-foreground">
+                  {project.missing ? "Folder unavailable" : project.rootPath}
+                </span>
               </span>
+              {project.id === props.activeProjectId ? <Check className="size-3.5 shrink-0 text-primary" /> : null}
             </button>
             <button
               aria-label={`Remove ${project.name}`}
               className="mr-1 grid size-7 place-items-center rounded-md text-muted-foreground opacity-0 hover:bg-muted hover:text-destructive group-hover:opacity-100"
               onClick={() => props.onForget(project)}
               type="button"
-            ><X className="size-3.5" /></button>
+            >
+              <X className="size-3.5" />
+            </button>
           </div>
         ))}
       </div>
       <div className="my-1 h-px bg-border" />
-      <button className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium hover:bg-accent" onClick={props.onOpen} type="button"><FolderPlus className="size-4" />Open folder…</button>
-      <button className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium hover:bg-accent" onClick={props.onCreate} type="button"><Plus className="size-4" />New project</button>
+      <button
+        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium hover:bg-accent"
+        onClick={props.onOpen}
+        type="button"
+      >
+        <FolderPlus className="size-4" />
+        Open folder…
+      </button>
+      <button
+        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs font-medium hover:bg-accent"
+        onClick={props.onCreate}
+        type="button"
+      >
+        <Plus className="size-4" />
+        New project
+      </button>
     </div>
   )
 }
 
-function ProjectEmptyState({ loading, onCreate, onOpen }: { loading: boolean; onCreate: () => void; onOpen: () => void }) {
+function ProjectEmptyState({
+  loading,
+  onCreate,
+  onOpen,
+}: {
+  loading: boolean
+  onCreate: () => void
+  onOpen: () => void
+}) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-7 text-center">
-      {loading ? <LoaderCircle className="size-6 animate-spin text-muted-foreground" /> : (
+      {loading ? (
+        <LoaderCircle className="size-6 animate-spin text-muted-foreground" />
+      ) : (
         <>
-          <span className="mb-4 grid size-12 place-items-center rounded-2xl bg-accent text-primary"><FolderOpen className="size-6" /></span>
+          <span className="mb-4 grid size-12 place-items-center rounded-2xl bg-accent text-primary">
+            <FolderOpen className="size-6" />
+          </span>
           <h2 className="text-sm font-semibold">Start with a project</h2>
-          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">Open a folder or create a clean project for your files.</p>
-          <Button className="mt-5 w-full" onClick={onOpen} size="sm"><FolderPlus />Open folder</Button>
-          <Button className="mt-2 w-full" onClick={onCreate} size="sm" variant="outline"><Plus />New project</Button>
+          <p className="mt-1.5 text-xs leading-5 text-muted-foreground">
+            Open a folder or create a clean project for your files.
+          </p>
+          <Button className="mt-5 w-full" onClick={onOpen} size="sm">
+            <FolderPlus />
+            Open folder
+          </Button>
+          <Button className="mt-2 w-full" onClick={onCreate} size="sm" variant="outline">
+            <Plus />
+            New project
+          </Button>
         </>
       )}
     </div>
@@ -919,11 +1433,22 @@ function ProjectEmptyState({ loading, onCreate, onOpen }: { loading: boolean; on
 
 function Modal({ children, onClose, title }: { children: ReactNode; onClose: () => void; title: string }) {
   return (
-    <div className="fixed inset-0 z-[100] grid place-items-center bg-foreground/20 p-5 backdrop-blur-[2px]" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div aria-modal="true" className="w-full max-w-sm rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-2xl" role="dialog">
+    <div
+      className="fixed inset-0 z-[100] grid place-items-center bg-foreground/20 p-5 backdrop-blur-[2px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose()
+      }}
+    >
+      <div
+        aria-modal="true"
+        className="w-full max-w-sm rounded-xl border border-border bg-popover p-5 text-popover-foreground shadow-2xl"
+        role="dialog"
+      >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-sm font-semibold">{title}</h2>
-          <Button aria-label="Close" onClick={onClose} size="icon-sm" variant="ghost"><X /></Button>
+          <Button aria-label="Close" onClick={onClose} size="icon-sm" variant="ghost">
+            <X />
+          </Button>
         </div>
         {children}
       </div>
@@ -931,13 +1456,24 @@ function Modal({ children, onClose, title }: { children: ReactNode; onClose: () 
   )
 }
 
-function ConfirmDialog(props: { confirmLabel: string; description: string; destructive?: boolean; onCancel: () => void; onConfirm: () => void; title: string }) {
+function ConfirmDialog(props: {
+  confirmLabel: string
+  description: string
+  destructive?: boolean
+  onCancel: () => void
+  onConfirm: () => void
+  title: string
+}) {
   return (
     <Modal onClose={props.onCancel} title={props.title}>
       <p className="text-xs leading-5 text-muted-foreground">{props.description}</p>
       <div className="mt-5 flex justify-end gap-2">
-        <Button onClick={props.onCancel} size="sm" variant="ghost">Cancel</Button>
-        <Button onClick={props.onConfirm} size="sm" variant={props.destructive ? "destructive" : "default"}>{props.confirmLabel}</Button>
+        <Button onClick={props.onCancel} size="sm" variant="ghost">
+          Cancel
+        </Button>
+        <Button onClick={props.onConfirm} size="sm" variant={props.destructive ? "destructive" : "default"}>
+          {props.confirmLabel}
+        </Button>
       </div>
     </Modal>
   )
@@ -949,23 +1485,30 @@ interface ProjectSidebarLayout {
   sectionSplitRatio: number
 }
 
-function projectSidebarLayoutKey(projectId: string) {
-  return `convax.project-sidebar.layout.${projectId}`
+function projectSidebarLayoutKey(projectId: string, workspace: boolean) {
+  return workspace
+    ? `convax.project-sidebar.workspace-layout.v1.${projectId}`
+    : `convax.project-sidebar.layout.${projectId}`
 }
 
-function readProjectSidebarLayout(projectId: string): ProjectSidebarLayout {
-  const fallback = { extensionExpanded: true, filesExpanded: true, sectionSplitRatio: defaultSectionSplitRatio }
+function readProjectSidebarLayout(projectId: string, workspace: boolean): ProjectSidebarLayout {
+  const fallback = {
+    extensionExpanded: true,
+    filesExpanded: true,
+    sectionSplitRatio: workspace ? 0.3 : defaultSectionSplitRatio,
+  }
   if (typeof window === "undefined") return fallback
   try {
-    const raw = window.localStorage.getItem(projectSidebarLayoutKey(projectId))
+    const raw = window.localStorage.getItem(projectSidebarLayoutKey(projectId, workspace))
     if (!raw) return fallback
     const parsed = JSON.parse(raw) as Partial<ProjectSidebarLayout>
     return {
       extensionExpanded: typeof parsed.extensionExpanded === "boolean" ? parsed.extensionExpanded : true,
       filesExpanded: typeof parsed.filesExpanded === "boolean" ? parsed.filesExpanded : true,
-      sectionSplitRatio: typeof parsed.sectionSplitRatio === "number" && Number.isFinite(parsed.sectionSplitRatio)
-        ? clamp(parsed.sectionSplitRatio, minimumSectionSplitRatio, 1 - minimumSectionSplitRatio)
-        : defaultSectionSplitRatio,
+      sectionSplitRatio:
+        typeof parsed.sectionSplitRatio === "number" && Number.isFinite(parsed.sectionSplitRatio)
+          ? clamp(parsed.sectionSplitRatio, minimumSectionSplitRatio, 1 - minimumSectionSplitRatio)
+          : fallback.sectionSplitRatio,
     }
   } catch {
     return fallback
@@ -985,10 +1528,10 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value))
 }
 
-function writeProjectSidebarLayout(projectId: string, layout: ProjectSidebarLayout) {
+function writeProjectSidebarLayout(projectId: string, layout: ProjectSidebarLayout, workspace: boolean) {
   if (typeof window === "undefined") return
   try {
-    window.localStorage.setItem(projectSidebarLayoutKey(projectId), JSON.stringify(layout))
+    window.localStorage.setItem(projectSidebarLayoutKey(projectId, workspace), JSON.stringify(layout))
   } catch {
     // Storage may be unavailable in privacy modes; the in-memory layout remains usable.
   }
@@ -1004,6 +1547,27 @@ function flattenVisibleEntries(snapshot: ProjectFilesControllerSnapshot) {
   }
   visit("")
   return visible
+}
+
+function findMatchingEntryPaths(snapshot: ProjectFilesControllerSnapshot, query: string) {
+  const normalizedQuery = query.trim().toLocaleLowerCase()
+  if (!normalizedQuery) return null
+  const availablePaths = new Set(
+    Object.values(snapshot.listings).flatMap((listing) => listing?.entries.map((entry) => entry.path) ?? []),
+  )
+  const matches = new Set<string>()
+  for (const listing of Object.values(snapshot.listings)) {
+    for (const entry of listing?.entries ?? []) {
+      if (!`${entry.name} ${entry.path}`.toLocaleLowerCase().includes(normalizedQuery)) continue
+      matches.add(entry.path)
+      const segments = entry.path.split("/")
+      for (let index = 1; index < segments.length; index += 1) {
+        const ancestor = segments.slice(0, index).join("/")
+        if (availablePaths.has(ancestor)) matches.add(ancestor)
+      }
+    }
+  }
+  return matches
 }
 
 function normalizeSelectionRoots(paths: readonly string[]) {

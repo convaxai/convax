@@ -182,6 +182,18 @@ describe("canvas fit viewport", () => {
     expect(resolveCanvasFitViewport(input)).toEqual({ x: 200, y: 100, zoom: 2 })
   })
 
+  test("centers fitted content inside an inset safe rectangle", () => {
+    const document = createDocument([createNode("node", { x: 100, y: 50 }, { width: 200, height: 100 })])
+    expect(
+      resolveCanvasFitViewport({
+        bounds: { height: 400, left: 20, top: 40, width: 600 },
+        document,
+        maxZoom: 1,
+        nodeIds: ["node"],
+      }),
+    ).toEqual({ x: 120, y: 140, zoom: 1 })
+  })
+
   test("honors the viewport minimum zoom", () => {
     const document = createDocument([createNode("large", { x: 0, y: 0 }, { width: 1_000, height: 1_000 })])
 

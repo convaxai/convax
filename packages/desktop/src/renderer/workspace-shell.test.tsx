@@ -92,6 +92,36 @@ describe("WorkspaceShell", () => {
     expect(markup.indexOf("Canvas")).toBeLessThan(markup.indexOf("Ready"))
   })
 
+  test("delegates Canvas toolbar clamping to the host-neutral inset adapter", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const source = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+
+    expect(styles).not.toContain("--workspace-canvas-toolbar-offset")
+    expect(source).toContain("resolveWorkspaceCanvasViewportInsets")
+    expect(source).toContain("viewportInsets={canvasViewportInsets}")
+  })
+
+  test("opens whole-Canvas Generate through the mounted Canvas handle, not the utility drawer", async () => {
+    const source = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("mounted.handle.openGenerate()")
+    expect(source).not.toContain("openGenerateUtility")
+    expect(source).not.toContain('value: "generate" as const')
+    expect(source).not.toContain("<CanvasGenerationPanel")
+    expect(source).not.toContain("onGenerateRequest=")
+  })
+
+  test("keeps Settings as the original full-page surface instead of a Sheet", async () => {
+    const source = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+
+    expect(source).toContain("<SettingsView")
+    expect(source).toContain('className="absolute inset-0 z-[100]"')
+    expect(source).not.toContain("WorkspaceSettingsSheet")
+    expect(source).not.toContain('presentation="sheet"')
+    expect(styles).not.toContain(".workspace-settings-sheet")
+  })
+
   test("blocks embedded frames for every host-started pointer until all pointers release and one frame passes", async () => {
     const restoreWindow = installTestWindow()
     let root: Root | undefined
@@ -102,7 +132,9 @@ describe("WorkspaceShell", () => {
       await act(async () =>
         root?.render(
           <WorkspaceShell blocked={false}>
-            <button data-host-target type="button">Host target</button>
+            <button data-host-target type="button">
+              Host target
+            </button>
             <iframe data-web-plugin-iframe="" title="Plugin" />
           </WorkspaceShell>,
         ),
