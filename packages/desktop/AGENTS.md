@@ -267,6 +267,34 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   staging; never turn this into a provider-specific renderer call.
 - Grant fullscreen or any future iframe feature-policy exception only when the
   installed manifest declares it; keep all unrelated denials unchanged.
+- Keep connected image sessions in Main behind the generated
+  `canvas.inputs.image.open`/`canvas.inputs.image.close` declarations and
+  `canvas.connectedImages.read` grant. Resolve only opaque keys from the owning
+  node's direct incoming edges, reuse the Project-owned stable image reader,
+  perform bounded native decode validation, and revalidate the exact frame,
+  Canvas revision, edge and resource identity after asynchronous work. Issue and
+  revoke the handle against the sender/frame, but treat protocol GET/HEAD as a
+  high-entropy bearer capability because Electron does not expose a trustworthy
+  frame principal at that boundary; revalidate the live Plugin principal and
+  direct edge on every fetch. Return only that revocable opaque Host URL and safe
+  metadata, never image bytes over renderer IPC or a native path. Never widen
+  `canvas.inputs.open` beyond its declared audio/video stream contract.
+- Project `convax-connected-media:` into Plugin CSP per exact API: image open
+  controls only `img-src`, while audio/video open controls only `media-src`.
+  Missing declaration, missing grant and legacy schemas keep both closed; neither
+  API widens `connect-src`.
+- Treat custom URI schemes as fixed Host composition adapters, never as a Plugin
+  registration surface or global resource service. Keep verified Plugin assets,
+  trusted-renderer Project resources, connected-media bearer sessions and Pet
+  assets in their distinct authority owners. If a second independent temporary
+  bearer protocol is admitted, extract only a headless session kernel for codec,
+  constant-time token verification, TTL, range, capacity and revocation; do not
+  move domain authorization or resource validation into it.
+- Project `convax-pet-asset:` into `img-src` only for the exact Pet overlay or
+  settings document of a validated v8 snapshot that both contributes
+  `convax.pet-host/1` and holds `pet.custom.manage`. Missing contribution, missing
+  grant, legacy schema and unrelated Plugin documents stay closed. Do not widen
+  `media-src` or `connect-src`, and do not branch on a concrete Pet Plugin id.
 - Builtin and preinstalled are provisioning-source policies, never runtime
   privilege classes. They publish the same v8 snapshots, use the same grants and
   broker, and may not enable native behavior through concrete ids or host-authored

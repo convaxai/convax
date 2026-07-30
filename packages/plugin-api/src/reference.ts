@@ -2,7 +2,6 @@ import { PLUGIN_API_CATALOG_MAJOR, type PluginApiId, pluginApiCatalog } from "./
 import type { PluginApiDefinition } from "./contracts"
 import { parsePluginApiDeclaration } from "./declaration"
 import { pluginApiMethodContracts, type PluginApiObjectShape } from "./method-contracts"
-import { pluginApiWireSchemaDialect } from "./method-schemas"
 
 /**
  * A concrete Plugin-owned tool description included beside Host APIs in a Skill reference.
@@ -156,7 +155,7 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
         `- Response schema: ${renderMethodShape(pluginApiMethodContracts[definition.id].result)}`,
         `- Request byte limit: ${pluginApiMethodContracts[definition.id].request.maxBytes}`,
         `- Response byte limit: ${pluginApiMethodContracts[definition.id].response.maxBytes}`,
-        `- Contract dialect: \`${pluginApiWireSchemaDialect}\``,
+        `- Contract dialect: \`${pluginApiMethodContracts[definition.id].dialect}\``,
       )
       if (definition.docs.remarks) lines.push(`- Remarks: ${definition.docs.remarks}`)
       lines.push(

@@ -184,6 +184,7 @@ export class PluginHostApiService {
           throw new Error(`Plugin Host API connection exceeds ${this.#maximumInFlightRequests} in-flight requests`)
         }
         inFlightRequests += 1
+        let rollbackOpenedImage: (() => Promise<void>) | undefined
         try {
           throwIfAborted(signal)
           assertSerializedSize(
@@ -215,6 +216,44 @@ export class PluginHostApiService {
             const inputs = await this.#operations.listInputs({ binding, principal, signal })
             await reauthorizeNode(binding)
             result = { inputs: sanitizeInputs(inputs) }
+          } else if (call.method === "canvas.inputs.image.open") {
+            const binding = requireNode(node, call.method)
+            const params = exactRecord(call.params, ["inputKey"], "Plugin image input open request")
+            const inputKey = boundedString(params.inputKey, "Plugin image input key", 2_048)
+            await this.#requireNode(principal, binding, signal, authorized.resolved)
+            const opened = await this.#operations.openImageInput({
+              binding,
+              connectionId,
+              inputKey,
+              principal,
+              signal,
+              transport: requireTransport(request.transport),
+            })
+            rollbackOpenedImage = async () => {
+              await this.#operations.closeImageInput({
+                binding,
+                connectionId,
+                principal,
+                sessionId: opened.sessionId,
+                transport: requireTransport(request.transport),
+              })
+            }
+            await reauthorizeNode(binding)
+            result = sanitizeOpenedImageInput(opened)
+          } else if (call.method === "canvas.inputs.image.close") {
+            const binding = requireNode(node, call.method)
+            const params = exactRecord(call.params, ["sessionId"], "Plugin image input close request")
+            const sessionId = boundedString(params.sessionId, "Plugin image input session id", 128)
+            result = {
+              closed: await this.#operations.closeImageInput({
+                binding,
+                connectionId,
+                principal,
+                sessionId,
+                signal,
+                transport: requireTransport(request.transport),
+              }),
+            }
           } else if (call.method === "canvas.inputs.open") {
             const binding = requireNode(node, call.method)
             const params = exactRecord(call.params, ["inputKey"], "Plugin input open request")
@@ -403,7 +442,21 @@ export class PluginHostApiService {
             Math.min(this.#maximumResponseBytes, getPluginApiWireContract(call.method).result.maxBytes),
             "Plugin Host API response",
           )
-          return parsePluginApiResult(call.method, structuredClone(result))
+          const parsed = parsePluginApiResult(call.method, structuredClone(result))
+          rollbackOpenedImage = undefined
+          return parsed
+        } catch (error) {
+          if (rollbackOpenedImage) {
+            try {
+              await rollbackOpenedImage()
+            } catch {
+              // A failed targeted revocation must not leave an unreachable bearer
+              // session behind. Closing the connection revokes every session for
+              // the same exact sender/frame principal.
+              close()
+            }
+          }
+          throw error
         } finally {
           inFlightRequests -= 1
         }
@@ -711,7 +764,8 @@ function sanitizeInputs(inputs: readonly unknown[]) {
 function sanitizeOpenedInput(value: unknown) {
   const input = exactRecord(value, ["probe", "sessionId", "url"], "Plugin opened input")
   const url = boundedString(input.url, "Plugin opened input URL", 2_048)
-  if (!url.startsWith("convax-connected-media://")) throw new Error("Plugin opened input URL is invalid")
+  const sessionId = boundedString(input.sessionId, "Plugin opened input session id", 128)
+  requireConnectedMediaBearerUrl(url, sessionId)
   const probe = exactRecord(
     input.probe,
     ["duration", "height", "kind", "mediaRevision", "mimeType", "size", "width"],
@@ -720,8 +774,37 @@ function sanitizeOpenedInput(value: unknown) {
   if (probe.kind !== "audio" && probe.kind !== "video") throw new Error("Plugin opened input kind is invalid")
   return {
     probe: structuredClone(probe),
-    sessionId: boundedString(input.sessionId, "Plugin opened input session id", 128),
+    sessionId,
     url,
+  }
+}
+
+function sanitizeOpenedImageInput(value: unknown) {
+  const result = parsePluginApiResult("canvas.inputs.image.open", value)
+  requireConnectedMediaBearerUrl(result.url, result.sessionId)
+  return result
+}
+
+function requireConnectedMediaBearerUrl(value: string, sessionId: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error("Plugin opened input bearer URL is invalid")
+  }
+  const segments = url.pathname.split("/").filter(Boolean)
+  if (
+    url.protocol !== "convax-connected-media:" ||
+    url.hostname !== sessionId ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash ||
+    segments.length !== 1 ||
+    !/^[a-f0-9]{32}$/u.test(segments[0]!)
+  ) {
+    throw new Error("Plugin opened input bearer URL is invalid")
   }
 }
 

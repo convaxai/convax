@@ -103,10 +103,7 @@ describe("Plugin asset protocol", () => {
     expect(isAllowedWebPluginFrameNavigation(entryA, nestedA)).toBeTrue()
     expect(isAllowedWebPluginFrameNavigation(entryA, entryB)).toBeFalse()
     expect(
-      isAllowedWebPluginFrameNavigation(
-        entryA,
-        webPluginAssetUrl({ ...runtimeA, id: "other-plugin" }, "index.html"),
-      ),
+      isAllowedWebPluginFrameNavigation(entryA, webPluginAssetUrl({ ...runtimeA, id: "other-plugin" }, "index.html")),
     ).toBeFalse()
     expect(isAllowedWebPluginFrameNavigation(entryA, "https://example.invalid/")).toBeFalse()
     expect(isAllowedWebPluginFrameNavigation(entryA, "data:text/html,escaped")).toBeFalse()
@@ -118,9 +115,9 @@ describe("Plugin asset protocol", () => {
     const asset = await temporaryAsset("nested/index.html", "<!doctype html><title>Plugin</title>")
     const calls: Array<[WebPluginAssetRuntimeIdentity, string]> = []
     const manager = assetResolver(async (relativePath, identity) => {
-        calls.push([identity, relativePath])
-        return asset
-      })
+      calls.push([identity, relativePath])
+      return asset
+    })
     const handle = createWebPluginAssetHandler(manager, { rendererUrl: "file:///Applications/Convax/index.html" })
 
     const response = await handle({ url: assetUrl("nested/index.html") })
@@ -182,6 +179,7 @@ describe("Plugin asset protocol", () => {
     expect(allowed.headers.get("content-security-policy")).toContain(
       "media-src 'self' data: blob: convax-connected-media:",
     )
+    expect(allowed.headers.get("content-security-policy")).toContain("img-src 'self' data: blob:;")
     authorized = false
     const denied = await handle({ url: assetUrl("index.html") })
     expect(denied.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
@@ -193,6 +191,118 @@ describe("Plugin asset protocol", () => {
     schema = "convax.plugin/7"
     const legacy = await handle({ url: assetUrl("index.html") })
     expect(legacy.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
+  })
+
+  test("projects the connected-image grant into img-src without widening media-src", async () => {
+    const asset = await temporaryAsset("index.html", "<!doctype html>")
+    let authorized = true
+    let declared = true
+    const handle = createWebPluginAssetHandler(
+      {
+        async acquirePluginSnapshot(identity) {
+          return {
+            identity: {
+              ...identity,
+              version: identity.pluginVersion,
+            },
+            plugin: {
+              capabilities: authorized ? ["canvas.connectedImages.read"] : [],
+              hostApi: {
+                major: 1,
+                optional: declared ? ["canvas.inputs.image.open"] : [],
+                required: ["host.context.get"],
+              },
+              id: "director-stage",
+              schema: "convax.plugin/8",
+            },
+            release() {},
+            resolveAsset: async () => asset,
+          }
+        },
+      },
+      { rendererUrl: "file:///Applications/Convax/index.html" },
+    )
+
+    const allowed = await handle({ url: assetUrl("index.html") })
+    expect(allowed.headers.get("content-security-policy")).toContain(
+      "img-src 'self' data: blob: convax-connected-media:",
+    )
+    expect(allowed.headers.get("content-security-policy")).toContain("media-src 'self' data: blob:;")
+
+    authorized = false
+    const denied = await handle({ url: assetUrl("index.html") })
+    expect(denied.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
+
+    authorized = true
+    declared = false
+    const undeclared = await handle({ url: assetUrl("index.html") })
+    expect(undeclared.headers.get("content-security-policy")).not.toContain("convax-connected-media:")
+  })
+
+  test("projects custom Pet assets only onto an exact declared and granted v8 Pet surface", async () => {
+    const asset = await temporaryAsset("pet/index.html", "<!doctype html>")
+    let authorized = true
+    let contributed = true
+    let schema = "convax.plugin/8"
+    const handle = createWebPluginAssetHandler(
+      {
+        async acquirePluginSnapshot(identity) {
+          return {
+            identity: {
+              ...identity,
+              version: identity.pluginVersion,
+            },
+            plugin: {
+              capabilities: authorized
+                ? ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"]
+                : ["pet.activity.read", "pet.activity.open", "pet.preferences.write"],
+              contributes: contributed
+                ? {
+                    pet: {
+                      library: "pet-library.json",
+                      overlay: "pet/index.html",
+                      protocol: "convax.pet-host/1" as const,
+                      settings: "settings/index.html",
+                    },
+                  }
+                : {},
+              hostApi: { major: 1, optional: [], required: [] },
+              id: "director-stage",
+              schema,
+            },
+            release() {},
+            resolveAsset: async () => asset,
+          }
+        },
+      },
+      { rendererUrl: "file:///Applications/Convax/index.html" },
+    )
+
+    for (const relativePath of ["pet/index.html", "settings/index.html"]) {
+      const allowed = await handle({ url: assetUrl(relativePath) })
+      const policy = allowed.headers.get("content-security-policy")
+      expect(policy).toContain("img-src 'self' data: blob: convax-pet-asset:")
+      expect(policy).toContain("media-src 'self' data: blob:;")
+      expect(policy).toContain("connect-src 'none'")
+      expect(policy).not.toContain("convax-connected-media:")
+    }
+
+    const unrelatedDocument = await handle({ url: assetUrl("other/index.html") })
+    expect(unrelatedDocument.headers.get("content-security-policy")).not.toContain("convax-pet-asset:")
+
+    authorized = false
+    const denied = await handle({ url: assetUrl("pet/index.html") })
+    expect(denied.headers.get("content-security-policy")).not.toContain("convax-pet-asset:")
+
+    authorized = true
+    contributed = false
+    const undeclared = await handle({ url: assetUrl("pet/index.html") })
+    expect(undeclared.headers.get("content-security-policy")).not.toContain("convax-pet-asset:")
+
+    contributed = true
+    schema = "convax.plugin/7"
+    const legacy = await handle({ url: assetUrl("pet/index.html") })
+    expect(legacy.headers.get("content-security-policy")).not.toContain("convax-pet-asset:")
   })
 
   test("rejects ambiguous, malformed, traversal, and Windows-unsafe URLs before lookup", async () => {

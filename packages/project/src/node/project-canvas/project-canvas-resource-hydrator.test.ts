@@ -266,6 +266,20 @@ describe("ProjectCanvasResourceHydrator", () => {
     ).rejects.toThrow(/directories/i)
   })
 
+  test("cancels a typed image read before native path resolution", async () => {
+    const controller = new AbortController()
+    controller.abort(new DOMException("Image read canceled", "AbortError"))
+
+    await expect(
+      hydrator.readImage({
+        maximumBytes: 1024,
+        projectId,
+        reference: { kind: "project-file", path: "hero.png" },
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" })
+  })
+
   test("hydrates a full document while preserving the typed reference and revision", async () => {
     await fs.writeFile(path.join(projectRoot, "brief.txt"), "hello")
     const reference = { kind: "project-file", path: "brief.txt" } as const

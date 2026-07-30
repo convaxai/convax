@@ -159,6 +159,7 @@ import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
 import { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import { createElectronPluginConnectedImageInspector } from "./plugin-connected-image-inspector"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
@@ -461,8 +462,10 @@ function startApplication() {
     const pluginConnectedMedia = new PluginConnectedMediaService({
       changes: canvasDocumentChanges,
       documents: canvasDocuments,
+      images: createElectronPluginConnectedImageInspector(nativeImage),
       media: managedCanvasMedia,
       plugins: pluginInstallations,
+      resources: canvasResourceHydrator,
     })
     const pluginMaterialization = new PluginMaterializationService({
       application: canvasApplication,

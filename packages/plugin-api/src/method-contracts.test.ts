@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
 
 import {
+  maximumPluginApiConnectedImageBytes,
+  maximumPluginApiConnectedImageDimension,
+  maximumPluginApiConnectedImagePixels,
   parsePluginApiCall,
   parsePluginApiParams,
   parsePluginApiRemoteFailure,
@@ -8,6 +11,8 @@ import {
   pluginApiCatalog,
   pluginApiContractIds,
   pluginApiMethodContracts,
+  pluginApiWireContracts,
+  pluginApiWireSchemaDialect,
   type PluginApiCall,
   type PluginApiParams,
   type PluginApiResult,
@@ -15,17 +20,36 @@ import {
 
 const typedPromptParams: PluginApiParams<"agent.prompt"> = { text: "hello" }
 const typedPromptResult: PluginApiResult<"agent.prompt"> = { text: "accepted" }
+const typedImageOpenResult: PluginApiResult<"canvas.inputs.image.open"> = {
+  probe: {
+    contentRevision: "a".repeat(64),
+    height: 1,
+    kind: "image",
+    mimeType: "image/png",
+    size: 3,
+    width: 1,
+  },
+  sessionId: "session",
+  url: "convax-connected-media://session",
+}
 const typedNoParamsCall: PluginApiCall<"host.context.get"> = { method: "host.context.get" }
 const parseRemoteFailure = parsePluginApiRemoteFailure as (
   id: (typeof pluginApiContractIds)[number],
   value: unknown,
 ) => unknown
-void [typedPromptParams, typedPromptResult, typedNoParamsCall]
+void [typedPromptParams, typedPromptResult, typedImageOpenResult, typedNoParamsCall]
 
 describe("portable Plugin Host API method contracts", () => {
   test("binds every Catalog id to one request/result contract", () => {
     expect(pluginApiContractIds).toEqual(pluginApiCatalog.apis.map(({ id }) => id).sort())
-    expect(Object.keys(pluginApiMethodContracts)).toHaveLength(18)
+    expect(Object.keys(pluginApiMethodContracts)).toHaveLength(20)
+  })
+
+  test("assigns the current wire-schema dialect to every contract", () => {
+    expect(pluginApiMethodContracts["canvas.inputs.image.open"].dialect).toBe(pluginApiWireSchemaDialect)
+    expect(
+      pluginApiContractIds.every((id) => pluginApiMethodContracts[id].dialect === pluginApiWireSchemaDialect),
+    ).toBe(true)
   })
 
   test("gives no-params APIs a real absent-params contract", () => {
@@ -39,6 +63,76 @@ describe("portable Plugin Host API method contracts", () => {
     expect(() => parsePluginApiParams("agent.prompt", { text: "hello", toolId: "escape" })).toThrow("unsupported")
     expect(parsePluginApiResult("agent.prompt", { text: "accepted" })).toEqual({ text: "accepted" })
     expect(() => parsePluginApiResult("agent.prompt", { text: 42 })).toThrow("bounded string")
+  })
+
+  test("validates bounded Host-owned connected-image sessions with dialect 3", () => {
+    const imageProbeSchema = pluginApiWireContracts["canvas.inputs.image.open"].result.schema
+    if (!("properties" in imageProbeSchema) || !("properties" in imageProbeSchema.properties.probe)) {
+      throw new Error("expected connected image probe object schema")
+    }
+    expect(imageProbeSchema.properties.probe.products).toEqual([
+      { fields: ["width", "height"], maximum: maximumPluginApiConnectedImagePixels },
+    ])
+    expect(parsePluginApiParams("canvas.inputs.image.open", { inputKey: "opaque-input-key" })).toEqual({
+      inputKey: "opaque-input-key",
+    })
+    const result = {
+      probe: {
+        contentRevision: "a".repeat(64),
+        height: 4_096,
+        kind: "image",
+        mimeType: "image/webp",
+        size: maximumPluginApiConnectedImageBytes,
+        width: 8_192,
+      },
+      sessionId: "image-session",
+      url: "convax-connected-media://image-session",
+    } as const
+    expect(parsePluginApiResult("canvas.inputs.image.open", result)).toEqual(result)
+    expect(parsePluginApiParams("canvas.inputs.image.close", { sessionId: "image-session" })).toEqual({
+      sessionId: "image-session",
+    })
+    expect(parsePluginApiResult("canvas.inputs.image.close", { closed: true })).toEqual({ closed: true })
+
+    for (const invalidProbe of [
+      { ...result.probe, contentRevision: "A".repeat(64) },
+      { ...result.probe, contentRevision: "a".repeat(63) },
+      { ...result.probe, size: maximumPluginApiConnectedImageBytes + 1 },
+      { ...result.probe, width: maximumPluginApiConnectedImageDimension + 1 },
+      { ...result.probe, height: 0 },
+    ]) {
+      expect(() =>
+        parsePluginApiResult("canvas.inputs.image.open", {
+          ...result,
+          probe: invalidProbe,
+        }),
+      ).toThrow()
+    }
+    expect(() =>
+      parsePluginApiResult("canvas.inputs.image.open", {
+        ...result,
+        url: "https://example.com/image.png",
+      }),
+    ).toThrow("bounded string")
+    expect(() =>
+      parsePluginApiResult("canvas.inputs.image.open", {
+        ...result,
+        probe: {
+          ...result.probe,
+          mimeType: "image/svg+xml",
+        },
+      }),
+    ).toThrow("bounded string")
+    expect(() =>
+      parsePluginApiResult("canvas.inputs.image.open", {
+        ...result,
+        probe: {
+          ...result.probe,
+          height: 4_097,
+          width: 8_192,
+        },
+      }),
+    ).toThrow("numeric product limits")
   })
 
   test("interprets portable semantic refinements and field-local byte limits from the schema", () => {

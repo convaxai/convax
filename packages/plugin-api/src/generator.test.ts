@@ -4,6 +4,7 @@ import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { pluginApiCatalog } from "./catalog"
 import { PLUGIN_API_CATALOG_ARTIFACT_SCHEMA } from "./catalog-artifact"
+import { pluginApiWireSchemaDialect } from "./method-schemas"
 import {
   appendPluginApiHistory,
   checkPluginApiCompatibility,
@@ -107,6 +108,14 @@ describe("Plugin API compatibility", () => {
     expect(checkPluginApiCompatibility(previous, enumChanged)).toEqual([
       expect.objectContaining({ kind: "api-changed", apiId: "generation.execute" }),
     ])
+
+    const productChanged = structuredClone(previous) as any
+    productChanged.version = "1.0.1"
+    const imageOpen = productChanged.apis.find(({ id }: { id: string }) => id === "canvas.inputs.image.open")!
+    imageOpen.contract.result.schema.properties.probe.products[0].maximum -= 1
+    expect(checkPluginApiCompatibility(previous, productChanged)).toEqual([
+      expect.objectContaining({ kind: "api-changed", apiId: "canvas.inputs.image.open" }),
+    ])
   })
 })
 
@@ -115,10 +124,22 @@ describe("Plugin API generation", () => {
     const json = renderPluginApiJson()
     expect(json).toBe(renderPluginApiJson())
     expect(parsePluginApiCatalogArtifact(JSON.parse(json)).schema).toBe(PLUGIN_API_CATALOG_ARTIFACT_SCHEMA)
+    expect(PLUGIN_API_CATALOG_ARTIFACT_SCHEMA).toBe("convax.plugin-api-catalog/3")
     expect(json.indexOf('"id": "agent.prompt"')).toBeLessThan(json.indexOf('"id": "host.context.get"'))
     const markdown = renderPluginApiMarkdown()
     expect(markdown).toContain("| API | Since | Audience | Grant | Scope | Side effect | Completion | Errors |")
     expect(markdown).toContain("`canvas.inputs.open`")
+    expect(markdown).toContain("`canvas.inputs.image.open` | 1.0.0")
+    expect(markdown).toContain("`canvas.inputs.image.close` | 1.0.0")
+    expect(markdown).toContain("The response contains no image bytes, native path, or unrestricted URL.")
+    expect(markdown).toContain("Electron protocol GET/HEAD requests have no trusted sender or frame principal.")
+    expect(markdown).toContain("opaque 128-bit bearer URL")
+    expect(markdown).toContain('"maximum": 16777216')
+    expect(markdown).toContain('"maximum": 8192')
+    expect(markdown).toContain('"maximum": 33554432')
+    expect(markdown).toContain('"products": [')
+    expect(markdown).toContain('"fields": [')
+    expect(markdown).toContain('"refinement": "lowercase-sha256"')
     expect(markdown).toContain("`resource-unavailable`")
     expect(markdown).toContain("Request schema: closed object: `ref (required)`, `projection (optional)`")
     expect(markdown).toContain(
@@ -144,6 +165,45 @@ describe("Plugin API generation", () => {
     futureDialect.apis[0].contract.dialect = "convax.plugin-api-wire-schema/999"
     expect(() => parsePluginApiCatalogArtifact(futureDialect)).toThrow("dialect is invalid")
 
+    const retiredV2Artifact = JSON.parse(json)
+    retiredV2Artifact.schema = "convax.plugin-api-catalog/2"
+    expect(() => parsePluginApiCatalogArtifact(retiredV2Artifact)).toThrow("is not a Plugin API catalog snapshot")
+
+    const unknownNumericFeature = JSON.parse(json)
+    const imageCreate = unknownNumericFeature.apis.find(
+      ({ id }: { id: string }) => id === "canvas.resource.image.create",
+    )
+    imageCreate.contract.result.schema.properties.revision.exclusiveMaximum = 10
+    expect(() => parsePluginApiCatalogArtifact(unknownNumericFeature)).toThrow("unknown field: exclusiveMaximum")
+
+    const unknownProductFeature = JSON.parse(json)
+    const imageOpen = unknownProductFeature.apis.find(({ id }: { id: string }) => id === "canvas.inputs.image.open")
+    imageOpen.contract.result.schema.properties.probe.products[0].exclusiveMaximum = 10
+    expect(() => parsePluginApiCatalogArtifact(unknownProductFeature)).toThrow("unknown field: exclusiveMaximum")
+
+    const nonNumericProduct = JSON.parse(json)
+    const nonNumericImageOpen = nonNumericProduct.apis.find(
+      ({ id }: { id: string }) => id === "canvas.inputs.image.open",
+    )
+    nonNumericImageOpen.contract.result.schema.properties.probe.products[0].fields = ["width", "mimeType"]
+    expect(() => parsePluginApiCatalogArtifact(nonNumericProduct)).toThrow(
+      "mimeType is not a required non-negative numeric property",
+    )
+
+    const implicitProductLimit = JSON.parse(json)
+    const implicitImageOpen = implicitProductLimit.apis.find(
+      ({ id }: { id: string }) => id === "canvas.inputs.image.open",
+    )
+    delete implicitImageOpen.contract.result.schema.properties.probe.products[0].maximum
+    expect(() => parsePluginApiCatalogArtifact(implicitProductLimit)).toThrow("is invalid")
+
+    const changedProductLimit = JSON.parse(json)
+    const changedImageOpen = changedProductLimit.apis.find(
+      ({ id }: { id: string }) => id === "canvas.inputs.image.open",
+    )
+    changedImageOpen.contract.result.schema.properties.probe.products[0].maximum -= 1
+    expect(() => parsePluginApiCatalogArtifact(changedProductLimit)).toThrow("digest does not match")
+
     const nonFiniteConst = JSON.parse(json)
     const state = nonFiniteConst.apis.find(({ id }: { id: string }) => id === "canvas.node.state.replace")
     state.contract.result.schema.properties.updated.const = Number.NaN
@@ -153,6 +213,16 @@ describe("Plugin API generation", () => {
     const image = nonFiniteMinimum.apis.find(({ id }: { id: string }) => id === "canvas.resource.image.create")
     image.contract.result.schema.properties.revision.minimum = Number.POSITIVE_INFINITY
     expect(() => parsePluginApiCatalogArtifact(nonFiniteMinimum)).toThrow("number contract is invalid")
+  })
+
+  test("treats the rebuilt unpublished 1.0.0 history as the exact current single-dialect catalog", () => {
+    const historyPath = join(import.meta.dir, "../history/1.0.0.json")
+    const initial = JSON.parse(readFileSync(historyPath, "utf8")) as PluginApiCatalogSnapshot
+    expect(initial.schema).toBe(PLUGIN_API_CATALOG_ARTIFACT_SCHEMA)
+    expect(parsePluginApiCatalogArtifact(initial)).toEqual(initial)
+    expect(initial.apis.every(({ contract }) => contract.dialect === pluginApiWireSchemaDialect)).toBe(true)
+    const current = snapshotPluginApiCatalog(pluginApiCatalog)
+    expect(initial).toEqual(current)
   })
 
   test("--check reports drift without creating or changing files", async () => {

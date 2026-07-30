@@ -1,6 +1,11 @@
 import fs from "node:fs/promises"
 import { extname } from "node:path"
-import { getPluginApiDefinition, isPluginApiDeclared, type PluginApiDeclaration } from "@convax/plugin-api"
+import {
+  getPluginApiDefinition,
+  isPluginApiDeclared,
+  type PluginApiDeclaration,
+  type PluginApiId,
+} from "@convax/plugin-api"
 
 import {
   parseWebPluginAssetUrl,
@@ -8,6 +13,7 @@ import {
   webPluginAssetScheme,
   type WebPluginAssetRuntimeIdentity,
 } from "../plugin-asset-contract"
+import type { WebPluginPetContribution } from "../plugin-contracts"
 
 export { webPluginAssetScheme } from "../plugin-asset-contract"
 
@@ -58,7 +64,10 @@ export interface WebPluginAssetResolver {
     }
     plugin: {
       capabilities: readonly string[]
-      hostApi?: PluginApiDeclaration<string>
+      contributes?: {
+        readonly pet?: WebPluginPetContribution
+      }
+      hostApi?: PluginApiDeclaration
       id: string
       schema: string
     }
@@ -83,16 +92,43 @@ export function pluginAssetContentType(relativePath: string) {
   return contentTypeByExtension[extname(relativePath).toLowerCase()] ?? "application/octet-stream"
 }
 
-function responseHeaders(relativePath: string, rendererUrl: string, allowConnectedMedia = false) {
+interface WebPluginCspProjection {
+  connectedImages: boolean
+  connectedStreams: boolean
+  petAssets: boolean
+}
+
+function responseHeaders(
+  relativePath: string,
+  rendererUrl: string,
+  projection: WebPluginCspProjection = {
+    connectedImages: false,
+    connectedStreams: false,
+    petAssets: false,
+  },
+) {
   const frameAncestor = pluginFrameAncestorSource(rendererUrl)
+  const imageSources = [
+    "'self'",
+    "data:",
+    "blob:",
+    ...(projection.connectedImages ? ["convax-connected-media:"] : []),
+    ...(projection.petAssets ? ["convax-pet-asset:"] : []),
+  ].join(" ")
+  const mediaSources = [
+    "'self'",
+    "data:",
+    "blob:",
+    ...(projection.connectedStreams ? ["convax-connected-media:"] : []),
+  ].join(" ")
   return {
     "Cache-Control": "no-store",
     "Content-Security-Policy": [
       "default-src 'none'",
       "script-src 'self'",
       "style-src 'self'",
-      "img-src 'self' data: blob:",
-      `media-src 'self' data: blob:${allowConnectedMedia ? " convax-connected-media:" : ""}`,
+      `img-src ${imageSources}`,
+      `media-src ${mediaSources}`,
       "font-src 'self' data:",
       "connect-src 'none'",
       "worker-src 'none'",
@@ -176,18 +212,14 @@ export function createWebPluginAssetHandler(manager: WebPluginAssetResolver, opt
           throw new Error("Plugin asset resolver returned another runtime generation")
         }
         const absolutePath = await active.resolveAsset(relativePath)
-        const allowConnectedMedia = Boolean(
-          active.plugin.schema === "convax.plugin/8" &&
-            active.plugin.hostApi &&
-            isPluginApiDeclared(active.plugin.hostApi, "canvas.inputs.open") &&
-            (() => {
-              const grant = getPluginApiDefinition("canvas.inputs.open").grant
-              return grant === null || active.plugin.capabilities.includes(grant)
-            })(),
-        )
+        const projection = {
+          connectedImages: declaresAuthorizedHostApi(active.plugin, "canvas.inputs.image.open"),
+          connectedStreams: declaresAuthorizedHostApi(active.plugin, "canvas.inputs.open"),
+          petAssets: declaresAuthorizedPetAssetSurface(active.plugin, relativePath),
+        }
         const content = await readResolvedAsset(absolutePath)
         return new Response(content, {
-          headers: responseHeaders(relativePath, rendererUrl, allowConnectedMedia),
+          headers: responseHeaders(relativePath, rendererUrl, projection),
           status: 200,
         })
       } finally {
@@ -204,4 +236,39 @@ export function createWebPluginAssetHandler(manager: WebPluginAssetResolver, opt
       })
     }
   }
+}
+
+function declaresAuthorizedHostApi(
+  plugin: {
+    capabilities: readonly string[]
+    hostApi?: PluginApiDeclaration
+    schema: string
+  },
+  apiId: PluginApiId,
+) {
+  if (plugin.schema !== "convax.plugin/8" || !plugin.hostApi || !isPluginApiDeclared(plugin.hostApi, apiId)) {
+    return false
+  }
+  const grant = getPluginApiDefinition(apiId).grant
+  return grant === null || plugin.capabilities.includes(grant)
+}
+
+function declaresAuthorizedPetAssetSurface(
+  plugin: {
+    capabilities: readonly string[]
+    contributes?: {
+      readonly pet?: WebPluginPetContribution
+    }
+    schema: string
+  },
+  relativePath: string,
+) {
+  if (plugin.schema !== "convax.plugin/8" || !plugin.capabilities.includes("pet.custom.manage")) {
+    return false
+  }
+  const contribution = plugin.contributes?.pet
+  return (
+    contribution?.protocol === "convax.pet-host/1" &&
+    (relativePath === contribution.overlay || relativePath === contribution.settings)
+  )
 }

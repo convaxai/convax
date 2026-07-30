@@ -46,6 +46,20 @@ interpreter requires a schema-dialect bump. Never hand-edit
 APIs and their schema entries in one release, run `bun history:append`, and then run
 `bun generate`.
 
+Every value-affecting limit must be data in the portable wire schema. This includes
+cross-field limits such as numeric products: serialize the referenced fields and
+maximum so the contract digest and compatibility check change with the limit. An
+opaque API-specific refinement whose meaning depends on an interpreter constant is
+forbidden because it permits runtime semantics to change without changing the
+published contract bytes.
+
+The current unpublished candidate has one wire-schema dialect. Before the first
+package publication, an explicitly approved breaking cutover may rebuild that
+candidate and its initial history snapshot instead of preserving speculative legacy
+dialects. After first publication, changing the dialect or artifact schema requires
+the normal major-version or explicit migration path, with interpreter, compatibility,
+generation, and hostile-input tests.
+
 Consumers must import `PLUGIN_API_CATALOG_ARTIFACT_SCHEMA` from the root package and
 parse untrusted generated JSON with
 `parsePluginApiCatalogArtifact` from `@convax/plugin-api/generator`; copying the

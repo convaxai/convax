@@ -58,7 +58,7 @@ export interface PluginHostApiMainAdapterOptions {
   documents: Pick<CanvasDocumentClient, "load">
   generation: Pick<GenerationCanvasService, "generate" | "listTools">
   images: Pick<PluginCanvasImageService, "createForHostApi">
-  media: Pick<PluginConnectedMediaService, "close" | "open" | "revokeFrame">
+  media: Pick<PluginConnectedMediaService, "close" | "closeImage" | "open" | "openImage" | "revokeFrame">
   projects: PluginHostProjectPort
 }
 
@@ -139,25 +139,25 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     const references = generationReferences(snapshot, input.binding.nodeId, input.references)
     return this.options.generation
       .generate(
-          {
-            anchor: nodeOutputAnchor(owner),
-            expectedRevision: snapshot.revision,
-            operationId: input.operationId,
-            ...(input.output ? { output: input.output } : {}),
-            prompt: input.prompt,
-            ref: { canvasId: input.binding.canvasId, scopeId: input.binding.projectId },
-            referenceConstraint: {
-              ownerNodeId: input.binding.nodeId,
-              ownerPluginId: input.principal.pluginId,
-              type: "direct-incoming",
-            },
-            references,
-            resultMode: { type: input.resultMode ?? "create-pending-node" },
-            ...(input.toolId ? { toolId: input.toolId } : {}),
+        {
+          anchor: nodeOutputAnchor(owner),
+          expectedRevision: snapshot.revision,
+          operationId: input.operationId,
+          ...(input.output ? { output: input.output } : {}),
+          prompt: input.prompt,
+          ref: { canvasId: input.binding.canvasId, scopeId: input.binding.projectId },
+          referenceConstraint: {
+            ownerNodeId: input.binding.nodeId,
+            ownerPluginId: input.principal.pluginId,
+            type: "direct-incoming",
           },
-          { id: input.principal.pluginId, kind: "plugin" },
-          input.signal,
-          { beforeExternalCall: () => input.checkpoint.checkpoint().then(() => undefined) },
+          references,
+          resultMode: { type: input.resultMode ?? "create-pending-node" },
+          ...(input.toolId ? { toolId: input.toolId } : {}),
+        },
+        { id: input.principal.pluginId, kind: "plugin" },
+        input.signal,
+        { beforeExternalCall: () => input.checkpoint.checkpoint().then(() => undefined) },
       )
       .catch((error: unknown) => {
         if (error instanceof GenerationPublicationPartialSuccessError) {
@@ -214,6 +214,37 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
         ...mediaFrame(input.binding, input.principal, input.transport.frameId),
         expectedRevision: context.documentRevision,
         sourceNodeId: input.inputKey,
+      },
+      input.transport.senderId,
+    )
+  }
+
+  async openImageInput(input: Parameters<PluginHostNodeOperationsPort["openImageInput"]>[0]) {
+    const context = await this.resolve({
+      binding: input.binding,
+      principal: input.principal,
+      signal: input.signal,
+    })
+    if (!context) {
+      throw new PluginHostApiError("stale-context", "Plugin image input owner is no longer current")
+    }
+    return this.options.media.openImage(
+      {
+        ...mediaFrame(input.binding, input.principal, input.transport.frameId),
+        expectedRevision: context.documentRevision,
+        sourceNodeId: input.inputKey,
+      },
+      input.transport.senderId,
+      input.signal,
+    )
+  }
+
+  async closeImageInput(input: Parameters<PluginHostNodeOperationsPort["closeImageInput"]>[0]) {
+    throwIfAborted(input.signal)
+    return this.options.media.closeImage(
+      {
+        ...mediaFrame(input.binding, input.principal, input.transport.frameId),
+        sessionId: input.sessionId,
       },
       input.transport.senderId,
     )
@@ -413,7 +444,7 @@ async function connectedInputDescriptor(node: CanvasNode): Promise<PluginConnect
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined
   const text = (value: unknown, maximum: number) =>
     typeof value === "string" && value && value === value.trim() && value.length <= maximum ? value : undefined
-  const revision = createHash("sha256")
+  const mediaRevision = createHash("sha256")
     .update(
       JSON.stringify([
         data.kind,
@@ -434,7 +465,7 @@ async function connectedInputDescriptor(node: CanvasNode): Promise<PluginConnect
     id: node.id,
     kind: text(data.kind, 80) ?? "file",
     label: text(data.label, 512) ?? "Untitled",
-    mediaRevision: revision,
+    mediaRevision,
     ...(text(data.mimeType, 256) ? { mimeType: text(data.mimeType, 256) } : {}),
     ...(text(data.name, 512) ? { name: text(data.name, 512) } : {}),
     ...(data.status === "idle" || data.status === "pending" || data.status === "error" ? { status: data.status } : {}),

@@ -385,11 +385,13 @@ async function runtimeFixture(
         operations: {
           closeConnection() {},
           closeInput: unexpectedHostOperation,
+          closeImageInput: unexpectedHostOperation,
           createCanvasImage: unexpectedHostOperation,
           executeGeneration: unexpectedHostOperation,
           listGenerationTools: unexpectedHostOperation,
           listInputs: unexpectedHostOperation,
           openInput: unexpectedHostOperation,
+          openImageInput: unexpectedHostOperation,
           promptAgent: unexpectedHostOperation,
           readProjectText: unexpectedHostOperation,
           replaceNodeState: unexpectedHostOperation,

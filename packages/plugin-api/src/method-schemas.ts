@@ -1,4 +1,13 @@
-export type PluginApiStringRefinement = "portable-project-relative-path" | "safe-png-file-name" | "trimmed"
+export type PluginApiStringRefinement =
+  | "lowercase-sha256"
+  | "portable-project-relative-path"
+  | "safe-png-file-name"
+  | "trimmed"
+
+export interface PluginApiWireProductConstraint<Field extends string = string> {
+  readonly fields: readonly [Field, Field, ...Field[]]
+  readonly maximum: number
+}
 
 export type PluginApiWireSchema =
   | { readonly type: "none" }
@@ -7,6 +16,7 @@ export type PluginApiWireSchema =
   | {
       readonly type: "integer" | "number"
       readonly finite: true
+      readonly maximum?: number
       readonly minimum?: number
     }
   | {
@@ -28,6 +38,7 @@ export type PluginApiWireSchema =
   | {
       readonly additionalProperties: false
       readonly properties: Readonly<Record<string, PluginApiWireSchema>>
+      readonly products?: readonly PluginApiWireProductConstraint[]
       readonly required: readonly string[]
       readonly type: "object"
     }
@@ -50,12 +61,15 @@ export interface PluginApiWireLimit {
 }
 
 export interface PluginApiWireContract {
+  readonly dialect: PluginApiWireSchemaDialect
   readonly request: PluginApiWireLimit
   readonly result: PluginApiWireLimit
 }
 
-/** Versioned semantics of the portable schema interpreter and generated contracts. */
-export const pluginApiWireSchemaDialect = "convax.plugin-api-wire-schema/2" as const
+/** Wire-schema semantics of the unpublished initial Host API catalog. */
+export const pluginApiWireSchemaDialect = "convax.plugin-api-wire-schema/3" as const
+
+export type PluginApiWireSchemaDialect = typeof pluginApiWireSchemaDialect
 
 declare const pluginApiSchemaValue: unique symbol
 interface PluginApiSchemaBrand<Value> {
@@ -72,6 +86,9 @@ export type PluginApiJsonValue =
 
 const KiB = 1024
 const MiB = KiB * KiB
+export const maximumPluginApiConnectedImageBytes = 16 * MiB
+export const maximumPluginApiConnectedImageDimension = 8_192
+export const maximumPluginApiConnectedImagePixels = 33_554_432
 const none = { type: "none" } as const as { readonly type: "none" } & PluginApiSchemaBrand<undefined>
 const bool = { type: "boolean" } as const as { readonly type: "boolean" } & PluginApiSchemaBrand<boolean>
 const finite = { finite: true, type: "number" } as const as {
@@ -83,6 +100,13 @@ const integer = { finite: true, minimum: 0, type: "integer" } as const as {
   readonly minimum: 0
   readonly type: "integer"
 } & PluginApiSchemaBrand<number>
+const boundedPositiveInteger = <const Maximum extends number>(maximum: Maximum) =>
+  ({ finite: true, maximum, minimum: 1, type: "integer" }) as {
+    readonly finite: true
+    readonly maximum: Maximum
+    readonly minimum: 1
+    readonly type: "integer"
+  } & PluginApiSchemaBrand<number>
 const nil = { type: "null" } as const as { readonly type: "null" } & PluginApiSchemaBrand<null>
 const literal = <const Value extends boolean | number | string>(value: Value) =>
   ({ const: value }) as { readonly const: Value } & PluginApiSchemaBrand<Value>
@@ -138,12 +162,15 @@ const array = <const Items extends PluginApiWireSchema>(
 const object = <
   const Properties extends Readonly<Record<string, PluginApiWireSchema>>,
   const Required extends readonly (keyof Properties & string)[],
+  const Products extends readonly PluginApiWireProductConstraint<keyof Properties & string>[] | undefined = undefined,
 >(
   properties: Properties,
   required: Required,
+  products?: Products,
 ): {
   readonly additionalProperties: false
   readonly properties: Properties
+  readonly products?: Products
   readonly required: Required
   readonly type: "object"
 } & PluginApiSchemaBrand<
@@ -158,11 +185,13 @@ const object = <
   ({
     additionalProperties: false,
     properties,
+    ...(products ? { products } : {}),
     required,
     type: "object",
   }) as {
     readonly additionalProperties: false
     readonly properties: Properties
+    readonly products?: Products
     readonly required: Required
     readonly type: "object"
   } & PluginApiSchemaBrand<
@@ -338,6 +367,19 @@ const connectedInput = object(
   ["inputKey", "kind", "label"],
 )
 
+const connectedImageProbe = object(
+  {
+    contentRevision: string(64, { refinement: "lowercase-sha256" }),
+    height: boundedPositiveInteger(maximumPluginApiConnectedImageDimension),
+    kind: literal("image"),
+    mimeType: enumString(["image/jpeg", "image/png", "image/webp"]),
+    size: boundedPositiveInteger(maximumPluginApiConnectedImageBytes),
+    width: boundedPositiveInteger(maximumPluginApiConnectedImageDimension),
+  },
+  ["contentRevision", "height", "kind", "mimeType", "size", "width"],
+  [{ fields: ["width", "height"], maximum: maximumPluginApiConnectedImagePixels }],
+)
+
 const generationTool = object(
   {
     acceptedInputs: array(inputRole, 6),
@@ -438,9 +480,11 @@ const contract = <const Request extends PluginApiWireSchema, const Result extend
   result: Result,
   limits: { readonly request?: number; readonly result?: number } = {},
 ): {
+  readonly dialect: typeof pluginApiWireSchemaDialect
   readonly request: { readonly maxBytes: number; readonly schema: Request }
   readonly result: { readonly maxBytes: number; readonly schema: Result }
 } => ({
+  dialect: pluginApiWireSchemaDialect,
   request: { maxBytes: limits.request ?? 64 * KiB, schema: request },
   result: { maxBytes: limits.result ?? 64 * KiB, schema: result },
 })
@@ -456,6 +500,21 @@ export const pluginApiWireContracts = Object.freeze({
   "canvas.inputs.list": contract(none, object({ inputs: array(connectedInput, 256) }, ["inputs"]), {
     result: MiB,
   }),
+  "canvas.inputs.image.open": contract(
+    object({ inputKey: string() }, ["inputKey"]),
+    object(
+      {
+        probe: connectedImageProbe,
+        sessionId: string(128),
+        url: string(2_048, { prefix: "convax-connected-media://" }),
+      },
+      ["probe", "sessionId", "url"],
+    ),
+  ),
+  "canvas.inputs.image.close": contract(
+    object({ sessionId: string(128) }, ["sessionId"]),
+    object({ closed: bool }, ["closed"]),
+  ),
   "canvas.inputs.open": contract(
     object({ inputKey: string() }, ["inputKey"]),
     object(

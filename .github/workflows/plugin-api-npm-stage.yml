@@ -1,0 +1,232 @@
+name: Stage Plugin API npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: New stable @convax/plugin-api version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-api-npm-stage-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify protected source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          test "$COMMIT" = "$GITHUB_SHA"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          git fetch --no-tags origin refs/heads/convax-next:refs/remotes/origin/convax-next
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/convax-next
+          test "$(jq -r '.name' packages/plugin-api/package.json)" = "@convax/plugin-api"
+          test "$(jq -r '.version' packages/plugin-api/package.json)" = "$VERSION"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Require an existing package and an unused version
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm view "@convax/plugin-api" version \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent >/dev/null
+          output="$RUNNER_TEMP/npm-view-version.json"
+          if npm view "@convax/plugin-api@$VERSION" version \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent >"$output" 2>&1; then
+            echo "@convax/plugin-api@$VERSION already exists and cannot be reused" >&2
+            exit 1
+          fi
+          jq -e '.error.code == "E404"' "$output" >/dev/null
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Run the exact release conformance profile
+        run: bun scripts/plugin-api-release-conformance.ts --output "$RUNNER_TEMP/plugin-api-check-results.json"
+      - name: Build and verify exact staged bytes
+        id: evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-api-npm-stage"
+          inspection="$RUNNER_TEMP/plugin-api-npm-stage-inspection"
+          mkdir "$evidence" "$inspection"
+          (
+            cd packages/plugin-api
+            bun pm pack \
+              --ignore-scripts \
+              --destination "$evidence" \
+              --quiet
+          )
+          tarball="$evidence/convax-plugin-api-$VERSION.tgz"
+          test -f "$tarball"
+          test "$(stat -c '%s' "$tarball")" -le 33554432
+          tar -tzf "$tarball" > "$inspection/inventory.txt"
+          test "$(awk '$0 == "package/package.json" { count += 1 } END { print count + 0 }' "$inspection/inventory.txt")" -eq 1
+          test "$(awk '$0 == "package/dist/generated/plugin-api.json" { count += 1 } END { print count + 0 }' "$inspection/inventory.txt")" -eq 1
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' "$inspection/inventory.txt" ||
+            grep -Fq '\' "$inspection/inventory.txt"; then
+            echo "package tarball contains an unsafe path" >&2
+            exit 1
+          fi
+          tar -xOzf "$tarball" package/package.json |
+            head -c 131073 > "$inspection/package.json"
+          test "$(stat -c '%s' "$inspection/package.json")" -le 131072
+          tar -xOzf "$tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$inspection/package-plugin-api.json"
+          test "$(stat -c '%s' "$inspection/package-plugin-api.json")" -le 16777216
+          cp packages/plugin-api/generated/plugin-api.json "$evidence/plugin-api.json"
+          npm_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          bun scripts/plugin-api-release-evidence.ts \
+            --catalog "$evidence/plugin-api.json" \
+            --check-results "$RUNNER_TEMP/plugin-api-check-results.json" \
+            --commit "$COMMIT" \
+            --output "$evidence/runtime-conformance.json" \
+            --package-catalog "$inspection/package-plugin-api.json" \
+            --package-json "$inspection/package.json" \
+            --repository "$REPOSITORY" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --run-id "$GITHUB_RUN_ID" \
+            --tarball "$tarball" \
+            --tarball-integrity "$npm_integrity" \
+            --version "$VERSION" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF"
+          (
+            cd "$evidence"
+            sha256sum \
+              "convax-plugin-api-$VERSION.tgz" \
+              plugin-api.json \
+              runtime-conformance.json > SHA256SUMS
+            sha512sum "convax-plugin-api-$VERSION.tgz" > SHA512SUMS
+          )
+          echo "directory=$evidence" >> "$GITHUB_OUTPUT"
+      - name: Upload unprivileged staged candidate
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: plugin-api-npm-stage-candidate
+          path: ${{ steps.evidence.outputs.directory }}
+          if-no-files-found: error
+          retention-days: 14
+
+  stage:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: plugin-api-npm-stage
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+    steps:
+      - name: Verify protected staging identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          test "$COMMIT" = "$GITHUB_SHA"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - name: Select the admitted npm provenance mode
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRIVATE_ATTESTATIONS_ACK: ${{ vars.CONVAX_PRIVATE_ATTESTATIONS_ENABLED }}
+          PRIVATE_PUBLISHING_ACK: ${{ vars.CONVAX_PRIVATE_NPM_PUBLISHING_ENABLED }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          visibility="$(gh api "repos/$REPOSITORY" --jq '.visibility')"
+          case "$visibility" in
+            public)
+              echo "NPM_CONFIG_PROVENANCE=true" >> "$GITHUB_ENV"
+              ;;
+            private | internal)
+              test "$PRIVATE_ATTESTATIONS_ACK" = true
+              test "$PRIVATE_PUBLISHING_ACK" = true
+              echo "NPM_CONFIG_PROVENANCE=false" >> "$GITHUB_ENV"
+              ;;
+            *)
+              exit 1
+              ;;
+          esac
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: plugin-api-npm-stage-candidate
+          path: ${{ runner.temp }}/plugin-api-npm-stage
+      - name: Verify candidate without executing repository code
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-api-npm-stage"
+          (
+            cd "$evidence"
+            sha256sum --check SHA256SUMS
+            sha512sum --check SHA512SUMS
+          )
+          jq -e \
+            --arg commit "$COMMIT" \
+            --arg version "$VERSION" \
+            --arg workflow "$GITHUB_WORKFLOW_REF" \
+            '
+              .schema == "convax.plugin-api-runtime-conformance/1" and
+              .profile == "convax.plugin-api-host-runtime/1" and
+              .host == { repository: "microvoid/convax", commit: $commit } and
+              .workflow.ref == $workflow and
+              .pluginApi.package == "@convax/plugin-api" and
+              .pluginApi.version == $version and
+              .pluginApi.catalogSchema == "convax.plugin-api-catalog/3" and
+              ([.checks[].id] | unique | length) == (.checks | length) and
+              all(.checks[]; .status == "passed")
+            ' "$evidence/runtime-conformance.json" >/dev/null
+      - name: Attest staged candidate
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: |
+            ${{ runner.temp }}/plugin-api-npm-stage/convax-plugin-api-${{ inputs.version }}.tgz
+            ${{ runner.temp }}/plugin-api-npm-stage/plugin-api.json
+            ${{ runner.temp }}/plugin-api-npm-stage/runtime-conformance.json
+            ${{ runner.temp }}/plugin-api-npm-stage/SHA256SUMS
+            ${{ runner.temp }}/plugin-api-npm-stage/SHA512SUMS
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - run: npm install --global npm@11.18.0
+      - name: Submit candidate to npm staged publishing
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm stage publish \
+            "$RUNNER_TEMP/plugin-api-npm-stage/convax-plugin-api-$VERSION.tgz" \
+            --access public \
+            --registry=https://registry.npmjs.org

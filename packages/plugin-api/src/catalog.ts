@@ -67,6 +67,39 @@ export const pluginApiCatalog = definePluginApiCatalog(
       },
     }),
     definePluginApi({
+      id: "canvas.inputs.image.open",
+      completion: "cancelable",
+      grant: "canvas.connectedImages.read",
+      scope: "own-node",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors, ...resourceErrors],
+      docs: {
+        summary: "Open one directly connected image through the owning Plugin node.",
+        description:
+          "Issues a revocable Host-owned session for signature-validated JPEG, PNG, or WebP content after validating the Plugin principal, owning node, direct edge, resource identity, and image limits. Every protocol read revalidates the issued principal and direct edge against current Host state.",
+        request: "`{ inputKey }`, using an opaque image key returned by canvas.inputs.list.",
+        response:
+          "A connection-issued, revocable session with an opaque 128-bit bearer URL, bounded image probe, and lowercase SHA-256 content revision.",
+        remarks:
+          "Electron protocol GET/HEAD requests have no trusted sender or frame principal. Possession of the convax-connected-media URL therefore carries bearer authority until the Host revokes the session or its principal/edge revalidation fails; the URL must be kept secret and closed promptly. The response contains no image bytes, native path, or unrestricted URL. The Host rejects images above 16 MiB, dimensions above 8192 pixels, or more than 33,554,432 pixels.",
+      },
+    }),
+    definePluginApi({
+      id: "canvas.inputs.image.close",
+      completion: "cancelable",
+      grant: "canvas.connectedImages.read",
+      scope: "own-node",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Close one revocable connected-image bearer session.",
+        description:
+          "Revokes a session and bearer URL created by canvas.inputs.image.open after validating the calling Plugin principal, without changing Canvas or Project state.",
+        request: "`{ sessionId }`, using the opaque handle returned by canvas.inputs.image.open.",
+        response: "An acknowledgement that the caller's image session is closed; repeated close calls are idempotent.",
+      },
+    }),
+    definePluginApi({
       id: "canvas.inputs.open",
       completion: "cancelable",
       grant: "canvas.connectedMedia.stream",

@@ -18,6 +18,7 @@ const capabilities = [
   "agent.prompt",
   "canvas.catalog.read",
   "canvas.connectedInputs.read",
+  "canvas.connectedImages.read",
   "canvas.connectedMedia.stream",
   "canvas.document.read",
   "canvas.document.write",
@@ -136,6 +137,10 @@ function operations(log: string[]): PluginHostNodeOperationsPort {
       log.push("canvas.inputs.close")
       return true
     },
+    async closeImageInput() {
+      log.push("canvas.inputs.image.close")
+      return true
+    },
     async createCanvasImage({ checkpoint }) {
       await checkpoint.checkpoint()
       log.push("canvas.resource.image.create")
@@ -176,7 +181,22 @@ function operations(log: string[]): PluginHostNodeOperationsPort {
           width: 10,
         },
         sessionId: "session-1",
-        url: "convax-connected-media://session-1",
+        url: `convax-connected-media://session-1/${"a".repeat(32)}`,
+      }
+    },
+    async openImageInput() {
+      log.push("canvas.inputs.image.open")
+      return {
+        probe: {
+          contentRevision: "d".repeat(64),
+          height: 1,
+          kind: "image",
+          mimeType: "image/png",
+          size: 8,
+          width: 1,
+        },
+        sessionId: "image-session-1",
+        url: `convax-connected-media://image-session-1/${"b".repeat(32)}`,
       }
     },
     async promptAgent({ checkpoint }) {
@@ -258,6 +278,8 @@ describe("PluginHostApiService", () => {
     const calls = [
       { method: "host.context.get" },
       { method: "canvas.inputs.list" },
+      { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
+      { method: "canvas.inputs.image.close", params: { sessionId: "image-session-1" } },
       { method: "canvas.inputs.open", params: { inputKey: "source-1" } },
       { method: "canvas.inputs.close", params: { sessionId: "session-1" } },
       { method: "canvas.node.get" },
@@ -432,6 +454,122 @@ describe("PluginHostApiService", () => {
       connected.execute({ method: "canvas.inputs.list" }, { operationId: "operation-inputs" }),
     ).rejects.toThrow("changed")
     expect(listed).toBe(0)
+  })
+
+  test("rejects a connected-image result when the exact Plugin principal changes during open", async () => {
+    let current = true
+    let closedSessionId: string | undefined
+    const base = operations([])
+    const { connected } = await connection({
+      current: () => current,
+      operations: {
+        ...base,
+        async closeImageInput({ sessionId }) {
+          closedSessionId = sessionId
+          return true
+        },
+        async openImageInput() {
+          current = false
+          return {
+            probe: {
+              contentRevision: "d".repeat(64),
+              height: 1,
+              kind: "image",
+              mimeType: "image/png",
+              size: 8,
+              width: 1,
+            },
+            sessionId: "image-session-1",
+            url: `convax-connected-media://image-session-1/${"b".repeat(32)}`,
+          }
+        },
+      },
+    })
+
+    await expect(
+      connected.execute(
+        { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
+        { operationId: "operation-image-open" },
+      ),
+    ).rejects.toThrow("no longer current")
+    expect(closedSessionId).toBe("image-session-1")
+  })
+
+  test("rejects a connected-image result without one canonical bearer URL", async () => {
+    let closedSessionId: string | undefined
+    const base = operations([])
+    const { connected } = await connection({
+      operations: {
+        ...base,
+        async closeImageInput({ sessionId }) {
+          closedSessionId = sessionId
+          return true
+        },
+        async openImageInput() {
+          return {
+            probe: {
+              contentRevision: "d".repeat(64),
+              height: 1,
+              kind: "image",
+              mimeType: "image/png",
+              size: 8,
+              width: 1,
+            },
+            sessionId: "image-session-1",
+            url: "convax-connected-media://image-session-1",
+          }
+        },
+      },
+    })
+
+    await expect(
+      connected.execute(
+        { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
+        { operationId: "operation-image-bearer" },
+      ),
+    ).rejects.toThrow("bearer URL")
+    expect(closedSessionId).toBe("image-session-1")
+  })
+
+  test("closes the connection when connected-image rollback cannot revoke the exact session", async () => {
+    let current = true
+    const log: string[] = []
+    const base = operations(log)
+    const { connected } = await connection({
+      current: () => current,
+      operations: {
+        ...base,
+        async closeImageInput() {
+          throw new Error("targeted revoke failed")
+        },
+        async openImageInput() {
+          current = false
+          return {
+            probe: {
+              contentRevision: "d".repeat(64),
+              height: 1,
+              kind: "image",
+              mimeType: "image/png",
+              size: 8,
+              width: 1,
+            },
+            sessionId: "image-session-1",
+            url: `convax-connected-media://image-session-1/${"b".repeat(32)}`,
+          }
+        },
+      },
+    })
+
+    await expect(
+      connected.execute(
+        { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
+        { operationId: "operation-image-rollback" },
+      ),
+    ).rejects.toThrow("no longer current")
+    expect(log).toContain("connection.close")
+    await expect(
+      connected.execute({ method: "host.context.get" }, { operationId: "operation-after-rollback" }),
+    ).rejects.toThrow("connection is closed")
   })
 
   test("fails closed when an authoritative node projection contains a native path", async () => {

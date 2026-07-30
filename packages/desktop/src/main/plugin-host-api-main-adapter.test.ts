@@ -1,10 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import type { PluginPrincipal } from "../plugin-capability-contracts"
-import {
-  pluginHostApiRemoteFailure,
-  PluginHostApiResourceUnavailableError,
-} from "../plugin-host-errors"
+import { pluginHostApiRemoteFailure, PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
 import { PluginCanvasImagePublicationPartialSuccessError } from "./plugin-canvas-image-service"
 import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
 
@@ -54,6 +51,7 @@ const document = {
 function adapter(options?: {
   images?: { createForHostApi: () => Promise<never> }
   open?: () => Promise<never>
+  openImage?: () => Promise<never>
   readTextFile?: () => Promise<never>
 }) {
   const sessions = new Map<string, { frameId: string; senderId: number }>()
@@ -80,6 +78,22 @@ function adapter(options?: {
     sessions.delete(request.sessionId)
     return true
   })
+  const openImage = mock(
+    options?.openImage ??
+      (async () => ({
+        probe: {
+          contentRevision: "d".repeat(64),
+          height: 1,
+          kind: "image" as const,
+          mimeType: "image/png" as const,
+          size: 8,
+          width: 1,
+        },
+        sessionId: "image-session-1",
+        url: "convax-connected-media://image-session-1/token",
+      })),
+  )
+  const closeImage = mock(() => true)
   const instance = new PluginHostApiMainAdapter({
     agent: {} as never,
     application: {} as never,
@@ -100,7 +114,9 @@ function adapter(options?: {
     images: (options?.images ?? {}) as never,
     media: {
       close: close as never,
+      closeImage: closeImage as never,
       open: open as never,
+      openImage: openImage as never,
       revokeFrame: mock(() => 0),
     },
     projects: {
@@ -115,15 +131,17 @@ function adapter(options?: {
           },
         ]
       },
-      readTextFile: options?.readTextFile ?? (async () => {
-        throw new Error("unused")
-      }),
+      readTextFile:
+        options?.readTextFile ??
+        (async () => {
+          throw new Error("unused")
+        }),
       async resolveEntryPath() {
         throw new Error("unused")
       },
     },
   })
-  return { close, instance, open }
+  return { close, closeImage, instance, open, openImage }
 }
 
 describe("PluginHostApiMainAdapter connected media", () => {
@@ -177,6 +195,71 @@ describe("PluginHostApiMainAdapter connected media", () => {
       .catch((failure: unknown) => failure)
     expect(error).toBeInstanceOf(PluginHostApiResourceUnavailableError)
     expect(pluginHostApiRemoteFailure("canvas.inputs.open", error)).toEqual({
+      code: "resource-unavailable",
+      kind: "api",
+      message: "Plugin Host API resource is unavailable",
+      recoverable: true,
+    })
+  })
+
+  test("binds connected-image sessions to the exact Main-issued frame and forwards cancellation", async () => {
+    const { closeImage, instance, openImage } = adapter()
+    const controller = new AbortController()
+    const opened = await instance.openImageInput({
+      binding,
+      connectionId: "connection-1",
+      inputKey: "source-1",
+      principal,
+      signal: controller.signal,
+      transport: { frameId: "frame-1", senderId: 11 },
+    })
+    expect(opened.probe).toMatchObject({ contentRevision: "d".repeat(64), mimeType: "image/png" })
+    expect(openImage).toHaveBeenCalledWith(
+      {
+        canvasId: binding.canvasId,
+        expectedRevision: document.revision,
+        frameId: "frame-1",
+        nodeId: binding.nodeId,
+        pluginId: principal.pluginId,
+        pluginVersion: principal.pluginVersion,
+        projectId: binding.projectId,
+        sourceNodeId: "source-1",
+      },
+      11,
+      controller.signal,
+    )
+    await expect(
+      instance.closeImageInput({
+        binding,
+        connectionId: "connection-1",
+        principal,
+        sessionId: opened.sessionId,
+        signal: controller.signal,
+        transport: { frameId: "frame-1", senderId: 11 },
+      }),
+    ).resolves.toBeTrue()
+    expect(closeImage).toHaveBeenCalledWith(
+      expect.objectContaining({ frameId: "frame-1", sessionId: opened.sessionId }),
+      11,
+    )
+  })
+
+  test("preserves connected-image resource failures for the Catalog error contract", async () => {
+    const { instance } = adapter({
+      async openImage() {
+        throw new PluginHostApiResourceUnavailableError("connected image disappeared")
+      },
+    })
+    const error = await instance
+      .openImageInput({
+        binding,
+        connectionId: "connection-1",
+        inputKey: "source-1",
+        principal,
+        transport: { frameId: "frame-1", senderId: 11 },
+      })
+      .catch((failure: unknown) => failure)
+    expect(pluginHostApiRemoteFailure("canvas.inputs.image.open", error)).toEqual({
       code: "resource-unavailable",
       kind: "api",
       message: "Plugin Host API resource is unavailable",

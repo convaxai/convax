@@ -38,12 +38,14 @@ const minimalDefinition = {
 } as const
 
 describe("Plugin API catalog", () => {
-  test("has one immutable 1.0.0 contract for every stable id", () => {
+  test("publishes the complete initial API set in the unreleased 1.0.0 catalog", () => {
     expect(PLUGIN_API_CATALOG_VERSION).toBe("1.0.0")
     expect(PLUGIN_API_CATALOG_MAJOR).toBe(1)
-    expect(pluginApiCatalog.apis).toHaveLength(18)
-    expect(new Set(pluginApiCatalog.apis.map((definition) => definition.id)).size).toBe(18)
+    expect(pluginApiCatalog.apis).toHaveLength(20)
+    expect(new Set(pluginApiCatalog.apis.map((definition) => definition.id)).size).toBe(20)
     expect(pluginApiCatalog.apis.every((definition) => definition.since === "1.0.0")).toBe(true)
+    expect(getPluginApiDefinition("canvas.inputs.image.open").since).toBe("1.0.0")
+    expect(getPluginApiDefinition("canvas.inputs.image.close").since).toBe("1.0.0")
     expect(pluginApiCatalog.apis.every((definition) => definition.audience.includes("web-plugin"))).toBe(true)
     expect(
       pluginApiCatalog.apis
@@ -66,8 +68,12 @@ describe("Plugin API catalog", () => {
     expect(Object.isFrozen(pluginApiCatalog)).toBe(true)
     expect(Object.isFrozen(pluginApiCatalog.apis)).toBe(true)
     expect(isPluginApiId("canvas.inputs.open")).toBe(true)
+    expect(isPluginApiId("canvas.inputs.image.open")).toBe(true)
+    expect(isPluginApiId("canvas.inputs.image.close")).toBe(true)
     expect(isPluginApiId("unknown.api")).toBe(false)
     expect(getPluginApiDefinition("canvas.inputs.open").grant).toBe("canvas.connectedMedia.stream")
+    expect(getPluginApiDefinition("canvas.inputs.image.open").grant).toBe("canvas.connectedImages.read")
+    expect(getPluginApiDefinition("canvas.inputs.image.close").grant).toBe("canvas.connectedImages.read")
     expect(isPluginApiCommitPreserving("canvas.node.state.replace")).toBe(true)
     expect(isPluginApiCommitPreserving("canvas.inputs.close")).toBe(false)
   })
@@ -159,6 +165,30 @@ describe("Plugin API declarations", () => {
 })
 
 describe("Plugin API availability", () => {
+  test("reports the image-input API as available in the initial 1.0.0 release", () => {
+    const declaration = definePluginApiDeclaration({
+      major: 1,
+      required: ["canvas.inputs.image.open"],
+      optional: [],
+    })
+    const context: PluginApiLiveContext = {
+      catalogVersion: "1.0.0",
+      catalogMajor: 1,
+      audience: "web-plugin",
+      grants: ["canvas.connectedImages.read"],
+      hasContext: true,
+      setupComplete: true,
+      disabled: false,
+      recovering: false,
+    }
+    expect(evaluatePluginApiAvailability("canvas.inputs.image.open", declaration, context)).toEqual({
+      available: true,
+      catalogVersion: "1.0.0",
+      id: "canvas.inputs.image.open",
+      since: "1.0.0",
+    })
+  })
+
   test("narrows available results and throws structured unavailable results", () => {
     const available = {
       available: true,

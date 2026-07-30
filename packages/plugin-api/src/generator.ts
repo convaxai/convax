@@ -101,23 +101,15 @@ function assertExactKeys(record: Record<string, unknown>, allowed: readonly stri
   if (unknown) throw new TypeError(`${label} contains unknown field: ${unknown}`)
 }
 
-function contractDigest(
-  contract: PluginApiWireContract,
-  dialect: PluginApiContractSnapshot["dialect"],
-): `sha256:${string}` {
-  return `sha256:${createHash("sha256")
-    .update(stableJson({ dialect, ...contract }))
-    .digest("hex")}`
+function contractDigest(contract: PluginApiWireContract): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(stableJson(contract)).digest("hex")}`
 }
 
-function normalizedContract(
-  contract: PluginApiWireContract,
-  dialect: PluginApiContractSnapshot["dialect"] = pluginApiWireSchemaDialect,
-): PluginApiContractSnapshot {
-  const portable = sortRecord(contract) as PluginApiWireContract
+function normalizedContract(contract: PluginApiWireContract): PluginApiContractSnapshot {
+  const portable = sortRecord(contract) as unknown as PluginApiWireContract
   return {
-    dialect,
-    digest: contractDigest(portable, dialect),
+    dialect: portable.dialect,
+    digest: contractDigest(portable),
     request: portable.request,
     result: portable.result,
   }
@@ -135,6 +127,7 @@ function normalizedDefinition(
         }
       : pluginApiMethodContracts[definition.id as PluginApiContractId]
         ? {
+            dialect: pluginApiMethodContracts[definition.id as PluginApiContractId].dialect,
             request: pluginApiMethodContracts[definition.id as PluginApiContractId].request,
             result: pluginApiMethodContracts[definition.id as PluginApiContractId].response,
           }
@@ -154,10 +147,7 @@ function normalizedDefinition(
       .sort((left, right) => left.code.localeCompare(right.code))
       .map((error) => ({ ...error })),
     docs: { ...definition.docs },
-    contract: normalizedContract(
-      sourceContract,
-      "dialect" in sourceContract ? sourceContract.dialect : pluginApiWireSchemaDialect,
-    ),
+    contract: normalizedContract(sourceContract),
   }
 }
 
@@ -401,10 +391,12 @@ function assertWireSchema(value: unknown, label: string, depth = 0): asserts val
     return
   }
   if (value.type === "integer" || value.type === "number") {
-    assertExactKeys(value, ["finite", "minimum", "type"], label)
+    assertExactKeys(value, ["finite", "maximum", "minimum", "type"], label)
     if (
       value.finite !== true ||
-      (value.minimum !== undefined && (typeof value.minimum !== "number" || !Number.isFinite(value.minimum)))
+      (value.minimum !== undefined && (typeof value.minimum !== "number" || !Number.isFinite(value.minimum))) ||
+      (value.maximum !== undefined && (typeof value.maximum !== "number" || !Number.isFinite(value.maximum))) ||
+      (typeof value.minimum === "number" && typeof value.maximum === "number" && value.maximum < value.minimum)
     ) {
       throw new TypeError(`${label} number contract is invalid`)
     }
@@ -426,6 +418,7 @@ function assertWireSchema(value: unknown, label: string, depth = 0): asserts val
       !(value.prefix === undefined || typeof value.prefix === "string") ||
       !(
         value.refinement === undefined ||
+        value.refinement === "lowercase-sha256" ||
         value.refinement === "portable-project-relative-path" ||
         value.refinement === "safe-png-file-name" ||
         value.refinement === "trimmed"
@@ -455,7 +448,7 @@ function assertWireSchema(value: unknown, label: string, depth = 0): asserts val
     return
   }
   if (value.type === "object") {
-    assertExactKeys(value, ["additionalProperties", "properties", "required", "type"], label)
+    assertExactKeys(value, ["additionalProperties", "products", "properties", "required", "type"], label)
     if (
       value.additionalProperties !== false ||
       !isRecord(value.properties) ||
@@ -469,6 +462,41 @@ function assertWireSchema(value: unknown, label: string, depth = 0): asserts val
     for (const [key, entry] of Object.entries(value.properties)) {
       if (key.length < 1 || key.length > 128) throw new TypeError(`${label} property name is invalid`)
       assertWireSchema(entry, `${label}.properties.${key}`, depth + 1)
+    }
+    if (value.products !== undefined) {
+      if (!Array.isArray(value.products) || value.products.length < 1 || value.products.length > 16) {
+        throw new TypeError(`${label} product constraints are invalid`)
+      }
+      for (const [index, candidate] of value.products.entries()) {
+        const productLabel = `${label}.products[${index}]`
+        if (!isRecord(candidate)) throw new TypeError(`${productLabel} must be an object`)
+        assertExactKeys(candidate, ["fields", "maximum"], productLabel)
+        if (
+          !Array.isArray(candidate.fields) ||
+          candidate.fields.length < 2 ||
+          candidate.fields.length > 8 ||
+          !candidate.fields.every((field) => typeof field === "string" && field.length >= 1 && field.length <= 128) ||
+          new Set(candidate.fields).size !== candidate.fields.length ||
+          !Number.isSafeInteger(candidate.maximum) ||
+          Number(candidate.maximum) < 1
+        ) {
+          throw new TypeError(`${productLabel} is invalid`)
+        }
+        for (const field of candidate.fields) {
+          if (typeof field !== "string") throw new TypeError(`${productLabel} field is invalid`)
+          const factor = value.properties[field]
+          if (
+            !value.required.includes(field) ||
+            !isRecord(factor) ||
+            (factor.type !== "integer" && factor.type !== "number") ||
+            factor.finite !== true ||
+            typeof factor.minimum !== "number" ||
+            factor.minimum < 0
+          ) {
+            throw new TypeError(`${productLabel}.${field} is not a required non-negative numeric property`)
+          }
+        }
+      }
     }
     return
   }
@@ -497,6 +525,7 @@ function parseContractSnapshot(value: unknown, label: string): PluginApiContract
   if (value.dialect !== pluginApiWireSchemaDialect) {
     throw new TypeError(`${label} dialect is invalid`)
   }
+  const dialect = pluginApiWireSchemaDialect
   if (typeof value.digest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value.digest)) {
     throw new TypeError(`${label} digest is invalid`)
   }
@@ -518,7 +547,7 @@ function parseContractSnapshot(value: unknown, label: string): PluginApiContract
   }
   const request = parseLimit(value.request, `${label}.request`)
   const result = parseLimit(value.result, `${label}.result`)
-  const normalized = normalizedContract({ request, result }, value.dialect)
+  const normalized = normalizedContract({ dialect, request, result })
   if (normalized.digest !== value.digest) throw new TypeError(`${label} digest does not match its contract`)
   return normalized
 }
