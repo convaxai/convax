@@ -1146,9 +1146,11 @@ function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): Ca
 function normalizePendingGenerationData(data: CanvasNode["data"]): CanvasNode["data"] {
   if (data.status !== "pending") return data
   const normalized = { ...data } as CanvasNode["data"] & Record<string, unknown>
-  if (isEmptyPendingResourceState(normalized.resourceState)) delete normalized.resourceState
+  if (normalized.resourceState === undefined || isEmptyPendingResourceState(normalized.resourceState)) {
+    delete normalized.resourceState
+  }
   for (const key of ["durationMs", "height", "mimeType", "name", "width"] as const) {
-    if (normalized[key] === null) delete normalized[key]
+    if (normalized[key] === null || normalized[key] === undefined) delete normalized[key]
   }
   return normalized
 }
