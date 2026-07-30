@@ -216,8 +216,12 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   persists with one CAS write. Callers must not emulate atomicity with a sequence of
   independent saves. Transport transactions must be non-empty, request-bounded, and
   must not retain unbounded full-document idempotency results.
-- A business operation commits domain state first. Optional view effects must not
-  turn a successful mutation into a failed mutation.
+- A business operation commits domain state first. A Canvas-owned post-mutation
+  reveal may then move only the current mounted view when the affected nodes fall
+  outside its host-provided safe viewport. View failure never reverses the
+  successful mutation; stale scope, remount, background refresh, restore, or user
+  navigation cancels the effect. Reduced motion uses zero duration while preserving
+  necessary positioning.
 
 ## Agent capability rules
 

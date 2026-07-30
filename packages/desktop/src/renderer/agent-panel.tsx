@@ -13,7 +13,7 @@ import type { ProjectEntry } from "@convax/project-files"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
 import type { PetDisplayedSession } from "../pet-contracts"
 import { parseProjectCanvasDrag, PROJECT_CANVAS_DRAG_TYPE, type ProjectCanvas } from "@convax/project/canvas"
-import { Button, cn, createToolInputDefaultValues, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
+import { Button, cn, createToolInputDefaultValues, Loading, LoadingSpinner, Tooltip, TooltipProvider, validateToolInputValues } from "@convax/ui"
 import type {
   GenerationToolDescription,
   GenerationToolInput,
@@ -24,8 +24,10 @@ import {
   AtSign,
   BookOpen,
   Bot,
+  Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   ExternalLink,
   FileText,
   Folder,
@@ -78,6 +80,7 @@ import {
   mergeAgentResources,
   resolveAgentCompactStatus,
   selectAgentSessionAfterRefresh,
+  withAgentStoppingState,
 } from "./agent-panel-state"
 import {
   AgentComposerCompositionController,
@@ -136,13 +139,18 @@ import { AgentMarkdown } from "./agent-markdown"
 import { useAgentGenerationPreference } from "./agent-generation-preference"
 import { findAgentLlmModel, reconcileAgentLlmModelSelection, type AgentLlmModelSelection } from "./agent-llm-models"
 import {
+  agentConversationAnnouncementState,
+  agentConversationCopyText,
   agentConversationTurnHasFailure,
   buildAgentConversationTurns,
+  resolveAgentConversationAnnouncement,
+  type AgentConversationAnnouncementState,
   type AgentConversationTurn,
 } from "./agent-conversation-presentation"
 import { getAgentToolPresentation } from "./agent-tool-presentation"
 import { AgentActivitySummary } from "./agent-activity-summary"
 import { AgentDrawerHeader, AgentDrawerTrigger } from "./agent-drawer-header"
+import "./agent-panel.css"
 
 const resourceDragType = "application/x-convax-agent-resource"
 
@@ -241,6 +249,7 @@ export interface AgentPanelProps {
   projectId?: string
   projectName?: string
   utilityCloseLabel?: string
+  utilityOnClose?: () => void
   utilityNavigation?: ReactNode
 }
 
@@ -340,6 +349,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [loading, setLoading] = useState(false)
   const [sessionCatalogReadyScope, setSessionCatalogReadyScope] = useState("")
   const [promptingSessionIds, setPromptingSessionIds] = useState<Set<string>>(() => new Set())
+  const [stoppingSessionIds, setStoppingSessionIds] = useState<Set<string>>(() => new Set())
   const [failedSubmissions, setFailedSubmissions] = useState<FailedAgentSubmission[]>([])
   const [creatingSession, setCreatingSession] = useState(false)
   const [followingLatest, setFollowingLatest] = useState(true)
@@ -357,6 +367,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const stickToBottomRef = useRef(true)
   const activeSessionIdRef = useRef(sessionId)
   const promptingSessionIdsRef = useRef(promptingSessionIds)
+  const stoppingSessionIdsRef = useRef(stoppingSessionIds)
   const failedSubmissionIdRef = useRef(0)
   const sessionStateRequestRef = useRef(new AgentSessionStateRequestTracker())
   const sessionListRequestRef = useRef(0)
@@ -386,6 +397,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   activeSessionIdRef.current = sessionId
   composerDraftRef.current = composerDraft
   promptingSessionIdsRef.current = promptingSessionIds
+  stoppingSessionIdsRef.current = stoppingSessionIds
   generationCatalogVersionRef.current = generationCatalogVersion
   generationToolSelectionRef.current = generationToolSelection
   llmSelectionRef.current = llmSelection
@@ -443,6 +455,14 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     else next.delete(targetSessionId)
     promptingSessionIdsRef.current = next
     if (mountedRef.current) setPromptingSessionIds(next)
+  }, [])
+
+  const setSessionStopping = useCallback((targetSessionId: string, stopping: boolean) => {
+    const next = new Set(stoppingSessionIdsRef.current)
+    if (stopping) next.add(targetSessionId)
+    else next.delete(targetSessionId)
+    stoppingSessionIdsRef.current = next
+    if (mountedRef.current) setStoppingSessionIds(next)
   }, [])
 
   useEffect(() => {
@@ -676,6 +696,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     replaceComposerDraft(agentComposerDraftWithResources(initialResourcesRef.current))
     promptingSessionIdsRef.current = new Set()
     setPromptingSessionIds(new Set())
+    stoppingSessionIdsRef.current = new Set()
+    setStoppingSessionIds(new Set())
     setFailedSubmissions([])
     stickToBottomRef.current = true
     setFollowingLatest(true)
@@ -791,8 +813,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     Boolean(sessionId && promptingSessionIds.has(sessionId)) ||
     sessionState?.status.type === "busy" ||
     sessionState?.status.type === "retry"
+  const responseStopping = Boolean(sessionId && stoppingSessionIds.has(sessionId))
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
-  const interactionDisabled = runtimeBusy || loading || creatingSession
+  const interactionDisabled = runtimeBusy || responseStopping || loading || creatingSession
   useEffect(() => {
     const root = composerRef.current
     if (!root) return
@@ -1734,18 +1757,23 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const scopeId = props.projectId
     const scope = conversationScope
     const targetSessionId = sessionId
-    const isActiveTarget = () =>
-      mountedRef.current &&
-      activeProjectRef.current === scopeId &&
-      activeScopeRef.current === scope &&
-      activeSessionIdRef.current === targetSessionId
+    if (stoppingSessionIdsRef.current.has(targetSessionId)) return
+    const isCurrentScope = () =>
+      mountedRef.current && activeProjectRef.current === scopeId && activeScopeRef.current === scope
+    const isActiveTarget = () => isCurrentScope() && activeSessionIdRef.current === targetSessionId
     try {
-      await window.convax.agent.abort({ scopeId, sessionId: targetSessionId })
-      if (isActiveTarget()) await refreshSessionState(targetSessionId)
+      await withAgentStoppingState(
+        (stopping) => setSessionStopping(targetSessionId, stopping),
+        async () => {
+          await window.convax.agent.abort({ scopeId, sessionId: targetSessionId })
+          if (isActiveTarget()) await refreshSessionState(targetSessionId)
+        },
+        isCurrentScope,
+      )
     } catch (cause) {
       if (isActiveTarget()) setError(errorMessage(cause))
     }
-  }, [conversationScope, props.projectId, refreshSessionState, sessionId])
+  }, [conversationScope, props.projectId, refreshSessionState, sessionId, setSessionStopping])
 
   const conversationTurns = useMemo(
     () => buildAgentConversationTurns(sessionState?.messages ?? []),
@@ -1762,12 +1790,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
             ? "question"
             : undefined,
         pendingChanges: props.pendingChanges,
-        working: runtimeBusy,
+        working: runtimeBusy || responseStopping,
       }),
     [
       error,
       latestConversationTurn,
       props.pendingChanges,
+      responseStopping,
       runtimeBusy,
       sessionState?.pendingPermissions.length,
       sessionState?.pendingQuestions.length,
@@ -1807,6 +1836,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     <TooltipProvider>
       <PanelRoot
         className={cn(
+          "agent-panel",
           hosted
             ? "relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden bg-surface-panel text-text-primary"
             : embedded
@@ -1819,6 +1849,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           props.className,
         )}
         data-agent-panel-hosted={hosted || undefined}
+        data-agent-runtime-state={responseStopping ? "stopping" : runtimeBusy ? "running" : "idle"}
         style={embedded || hosted ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
       >
         {!embedded && !hosted && props.layout?.resizable !== false ? (
@@ -1838,9 +1869,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         {!compactEmbeddedChrome ? (
           <AgentDrawerHeader
             closeLabel={props.utilityCloseLabel}
+            collapse={hosted}
             createDisabled={!props.projectId || creatingSession}
             historyVisible={historyVisible}
-            onClose={embedded || hosted ? undefined : () => props.layout?.onOpenChange(false)}
+            onClose={hosted ? props.utilityOnClose : embedded ? undefined : () => props.layout?.onOpenChange(false)}
             onCreate={() => void createSession().catch((cause) => setError(errorMessage(cause)))}
             onHistory={embedded ? undefined : () => setHistoryVisible((value) => !value)}
             restart={embedded}
@@ -1872,7 +1904,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           <>
             <div className="relative flex min-h-0 flex-1">
               <div
-                className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 [overflow-anchor:none]"
+                className="agent-conversation-viewport flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-4 [overflow-anchor:none]"
+                data-agent-conversation-viewport
                 onScroll={(event) => {
                   const next = isAgentScrollNearBottom(event.currentTarget)
                   stickToBottomRef.current = next
@@ -1887,10 +1920,11 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     description="The agent uses the active project as its OpenCode working directory."
                   />
                 ) : loading && !sessionState ? (
-                  <div className="m-auto flex items-center gap-2 text-xs text-muted-foreground">
-                    <LoaderCircle className="size-4 animate-spin motion-reduce:animate-none" />
-                    Loading conversation…
-                  </div>
+                  <Loading
+                    className="agent-empty-state m-auto"
+                    label="Loading conversation…"
+                    size="sm"
+                  />
                 ) : !sessionId || !conversationTurns.length ? (
                   <EmptyState
                     icon={<Sparkles />}
@@ -1898,12 +1932,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     description="Ask about the project, reference content with @, or use a Skill with $."
                   />
                 ) : (
-                  <div className="space-y-5">
+                  <div className="agent-conversation-stack space-y-5">
                     {conversationTurns.map((turn, index) => (
                       <ConversationTurnView
                         awaitingInput={awaitingInteraction && index === conversationTurns.length - 1}
                         busy={runtimeBusy && index === conversationTurns.length - 1}
-                        key={turn.id}
+                        copyDisabled={runtimeBusy || responseStopping}
+                        key={`${conversationScope}:${sessionId}:${turn.id}`}
                         onOpenSkill={openSkill}
                         turn={turn}
                       />
@@ -1958,7 +1993,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               </div>
               {!followingLatest ? (
                 <button
-                  className="absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full bg-surface-raised px-2.5 py-1 text-[10px] text-muted-foreground shadow-[var(--ui-shadow-low)] transition-[color,transform] hover:text-foreground active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  className="agent-scroll-latest absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full bg-surface-raised px-2.5 py-1 text-[10px] text-muted-foreground shadow-[var(--ui-shadow-low)] transition-[color,transform] hover:text-foreground active:scale-[0.97] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+                  data-agent-scroll-latest
                   onClick={() => {
                     stickToBottomRef.current = true
                     setFollowingLatest(true)
@@ -1967,20 +2003,25 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   }}
                   type="button"
                 >
+                  <ChevronDown aria-hidden="true" className="size-3" />
                   Jump to latest
                 </button>
               ) : null}
             </div>
 
-            <div aria-live="polite" className="flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground">
+            <div
+              aria-live="polite"
+              className="agent-runtime-status flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground"
+              data-agent-runtime-status={responseStopping ? "stopping" : runtimeBusy ? "running" : "idle"}
+            >
               <span
                 className={cn(
                   "flex items-center gap-2 transition-opacity",
-                  runtimeBusy ? "opacity-100" : "pointer-events-none opacity-0",
+                  runtimeBusy || responseStopping ? "opacity-100" : "pointer-events-none opacity-0",
                 )}
               >
                 <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                OpenCode is working…
+                {responseStopping ? "Stopping OpenCode…" : "OpenCode is working…"}
               </span>
             </div>
 
@@ -1991,7 +2032,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               )}
             >
               {failedSubmission ? (
-                <div className="mb-2 flex items-start gap-2 rounded-md border-l-2 border-status-warning bg-status-warning-surface px-2.5 py-2 text-xs text-status-warning">
+                <div
+                  className="agent-notice mb-2 flex items-start gap-2 rounded-lg bg-status-warning-surface px-2.5 py-2 text-xs text-status-warning"
+                  data-agent-notice="submission"
+                >
                   <span className="min-w-0 flex-1">
                     A message in {failedConversationTitle} failed: {failedSubmission.message}
                     {failedSubmissions.length > 1 ? ` · ${failedSubmissions.length - 1} more` : ""}
@@ -2024,7 +2068,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 </div>
               ) : null}
               {error ? (
-                <div className="mb-2 flex items-start gap-2 rounded-md border-l-2 border-status-danger bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger">
+                <div
+                  className="agent-notice mb-2 flex items-start gap-2 rounded-lg bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger"
+                  data-agent-notice="error"
+                >
                   <span className="min-w-0 flex-1">{error}</span>
                   <button aria-label="Dismiss error" onClick={() => setError(undefined)} type="button">
                     <X className="size-3.5" />
@@ -2100,12 +2147,16 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 ) : null}
                 <div
                   className={cn(
+                    "agent-composer-frame",
                     compactEmbeddedChrome
                       ? "bg-transparent py-2.5"
-                      : "rounded-xl bg-surface-raised p-2.5 shadow-[var(--ui-shadow-low)] transition-[background-color,box-shadow] focus-within:shadow-[var(--ui-shadow-medium)]",
-                    dropActive && "rounded-xl bg-primary/5 ring-2 ring-primary/40",
+                      : "rounded-[24px] bg-surface-raised p-2 shadow-[var(--ui-shadow-low)] transition-[background-color,box-shadow] focus-within:shadow-[var(--ui-shadow-medium)]",
+                    dropActive && "bg-primary/5 ring-2 ring-primary/40",
                   )}
                   data-agent-composer-surface={compactEmbeddedChrome ? "flat" : "framed"}
+                  data-agent-composer-state={
+                    responseStopping ? "stopping" : runtimeBusy ? "running" : dropActive ? "drop" : "idle"
+                  }
                   onDragEnter={(event) => {
                     if (!supportsResourceDrop(event.dataTransfer)) return
                     containEmbeddedResourceDrag(embedded, event)
@@ -2149,11 +2200,12 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         : "Open a project to start chatting"
                     }
                     className={cn(
-                      "max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-1 text-sm leading-5 outline-none before:pointer-events-none before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)] focus:data-[empty=true]:before:hidden",
-                      compactEmbeddedChrome ? "min-h-24" : embedded ? "min-h-12" : "min-h-16",
+                      "agent-composer-editor max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-1 text-sm leading-5 outline-none before:pointer-events-none before:text-muted-foreground data-[empty=true]:before:content-[attr(data-placeholder)] focus:data-[empty=true]:before:hidden",
+                      compactEmbeddedChrome ? "min-h-20" : "min-h-10",
                       interactionDisabled && "cursor-not-allowed opacity-60",
                     )}
                     contentEditable={Boolean(props.projectId) && !interactionDisabled}
+                    data-agent-composer-editor
                     data-empty={shouldShowAgentComposerPlaceholder(composerDraft, composerFocused) ? "true" : undefined}
                     data-placeholder={
                       props.projectId
@@ -2303,12 +2355,13 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     role={suggestion.open ? "combobox" : "textbox"}
                     suppressContentEditableWarning
                   />
-                  <div className="flex items-center gap-1 pt-1">
+                  <div className="agent-composer-toolbar flex items-center gap-0.5 pt-1">
                     <Tooltip content="Reference Project or Canvas content">
                       <Button
                         aria-controls="agent-composer-reference-picker"
                         aria-expanded={suggestion.open && suggestion.trigger === "reference"}
                         aria-label="Reference Project or Canvas content"
+                        data-agent-composer-action="reference"
                         disabled={!props.projectId || interactionDisabled}
                         onClick={() => insertComposerQueryTrigger("@")}
                         onPointerDown={(event) => {
@@ -2327,6 +2380,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                         aria-controls="agent-composer-skill-picker"
                         aria-expanded={suggestion.open && suggestion.trigger === "skill"}
                         aria-label="Use a Skill"
+                        data-agent-composer-action="skill"
                         disabled={!props.projectId || interactionDisabled}
                         onClick={() => insertComposerQueryTrigger("$")}
                         onPointerDown={(event) => {
@@ -2344,7 +2398,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       aria-expanded={generationModelPickerOpen}
                       aria-haspopup="dialog"
                       aria-label={`Select Agent models, ${displayedModelLabel}`}
-                      className="flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="agent-composer-model flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                      data-agent-composer-action="model"
                       disabled={!props.projectId || interactionDisabled}
                       onClick={() => {
                         if (generationModelPickerOpen) {
@@ -2379,15 +2434,20 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       </>
                     ) : null}
                     <span className="min-w-0 flex-1" />
-                    {runtimeBusy ? (
-                      <Tooltip content="Stop">
+                    {runtimeBusy || responseStopping ? (
+                      <Tooltip content={responseStopping ? "Stopping…" : "Stop"}>
                         <Button
-                          aria-label="Stop response"
+                          aria-label={responseStopping ? "Stopping response" : "Stop response"}
+                          disabled={responseStopping}
                           onClick={() => void abort()}
                           size="icon-sm"
                           variant="outline"
                         >
-                          <Square className="fill-current" />
+                          {responseStopping ? (
+                            <LoaderCircle className="animate-spin motion-reduce:animate-none" />
+                          ) : (
+                            <Square className="fill-current" />
+                          )}
                         </Button>
                       </Tooltip>
                     ) : (
@@ -2432,7 +2492,7 @@ function ConversationHistory(props: {
         Conversation history
       </div>
       {props.loading && props.sessions.length === 0 ? (
-        <div className="p-4 text-xs text-muted-foreground">Loading…</div>
+        <Loading className="p-4" label="Loading…" size="sm" tone="muted" />
       ) : null}
       {props.sessions.length === 0 && !props.loading ? (
         <div className="p-4 text-xs text-muted-foreground">No conversations yet.</div>
@@ -2449,7 +2509,7 @@ function ConversationHistory(props: {
           type="button"
         >
           {props.busySessionIds.has(session.id) ? (
-            <LoaderCircle className="mt-0.5 size-3.5 shrink-0 animate-spin text-primary motion-reduce:animate-none" />
+            <LoadingSpinner className="mt-0.5 shrink-0 text-primary" size="sm" />
           ) : (
             <MessageSquare className="mt-0.5 size-3.5 shrink-0" />
           )}
@@ -2468,8 +2528,8 @@ function ConversationHistory(props: {
 
 function EmptyState(props: { description: string; icon: React.ReactNode; title: string }) {
   return (
-    <div className="m-auto max-w-64 text-center">
-      <div className="mx-auto mb-3 grid size-9 place-items-center rounded-full bg-accent text-primary [&_svg]:size-4">
+    <div className="agent-empty-state m-auto max-w-64 text-center" data-agent-empty-state>
+      <div className="agent-empty-state__icon mx-auto mb-3 grid size-9 place-items-center rounded-full bg-accent text-primary [&_svg]:size-4">
         {props.icon}
       </div>
       <div className="text-sm font-medium">{props.title}</div>
@@ -2481,27 +2541,54 @@ function EmptyState(props: { description: string; icon: React.ReactNode; title: 
 export function ConversationTurnView(props: {
   awaitingInput?: boolean
   busy: boolean
+  copyDisabled?: boolean
   onOpenSkill: (name: string) => Promise<void>
   turn: AgentConversationTurn
 }) {
+  const turnState = props.awaitingInput
+    ? "awaiting-input"
+    : props.busy
+      ? "running"
+      : agentConversationTurnHasFailure(props.turn)
+        ? "failed"
+        : props.turn.interrupted
+          ? "cancelled"
+          : "completed"
   return (
-    <section className="space-y-3">
+    <section
+      className="agent-conversation-turn space-y-3"
+      data-agent-conversation-turn
+      data-agent-turn-state={turnState}
+    >
+      <AgentResponseAnnouncer busy={props.busy} delivery={props.turn.delivery} />
       {props.turn.user ? <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.user} user /> : null}
       {props.turn.activity.length ? (
         <AgentActivitySummary awaitingInput={props.awaitingInput} busy={props.busy} turn={props.turn}>
           {props.turn.activity.flatMap((slice) =>
             slice.parts.map((part) => (
-              <MessagePartView key={`${slice.message.id}:${part.id}`} onOpenSkill={props.onOpenSkill} part={part} />
+              <MessagePartView
+                interrupted={props.turn.interrupted && !props.busy}
+                key={`${slice.message.id}:${part.id}`}
+                onOpenSkill={props.onOpenSkill}
+                part={part}
+              />
             )),
           )}
         </AgentActivitySummary>
       ) : null}
-      {props.turn.delivery && !props.busy ? (
-        <MessageSliceView onOpenSkill={props.onOpenSkill} slice={props.turn.delivery} />
+      {props.turn.delivery ? (
+        <MessageSliceView
+          busy={props.busy}
+          copyDisabled={props.copyDisabled}
+          key={props.turn.delivery.message.id}
+          onOpenSkill={props.onOpenSkill}
+          slice={props.turn.delivery}
+        />
       ) : null}
       {props.turn.errors.map((entry) => (
         <div
-          className="rounded-md border-l-2 border-status-danger bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger"
+          className="agent-notice rounded-lg bg-status-danger-surface px-2.5 py-2 text-xs text-status-danger"
+          data-agent-notice="turn-error"
           key={`${entry.message.id}:${entry.text}`}
         >
           {entry.text}
@@ -2512,16 +2599,52 @@ export function ConversationTurnView(props: {
 }
 
 function MessageSliceView(props: {
+  busy?: boolean
+  copyDisabled?: boolean
   onOpenSkill: (name: string) => Promise<void>
   slice: { message: AgentMessage; parts: AgentMessage["parts"] }
   user?: boolean
 }) {
+  const [copyStatus, setCopyStatus] = useState<"copied" | "copying" | "failed" | "idle">("idle")
+  const copyRequestRef = useRef(0)
+  const copyText = agentConversationCopyText(props.slice)
+  const canCopy = Boolean(
+    !props.user && props.slice.message.completedAt !== undefined && !props.busy && !props.copyDisabled && copyText,
+  )
+  useEffect(() => {
+    copyRequestRef.current += 1
+    setCopyStatus("idle")
+  }, [copyText, props.busy, props.copyDisabled, props.slice.message.id, props.slice.message.sessionId])
+  useEffect(
+    () => () => {
+      copyRequestRef.current += 1
+    },
+    [],
+  )
+  const copyResponse = async () => {
+    const request = ++copyRequestRef.current
+    setCopyStatus("copying")
+    try {
+      if (!window.navigator.clipboard?.writeText) throw new Error("Clipboard is unavailable")
+      await window.navigator.clipboard.writeText(copyText)
+      if (copyRequestRef.current === request) setCopyStatus("copied")
+    } catch {
+      if (copyRequestRef.current === request) setCopyStatus("failed")
+    }
+  }
+
   return (
-    <article className={cn("flex", props.user ? "justify-end" : "justify-start")}>
+    <article
+      aria-busy={props.user ? undefined : Boolean(props.busy)}
+      className={cn("agent-message flex", props.user ? "justify-end" : "justify-start")}
+      data-agent-message={props.user ? "user" : "assistant"}
+    >
       <div
         className={cn(
-          "min-w-0 max-w-[92%] space-y-2 text-sm",
-          props.user ? "rounded-xl bg-accent px-3 py-2 text-accent-foreground" : "w-full text-foreground",
+          "agent-message__surface min-w-0 max-w-[92%] space-y-2 text-sm",
+          props.user
+            ? "rounded-[18px] rounded-br-md bg-accent px-3 py-2 text-accent-foreground"
+            : "w-full text-foreground",
         )}
       >
         {!props.user ? (
@@ -2533,8 +2656,53 @@ function MessageSliceView(props: {
         {props.slice.parts.map((part) => (
           <MessagePartView key={part.id} onOpenSkill={props.onOpenSkill} part={part} />
         ))}
+        {canCopy ? (
+          <div
+            className="agent-message-actions flex items-center gap-2 pt-1 text-[11px] text-muted-foreground"
+            data-agent-message-actions
+          >
+            <Tooltip content={copyStatus === "copied" ? "Copied" : "Copy response"}>
+              <Button
+                aria-label={copyStatus === "copied" ? "Response copied" : "Copy response"}
+                disabled={copyStatus === "copying"}
+                onClick={() => void copyResponse()}
+                size="icon-sm"
+                variant="ghost"
+              >
+                {copyStatus === "copied" ? <Check /> : <Copy />}
+              </Button>
+            </Tooltip>
+            {copyStatus === "copied" ? (
+              <span aria-live="polite" data-agent-copy-status role="status">
+                Copied
+              </span>
+            ) : copyStatus === "failed" ? (
+              <span aria-live="polite" className="text-status-danger" data-agent-copy-status role="status">
+                Couldn’t copy. Select the response text and copy it manually.
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </article>
+  )
+}
+
+function AgentResponseAnnouncer(props: { busy: boolean; delivery?: AgentConversationTurn["delivery"] }) {
+  const state = agentConversationAnnouncementState(props.delivery, props.busy)
+  const previousRef = useRef<AgentConversationAnnouncementState | undefined>(undefined)
+  const [announcement, setAnnouncement] = useState("")
+
+  useEffect(() => {
+    const nextAnnouncement = resolveAgentConversationAnnouncement(previousRef.current, state)
+    previousRef.current = state
+    if (nextAnnouncement) setAnnouncement(nextAnnouncement)
+  }, [state.busy, state.completed, state.messageId, state.text])
+
+  return (
+    <span aria-atomic="true" aria-live="polite" className="sr-only" data-agent-response-announcer role="status">
+      {announcement}
+    </span>
   )
 }
 
@@ -2559,9 +2727,11 @@ function agentToolDetail(part: AgentToolPart, resultDetail: string | undefined) 
 }
 
 export function MessagePartView({
+  interrupted,
   onOpenSkill,
   part,
 }: {
+  interrupted?: boolean
   onOpenSkill: (name: string) => Promise<void>
   part: AgentMessage["parts"][number]
 }) {
@@ -2582,31 +2752,68 @@ export function MessagePartView({
       </div>
     )
   if (part.type === "tool") {
-    const presentation = getAgentToolPresentation(part)
-    const pending = presentation.outcome === "pending" || presentation.outcome === "running"
+    const presentation = getAgentToolPresentation(part, { interrupted })
     const title = agentToolTitle(part)
     const detail = agentToolDetail(part, presentation.detail)
     const ToolIcon = agentToolLooksLikeRead(part) ? BookOpen : SquareTerminal
-    return (
-      <details className="group/tool rounded-md px-1 py-1 hover:bg-muted/45" data-agent-tool-call>
-        <summary className="flex cursor-pointer list-none items-center gap-2 outline-none focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-details-marker]:hidden">
-          {pending ? (
-            <LoaderCircle className="size-3.5 animate-spin text-primary" />
-          ) : presentation.outcome === "failure" ? (
-            <X className="size-3.5 text-destructive" />
-          ) : (
-            <ToolIcon className="size-3.5 shrink-0 text-muted-foreground" />
-          )}
-          <span className="min-w-0 truncate">{title}</span>
-          {detail ? (
-            <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90" />
-          ) : null}
-        </summary>
+    const statusLabel =
+      presentation.outcome === "pending"
+        ? "Queued"
+        : presentation.outcome === "running"
+          ? "Running"
+          : presentation.outcome === "success"
+            ? "Completed"
+            : presentation.outcome === "cancelled"
+              ? "Cancelled"
+              : "Failed"
+    const statusIcon =
+      presentation.outcome === "running" ? (
+        <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
+      ) : presentation.outcome === "pending" || presentation.outcome === "cancelled" ? (
+        <Square aria-hidden="true" className="size-3" />
+      ) : presentation.outcome === "failure" ? (
+        <X aria-hidden="true" className="size-3.5" />
+      ) : (
+        <Check aria-hidden="true" className="size-3.5" />
+      )
+    const row = (
+      <>
+        <span className="agent-tool-call__status-icon" data-state={presentation.outcome}>
+          {statusIcon}
+        </span>
+        <ToolIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate font-medium text-text-secondary">{title}</span>
+        <span className="agent-tool-call__status" data-state={presentation.outcome}>
+          {statusLabel}
+        </span>
         {detail ? (
-          <pre className="ml-5 mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/65 px-2 py-1.5 font-mono text-[11px] leading-4">
+          <ChevronRight
+            aria-hidden="true"
+            className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/tool:rotate-90 motion-reduce:transition-none"
+          />
+        ) : null}
+      </>
+    )
+    if (!detail)
+      return (
+        <div
+          className="agent-tool-call agent-tool-call--static"
+          data-agent-tool-call
+          data-agent-tool-state={presentation.outcome}
+        >
+          <div className="agent-tool-call__summary">{row}</div>
+        </div>
+      )
+    return (
+      <details className="agent-tool-call group/tool" data-agent-tool-call data-agent-tool-state={presentation.outcome}>
+        <summary className="agent-tool-call__summary cursor-pointer list-none outline-none focus-visible:ring-2 focus-visible:ring-ring/30 [&::-webkit-details-marker]:hidden">
+          {row}
+        </summary>
+        <div className="agent-tool-call__detail">
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-4">
             {detail}
           </pre>
-        ) : null}
+        </div>
       </details>
     )
   }
@@ -2616,7 +2823,7 @@ export function MessagePartView({
 function SkillBadge(props: { name: string; onOpen: () => Promise<void> }) {
   return (
     <button
-      className="inline-flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-1.5 py-1 text-xs font-medium text-primary hover:bg-primary/15"
+      className="agent-skill-badge inline-flex max-w-full items-center gap-1 rounded-md bg-primary/10 px-1.5 py-1 text-xs font-medium text-primary hover:bg-primary/15"
       onClick={() => void props.onOpen()}
       title={`Open ${props.name} Skill`}
       type="button"
@@ -2640,7 +2847,7 @@ function ResourceChip(props: { locked?: boolean; onRemove?: () => void; resource
       <FileText />
     )
   return (
-    <span className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-surface-inset px-1.5 py-1 text-[11px]">
+    <span className="agent-resource-chip inline-flex min-w-0 max-w-full items-center gap-1 rounded-md bg-surface-inset px-1.5 py-1 text-[11px]">
       <span className="text-primary [&_svg]:size-3">{icon}</span>
       <span className="max-w-40 truncate">{resourceLabel(props.resource)}</span>
       {props.locked ? <span className="rounded bg-primary/10 px-1 text-[9px] text-primary">context</span> : null}
@@ -2676,7 +2883,10 @@ function PermissionCard(props: {
     }
   }
   return (
-    <div className="mt-3 rounded-lg border-l-2 border-status-warning bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]">
+    <div
+      className="agent-interaction-card mt-3 rounded-xl bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]"
+      data-agent-interaction-card="permission"
+    >
       <div className="flex items-center gap-2 font-medium">
         <ShieldAlert className="size-4 text-status-warning" />
         Permission required
@@ -2765,7 +2975,10 @@ function QuestionCard(props: {
     }
   }
   return (
-    <div className="mt-3 rounded-lg border-l-2 border-primary/70 bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]">
+    <div
+      className="agent-interaction-card mt-3 rounded-xl bg-surface-raised p-3 text-xs shadow-[var(--ui-shadow-low)]"
+      data-agent-interaction-card="question"
+    >
       {props.request.questions.map((question, index) => (
         <div className={cn(index > 0 && "mt-4 pt-1")} key={`${props.request.id}:${index}`}>
           <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-primary">{question.header}</div>

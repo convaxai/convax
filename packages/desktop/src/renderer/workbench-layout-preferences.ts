@@ -1,9 +1,12 @@
 import { WorkbenchLayoutParts, type WorkbenchLayoutSnapshot } from "@convax/workbench"
 
-const layoutPreferenceKey = "convax.workbench.layout.v2"
+export const currentWorkbenchLayoutPreferenceKey = "convax.workbench.layout.v3"
+export const previousWorkbenchLayoutPreferenceKey = "convax.workbench.layout.v2"
+const currentWorkbenchLayoutPreferenceVersion = 3
 const legacyLayoutPreferenceKey = "convax.workbench.layout.v1"
 const legacyAgentPanelOpenKey = "convax:agent-panel:open"
 const legacyAgentPanelWidthKey = "convax:agent-panel:width"
+const previousPrimarySidebarDefaultSize = 292
 
 export interface WorkbenchLayoutPreferenceBounds {
   primarySidebar: { defaultSize: number; defaultVisible: boolean; maxSize: number; minSize: number }
@@ -24,36 +27,49 @@ export function readWorkbenchLayoutPreferences(
   storage: Pick<Storage, "getItem">,
   bounds: WorkbenchLayoutPreferenceBounds,
 ): WorkbenchLayoutPreferences {
-  const stored = readStoredLayout(storage, layoutPreferenceKey, 2)
-  const legacyStored = stored ? null : readStoredLayout(storage, legacyLayoutPreferenceKey, 1)
-  const source = stored ?? legacyStored
+  const currentRaw = safeGetItem(storage, currentWorkbenchLayoutPreferenceKey)
+  const current = parseStoredLayout(currentRaw, currentWorkbenchLayoutPreferenceVersion)
+  const previous =
+    currentRaw === null ? parseStoredLayout(safeGetItem(storage, previousWorkbenchLayoutPreferenceKey), 2) : null
+  const legacy =
+    currentRaw === null && previous === null
+      ? parseStoredLayout(safeGetItem(storage, legacyLayoutPreferenceKey), 1)
+      : null
+  const sourceKind = currentRaw !== null ? "current" : previous ? "previous" : legacy ? "legacy" : "none"
+  const source = current ?? previous ?? legacy
   const primary = source?.parts?.[WorkbenchLayoutParts.PrimarySidebar]
   const secondary = source?.parts?.[WorkbenchLayoutParts.SecondarySidebar]
-  const legacyWidth = numberValue(safeGetItem(storage, legacyAgentPanelWidthKey))
-  const legacyOpen = safeGetItem(storage, legacyAgentPanelOpenKey)
+  const legacyWidth = sourceKind === "none" ? numberValue(safeGetItem(storage, legacyAgentPanelWidthKey)) : null
+  const legacyOpen = sourceKind === "none" ? safeGetItem(storage, legacyAgentPanelOpenKey) : null
+  const primarySize =
+    sourceKind === "previous" && primary?.size === previousPrimarySidebarDefaultSize
+      ? bounds.primarySidebar.defaultSize
+      : primary?.size
   return {
     primarySidebar: {
-      pinned: stored
-        ? primary?.pinned === true
-        : legacyStored
-          ? primary?.visible === true
-          : false,
-      size: clampSize(primary?.size, bounds.primarySidebar),
+      pinned:
+        sourceKind === "current" || sourceKind === "previous"
+          ? primary?.pinned === true
+          : sourceKind === "legacy"
+            ? primary?.visible === true
+            : false,
+      size: clampSize(primarySize, bounds.primarySidebar),
       visible: typeof primary?.visible === "boolean" ? primary.visible : bounds.primarySidebar.defaultVisible,
     },
     secondarySidebar: {
       size: clampSize(secondary?.size ?? legacyWidth, bounds.secondarySidebar),
-      visible: typeof secondary?.visible === "boolean"
-        ? secondary.visible
-        : legacyOpen === null
-          ? bounds.secondarySidebar.defaultVisible
-          : legacyOpen !== "false",
+      visible:
+        typeof secondary?.visible === "boolean"
+          ? secondary.visible
+          : sourceKind !== "none" || legacyOpen === null
+            ? bounds.secondarySidebar.defaultVisible
+            : legacyOpen !== "false",
     },
   }
 }
 
 export function writeWorkbenchLayoutPreferences(
-  storage: Pick<Storage, "setItem">,
+  storage: Pick<Storage, "getItem" | "setItem">,
   snapshot: WorkbenchLayoutSnapshot,
   options: { projectDetailsPinned: boolean } = {
     projectDetailsPinned: snapshot.parts[WorkbenchLayoutParts.PrimarySidebar]?.visible ?? false,
@@ -63,30 +79,44 @@ export function writeWorkbenchLayoutPreferences(
   const secondary = snapshot.parts[WorkbenchLayoutParts.SecondarySidebar]
   if (!primary || !secondary) return false
   try {
-    storage.setItem(layoutPreferenceKey, JSON.stringify({
-      parts: {
-        [WorkbenchLayoutParts.PrimarySidebar]: {
-          pinned: options.projectDetailsPinned,
-          size: primary.size,
-          visible: primary.visible,
+    if (hasFutureStoredLayoutVersion(safeGetItem(storage, currentWorkbenchLayoutPreferenceKey))) return false
+    storage.setItem(
+      currentWorkbenchLayoutPreferenceKey,
+      JSON.stringify({
+        parts: {
+          [WorkbenchLayoutParts.PrimarySidebar]: {
+            pinned: options.projectDetailsPinned,
+            size: primary.size,
+            visible: primary.visible,
+          },
+          [WorkbenchLayoutParts.SecondarySidebar]: { size: secondary.size, visible: secondary.visible },
         },
-        [WorkbenchLayoutParts.SecondarySidebar]: { size: secondary.size, visible: secondary.visible },
-      },
-      version: 2,
-    }))
+        version: currentWorkbenchLayoutPreferenceVersion,
+      }),
+    )
     return true
   } catch {
     return false
   }
 }
 
-function readStoredLayout(
-  storage: Pick<Storage, "getItem">,
-  key: string,
-  version: number,
-): StoredWorkbenchLayout | null {
+function hasFutureStoredLayoutVersion(raw: string | null) {
+  if (!raw) return false
   try {
-    const raw = storage.getItem(key)
+    const value: unknown = JSON.parse(raw)
+    return (
+      isRecord(value) &&
+      typeof value.version === "number" &&
+      Number.isInteger(value.version) &&
+      value.version > currentWorkbenchLayoutPreferenceVersion
+    )
+  } catch {
+    return false
+  }
+}
+
+function parseStoredLayout(raw: string | null, version: number): StoredWorkbenchLayout | null {
+  try {
     if (!raw) return null
     const value: unknown = JSON.parse(raw)
     if (!isRecord(value) || value.version !== version) return null
@@ -119,10 +149,7 @@ function safeGetItem(storage: Pick<Storage, "getItem">, key: string) {
   }
 }
 
-function clampSize(
-  value: unknown,
-  bounds: { defaultSize: number; maxSize: number; minSize: number },
-) {
+function clampSize(value: unknown, bounds: { defaultSize: number; maxSize: number; minSize: number }) {
   const size = typeof value === "number" ? value : numberValue(value)
   if (size === null || !Number.isFinite(size)) return bounds.defaultSize
   return Math.min(bounds.maxSize, Math.max(bounds.minSize, size))

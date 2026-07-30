@@ -72,6 +72,7 @@ describe("Agent drawer header", () => {
     const markup = renderToStaticMarkup(
       <AgentDrawerHeader
         closeLabel="Close utilities"
+        collapse
         createDisabled={false}
         historyVisible
         onClose={() => undefined}
@@ -91,6 +92,9 @@ describe("Agent drawer header", () => {
     expect(markup).toContain("8 tools")
     expect(markup).toContain("h-7")
     expect(markup).toContain("border-border-subtle")
+    expect(markup).toContain('data-workspace-utility-close=""')
+    expect(markup).toContain("lucide-panel-right-close")
+    expect(markup).not.toContain("lucide-chevron-right")
     expect(markup.match(/Atlas Agent/g)).toHaveLength(1)
   })
 

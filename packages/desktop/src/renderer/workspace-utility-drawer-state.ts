@@ -1,9 +1,8 @@
-export type WorkspaceUtilityMode = "agent" | "closed" | "generate" | "inspector"
+export type WorkspaceUtilityMode = "agent" | "closed" | "inspector"
 
 export type WorkspaceUtilityDrawerState =
   | { mode: "closed" }
   | { mode: "agent"; projectId: string }
-  | { canvasId: string; mode: "generate"; projectId: string }
   | { canvasId: string; mode: "inspector"; projectId: string; selectionKey: string }
 
 export interface WorkspaceUtilityScope {
@@ -15,12 +14,6 @@ export const closedWorkspaceUtilityDrawer: WorkspaceUtilityDrawerState = { mode:
 
 export function openAgentUtility(projectId: string): WorkspaceUtilityDrawerState {
   return projectId ? { mode: "agent", projectId } : closedWorkspaceUtilityDrawer
-}
-
-export function openGenerateUtility(scope: Required<WorkspaceUtilityScope>): WorkspaceUtilityDrawerState {
-  return scope.projectId && scope.canvasId
-    ? { canvasId: scope.canvasId, mode: "generate", projectId: scope.projectId }
-    : closedWorkspaceUtilityDrawer
 }
 
 export function openInspectorUtility(

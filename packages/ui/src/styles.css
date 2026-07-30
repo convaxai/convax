@@ -99,3 +99,139 @@
     }
   }
 }
+
+/* Shared loading visuals: spin / pulse only; owners own busy truth and copy. */
+@keyframes ui-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes ui-loading-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+:where([data-ui-loading-spinner]) {
+  box-sizing: border-box;
+  display: inline-block;
+  flex-shrink: 0;
+  width: 1rem;
+  height: 1rem;
+  border-radius: var(--ui-radius-pill);
+  border-style: solid;
+  border-width: 2px;
+  border-color: color-mix(in oklab, currentColor 22%, transparent);
+  border-top-color: currentColor;
+  vertical-align: middle;
+  animation: ui-loading-spin 0.8s linear infinite;
+}
+
+:where([data-ui-loading-spinner][data-ui-loading-size="sm"]) {
+  width: 0.75rem;
+  height: 0.75rem;
+  border-width: 1.5px;
+}
+
+:where([data-ui-loading-spinner][data-ui-loading-size="lg"]) {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-width: 2.5px;
+}
+
+:where([data-ui-loading-skeleton]) {
+  min-height: 0.75rem;
+  opacity: 0.85;
+  animation: ui-loading-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+:where([data-ui-loading-well]) {
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border: 1px solid color-mix(in oklab, currentColor 15%, transparent);
+  border-radius: var(--ui-radius-xl);
+  background: color-mix(in oklab, currentColor 10%, transparent);
+  color: inherit;
+}
+
+:where([data-ui-loading-motion="reduce"][data-ui-loading-spinner]),
+:where([data-ui-loading-motion="reduce"] [data-ui-loading-spinner]) {
+  animation: none;
+  /* Static busy glyph: keep a visible incomplete ring, never hide activity. */
+  border-color: color-mix(in oklab, currentColor 28%, transparent);
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  opacity: 1;
+  transform: none;
+}
+
+:where([data-ui-loading-motion="reduce"][data-ui-loading-skeleton]),
+:where([data-ui-loading-motion="reduce"] [data-ui-loading-skeleton]) {
+  animation: none;
+  opacity: 0.7;
+}
+
+:where([data-ui-loading-motion="animate"][data-ui-loading-spinner]),
+:where([data-ui-loading-motion="animate"] [data-ui-loading-spinner]) {
+  animation: ui-loading-spin 0.8s linear infinite;
+}
+
+:where([data-ui-loading-motion="animate"][data-ui-loading-skeleton]),
+:where([data-ui-loading-motion="animate"] [data-ui-loading-skeleton]) {
+  animation: ui-loading-pulse 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :where([data-ui-loading-spinner]:not([data-ui-loading-motion="animate"])) {
+    animation: none;
+    border-color: color-mix(in oklab, currentColor 28%, transparent);
+    border-top-color: currentColor;
+    border-right-color: currentColor;
+    opacity: 1;
+    transform: none;
+  }
+
+  :where([data-ui-loading-skeleton]:not([data-ui-loading-motion="animate"])) {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+@media (forced-colors: active) {
+  :where([data-ui-loading-spinner]) {
+    border-color: GrayText;
+    border-top-color: CanvasText;
+    forced-color-adjust: none;
+  }
+
+  :where([data-ui-loading-motion="reduce"][data-ui-loading-spinner]),
+  :where([data-ui-loading-motion="reduce"] [data-ui-loading-spinner]) {
+    border-color: GrayText;
+    border-top-color: CanvasText;
+    border-right-color: CanvasText;
+  }
+
+  :where([data-ui-loading-skeleton]) {
+    background-color: GrayText;
+    opacity: 0.45;
+    forced-color-adjust: none;
+  }
+
+  :where([data-ui-loading-well]) {
+    border-color: CanvasText;
+    background: Canvas;
+    forced-color-adjust: none;
+  }
+}
+
+@media (forced-colors: active) and (prefers-reduced-motion: reduce) {
+  :where([data-ui-loading-spinner]:not([data-ui-loading-motion="animate"])) {
+    border-color: GrayText;
+    border-top-color: CanvasText;
+    border-right-color: CanvasText;
+  }
+}

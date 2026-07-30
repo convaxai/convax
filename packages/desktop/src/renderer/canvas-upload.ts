@@ -1,5 +1,8 @@
+import type { CanvasResourceMutationRequest } from "@convax/canvas"
 import type { CanvasResourceSource } from "@convax/canvas/application"
+import type { CanvasDocument } from "@convax/canvas/core"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
+import type { CanvasResourceClient } from "../desktop-protocol"
 
 export interface CanvasUploadSources {
   localFiles: Array<{ file: File; mediaType?: string; name: string; sourceId: string }>
@@ -20,6 +23,18 @@ export interface CanvasUploadRequest {
   }
 }
 
+export interface CanvasUploadMutationRequest extends CanvasResourceMutationRequest {
+  canvasId: string
+  projectId: string
+}
+
+export interface CanvasUploadMutationHost
+  extends Pick<CanvasResourceClient, "add" | "createLocalFileToken"> {
+  createCommandId(): string
+  createSourceId(): string
+  flushAuthoritativeCanvas(): Promise<Pick<CanvasDocument, "id" | "revision"> | undefined>
+}
+
 export function resolveCanvasUploadItems(request: CanvasUploadRequest, host: CanvasUploadHost): CanvasUploadSources {
   if (request.signal.aborted) throw request.signal.reason
   const localFiles = request.files.map((file) => ({
@@ -38,4 +53,46 @@ export function resolveCanvasUploadItems(request: CanvasUploadRequest, host: Can
         }))
       : []
   return { localFiles, sources }
+}
+
+export async function addCanvasUploadResources(
+  request: CanvasUploadMutationRequest,
+  host: CanvasUploadMutationHost,
+) {
+  throwIfAborted(request.signal)
+  const authoritativeDocument = await host.flushAuthoritativeCanvas()
+  throwIfAborted(request.signal)
+  if (!authoritativeDocument || authoritativeDocument.id !== request.canvasId) {
+    throw new Error("Canvas upload could not resolve Main's authoritative document")
+  }
+  const transport = resolveCanvasUploadItems(
+    {
+      files: request.files ?? [],
+      signal: request.signal,
+      transfer: request.transfer,
+    },
+    { createSourceId: () => host.createSourceId(), projectId: request.projectId },
+  )
+  const localFiles = transport.localFiles.map(({ file, ...source }) => {
+    const sourceToken = host.createLocalFileToken(file)
+    if (!sourceToken) throw new Error("Only files from the local disk can be added to a Project Canvas")
+    return { ...source, sourceToken }
+  })
+  throwIfAborted(request.signal)
+  return host.add({
+    anchor: request.anchor,
+    canvasId: request.canvasId,
+    commandId: host.createCommandId(),
+    expectedRevision: authoritativeDocument.revision,
+    localFiles,
+    projectId: request.projectId,
+    ...(request.relation === undefined ? {} : { relation: request.relation }),
+    sources: [...request.sources, ...transport.sources],
+  })
+}
+
+function throwIfAborted(signal: AbortSignal) {
+  if (signal.aborted) {
+    throw signal.reason ?? new DOMException("The operation was aborted", "AbortError")
+  }
 }

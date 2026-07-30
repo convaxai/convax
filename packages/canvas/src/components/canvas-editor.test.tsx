@@ -43,6 +43,13 @@ let renderedCanvasEdges: CanvasEdge[] = []
 let renderedCanvasNodes: CanvasNode[] = []
 let renderedBackground: { color?: string; gap?: number; size?: number; variant?: string } | undefined
 let renderedColorMode: string | undefined
+let renderedReactFlowOptions:
+  | {
+      connectionRadius?: number
+      multiSelectionKeyCode?: readonly string[]
+      snapToGrid?: boolean
+    }
+  | undefined
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window")
 Object.defineProperty(globalThis, "window", {
@@ -75,12 +82,16 @@ function reactNodeText(node: ReactNode): string {
 function MockReactFlow(props: {
   children?: ReactNode
   colorMode?: string
+  connectionRadius?: number
   edges?: CanvasEdge[]
+  multiSelectionKeyCode?: readonly string[]
   nodes?: CanvasNode[]
+  snapToGrid?: boolean
 }) {
   renderedCanvasEdges = props.edges ?? []
   renderedCanvasNodes = props.nodes ?? []
   renderedColorMode = props.colorMode
+  renderedReactFlowOptions = props
   return <>{props.children}</>
 }
 
@@ -117,6 +128,41 @@ mock.module("@convax/ui", () => ({
     return <>{props.children}</>
   },
   Input: (props: { className?: string }) => <input className={props.className} />,
+  Loading: (props: {
+    className?: string
+    description?: ReactNode
+    label?: ReactNode
+    reducedMotion?: boolean
+  }) => (
+    <div
+      aria-live="polite"
+      className={props.className}
+      data-slot="loading"
+      data-ui-loading-motion={
+        props.reducedMotion === true ? "reduce" : props.reducedMotion === false ? "animate" : undefined
+      }
+      role="status"
+    >
+      <span aria-hidden="true" data-slot="loading-spinner" data-ui-loading-spinner="" />
+      <span data-slot="loading-label">{props.label}</span>
+      {props.description != null ? <span data-slot="loading-description">{props.description}</span> : null}
+    </div>
+  ),
+  LoadingSkeleton: (props: { className?: string }) => (
+    <div aria-hidden="true" className={props.className} data-slot="loading-skeleton" data-ui-loading-skeleton="" />
+  ),
+  LoadingSpinner: (props: { className?: string; reducedMotion?: boolean; size?: string }) => (
+    <span
+      aria-hidden="true"
+      className={props.className}
+      data-slot="loading-spinner"
+      data-ui-loading-motion={
+        props.reducedMotion === true ? "reduce" : props.reducedMotion === false ? "animate" : undefined
+      }
+      data-ui-loading-size={props.size}
+      data-ui-loading-spinner=""
+    />
+  ),
   Select: Passthrough,
   SelectContent: Passthrough,
   SelectItem: Passthrough,
@@ -147,6 +193,7 @@ mock.module("@xyflow/react", () => ({
   ReactFlow: MockReactFlow,
   ReactFlowProvider: Passthrough,
   SelectionMode: { Partial: "partial" },
+  ViewportPortal: Passthrough,
   applyEdgeChanges: (_changes: unknown, edges: unknown) => edges,
   applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
   getBezierPath: () => ["", 0, 0, 0, 0],
@@ -199,6 +246,7 @@ beforeEach(() => {
   renderedCanvasNodes = []
   renderedBackground = undefined
   renderedColorMode = undefined
+  renderedReactFlowOptions = undefined
   fitView.mockClear()
   setCenter.mockClear()
   setViewport.mockClear()
@@ -221,7 +269,7 @@ function renderEditor(
   options: {
     initialDocument?: ReturnType<typeof createCanvasDocument>
     appearance?: CanvasAppearanceInput
-    onGenerateRequest?: () => void
+    onGenerateRequest?: Parameters<typeof CanvasEditor>[0]["onGenerateRequest"]
     readOnly?: boolean
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
@@ -239,6 +287,16 @@ function renderEditor(
 }
 
 describe("CanvasEditor edge port projection", () => {
+  test("uses one bounded connection radius and explicit multi-selection chord", () => {
+    renderEditor()
+    expect(renderedReactFlowOptions).toMatchObject({
+      connectionRadius: 120,
+      multiSelectionKeyCode: ["Meta", "Shift"],
+      snapGrid: [8, 8],
+      snapToGrid: true,
+    })
+  })
+
   test("projects handleless and legacy edges onto fixed ports without mutating the document", () => {
     const source = createTextNode({
       id: "source",
@@ -370,6 +428,27 @@ describe("CanvasEditor node dimension projection", () => {
 })
 
 describe("CanvasEditor resource mutation", () => {
+  test("announces blocking authoritative hydration without relying on spinner motion", () => {
+    const initialDocument = createCanvasDocument({ id: "loading-canvas" })
+    const markup = renderEditor(
+      createCanvasServices({
+        persistence: {
+          load: async () => initialDocument,
+          save: async (document) => document,
+        },
+      }),
+      { initialDocument },
+    )
+
+    expect(markup).toContain('role="status"')
+    expect(markup).toContain('aria-live="polite"')
+    expect(markup).toContain("Loading canvas…")
+    expect(markup).toContain('data-slot="loading"')
+    expect(markup).toContain('data-slot="loading-spinner"')
+    expect(markup).toContain('aria-hidden="true"')
+    expect(markup.match(/role="status"/g)?.length).toBe(1)
+  })
+
   test("keeps a cancelled relink selection isolated from the next ordinary multi-file upload", () => {
     const uploaded: File[][] = []
     const relinked: Array<{ file: File; nodeId: string }> = []
@@ -675,6 +754,48 @@ describe("CanvasEditor resource mutation", () => {
     expect(JSON.stringify(show.mock.calls)).not.toContain("/native/")
   })
 
+  test("keeps a committed resource successful when its optional camera effect fails", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const show = mock(() => undefined)
+    const selectNodes = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => undefined,
+      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      runViewEffect: async () => {
+        throw new Error("view closed")
+      },
+      selectNodes,
+      show,
+      signal: new AbortController().signal,
+    })
+    expect(selectNodes).toHaveBeenCalledWith(["note"])
+    expect(show).toHaveBeenCalledWith({ description: undefined, kind: "success", title: "1 item added" })
+  })
+
+  test("presents an authoritative batch once before selection and optional camera work", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const calls: string[] = []
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      presentCreatedNodes: (nodeIds) => calls.push(`present:${nodeIds.join(",")}`),
+      reload: async () => {
+        calls.push("reload")
+      },
+      result: { createdNodeIds: ["one", "two", "one"], revision: 1, warnings: [] },
+      runViewEffect: async (nodeIds) => {
+        calls.push(`view:${nodeIds.join(",")}`)
+      },
+      selectNodes: (nodeIds) => calls.push(`select:${nodeIds.join(",")}`),
+      show: () => calls.push("show"),
+      signal: new AbortController().signal,
+    })
+
+    expect(calls).toEqual(["reload", "present:one,two", "select:one,two", "view:one,two", "show"])
+  })
+
   test("ignores an aborted success in the same scope before and during refresh completion", async () => {
     const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     const abortedBefore = new AbortController()
@@ -935,7 +1056,13 @@ describe("CanvasEditor resource mutation", () => {
     expect(buttonActions.get("Tidy canvas")).toBeFunction()
     buttonActions.get("Tidy canvas")?.()
 
-    expect(fitView).toHaveBeenCalledWith({ duration: 220, maxZoom: 1, padding: 0.18 })
+    expect(fitView).toHaveBeenCalledWith({
+      duration: 300,
+      ease: expect.any(Function),
+      interpolate: "smooth",
+      maxZoom: 1,
+      padding: 0.18,
+    })
   })
 
   test("lets the explicit Fit view use the Canvas zoom ceiling", () => {
@@ -949,7 +1076,13 @@ describe("CanvasEditor resource mutation", () => {
 
     buttonActions.get("Fit view")?.()
 
-    expect(fitView).toHaveBeenCalledWith({ duration: 220, maxZoom: 2.5, padding: 0.18 })
+    expect(fitView).toHaveBeenCalledWith({
+      duration: 300,
+      ease: expect.any(Function),
+      interpolate: "smooth",
+      maxZoom: 2.5,
+      padding: 0.18,
+    })
   })
 
   test("keeps edge visibility and tidy as distinct toolbar actions", () => {
@@ -1131,11 +1264,24 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).toContain('data-canvas-color-scheme="dark"')
     expect(renderedColorMode).toBe("dark")
     expect(renderedBackground).toMatchObject({
-      color: "var(--canvas-grid)",
+      color: "#292b314d",
       gap: 36,
       size: 2,
       variant: "lines",
     })
+  })
+
+  test("honors the host hidden-grid override without rendering a background", () => {
+    renderEditor(createCanvasServices(), { appearance: { gridStyle: "none" } })
+
+    expect(renderedBackground).toBeUndefined()
+  })
+
+  test("keeps creation out of the viewport header without moving the viewport", async () => {
+    const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
+
+    expect(source).not.toContain("convax-creation-toolbar")
+    expectViewportUnchanged()
   })
 })
 

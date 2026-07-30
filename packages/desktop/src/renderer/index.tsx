@@ -1,6 +1,5 @@
 import {
   CanvasEditor,
-  CanvasGenerationPanel,
   CanvasInspector,
   type CanvasDocument,
   createDefaultCanvasFileRendererRegistry,
@@ -22,6 +21,7 @@ import { ProjectFilesController } from "@convax/project-files"
 import {
   dehydrateProjectCanvasDocument,
   markProjectCanvasResourcesStale,
+  ProjectCanvasSidebar,
   ProjectCanvasController,
 } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
@@ -31,6 +31,7 @@ import {
   Info,
   Layers3,
   MessageSquarePlus,
+  PanelLeftClose,
   TriangleAlert,
   XCircle,
 } from "lucide-react"
@@ -43,10 +44,7 @@ import { AgentDrawerTrigger } from "./agent-drawer-header"
 import { AgentGenerationPreferenceProvider } from "./agent-generation-preference"
 import { isGenerationModelTool } from "./agent-generation-models"
 import { resolveAgentCompactStatus, type AgentCompactStatus } from "./agent-panel-state"
-import {
-  combineInstalledPluginInventoryChanges,
-  subscribeInstalledPluginInventory,
-} from "./installed-plugin-inventory"
+import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInventory } from "./installed-plugin-inventory"
 import { createAddSelectionToConversationAction } from "./agent-selection-action"
 import { ApplicationCommandPalette } from "./application-command-palette"
 import type { ApplicationCommand } from "./application-command-model"
@@ -81,8 +79,9 @@ import {
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
+import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
-import { resolveCanvasUploadItems } from "./canvas-upload"
+import { addCanvasUploadResources } from "./canvas-upload"
 import {
   closeDesktopSettings,
   createDesktopSurfaceState,
@@ -121,9 +120,9 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent, showPluginAgentSession } from "./plugin-agent-entry"
 import { executePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
-import { ProjectCanvasSidebar } from "./project-canvas-sidebar"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { ProjectHome } from "./project-home"
+import { ProjectSidebarShell } from "./project-sidebar-shell"
 import { ProjectSidebarTrigger } from "./project-sidebar-trigger"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { ServiceCatalogController, serviceGenerationAvailabilityVersion } from "./service-catalog-controller"
@@ -135,13 +134,17 @@ import { WorkspaceShell } from "./workspace-shell"
 import { WorkspaceStatusBar } from "./workspace-status-bar"
 import { summarizeWorkspaceCanvasActivity } from "./workspace-activity-model"
 import { WorkspaceTaskIndicator } from "./workspace-task-indicator"
-import { resolveWorkspaceLayout } from "./workspace-layout-model"
+import { resolveWorkspaceLayout, workspaceShellMetrics } from "./workspace-layout-model"
+import { WorkspaceResizeHandle } from "./workspace-resize-handle"
 import { WorkspaceEntryCoordinator, waitForMountedWorkspaceTarget } from "./workspace-entry"
-import { WorkspaceUtilityDrawer, type WorkspaceUtilityActiveMode } from "./workspace-utility-drawer"
+import {
+  WorkspaceUtilityCollapseButton,
+  WorkspaceUtilityDrawer,
+  type WorkspaceUtilityActiveMode,
+} from "./workspace-utility-drawer"
 import {
   closedWorkspaceUtilityDrawer,
   openAgentUtility,
-  openGenerateUtility,
   openInspectorUtility,
   reconcileWorkspaceUtilityDrawer,
   type WorkspaceUtilityDrawerState,
@@ -152,11 +155,10 @@ import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 import "./appearance-themes.css"
 
-const primarySidebarBounds = { defaultSize: 292, defaultVisible: true, maxSize: 480, minSize: 220 }
-const secondarySidebarBounds = { defaultSize: 380, defaultVisible: false, maxSize: 4096, minSize: 300 }
+const primarySidebarBounds = workspaceShellMetrics.primarySidebar
+const secondarySidebarBounds = workspaceShellMetrics.utilitySidebar
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
-const minimumCanvasPeekSize = 160
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -169,7 +171,6 @@ function App() {
   const [desktopSurface, setDesktopSurface] = useState(createDesktopSurfaceState)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
-  const [canvasGenerationRunning, setCanvasGenerationRunning] = useState(false)
   const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() => resolveAgentCompactStatus({}))
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
@@ -447,7 +448,6 @@ function App() {
     workbenchSnapshot.surface.kind === "canvas" && workbenchSnapshot.surface.input.projectId === activeProjectId
       ? workbenchSnapshot.surface.input.canvasId
       : undefined
-  useEffect(() => setCanvasGenerationRunning(false), [activeCanvasId, activeProjectId])
   const mountCanvasEditor = useCallback(
     (handle: CanvasEditorHandle | null) => {
       canvasEditorRef.current = handle
@@ -1042,32 +1042,20 @@ function App() {
           if (!activeProjectId || !activeCanvasId) {
             throw new Error("Open a Project Canvas before adding resources")
           }
-          const transport = resolveCanvasUploadItems(
+          return addCanvasUploadResources(
             {
-              files: request.files ?? [],
-              signal: request.signal,
-              transfer: request.transfer,
-            },
-            {
-              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              ...request,
+              canvasId: activeCanvasId,
               projectId: activeProjectId,
             },
+            {
+              add: (input) => window.convax.canvas.resources.add(input),
+              createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+              createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
+              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+              flushAuthoritativeCanvas,
+            },
           )
-          const localFiles = transport.localFiles.map(({ file, ...source }) => {
-            const sourceToken = window.convax.canvas.resources.createLocalFileToken(file)
-            if (!sourceToken) throw new Error("Only files from the local disk can be added to a Project Canvas")
-            return { ...source, sourceToken }
-          })
-          return window.convax.canvas.resources.add({
-            anchor: request.anchor,
-            canvasId: activeCanvasId,
-            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
-            expectedRevision: request.expectedRevision,
-            localFiles,
-            projectId: activeProjectId,
-            ...(request.relation === undefined ? {} : { relation: request.relation }),
-            sources: [...request.sources, ...transport.sources],
-          })
         },
         async relink(request) {
           return runProjectCanvasResourceRelink({
@@ -1466,10 +1454,12 @@ function App() {
         const occupiedBySecondary = presentation.agent === "dock" ? secondary.size : 0
         const available =
           partId === WorkbenchLayoutParts.PrimarySidebar
-            ? window.innerWidth - occupiedBySecondary - minimumCanvasPeekSize
+            ? window.innerWidth - occupiedBySecondary - workspaceShellMetrics.minimumCanvasPeekSize
             : presentation.agent === "dock"
-              ? window.innerWidth - occupiedByPrimary - minimumCanvasPeekSize
-              : window.innerWidth - 24
+              ? window.innerWidth - occupiedByPrimary - workspaceShellMetrics.minimumCanvasPeekSize
+              : presentation.utilityPresentation === "overlay"
+                ? window.innerWidth - workspaceShellMetrics.utilityOverlayInset * 2
+                : window.innerWidth
         const requested = startSize + (clientX - startX) * direction
         const constrained = Math.min(requested, Math.max(0, available))
         workbenchLayoutController.updateResize(constrained - startSize)
@@ -1519,19 +1509,22 @@ function App() {
     projectSidebarVisible: primarySidebar.visible,
     viewportWidth,
   })
-  const primarySidebarOccupiedSize = activeProject && primarySidebar.visible ? primarySidebar.size : 0
+  const primarySidebarOccupiedSize =
+    activeProject && primarySidebar.visible && workspaceLayout.projectSidebar === "dock" ? primarySidebar.size : 0
   const secondarySidebarAvailableSize = Math.max(
     secondarySidebarBounds.minSize,
-    workspaceLayout.agent !== "dock"
-      ? viewportWidth - 24
-      : viewportWidth - primarySidebarOccupiedSize - minimumCanvasPeekSize,
+    workspaceLayout.utilityPresentation === "sheet"
+      ? viewportWidth
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? viewportWidth - workspaceShellMetrics.utilityOverlayInset * 2
+        : viewportWidth - primarySidebarOccupiedSize - workspaceShellMetrics.minimumCanvasPeekSize,
   )
   const secondarySidebarMaxWidthStyle =
-    workspaceLayout.agent === "sheet"
+    workspaceLayout.utilityPresentation === "sheet"
       ? "100vw"
-      : workspaceLayout.agent === "overlay"
-        ? "calc(100vw - 24px)"
-        : `calc(100vw - ${primarySidebarOccupiedSize + minimumCanvasPeekSize}px)`
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? `calc(100vw - ${workspaceShellMetrics.utilityOverlayInset * 2}px)`
+        : `calc(100vw - ${primarySidebarOccupiedSize + workspaceShellMetrics.minimumCanvasPeekSize}px)`
   const resizingPrimarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.PrimarySidebar
   const resizingSecondarySidebar = workbenchLayoutSnapshot.resize?.partId === WorkbenchLayoutParts.SecondarySidebar
   const openWorkspaceSettings = useCallback(() => openSettings("general"), [openSettings])
@@ -1540,11 +1533,12 @@ function App() {
     setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
     workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
   }, [activeProjectId, workbenchLayoutController])
-  const openGenerateDrawer = useCallback(() => {
-    if (!activeProjectId || !activeCanvasId || !canvasOutlineDocument) return
-    setWorkspaceUtilityDrawer(openGenerateUtility({ canvasId: activeCanvasId, projectId: activeProjectId }))
-    workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
-  }, [activeCanvasId, activeProjectId, canvasOutlineDocument, workbenchLayoutController])
+  const openCanvasGenerate = useCallback(() => {
+    if (!activeProjectId || !activeCanvasId) return
+    const mounted = canvasEditorScopeRef.current
+    if (mounted?.projectId !== activeProjectId || mounted.canvasId !== activeCanvasId) return
+    mounted.handle.openGenerate()
+  }, [activeCanvasId, activeProjectId])
   const reportWorkspaceEntryFailure = useCallback(
     (error: unknown) =>
       setNotification({
@@ -1720,7 +1714,7 @@ function App() {
       controller={projectController}
       extension={{
         busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
-        content: (
+        content: ({ query }) => (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
             controller={projectCanvasController}
@@ -1730,6 +1724,7 @@ function App() {
             onClearNavigationError={() => workbenchController.clearError()}
             onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
             onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+            query={query}
           />
         ),
         count: projectCanvasSnapshot.canvases.length,
@@ -1739,27 +1734,39 @@ function App() {
       }}
       filesController={projectFilesController}
       footerActions={<ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />}
+      headerActions={
+        <button
+          aria-label={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+          data-project-sidebar-close=""
+          onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
+          title={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+          type="button"
+        >
+          <PanelLeftClose className="size-3.5" />
+        </button>
+      }
       hideWhenNoProject
+      presentation="workspace"
+      searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project"}
     />
   ) : null
-  const agentPanelWidth = workspaceLayout.agent === "sheet" ? viewportWidth : secondarySidebar.size
+  const agentPanelWidth = workspaceLayout.utilityPresentation === "sheet" ? viewportWidth : secondarySidebar.size
   const agentPanelClassName =
-    workspaceLayout.agent === "sheet"
+    workspaceLayout.utilityPresentation === "sheet"
       ? "!fixed !inset-0 !z-50 !max-w-none !border-l-0"
-      : workspaceLayout.agent === "overlay"
-        ? "!absolute !inset-y-3 !right-3 !z-40 rounded-lg shadow-2xl"
+      : workspaceLayout.utilityPresentation === "overlay"
+        ? "!absolute !inset-y-4 !right-4 !z-40"
         : undefined
-  const utilityDocument = canvasOutlineDocument?.id === activeCanvasId ? canvasOutlineDocument : null
-  const utilitySelectedNodeIds =
-    workbenchSnapshot.selection?.input.kind === "canvas" &&
-    workbenchSnapshot.selection.input.projectId === activeProjectId &&
-    workbenchSnapshot.selection.input.canvasId === activeCanvasId &&
-    workbenchSnapshot.selection.selection.kind === "canvas-nodes"
-      ? workbenchSnapshot.selection.selection.nodeIds
-      : []
+  const canvasViewportInsets = resolveWorkspaceCanvasViewportInsets({
+    presentation: workspaceLayout.utilityPresentation,
+    primarySidebarSize: primarySidebarOccupiedSize,
+    utilityPanelSize: secondarySidebar.size,
+    utilityVisible: secondarySidebar.visible,
+    viewportWidth,
+  })
   const utilityModes = [
     { label: locale === "zh-CN" ? "助手" : "Agent", value: "agent" as const },
-    ...(utilityDocument ? [{ label: locale === "zh-CN" ? "生成" : "Generate", value: "generate" as const }] : []),
     ...(canvasInspector ? [{ label: locale === "zh-CN" ? "检查器" : "Inspector", value: "inspector" as const }] : []),
   ]
   const closeWorkspaceUtility = () => {
@@ -1769,9 +1776,7 @@ function App() {
   const changeWorkspaceUtilityMode = (mode: WorkspaceUtilityActiveMode) => {
     if (!activeProjectId) return
     if (mode === "agent") setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-    else if (mode === "generate" && activeCanvasId) {
-      setWorkspaceUtilityDrawer(openGenerateUtility({ canvasId: activeCanvasId, projectId: activeProjectId }))
-    } else if (mode === "inspector" && activeCanvasId && canvasInspector) {
+    else if (mode === "inspector" && activeCanvasId && canvasInspector) {
       setWorkspaceUtilityDrawer(
         openInspectorUtility(
           { canvasId: activeCanvasId, projectId: activeProjectId },
@@ -1809,7 +1814,7 @@ function App() {
         id: "utility.generate",
         keywords: ["create", "media"],
         label: locale === "zh-CN" ? "打开生成" : "Open Generate",
-        run: openGenerateDrawer,
+        run: openCanvasGenerate,
       },
       {
         disabled: !activeCanvasId,
@@ -1826,7 +1831,7 @@ function App() {
       activeProjectId,
       locale,
       openAgentDrawer,
-      openGenerateDrawer,
+      openCanvasGenerate,
       openProjectHomeFromTitlebar,
       openWorkspaceSettings,
     ],
@@ -1894,7 +1899,12 @@ function App() {
               className="size-full pt-11"
               inert={Boolean(settingsSection) || undefined}
             >
-              <ProjectHome controller={projectController} locale={locale} onEnterProject={enterHomeProject} />
+              <ProjectHome
+                controller={projectController}
+                locale={locale}
+                onEnterProject={enterHomeProject}
+                reducedMotion={appearancePreferences.reducedMotion}
+              />
             </div>
           ) : (
             <WorkspaceShell
@@ -1911,7 +1921,7 @@ function App() {
                           ? `打开 ${workspaceActivity.total} 个画布任务`
                           : `Open ${workspaceActivity.total} Canvas tasks`
                       }
-                      onOpen={openGenerateDrawer}
+                      onOpen={openCanvasGenerate}
                       summary={workspaceActivity}
                     />
                   }
@@ -1921,41 +1931,34 @@ function App() {
               workspaceRef={workspaceShellRef}
             >
               {activeProject ? (
-                <div
-                  className={`relative h-full shrink-0 overflow-hidden${
-                    !resizingPrimarySidebar || !primarySidebar.visible
-                      ? " transition-[width] duration-200 ease-out motion-reduce:transition-none"
-                      : ""
-                  }`}
-                  style={{ width: primarySidebarOccupiedSize }}
+                <ProjectSidebarShell
+                  entryLabel={activeProject.name}
+                  onOpenChange={(open) =>
+                    workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, open)
+                  }
+                  open={primarySidebar.visible}
+                  presentation={workspaceLayout.projectSidebar === "dock" ? "dock" : "overlay"}
+                  resizeHandle={
+                    shouldMountResizeHandle(primarySidebar.visible, resizingPrimarySidebar) ? (
+                      <WorkspaceResizeHandle
+                        edge="end"
+                        label="Resize project sidebar"
+                        maximum={primarySidebarBounds.maxSize}
+                        minimum={primarySidebarBounds.minSize}
+                        onResizeBy={(delta) => resizeWorkbenchPartBy(WorkbenchLayoutParts.PrimarySidebar, delta)}
+                        onPointerDown={(pointerEvent) =>
+                          startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
+                        }
+                        value={primarySidebar.size}
+                      />
+                    ) : null
+                  }
+                  size={primarySidebar.size}
                 >
-                  {primarySidebar.visible ? projectSidebar : null}
-                  {shouldMountResizeHandle(primarySidebar.visible, resizingPrimarySidebar) ? (
-                    <div
-                      aria-label="Resize project sidebar"
-                      aria-orientation="vertical"
-                      aria-valuemax={primarySidebarBounds.maxSize}
-                      aria-valuemin={primarySidebarBounds.minSize}
-                      aria-valuenow={primarySidebar.size}
-                      className="absolute inset-y-0 -right-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-primary/20"
-                      onKeyDown={(keyEvent) => {
-                        if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                        keyEvent.preventDefault()
-                        resizeWorkbenchPartBy(
-                          WorkbenchLayoutParts.PrimarySidebar,
-                          keyEvent.key === "ArrowLeft" ? -24 : 24,
-                        )
-                      }}
-                      onPointerDown={(pointerEvent) =>
-                        startWorkbenchPartResize(WorkbenchLayoutParts.PrimarySidebar, pointerEvent)
-                      }
-                      role="separator"
-                      tabIndex={0}
-                    />
-                  ) : null}
-                </div>
+                  {projectSidebar}
+                </ProjectSidebarShell>
               ) : null}
-              <section className="relative min-w-0 flex-1">
+              <section className="workspace-canvas-region relative min-w-0 flex-1">
                 {activeCanvas ? (
                   <aside
                     aria-label="Canvas title"
@@ -1988,7 +1991,11 @@ function App() {
                   </>
                 ) : null}
                 {workbenchSnapshot.surface.kind === "empty" && workbenchSnapshot.surface.reason === "no-project" ? (
-                  <ProjectEmptyState controller={projectController} initialized={projectSnapshot.initialized} />
+                  <ProjectEmptyState
+                    controller={projectController}
+                    initialized={projectSnapshot.initialized}
+                    reducedMotion={appearancePreferences.reducedMotion}
+                  />
                 ) : workbenchSnapshot.surface.kind === "file" ? (
                   <div className="grid size-full place-items-center text-sm text-muted-foreground">
                     File surface is not available yet.
@@ -1997,7 +2004,10 @@ function App() {
                   !activeProject ||
                   !activeCanvas ||
                   !initialDocument ? (
-                  <ProjectLoadingState projectName={activeProject?.name ?? "Project"} />
+                  <ProjectLoadingState
+                    projectName={activeProject?.name ?? "Project"}
+                    reducedMotion={appearancePreferences.reducedMotion}
+                  />
                 ) : (
                   <RendererErrorBoundary
                     name="Canvas surface"
@@ -2036,19 +2046,19 @@ function App() {
                       nodeRegistry={canvasNodeRegistry}
                       onDocumentChange={handleCanvasDocumentChange}
                       onInspectorRequest={openCanvasInspector}
-                      onGenerateRequest={openGenerateDrawer}
-                      onGenerationStateChange={setCanvasGenerationRunning}
                       onSelectionProjectionChange={publishCanvasSelection}
                       readOnly={
                         workbenchSnapshot.changingInput ||
                         projectCanvasSnapshot.busy ||
                         projectSnapshot.changingActiveProject
                       }
+                      reducedMotion={appearancePreferences.reducedMotion}
                       ref={mountCanvasEditor}
                       selectionActions={selectionActions}
                       selectionDragSource={selectionDragSource}
                       services={services}
                       title={activeCanvas.name}
+                      viewportInsets={canvasViewportInsets}
                       viewId="desktop-main"
                       viewRegistry={canvasViewRegistry}
                       viewScopeId={activeProject.id}
@@ -2057,23 +2067,29 @@ function App() {
                 )}
               </section>
               <WorkspaceUtilityDrawer
-                agent={({ closeLabel, modeNavigation }) => (
+                agent={({ closeLabel, modeNavigation, onClose }) => (
                   <RendererErrorBoundary
                     name="Agent panel"
                     renderFallback={({ retry }) => (
-                      <div className="grid size-full place-items-center p-4 text-center" role="alert">
-                        <div>
-                          <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
-                          <p className="mt-2 text-xs leading-5 text-text-tertiary">
-                            {rendererFailureCopy.agentDescription}
-                          </p>
-                          <button
-                            className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
-                            onClick={retry}
-                            type="button"
-                          >
-                            {rendererFailureCopy.retry}
-                          </button>
+                      <div className="flex size-full min-h-0 flex-col">
+                        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2.5">
+                          {modeNavigation}
+                          <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
+                        </header>
+                        <div className="grid min-h-0 flex-1 place-items-center p-4 text-center" role="alert">
+                          <div>
+                            <h2 className="text-sm font-semibold">{rendererFailureCopy.agentTitle}</h2>
+                            <p className="mt-2 text-xs leading-5 text-text-tertiary">
+                              {rendererFailureCopy.agentDescription}
+                            </p>
+                            <button
+                              className="mt-4 rounded-md bg-brand px-3 py-2 text-xs font-medium text-on-brand outline-none focus-visible:ring-2 focus-visible:ring-focus-ring/50"
+                              onClick={retry}
+                              type="button"
+                            >
+                              {rendererFailureCopy.retry}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -2111,13 +2127,14 @@ function App() {
                       ref={mountAgentPanel}
                       utilityCloseLabel={closeLabel}
                       utilityNavigation={modeNavigation ?? undefined}
+                      utilityOnClose={onClose}
                     />
                   </RendererErrorBoundary>
                 )}
                 className={`${agentPanelClassName ?? ""} pt-11 ${
                   resizingSecondarySidebar
                     ? ""
-                    : "transition-[width] duration-200 ease-out motion-reduce:transition-none"
+                    : "transition-[width] duration-300 ease-[cubic-bezier(0.78,0,0.22,1)] motion-reduce:transition-none"
                 }`}
                 closeLabel={locale === "zh-CN" ? "关闭工具抽屉" : "Close utility drawer"}
                 collapsedEntry={
@@ -2127,50 +2144,25 @@ function App() {
                     </aside>
                   ) : null
                 }
-                generate={
-                  utilityDocument ? (
-                    <CanvasGenerationPanel
-                      autoFocus
-                      className="p-3"
-                      disabled={workbenchSnapshot.changingInput || projectSnapshot.changingActiveProject}
-                      document={utilityDocument}
-                      generateService={services.require("generate")}
-                      onOpenServices={openServices}
-                      onSubmit={(submission) => canvasEditorRef.current?.submitGeneration(submission)}
-                      scopeId={activeProjectId}
-                      selectedNodeIds={utilitySelectedNodeIds}
-                      submitting={canvasGenerationRunning}
-                    />
-                  ) : null
-                }
                 inspector={canvasInspector ? <CanvasInspector className="pb-3" projection={canvasInspector} /> : null}
-                modal={workspaceLayout.agent !== "dock"}
+                modal={workspaceLayout.utilityPresentation === "sheet"}
                 mode={secondarySidebar.visible ? workspaceUtilityDrawer.mode : "closed"}
                 modes={utilityModes}
                 onClose={closeWorkspaceUtility}
                 onModeChange={changeWorkspaceUtilityMode}
+                presentation={workspaceLayout.utilityPresentation}
                 resizeHandle={
-                  workspaceLayout.agent === "dock" ? (
-                    <div
-                      aria-label="Resize workspace utilities"
-                      aria-orientation="vertical"
-                      aria-valuemax={secondarySidebarBounds.maxSize}
-                      aria-valuemin={secondarySidebarBounds.minSize}
-                      aria-valuenow={secondarySidebar.size}
-                      className="absolute inset-y-0 -left-1 z-50 w-2 cursor-col-resize touch-none outline-none focus-visible:bg-brand/20"
-                      onKeyDown={(keyEvent) => {
-                        if (keyEvent.key !== "ArrowLeft" && keyEvent.key !== "ArrowRight") return
-                        keyEvent.preventDefault()
-                        resizeWorkbenchPartBy(
-                          WorkbenchLayoutParts.SecondarySidebar,
-                          keyEvent.key === "ArrowLeft" ? 24 : -24,
-                        )
-                      }}
+                  workspaceLayout.utilityPresentation !== "sheet" ? (
+                    <WorkspaceResizeHandle
+                      edge="start"
+                      label="Resize workspace utilities"
+                      maximum={secondarySidebarBounds.maxSize}
+                      minimum={secondarySidebarBounds.minSize}
+                      onResizeBy={(delta) => resizeWorkbenchPartBy(WorkbenchLayoutParts.SecondarySidebar, delta)}
                       onPointerDown={(pointerEvent) =>
                         startWorkbenchPartResize(WorkbenchLayoutParts.SecondarySidebar, pointerEvent)
                       }
-                      role="separator"
-                      tabIndex={0}
+                      value={secondarySidebar.size}
                     />
                   ) : null
                 }

@@ -37,6 +37,7 @@ describe("card-level canvas connections", () => {
     expect(markup).toContain("Text")
     expect(markup).toContain("Image")
     expect(markup).toContain("Video")
+    expect(markup).toContain("convax-motion-menu")
     expect(markup).not.toContain("Audio")
   })
 })

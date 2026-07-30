@@ -1,9 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import {
-  canvasAppearanceStyle,
-  resolveCanvasAppearance,
-  type CanvasAppearancePalette,
-} from "./appearance"
+import { canvasAppearanceStyle, resolveCanvasAppearance, type CanvasAppearancePalette } from "./appearance"
 
 const hostPalettes = [
   {
@@ -93,9 +89,7 @@ describe("Canvas appearance", () => {
     expect(resolveCanvasAppearance({ palette: invisibleChrome })).toEqual(fallback)
     expect(resolveCanvasAppearance({ palette: malformed })).toEqual(fallback)
     expect(resolveCanvasAppearance({ palette: unreadableAccent })).toEqual(fallback)
-    expect(resolveCanvasAppearance({ palette: { text: "#111111" } as CanvasAppearancePalette })).toEqual(
-      fallback,
-    )
+    expect(resolveCanvasAppearance({ palette: { text: "#111111" } as CanvasAppearancePalette })).toEqual(fallback)
   })
 
   test("keeps bounded visual preferences independent from the semantic palette", () => {
@@ -109,7 +103,7 @@ describe("Canvas appearance", () => {
 
     expect(appearance).toMatchObject({
       ...hostPalettes[2],
-      gridGap: 20,
+      gridGap: 24,
       gridSize: 3,
       gridStyle: "dots",
       nodeRadius: 0,
@@ -118,10 +112,15 @@ describe("Canvas appearance", () => {
 
   test("keeps the default dot grid legible at common workspace zoom levels", () => {
     expect(resolveCanvasAppearance()).toMatchObject({
-      gridGap: 20,
-      gridSize: 1.3,
+      gridGap: 24,
+      gridSize: 1.5,
       gridStyle: "dots",
     })
+  })
+
+  test("preserves host line and hidden-grid overrides", () => {
+    expect(resolveCanvasAppearance({ gridStyle: "lines" }).gridStyle).toBe("lines")
+    expect(resolveCanvasAppearance({ gridStyle: "none" }).gridStyle).toBe("none")
   })
 
   test("maps resolved values to semantic CSS variables without document state", () => {

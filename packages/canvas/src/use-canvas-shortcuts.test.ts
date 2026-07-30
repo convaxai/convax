@@ -20,6 +20,7 @@ function shortcutActions(overrides: Partial<CanvasShortcutActions> = {}): Canvas
     fitView: noop,
     generate: noop,
     group: noop,
+    hand: noop,
     layout: noop,
     openSearch: noop,
     paste: noop,
@@ -58,14 +59,81 @@ describe("canvas shortcuts", () => {
     expect(resolveCanvasTidyShortcutScope(false, 2)).toBe("selection")
   })
 
-  test("activates the selection tool with V", () => {
+  test("activates the selection and hand tools with unmodified V and H", () => {
     const select = mock(() => undefined)
-    const event = keyboardEvent("v")
+    const hand = mock(() => undefined)
+    const selectEvent = keyboardEvent("v")
+    const handEvent = keyboardEvent("H")
 
-    createCanvasShortcutHandler(shortcutActions({ select }), false)(event)
+    const handler = createCanvasShortcutHandler(shortcutActions({ hand, select }), false)
+    handler(selectEvent)
+    handler(handEvent)
 
     expect(select).toHaveBeenCalledTimes(1)
-    expect(event.preventDefault).toHaveBeenCalledTimes(1)
+    expect(hand).toHaveBeenCalledTimes(1)
+    expect(selectEvent.preventDefault).toHaveBeenCalledTimes(1)
+    expect(handEvent.preventDefault).toHaveBeenCalledTimes(1)
+  })
+
+  test("leaves tool shortcuts available in read-only canvases", () => {
+    const hand = mock(() => undefined)
+    const select = mock(() => undefined)
+    const handler = createCanvasShortcutHandler(shortcutActions({ hand, select }), true)
+
+    handler(keyboardEvent("h"))
+    handler(keyboardEvent("v"))
+
+    expect(hand).toHaveBeenCalledTimes(1)
+    expect(select).toHaveBeenCalledTimes(1)
+  })
+
+  test("leaves H unclaimed for existing shortcut consumers without a hand tool", () => {
+    const actions = shortcutActions()
+    delete actions.hand
+    const event = keyboardEvent("h")
+
+    createCanvasShortcutHandler(actions, false)(event)
+
+    expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.stopPropagation).not.toHaveBeenCalled()
+  })
+
+  test("does not claim tool shortcuts from editable or explicitly ignored descendants", () => {
+    const originalHTMLElement = Object.getOwnPropertyDescriptor(globalThis, "HTMLElement")
+    class TestHTMLElement {
+      constructor(
+        readonly isContentEditable: boolean,
+        readonly editableAncestor: boolean,
+        readonly ignoredAncestor: boolean,
+      ) {}
+
+      closest(selector: string) {
+        if (selector === "input, textarea, select") return this.editableAncestor ? this : null
+        if (selector === "[data-canvas-shortcuts='ignore']") return this.ignoredAncestor ? this : null
+        return null
+      }
+    }
+    Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: TestHTMLElement })
+    try {
+      const hand = mock(() => undefined)
+      const select = mock(() => undefined)
+      const handler = createCanvasShortcutHandler(shortcutActions({ hand, select }), false)
+
+      for (const target of [
+        new TestHTMLElement(true, false, false),
+        new TestHTMLElement(false, true, false),
+        new TestHTMLElement(false, false, true),
+      ]) {
+        handler(keyboardEvent("h", { target: target as unknown as EventTarget }))
+        handler(keyboardEvent("v", { target: target as unknown as EventTarget }))
+      }
+
+      expect(hand).not.toHaveBeenCalled()
+      expect(select).not.toHaveBeenCalled()
+    } finally {
+      if (originalHTMLElement) Object.defineProperty(globalThis, "HTMLElement", originalHTMLElement)
+      else Reflect.deleteProperty(globalThis, "HTMLElement")
+    }
   })
 
   test("leaves command copy and paste to native clipboard events", () => {

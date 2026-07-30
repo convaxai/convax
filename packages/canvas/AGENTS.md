@@ -38,9 +38,17 @@ Canvas owns document and editor semantics independently of Project and Agent.
   into a failed mutation.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
   parent coordinates. Do not wait for or trust stale mounted renderer geometry.
-- Ordinary document mutations such as adding, importing, duplicating, or generating
-  nodes preserve the mounted viewport. Fit, center, zoom, and reveal movement require
-  an explicit user action or view command.
+- Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
+  owns the resulting safe rectangle, camera avoidance, and Canvas overlay clamping;
+  host product/utility identity never enters this package.
+- Domain mutation commits before any camera behavior. Canvas may own an optional
+  post-mutation safe reveal for the current mounted view when newly affected nodes
+  are outside its host-provided safe viewport; stale scope, remount, background
+  refresh/restore, or intervening user navigation cancels it. View failure never
+  reverses the mutation, and reduced motion uses zero duration while retaining the
+  required final position. Eligible flows are batch picker import and new pending
+  generation. Pointer drops, ordinary paste, duplicate, and duplicate-drag do not
+  move the viewport unless a separate explicit view command requests it.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply

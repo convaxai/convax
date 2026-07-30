@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Position } from "@xyflow/react"
-import { resolveCanvasEdgeGeometry, shouldAnimateCanvasEdge } from "./canvas-edge"
+import { resolveCanvasConnectionStatus, resolveCanvasEdgeGeometry, shouldAnimateCanvasEdge } from "./canvas-edge"
 import type { CanvasEdge, CanvasSelection } from "../types"
 
 const edge: CanvasEdge = {
@@ -14,8 +14,10 @@ function selection(nodeIds: string[], edgeIds: string[] = []): CanvasSelection {
 }
 
 describe("canvas edge presentation", () => {
-  test("animates only beside one focused node while the edge is not selected", () => {
-    expect(shouldAnimateCanvasEdge(edge, selection([]))).toBeFalse()
+  test("animates persisted flow edges and edges incident to one focused node", () => {
+    expect(shouldAnimateCanvasEdge(edge)).toBeFalse()
+    expect(shouldAnimateCanvasEdge({ ...edge, animated: false })).toBeFalse()
+    expect(shouldAnimateCanvasEdge({ ...edge, animated: true })).toBeTrue()
     expect(shouldAnimateCanvasEdge(edge, selection(["node_a"]))).toBeTrue()
     expect(shouldAnimateCanvasEdge(edge, selection(["node_b"]))).toBeTrue()
     expect(shouldAnimateCanvasEdge(edge, selection(["node_c"]))).toBeFalse()
@@ -102,5 +104,12 @@ describe("canvas edge presentation", () => {
       targetY: 120,
       targetPosition: Position.Left,
     })
+  })
+
+  test("marks live connection previews by pending, valid, and invalid status", () => {
+    expect(resolveCanvasConnectionStatus(undefined)).toBe("pending")
+    expect(resolveCanvasConnectionStatus(null)).toBe("pending")
+    expect(resolveCanvasConnectionStatus("valid")).toBe("valid")
+    expect(resolveCanvasConnectionStatus("invalid")).toBe("invalid")
   })
 })

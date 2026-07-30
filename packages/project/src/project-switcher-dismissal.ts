@@ -8,15 +8,20 @@ export function bindProjectSwitcherDismissal(input: {
 }) {
   const isInsideSwitcher = (target: EventTarget | null) => {
     const targetNode = target as Node | null
-    return targetNode !== null
-      && typeof targetNode.nodeType === "number"
-      && (input.switcher.contains(targetNode) || input.trigger.contains(targetNode))
+    return (
+      targetNode !== null &&
+      typeof targetNode.nodeType === "number" &&
+      (input.switcher.contains(targetNode) || input.trigger.contains(targetNode))
+    )
   }
   const dismissOnOutsideInteraction = (event: Event) => {
     if (!isInsideSwitcher(event.target)) input.onDismiss()
   }
   const dismissOnEscape = (event: KeyboardEvent) => {
-    if (event.key === "Escape") input.onEscape()
+    if (event.key !== "Escape") return
+    event.preventDefault?.()
+    event.stopPropagation?.()
+    input.onEscape()
   }
 
   input.document.addEventListener("pointerdown", dismissOnOutsideInteraction, true)

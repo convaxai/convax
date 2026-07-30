@@ -201,6 +201,19 @@ describe("Project Canvas Workbench coordination", () => {
     expect(workbench.getSnapshot().surface.kind).toBe("canvas")
   })
 
+  test("rejects a stale Canvas navigation after the Workbench switches Project scope", async () => {
+    const catalog = catalogHarness()
+    const workbench = new WorkbenchController()
+    workbench.setProject("project-one", projectCanvasInput("project-one", "canvas-one"))
+    const coordinator = new ProjectCanvasWorkbenchCoordinator(catalog.controller, workbench)
+
+    workbench.setProject("project-two")
+
+    expect(await coordinator.openCanvas("project-one", "canvas-two")).toBe(false)
+    expect(workbench.getSnapshot().projectId).toBe("project-two")
+    expect(workbench.getSnapshot().activeInput).toBeNull()
+  })
+
   test("rolls a created Canvas back when the Workbench cannot leave its current input", async () => {
     const catalog = catalogHarness()
     const workbench = new WorkbenchController({

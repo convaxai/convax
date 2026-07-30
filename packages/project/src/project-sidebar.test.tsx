@@ -34,13 +34,15 @@ const filesController = {
 const activeSnapshot: ProjectControllerSnapshot = {
   ...emptySnapshot,
   activeProjectId: "project-1",
-  projects: [{
-    createdAt: 1,
-    id: "project-1",
-    lastOpenedAt: 1,
-    name: "Example",
-    rootPath: "/project",
-  }],
+  projects: [
+    {
+      createdAt: 1,
+      id: "project-1",
+      lastOpenedAt: 1,
+      name: "Example",
+      rootPath: "/project",
+    },
+  ],
 }
 
 const activeFilesSnapshot: ProjectFilesControllerSnapshot = {
@@ -57,7 +59,9 @@ const activeFilesSnapshot: ProjectFilesControllerSnapshot = {
 
 describe("ProjectSidebar", () => {
   test("stays mounted for initialization but renders nothing when the host hides an empty project sidebar", () => {
-    const markup = renderToStaticMarkup(<ProjectSidebar controller={controller} filesController={filesController} hideWhenNoProject />)
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar controller={controller} filesController={filesController} hideWhenNoProject />,
+    )
 
     expect(markup).toBe("")
   })
@@ -159,14 +163,16 @@ describe("ProjectSidebar", () => {
         ...activeFilesSnapshot,
         listings: {
           "": {
-            entries: [{
-              kind: "file",
-              modifiedAt: 1,
-              name: "stale.md",
-              parentPath: "",
-              path: "stale.md",
-              size: 10,
-            }],
+            entries: [
+              {
+                kind: "file",
+                modifiedAt: 1,
+                name: "stale.md",
+                parentPath: "",
+                path: "stale.md",
+                size: 10,
+              },
+            ],
             path: "",
             projectId: "old-project",
           },
@@ -186,5 +192,37 @@ describe("ProjectSidebar", () => {
 
     expect(markup).toContain('aria-label="Example files"')
     expect(markup).not.toContain("stale.md")
+  })
+
+  test("offers the compact Canvas-over-Project hierarchy without replacing Project ownership", () => {
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar
+        controller={
+          {
+            getSnapshot: () => activeSnapshot,
+            subscribe: () => () => undefined,
+          } as unknown as ProjectController
+        }
+        extension={{
+          content: ({ query }) => <div data-canvas-query={query}>Canvas region</div>,
+          label: "Canvases",
+        }}
+        filesController={
+          {
+            getSnapshot: () => activeFilesSnapshot,
+            subscribe: () => () => undefined,
+          } as unknown as ProjectFilesController
+        }
+        presentation="workspace"
+        searchLabel="Search sidebar"
+      />,
+    )
+
+    expect(markup).toContain('aria-label="Search sidebar"')
+    expect(markup).toContain("Canvas region")
+    expect(markup.indexOf(">Canvas<")).toBeLessThan(markup.indexOf(">Project<"))
+    expect(markup).toContain('aria-label="Resize Canvas and Project sections"')
+    expect(markup).toContain('aria-label="Rename Example"')
+    expect(markup).toContain('data-canvas-query=""')
   })
 })

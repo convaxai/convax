@@ -19,6 +19,30 @@ import type { CanvasEditorHandle } from "./canvas-editor"
 let EditorProbe: ComponentType | undefined
 let feedbackCommits = 0
 let observedEditor: CanvasEditorController | undefined
+let observedReactFlowProps:
+  | {
+      elementsSelectable?: boolean
+      nodesConnectable?: boolean
+      nodesDraggable?: boolean
+      onNodesChange?: (
+        changes: Array<{
+          dimensions?: { height: number; width: number }
+          id: string
+          position?: { x: number; y: number }
+          selected?: boolean
+          type: string
+        }>,
+      ) => void
+      panOnDrag?: boolean | number[]
+      selectionOnDrag?: boolean
+    }
+  | undefined
+const fitView = mock(async () => undefined)
+const getViewport = mock(() => ({ x: 0, y: 0, zoom: 1 }))
+const setViewport = mock(async () => undefined)
+const zoomIn = mock(async () => undefined)
+const zoomOut = mock(async () => undefined)
+const zoomTo = mock(async () => undefined)
 
 function Passthrough(props: { children?: ReactNode }) {
   return <>{props.children}</>
@@ -43,6 +67,41 @@ mock.module("@convax/ui", () => ({
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
   Input: () => <input />,
+  Loading: (props: {
+    className?: string
+    description?: ReactNode
+    label?: ReactNode
+    reducedMotion?: boolean
+  }) => (
+    <div
+      aria-live="polite"
+      className={props.className}
+      data-slot="loading"
+      data-ui-loading-motion={
+        props.reducedMotion === true ? "reduce" : props.reducedMotion === false ? "animate" : undefined
+      }
+      role="status"
+    >
+      <span aria-hidden="true" data-slot="loading-spinner" data-ui-loading-spinner="" />
+      <span data-slot="loading-label">{props.label}</span>
+      {props.description != null ? <span data-slot="loading-description">{props.description}</span> : null}
+    </div>
+  ),
+  LoadingSkeleton: (props: { className?: string }) => (
+    <div aria-hidden="true" className={props.className} data-slot="loading-skeleton" data-ui-loading-skeleton="" />
+  ),
+  LoadingSpinner: (props: { className?: string; reducedMotion?: boolean; size?: string }) => (
+    <span
+      aria-hidden="true"
+      className={props.className}
+      data-slot="loading-spinner"
+      data-ui-loading-motion={
+        props.reducedMotion === true ? "reduce" : props.reducedMotion === false ? "animate" : undefined
+      }
+      data-ui-loading-size={props.size}
+      data-ui-loading-spinner=""
+    />
+  ),
   Select: Passthrough,
   SelectContent: Passthrough,
   SelectItem: Passthrough,
@@ -71,18 +130,48 @@ mock.module("@xyflow/react", () => ({
     </div>
   ),
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
-  ReactFlow: (props: { children?: ReactNode }) => (
-    <>
-      {props.children}
-      {EditorProbe ? <EditorProbe /> : null}
-    </>
-  ),
+  ReactFlow: (props: {
+    children?: ReactNode
+    elementsSelectable?: boolean
+    nodesConnectable?: boolean
+    nodesDraggable?: boolean
+    onNodesChange?: (
+      changes: Array<{
+        dimensions?: { height: number; width: number }
+        id: string
+        position?: { x: number; y: number }
+        selected?: boolean
+        type: string
+      }>,
+    ) => void
+    panOnDrag?: boolean | number[]
+    selectionOnDrag?: boolean
+  }) => {
+    observedReactFlowProps = props
+    return (
+      <>
+        {props.children}
+        {EditorProbe ? <EditorProbe /> : null}
+      </>
+    )
+  },
   ReactFlowProvider: Passthrough,
   SelectionMode: { Partial: "partial" },
   applyEdgeChanges: (_changes: unknown, edges: unknown) => edges,
   applyNodeChanges: (
-    changes: Array<{ id: string; position?: { x: number; y: number }; selected?: boolean; type: string }>,
-    nodes: Array<{ id: string; position: { x: number; y: number }; selected?: boolean }>,
+    changes: Array<{
+      dimensions?: { height: number; width: number }
+      id: string
+      position?: { x: number; y: number }
+      selected?: boolean
+      type: string
+    }>,
+    nodes: Array<{
+      id: string
+      measured?: { height: number; width: number }
+      position: { x: number; y: number }
+      selected?: boolean
+    }>,
   ) =>
     nodes.map((node) => {
       const applicable = changes.filter((change) => change.id === node.id)
@@ -90,9 +179,11 @@ mock.module("@xyflow/react", () => ({
         (current, change) =>
           change.type === "position" && change.position
             ? { ...current, position: change.position }
-            : change.type === "select"
-              ? { ...current, selected: change.selected }
-              : current,
+            : change.type === "dimensions" && change.dimensions
+              ? { ...current, measured: change.dimensions }
+              : change.type === "select"
+                ? { ...current, selected: change.selected }
+                : current,
         node,
       )
     }),
@@ -100,15 +191,15 @@ mock.module("@xyflow/react", () => ({
   useConnection: (selector: (state: { inProgress: boolean }) => unknown) => selector({ inProgress: false }),
   useInternalNode: () => undefined,
   useReactFlow: () => ({
-    fitView: async () => undefined,
+    fitView,
     getNodes: () => [],
-    getViewport: () => ({ x: 0, y: 0, zoom: 1 }),
+    getViewport,
     screenToFlowPosition: (point: { x: number; y: number }) => point,
     setCenter: async () => undefined,
-    setViewport: async () => undefined,
-    zoomIn: async () => undefined,
-    zoomOut: async () => undefined,
-    zoomTo: async () => undefined,
+    setViewport,
+    zoomIn,
+    zoomOut,
+    zoomTo,
   }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
@@ -125,6 +216,8 @@ function installTestWindow() {
     Element: testWindow.Element,
     Event: testWindow.Event,
     HTMLElement: testWindow.HTMLElement,
+    KeyboardEvent: testWindow.KeyboardEvent,
+    MouseEvent: testWindow.MouseEvent,
     Node: testWindow.Node,
     document: testWindow.document,
     window: testWindow,
@@ -237,6 +330,271 @@ test("does not feed a selection-action refresh back into Canvas document updates
     expect(document.querySelector('[data-testid="error"]')).toBeNull()
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("switches Select and Hand modes through canvas shortcuts", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const interactionNode = createTextNode({
+      id: "interaction-node",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "interaction-tools", nodes: [interactionNode] })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+    expect(canvas?.dataset.canvasTool).toBe("select")
+    expect(observedReactFlowProps).toMatchObject({
+      elementsSelectable: true,
+      nodesConnectable: true,
+      nodesDraggable: true,
+      panOnDrag: [1],
+      selectionOnDrag: true,
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([
+        { id: interactionNode.id, position: { x: 16, y: 24 }, type: "position" },
+      ])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
+    })
+    expect(canvas?.dataset.canvasTool).toBe("hand")
+    expect(observedReactFlowProps).toMatchObject({
+      elementsSelectable: false,
+      nodesConnectable: false,
+      nodesDraggable: false,
+      panOnDrag: true,
+      selectionOnDrag: false,
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([
+        { id: interactionNode.id, position: { x: 160, y: 240 }, type: "position" },
+        { dimensions: { height: 300, width: 400 }, id: interactionNode.id, type: "dimensions" },
+        { id: interactionNode.id, selected: true, type: "select" },
+      ])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
+    expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
+
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "v" }))
+    })
+    expect(canvas?.dataset.canvasTool).toBe("select")
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+    })
+    expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
+    expect(observedReactFlowProps).toMatchObject({
+      elementsSelectable: false,
+      nodesConnectable: false,
+      nodesDraggable: false,
+      selectionOnDrag: false,
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([
+        { id: interactionNode.id, position: { x: 320, y: 480 }, type: "position" },
+        { dimensions: { height: 600, width: 800 }, id: interactionNode.id, type: "dimensions" },
+        { id: interactionNode.id, selected: true, type: "select" },
+      ])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
+    expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
+    await act(async () => {
+      window.dispatchEvent(new Event("blur"))
+    })
+    expect(canvas?.classList.contains("is-space-panning")).toBeFalse()
+    expect(observedReactFlowProps).toMatchObject({
+      elementsSelectable: true,
+      nodesConnectable: true,
+      nodesDraggable: true,
+      selectionOnDrag: true,
+    })
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+    })
+    expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
+    Object.defineProperty(document, "hidden", { configurable: true, value: true })
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"))
+    })
+    expect(canvas?.classList.contains("is-space-panning")).toBeFalse()
+
+    const input = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="upload"]')
+    await act(async () => {
+      input?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
+    })
+    expect(canvas?.dataset.canvasTool).toBe("select")
+
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
+    })
+    expect(canvas?.dataset.canvasTool).toBe("hand")
+  } finally {
+    EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("uses zero-duration viewport commands when reduced motion is preferred", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  fitView.mockClear()
+  setViewport.mockClear()
+  zoomIn.mockClear()
+  zoomOut.mockClear()
+
+  try {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({
+        addEventListener: () => undefined,
+        matches: true,
+        media: "(prefers-reduced-motion: reduce)",
+        removeEventListener: () => undefined,
+      }),
+    })
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({
+            id: "reduced-motion",
+            nodes: [
+              createTextNode({
+                id: "motion-node",
+                metadata: {},
+                position: { x: 0, y: 0 },
+                resourceState: { status: "ready" },
+              }),
+            ],
+          })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const zoomInButton = container.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')
+    const zoomOutButton = container.querySelector<HTMLButtonElement>('button[aria-label="Zoom out"]')
+    expect(zoomInButton).not.toBeNull()
+    expect(zoomOutButton).not.toBeNull()
+    await act(async () => {
+      zoomInButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+      zoomOutButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
+    })
+
+    expect(zoomIn).toHaveBeenCalledWith({
+      duration: 0,
+      ease: expect.any(Function),
+      interpolate: "smooth",
+    })
+    expect(zoomOut).toHaveBeenCalledWith({
+      duration: 0,
+      ease: expect.any(Function),
+      interpolate: "smooth",
+    })
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("animates zoom presets around the visible viewport center", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  getViewport.mockClear()
+  setViewport.mockClear()
+  zoomTo.mockClear()
+  getViewport.mockImplementation(() => ({ x: -200, y: 100, zoom: 1 }))
+
+  try {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: () => ({
+        addEventListener: () => undefined,
+        matches: false,
+        media: "(prefers-reduced-motion: reduce)",
+        removeEventListener: () => undefined,
+      }),
+    })
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({
+            id: "centered-zoom",
+            nodes: [
+              createTextNode({
+                id: "zoom-node",
+                metadata: {},
+                position: { x: 0, y: 0 },
+                resourceState: { status: "ready" },
+              }),
+            ],
+          })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+    expect(canvas).not.toBeNull()
+    Object.defineProperty(canvas!, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ height: 600, width: 800 }),
+    })
+    const zoomTrigger = container.querySelector<HTMLButtonElement>(".convax-zoom-trigger")
+    await act(async () => zoomTrigger?.click())
+    const zoomPreset = [...container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')].find(
+      (button) => button.textContent?.trim() === "200%",
+    )
+    expect(zoomPreset).not.toBeUndefined()
+    await act(async () => zoomPreset?.click())
+
+    expect(setViewport).toHaveBeenCalledWith(
+      { x: -800, y: -100, zoom: 2 },
+      {
+        duration: 300,
+        ease: expect.any(Function),
+        interpolate: "smooth",
+      },
+    )
+    expect(zoomTo).not.toHaveBeenCalled()
+  } finally {
+    getViewport.mockImplementation(() => ({ x: 0, y: 0, zoom: 1 }))
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -584,6 +942,11 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
 
     expect(container.querySelector('[aria-label="Search nodes"]')).toBeNull()
     expect(container.textContent).not.toContain("No supported context or reference nodes selected.")
+    fitView.mockClear()
+    setViewport.mockClear()
+    zoomIn.mockClear()
+    zoomOut.mockClear()
+    zoomTo.mockClear()
 
     await act(async () => editorRef.current?.openSearch())
     expect(container.querySelector('[aria-label="Search nodes"]')).not.toBeNull()
@@ -592,7 +955,32 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
       editorRef.current?.openGenerate()
       await Promise.resolve()
     })
+    const canvasRoot = container.querySelector<HTMLElement>(".convax-canvas")
+    const generationOverlay = container.querySelector<HTMLElement>('[data-canvas-composer-overlay="generation"]')
+    const generationSurface = generationOverlay?.closest(".convax-canvas-composer-overlay")
+    expect(generationOverlay).not.toBeNull()
+    expect(generationSurface?.parentElement).toBe(canvasRoot)
     expect(container.textContent).toContain("No supported context or reference nodes selected.")
+    expect(fitView).not.toHaveBeenCalled()
+    expect(setViewport).not.toHaveBeenCalled()
+    expect(zoomIn).not.toHaveBeenCalled()
+    expect(zoomOut).not.toHaveBeenCalled()
+    expect(zoomTo).not.toHaveBeenCalled()
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Close generation composer"]')?.click()
+      await Promise.resolve()
+    })
+    expect(
+      container
+        .querySelector('[data-canvas-composer-overlay="generation"]')
+        ?.closest('[data-canvas-presence="exit"]'),
+    ).not.toBeNull()
+    expect(document.activeElement).toBe(canvasRoot)
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 220))
+    })
+    expect(container.querySelector('[data-canvas-composer-overlay="generation"]')).toBeNull()
     expect(errors).toEqual([])
   } finally {
     if (root) await act(async () => root?.unmount())
@@ -679,6 +1067,106 @@ test("publishes scope-safe selection and requests the read-only Inspector withou
   } finally {
     EditorProbe = undefined
     observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("does not replay the initial fit after the first mutation on an initially empty Canvas", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  fitView.mockClear()
+  setViewport.mockClear()
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "empty-then-mutate" })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+    fitView.mockClear()
+    setViewport.mockClear()
+
+    await act(async () => {
+      getObservedEditor()?.commit((document) => ({
+        ...document,
+        nodes: [
+          createTextNode({
+            id: "first-note",
+            metadata: {},
+            position: { x: 40, y: 60 },
+            resourceState: { status: "ready" },
+          }),
+        ],
+        revision: document.revision + 1,
+      }))
+    })
+
+    expect(getObservedEditor()?.document.nodes.map((node) => node.id)).toEqual(["first-note"])
+    expect(fitView).not.toHaveBeenCalled()
+    expect(setViewport).not.toHaveBeenCalled()
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("dismisses the zoom menu with Escape and restores trigger focus", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({
+            id: "zoom-menu-escape",
+            nodes: [
+              createTextNode({
+                id: "visible",
+                metadata: {},
+                position: { x: 0, y: 0 },
+                resourceState: { status: "ready" },
+              }),
+            ],
+          })}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>(".convax-zoom-trigger")
+    expect(trigger).not.toBeNull()
+    await act(async () => {
+      trigger?.focus()
+      trigger?.click()
+    })
+    expect(container.querySelector(".convax-zoom-menu[role='menu']")).not.toBeNull()
+
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+    })
+
+    expect(container.querySelector(".convax-zoom-menu[role='menu']")).toBeNull()
+    expect(document.activeElement?.classList.contains("convax-zoom-trigger") ?? false).toBeTrue()
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

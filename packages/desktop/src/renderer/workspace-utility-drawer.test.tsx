@@ -3,11 +3,14 @@ import { Window } from "happy-dom"
 import { act, useState, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
-import { WorkspaceUtilityDrawer, type WorkspaceUtilityActiveMode } from "./workspace-utility-drawer"
+import {
+  WorkspaceUtilityCollapseButton,
+  WorkspaceUtilityDrawer,
+  type WorkspaceUtilityActiveMode,
+} from "./workspace-utility-drawer"
 
 const modes = [
   { label: "Agent", value: "agent" },
-  { label: "Generate", value: "generate" },
   { label: "Inspector", value: "inspector" },
 ] as const
 
@@ -46,7 +49,7 @@ function installTestWindow() {
 }
 
 describe("WorkspaceUtilityDrawer", () => {
-  test("renders one active utility while retaining the Agent slot and caller-owned width", () => {
+  test("renders Inspector while retaining the Agent slot and caller-owned width", () => {
     const markup = renderToStaticMarkup(
       <WorkspaceUtilityDrawer
         agent={({ modeNavigation }) => (
@@ -56,9 +59,8 @@ describe("WorkspaceUtilityDrawer", () => {
           </div>
         )}
         closeLabel="Close utilities"
-        generate={<div>Generate composer</div>}
         inspector={<div>Inspector details</div>}
-        mode="generate"
+        mode="inspector"
         modes={modes}
         onClose={() => undefined}
         onModeChange={() => undefined}
@@ -66,17 +68,42 @@ describe("WorkspaceUtilityDrawer", () => {
       />,
     )
 
-    expect(markup).toContain('data-workspace-utility-mode="generate"')
+    expect(markup).toContain('data-workspace-utility-mode="inspector"')
     expect(markup).toContain("max-width:620px")
     expect(markup).toContain("width:380px")
     expect(markup).toContain('data-workspace-utility-panel="agent"')
     expect(markup).toContain("Agent session")
-    expect(markup).toContain('data-workspace-utility-panel="generate"')
-    expect(markup).toContain("Generate composer")
-    expect(markup).not.toContain("Inspector details")
+    expect(markup).toContain('data-workspace-utility-panel="inspector"')
+    expect(markup).toContain("Inspector details")
+    expect(markup).not.toContain("Generate")
     expect(markup.match(/role="tabpanel"/g)).toHaveLength(2)
     expect(markup.match(/role="tablist"/g)).toHaveLength(1)
     expect(markup).toContain('aria-label="Close utilities"')
+  })
+
+  test("keeps the collapse control inside the active Inspector content header", () => {
+    const markup = renderToStaticMarkup(
+      <WorkspaceUtilityDrawer
+        agent={() => <div>Agent</div>}
+        closeLabel="Collapse utility sidebar"
+        inspector={<div>Inspector details</div>}
+        mode="inspector"
+        modes={modes}
+        onClose={() => undefined}
+        onModeChange={() => undefined}
+      />,
+    )
+
+    expect(markup).toContain('data-workspace-utility-close=""')
+    expect(markup).toContain('aria-label="Collapse utility sidebar"')
+    expect(markup).toContain('title="Collapse utility sidebar"')
+    expect(markup).toContain("size-6")
+    expect(markup).toContain("lucide-panel-right-close")
+    expect(markup).not.toContain("lucide-x")
+    expect(markup).toContain('data-workspace-utility-content-header=""')
+    expect(markup.indexOf("data-workspace-utility-content-header")).toBeGreaterThan(
+      markup.indexOf('data-workspace-utility-panel="inspector"'),
+    )
   })
 
   test("keeps Agent component state mounted across mode switches and close/reopen", async () => {
@@ -119,7 +146,6 @@ describe("WorkspaceUtilityDrawer", () => {
               Open Agent
             </button>
           }
-          generate={<div>Generate composer</div>}
           inspector={<div>Inspector details</div>}
           mode={mode}
           modes={modes}
@@ -136,22 +162,25 @@ describe("WorkspaceUtilityDrawer", () => {
       await act(async () => root?.render(<Harness />))
 
       await act(async () =>
-        [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-          (button) => button.textContent === "Change draft",
-        )?.click(),
+        [...container.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Change draft")
+          ?.click(),
       )
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
 
-      const generateTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
-        (tab) => tab.textContent === "Generate",
+      const inspectorTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+        (tab) => tab.textContent === "Inspector",
       )
       await act(async () => {
-        generateTab?.focus()
-        generateTab?.click()
+        inspectorTab?.focus()
+        inspectorTab?.click()
       })
-      expect(document.activeElement).toBe(generateTab ?? null)
+      const activeInspectorTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+        (tab) => tab.textContent === "Inspector",
+      )
+      expect(document.activeElement).toBe(activeInspectorTab ?? null)
       expect(container.querySelector('[data-workspace-utility-panel="agent"]')?.hasAttribute("hidden")).toBeTrue()
-      expect(container.querySelector('[data-workspace-utility-panel="generate"]')?.hasAttribute("hidden")).toBeFalse()
+      expect(container.querySelector('[data-workspace-utility-panel="inspector"]')).not.toBeNull()
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
 
       const agentTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
@@ -161,16 +190,19 @@ describe("WorkspaceUtilityDrawer", () => {
         agentTab?.focus()
         agentTab?.click()
       })
-      expect(document.activeElement).toBe(agentTab ?? null)
+      const activeAgentTab = [...container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+        (tab) => tab.textContent === "Agent",
+      )
+      expect(document.activeElement).toBe(activeAgentTab ?? null)
       expect(container.querySelector('[data-workspace-utility-panel="agent"]')?.hasAttribute("hidden")).toBeFalse()
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
 
-      await act(async () =>
-        container.querySelector<HTMLButtonElement>('button[aria-label="Close utilities"]')?.click(),
-      )
+      await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Close utilities"]')?.click())
       expect(container.querySelector("[data-workspace-utility-drawer]")?.hasAttribute("hidden")).toBeTrue()
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
       expect(container.textContent).toContain("Open Agent")
+      expect(container.querySelector("[data-workspace-utility-entry-state]")?.getAttribute("aria-hidden")).toBeNull()
+      expect(container.querySelector("[data-workspace-utility-entry-state]")?.hasAttribute("inert")).toBeFalse()
 
       await act(async () => {
         const openButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
@@ -180,6 +212,8 @@ describe("WorkspaceUtilityDrawer", () => {
         openButton?.click()
       })
       expect(container.querySelector("[data-agent-state]")?.getAttribute("data-agent-state")).toBe("1")
+      expect(container.querySelector("[data-workspace-utility-entry-state]")?.getAttribute("aria-hidden")).toBe("true")
+      expect(container.querySelector("[data-workspace-utility-entry-state]")?.hasAttribute("inert")).toBeTrue()
 
       await act(async () => {
         document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
@@ -210,7 +244,18 @@ describe("WorkspaceUtilityDrawer", () => {
     expect(markup).toContain('role="status"')
   })
 
-  test("uses dialog semantics and a dismissing backdrop for overlay layouts", () => {
+  test("keeps floating overlay layouts non-modal while Sheet layouts remain modal", () => {
+    const overlayMarkup = renderToStaticMarkup(
+      <WorkspaceUtilityDrawer
+        agent={() => <div>Agent</div>}
+        closeLabel="Close utilities"
+        mode="agent"
+        modes={modes}
+        onClose={() => undefined}
+        onModeChange={() => undefined}
+        presentation="overlay"
+      />,
+    )
     const markup = renderToStaticMarkup(
       <WorkspaceUtilityDrawer
         agent={() => <div>Agent</div>}
@@ -220,11 +265,225 @@ describe("WorkspaceUtilityDrawer", () => {
         modes={modes}
         onClose={() => undefined}
         onModeChange={() => undefined}
+        presentation="sheet"
       />,
     )
 
+    expect(overlayMarkup).not.toContain('role="dialog"')
+    expect(overlayMarkup).not.toContain('aria-modal="true"')
+    expect(overlayMarkup).not.toContain("workspace-utility-backdrop")
     expect(markup).toContain('role="dialog"')
     expect(markup).toContain('aria-modal="true"')
     expect(markup).toContain("bg-backdrop")
+    expect(markup).toContain("workspace-utility-drawer--sheet")
+    expect(markup).toContain('data-workspace-utility-presentation="sheet"')
+  })
+
+  test("keeps the compact entry mounted for coordinated motion while removing it from interaction", () => {
+    const closedMarkup = renderToStaticMarkup(
+      <WorkspaceUtilityDrawer
+        agent={() => <div>Agent</div>}
+        closeLabel="Close utilities"
+        collapsedEntry={<button type="button">Open Agent</button>}
+        mode="closed"
+        modes={modes}
+        onClose={() => undefined}
+        onModeChange={() => undefined}
+        presentation="overlay"
+      />,
+    )
+    const openMarkup = renderToStaticMarkup(
+      <WorkspaceUtilityDrawer
+        agent={() => <div>Agent</div>}
+        closeLabel="Close utilities"
+        collapsedEntry={<button type="button">Open Agent</button>}
+        mode="agent"
+        modes={modes}
+        onClose={() => undefined}
+        onModeChange={() => undefined}
+        presentation="overlay"
+      />,
+    )
+
+    expect(closedMarkup).toContain(
+      '<div class="workspace-utility-entry" data-workspace-utility-entry-state="visible">',
+    )
+    expect(openMarkup).toContain(
+      '<div aria-hidden="true" class="workspace-utility-entry" data-workspace-utility-entry-state="hidden" inert="">',
+    )
+  })
+
+  test("coordinates utility drawer and compact-entry motion with a reduced-motion terminal state", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const entryRule =
+      styles.match(/\.workspace-utility-entry \{[\s\S]*?\n\}/)?.[0] ?? ""
+    const hiddenEntryRule =
+      styles.match(
+        /\.workspace-utility-entry\[data-workspace-utility-entry-state="hidden"\] \{[\s\S]*?\n\}/,
+      )?.[0] ?? ""
+
+    expect(entryRule).toContain("position: absolute")
+    expect(entryRule).toContain("inset: 0")
+    expect(entryRule).toContain("pointer-events: none")
+    expect(entryRule).toContain("opacity 300ms cubic-bezier(0.78, 0, 0.22, 1)")
+    expect(entryRule).toContain("translate 300ms cubic-bezier(0.78, 0, 0.22, 1)")
+    expect(hiddenEntryRule).toContain("translate: 16px 0")
+    expect(hiddenEntryRule).toContain("visibility 0s linear 300ms")
+    expect(styles).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.workspace-utility-entry[\s\S]*transition-delay: 0ms;[\s\S]*transition-duration: 0ms;/,
+    )
+  })
+
+  test("keeps the Sheet focus trapped, dismisses on Escape, and returns focus", async () => {
+    const restoreWindow = installTestWindow()
+    let root: Root | undefined
+
+    function Harness() {
+      const [open, setOpen] = useState(false)
+      return (
+        <>
+          <button data-utility-opener onClick={() => setOpen(true)} type="button">
+            Open utilities
+          </button>
+          <WorkspaceUtilityDrawer
+            agent={({ closeLabel, onClose }) => (
+              <>
+                <button type="button">Agent action</button>
+                <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
+              </>
+            )}
+            closeLabel="Close utilities"
+            modal
+            mode={open ? "agent" : "closed"}
+            modes={modes}
+            onClose={() => setOpen(false)}
+            onModeChange={() => undefined}
+            presentation="sheet"
+          />
+        </>
+      )
+    }
+
+    try {
+      const container = document.createElement("div")
+      document.body.append(container)
+      root = createRoot(container)
+      await act(async () => root?.render(<Harness />))
+
+      const opener = container.querySelector<HTMLButtonElement>("[data-utility-opener]")!
+      await act(async () => {
+        opener.focus()
+        opener.click()
+        await Promise.resolve()
+      })
+
+      const drawer = container.querySelector<HTMLElement>("[data-workspace-utility-drawer]")!
+      expect(drawer.contains(document.activeElement)).toBeTrue()
+      expect(document.body.style.overflow).toBe("hidden")
+
+      await act(async () => {
+        document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+        await Promise.resolve()
+      })
+
+      expect(drawer.getAttribute("data-workspace-utility-state")).toBe("closed")
+      expect(drawer.getAttribute("aria-hidden")).toBe("true")
+      expect(drawer.querySelector('[data-workspace-utility-panel="agent"]')?.hasAttribute("hidden")).toBeFalse()
+      expect(document.activeElement).toBe(opener)
+      expect(document.body.style.overflow).toBe("")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      await restoreWindow()
+    }
+  })
+
+  for (const [initialPresentation, nextPresentation] of [
+    ["dock", "overlay"],
+    ["overlay", "dock"],
+  ] as const) {
+    test(`restores the external opener after ${initialPresentation} -> ${nextPresentation} -> close`, async () => {
+      const restoreWindow = installTestWindow()
+      let root: Root | undefined
+      let changePresentation: (() => void) | undefined
+
+      function Harness() {
+        const [open, setOpen] = useState(false)
+        const [presentation, setPresentation] = useState(initialPresentation)
+        changePresentation = () => setPresentation(nextPresentation)
+        return (
+          <>
+            <button data-utility-opener onClick={() => setOpen(true)} type="button">
+              Open utilities
+            </button>
+            <WorkspaceUtilityDrawer
+              agent={({ closeLabel, onClose }) => (
+                <>
+                  <button type="button">Agent action</button>
+                  <WorkspaceUtilityCollapseButton label={closeLabel} onClose={onClose} />
+                </>
+              )}
+              closeLabel="Close utilities"
+              modal={presentation === "overlay"}
+              mode={open ? "agent" : "closed"}
+              modes={modes}
+              onClose={() => setOpen(false)}
+              onModeChange={() => undefined}
+              presentation={presentation}
+            />
+          </>
+        )
+      }
+
+      try {
+        const container = document.createElement("div")
+        document.body.append(container)
+        root = createRoot(container)
+        await act(async () => root?.render(<Harness />))
+
+        const opener = container.querySelector<HTMLButtonElement>("[data-utility-opener]")!
+        await act(async () => {
+          opener.focus()
+          opener.click()
+          await Promise.resolve()
+        })
+
+        const drawer = container.querySelector<HTMLElement>("[data-workspace-utility-drawer]")!
+        expect(drawer.contains(document.activeElement)).toBeTrue()
+
+        await act(async () => {
+          changePresentation?.()
+          await Promise.resolve()
+        })
+        expect(drawer.getAttribute("data-workspace-utility-presentation")).toBe(nextPresentation)
+
+        await act(async () => {
+          container.querySelector<HTMLButtonElement>('button[aria-label="Close utilities"]')?.click()
+          await Promise.resolve()
+        })
+
+        expect(drawer.getAttribute("data-workspace-utility-state")).toBe("closed")
+        expect(drawer.getAttribute("aria-hidden")).toBe("true")
+        expect(drawer.contains(document.activeElement)).toBeFalse()
+        expect(document.activeElement).toBe(opener)
+      } finally {
+        if (root) await act(async () => root?.unmount())
+        await restoreWindow()
+      }
+    })
+  }
+
+  test("defines floating open and close motion, Sheet motion, and reduced-motion overrides", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+
+    expect(styles).toContain("border-radius: 18px")
+    expect(styles).toContain("var(--ui-surface-panel) 80%")
+    expect(styles).toContain("blur(40px) saturate(150%)")
+    expect(styles).toContain("0 8px 40px -12px rgb(0 0 0 / 50%)")
+    expect(styles).toContain("300ms cubic-bezier(0.78, 0, 0.22, 1)")
+    expect(styles).toContain("@media (prefers-reduced-motion: reduce)")
+    expect(styles).toContain('[data-workspace-utility-state="closed"]')
+    expect(styles).toContain(".workspace-utility-drawer--sheet")
+    expect(styles).toContain("visibility 0s linear 300ms")
+    expect(styles).toMatch(/@media \(prefers-reduced-motion: reduce\)[\s\S]*transition-duration: 0ms/)
   })
 })

@@ -8,6 +8,8 @@ import {
   Disclosure,
   DisclosureContent,
   DisclosureTrigger,
+  Loading,
+  LoadingSpinner,
 } from "@convax/ui"
 import {
   ArrowRight,
@@ -15,7 +17,6 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
-  LoaderCircle,
   Pencil,
   Trash2,
   X,
@@ -33,6 +34,7 @@ export interface ProjectHomeProps {
   controller: ProjectController
   locale?: "en" | "zh-CN"
   onEnterProject: (projectId: string) => Promise<boolean | void>
+  reducedMotion?: boolean
 }
 
 type PendingAction =
@@ -93,7 +95,12 @@ const copy = {
   },
 } as const
 
-export function ProjectHome({ controller, locale = "en", onEnterProject }: ProjectHomeProps) {
+export function ProjectHome({
+  controller,
+  locale = "en",
+  onEnterProject,
+  reducedMotion,
+}: ProjectHomeProps) {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const model = buildProjectHomeModel(snapshot)
   const labels = copy[locale]
@@ -178,10 +185,7 @@ export function ProjectHome({ controller, locale = "en", onEnterProject }: Proje
   if (!model.initialized) {
     return (
       <main className="grid size-full place-items-center bg-surface-canvas" data-project-home="true">
-        <div className="flex items-center gap-2 text-sm text-text-tertiary" role="status">
-          <LoaderCircle className="size-4 animate-spin" />
-          {labels.loading}
-        </div>
+        <Loading label={labels.loading} reducedMotion={reducedMotion} tone="muted" />
       </main>
     )
   }
@@ -238,7 +242,7 @@ export function ProjectHome({ controller, locale = "en", onEnterProject }: Proje
             onClick={() => void openProject()}
             variant="outline"
           >
-            {pending === "open" ? <LoaderCircle className="animate-spin" /> : <FolderOpen />}
+            {pending === "open" ? <LoadingSpinner size="sm" /> : <FolderOpen />}
             {labels.open}
           </Button>
         </div>
@@ -350,7 +354,7 @@ export function ProjectHome({ controller, locale = "en", onEnterProject }: Proje
                   {labels.cancel}
                 </Button>
                 <Button disabled={!projectName.trim() || pending === "create"} size="sm" type="submit">
-                  {pending === "create" ? <LoaderCircle className="animate-spin" /> : null}
+                  {pending === "create" ? <LoadingSpinner size="sm" /> : null}
                   {labels.create}
                 </Button>
               </div>
@@ -385,7 +389,7 @@ function ContinueProject(props: {
         </p>
       </div>
       <Button className="active:scale-95" disabled={props.disabled} onClick={props.onEnter}>
-        {props.busy ? <LoaderCircle className="animate-spin" /> : <ArrowRight />}
+        {props.busy ? <LoadingSpinner size="sm" /> : <ArrowRight />}
         {props.labels.continue}
       </Button>
       </div>
@@ -440,7 +444,7 @@ function ProjectRow(props: {
             <span className="hidden shrink-0 text-xs tabular-nums text-text-tertiary md:block">
               {formatLastOpened(props.project.lastOpenedAt, props.project.hasValidRecency, props.locale)}
             </span>
-            {props.busy ? <LoaderCircle className="size-3.5 shrink-0 animate-spin" /> : null}
+            {props.busy ? <LoadingSpinner className="shrink-0" size="sm" /> : null}
           </button>
           <DisclosureTrigger
             aria-label={`${props.labels.manage}: ${props.project.name}`}

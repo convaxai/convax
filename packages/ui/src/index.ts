@@ -30,6 +30,17 @@ export {
   type DisclosureProps,
 } from "./components/disclosure"
 export { Input } from "./components/input"
+export {
+  Loading,
+  LoadingSkeleton,
+  LoadingSpinner,
+  type LoadingLayout,
+  type LoadingProps,
+  type LoadingSize,
+  type LoadingSkeletonProps,
+  type LoadingSpinnerProps,
+  type LoadingTone,
+} from "./components/loading"
 export { SegmentedTabs, type SegmentedTabItem, type SegmentedTabsProps } from "./components/segmented-tabs"
 export { SettingsRow, type SettingsRowProps } from "./components/settings-row"
 export {

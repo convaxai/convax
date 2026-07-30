@@ -23,11 +23,28 @@ describe("Agent tool presentation", () => {
   })
 
   test("presents OpenCode errors as failures", () => {
-    expect(getAgentToolPresentation(toolPart("example", {
-      error: "Execution failed",
+    expect(
+      getAgentToolPresentation(
+        toolPart("example", {
+          error: "Execution failed",
+          input: {},
+          status: "error",
+        }),
+      ),
+    ).toEqual({ detail: "Execution failed", outcome: "failure" })
+  })
+
+  test("presents an interrupted OpenCode error as cancelled without parsing its text", () => {
+    const part = toolPart("example", {
+      error: "Any host-safe terminal detail",
       input: {},
       status: "error",
-    }))).toEqual({ detail: "Execution failed", outcome: "failure" })
+    })
+
+    expect(getAgentToolPresentation(part, { interrupted: true })).toEqual({
+      detail: "Any host-safe terminal detail",
+      outcome: "cancelled",
+    })
   })
 
   test("presents OpenCode's completed invalid tool as a failure", () => {

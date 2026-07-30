@@ -517,7 +517,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
 
   return (
     <form
-      className="flex min-h-[196px] flex-col px-3 pb-3 pt-1"
+      className="flex min-h-[152px] flex-col px-3 pb-3 pt-1"
       data-canvas-card-generation-panel
       onSubmit={runGeneration}
     >
@@ -539,7 +539,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
         ) : null}
         <textarea
           aria-label="Generation prompt"
-          className="min-h-28 max-h-48 flex-1 resize-none bg-transparent px-1 pb-2 pt-2 text-[15px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
+          className="min-h-16 max-h-32 flex-1 resize-none bg-transparent px-1 pb-2 pt-2 text-[15px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
           data-canvas-shortcuts="ignore"
           disabled={generating}
           onChange={(event) => setPrompt(event.currentTarget.value)}

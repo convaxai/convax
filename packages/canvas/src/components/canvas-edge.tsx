@@ -8,10 +8,9 @@ import {
   type EdgeProps,
 } from "@xyflow/react"
 import type { CSSProperties } from "react"
+import { CANVAS_MOTION_DURATION } from "../motion"
 import type { CanvasEdge, CanvasNode, CanvasSelection } from "../types"
 import { resolveCanvasCardHandlePoint, type CanvasNodeBounds } from "./card-connection-geometry"
-
-const METEOR_DURATION_SECONDS = 1
 
 export function CanvasEdgeView(props: EdgeProps<CanvasEdge>) {
   const sourceNode = useInternalNode<CanvasNode>(props.source)
@@ -56,7 +55,8 @@ export function CanvasEdgeView(props: EdgeProps<CanvasEdge>) {
   })
   const label = typeof props.data?.label === "string" ? props.data.label : undefined
   const phase = getAnimationPhase(props.id)
-  const motionStyle = { animationDelay: `${phase}s` } satisfies CSSProperties
+  const motionStyle = { animationDelay: `${phase}ms` } satisfies CSSProperties
+  const animated = shouldAnimateCanvasEdge(props)
 
   return (
     <>
@@ -69,7 +69,7 @@ export function CanvasEdgeView(props: EdgeProps<CanvasEdge>) {
         path={path}
         style={props.style}
       />
-      {props.animated === false ? null : (
+      {!animated ? null : (
         <g aria-hidden="true" className="convax-edge__motion">
           <path className="convax-edge__meteor-glow" d={path} style={motionStyle} />
           <path className="convax-edge__meteor-tail" d={path} style={motionStyle} />
@@ -113,7 +113,7 @@ export function CanvasConnectionLine(props: ConnectionLineComponentProps<CanvasN
     targetY: props.toY,
     targetPosition: props.toPosition,
   })
-  const status = props.connectionStatus ?? "pending"
+  const status = resolveCanvasConnectionStatus(props.connectionStatus)
 
   return (
     <g className={`convax-connection convax-connection--${status}`}>
@@ -124,10 +124,15 @@ export function CanvasConnectionLine(props: ConnectionLineComponentProps<CanvasN
   )
 }
 
+export function resolveCanvasConnectionStatus(
+  status: ConnectionLineComponentProps<CanvasNode>["connectionStatus"] | undefined,
+) {
+  return status ?? "pending"
+}
+
 function getAnimationPhase(id: string) {
-  return (
-    (-([...id].reduce((value, character) => value + character.charCodeAt(0), 0) % 1000) / 1000) *
-    METEOR_DURATION_SECONDS
+  return -(
+    Array.from(id).reduce((value, character) => value + character.charCodeAt(0), 0) % CANVAS_MOTION_DURATION.edgeLoop
   )
 }
 
@@ -140,10 +145,14 @@ interface CanvasEdgeGeometry {
   targetPosition: Position
 }
 
-export function shouldAnimateCanvasEdge(edge: CanvasEdge, selection: CanvasSelection) {
-  if (edge.animated === false || selection.nodeIds.size !== 1 || selection.edgeIds.has(edge.id)) return false
-  const [activeNodeId] = selection.nodeIds
-  return activeNodeId === edge.source || activeNodeId === edge.target
+export function shouldAnimateCanvasEdge(
+  edge: Pick<CanvasEdge, "animated" | "id" | "source" | "target">,
+  selection?: CanvasSelection,
+) {
+  if (edge.animated !== undefined) return edge.animated
+  if (!selection || selection.nodeIds.size !== 1 || selection.edgeIds.has(edge.id)) return false
+  const [selectedNodeId] = selection.nodeIds
+  return selectedNodeId === edge.source || selectedNodeId === edge.target
 }
 
 export function resolveCanvasEdgeGeometry(input: {

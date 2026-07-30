@@ -30,10 +30,72 @@ export interface AgentConversationTurn {
   /** Render independently from the activity disclosure so failures stay visible. */
   errors: AgentConversationError[]
   id: string
-  /** The persisted turn ended without a completed assistant delivery. */
+  /** The latest assistant has no completed marker; caller busy state distinguishes streaming from interruption. */
   interrupted: boolean
   tools: AgentConversationToolSummary
   user?: AgentConversationMessageSlice
+}
+
+export interface AgentConversationAnnouncementState {
+  busy: boolean
+  completed: boolean
+  messageId?: string
+  text: string
+}
+
+/** Returns only the assistant-authored text that is safe to place on the clipboard. */
+export function agentConversationCopyText(slice: AgentConversationMessageSlice) {
+  return slice.parts
+    .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : []))
+    .join("\n\n")
+    .trim()
+}
+
+export function agentConversationAnnouncementState(
+  slice: AgentConversationMessageSlice | undefined,
+  busy: boolean,
+): AgentConversationAnnouncementState {
+  return {
+    busy,
+    completed: slice?.message.completedAt !== undefined,
+    messageId: slice?.message.id,
+    text: slice ? agentConversationCopyText(slice) : "",
+  }
+}
+
+/**
+ * Produces short live-region updates instead of repeatedly announcing the
+ * complete streaming response. A completed conversation loaded from history
+ * stays quiet because it has no preceding in-view transition.
+ */
+export function resolveAgentConversationAnnouncement(
+  previous: AgentConversationAnnouncementState | undefined,
+  next: AgentConversationAnnouncementState,
+) {
+  if (!previous) {
+    if (!next.busy) return undefined
+    return next.text ? `Agent response started. ${next.text}` : "Agent response requested."
+  }
+
+  const newMessage = Boolean(next.messageId && next.messageId !== previous.messageId)
+  const appendedText =
+    next.text && (newMessage || !previous.text)
+      ? next.text
+      : next.text.startsWith(previous.text)
+        ? next.text.slice(previous.text.length).trim()
+        : undefined
+
+  if (next.completed && (!previous.completed || newMessage)) {
+    return appendedText ? `Agent response complete. ${appendedText}` : "Agent response complete."
+  }
+  if (next.busy && next.text) {
+    if (newMessage || !previous.messageId) return `Agent response started. ${next.text}`
+    if (appendedText) return `Agent response continued. ${appendedText}`
+    if (next.text !== previous.text) return "Agent response updated."
+  }
+  if (previous.busy && !next.busy) return "Agent response ended."
+  if (!previous.busy && next.busy && !next.text) return "Agent response requested."
+  return undefined
 }
 
 /** Uses the structured turn projection; never reparses tool output or display text. */
@@ -148,9 +210,7 @@ function presentTurn(user: AgentMessage | undefined, assistants: AgentMessage[])
     durationMs,
     errors: assistants.flatMap((message) => (message.error ? [{ message, text: message.error }] : [])),
     id: firstMessage.id,
-    interrupted: Boolean(
-      assistants.at(-1) && assistants.at(-1)?.completedAt === undefined && !delivery && activity.length,
-    ),
+    interrupted: Boolean(assistants.at(-1) && assistants.at(-1)?.completedAt === undefined),
     tools: summarizeTools(activity),
     user: user && userParts.length > 0 ? { message: user, parts: userParts } : undefined,
   }

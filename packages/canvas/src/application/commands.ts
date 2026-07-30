@@ -399,7 +399,8 @@ export function findOpenCanvasPoint(
   document: CanvasDocument,
   preferred: CanvasPoint,
   size: CanvasSize = { height: 200, width: 320 },
-) {
+  bounds?: { bottom: number; left: number; right: number; top: number },
+): CanvasPoint {
   requireFinitePoint(preferred, "Placement anchor")
   const gap = 24
   const occupied = document.nodes
@@ -409,6 +410,7 @@ export function findOpenCanvasPoint(
         Math.hypot(left.position.x - preferred.x, left.position.y - preferred.y) -
         Math.hypot(right.position.x - preferred.x, right.position.y - preferred.y),
     )
+  const boundedCandidates = bounds ? createBoundedCanvasPlacementCandidates(bounds, preferred, size, gap) : []
   const candidates = [
     preferred,
     ...occupied.flatMap((node) => {
@@ -420,25 +422,77 @@ export function findOpenCanvasPoint(
         { x: preferred.x, y: node.position.y - size.height - gap },
       ]
     }),
+    ...boundedCandidates,
   ]
     .filter((candidate) => Number.isFinite(candidate.x) && Number.isFinite(candidate.y))
+    .filter((candidate) => !bounds || canvasPlacementFitsBounds(candidate, size, bounds))
     .filter(
       (candidate, index, all) => all.findIndex((other) => other.x === candidate.x && other.y === candidate.y) === index,
     )
+  const open = candidates.find(
+    (candidate) =>
+      !occupied.some((node) => {
+        if (node.parentId) return false
+        const nodeSize = getCanvasNodeSize(node)
+        return (
+          candidate.x < node.position.x + nodeSize.width + gap &&
+          candidate.x + size.width + gap > node.position.x &&
+          candidate.y < node.position.y + nodeSize.height + gap &&
+          candidate.y + size.height + gap > node.position.y
+        )
+      }),
+  )
+  if (open) return open
+  return bounds ? findOpenCanvasPoint(document, preferred, size) : preferred
+}
+
+function createBoundedCanvasPlacementCandidates(
+  bounds: { bottom: number; left: number; right: number; top: number },
+  preferred: CanvasPoint,
+  size: CanvasSize,
+  gap: number,
+) {
+  if (
+    ![bounds.bottom, bounds.left, bounds.right, bounds.top, size.height, size.width].every(Number.isFinite) ||
+    size.width <= 0 ||
+    size.height <= 0 ||
+    bounds.right - bounds.left < size.width ||
+    bounds.bottom - bounds.top < size.height
+  ) {
+    return []
+  }
+  const maxX = bounds.right - size.width
+  const maxY = bounds.bottom - size.height
+  const xs = canvasPlacementAxisCandidates(bounds.left, maxX, size.width + gap)
+  const ys = canvasPlacementAxisCandidates(bounds.top, maxY, size.height + gap)
+  return xs
+    .flatMap((x) => ys.map((y) => ({ x, y })))
+    .sort(
+      (left, right) =>
+        Math.hypot(left.x - preferred.x, left.y - preferred.y) -
+          Math.hypot(right.x - preferred.x, right.y - preferred.y) ||
+        left.y - right.y ||
+        left.x - right.x,
+    )
+}
+
+function canvasPlacementAxisCandidates(start: number, end: number, step: number) {
+  const values: number[] = []
+  for (let value = start; value <= end; value += step) values.push(value)
+  if (values.at(-1) !== end) values.push(end)
+  return values
+}
+
+function canvasPlacementFitsBounds(
+  point: CanvasPoint,
+  size: CanvasSize,
+  bounds: { bottom: number; left: number; right: number; top: number },
+) {
   return (
-    candidates.find(
-      (candidate) =>
-        !occupied.some((node) => {
-          if (node.parentId) return false
-          const nodeSize = getCanvasNodeSize(node)
-          return (
-            candidate.x < node.position.x + nodeSize.width + gap &&
-            candidate.x + size.width + gap > node.position.x &&
-            candidate.y < node.position.y + nodeSize.height + gap &&
-            candidate.y + size.height + gap > node.position.y
-          )
-        }),
-    ) ?? preferred
+    point.x >= bounds.left &&
+    point.y >= bounds.top &&
+    point.x + size.width <= bounds.right &&
+    point.y + size.height <= bounds.bottom
   )
 }
 
