@@ -17,10 +17,10 @@ function project(id: string, input: Partial<ProjectRecord> = {}): ProjectRecord 
   }
 }
 
-function controllerFor(
+function controllerHarness(
   input: Partial<ProjectControllerSnapshot> = {},
   overrides: Partial<ProjectController> = {},
-): ProjectController {
+) {
   let current: ProjectControllerSnapshot = {
     activeProjectId: null,
     changingActiveProject: false,
@@ -29,7 +29,7 @@ function controllerFor(
     projects: [],
     ...input,
   }
-  return {
+  const controller = {
     activate: mock(async (projectId: string) => {
       current = { ...current, activeProjectId: projectId }
     }),
@@ -43,182 +43,204 @@ function controllerFor(
     subscribe: () => () => undefined,
     ...overrides,
   } as unknown as ProjectController
+
+  return {
+    controller,
+    setSnapshot(next: Partial<ProjectControllerSnapshot>) {
+      current = { ...current, ...next }
+    },
+  }
+}
+
+async function withDom(run: (root: Root) => Promise<void>) {
+  const window = new Window()
+  const globals = {
+    Element: window.Element,
+    Event: window.Event,
+    HTMLInputElement: window.HTMLInputElement,
+    HTMLElement: window.HTMLElement,
+    IS_REACT_ACT_ENVIRONMENT: true,
+    InputEvent: window.InputEvent,
+    MouseEvent: window.MouseEvent,
+    Node: window.Node,
+    document: window.document,
+    window,
+  }
+  const originalGlobalDescriptors = new Map<string, PropertyDescriptor | undefined>()
+  for (const [name, value] of Object.entries(globals)) {
+    originalGlobalDescriptors.set(name, Object.getOwnPropertyDescriptor(globalThis, name))
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  const container = document.createElement("div")
+  document.body.append(container)
+  const root = createRoot(container)
+
+  try {
+    await run(root)
+  } finally {
+    await act(async () => root.unmount())
+    await window.happyDOM.close()
+    for (const [name, descriptor] of originalGlobalDescriptors) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor)
+      else Reflect.deleteProperty(globalThis, name)
+    }
+  }
 }
 
 describe("ProjectHome", () => {
-  test("renders first-run actions without fabricated Project metrics", () => {
+  test("renders only first-run onboarding even when Project records are supplied", () => {
+    const { controller } = controllerHarness({
+      activeProjectId: "existing",
+      projects: [
+        project("existing", {
+          name: "Private roadmap",
+          rootPath: "/private/work/private-roadmap",
+        }),
+      ],
+    })
     const markup = renderToStaticMarkup(
-      <ProjectHome controller={controllerFor()} onEnterProject={async () => true} />,
+      <ProjectHome controller={controller} onEnterProject={async () => true} />,
     )
 
     expect(markup).toContain('data-project-home="true"')
-    expect(markup).toContain("Create a project")
+    expect(markup).toContain('data-project-home-motion="reveal"')
+    expect(markup).toContain("Start with a blank canvas")
+    expect(markup).toContain("Create project")
     expect(markup).toContain("Open project")
-    expect(markup).not.toContain("canvas count")
-    expect(markup).not.toContain("files")
-    expect(markup).not.toContain("unreviewed")
+    expect(markup.match(/data-project-action=/g)).toHaveLength(2)
+    expect(markup).not.toContain("Continue")
+    expect(markup).not.toContain("Recent work")
+    expect(markup).not.toContain("Private roadmap")
+    expect(markup).not.toContain("/private/work/private-roadmap")
+    expect(markup).not.toContain("data-project-list")
+    expect(markup).not.toContain("data-project-row")
+    expect(markup).not.toContain("data-continue-project")
   })
 
-  test("renders deterministic recency, a real Continue affordance, and unavailable folders", () => {
+  test("exposes an explicit reduced-motion state without changing the onboarding content", () => {
+    const { controller } = controllerHarness()
     const markup = renderToStaticMarkup(
       <ProjectHome
-        controller={controllerFor({
-          activeProjectId: "active",
-          projects: [
-            project("active", { lastOpenedAt: 20, name: "Active study" }),
-            project("new", { lastOpenedAt: 90, name: "Newest research" }),
-            project("missing", { lastOpenedAt: 50, missing: true, name: "Offline archive" }),
-          ],
-        })}
+        controller={controller}
+        locale="zh-CN"
         onEnterProject={async () => true}
+        reducedMotion
       />,
     )
 
-    expect(markup).toContain("Continue where you left off")
-    expect(markup.indexOf('data-project-id="new"')).toBeLessThan(
-      markup.indexOf('data-project-id="missing"'),
-    )
-    expect(markup.indexOf('data-project-id="missing"')).toBeLessThan(
-      markup.indexOf('data-project-id="active"'),
-    )
-    expect(markup).toContain("Folder unavailable")
-    expect(markup).toContain('disabled=""')
-    expect(markup).toContain('data-project-list="true"')
-    expect(markup).toMatch(/class="[^"]*shadow-\[var\(--ui-shadow-low\)\][^"]*" data-project-list="true"/)
-    expect(markup).toMatch(/class="[^"]*shadow-\[var\(--ui-shadow-low\)\][^"]*" data-continue-project="true"/)
-    expect(markup).toContain('data-project-row="new"')
-    expect(markup).not.toMatch(/class="[^"]*border-border-default[^"]*" data-project-list="true"/)
-    expect(markup).not.toMatch(/class="[^"]*border-border-default[^"]*" data-continue-project="true"/)
-    expect(markup).not.toContain("grid-cols-3")
-    expect(markup).not.toContain("h-32")
+    expect(markup).toContain('data-project-home-motion="reduce"')
+    expect(markup).toContain("从一张空白画布开始")
+    expect(markup).toContain("创建项目")
+    expect(markup).toContain("打开项目")
   })
 
-  test("keeps restoration failures on Home and offers a retryable error", async () => {
-    const window = new Window()
-    const previousWindow = globalThis.window
-    const previousDocument = globalThis.document
-    const reactGlobal = globalThis as typeof globalThis & {
-      IS_REACT_ACT_ENVIRONMENT?: boolean
-    }
-    const previousActEnvironment = reactGlobal.IS_REACT_ACT_ENVIRONMENT
-    Object.assign(globalThis, {
-      IS_REACT_ACT_ENVIRONMENT: true,
-      document: window.document,
-      window,
-    })
-    let root: Root | undefined
-    const onEnterProject = mock(async () => false)
+  test("creates and enters a Project without initializing or listing the registry", async () => {
+    await withDom(async (root) => {
+      const harness = controllerHarness()
+      const callOrder: string[] = []
+      const createProject = mock(async (name: string) => {
+        callOrder.push("create")
+        harness.setSnapshot({
+          activeProjectId: "created",
+          projects: [project("created", { name })],
+        })
+        return true
+      })
+      const controller = Object.assign(harness.controller, { createProject })
+      const onEnterProject = mock(async () => true)
+      const onSelectionStart = mock(() => callOrder.push("selection"))
 
-    try {
-      const container = document.createElement("div")
-      document.body.append(container)
-      root = createRoot(container)
       await act(async () => {
-        root?.render(
+        root.render(
           <ProjectHome
-            controller={controllerFor({
-              projects: [project("research", { name: "Research" })],
-            })}
+            controller={controller}
             onEnterProject={onEnterProject}
+            onSelectionStart={onSelectionStart}
           />,
         )
       })
-      await act(async () =>
-        document.querySelector<HTMLButtonElement>('[data-project-id="research"]')?.click(),
-      )
-
-      expect(onEnterProject).toHaveBeenCalledWith("research")
-      expect(document.querySelector('[data-project-home="true"]')).not.toBeNull()
-      expect(document.querySelector('[role="alert"]')?.textContent).toContain("could not restore")
-    } finally {
-      if (root) await act(async () => root?.unmount())
-      Object.assign(globalThis, {
-        IS_REACT_ACT_ENVIRONMENT: previousActEnvironment,
-        document: previousDocument,
-        window: previousWindow,
-      })
-    }
-  })
-
-  test("reveals real Project management actions without activating the Project", async () => {
-    const window = new Window()
-    const previousWindow = globalThis.window
-    const previousDocument = globalThis.document
-    const reactGlobal = globalThis as typeof globalThis & {
-      IS_REACT_ACT_ENVIRONMENT?: boolean
-    }
-    const previousActEnvironment = reactGlobal.IS_REACT_ACT_ENVIRONMENT
-    Object.assign(globalThis, {
-      IS_REACT_ACT_ENVIRONMENT: true,
-      document: window.document,
-      window,
-    })
-    let root: Root | undefined
-    const onEnterProject = mock(async () => true)
-    const forgetProject = mock(async () => undefined)
-
-    try {
-      const container = document.createElement("div")
-      document.body.append(container)
-      root = createRoot(container)
       await act(async () => {
-        root?.render(
-          <ProjectHome
-            controller={controllerFor(
-              { projects: [project("research", { name: "Research" })] },
-              { forgetProject },
-            )}
-            onEnterProject={onEnterProject}
-          />,
-        )
+        document.querySelector<HTMLButtonElement>('[data-project-action="create"]')?.click()
       })
 
-      const manage = document.querySelector<HTMLButtonElement>(
-        '[aria-label="Project actions: Research"]',
-      )
-      expect(manage?.getAttribute("aria-expanded")).toBe("false")
-      await act(async () => manage?.click())
-
-      expect(manage?.getAttribute("aria-expanded")).toBe("true")
-      expect(document.querySelector('[data-project-row="research"] [data-slot="disclosure-content"]')?.textContent).toContain(
-        "/projects/research",
-      )
-      expect(onEnterProject).not.toHaveBeenCalled()
-
-      const rename = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Rename",
-      )
-      await act(async () => rename?.click())
+      const input = document.querySelector<HTMLInputElement>("#project-home-name")
+      expect(input).not.toBeNull()
+      await act(async () => {
+        if (!input) return
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(
+          input,
+          "Launch plan",
+        )
+        input.dispatchEvent(
+          new InputEvent("input", {
+            bubbles: true,
+            data: "Launch plan",
+            inputType: "insertText",
+          }),
+        )
+        input.dispatchEvent(new Event("change", { bubbles: true }))
+      })
+      expect(input?.value).toBe("Launch plan")
       expect(
-        document.querySelector<HTMLInputElement>("#project-home-rename-research")?.value,
-      ).toBe("Research")
-      await act(async () => manage?.click())
-      await act(async () => manage?.click())
-
-      const remove = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Remove from Convax",
-      )
-      await act(async () => remove?.click())
-      expect(document.querySelector('[data-project-row="research"] [data-slot="disclosure-content"]')?.textContent).toContain(
-        "The folder and its files stay on disk.",
-      )
-
-      const confirm = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) =>
-          button.textContent?.trim() === "Remove from Convax" &&
-          button.className.includes("bg-destructive"),
-      )
-      await act(async () => confirm?.click())
-      expect(forgetProject).toHaveBeenCalledWith("research")
-      expect(onEnterProject).not.toHaveBeenCalled()
-    } finally {
-      if (root) await act(async () => root?.unmount())
-      Object.assign(globalThis, {
-        IS_REACT_ACT_ENVIRONMENT: previousActEnvironment,
-        document: previousDocument,
-        window: previousWindow,
+        [...document.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')].find(
+          (button) => button.textContent?.trim() === "Create project",
+        )?.disabled,
+      ).toBeFalse()
+      await act(async () => {
+        document
+          .querySelector<HTMLFormElement>("#project-home-name")
+          ?.closest("form")
+          ?.dispatchEvent(new window.Event("submit", { bubbles: true, cancelable: true }))
       })
-    }
+
+      expect(createProject).toHaveBeenCalledWith("Launch plan")
+      expect(onSelectionStart).toHaveBeenCalledTimes(1)
+      expect(callOrder).toEqual(["selection", "create"])
+      expect(onEnterProject).toHaveBeenCalledWith("created")
+      expect(controller.initialize).not.toHaveBeenCalled()
+      expect(document.querySelector('[role="dialog"]')).toBeNull()
+      expect(document.querySelector("[data-project-list]")).toBeNull()
+    })
+  })
+
+  test("keeps native open cancellation quiet and reports real open failures", async () => {
+    await withDom(async (root) => {
+      const canceled = controllerHarness()
+      const onEnterProject = mock(async () => true)
+
+      await act(async () => {
+        root.render(
+          <ProjectHome controller={canceled.controller} onEnterProject={onEnterProject} />,
+        )
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-project-action="open"]')?.click()
+      })
+
+      expect(canceled.controller.openProject).toHaveBeenCalledTimes(1)
+      expect(onEnterProject).not.toHaveBeenCalled()
+      expect(document.querySelector('[role="alert"]')).toBeNull()
+
+      const failed = controllerHarness()
+      const openProject = mock(async () => {
+        failed.setSnapshot({ error: "This folder cannot be opened." })
+        return false
+      })
+      const failedController = Object.assign(failed.controller, { openProject })
+      await act(async () => {
+        root.render(
+          <ProjectHome controller={failedController} onEnterProject={onEnterProject} />,
+        )
+      })
+      await act(async () => {
+        document.querySelector<HTMLButtonElement>('[data-project-action="open"]')?.click()
+      })
+
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain(
+        "This folder cannot be opened.",
+      )
+      expect(onEnterProject).not.toHaveBeenCalled()
+    })
   })
 })
 

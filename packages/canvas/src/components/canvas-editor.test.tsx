@@ -1170,8 +1170,8 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).not.toContain("Add Audio")
   })
 
-  test("keeps secondary creation actions in the context menu instead of a creation toolbar", () => {
-    renderEditor(
+  test("publishes registered node creation through the safe top toolbar without duplicating Search", () => {
+    const markup = renderEditor(
       createCanvasServices({
         generate: {
           describeTool: async (toolId) => ({ fields: [], toolId }),
@@ -1183,15 +1183,19 @@ describe("CanvasEditor insertion surfaces", () => {
 
     expect(contextMenuActions.get("Add Text")).toBeFunction()
     expect(contextMenuActions.get("Generate⌘↵")).toBeFunction()
-    expect(buttonActions.get("Text")).toBeUndefined()
-    expect(buttonActions.get("Image")).toBeUndefined()
-    expect(buttonActions.get("Video")).toBeUndefined()
-    expect(buttonActions.get("Audio")).toBeUndefined()
-    expect(buttonActions.get("Agent")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeUndefined()
+    expect(markup).toContain("convax-creation-toolbar-frame")
+    expect(markup).toContain('aria-label="Add Text"')
+    expect(markup).toContain('aria-label="Add Image"')
+    expect(markup).toContain('aria-label="Add Video"')
+    expect(markup).not.toContain('aria-label="Add Audio"')
+    expect(markup).not.toContain('aria-label="Add Agent"')
+    expect(buttonActions.get("Add node")).toBeFunction()
+    expect(buttonActions.get("Upload")).toBeUndefined()
+    expect(buttonActions.get("Generate")).toBeFunction()
+    expect(buttonActions.get("Search")).toBeFunction()
   })
 
-  test("routes Generate presentation to the host without opening Canvas's legacy overlay", () => {
+  test("routes top-toolbar Generate presentation to the host without opening Canvas's legacy overlay", () => {
     const onGenerateRequest = mock(() => undefined)
     renderEditor(
       createCanvasServices({
@@ -1204,7 +1208,7 @@ describe("CanvasEditor insertion surfaces", () => {
       { onGenerateRequest },
     )
 
-    contextMenuActions.get("Generate⌘↵")?.()
+    buttonActions.get("Generate")?.()
 
     expect(onGenerateRequest).toHaveBeenCalledTimes(1)
   })
@@ -1218,12 +1222,13 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain("props.onGenerationStateChange?.(false)")
   })
 
-  test("moves Search into the bottom-left viewport toolbar and removes the creation bar", async () => {
+  test("keeps Search in the bottom-left viewport toolbar while restoring top creation tools", async () => {
     const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
     const markup = renderEditor()
 
     expect(markup).toContain("convax-viewport-toolbar bottom-3 left-3")
-    expect(markup).not.toContain("convax-creation-toolbar")
+    expect(markup).toContain("convax-creation-toolbar-frame")
+    expect(markup).toContain('aria-label="Canvas tools"')
     expect(source).toContain('className="convax-node-search__input"')
     expect(source).toContain('className="convax-node-search__backdrop"')
     expect(source).toContain('data-convax-node-search-panel="true"')
@@ -1235,7 +1240,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(buttonActions.get("Search")).toBeFunction()
     expect(buttonActions.get("Fit view")).toBeFunction()
     expect(buttonActions.get("Snap and alignment guides")).toBeFunction()
-    expect(buttonActions.get("More canvas actions")).toBeUndefined()
+    expect(buttonActions.get("More canvas actions")).toBeFunction()
   })
 
   test("renders host appearance without producing an editor command", () => {
@@ -1277,10 +1282,11 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(renderedBackground).toBeUndefined()
   })
 
-  test("keeps creation out of the viewport header without moving the viewport", async () => {
+  test("places the creation toolbar at safe top center without moving the viewport", async () => {
     const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
 
-    expect(source).not.toContain("convax-creation-toolbar")
+    expect(source).toContain('className="convax-creation-toolbar-frame"')
+    expect(source).toContain('className="convax-creation-toolbar convax-tool-surface')
     expectViewportUnchanged()
   })
 })

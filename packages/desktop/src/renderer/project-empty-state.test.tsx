@@ -1,65 +1,57 @@
-import type { ProjectController, ProjectControllerSnapshot } from "@convax/project"
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ProjectEmptyState, ProjectLoadingState } from "./project-empty-state"
+import {
+  ProjectLoadingState,
+  ProjectRecoveryState,
+  ProjectRegistryLoadingState,
+} from "./project-empty-state"
 
-function controller(snapshot: ProjectControllerSnapshot): ProjectController {
-  return {
-    clearError: () => undefined,
-    getSnapshot: () => snapshot,
-    initialize: async () => undefined,
-    subscribe: () => () => undefined,
-  } as unknown as ProjectController
-}
+describe("ProjectRegistryLoadingState", () => {
+  test("keeps startup in an accessible loading state without onboarding actions", () => {
+    const markup = renderToStaticMarkup(<ProjectRegistryLoadingState />)
 
-const emptySnapshot: ProjectControllerSnapshot = {
-  activeProjectId: null,
-  changingActiveProject: false,
-  error: null,
-  initialized: true,
-  projects: [],
-}
+    expect(markup).toContain("Loading Projects")
+    expect(markup).toContain("Restoring your workspace")
+    expect(markup).toContain('role="status"')
+    expect(markup).not.toContain("Create a project")
+    expect(markup).not.toContain("Open a Project")
+  })
 
-describe("ProjectEmptyState", () => {
-  test("shows a loading state while projects initialize", () => {
+  test("honors reduced motion", () => {
+    const markup = renderToStaticMarkup(<ProjectRegistryLoadingState reducedMotion />)
+    expect(markup).toContain('data-ui-loading-motion="reduce"')
+  })
+})
+
+describe("ProjectRecoveryState", () => {
+  test("separates unavailable registered Projects from first-run onboarding", () => {
     const markup = renderToStaticMarkup(
-      <ProjectEmptyState
-        controller={controller({ ...emptySnapshot, initialized: false })}
-        initialized={false}
+      <ProjectRecoveryState
+        error="Folder unavailable"
+        onOpenProject={() => undefined}
+        onRetry={() => undefined}
       />,
     )
 
-    expect(markup).toContain("Loading projects")
-    expect(markup).toContain('role="status"')
-    expect(markup).toContain('aria-live="polite"')
-    expect(markup).toContain('data-slot="loading"')
-    expect(markup).toContain('data-slot="loading-spinner"')
-    expect(markup).toContain('aria-hidden="true"')
-    expect(markup).not.toContain("Create project")
+    expect(markup).toContain('data-project-recovery="true"')
+    expect(markup).toContain("Your last Project could not be restored")
+    expect(markup).toContain("Folder unavailable")
+    expect(markup).toContain("Open a Project")
+    expect(markup).toContain("Try again")
+    expect(markup).not.toContain('data-project-home="true"')
+    expect(markup).not.toContain("Recent work")
   })
 
-  test("honors reduced motion on the registry loading surface", () => {
+  test("shows static busy indicators when reduced motion is enabled", () => {
     const markup = renderToStaticMarkup(
-      <ProjectEmptyState
-        controller={controller({ ...emptySnapshot, initialized: false })}
-        initialized={false}
+      <ProjectRecoveryState
+        onOpenProject={() => undefined}
+        onRetry={() => undefined}
+        opening
         reducedMotion
       />,
     )
-
     expect(markup).toContain('data-ui-loading-motion="reduce"')
-  })
-
-  test("offers create and open actions when there is no active project", () => {
-    const markup = renderToStaticMarkup(
-      <ProjectEmptyState controller={controller(emptySnapshot)} initialized />,
-    )
-
-    expect(markup).toContain('data-project-home="true"')
-    expect(markup).toContain("Your next workspace starts here")
-    expect(markup).toContain("Create a project")
-    expect(markup).toContain("Open project")
-    expect(markup).not.toContain("Choose a location")
   })
 })
 
@@ -71,7 +63,6 @@ describe("ProjectLoadingState", () => {
     expect(markup).toContain("Loading canvases and project files")
     expect(markup).toContain('role="status"')
     expect(markup).toContain('data-ui-loading-layout="surface"')
-    expect(markup).toContain('data-slot="loading"')
     expect(markup.match(/role="status"/g)?.length).toBe(1)
     expect(markup).not.toContain("Create project")
   })
@@ -82,7 +73,6 @@ describe("ProjectLoadingState", () => {
     )
 
     expect(markup).toContain('data-ui-loading-motion="reduce"')
-    expect(markup).toContain("Opening Storyboard…")
     expect(markup.match(/role="status"/g)?.length).toBe(1)
   })
 })

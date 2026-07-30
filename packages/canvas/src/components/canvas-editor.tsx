@@ -62,7 +62,9 @@ import {
   LayoutGrid,
   Magnet,
   MapPinned,
+  MousePointer2,
   PanelRightOpen,
+  Plus,
   Redo2,
   Rows3,
   Search,
@@ -84,6 +86,7 @@ import {
   type ClipboardEvent as ReactClipboardEvent,
   type ForwardedRef,
   type HTMLAttributes,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
   forwardRef,
   useCallback,
@@ -102,10 +105,8 @@ import {
   isCanvasPostMutationRevealGuardCurrent,
   resolveCanvasAnchoredZoomViewport,
   resolveCanvasFocusAvoidanceViewport,
-  resolveCanvasNodeWorldRects,
   resolveCanvasSafeViewportRect,
   resolveCanvasVisibleWorldRect,
-  resolveCanvasWorldBounds,
   resolveInitialCanvasCameraFit,
   shouldRevealCanvasNodes,
   type CanvasPostMutationRevealGuard,
@@ -3770,6 +3771,39 @@ function CanvasEditorContent(
                   />
                 ) : null}
 
+                <CanvasHeader
+                  canExport={Boolean(exportService)}
+                  canGenerate={Boolean(generateService)}
+                  canRedo={history.future.length > 0}
+                  canUndo={history.past.length > 0}
+                  canUpload={Boolean(mutationService)}
+                  createItems={connectionNodeTypes}
+                  generating={generating}
+                  interactionTool={interactionTool}
+                  onAddNode={(type) => addNode(type, undefined, true)}
+                  onExport={exportCanvas}
+                  onGenerate={requestGenerate}
+                  onInteractionToolChange={activateInteractionTool}
+                  onRedo={() => dispatch({ type: "redo" })}
+                  onSelectionDragModeChange={(active) => {
+                    if (active) enterSelectionDragMode()
+                    else exitSelectionDragMode()
+                  }}
+                  onUndo={() => dispatch({ type: "undo" })}
+                  onUpload={() => uploadInputRef.current?.click()}
+                  readOnly={readOnly}
+                  reducedMotion={prefersReducedMotion}
+                  selectionDragMode={
+                    props.selectionDragSource?.mode
+                      ? {
+                          active: selectionDragModeActive,
+                          icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                          label: props.selectionDragSource.mode.label,
+                        }
+                      : undefined
+                  }
+                />
+
                 {blockingLoad || loadError ? (
                   <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
                     {loadError ? (
@@ -4104,6 +4138,7 @@ function CanvasEditorContent(
 }
 
 function IconButton(props: {
+  buttonRef?: ForwardedRef<HTMLButtonElement>
   disabled?: boolean
   expanded?: boolean
   hasPopup?: "menu"
@@ -4126,11 +4161,13 @@ function IconButton(props: {
     >
       <span className="inline-flex">
         <Button
+          ref={props.buttonRef}
           aria-expanded={props.expanded}
           aria-haspopup={props.hasPopup}
           aria-label={props.label}
           aria-pressed={props.pressed}
           className={cn(props.pressed && "bg-accent text-accent-foreground")}
+          data-canvas-toolbar-control="true"
           disabled={props.disabled}
           onClick={props.onClick}
           size="icon-sm"
@@ -4166,6 +4203,286 @@ function FloatingPanel({ children, className, ...props }: HTMLAttributes<HTMLDiv
       )}
     >
       {children}
+    </div>
+  )
+}
+
+function insertionIcon(type: string) {
+  if (type === "text") return <Type />
+  if (type === "agent") return <Bot />
+  if (type === "image") return <ImagePlus />
+  if (type === "video") return <Video />
+  return <FileUp />
+}
+
+function moveMenuFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
+  if (!["ArrowDown", "ArrowUp", "End", "Home"].includes(event.key)) return
+  const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')]
+  if (items.length === 0) return
+  event.preventDefault()
+  const currentIndex =
+    event.target instanceof Element ? items.indexOf(event.target.closest("button") as HTMLButtonElement) : -1
+  if (event.key === "Home") items[0]?.focus()
+  else if (event.key === "End") items.at(-1)?.focus()
+  else if (event.key === "ArrowDown") items[(currentIndex + 1 + items.length) % items.length]?.focus()
+  else items[currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length]?.focus()
+}
+
+function CanvasHeader(props: {
+  canExport: boolean
+  canGenerate: boolean
+  canRedo: boolean
+  canUndo: boolean
+  canUpload: boolean
+  createItems: readonly { label: string; type: string }[]
+  generating: boolean
+  interactionTool: CanvasInteractionTool
+  onAddNode: (type: string) => void
+  onExport: () => void
+  onGenerate: () => void
+  onInteractionToolChange: (tool: CanvasInteractionTool) => void
+  onRedo: () => void
+  onSelectionDragModeChange: (active: boolean) => void
+  onUndo: () => void
+  onUpload: () => void
+  readOnly: boolean
+  reducedMotion: boolean
+  selectionDragMode?: {
+    active: boolean
+    icon: ReactNode
+    label: string
+  }
+}) {
+  const [addOpen, setAddOpen] = useState(false)
+  const [moreOpen, setMoreOpen] = useState(false)
+  const addMenuRef = useRef<HTMLDivElement>(null)
+  const addTriggerRef = useRef<HTMLButtonElement>(null)
+  const moreMenuRef = useRef<HTMLDivElement>(null)
+  const moreTriggerRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!addOpen && !moreOpen) return
+    const close = (event: PointerEvent) => {
+      if (
+        event.target instanceof Element &&
+        (addMenuRef.current?.contains(event.target) || moreMenuRef.current?.contains(event.target))
+      )
+        return
+      setAddOpen(false)
+      setMoreOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      if (addOpen) addTriggerRef.current?.focus()
+      if (moreOpen) moreTriggerRef.current?.focus()
+      setAddOpen(false)
+      setMoreOpen(false)
+    }
+    window.addEventListener("pointerdown", close)
+    window.addEventListener("keydown", closeOnEscape)
+    return () => {
+      window.removeEventListener("pointerdown", close)
+      window.removeEventListener("keydown", closeOnEscape)
+    }
+  }, [addOpen, moreOpen])
+  useEffect(() => {
+    if (!props.readOnly) return
+    setAddOpen(false)
+  }, [props.readOnly])
+  useEffect(() => {
+    if (!addOpen) return
+    const frame = window.requestAnimationFrame(() =>
+      addMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]')?.focus(),
+    )
+    return () => window.cancelAnimationFrame(frame)
+  }, [addOpen])
+  useEffect(() => {
+    if (!moreOpen) return
+    const frame = window.requestAnimationFrame(() =>
+      moreMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(),
+    )
+    return () => window.cancelAnimationFrame(frame)
+  }, [moreOpen])
+  return (
+    <div className="convax-creation-toolbar-frame">
+      <div
+        aria-label="Canvas tools"
+        className="convax-creation-toolbar convax-tool-surface convax-motion-surface convax-motion-surface--top"
+        data-canvas-shortcuts="ignore"
+        onKeyDown={(event) => {
+          if (!["ArrowLeft", "ArrowRight", "End", "Home"].includes(event.key)) return
+          if (!(event.target instanceof Element) || !event.target.matches("[data-canvas-toolbar-control='true']"))
+            return
+          const controls = [
+            ...event.currentTarget.querySelectorAll<HTMLButtonElement>(
+              "[data-canvas-toolbar-control='true']:not(:disabled)",
+            ),
+          ]
+          if (controls.length === 0) return
+          event.preventDefault()
+          const currentIndex = controls.indexOf(event.target as HTMLButtonElement)
+          if (event.key === "Home") controls[0]?.focus()
+          else if (event.key === "End") controls.at(-1)?.focus()
+          else if (event.key === "ArrowRight") controls[(currentIndex + 1 + controls.length) % controls.length]?.focus()
+          else controls[(currentIndex - 1 + controls.length) % controls.length]?.focus()
+        }}
+        role="toolbar"
+      >
+        <IconButton
+          icon={<MousePointer2 />}
+          label="Select"
+          onClick={() => props.onInteractionToolChange("select")}
+          pressed={props.interactionTool === "select"}
+          shortcut="V"
+          tooltipSide="bottom"
+        />
+        <IconButton
+          icon={<Hand />}
+          label="Hand"
+          onClick={() => props.onInteractionToolChange("hand")}
+          pressed={props.interactionTool === "hand"}
+          shortcut="H"
+          tooltipSide="bottom"
+        />
+        {props.selectionDragMode ? (
+          <IconButton
+            disabled={props.readOnly}
+            icon={props.selectionDragMode.icon}
+            label={props.selectionDragMode.label}
+            onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
+            pressed={props.selectionDragMode.active}
+            tooltipSide="bottom"
+          />
+        ) : null}
+        <span aria-hidden="true" className="convax-toolbar-divider" />
+        <div className="relative" ref={addMenuRef}>
+          <IconButton
+            buttonRef={addTriggerRef}
+            disabled={props.readOnly || props.createItems.length === 0}
+            expanded={addOpen}
+            hasPopup="menu"
+            icon={<Plus />}
+            label="Add node"
+            onClick={() => {
+              setMoreOpen(false)
+              setAddOpen((open) => !open)
+            }}
+            pressed={addOpen}
+            tooltipSide="bottom"
+          />
+          <div
+            className="convax-canvas-create-menu convax-motion-menu"
+            data-canvas-shortcuts="ignore"
+            hidden={!addOpen}
+            onKeyDown={moveMenuFocus}
+            role="menu"
+          >
+            <div className="convax-canvas-menu__label">Create</div>
+            {props.createItems.map((item) => (
+              <button
+                aria-label={`Add ${item.label}`}
+                disabled={props.readOnly}
+                key={item.type}
+                onClick={() => {
+                  props.onAddNode(item.type)
+                  setAddOpen(false)
+                  addTriggerRef.current?.focus()
+                }}
+                role="menuitem"
+                type="button"
+              >
+                {insertionIcon(item.type)}
+                <span>Add {item.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+        {props.canUpload ? (
+          <IconButton
+            disabled={props.readOnly}
+            icon={<FileUp />}
+            label="Upload"
+            onClick={props.onUpload}
+            tooltipSide="bottom"
+          />
+        ) : null}
+        {props.canGenerate ? (
+          <IconButton
+            disabled={props.readOnly || props.generating}
+            icon={props.generating ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
+            label="Generate"
+            onClick={props.onGenerate}
+            shortcut="⌘↵"
+            tooltipSide="bottom"
+          />
+        ) : null}
+        <span aria-hidden="true" className="convax-toolbar-divider" />
+        <div className="relative" ref={moreMenuRef}>
+          <IconButton
+            buttonRef={moreTriggerRef}
+            expanded={moreOpen}
+            hasPopup="menu"
+            icon={<Ellipsis />}
+            label="More canvas actions"
+            onClick={() => {
+              setAddOpen(false)
+              setMoreOpen((open) => !open)
+            }}
+            pressed={moreOpen}
+            tooltipSide="bottom"
+          />
+          <div
+            className="convax-canvas-more-menu convax-motion-menu"
+            data-canvas-shortcuts="ignore"
+            hidden={!moreOpen}
+            onKeyDown={moveMenuFocus}
+            role="menu"
+          >
+            <button
+              disabled={!props.canUndo || props.readOnly}
+              onClick={() => {
+                props.onUndo()
+                setMoreOpen(false)
+                moreTriggerRef.current?.focus()
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <Undo2 />
+              <span>Undo</span>
+              <Shortcut>⌘Z</Shortcut>
+            </button>
+            <button
+              disabled={!props.canRedo || props.readOnly}
+              onClick={() => {
+                props.onRedo()
+                setMoreOpen(false)
+                moreTriggerRef.current?.focus()
+              }}
+              role="menuitem"
+              type="button"
+            >
+              <Redo2 />
+              <span>Redo</span>
+              <Shortcut>⇧⌘Z</Shortcut>
+            </button>
+            {props.canExport ? (
+              <button
+                onClick={() => {
+                  props.onExport()
+                  setMoreOpen(false)
+                  moreTriggerRef.current?.focus()
+                }}
+                role="menuitem"
+                type="button"
+              >
+                <Download />
+                <span>Export</span>
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </div>
   )
 }

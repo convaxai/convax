@@ -537,25 +537,10 @@ try {
       const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
       const canvasId = catalog.canvases[0]?.id
       if (canvasId !== "canvas-main") throw new Error("The packaged Project did not expose canvas-main")
-      await waitFor(
-        () => document.querySelector('[data-project-home="true"]') || document.querySelector(".convax-canvas"),
-        "the packaged Home or Canvas",
-      )
-      if (document.querySelector('[data-project-home="true"]')) {
-        const projectEntry = await waitFor(
-          () =>
-            document.querySelector('[data-project-id="' + project.id + '"]') ??
-            [...document.querySelectorAll("button")].find((button) =>
-              ["Continue", "继续"].includes(button.textContent?.trim() ?? ""),
-            ),
-          "the seeded Project entry",
-        )
-        if (!(projectEntry instanceof HTMLElement)) {
-          throw new Error("The packaged Home did not expose the seeded Project")
-        }
-        projectEntry.click()
-      }
       await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")
+      if (document.querySelector('[data-project-home="true"]')) {
+        throw new Error("The packaged Desktop showed first-run onboarding despite having a seeded Project")
+      }
       const inventory = await window.convax.plugins.listPlugins()
       const defaultRemotePluginId = ${JSON.stringify(defaultRemotePluginId)}
       const packagedDefault = inventory.installed.find((plugin) => plugin.id === defaultRemotePluginId)

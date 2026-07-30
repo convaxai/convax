@@ -57,8 +57,9 @@ export interface ProjectSidebarProps {
   footerActions?: ReactNode
   headerActions?: ReactNode
   hideWhenNoProject?: boolean
+  onFileActivate?: (input: { entry: ProjectEntry; projectId: string }) => void
   presentation?: "sidebar" | "embedded-files" | "workspace" | "workspace-tabs"
-  resolveFileUrl?: (input: { path: string; projectId: string }) => string
+  resolveFileUrl?: (input: { path: string; projectId: string }) => Promise<string> | string
   searchLabel?: string
 }
 
@@ -72,6 +73,10 @@ const defaultSectionSplitRatio = 0.6
 const minimumSectionSplitRatio = 0.1
 const minimumExpandedSectionSize = 112
 const sectionSplitterSize = 6
+const maximumInlineFilePreviewBytes = 8 * 1024 * 1024
+const maximumFilePreviewCacheCharacters = 24 * 1024 * 1024
+const maximumFilePreviewCacheEntries = 64
+const filePreviewUrlCache = new Map<string, string>()
 const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   error: null,
   expandedPaths: [],
@@ -89,6 +94,7 @@ export function ProjectSidebar({
   footerActions,
   headerActions,
   hideWhenNoProject = false,
+  onFileActivate,
   presentation = "sidebar",
   resolveFileUrl,
   searchLabel = "Search project",
@@ -103,7 +109,6 @@ export function ProjectSidebar({
     latestFilesSnapshot.projectId === projectSnapshot.activeProjectId ? latestFilesSnapshot : emptyProjectFilesSnapshot
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const embeddedFiles = presentation === "embedded-files"
-  // Keep the old value as an input-only compatibility alias; this presentation
   // Keep the Canvas-over-Project hierarchy explicit instead of presenting both as tabs.
   const workspaceTabs = presentation === "workspace" || presentation === "workspace-tabs"
   const displayedExtension = embeddedFiles ? undefined : extension
@@ -307,24 +312,25 @@ export function ProjectSidebar({
       <aside
         aria-busy={projectSnapshot.changingActiveProject}
         className={cn(
-          "relative flex h-full shrink-0 flex-col bg-card text-card-foreground",
+          "relative flex h-full min-w-0 shrink-0 flex-col overflow-hidden bg-surface-panel text-text-primary",
           embeddedFiles || workspaceTabs ? "w-full" : "w-[292px] border-r border-border",
           projectSnapshot.changingActiveProject && "pointer-events-none opacity-80",
           className,
         )}
         data-project-files-view={embeddedFiles ? "embedded" : undefined}
+        data-project-sidebar-presentation={presentation}
       >
         {!embeddedFiles ? (
           <header
             className={cn(
-              "group/header relative flex shrink-0 items-center border-b border-border",
-              workspaceTabs ? "h-10 gap-1 py-2 pl-3 pr-2" : "h-16 gap-2 px-3",
+              "group/header relative flex shrink-0 items-center",
+              workspaceTabs ? "h-11 gap-1 px-2.5" : "h-16 gap-2 px-3",
             )}
           >
             {workspaceTabs && activeProject ? (
               <span
                 aria-hidden
-                className="grid size-6 shrink-0 place-items-center rounded-md bg-primary/10 text-primary"
+                className="grid size-7 shrink-0 place-items-center rounded-md bg-interactive-selected text-brand"
               >
                 <Folder className="size-3.5" />
               </span>
@@ -346,9 +352,9 @@ export function ProjectSidebar({
                 aria-expanded={switcherOpen}
                 aria-haspopup="dialog"
                 className={cn(
-                  "flex min-w-0 flex-1 items-center text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+                  "flex min-w-0 flex-1 items-center text-left outline-none transition-transform duration-100 active:scale-[0.98] focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none",
                   workspaceTabs
-                    ? "h-6 gap-1 rounded px-1 text-xs font-medium hover:bg-accent"
+                    ? "h-8 gap-1 rounded-md px-1.5 text-xs font-medium hover:bg-interactive-hover active:bg-interactive-pressed"
                     : "gap-2 rounded-md px-2 py-1.5",
                 )}
                 onClick={() => setSwitcherOpen((open) => !open)}
@@ -389,7 +395,7 @@ export function ProjectSidebar({
             {workspaceTabs && activeProject && !projectEditor ? (
               <button
                 aria-label={`Rename ${activeProject.name}`}
-                className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground opacity-0 transition-opacity duration-100 hover:bg-accent hover:text-foreground group-hover/header:opacity-100 focus:opacity-100 motion-reduce:transition-none"
+                className="grid size-8 shrink-0 place-items-center rounded-md text-text-tertiary opacity-0 transition-[opacity,transform] duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed group-hover/header:opacity-100 focus:opacity-100 motion-reduce:transition-none"
                 onClick={() => setProjectEditor({ name: activeProject.name, projectId: activeProject.id })}
                 title={`Rename ${activeProject.name}`}
                 type="button"
@@ -401,7 +407,7 @@ export function ProjectSidebar({
               <>
                 <button
                   aria-label={searchLabel}
-                  className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+                  className="grid size-8 shrink-0 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
                   onClick={() => setSearchOpen(true)}
                   ref={searchTriggerRef}
                   type="button"
@@ -411,7 +417,7 @@ export function ProjectSidebar({
                 {displayedExtension?.onCreate ? (
                   <button
                     aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}
-                    className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+                    className="grid size-8 shrink-0 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
                     disabled={displayedExtension.busy}
                     onClick={displayedExtension.onCreate}
                     type="button"
@@ -450,7 +456,7 @@ export function ProjectSidebar({
         ) : null}
 
         {workspaceTabs && activeProject && searchOpen ? (
-          <div className="flex h-10 shrink-0 items-center border-b border-border px-2">
+          <div className="flex h-10 shrink-0 items-center border-b border-border-subtle bg-surface-panel px-2.5">
             <Input
               aria-label={searchLabel}
               autoFocus
@@ -479,22 +485,26 @@ export function ProjectSidebar({
           />
         ) : (
           <>
-            <div className={cn("flex min-h-0 flex-1 flex-col", resizingSections && "select-none")} ref={sectionsRef}>
+            <div
+              className={cn("flex min-h-0 min-w-0 flex-1 flex-col", resizingSections && "select-none")}
+              ref={sectionsRef}
+            >
               {workspaceTabs && displayedExtension ? (
                 <section
                   aria-busy={displayedExtension.busy}
                   className={cn("flex min-h-0 flex-col overflow-hidden", displayedExtension.busy && "opacity-70")}
+                  data-project-sidebar-section="canvas"
                   style={{
                     flex: `${sectionSplitRatio} 1 0px`,
                     minHeight: expandedSectionMinHeight,
                   }}
                 >
-                  <div className="flex h-9 shrink-0 items-center gap-1 px-2">
-                    <span className="min-w-0 flex-1 truncate px-1.5 text-[11px] font-semibold text-muted-foreground">
+                  <div className="flex h-9 shrink-0 items-center gap-1 px-2.5">
+                    <span className="min-w-0 flex-1 truncate px-1 text-[11px] font-semibold text-text-secondary">
                       Canvas
                     </span>
                     {displayedExtension.count === undefined ? null : (
-                      <span className="mr-1 text-[10px] tabular-nums text-muted-foreground/70">
+                      <span className="mr-1 text-[10px] tabular-nums text-text-tertiary">
                         {displayedExtension.count}
                       </span>
                     )}
@@ -541,11 +551,12 @@ export function ProjectSidebar({
                   tabIndex={0}
                   title="Drag to resize. Use arrow keys when focused."
                 >
-                  <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-all group-hover:h-0.5 group-hover:bg-primary/45 group-focus-visible:h-0.5 group-focus-visible:bg-ring" />
+                  <span className="absolute left-1/2 top-1/2 h-1 w-10 -translate-x-1/2 -translate-y-1/2 rounded-full bg-text-disabled/0 transition-colors duration-150 group-hover:bg-text-disabled/35 group-focus-visible:bg-focus-ring motion-reduce:transition-none" />
                 </div>
               ) : null}
               <section
-                className={cn("flex min-h-0 flex-col overflow-hidden", workspaceTabs && "border-t border-border/70")}
+                className="flex min-h-0 flex-col overflow-hidden"
+                data-project-sidebar-section={workspaceTabs ? "project" : "files"}
                 style={{
                   flex: workspaceTabs
                     ? `${1 - sectionSplitRatio} 1 0px`
@@ -558,13 +569,11 @@ export function ProjectSidebar({
                 }}
               >
                 {workspaceTabs ? (
-                  <div className="flex h-9 shrink-0 items-center gap-1 px-2">
-                    <span className="min-w-0 flex-1 truncate px-1.5 text-[11px] font-semibold text-muted-foreground">
+                  <div className="flex h-9 shrink-0 items-center gap-1 px-2.5">
+                    <span className="min-w-0 flex-1 truncate px-1 text-[11px] font-semibold text-text-secondary">
                       Project
                     </span>
-                    <span className="mr-0.5 text-[10px] tabular-nums text-muted-foreground/70">
-                      {visibleEntries.length}
-                    </span>
+                    <span className="mr-0.5 text-[10px] tabular-nums text-text-tertiary">{visibleEntries.length}</span>
                     <Tooltip content="New file">
                       <Button
                         aria-label="New file"
@@ -654,7 +663,10 @@ export function ProjectSidebar({
                 )}
                 {workspaceTabs || filesExpanded ? (
                   <div
-                    className={cn("min-h-0 flex-1 overflow-auto px-2 pb-2", dropTargetPath === "" && "bg-accent/50")}
+                    className={cn(
+                      "min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2",
+                      dropTargetPath === "" && "bg-drop-target",
+                    )}
                     onDragLeave={(event) => {
                       if (event.currentTarget === event.target && dropTargetPath === "") setDropTargetPath(null)
                     }}
@@ -697,6 +709,7 @@ export function ProjectSidebar({
                             setTreeDragActive(true)
                           }}
                           onDrop={handleDrop}
+                          onFileActivate={onFileActivate}
                           onRequestDelete={requestDelete}
                           onStartRename={(target) =>
                             setEditor({ kind: "rename", name: target.name, path: target.path })
@@ -774,7 +787,7 @@ export function ProjectSidebar({
                   tabIndex={0}
                   title="Drag to resize. Use arrow keys when focused."
                 >
-                  <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border transition-all group-hover:h-0.5 group-hover:bg-primary/45 group-focus-visible:h-0.5 group-focus-visible:bg-ring" />
+                  <span className="absolute inset-x-2 top-1/2 h-px origin-center -translate-y-1/2 bg-border-subtle transition-transform duration-150 group-hover:scale-y-2 group-focus-visible:scale-y-2 group-focus-visible:bg-focus-ring motion-reduce:transition-none" />
                 </div>
               ) : null}
 
@@ -854,7 +867,12 @@ export function ProjectSidebar({
               ) : null}
             </div>
             {!embeddedFiles && footerActions ? (
-              <div className="shrink-0 border-t border-border p-2">{footerActions}</div>
+              <div
+                className="mt-auto min-w-0 shrink-0 overflow-hidden bg-surface-inset/35 p-2 shadow-[0_-16px_32px_-30px_rgb(0_0_0_/_72%)]"
+                data-project-sidebar-footer=""
+              >
+                {footerActions}
+              </div>
             ) : null}
           </>
         )}
@@ -985,10 +1003,11 @@ function ProjectTreeNode(props: {
   onDragOver: (event: DragEvent<HTMLElement>, destinationPath: string) => void
   onDragStart: () => void
   onDrop: (event: DragEvent<HTMLElement>, destinationPath: string) => Promise<void>
+  onFileActivate?: (input: { entry: ProjectEntry; projectId: string }) => void
   onRequestDelete: (path: string) => void
   onStartRename: (entry: ProjectEntry) => void
   previewDisabled: boolean
-  resolveFileUrl?: (input: { path: string; projectId: string }) => string
+  resolveFileUrl?: (input: { path: string; projectId: string }) => Promise<string> | string
   shouldSuppressClick: () => boolean
   snapshot: ProjectFilesControllerSnapshot
 }) {
@@ -1004,21 +1023,72 @@ function ProjectTreeNode(props: {
   const loading = snapshot.loadingPaths.includes(entry.path)
   const editing = props.editor?.kind === "rename" && props.editor.path === entry.path
   const previewKind = getFilePreviewKind(entry)
-  const previewUrl = useMemo(() => {
-    if (!previewKind || !snapshot.projectId) return null
+  const previewCacheKey = snapshot.projectId
+    ? `${snapshot.projectId}\u0000${entry.path}\u0000${entry.modifiedAt}`
+    : null
+  const [previewUrl, setPreviewUrl] = useState<string | null>(() => {
     if (previewKind === "markdown" || previewKind === "text") return ""
-    if (!props.resolveFileUrl) return null
-    try {
-      return props.resolveFileUrl({ path: entry.path, projectId: snapshot.projectId }) || null
-    } catch {
-      return null
-    }
-  }, [entry.path, previewKind, props.resolveFileUrl, snapshot.projectId])
+    return previewCacheKey ? (filePreviewUrlCache.get(previewCacheKey) ?? null) : null
+  })
   const rowRef = useRef<HTMLDivElement | null>(null)
   const previewOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const previewCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [previewPosition, setPreviewPosition] = useState({ left: 0, top: 0 })
+
+  useEffect(() => {
+    if (!previewKind || !snapshot.projectId || !previewCacheKey) {
+      setPreviewUrl(null)
+      return
+    }
+    if (previewKind === "markdown" || previewKind === "text") {
+      setPreviewUrl("")
+      return
+    }
+    if (entry.size === undefined || entry.size > maximumInlineFilePreviewBytes) {
+      setPreviewUrl(null)
+      return
+    }
+    const cached = filePreviewUrlCache.get(previewCacheKey)
+    if (cached) {
+      setPreviewUrl(cached)
+      return
+    }
+    if (!props.resolveFileUrl) {
+      setPreviewUrl(null)
+      return
+    }
+    let stale = false
+    setPreviewUrl(null)
+    void Promise.resolve()
+      .then(() => props.resolveFileUrl?.({ path: entry.path, projectId: snapshot.projectId! }))
+      .then((url) => {
+        if (stale || !url) return
+        filePreviewUrlCache.set(previewCacheKey, url)
+        while (
+          filePreviewUrlCache.size > maximumFilePreviewCacheEntries ||
+          filePreviewUrlCacheCharacters() > maximumFilePreviewCacheCharacters
+        ) {
+          const oldestKey = filePreviewUrlCache.keys().next().value
+          if (typeof oldestKey !== "string") break
+          filePreviewUrlCache.delete(oldestKey)
+        }
+        setPreviewUrl(url)
+      })
+      .catch(() => {
+        if (!stale) setPreviewUrl(null)
+      })
+    return () => {
+      stale = true
+    }
+  }, [
+    entry.path,
+    entry.size,
+    previewCacheKey,
+    previewKind,
+    props.resolveFileUrl,
+    snapshot.projectId,
+  ])
 
   const clearPreviewTimer = (timerRef: typeof previewOpenTimerRef) => {
     if (!timerRef.current) return
@@ -1103,6 +1173,9 @@ function ProjectTreeNode(props: {
         const toggle = event.metaKey || event.ctrlKey
         props.controller.selectEntry(entry.path, { range, toggle })
         if (directory && event.detail === 1 && !range && !toggle) void props.controller.toggleDirectory(entry.path)
+        if (!directory && !range && !toggle && snapshot.projectId) {
+          props.onFileActivate?.({ entry, projectId: snapshot.projectId })
+        }
       }}
       onDoubleClick={() => {
         if (!directory) void props.controller.openEntry(entry.path)
@@ -1274,6 +1347,12 @@ function TreeStateRow({ icon, label, level }: { icon?: ReactNode; label: string;
       <span>{label}</span>
     </div>
   )
+}
+
+function filePreviewUrlCacheCharacters() {
+  let characters = 0
+  for (const url of filePreviewUrlCache.values()) characters += url.length
+  return characters
 }
 
 function ProjectNameInput(props: {

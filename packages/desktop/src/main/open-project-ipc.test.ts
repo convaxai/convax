@@ -237,6 +237,9 @@ describe("desktop Project lifecycle IPC smoke", () => {
     expect(selection).toMatchObject({ canceled: false, project: { name: "empty-project" } })
     const projectId = selection.project?.id
     if (!projectId) throw new Error("Open Project did not return a project id")
+    const touched = await exposedBridge.projects.touchProject({ projectId })
+    expect(touched.project.lastOpenedAt).toBeGreaterThan(selection.project?.lastOpenedAt ?? 0)
+    expect(touched.projects[0]?.id).toBe(projectId)
     activeProjectId = projectId
     expect(await exposedBridge.projectFiles.listDirectory({ path: "", projectId })).toMatchObject({
       entries: [],

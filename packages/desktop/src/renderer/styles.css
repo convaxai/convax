@@ -67,6 +67,293 @@
   box-sizing: border-box;
 }
 
+/* First-run Project onboarding. This surface is never used as a Project directory. */
+.project-home {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-height: 28rem;
+  place-items: center;
+  overflow: auto;
+  padding: clamp(1.5rem, 5vw, 4rem);
+  color: var(--ui-text-primary);
+  background: var(--ui-surface-canvas);
+}
+
+.project-home__atmosphere {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.project-home__bloom,
+.project-home__grid {
+  position: absolute;
+  inset: 0;
+}
+
+.project-home__bloom {
+  background:
+    radial-gradient(
+      circle at 50% 39%,
+      color-mix(in oklab, var(--ui-brand) 13%, transparent) 0,
+      color-mix(in oklab, var(--ui-brand) 5%, transparent) 24rem,
+      transparent 40rem
+    );
+}
+
+.project-home__grid {
+  opacity: 0.56;
+  background-image:
+    radial-gradient(
+      circle,
+      color-mix(in oklab, var(--ui-border-default) 76%, transparent) 0.75px,
+      transparent 0.85px
+    );
+  background-position: center;
+  background-size: 1.5rem 1.5rem;
+  -webkit-mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+  mask-image: radial-gradient(
+    ellipse at 50% 40%,
+    var(--ui-text-primary) 0,
+    transparent 68%
+  );
+}
+
+.project-home__content {
+  width: min(100%, 34rem);
+  text-align: center;
+  animation: project-home-reveal var(--ui-motion-slow) var(--ui-ease-reveal) both;
+}
+
+.project-home__canvas-mark {
+  position: relative;
+  width: 14rem;
+  height: 7.5rem;
+  margin: 0 auto 1.25rem;
+}
+
+.project-home__canvas-mark::before {
+  position: absolute;
+  inset: 1rem 3.25rem;
+  border: 1px solid color-mix(in oklab, var(--ui-brand) 25%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-pill);
+  background: color-mix(in oklab, var(--ui-brand) 6%, transparent);
+  content: "";
+  filter: blur(0.2px);
+}
+
+.project-home__connector {
+  position: absolute;
+  z-index: 0;
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklab, var(--ui-border-strong) 72%, transparent),
+    color-mix(in oklab, var(--ui-brand) 68%, var(--ui-border-default))
+  );
+}
+
+.project-home__connector--left {
+  top: 2.85rem;
+  left: 3.1rem;
+  width: 4.25rem;
+  transform: rotate(15deg);
+}
+
+.project-home__connector--right {
+  top: 3.75rem;
+  left: 7.4rem;
+  width: 4.25rem;
+  transform: rotate(-22deg);
+}
+
+.project-home__node {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  width: 2.6rem;
+  height: 2.6rem;
+  place-items: center;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-lg);
+  color: var(--ui-text-secondary);
+  background: color-mix(in oklab, var(--ui-surface-raised) 92%, var(--ui-brand));
+  box-shadow: var(--ui-shadow-low);
+}
+
+.project-home__node svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.project-home__node--document {
+  top: 0.7rem;
+  left: 1.2rem;
+  transform: rotate(-4deg);
+}
+
+.project-home__node--brand {
+  top: 2.6rem;
+  left: 50%;
+  width: 3.1rem;
+  height: 3.1rem;
+  transform: translateX(-50%);
+  border-color: color-mix(in oklab, var(--ui-brand) 48%, var(--ui-border-default));
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-surface-raised) 90%, var(--ui-brand));
+  box-shadow:
+    var(--ui-shadow-low),
+    0 0 0 0.35rem color-mix(in oklab, var(--ui-brand) 7%, transparent);
+}
+
+.project-home__node--brand [data-convax-brand] > svg {
+  width: 1.45rem;
+  height: 1.45rem;
+}
+
+.project-home__node--image {
+  top: 0.5rem;
+  right: 1rem;
+  transform: rotate(5deg);
+}
+
+.project-home__node--message {
+  right: 2.35rem;
+  bottom: 0.15rem;
+  width: 2.35rem;
+  height: 2.35rem;
+  transform: rotate(-3deg);
+}
+
+.project-home__wordmark {
+  justify-content: center;
+  color: var(--ui-text-secondary);
+}
+
+.project-home__title {
+  margin: 0.85rem 0 0;
+  font-size: clamp(1.85rem, 4vw, 2.6rem);
+  font-weight: 650;
+  line-height: 1.08;
+  letter-spacing: -0.042em;
+  text-wrap: balance;
+}
+
+.project-home__description {
+  max-width: 29rem;
+  margin: 0.95rem auto 0;
+  color: var(--ui-text-secondary);
+  font-size: 0.95rem;
+  line-height: 1.65;
+  text-wrap: balance;
+}
+
+.project-home__actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.65rem;
+  margin-top: 1.75rem;
+}
+
+.project-home__action {
+  min-width: 10.75rem;
+}
+
+.project-home__error {
+  max-width: 28rem;
+  margin: 1rem auto 0;
+  border: 1px solid color-mix(in oklab, var(--ui-status-danger) 28%, var(--ui-border-subtle));
+  border-radius: var(--ui-radius-md);
+  padding: 0.7rem 0.85rem;
+  color: var(--ui-status-danger);
+  background: var(--ui-status-danger-surface);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+@keyframes project-home-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(calc(-3vh + 0.6rem)) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(-3vh) scale(1);
+  }
+}
+
+@media (max-width: 32rem) {
+  .project-home__actions {
+    flex-direction: column;
+  }
+
+  .project-home__action {
+    width: 100%;
+  }
+}
+
+@media (max-height: 36rem) {
+  .project-home__content {
+    animation-name: project-home-reveal-compact;
+  }
+
+  .project-home__canvas-mark {
+    margin-bottom: 0.5rem;
+    transform: scale(0.84);
+  }
+}
+
+@keyframes project-home-reveal-compact {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.98);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+[data-project-home-motion="reduce"] .project-home__content {
+  animation: none;
+  transform: translateY(-3vh);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .project-home__content {
+    animation: none;
+    transform: translateY(-3vh);
+  }
+}
+
+@media (forced-colors: active) {
+  .project-home__bloom,
+  .project-home__grid,
+  .project-home__connector,
+  .project-home__canvas-mark::before {
+    display: none;
+  }
+
+  .project-home__node {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+}
+
 .convax-settings-search__input {
   padding-inline-start: 2.25rem;
 }
@@ -296,69 +583,69 @@ body {
 }
 
 .project-sidebar-shell {
-  z-index: 45;
-  overflow: hidden;
-  pointer-events: auto;
-}
-
-.project-sidebar-shell--dock {
   position: relative;
-  width: var(--project-sidebar-size);
+  width: 0;
   height: 100%;
   flex: 0 0 auto;
-  border-right: 1px solid var(--ui-border-default);
-  transition:
-    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    border-color 300ms cubic-bezier(0.78, 0, 0.22, 1);
+  z-index: 45;
+  overflow: visible;
+  pointer-events: auto;
+  transition: width var(--ui-motion-slow) var(--ui-ease-reveal);
 }
 
-.project-sidebar-shell--dock[data-project-sidebar-state="closed"] {
-  width: 0;
-  border-color: transparent;
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] {
+  width: var(--project-sidebar-size);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] {
   pointer-events: none;
 }
 
-.project-sidebar-shell--overlay {
+.project-sidebar-shell__panel {
   position: absolute;
-  inset-block: 16px;
-  left: 16px;
-  width: min(var(--project-sidebar-size), calc(100% - 32px));
-  border: 1px solid color-mix(in srgb, var(--ui-border-default) 72%, transparent);
-  border-radius: 16px;
-  box-shadow:
-    0 18px 50px -20px rgb(0 0 0 / 55%),
-    0 4px 14px -6px rgb(0 0 0 / 35%);
+  inset-block: 0;
+  left: 0;
+  width: min(var(--project-sidebar-size), calc(100vw - 16px));
+  overflow: hidden;
+  border: 1px solid transparent;
+  background: var(--ui-surface-panel);
   opacity: 1;
   translate: 0;
   visibility: visible;
   transition:
-    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    inset var(--ui-motion-slow) var(--ui-ease-reveal),
+    left var(--ui-motion-slow) var(--ui-ease-reveal),
+    border-color var(--ui-motion-normal) ease-out,
+    border-radius var(--ui-motion-slow) var(--ui-ease-reveal),
+    box-shadow var(--ui-motion-slow) var(--ui-ease-reveal),
+    opacity var(--ui-motion-normal) ease-out,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
     visibility 0s linear 0s;
 }
 
-.project-sidebar-shell--overlay[data-project-sidebar-state="closed"] {
+.project-sidebar-shell[data-project-sidebar-reveal="pinned"] .project-sidebar-shell__panel {
+  width: var(--project-sidebar-size);
+  border-right-color: color-mix(in oklab, var(--ui-border-subtle) 72%, transparent);
+  box-shadow: 18px 0 38px -32px rgb(0 0 0 / 58%);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="hover"] .project-sidebar-shell__panel {
+  inset-block: 8px;
+  left: 8px;
+  border-color: color-mix(in oklab, var(--ui-border-default) 68%, transparent);
+  border-radius: var(--ui-radius-lg);
+  box-shadow: var(--ui-shadow-medium);
+}
+
+.project-sidebar-shell[data-project-sidebar-reveal="closed"] .project-sidebar-shell__panel {
   opacity: 0;
   translate: -16px 0;
   visibility: hidden;
   pointer-events: none;
   transition:
-    opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
-    visibility 0s linear 300ms;
-}
-
-.project-sidebar-shell__panel {
-  width: var(--project-sidebar-size);
-  max-width: 100%;
-  height: 100%;
-  opacity: 1;
-  transition: opacity 200ms ease-out 100ms;
-}
-
-.project-sidebar-shell[data-project-sidebar-state="closed"] .project-sidebar-shell__panel {
-  opacity: 0;
-  transition-delay: 0ms;
+    opacity var(--ui-motion-normal) ease-in,
+    translate var(--ui-motion-slow) var(--ui-ease-reveal),
+    visibility 0s linear var(--ui-motion-slow);
 }
 
 .project-sidebar-entry {
@@ -369,27 +656,8 @@ body {
     translate 300ms cubic-bezier(0.78, 0, 0.22, 1);
 }
 
-.project-sidebar-entry--hidden {
-  opacity: 0;
-  translate: -16px 0;
-}
-
-.project-sidebar-backdrop {
-  animation: project-sidebar-backdrop-enter 300ms cubic-bezier(0.78, 0, 0.22, 1) both;
-}
-
-@keyframes project-sidebar-backdrop-enter {
-  from {
-    opacity: 0;
-  }
-
-  to {
-    opacity: 1;
-  }
-}
-
 .workspace-utility-drawer--overlay {
-  border: 1px solid color-mix(in srgb, var(--ui-border-default) 60%, transparent);
+  border: 0;
   border-radius: 18px;
   background: color-mix(in srgb, var(--ui-surface-panel) 80%, transparent);
   box-shadow:
@@ -405,6 +673,31 @@ body {
     opacity 300ms cubic-bezier(0.78, 0, 0.22, 1),
     translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
     visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"] {
+  box-shadow: -18px 0 38px -32px rgb(0 0 0 / 68%);
+  opacity: 1;
+  translate: 0;
+  visibility: visible;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 220ms ease-out,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 0s;
+}
+
+.workspace-utility-drawer[data-workspace-utility-presentation="dock"][data-workspace-utility-state="closed"] {
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  translate: 12px 0;
+  visibility: hidden;
+  transition:
+    width 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    opacity 180ms ease-in,
+    translate 300ms cubic-bezier(0.78, 0, 0.22, 1),
+    visibility 0s linear 300ms;
 }
 
 .workspace-utility-drawer--sheet {
@@ -481,10 +774,10 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .project-sidebar-backdrop,
   .project-sidebar-entry,
   .project-sidebar-shell,
   .project-sidebar-shell__panel,
+  .workspace-utility-drawer[data-workspace-utility-presentation="dock"],
   .workspace-utility-drawer--overlay,
   .workspace-utility-drawer--sheet,
   .workspace-utility-entry,
@@ -496,6 +789,12 @@ body {
 }
 
 @media (forced-colors: active) {
+  .project-sidebar-shell__panel {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
   .workspace-utility-drawer--overlay {
     border-color: CanvasText;
     background: Canvas;
@@ -529,9 +828,15 @@ textarea {
 
 .app-titlebar {
   -webkit-app-region: drag;
+  box-shadow: 0 12px 32px -32px rgb(0 0 0 / 72%);
 }
 
 .app-titlebar button {
+  -webkit-app-region: no-drag;
+}
+
+.app-titlebar-no-drag,
+.app-titlebar-no-drag * {
   -webkit-app-region: no-drag;
 }
 

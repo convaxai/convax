@@ -79,8 +79,17 @@ export class ProjectController {
     if (!project) return this.update({ error: "Project was not found." })
     if (project.missing) return this.update({ error: `Project folder is unavailable: ${project.rootPath}` })
     if (this.forgettingProjectIds.has(projectId)) return this.update({ error: "This project is being removed." })
-    if (projectId === this.snapshot.activeProjectId) return
     const request = ++this.transitionRequest
+    if (projectId === this.snapshot.activeProjectId) {
+      try {
+        const result = await this.client.touchProject({ projectId })
+        if (request !== this.transitionRequest) return
+        this.update({ error: null, projects: result.projects })
+      } catch (error) {
+        if (request === this.transitionRequest) this.update({ error: errorMessage(error) })
+      }
+      return
+    }
     this.update({ changingActiveProject: true, error: null })
     try {
       const proceed = await this.options.beforeActiveProjectChange?.(this.snapshot.activeProjectId, projectId)
@@ -90,6 +99,9 @@ export class ProjectController {
         this.update({ changingActiveProject: false, error: null })
         return
       }
+      const result = await this.client.touchProject({ projectId })
+      if (request !== this.transitionRequest) return
+      this.update({ projects: result.projects })
       this.applyActiveProject(projectId)
     } catch (error) {
       if (request === this.transitionRequest) {
@@ -117,7 +129,7 @@ export class ProjectController {
       this.update({ error: null, initialized: true, projects: result.projects })
       if (result.canceled || !result.project) return false
       await this.activate(result.project.id)
-      return true
+      return this.snapshot.activeProjectId === result.project.id && this.snapshot.error === null
     } catch (error) {
       if (request === this.selectionRequest) this.update({ error: errorMessage(error) })
       return false
