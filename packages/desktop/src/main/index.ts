@@ -66,7 +66,6 @@ import {
   desktopRendererUrl,
   desktopUserDataDirectory,
 } from "./app-branding"
-import { desktopDeepLinkScheme, findDesktopDeepLink, parseDesktopDeepLink } from "./desktop-deep-link"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
 import { ManagedMcpAgentToolRegistry, type ManagedMcpPrincipalState } from "./managed-mcp-agent-tools"
@@ -197,7 +196,7 @@ type CloseGate = "approved" | "flushing" | "idle"
 
 let quitGate: CloseGate = "idle"
 let mainWindow: BrowserWindow | null = null
-let pendingDeepLinkActivation = false
+let pendingMainWindowActivation = false
 const rendererUrl = desktopRendererUrl({
   isPackaged: app.isPackaged,
   requestedUrl: process.env.ELECTRON_RENDERER_URL,
@@ -241,19 +240,13 @@ function isTrustedRendererUrl(value: string) {
 function activateMainWindow() {
   const window = mainWindow
   if (!window || window.isDestroyed()) {
-    pendingDeepLinkActivation = true
+    pendingMainWindowActivation = true
     return
   }
-  pendingDeepLinkActivation = false
+  pendingMainWindowActivation = false
   if (window.isMinimized()) window.restore()
   window.show()
   window.focus()
-}
-
-function handleDesktopDeepLink(value: string) {
-  if (!parseDesktopDeepLink(value)) return false
-  activateMainWindow()
-  return true
 }
 
 function createWindow(
@@ -278,7 +271,7 @@ function createWindow(
     },
   })
   mainWindow = window
-  if (pendingDeepLinkActivation) activateMainWindow()
+  if (pendingMainWindowActivation) activateMainWindow()
   const webContentsId = window.webContents.id
   const pluginFrameBindings = new Map<number, string>()
   trustedWebContents.add(webContentsId)
@@ -376,31 +369,9 @@ function startApplication() {
     { scheme: pluginConnectedMediaScheme, privileges: pluginConnectedMediaPrivileges },
     { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
-  app.on("open-url", (event, url) => {
-    event.preventDefault()
-    handleDesktopDeepLink(url)
-  })
-  app.on("second-instance", (_event, commandLine) => {
-    if (!findDesktopDeepLink(commandLine)) {
-      activateMainWindow()
-      return
-    }
-    for (const value of commandLine) {
-      if (handleDesktopDeepLink(value)) return
-    }
-  })
+  app.on("second-instance", activateMainWindow)
 
   void app.whenReady().then(async () => {
-    const protocolRegistered =
-      process.defaultApp && process.argv[1]
-        ? app.setAsDefaultProtocolClient(desktopDeepLinkScheme, process.execPath, [resolve(process.argv[1])])
-        : app.setAsDefaultProtocolClient(desktopDeepLinkScheme)
-    if (!protocolRegistered) {
-      console.warn(`Could not register ${desktopDeepLinkScheme}:// as the Convax desktop protocol`)
-    }
-    for (const value of process.argv) {
-      if (handleDesktopDeepLink(value)) break
-    }
     if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
 
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")

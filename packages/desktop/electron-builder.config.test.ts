@@ -40,7 +40,7 @@ describe("Desktop package identity", () => {
       expect(config.extraMetadata?.desktopName).toBe(`${expected.appId}.desktop`)
       expect(config.linux?.executableName).toBe(expected.appId)
       expect(config.linux?.desktop?.entry?.StartupWMClass).toBe(expected.appId)
-      expect(config.protocols).toEqual([{ name: "Convax", schemes: ["convax"] }])
+      expect(config.protocols).toBeUndefined()
       expect(config.rpm?.packageName).toBe(expected.rpmPackageName)
     })
   }
