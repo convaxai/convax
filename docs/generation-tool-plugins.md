@@ -101,8 +101,9 @@ explicit terminal failure or caller cancellation.
 Restart recovery requires the complete Scheduler–Agent–Supervisor/LRO contract.
 `operationId` is the durable idempotency identity; downstream `taskId` is opaque.
 The recovery record pins the exact ActiveSet/snapshot/companion/tool binding. A
-Plugin without that complete contract is marked interrupted after restart and is
-never silently replayed.
+Plugin without that complete contract is marked failed after restart and is never
+silently replayed. Recovery-capable Plugins query or resume the same operation id;
+they never create a replacement billable operation during restart recovery.
 
 The in-process Plugin capability broker rejects only a concurrent duplicate.
 Billing-grade replay safety belongs to the provider's durable `operationId`/LRO

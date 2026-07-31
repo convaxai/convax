@@ -5,7 +5,8 @@ export const canvasNodeGenerationRunKey = "convaxGenerationRun"
 export const canvasNodeGenerationRunSchemaV1 = "convax.node-generation-run/1"
 export const canvasNodeGenerationRunSchemaV2 = "convax.node-generation-run/2"
 export const canvasNodeGenerationRunSchemaV3 = "convax.node-generation-run/3"
-export const canvasNodeGenerationRunSchema = "convax.node-generation-run/4"
+export const canvasNodeGenerationRunSchemaV4 = "convax.node-generation-run/4"
+export const canvasNodeGenerationRunSchema = "convax.node-generation-run/5"
 export const maximumCanvasGenerationPromptLength = 64 * 1024
 
 const maximumGenerationFailureMessageLength = 200
@@ -22,8 +23,6 @@ export type CanvasNodeGenerationRunStatus =
   | "running"
   | "succeeded"
   | "failed"
-  | "cancelled"
-  | "interrupted"
 
 export interface CanvasNodeGenerationRun {
   /** Bounded host-authored presentation text; never raw sidecar or native diagnostics. */
@@ -31,7 +30,6 @@ export interface CanvasNodeGenerationRun {
   operationId: string
   /** Normalized user-editable draft; may be empty and never contains Main-composed prompt context. */
   prompt: string
-  retrySafety?: "safe" | "unknown"
   schema: typeof canvasNodeGenerationRunSchema
   status: CanvasNodeGenerationRunStatus
   taskId?: string
@@ -55,19 +53,21 @@ const generationRunStatuses = [
   "running",
   "succeeded",
   "failed",
-  "cancelled",
-  "interrupted",
 ] as const satisfies readonly CanvasNodeGenerationRunStatus[]
 
 const terminalGenerationRunStatuses = new Set<CanvasNodeGenerationRunStatus>([
   "succeeded",
   "failed",
-  "cancelled",
-  "interrupted",
 ])
 
-function isRetrySafety(value: unknown): value is NonNullable<CanvasNodeGenerationRun["retrySafety"]> {
+function isLegacyRetrySafety(value: unknown): value is "safe" | "unknown" {
   return value === "safe" || value === "unknown"
+}
+
+function isLegacyCanvasNodeGenerationRunStatus(
+  value: unknown,
+): value is CanvasNodeGenerationRunStatus | "cancelled" | "interrupted" {
+  return isCanvasNodeGenerationRunStatus(value) || value === "cancelled" || value === "interrupted"
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,7 +142,8 @@ export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerati
   const isLegacyV1 = value.schema === canvasNodeGenerationRunSchemaV1
   const isLegacyV2 = value.schema === canvasNodeGenerationRunSchemaV2
   const isLegacyV3 = value.schema === canvasNodeGenerationRunSchemaV3
-  const isLegacySchema = isLegacyV1 || isLegacyV2 || isLegacyV3
+  const isLegacyV4 = value.schema === canvasNodeGenerationRunSchemaV4
+  const isLegacySchema = isLegacyV1 || isLegacyV2 || isLegacyV3 || isLegacyV4
   const requiresNonEmptyLegacyPrompt = isLegacyV1 || isLegacyV2
   const prompt = typeof value.prompt === "string" ? value.prompt : undefined
   if (
@@ -150,9 +151,11 @@ export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerati
       value,
       isLegacyV1
         ? ["operationId", "prompt", "schema", "status", "taskId", "toolId"]
-        : isLegacySchema
+        : isLegacyV2 || isLegacyV3
           ? ["operationId", "prompt", "retrySafety", "schema", "status", "taskId", "toolId"]
-          : ["failureMessage", "operationId", "prompt", "retrySafety", "schema", "status", "taskId", "toolId"],
+          : isLegacyV4
+            ? ["failureMessage", "operationId", "prompt", "retrySafety", "schema", "status", "taskId", "toolId"]
+            : ["failureMessage", "operationId", "prompt", "schema", "status", "taskId", "toolId"],
       ["operationId", "prompt", "schema", "status", "toolId"],
     ) ||
     (!isLegacySchema && value.schema !== canvasNodeGenerationRunSchema) ||
@@ -160,17 +163,24 @@ export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerati
     prompt === undefined ||
     (requiresNonEmptyLegacyPrompt ? !isLegacyCanvasGenerationPrompt(prompt) : !isCanvasGenerationPrompt(prompt)) ||
     !isCanvasGenerationToolId(value.toolId) ||
-    !isCanvasNodeGenerationRunStatus(value.status) ||
+    !(isLegacySchema
+      ? isLegacyCanvasNodeGenerationRunStatus(value.status)
+      : isCanvasNodeGenerationRunStatus(value.status)) ||
     (value.taskId !== undefined && !isCanvasGenerationTaskId(value.taskId)) ||
-    (!isLegacyV1 && value.retrySafety !== undefined && !isRetrySafety(value.retrySafety)) ||
-    (!isLegacySchema && value.failureMessage !== undefined && !isCanvasGenerationFailureMessage(value.failureMessage))
+    (isLegacySchema &&
+      !isLegacyV1 &&
+      value.retrySafety !== undefined &&
+      !isLegacyRetrySafety(value.retrySafety)) ||
+    ((isLegacyV4 || !isLegacySchema) &&
+      value.failureMessage !== undefined &&
+      !isCanvasGenerationFailureMessage(value.failureMessage))
   ) {
     return undefined
   }
-  const retrySafety: CanvasNodeGenerationRun["retrySafety"] =
-    isLegacyV1 && value.status !== "succeeded" && terminalGenerationRunStatuses.has(value.status)
+  const retrySafety =
+    isLegacyV1 && value.status !== "succeeded" && value.status !== "submitting" && value.status !== "running"
       ? "unknown"
-      : isRetrySafety(value.retrySafety)
+      : isLegacyRetrySafety(value.retrySafety)
         ? value.retrySafety
         : undefined
   if (
@@ -180,18 +190,23 @@ export function parseCanvasNodeGenerationRun(value: unknown): CanvasNodeGenerati
     return undefined
   }
   if (
+    isLegacySchema &&
     (value.status === "failed" || value.status === "cancelled" || value.status === "interrupted") &&
     retrySafety === undefined
   ) {
     return undefined
   }
+  if (!isLegacySchema && value.status !== "failed" && value.failureMessage !== undefined) return undefined
+  const status: CanvasNodeGenerationRunStatus =
+    value.status === "cancelled" || value.status === "interrupted"
+      ? "failed"
+      : (value.status as CanvasNodeGenerationRunStatus)
   const run: CanvasNodeGenerationRun = {
     ...(isCanvasGenerationFailureMessage(value.failureMessage) ? { failureMessage: value.failureMessage } : {}),
     operationId: value.operationId,
     prompt,
-    ...(retrySafety === undefined ? {} : { retrySafety }),
     schema: canvasNodeGenerationRunSchema,
-    status: value.status,
+    status,
     ...(value.taskId === undefined ? {} : { taskId: value.taskId }),
     toolId: value.toolId,
   }
@@ -235,9 +250,6 @@ export function startCanvasNodeGenerationRun(
   if (current.kind === "valid" && isCanvasNodeGenerationRunActive(current.run)) {
     throw new CanvasNodeGenerationRunValidationError("Canvas node already has an active generation run")
   }
-  if (current.kind === "valid" && current.run.status !== "succeeded" && current.run.retrySafety === "unknown") {
-    throw new CanvasNodeGenerationRunValidationError("Canvas node generation retry safety is unknown")
-  }
   return setRun(document, nodeId, {
     operationId: input.operationId,
     prompt: input.prompt,
@@ -280,13 +292,8 @@ export function finishCanvasNodeGenerationRun(
   document: CanvasDocument,
   nodeId: string,
   operationId: string,
-  status: "failed" | "cancelled" | "interrupted",
-  retrySafety: "safe" | "unknown",
   failureMessage?: string,
 ): CanvasDocument {
-  if (!isRetrySafety(retrySafety)) {
-    throw new CanvasNodeGenerationRunValidationError("Canvas generation retry safety is invalid")
-  }
   if (failureMessage !== undefined && !isCanvasGenerationFailureMessage(failureMessage)) {
     throw new CanvasNodeGenerationRunValidationError("Canvas generation failure message is invalid")
   }
@@ -297,10 +304,9 @@ export function finishCanvasNodeGenerationRun(
   const next = setRun(document, nodeId, {
     ...run,
     ...(failureMessage === undefined ? {} : { failureMessage }),
-    retrySafety,
-    status,
+    status: "failed",
   })
-  return finishPendingResourcePresentation(next, nodeId, status, failureMessage)
+  return finishPendingResourcePresentation(next, nodeId, failureMessage)
 }
 
 /** Used only by the atomic generated-resource replacement command. */
@@ -331,7 +337,7 @@ export function interruptInactiveCanvasNodeGenerationRuns(
     ) {
       continue
     }
-    next = finishCanvasNodeGenerationRun(next, node.id, inspected.run.operationId, "interrupted", "unknown")
+    next = finishCanvasNodeGenerationRun(next, node.id, inspected.run.operationId)
   }
   return next
 }
@@ -346,8 +352,7 @@ export function cloneCanvasNodeGenerationRunData(data: CanvasNode["data"]): Canv
     ...structuredClone(metadata),
     [canvasNodeGenerationRunKey]: {
       ...run,
-      retrySafety: "unknown" as const,
-      status: "interrupted" as const,
+      status: "failed" as const,
       taskId: undefined,
     },
   }
@@ -356,7 +361,7 @@ export function cloneCanvasNodeGenerationRunData(data: CanvasNode["data"]): Canv
     ...data,
     ...(data.status === "pending"
       ? {
-          error: pendingGenerationTerminalMessage("interrupted"),
+          error: pendingGenerationTerminalMessage(),
           status: "error" as const,
         }
       : {}),
@@ -433,7 +438,6 @@ function setRun(document: CanvasDocument, nodeId: string, run: CanvasNodeGenerat
 function finishPendingResourcePresentation(
   document: CanvasDocument,
   nodeId: string,
-  status: "failed" | "cancelled" | "interrupted",
   failureMessage?: string,
 ) {
   return {
@@ -444,7 +448,7 @@ function finishPendingResourcePresentation(
             ...node,
             data: {
               ...node.data,
-              error: failureMessage ?? pendingGenerationTerminalMessage(status),
+              error: failureMessage ?? pendingGenerationTerminalMessage(),
               status: "error" as const,
             },
           }
@@ -453,9 +457,7 @@ function finishPendingResourcePresentation(
   }
 }
 
-function pendingGenerationTerminalMessage(status: "failed" | "cancelled" | "interrupted") {
-  if (status === "cancelled") return "Generation was canceled"
-  if (status === "interrupted") return "Generation was interrupted"
+function pendingGenerationTerminalMessage() {
   return "Generation could not be completed"
 }
 

@@ -343,7 +343,7 @@ describe("Canvas card generation request", () => {
     expect(second.operationId).not.toBe(first.operationId)
   })
 
-  test("continues an unknown result as a fresh pending task without replacing the unresolved owner", () => {
+  test("manually retries a failed card as a fresh pending task without replacing its prompt history", () => {
     const owner = imageNode()
     const incoming = imageNode({ id: "incoming-reference" })
     const request = assistantRequest(owner, [owner, incoming], [incoming.id])

@@ -21,6 +21,7 @@ import {
   canvasNodeGenerationRunSchemaV1,
   canvasNodeGenerationRunSchemaV2,
   canvasNodeGenerationRunSchemaV3,
+  canvasNodeGenerationRunSchemaV4,
   finishCanvasNodeGenerationRun,
   getCanvasNodeGenerationRun,
   inspectCanvasNodeGenerationRun,
@@ -90,7 +91,7 @@ describe("Canvas node generation run", () => {
     }
   })
 
-  test("migrates readable v1, v2, and v3 runs to v4 without overwriting unknown schemas", () => {
+  test("migrates readable v1-v4 runs to the single-failure v5 schema", () => {
     const source = document({
       [canvasNodeGenerationRunKey]: {
         operationId: "legacy-operation",
@@ -120,7 +121,6 @@ describe("Canvas node generation run", () => {
       },
     })
     expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)).toMatchObject({
-      retrySafety: "unknown",
       schema: canvasNodeGenerationRunSchema,
       status: "failed",
     })
@@ -138,7 +138,26 @@ describe("Canvas node generation run", () => {
     expect(getCanvasNodeGenerationRun(v2.nodes[0]!)).toEqual({
       operationId: "version-two-operation",
       prompt: "Version two prompt",
-      retrySafety: "safe",
+      schema: canvasNodeGenerationRunSchema,
+      status: "failed",
+      toolId: "creative-tools/image.generate",
+    })
+
+    const v4 = document({
+      [canvasNodeGenerationRunKey]: {
+        failureMessage: "Previous interruption",
+        operationId: "version-four-operation",
+        prompt: "Version four prompt",
+        retrySafety: "unknown",
+        schema: canvasNodeGenerationRunSchemaV4,
+        status: "interrupted",
+        toolId: "creative-tools/image.generate",
+      },
+    })
+    expect(getCanvasNodeGenerationRun(v4.nodes[0]!)).toEqual({
+      failureMessage: "Previous interruption",
+      operationId: "version-four-operation",
+      prompt: "Version four prompt",
       schema: canvasNodeGenerationRunSchema,
       status: "failed",
       toolId: "creative-tools/image.generate",
@@ -218,39 +237,36 @@ describe("Canvas node generation run", () => {
     )
     expect(() => markCanvasNodeGenerationRunRunning(receipted, "image-one", "other-operation")).toThrow("does not own")
 
-    for (const status of ["failed", "cancelled", "interrupted"] as const) {
-      const terminal = finishCanvasNodeGenerationRun(receipted, "image-one", "operation-one", status, "safe")
-      expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)?.status).toBe(status)
-      expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)?.retrySafety).toBe("safe")
-      expect(() => markCanvasNodeGenerationRunRunning(terminal, "image-one", "operation-one")).toThrow("cannot return")
-      expect(() => finishCanvasNodeGenerationRun(terminal, "image-one", "operation-one", status, "safe")).toThrow(
-        "already terminal",
-      )
-      expect(() =>
-        startCanvasNodeGenerationRun(terminal, "image-one", {
-          operationId: `retry-${status}`,
-          prompt: "Retry prompt",
-          toolId: "creative-tools/image.generate",
-        }),
-      ).not.toThrow()
-    }
+    const terminal = finishCanvasNodeGenerationRun(receipted, "image-one", "operation-one")
+    expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)?.status).toBe("failed")
+    expect(() => markCanvasNodeGenerationRunRunning(terminal, "image-one", "operation-one")).toThrow("cannot return")
+    expect(() => finishCanvasNodeGenerationRun(terminal, "image-one", "operation-one")).toThrow("already terminal")
+    expect(() =>
+      startCanvasNodeGenerationRun(terminal, "image-one", {
+        operationId: "retry-failed",
+        prompt: "Retry prompt",
+        toolId: "creative-tools/image.generate",
+      }),
+    ).not.toThrow()
   })
 
-  test("blocks a fresh operation after an indeterminate terminal state until safety is proven", () => {
-    const interrupted = finishCanvasNodeGenerationRun(
+  test("allows an explicit fresh operation after failure while retaining the previous prompt", () => {
+    const failed = finishCanvasNodeGenerationRun(
       markCanvasNodeGenerationRunRunning(start(), "image-one", "operation-one"),
       "image-one",
       "operation-one",
-      "interrupted",
-      "unknown",
     )
-    expect(() =>
-      startCanvasNodeGenerationRun(interrupted, "image-one", {
-        operationId: "new-operation",
-        prompt: "Could charge twice",
-        toolId: "creative-tools/image.generate",
-      }),
-    ).toThrow("retry safety is unknown")
+    expect(getCanvasNodeGenerationRun(failed.nodes[0]!)?.prompt).toBe("Draw a fox")
+    const retried = startCanvasNodeGenerationRun(failed, "image-one", {
+      operationId: "new-operation",
+      prompt: "Retry the fox",
+      toolId: "creative-tools/image.generate",
+    })
+    expect(getCanvasNodeGenerationRun(retried.nodes[0]!)).toMatchObject({
+      operationId: "new-operation",
+      prompt: "Retry the fox",
+      status: "submitting",
+    })
   })
 
   test("bounds prompt, task identifiers and the complete serialized record", () => {
@@ -284,8 +300,6 @@ describe("Canvas node generation run", () => {
       running,
       "image-one",
       "operation-one",
-      "failed",
-      "safe",
       "Creative Tools 服务不可用",
     )
     expect(getCanvasNodeGenerationRun(unavailable.nodes[0]!)?.failureMessage).toBe("Creative Tools 服务不可用")
@@ -293,8 +307,6 @@ describe("Canvas node generation run", () => {
       running,
       "image-one",
       "operation-one",
-      "failed",
-      "safe",
       "x".repeat(200),
     )
     expect(getCanvasNodeGenerationRun(maximumMessage.nodes[0]!)?.failureMessage).toHaveLength(200)
@@ -309,7 +321,7 @@ describe("Canvas node generation run", () => {
       "unsafe\u2029message",
     ]) {
       expect(() =>
-        finishCanvasNodeGenerationRun(running, "image-one", "operation-one", "failed", "safe", failureMessage),
+        finishCanvasNodeGenerationRun(running, "image-one", "operation-one", failureMessage),
       ).toThrow("failure message is invalid")
     }
 
@@ -353,8 +365,6 @@ describe("Canvas node generation run", () => {
       failureMessage: "Creative Tools 服务不可用",
       nodeId,
       operationId: "operation-pending",
-      retrySafety: "safe",
-      status: "failed",
       type: "generation.run.finish",
     }).document
     const failedNode = failed.nodes.find((candidate) => candidate.id === nodeId)!
@@ -364,18 +374,16 @@ describe("Canvas node generation run", () => {
     })
     expect(getCanvasNodeGenerationRun(failedNode)).toMatchObject({
       failureMessage: "Creative Tools 服务不可用",
-      retrySafety: "safe",
       status: "failed",
     })
 
     const restarted = interruptInactiveCanvasNodeGenerationRuns(created.document, [])
     const restartedNode = restarted.nodes.find((candidate) => candidate.id === nodeId)!
     expect(restartedNode.data).toMatchObject({
-      error: "Generation was interrupted",
+      error: "Generation could not be completed",
       status: "error",
     })
-    expect(getCanvasNodeGenerationRun(restartedNode)?.status).toBe("interrupted")
-    expect(getCanvasNodeGenerationRun(restartedNode)?.retrySafety).toBe("unknown")
+    expect(getCanvasNodeGenerationRun(restartedNode)?.status).toBe("failed")
   })
 
   test("starts runs only on file nodes", () => {
@@ -527,7 +535,7 @@ describe("Canvas node generation run", () => {
     ).toThrow(CanvasCommandValidationError)
 
     expect(() =>
-      finishCanvasNodeGenerationRun({ ...source, nodes: [] }, "image-one", "operation-one", "failed", "safe"),
+      finishCanvasNodeGenerationRun({ ...source, nodes: [] }, "image-one", "operation-one"),
     ).toThrow("not found")
     expect(() =>
       applyCanvasApplicationCommand(source, {
@@ -549,14 +557,13 @@ describe("Canvas node generation run", () => {
       operationId: "operation-one",
       prompt: "Draw a fox",
       schema: canvasNodeGenerationRunSchema,
-      status: "interrupted",
-      retrySafety: "unknown",
+      status: "failed",
       toolId: "creative-tools/image.generate",
     })
     expect(getCanvasNodeGenerationRun(running.nodes[0]!)?.status).toBe("running")
   })
 
-  test("duplicates an active pending owner as interrupted error history", () => {
+  test("duplicates an active pending owner as failed error history", () => {
     const created = applyCanvasApplicationCommand(
       createCanvasDocument({ id: "canvas-one", title: "Canvas" }),
       createCanvasPendingGenerationResourceCommand({
@@ -575,12 +582,12 @@ describe("Canvas node generation run", () => {
     const cloneId = duplicated.duplicatedNodeIdBySourceId.get(sourceNodeId)!
     const clone = duplicated.document.nodes.find((node) => node.id === cloneId)!
     expect(clone.data).toMatchObject({
-      error: "Generation was interrupted",
+      error: "Generation could not be completed",
       status: "error",
     })
     expect(getCanvasNodeGenerationRun(clone)).toMatchObject({
       operationId: "operation-pending",
-      status: "interrupted",
+      status: "failed",
     })
   })
 })

@@ -1,9 +1,7 @@
 # Canvas Node Generation: Scheduler–Agent–Supervisor and Long-Running Operations
 
-Status: historical implementation record for `origin/convax-next` at
-`06f993e6dea3c3cff59ec7d335cf7ebc7b4a2e38`. The Scheduler–Agent–Supervisor and LRO
-invariants remain current, but Plugin authoring now uses only `convax.plugin/8`,
-immutable ActiveSet snapshots, and code-generated API/Skill references.
+Status: current design. Plugin authoring uses `convax.plugin/8`, immutable ActiveSet
+snapshots, and code-generated API/Skill references.
 
 This document is the normative design implemented by this change. It applies the
 industry-standard **Scheduler–Agent–Supervisor** pattern to a durable
@@ -12,7 +10,7 @@ the verified Tool Plugin sidecar executes it, and the Main-owned supervision pha
 reconciles it after failures. Submission is idempotent, task recovery is
 crash-safe, result replay is byte-verified, and cancellation never requires a second
 billable call. Any runtime that cannot satisfy the complete LRO contract stays on
-the legacy fail-closed `interrupted(unknown)` path.
+the fail-closed Canvas `failed` path and is never automatically resubmitted.
 
 ![Canvas 节点生成的 Scheduler–Agent–Supervisor 与 LRO 架构](images/canvas-node-generation-scheduler-agent-supervisor-lro.png)
 
@@ -81,7 +79,7 @@ Goals:
 
 - persist the node’s next-run preference separately from its most recent actual run;
 - persist bounded portable operation, prompt, resolved tool, task receipt, status,
-  and retry-safety state;
+  and optional host-safe failure presentation;
 - submit only after Canvas state, Desktop’s private ledger, and immutable input
   snapshots are durable;
 - recover both task-receipt crash windows:
@@ -115,7 +113,7 @@ Canvas owns:
 
 - the versioned portable `convaxGenerationRun` schema;
 - parsing, migration, size bounds, and non-destructive handling of unknown schemas;
-- legal run transitions, terminal retry-safety, and clone semantics;
+- legal run transitions, one terminal failure state, and clone semantics;
 - typed run application operations;
 - the generation-specific content guard;
 - atomic generated-resource replacement plus `succeeded`.
@@ -157,11 +155,11 @@ Renderer:
 
 - creates a fresh `operationId` for a genuinely new user submission;
 - submits, explicitly cancels, and subscribes through narrow Desktop APIs;
-- hydrates prompt, resolved tool, status, and retry safety from Canvas;
+- hydrates prompt, resolved tool, and status from Canvas;
 - may display a transient Main-reported `recovering` projection.
 
 Renderer does not edit `.convax` JSON, call recovery methods directly, persist
-private receipts, or resubmit an indeterminate operation.
+private receipts, or automatically resubmit any failed operation.
 
 ## 4. Identity and trust model
 
@@ -210,11 +208,11 @@ metadata.convaxGenerationPreference = {
 }
 ```
 
-The current run schema is version 4:
+The current run schema is version 5:
 
 ```ts
 metadata.convaxGenerationRun = {
-  schema: "convax.node-generation-run/4",
+  schema: "convax.node-generation-run/5",
   failureMessage?: string,
   operationId: string,
   toolId: string,
@@ -223,23 +221,14 @@ metadata.convaxGenerationRun = {
     | "submitting"
     | "running"
     | "succeeded"
-    | "failed"
-    | "cancelled"
-    | "interrupted",
+    | "failed",
   taskId?: string,
-  retrySafety?: "safe" | "unknown",
 }
 ```
 
-Only the most recent run is retained. `retrySafety` is present only on terminal
-states:
-
-- `safe` means Main has durable proof that the prior operation cannot later produce
-  a second charge or result, so a new operation may be offered;
-- `unknown` means the original side effect cannot be disproved or safely queried.
-  UI must not offer ordinary retry because a new operation could duplicate a charge.
-
-`interrupted` therefore does not automatically mean “retryable.”
+Only the most recent run is retained. Canvas has one terminal failure state. Main
+and recovery-capable sidecars may keep more detailed technical phases in their
+private ledgers, but those phases never become portable Canvas state or retry UI.
 
 `prompt` is the normalized user-editable draft, not Main's effective model prompt.
 It may be empty when selected Canvas text nodes provide the complete prompt context.
@@ -263,10 +252,11 @@ stderr, or raw diagnostic may enter Canvas.
 
 An absent namespace stays absent. Unknown or malformed schemas remain unmodified
 and unreadable; commands do not overwrite them with defaults. Migration from
-`convax.node-generation-run/1`, `/2`, and `/3` preserves every valid field. Version
-3 permits the empty editable draft needed by prompt-context-only runs. Version 4
-adds the optional bounded host-authored failure presentation. An active v1 run
-lacks the proof required for automatic recovery and is reconciled conservatively
+`convax.node-generation-run/1` through `/4` preserves every valid field while
+migrating legacy cancelled/interrupted terminal states to `failed` and dropping
+legacy retry-safety metadata. Version 3 permits the empty editable draft needed by
+prompt-context-only runs. Version 4 added the optional bounded host-authored failure
+presentation. An active legacy run lacks the proof required for automatic recovery
 unless a matching private ledger can upgrade it.
 
 ## 6. Canvas state machine and replacement boundary
@@ -280,11 +270,11 @@ absent or terminal(previous operation)
 submitting(same operation)
   -> running
   -> running(first taskId)
-  -> failed(safe) | cancelled(safe) | interrupted(safe|unknown)
+  -> failed
 
 running(same operation)
   -> running(same taskId or first taskId)
-  -> succeeded | failed(safe) | cancelled(safe) | interrupted(safe|unknown)
+  -> succeeded | failed
 
 terminal(same operation)
   -> no transition
@@ -292,8 +282,8 @@ terminal(same operation)
 
 A different task id for the same operation fails closed. Duplicate lifecycle
 events with identical values are idempotent. A new operation cannot replace an
-active operation or an `interrupted(unknown)` operation without an explicit
-resolution that proves retry safety.
+active operation. After failure, pressing Send creates a fresh operation id; Main
+never automatically turns a failed operation into a new submission.
 
 The generated content guard omits only the Canvas-owned run and preference
 namespaces. It still protects node type, resource kind, Project reference, MIME,
@@ -306,9 +296,8 @@ preserves only the live, validated preference and run namespaces. The resource a
 `succeeded` status are committed by one Canvas command and one repository CAS.
 
 Duplicating an active node copies preference and historical prompt/tool, removes
-task ownership, sets `interrupted(unknown)`, and cannot accept callbacks for the
-original task. Deleting a node makes every late transition and replacement fail
-closed.
+task ownership, sets `failed`, and cannot accept callbacks for the original task.
+Deleting a node makes every late transition and replacement fail closed.
 
 ## 7. Desktop private operation ledger
 
@@ -432,7 +421,7 @@ recovery.
 
 Within v8, tools that omit `recovery` are recovery-unsupported. They continue to
 persist Canvas run state and task receipts when available, but restart marks an
-orphaned active run `interrupted(unknown)` and never invokes the tool.
+orphaned active run `failed` and never invokes the tool.
 
 Convax contains no Plugin-id, provider, model, or vendor branches. A tool either
 satisfies the complete durable LRO contract or it does not.
@@ -598,8 +587,8 @@ Startup recovery runs in Main before renderer hydration:
 1. load active Canvas runs and private ledgers;
 2. acquire a scoped recovery single-flight lease;
 3. cross-check Canvas owner, operation, request, task receipt, and ledger;
-4. if Main's ledger is still `prepared`, persist a safe failed/cancelled Canvas
-   terminal state and reclaim the local snapshot without launching a sidecar;
+4. if Main's ledger is still `prepared`, persist Canvas `failed` and reclaim the
+   local snapshot without launching a sidecar;
 5. otherwise launch only the pinned authorized runtime in recovery mode;
 6. verify the exact recovery handshake;
 7. call `lookupOperation(operationId, requestDigest)`;
@@ -610,8 +599,8 @@ Startup recovery runs in Main before renderer hydration:
    - `submitted` or `running`: persist a missing task receipt and reattach polling;
    - `succeeded`: replay and verify the terminal result, then attempt the guarded
      Canvas commit;
-   - `failed` or `cancelled`: persist the matching safe terminal Canvas state;
-   - `unknown`: persist `interrupted(unknown)` and never resubmit;
+   - `failed`, `cancelled`, or an unprovable private outcome: persist Canvas
+     `failed` and never create a replacement operation;
 9. publish Canvas invalidation, then hydrate Renderer from authoritative state.
 
 Replaying after `absent` is safe only because a full-recovery sidecar proves absence,
@@ -623,10 +612,10 @@ acknowledges and cleans up without re-admitting output. If the ledger is termina
 but Canvas is active, Main applies the terminal result through Canvas CAS. Every
 conflict reloads Canvas, ledger, and sidecar state before a bounded retry.
 
-An active Canvas run without its exact private ledger is
-`interrupted(unknown)`. A ledger whose node was deleted never revives the node;
-Main best-effort cancels or acknowledges the external operation and retains only
-private audit state until cleanup.
+An active Canvas run without its exact private ledger becomes `failed`. A ledger
+whose node was deleted never revives the node; Main best-effort cancels or
+acknowledges the external operation and retains only private audit state until
+cleanup.
 
 ## 14. Update, uninstall, single-host lifecycle, and late callbacks
 
@@ -637,16 +626,16 @@ identity. Plugin update or uninstall:
 - does not redirect recovery to the new executable;
 - retains the minimum private old runtime/journal needed for query, cancel, and
   result replay until terminal acknowledgement;
-- fails closed to `interrupted(unknown)` if the pinned runtime cannot be proven.
+- fails Canvas closed to `failed` if the pinned runtime cannot be proven.
 
 No provider-specific migration is attempted.
 
 Explicit sign-out first blocks new submissions and attempts operation-scoped
 cancellation or terminal acknowledgement for every active ledger bound to that
 private service identity. Credentials and private account state may be cleared only
-after those operations are terminal, or after the user accepts that unresolved
-operations will remain `interrupted(unknown)`. Sign-out never silently switches an
-operation to another account.
+after those operations are terminal, or after unresolved operations have been
+preserved privately and their Canvas cards marked `failed`. Sign-out never silently
+switches an operation to another account.
 
 The current product is single-machine. Recovery authority is scoped to the one local
 Desktop installation and its private ledger, pinned runtime, and sidecar journal.
@@ -661,14 +650,14 @@ runtime identity, and terminal Canvas state reject late mutation.
 
 Explicit cancellation is operation-scoped:
 
-- before external dispatch, Main cancels locally and records `cancelled(safe)`;
+- before external dispatch, Main cancels locally and presents Canvas `failed`;
 - during dispatch without `taskId`, Main calls the LRO `cancel` method by operation
   id;
 - after receipt, it includes both operation and task ids;
 - after restart, it uses the same pinned runtime and ledger;
-- cancellation acknowledgement is required before `retrySafety: "safe"`;
-- cancellation timeout or `unknown` becomes `interrupted(unknown)`, not safely
-  cancelled.
+- cancellation timeout or an unprovable outcome becomes Canvas `failed`; Main keeps
+  the technical distinction only in its private ledger and never auto-submits a new
+  operation.
 
 Renderer destruction, node unmount, selection changes, Canvas switches, and panel
 changes do not imply cancellation. OpenCode Stop is different: the Agent adapter
@@ -720,7 +709,7 @@ second generation.
 - Project `.convax` contains only Canvas-owned portable state;
 - journal and input cleanup are bounded, injected-clock-driven, and serialized with
   active recovery;
-- unknown state always fails closed.
+- unprovable private state always fails Canvas closed to `failed`.
 
 ## 18. IPC and UI
 
@@ -739,10 +728,8 @@ UI behavior:
 - `submitting`/`running`: active display; after restart Main may project
   `recovering`;
 - `succeeded`: historical resolved tool and committed result;
-- `failed`/`cancelled` with `retrySafety: "safe"`: modify and retry with a fresh
-  operation id;
-- `interrupted(unknown)`: explain that the prior external outcome is uncertain,
-  disable ordinary retry, and offer only safe inspect/reconnect/cancel actions;
+- `failed`: one simple icon-and-message error surface; selecting the card restores
+  its persisted prompt, and pressing Send manually starts a fresh operation id;
 - a recognized service outage may replace the generic terminal title only with a
   bounded host-authored message derived from the validated service display name;
 - model preference remains independent from the run’s resolved tool.
@@ -784,13 +771,13 @@ Every row asserts:
   the current runtime.
 - Full recovery is admitted only by the exact v8 manifest/runtime contract.
 - V8 tools without the complete LRO declaration may still return structured task
-  receipts, but remain restart-interrupted.
-- `convax.node-generation-run/1`, `/2`, and `/3` are read and explicitly migrated;
+  receipts, but restart to Canvas `failed`.
+- `convax.node-generation-run/1` through `/4` are read and explicitly migrated;
   unknown schemas remain untouched.
 - Desktop protocol and `@convax/canvas` public version must be bumped when the
   corresponding contracts land.
 - Recovery is enabled only after private storage, sidecar protocol, startup
-  orchestration, UI retry safety, and the complete crash matrix are all present.
+  orchestration, single-failure UI, and the complete crash matrix are all present.
   There is no feature flag that enables automatic replay with only part of the
   proof chain.
 
@@ -798,13 +785,13 @@ Every row asserts:
 
 Canvas:
 
-- v1-to-v2 migration and unknown/invalid schema preservation;
+- v1-to-v5 migration and unknown/invalid schema preservation;
 - preference versus resolved tool separation;
-- legal and illegal transitions, task immutability, and retry-safety invariants;
+- legal and illegal transitions, task immutability, and single-failure invariants;
 - complete string and JSON bounds;
 - generated guard stability and atomic success replacement;
 - clone/delete/stale revision behavior;
-- prohibition on retrying `interrupted(unknown)`.
+- manual retry after failure creates a fresh operation id.
 
 Desktop private storage:
 

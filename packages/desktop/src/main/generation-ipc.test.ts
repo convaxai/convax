@@ -144,7 +144,7 @@ async function rejectionMessage(value: unknown) {
 describe("generation IPC", () => {
   test("reconciles one exact Canvas reference without exposing paths or resume controls", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
-    const reconcileCanvas = mock(async () => ({ interruptedNodeIds: ["node-one"], revision: 8 }))
+    const reconcileCanvas = mock(async () => ({ failedNodeIds: ["node-one"], revision: 8 }))
     const dispose = registerGenerationIpc(
       {
         describeTool: async () => description,
@@ -161,7 +161,7 @@ describe("generation IPC", () => {
           ref: { canvasId: "canvas-one", scopeId: "project-one" },
         }),
       ),
-    ).resolves.toEqual({ interruptedNodeIds: ["node-one"], revision: 8 })
+    ).resolves.toEqual({ failedNodeIds: ["node-one"], revision: 8 })
     expect(reconcileCanvas).toHaveBeenCalledWith({ ref: { canvasId: "canvas-one", scopeId: "project-one" } })
     await expect(
       rejectionMessage(

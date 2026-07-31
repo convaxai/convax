@@ -28,8 +28,6 @@ export interface CanvasFinishNodeGenerationRunRequest extends CanvasNodeGenerati
   failureMessage?: string
   nodeId: string
   operationId: string
-  retrySafety: "safe" | "unknown"
-  status: "failed" | "cancelled" | "interrupted"
 }
 
 export interface CanvasInterruptInactiveGenerationRunsRequest extends CanvasNodeGenerationRunRequestBase {
@@ -68,8 +66,6 @@ export class CanvasNodeGenerationRunBusinessService {
       ...(request.failureMessage === undefined ? {} : { failureMessage: request.failureMessage }),
       nodeId: request.nodeId,
       operationId: request.operationId,
-      retrySafety: request.retrySafety,
-      status: request.status,
       type: "generation.run.finish",
     })
   }

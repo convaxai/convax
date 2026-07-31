@@ -138,8 +138,6 @@ export type CanvasNodeGenerationRunCommand =
       failureMessage?: string
       nodeId: string
       operationId: string
-      retrySafety: "safe" | "unknown"
-      status: "failed" | "cancelled" | "interrupted"
     }
   | {
       type: "generation.runs.interrupt-inactive"
@@ -525,8 +523,6 @@ export function applyCanvasApplicationCommand(
         document,
         command.nodeId,
         command.operationId,
-        command.status,
-        command.retrySafety,
         command.failureMessage,
       ),
     )

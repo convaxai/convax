@@ -391,8 +391,9 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   application service for every transition. Recovery-capable tools use the standard
   Scheduler–Agent–Supervisor pattern over a durable Long-Running Operation contract;
   `operationId` is the idempotency/LRO identity and `taskId` is only an opaque
-  downstream handle. Without the complete admitted LRO contract, restart marks
-  orphaned active runs interrupted and never repeats a potentially billable call.
+  downstream handle. A complete admitted LRO resumes or queries the same operation
+  after restart; without it, restart marks orphaned active runs failed and never
+  repeats a potentially billable call.
 - A Tool Plugin may expose a user-global service surface through the same verified
   sidecar lifecycle. Service status and mutations use fixed host tool names and a
   strict display-only contract; renderer code never selects an MCP method or receives

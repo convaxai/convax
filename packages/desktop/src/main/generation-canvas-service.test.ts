@@ -567,8 +567,6 @@ async function setupPendingGeneration(
           currentDocument,
           input.nodeId,
           input.operationId,
-          input.status,
-          input.retrySafety,
           input.failureMessage,
         )
         currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
@@ -1892,7 +1890,7 @@ describe("GenerationCanvasService", () => {
     releaseLedgerList()
 
     try {
-      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
       expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
       expect(harness.runRequests.finish).toEqual([])
       expect(harness.calls).toEqual([])
@@ -1977,7 +1975,7 @@ describe("GenerationCanvasService", () => {
     releaseLedgerList()
 
     try {
-      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
       expect(harness.runRequests.interruptInactive).toHaveLength(1)
       expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
         nodeId: owner.id,
@@ -2100,7 +2098,6 @@ describe("GenerationCanvasService", () => {
       expectedRevision: 2,
       nodeId: harness.pendingNodeId,
       operationId: "operation-one",
-      status: "failed",
     })
     expect(harness.runRequests.finish[0]).not.toHaveProperty("failureMessage")
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
@@ -2237,7 +2234,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
   })
 
-  test("treats a final dispatch guard rejection as safely not dispatched", async () => {
+  test("fails the card when the final dispatch guard rejects before the tool call", async () => {
     const harness = await setupPendingGeneration(
       { content: [{ text: "Unused output", type: "text" }] },
       {
@@ -2265,15 +2262,12 @@ describe("GenerationCanvasService", () => {
       expect.objectContaining({
         failureMessage: "Creative Tools 服务不可用",
         operationId: "operation-one",
-        retrySafety: "safe",
-        status: "failed",
       }),
     ])
     const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
     expect(pending.data).toMatchObject({ error: "Creative Tools 服务不可用", status: "error" })
     expect(getCanvasNodeGenerationRun(pending)).toMatchObject({
       failureMessage: "Creative Tools 服务不可用",
-      retrySafety: "safe",
       status: "failed",
     })
   })
@@ -2313,7 +2307,7 @@ describe("GenerationCanvasService", () => {
     expect(calls).toEqual([])
     expect(runRequests.markRunning).toEqual([])
     expect(runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
   })
 
@@ -2372,7 +2366,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
     expect(harness.runRequests.markRunning).toEqual([])
     expect(harness.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
     expect(await operations.list()).toEqual([])
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
@@ -2413,12 +2407,9 @@ describe("GenerationCanvasService", () => {
     await expect(generation).rejects.toMatchObject({ name: "AbortError" })
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(harness.runRequests.finish).toHaveLength(1)
-    expect(harness.runRequests.finish[0]).toMatchObject({
-      retrySafety: "unknown",
-      status: "interrupted",
-    })
+    expect(harness.runRequests.finish[0]).toMatchObject({ operationId: "operation-one" })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
-      error: "Generation was interrupted",
+      error: "Generation could not be completed",
       status: "error",
     })
     expect(harness.replacementRequests).toEqual([])
@@ -2739,7 +2730,7 @@ describe("GenerationCanvasService", () => {
       { operationId: "operation-one", taskId: undefined },
     ])
     expect(legacy.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
     expect(legacy.replacementRequests).toEqual([])
   })
@@ -2807,13 +2798,11 @@ describe("GenerationCanvasService", () => {
     for (let index = 0; index < 10 && canceled.runRequests.finish.length === 0; index += 1) {
       await Bun.sleep(0)
     }
-    expect(canceled.runRequests.finish.map(({ operationId, status }) => ({ operationId, status }))).toEqual([
-      { operationId: "operation-one", status: "interrupted" },
-    ])
+    expect(canceled.runRequests.finish.map(({ operationId }) => operationId)).toEqual(["operation-one"])
     expect(canceled.replacementRequests).toEqual([])
   })
 
-  test("reconciles restart-left active runs to interrupted without invoking a tool", async () => {
+  test("reconciles restart-left active runs to failed without invoking a tool", async () => {
     const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
     const active = startCanvasNodeGenerationRun(
       createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
@@ -2831,7 +2820,7 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:renderer", kind: "ui" },
       ),
-    ).resolves.toEqual({ interruptedNodeIds: [owner.id], revision: 1 })
+    ).resolves.toEqual({ failedNodeIds: [owner.id], revision: 1 })
     expect(runRequests.interruptInactive).toEqual([expect.objectContaining({ expectedRevision: 0, liveRuns: [] })])
     expect(calls).toEqual([])
   })
@@ -3009,7 +2998,7 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:startup", kind: "system" },
       ),
-    ).resolves.toMatchObject({ interruptedNodeIds: [] })
+    ).resolves.toMatchObject({ failedNodeIds: [] })
     for (let index = 0; index < 2_000; index += 1) {
       if ((await operations.list()).length === 0) break
       await Bun.sleep(1)
@@ -3136,8 +3125,6 @@ describe("GenerationCanvasService", () => {
     expect(harness.runRequests.finish).toEqual([
       expect.objectContaining({
         operationId: "operation-never-dispatched",
-        retrySafety: "safe",
-        status: "failed",
       }),
     ])
     expect(await operations.list()).toEqual([])
@@ -3634,8 +3621,6 @@ describe("GenerationCanvasService", () => {
     expect(harness.runRequests.finish).toEqual([
       expect.objectContaining({
         operationId: "operation-cancel-after-restart",
-        retrySafety: "safe",
-        status: "cancelled",
       }),
     ])
     expect(acknowledgements).toEqual([
@@ -3846,7 +3831,9 @@ describe("GenerationCanvasService", () => {
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([storedInput.id])
     expect(harness.calls).toEqual([])
     expect(harness.replacementRequests).toEqual([])
-    expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", { errorType: "Error" })
+    expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", {
+      diagnostics: [{ message: "Generation recovery runtime binding changed", name: "Error" }],
+    })
     report.mockRestore()
   })
 
@@ -3929,9 +3916,9 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:renderer", kind: "ui" },
       ),
-    ).resolves.toEqual({ interruptedNodeIds: [staleOwner.id], revision: 2 })
+    ).resolves.toEqual({ failedNodeIds: [staleOwner.id], revision: 2 })
     expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === staleOwner.id)!)).toMatchObject({
-      status: "interrupted",
+      status: "failed",
     })
     expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === liveOwner.id)!)).toMatchObject({
       operationId: "operation-after-restart",
