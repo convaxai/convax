@@ -261,6 +261,74 @@ describe("@convax/marketplace-kit", () => {
     await expect(changedMarketplaceVersions(root, base)).rejects.toThrow("yanked")
   })
 
+  test("selects a versioned package/2 replacement from a package/1 base tree", async () => {
+    const root = await mkdtemp(join(tmpdir(), "convax-market-package-v1-cutover-"))
+    await createMarketplaceStarter(root, {
+      id: "acme-market",
+      name: "Acme Market",
+      owner: "acme",
+      repository: "extensions",
+      starter: "plugin",
+    })
+    const metadataPath = join(root, "packages/plugins/example-plugin/convax-package.json")
+    const manifestPath = join(root, "packages/plugins/example-plugin/package/manifest.json")
+    const currentMetadata = JSON.parse(await readFile(metadataPath, "utf8"))
+    const currentManifest = JSON.parse(await readFile(manifestPath, "utf8"))
+    await Bun.write(
+      metadataPath,
+      `${JSON.stringify({
+        ...currentMetadata,
+        schema: "convax.package/1",
+        compatibility: { convax: ">=0.1.0" },
+        license: "Apache-2.0",
+        yanked: false,
+      }, null, 2)}\n`,
+    )
+    await Bun.write(
+      manifestPath,
+      `${JSON.stringify({
+        ...currentManifest,
+        schema: "convax.plugin/7",
+        hostApi: undefined,
+      }, null, 2)}\n`,
+    )
+    const git = async (...args: string[]): Promise<string> => {
+      const process = Bun.spawn(["git", "-C", root, ...args], { stdout: "pipe", stderr: "pipe" })
+      const [stdout, stderr, code] = await Promise.all([
+        new Response(process.stdout).text(),
+        new Response(process.stderr).text(),
+        process.exited,
+      ])
+      if (code !== 0) throw new Error(`git ${args.join(" ")} failed: ${stderr}`)
+      return stdout.trim()
+    }
+    await git("init", "-b", "main")
+    await git("config", "user.email", "marketplace-test@example.com")
+    await git("config", "user.name", "Marketplace Test")
+    await git("add", ".")
+    await git("commit", "-m", "package v1 baseline")
+    const base = await git("rev-parse", "HEAD")
+
+    await Bun.write(
+      metadataPath,
+      `${JSON.stringify({ ...currentMetadata, version: "0.2.0" }, null, 2)}\n`,
+    )
+    await Bun.write(
+      manifestPath,
+      `${JSON.stringify({ ...currentManifest, version: "0.2.0" }, null, 2)}\n`,
+    )
+    await git("add", ".")
+    await git("commit", "-m", "package v2 replacement")
+
+    expect(await changedMarketplaceVersions(root, base)).toEqual([{
+      kind: "plugin",
+      id: "example-plugin",
+      version: "0.2.0",
+      previousVersion: "0.1.0",
+      releaseTag: "plugin-example-plugin-v0.2.0",
+    }])
+  })
+
   test("separates installed and built workspace outputs from immutable package closure", async () => {
     const root = await mkdtemp(join(tmpdir(), "convax-market-version-closure-"))
     const pluginRoot = join(root, "packages/plugins/example-plugin")

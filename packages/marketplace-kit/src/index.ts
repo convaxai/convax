@@ -241,6 +241,64 @@ function parsePackageMetadata(value: unknown, label = "convax-package.json"): Re
   return metadata
 }
 
+function parseBasePackageMetadata(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return parsePackageMetadata(value, label)
+  }
+  const metadata: Record<string, unknown> = {}
+  for (const key of Object.keys(value)) metadata[key] = Reflect.get(value, key)
+  if (metadata.schema !== "convax.package/1") return parsePackageMetadata(value, label)
+  const allowed = [
+    "schema",
+    "kind",
+    "id",
+    "name",
+    "description",
+    "version",
+    "compatibility",
+    "license",
+    "showcase",
+    "yanked",
+  ]
+  if (metadata.kind === "plugin") allowed.push("companions")
+  if (metadata.kind === "skill") allowed.push("ownerPluginId")
+  for (const key of Object.keys(metadata)) {
+    if (!allowed.includes(key)) throw new TypeError(`${label} has unknown property ${key}`)
+  }
+  for (const key of [
+    "schema",
+    "kind",
+    "id",
+    "name",
+    "description",
+    "version",
+    "compatibility",
+    "license",
+    "yanked",
+  ]) {
+    if (!(key in metadata)) throw new TypeError(`${label} is missing ${key}`)
+  }
+  if (metadata.kind !== "plugin" && metadata.kind !== "skill") {
+    throw new TypeError(`${label} has an unsupported historical kind`)
+  }
+  for (const key of ["id", "name", "description", "version", "license"] as const) {
+    if (typeof metadata[key] !== "string" || metadata[key].length === 0) {
+      throw new TypeError(`${label}.${key} must be a non-empty string`)
+    }
+  }
+  if (
+    !metadata.compatibility ||
+    typeof metadata.compatibility !== "object" ||
+    Array.isArray(metadata.compatibility)
+  ) {
+    throw new TypeError(`${label}.compatibility must be an object`)
+  }
+  if (typeof metadata.yanked !== "boolean") {
+    throw new TypeError(`${label}.yanked must be a boolean`)
+  }
+  return metadata
+}
+
 function parseSkill(
   markdown: string,
   directoryName: string,
@@ -508,7 +566,10 @@ export async function changedMarketplaceVersions(
     if (authoringText === undefined) {
       throw new TypeError(`base package ${packageRoot} does not use convax.package/2`)
     }
-    const authoring = parsePackageMetadata(JSON.parse(authoringText), `base package ${packageRoot}`)
+    const authoring = parseBasePackageMetadata(
+      JSON.parse(authoringText),
+      `base package ${packageRoot}`,
+    )
     const kind = authoring.kind as StarterKind
     const id = authoring.id as string
     const version = authoring.version as string
@@ -2137,7 +2198,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.0",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.1",
         },
       },
       null,

@@ -188,7 +188,7 @@ the provider's durable `operationId`/LRO contract.
 Plugin ABI releases roll out in dependency order: publish
 `@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
 Marketplace authoring line (`@convax/marketplace`,
-`@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.0`), and only
+`@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.1`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
 its authoring dependencies and republishes `convax.plugin/8` artifacts after those
 Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
