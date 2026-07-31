@@ -39,6 +39,102 @@ Registry/Release artifacts or mechanically generated and verified bootstrap byte
 it does not duplicate hand-maintained Plugin source. No runtime semantic may depend
 on a concrete package id merely because a package was historically bundled here.
 
+### Architecture map
+
+This diagram is part of the canonical architecture, not a generated illustration.
+Keep it and the corresponding prose, tables, state map, persistence map, and flows
+up to date in the same change whenever package ownership, dependencies, runtime
+routing, trust boundaries, persistence targets, or delivery surfaces change. Keep
+the reviewable Mermaid source in this document; do not commit duplicate PNG, SVG, or
+JSON renderings.
+
+```mermaid
+flowchart TB
+  subgraph Authoring["Authoring and immutable release"]
+    PluginSource["convax-plugins<br/>Plugin, Skill, companion source"]
+    MarketplaceCli["create-convax-marketplace"]
+    MarketplaceKit["@convax/marketplace-kit"]
+    Release["Registry / immutable Release artifacts"]
+    PluginSource --> MarketplaceKit
+    MarketplaceCli --> MarketplaceKit
+    MarketplaceKit --> Release
+  end
+
+  subgraph Desktop["@convax/desktop · Electron composition root"]
+    subgraph Entry["Runtime entry surfaces"]
+      Renderer["Renderer UI<br/>React and controllers"]
+      Preload["Preload<br/>typed window.convax bridge"]
+      Agent["Agent / OpenCode"]
+      PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
+      Main["Main authority<br/>I/O, execution, persistence"]
+      Composition["Desktop composition<br/>adapters and package wiring"]
+      Renderer --> Preload --> Main
+      Agent --> Main
+      PluginRuntime --> Main
+      Composition --> Renderer
+      Composition --> Main
+    end
+
+    subgraph Packages["Headless and publishable packages"]
+      Workbench["@convax/workbench"]
+      Project["@convax/project"]
+      Canvas["@convax/canvas"]
+      ProjectFiles["@convax/project-files"]
+      UI["@convax/ui"]
+      AgentRuntime["@convax/agent-runtime"]
+      Marketplace["@convax/marketplace"]
+      PluginSdk["@convax/plugin-sdk"]
+      PluginApi["@convax/plugin-api"]
+
+      Project --> Canvas --> UI
+      Project --> ProjectFiles
+      Project --> UI
+      PluginSdk --> PluginApi
+    end
+
+    MarketplaceKit --> Marketplace
+    MarketplaceKit --> PluginSdk
+    MarketplaceKit --> PluginApi
+    Composition --> Workbench
+    Composition --> Project
+    Composition --> Canvas
+    Composition --> ProjectFiles
+    Composition --> UI
+    Composition --> AgentRuntime
+    Composition --> Marketplace
+    Composition --> PluginSdk
+    Composition --> PluginApi
+  end
+
+  Release --> Main
+
+  subgraph State["State and persistence"]
+    UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
+    ProjectRoot["Project root / .convax<br/>identity, Canvas catalog/documents, managed assets"]
+    LocalStorage["Browser localStorage<br/>Workbench and renderer preferences only"]
+  end
+
+  Main --> UserData
+  Main --> ProjectRoot
+  Renderer -. preferences only .-> LocalStorage
+
+  subgraph Delivery["Independent delivery surfaces"]
+    Web["@convax/web<br/>public marketing site"]
+    Cloudflare["@convax/deploy-cloudflare<br/>public origin and API routing edge"]
+    Docs["@convax/docs<br/>independently deployed documentation site"]
+    FutureApi["future @convax/api"]
+    Web --> Cloudflare
+    Cloudflare -. explicit Service Binding .-> FutureApi
+  end
+
+  classDef authority fill:#123047,stroke:#46c7e8,color:#ffffff,stroke-width:2px;
+  classDef store fill:#15382e,stroke:#63d4a5,color:#ffffff;
+  classDef external fill:#312a1a,stroke:#e8b44e,color:#ffffff;
+  class Main authority;
+  class UserData,ProjectRoot,LocalStorage store;
+  class PluginSource,Release external;
+```
+
 ## 2. Terms
 
 ### Project
@@ -250,6 +346,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell                                                     |
 | `@convax/web`               | Public marketing site and responsive product storytelling                                                                    |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                    |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                    |
 
 Allowed internal runtime dependencies:
 
@@ -269,14 +366,18 @@ create-convax-marketplace -> @convax/marketplace-kit
                           project, project-files, ui and workbench
 @convax/deploy-cloudflare -> @convax/web build output; future @convax/api through
                              a Cloudflare Service Binding
+@convax/docs           -> no Convax package
 ```
 
 The private applications under `apps/*` are delivery surfaces rather than
-publishable domain libraries. `@convax/web` owns no product state and
-`@convax/deploy-cloudflare` owns no API business logic. The latter is the single
-public origin for `convax.microvoid.io`: static Web assets own normal navigation,
-while the exact `/api` and `/api/**` path family is reserved for a separately
-deployed API service.
+publishable domain libraries. `@convax/web` owns no product state,
+`@convax/docs` owns no product or architecture runtime state, and
+`@convax/deploy-cloudflare` owns no API business logic. The deployment package is
+the single public origin for `convax.microvoid.io`: static Web assets own normal
+navigation, while the exact `/api` and `/api/**` path family is reserved for a
+separately deployed API service. The Docs application is built and deployed through
+its own Astro and Cloudflare configuration; it is not routed through the product Web
+deployment package.
 
 The three Marketplace packages target the supported Node/Bun authoring and Desktop
 main runtimes. `@convax/marketplace` stays headless but may use Node cryptography for
