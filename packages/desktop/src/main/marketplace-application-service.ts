@@ -31,6 +31,7 @@ import {
   type CapabilityMutationCoordinator,
   type CapabilityTransition,
   type InstallRecord,
+  type MarketplaceState,
   capabilityTransitionParticipantDigest,
   projectInstalledCapability,
 } from "./marketplace-state"
@@ -157,6 +158,50 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     return () => this.#listeners.delete(listener)
   }
 
+  #clearProvisioningDecision(
+    draft: MarketplaceState,
+    identity: { id: string; kind: MarketplaceCapabilityKind },
+    marketplaceId: string,
+  ) {
+    draft.provisioningDecisions = draft.provisioningDecisions.filter(
+      (decision) =>
+        !(identityKey(decision.identity) === identityKey(identity) && decision.marketplaceId === marketplaceId),
+    )
+  }
+
+  #clearProductLockProvisioningDecision(
+    draft: MarketplaceState,
+    identity: {
+      id: string
+      kind: MarketplaceCapabilityKind
+      sourceKey: SourceKey
+      version: string
+    },
+  ) {
+    const policy = this.#options.preinstalledPolicy?.(identity)
+    if (policy) this.#clearProvisioningDecision(draft, identity, policy.marketplaceId)
+  }
+
+  #recordProvisioningRemoval(draft: MarketplaceState, record: InstallRecord) {
+    const policy = this.#options.preinstalledPolicy?.(record)
+    if (!policy) return
+    const previous = draft.provisioningDecisions.find(
+      (decision) =>
+        identityKey(decision.identity) === identityKey(record) &&
+        decision.marketplaceId === policy.marketplaceId,
+    )
+    this.#clearProvisioningDecision(draft, record, policy.marketplaceId)
+    draft.provisioningDecisions.push({
+      decision: "removed-by-user",
+      identity: { id: record.id, kind: record.kind },
+      marketplaceId: policy.marketplaceId,
+      observedPolicyRevision: policy.observedPolicyRevision,
+      policyEntryDigest: policy.policyEntryDigest,
+      revision: (previous?.revision ?? 0) + 1,
+      sourceKey: record.sourceKey,
+    })
+  }
+
   async #catalog() {
     const [fixed, network] = await Promise.all([this.#options.fixedCatalog(), this.#options.network.listCatalog()])
     let localItems: SourceQualifiedItem[] = []
@@ -273,9 +318,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         state.installations.map(async (record) => {
           const sourceItem = catalog.find(
             (candidate) =>
-              candidate.kind === record.kind &&
-              candidate.id === record.id &&
-              candidate.sourceKey === record.sourceKey,
+              candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
           )
           const grant = state.executionGrants.find(
             (candidate) =>
@@ -477,6 +520,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       (record) => identityKey(record) === identityKey(candidate),
     )
     await this.#installCandidate(candidate, installed ? "update" : "install")
+    if (this.#options.preinstalledPolicy?.(candidate)?.setup === "automatic") {
+      await this.#ensureAutomaticProductLockSetup(candidate)
+    }
     this.#emit()
     return this.#installed(candidate.kind, candidate.id)
   }
@@ -597,6 +643,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           if (current && current.sourceKey !== candidate.sourceKey) throw new Error("Installed source cannot change")
           draft.installations = draft.installations.filter((entry) => identityKey(entry) !== identityKey(candidate))
           draft.installations.push(next)
+          this.#clearProductLockProvisioningDecision(draft, candidate)
           const previousGrant = draft.executionGrants.find(
             (entry) => identityKey(entry.identity) === identityKey(candidate),
           )
@@ -982,6 +1029,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           previous: record,
           revision: 1,
         })
+        // The explicit user intent must survive every publication outcome and
+        // product-lock revision, so commit it before removing any installed bytes.
+        this.#recordProvisioningRemoval(draft, record)
       })
       try {
         await this.#advanceTransition(transitionId, "publish")
@@ -996,28 +1046,6 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           draft.runtimePreferences = draft.runtimePreferences.filter(
             (entry) => identityKey(entry.identity) !== identityKey(identity),
           )
-          const policy = this.#options.preinstalledPolicy?.(record)
-          if (policy) {
-            const previousDecision = draft.provisioningDecisions.find(
-              (entry) =>
-                identityKey(entry.identity) === identityKey(identity) && entry.marketplaceId === policy.marketplaceId,
-            )
-            draft.provisioningDecisions = draft.provisioningDecisions.filter(
-              (entry) =>
-                !(
-                  identityKey(entry.identity) === identityKey(identity) && entry.marketplaceId === policy.marketplaceId
-                ),
-            )
-            draft.provisioningDecisions.push({
-              decision: "removed-by-user",
-              identity,
-              marketplaceId: policy.marketplaceId,
-              observedPolicyRevision: policy.observedPolicyRevision,
-              policyEntryDigest: policy.policyEntryDigest,
-              revision: (previousDecision?.revision ?? 0) + 1,
-              sourceKey: record.sourceKey,
-            })
-          }
           transition.decision = "next"
           transition.phase = "decide"
           transition.participants[0]!.state = "published"
@@ -1250,7 +1278,12 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             draft.installations = draft.installations.filter(
               (record) => identityKey(record) !== identityKey(transition.identity),
             )
-            if (selected) draft.installations.push(selected)
+            if (selected) {
+              draft.installations.push(selected)
+              if (transition.mutation !== "uninstall") {
+                this.#clearProductLockProvisioningDecision(draft, selected)
+              }
+            }
             for (const participant of transition.participants) {
               if (participant.participant === "execution-grant") {
                 const participantRecord = decision === "next" ? participant.next : participant.previous
@@ -1325,15 +1358,12 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         const policy = this.#options.preinstalledPolicy(item)
         if (!policy || item.marketplaceId !== policy.marketplaceId) continue
         const state = await this.#options.state.read()
-        if (
-          state.provisioningDecisions.some(
-            (entry) =>
-              identityKey(entry.identity) === identityKey(item) &&
-              entry.marketplaceId === policy.marketplaceId &&
-              entry.sourceKey === item.sourceKey,
-          )
+        const removed = state.provisioningDecisions.some(
+          (entry) =>
+            identityKey(entry.identity) === identityKey(item) &&
+            entry.marketplaceId === policy.marketplaceId,
         )
-          continue
+        if (removed) continue
         const installed = state.installations.find((entry) => identityKey(entry) === identityKey(item))
         if (!installed) {
           await this.#installCandidate(item, "install")

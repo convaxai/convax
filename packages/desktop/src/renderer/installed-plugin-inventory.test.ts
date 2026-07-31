@@ -4,10 +4,12 @@ import { combineInstalledPluginInventoryChanges, subscribeInstalledPluginInvento
 
 function deferred<T>() {
   let resolve!: (value: T) => void
-  const promise = new Promise<T>((settle) => {
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((settle, fail) => {
     resolve = settle
+    reject = fail
   })
-  return { promise, resolve }
+  return { promise, reject, resolve }
 }
 
 function inventory(installed: ActiveInstalledWebPluginSummary[]): WebPluginInventory {
@@ -46,6 +48,43 @@ describe("subscribeInstalledPluginInventory", () => {
     await Promise.resolve()
 
     expect(updates.map((plugins) => plugins.map((plugin) => plugin.id))).toEqual([["plugin-new"]])
+    dispose()
+  })
+
+  test("clears the authoritative inventory before reporting a current refresh failure", async () => {
+    const initial = deferred<WebPluginInventory>()
+    const failed = deferred<WebPluginInventory>()
+    let listener: (() => void) | undefined
+    const listPlugins = mock()
+      .mockImplementationOnce(() => initial.promise)
+      .mockImplementationOnce(() => failed.promise)
+    const updates: Array<readonly ActiveInstalledWebPluginSummary[]> = []
+    const errors: unknown[] = []
+    const dispose = subscribeInstalledPluginInventory(
+      {
+        listPlugins,
+        onDidChange: (next) => {
+          listener = next
+          return () => {
+            listener = undefined
+          }
+        },
+      },
+      (plugins) => updates.push(plugins),
+      (error) => errors.push(error),
+    )
+
+    initial.resolve(inventory([{ id: "plugin-stale" } as ActiveInstalledWebPluginSummary]))
+    await initial.promise
+    await Promise.resolve()
+    listener?.()
+    const failure = new Error("active set unavailable")
+    failed.reject(failure)
+    await failed.promise.catch(() => undefined)
+    await Promise.resolve()
+
+    expect(updates.map((plugins) => plugins.map((plugin) => plugin.id))).toEqual([["plugin-stale"], []])
+    expect(errors).toEqual([failure])
     dispose()
   })
 

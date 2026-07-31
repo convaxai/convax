@@ -775,6 +775,149 @@ test("preinstalls only the exact source-bound policy entry and preserves removal
   expect((await state.read()).installations).toEqual([])
 })
 
+test("explicit reinstall clears the matching removal decision and completes automatic Plugin setup", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-zip")
+  const item: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
+    },
+    id: "ffmpeg-tools",
+    kind: "plugin",
+    marketplaceId: "convax-official",
+    presentation: { name: "FFmpeg Tools" },
+    sourceKey: sourceA,
+    version: "1.0.0",
+  }
+  const policyEntryDigest = sha256Hex(canonicalJson({ id: item.id, sourceKey: item.sourceKey, version: item.version }))
+  const policy = () => ({
+    marketplaceId: item.marketplaceId,
+    observedPolicyRevision: 1,
+    policyEntryDigest,
+    setup: "automatic" as const,
+  })
+  const setupModes: string[] = []
+  const { service } = harness({
+    candidates: [item],
+    installer: {
+      setup: async (_record, _prepared, options) => {
+        setupModes.push(options.mode)
+        return { authorizationContractDigest: "f".repeat(64) }
+      },
+    },
+    preinstalledPolicy: policy,
+    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
+    state,
+  })
+
+  await service.provisionPreinstalled()
+  await service.uninstall({ id: item.id, kind: item.kind })
+  expect((await state.read()).provisioningDecisions).toHaveLength(1)
+
+  await install(service, item)
+
+  expect(setupModes).toEqual(["automatic-product-lock", "automatic-product-lock"])
+  expect(await state.read()).toMatchObject({
+    executionGrants: [{ identity: { id: item.id, kind: item.kind }, sourceKey: item.sourceKey }],
+    installations: [{ id: item.id, sourceKey: item.sourceKey }],
+    provisioningDecisions: [],
+    transitions: [],
+  })
+})
+
+test("uninstall recovery preserves the accepted removal decision across a product-lock version change", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-zip")
+  const item: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v1.0.0/plugin.zip",
+    },
+    id: "ffmpeg-tools",
+    kind: "plugin",
+    marketplaceId: "convax-official",
+    presentation: { name: "FFmpeg Tools" },
+    sourceKey: sourceA,
+    version: "1.0.0",
+  }
+  const nextBytes = new TextEncoder().encode("plugin-zip-v2")
+  const nextItem: SourceQualifiedItem = {
+    ...item,
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(nextBytes),
+      size: nextBytes.byteLength,
+      url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v2.0.0/plugin.zip",
+    },
+    version: "2.0.0",
+  }
+  const policyEntryDigest = "d".repeat(64)
+  const nextPolicyEntryDigest = "e".repeat(64)
+  const policy = (identity: { version: string }) =>
+    identity.version === item.version
+      ? {
+          marketplaceId: item.marketplaceId,
+          observedPolicyRevision: 1,
+          policyEntryDigest,
+          setup: "automatic" as const,
+        }
+      : identity.version === nextItem.version
+        ? {
+            marketplaceId: nextItem.marketplaceId,
+            observedPolicyRevision: 2,
+            policyEntryDigest: nextPolicyEntryDigest,
+            setup: "automatic" as const,
+          }
+        : undefined
+  const first = harness({
+    candidates: [item],
+    installer: {
+      setup: async () => ({ authorizationContractDigest: "f".repeat(64) }),
+      uninstall: async () => {
+        throw new Error("crashed after removing Plugin bytes")
+      },
+    },
+    preinstalledPolicy: policy,
+    prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
+    state,
+  })
+  await first.service.provisionPreinstalled()
+  await expect(first.service.uninstall({ id: item.id, kind: item.kind })).rejects.toThrow(
+    "crashed after removing Plugin bytes",
+  )
+
+  const restarted = harness({
+    candidates: [nextItem],
+    installer: { resolveTransition: async () => "next" },
+    preinstalledPolicy: policy,
+    prepareFixedArtifact: async () => ({ artifactBytes: nextBytes, companionBytes: {} }),
+    state,
+  })
+  await restarted.service.recoverTransitions()
+  await restarted.service.provisionPreinstalled()
+
+  expect(await state.read()).toMatchObject({
+    installations: [],
+    provisioningDecisions: [
+      {
+        decision: "removed-by-user",
+        identity: { id: item.id, kind: item.kind },
+        marketplaceId: item.marketplaceId,
+        policyEntryDigest,
+        sourceKey: item.sourceKey,
+      },
+    ],
+    transitions: [],
+  })
+})
+
 test("retries automatic product-lock setup after recovering a failed setup transition", async () => {
   const state = await stateStore()
   const bytes = new TextEncoder().encode("plugin-zip")
