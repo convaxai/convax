@@ -192,6 +192,14 @@ Marketplace authoring line (`@convax/marketplace`,
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
 its authoring dependencies and republishes `convax.plugin/8` artifacts after those
 Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
+The SDK's immutable Host package Release binds its exact npm tarball to the exact
+Plugin API package/Catalog identity tested at release time, using
+`convax.host-package-release/1`; it is not a Host capability receipt. A concrete
+Plugin release separately attests the actual frozen SDK/API dependency closure and
+bundle bytes. Capability decisions remain bound to the Plugin API Catalog contract
+and Host runtime-conformance evidence, so neither an SDK version nor its package
+Release grants Host authority. See
+[`plugin-sdk-release.md`](plugin-sdk-release.md).
 
 Capability Center reads a renderer-safe connection projection keyed only by the
 installed Plugin id. It never receives OpenCode server keys, URLs, headers, OAuth
