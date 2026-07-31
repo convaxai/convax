@@ -210,11 +210,12 @@ metadata.convaxGenerationPreference = {
 }
 ```
 
-The current run schema is version 3:
+The current run schema is version 4:
 
 ```ts
 metadata.convaxGenerationRun = {
-  schema: "convax.node-generation-run/3",
+  schema: "convax.node-generation-run/4",
+  failureMessage?: string,
   operationId: string,
   toolId: string,
   prompt: string,
@@ -249,6 +250,8 @@ retrying a run therefore cannot append the same Canvas text twice.
 Portable bounds:
 
 - `prompt`: trimmed, no NUL, at most the existing 64 Ki character generation limit;
+- `failureMessage`: optional terminal-only host-authored presentation text, 1–200
+  printable characters, never raw sidecar or native diagnostics;
 - `operationId`: printable and at most 128 characters;
 - `toolId`: host-opaque and at most 512 characters;
 - `taskId`: at most 512 characters and restricted to the portable opaque identifier
@@ -260,10 +263,11 @@ stderr, or raw diagnostic may enter Canvas.
 
 An absent namespace stays absent. Unknown or malformed schemas remain unmodified
 and unreadable; commands do not overwrite them with defaults. Migration from
-`convax.node-generation-run/1` and `/2` preserve every valid field. Version 3
-permits the empty editable draft needed by prompt-context-only runs. An active v1 run lacks
-the proof required for automatic recovery and is reconciled conservatively unless
-a matching private ledger can upgrade it.
+`convax.node-generation-run/1`, `/2`, and `/3` preserves every valid field. Version
+3 permits the empty editable draft needed by prompt-context-only runs. Version 4
+adds the optional bounded host-authored failure presentation. An active v1 run
+lacks the proof required for automatic recovery and is reconciled conservatively
+unless a matching private ledger can upgrade it.
 
 ## 6. Canvas state machine and replacement boundary
 
@@ -739,6 +743,8 @@ UI behavior:
   operation id;
 - `interrupted(unknown)`: explain that the prior external outcome is uncertain,
   disable ordinary retry, and offer only safe inspect/reconnect/cancel actions;
+- a recognized service outage may replace the generic terminal title only with a
+  bounded host-authored message derived from the validated service display name;
 - model preference remains independent from the run’s resolved tool.
 
 ## 19. Crash-window proof matrix
@@ -779,8 +785,8 @@ Every row asserts:
 - Full recovery is admitted only by the exact v8 manifest/runtime contract.
 - V8 tools without the complete LRO declaration may still return structured task
   receipts, but remain restart-interrupted.
-- `convax.node-generation-run/1` and `/2` are read and explicitly migrated; unknown schemas
-  remain untouched.
+- `convax.node-generation-run/1`, `/2`, and `/3` are read and explicitly migrated;
+  unknown schemas remain untouched.
 - Desktop protocol and `@convax/canvas` public version must be bumped when the
   corresponding contracts land.
 - Recovery is enabled only after private storage, sidecar protocol, startup

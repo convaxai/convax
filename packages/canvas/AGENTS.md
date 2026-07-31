@@ -56,10 +56,14 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.
+  Only an image/video replacement owner persists this override. A text owner may
+  offer image/video output choices, but remains a relation anchor and never stores
+  one cross-output model choice or becomes an implicit generation input.
 - Canvas owns the separate versioned node-generation run namespace, its bounded
   parser and legal transitions. Keep the next-run preference separate from the
-  resolved historical tool, never persist raw diagnostics or vendor state, and mark
-  generated resource replacement plus `succeeded` in one guarded Canvas command.
+  resolved historical tool, admit only bounded host-authored terminal failure text,
+  never persist raw diagnostics or vendor state, and mark generated resource
+  replacement plus `succeeded` in one guarded Canvas command.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.

@@ -135,6 +135,7 @@ export type CanvasNodeGenerationRunCommand =
     }
   | {
       type: "generation.run.finish"
+      failureMessage?: string
       nodeId: string
       operationId: string
       retrySafety: "safe" | "unknown"
@@ -520,7 +521,14 @@ export function applyCanvasApplicationCommand(
   }
   if (command.type === "generation.run.finish") {
     return applyGenerationRunMutation(document, command.nodeId, () =>
-      finishCanvasNodeGenerationRun(document, command.nodeId, command.operationId, command.status, command.retrySafety),
+      finishCanvasNodeGenerationRun(
+        document,
+        command.nodeId,
+        command.operationId,
+        command.status,
+        command.retrySafety,
+        command.failureMessage,
+      ),
     )
   }
   if (command.type === "generation.runs.interrupt-inactive") {

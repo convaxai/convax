@@ -1292,7 +1292,7 @@ describe("built-in node toolbar visibility", () => {
     expect(markup).toContain("data-assistant-toolbar")
   })
 
-  test("gives only image and video assistants a direct-generation capability", () => {
+  test("gives image/video owners replacement generation and text owners related visual generation", () => {
     for (const output of ["image", "video"] as const) {
       const mediaNode: CanvasNode = {
         data: { kind: output, label: output === "image" ? "Image" : "Video", url: "" },
@@ -1322,6 +1322,36 @@ describe("built-in node toolbar visibility", () => {
       expect(markup).not.toContain('class="convax-node-assistant nodrag nowheel"')
       expect(markup).not.toContain('aria-label="Open Agent"')
     }
+
+    const textNode = createTextNode({
+      id: "node-text",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "Storyboard" },
+    })
+    let textRequest: CanvasAssistantRequest | undefined
+    const textMarkup = renderWithEditor(
+      selection([textNode.id]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        assistantRender: (next) => {
+          textRequest = next
+          return <div data-assistant-toolbar />
+        },
+        node: textNode,
+      },
+    )
+    expect(textRequest?.generation).toMatchObject({
+      availableOutputs: ["image", "video"],
+      output: "image",
+    })
+    expect(textRequest?.generation?.ownerToolId).toBeUndefined()
+    expect(textRequest?.generation?.onOwnerToolIdChange).toBeUndefined()
+    expect(textRequest?.mentionedNodeIds).toEqual([])
+    expect(textMarkup).toContain('data-canvas-composer-overlay="file-assistant"')
+    expect(textMarkup).not.toContain('aria-label="Open Agent"')
 
     let genericRequest: CanvasAssistantRequest | undefined
     const genericMarkup = renderWithEditor(
@@ -1475,12 +1505,20 @@ describe("built-in node toolbar visibility", () => {
     expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain("nodrag")
     expect(activeMarkup).toContain("nodrag nowheel")
 
-    const failed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one", "failed", "safe")
+    const failed = finishCanvasNodeGenerationRun(
+      running,
+      imageNode.id,
+      "operation-one",
+      "failed",
+      "safe",
+      "Creative Tools 服务不可用",
+    )
     const failedMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
       document: failed,
       node: failed.nodes[0],
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
+    expect(failedMarkup).toContain("Creative Tools 服务不可用")
     expect(failedMarkup).toContain("修改并重试")
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain("nodrag")
     expect(failedMarkup).toContain("nodrag nowheel")
@@ -1491,6 +1529,7 @@ describe("built-in node toolbar visibility", () => {
       "operation-one",
       "interrupted",
       "unknown",
+      "Creative Tools 服务不可用",
     )
     const indeterminateMarkup = renderWithEditor(
       selection([]),
@@ -1503,6 +1542,7 @@ describe("built-in node toolbar visibility", () => {
       },
     )
     expect(indeterminateMarkup).toContain('data-canvas-file-generation-activity="interrupted"')
+    expect(indeterminateMarkup).toContain("Creative Tools 服务不可用")
     expect(indeterminateMarkup).toContain("使用原提示词新建任务")
     expect(indeterminateMarkup).toContain("避免重复计费")
     expect(indeterminateMarkup).toContain("切换 Agent 默认模型不会改变该任务")

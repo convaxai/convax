@@ -311,6 +311,7 @@ describe("Canvas card generation request", () => {
         source: "canvas-card",
       },
       expectedRevision: 7,
+      expectedOutputCount: 1,
       operationId: "operation-one",
       output: "image",
       prompt: "Turn this into a poster",
@@ -410,7 +411,50 @@ describe("Canvas card generation request", () => {
     })
   })
 
-  test("rejects direct generation for generic and non-visual media cards", () => {
+  test("creates one related pending visual node from a text owner without using its body as input", () => {
+    const owner = createTextNode({
+      id: "text-card",
+      metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/storyboard.md" } },
+      name: "storyboard.md",
+      position: { x: 10, y: 20 },
+      resourceState: { status: "ready", text: "Opening scene" },
+    })
+    const selected = tool({ acceptedInputs: [], id: "creative-tools/video.generate", output: "video" })
+    const request = {
+      ...assistantRequest(owner),
+      generation: { availableOutputs: ["image", "video"], output: "video" },
+    } satisfies CanvasAssistantRequest
+
+    const generated = createCanvasCardGenerationRequest({
+      description: { fields: [], toolId: selected.id },
+      operationId: "operation-text-video",
+      prompt: "Animate the opening scene",
+      request,
+      signal: new AbortController().signal,
+      tool: selected,
+      toolInput: {},
+    })
+
+    expect(generated).toMatchObject({
+      context: {
+        documentId: "canvas-one",
+        selectedNodeIds: [owner.id],
+        source: "canvas-card",
+      },
+      expectedOutputCount: 1,
+      operationId: "operation-text-video",
+      output: "video",
+      prompt: "Animate the opening scene",
+      referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+      references: [],
+      resultMode: { type: "create-pending-node" },
+      toolId: selected.id,
+    })
+    expect(generated.promptContextNodeIds).toBeUndefined()
+    expect(generated.relationAnchorNodeIds).toBeUndefined()
+  })
+
+  test("rejects direct generation for generic and non-visual media cards other than text", () => {
     const folder = createFolderNode({
       id: "folder",
       position: { x: 3, y: 4 },
@@ -445,7 +489,7 @@ describe("Canvas card generation request", () => {
           tool: selected,
           toolInput: {},
         }),
-      ).toThrow("only for image and video cards")
+      ).toThrow("only for text, image, and video cards")
     }
 
     expect(() =>
@@ -457,7 +501,7 @@ describe("Canvas card generation request", () => {
         tool: tool(),
         toolInput: {},
       }),
-    ).toThrow("only for image and video cards")
+    ).toThrow("only for text, image, and video cards")
   })
 
   test("generates from an empty image card as prompt-only output instead of treating the placeholder as input", () => {
@@ -482,6 +526,7 @@ describe("Canvas card generation request", () => {
         toolInput: {},
       }),
     ).toMatchObject({
+      expectedOutputCount: 1,
       output: "image",
       prompt: "A small rabbit",
       references: [],
@@ -960,7 +1005,7 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain('aria-label="Remove Canvas reference: Source folder"')
   })
 
-  test("renders only Agent for text, audio, folder, and plugin cards", () => {
+  test("renders only Agent when the request has no generation capability", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
       generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),

@@ -25,6 +25,7 @@ export interface CanvasMarkNodeGenerationRunRunningRequest extends CanvasNodeGen
 }
 
 export interface CanvasFinishNodeGenerationRunRequest extends CanvasNodeGenerationRunRequestBase {
+  failureMessage?: string
   nodeId: string
   operationId: string
   retrySafety: "safe" | "unknown"
@@ -64,6 +65,7 @@ export class CanvasNodeGenerationRunBusinessService {
 
   finish(request: CanvasFinishNodeGenerationRunRequest) {
     return this.execute(request, {
+      ...(request.failureMessage === undefined ? {} : { failureMessage: request.failureMessage }),
       nodeId: request.nodeId,
       operationId: request.operationId,
       retrySafety: request.retrySafety,

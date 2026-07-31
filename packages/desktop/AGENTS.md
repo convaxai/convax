@@ -32,17 +32,25 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - The Agent generation-tool preference is the host default for new file-card
   conversations. A card may persist its own opaque tool-id override, but card
   changes never write back to the Agent preference or create a second catalog.
+  Image/video replacement cards may persist that override. A text card keeps
+  image/video model and tool-option state isolated by output only for the mounted
+  composer; it never persists one owner override across those outputs.
 - Main owns live generation coordination and writes node-targeted run state only
   through Canvas application services. Main never asks renderer to flush, lock,
   approve, or arbitrate a Main mutation; committed revision invalidation and reload
   are fallible projection work. Renderer components hydrate and display that state;
   mounting, selection and panel lifetime must never become task ownership or
-  implicit cancellation.
+  implicit cancellation. A terminal service-outage message is Main-authored from
+  the validated service display name and must remain bounded; raw sidecar/native
+  diagnostics never enter Canvas or renderer state.
 - Card-scoped Agent and Generate conversations preload only direct incoming Canvas
   file nodes as removable `@` references. Keep the owning card separate as locked
   conversation context or the replacement target; never infer it or an outgoing
-  neighbor as an input. Revalidate generation mentions against Main's live incoming
-  edges before execution.
+  neighbor as an input. Text-card visual generation creates exactly one separate
+  pending image/video node and uses the text owner only as its constrained relation
+  anchor; the owner's body is not prompt context unless it is separately supplied
+  through an admitted incoming node. Revalidate generation mentions against Main's
+  live incoming edges before execution.
 - Agent tools are thin adapters over Canvas application/business and view ports.
   Host Project scope is authoritative; document tools may select only a Canvas in
   that Project's live catalog, while view tools resolve the mounted active Canvas.

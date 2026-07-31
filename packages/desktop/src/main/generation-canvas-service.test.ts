@@ -569,6 +569,7 @@ async function setupPendingGeneration(
           input.operationId,
           input.status,
           input.retrySafety,
+          input.failureMessage,
         )
         currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
         return persistedCommandResult(currentDocument, [], [input.nodeId])
@@ -1534,7 +1535,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests).toHaveLength(1)
   })
 
-  test("connects a constrained Plugin owner to its pending generation node", async () => {
+  test("keeps a constrained text-card owner as relation-only context for one pending visual result", async () => {
     let markStarted!: () => void
     let release!: () => void
     const started = new Promise<void>((resolve) => {
@@ -1551,6 +1552,7 @@ describe("GenerationCanvasService", () => {
     })
     const generation = harness.service.generate(
       request({
+        expectedOutputCount: 1,
         output: "image",
         referenceConstraint: { ownerNodeId: harness.owner.id, type: "direct-incoming" },
         references: [{ nodeId: harness.reference.id, role: "text" }],
@@ -1569,9 +1571,18 @@ describe("GenerationCanvasService", () => {
     expect(harness.getDocument().edges.filter((edge) => edge.target === harness.pendingNodeId)).toEqual([
       expect.objectContaining({ source: harness.owner.id, target: harness.pendingNodeId }),
     ])
+    expect(harness.calls[0]?.references).toEqual([
+      expect.objectContaining({ node_id: harness.reference.id, role: "text", text: "Stable brief" }),
+    ])
+    expect(harness.calls[0]?.references).not.toContainEqual(expect.objectContaining({ node_id: harness.owner.id }))
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)?.data).toEqual(harness.owner.data)
+    expect(getCanvasNodeGenerationRun(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)!)).toBe(
+      undefined,
+    )
 
     release()
     await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)?.data).toEqual(harness.owner.data)
   })
 
   test("persists a structured task receipt on a host-created pending owner", async () => {
@@ -2091,11 +2102,40 @@ describe("GenerationCanvasService", () => {
       operationId: "operation-one",
       status: "failed",
     })
+    expect(harness.runRequests.finish[0]).not.toHaveProperty("failureMessage")
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
       error: "Generation could not be completed",
       status: "error",
     })
     expect(harness.reloadRevisions).toEqual([1, 3])
+  })
+
+  test("does not derive portable service presentation from sidecar-reported text", async () => {
+    const harness = await setupPendingGeneration({
+      content: [{ text: "Generation model service unavailable", type: "text" }],
+      isError: true,
+    })
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toMatchObject({
+      message: "Generation tool failed: Generation model service unavailable",
+      name: "GenerationToolReportedError",
+    })
+
+    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.runRequests.finish[0]).not.toHaveProperty("failureMessage")
+    const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
+    expect(pending.data).toMatchObject({ error: "Generation could not be completed", status: "error" })
+    expect(getCanvasNodeGenerationRun(pending)).not.toHaveProperty("failureMessage")
   })
 
   test("does not let a delayed Renderer projection block pending creation or replacement", async () => {
@@ -2222,11 +2262,20 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
     expect(harness.runRequests.markRunning).toEqual([])
     expect(harness.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({
+        failureMessage: "Creative Tools 服务不可用",
+        operationId: "operation-one",
+        retrySafety: "safe",
+        status: "failed",
+      }),
     ])
     const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
-    expect(pending.data).toMatchObject({ error: "Generation could not be completed", status: "error" })
-    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({ retrySafety: "safe", status: "failed" })
+    expect(pending.data).toMatchObject({ error: "Creative Tools 服务不可用", status: "error" })
+    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({
+      failureMessage: "Creative Tools 服务不可用",
+      retrySafety: "safe",
+      status: "failed",
+    })
   })
 
   test("rechecks the replacement target after bounded runtime and service guards", async () => {

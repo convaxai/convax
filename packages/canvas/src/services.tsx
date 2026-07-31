@@ -353,8 +353,10 @@ export interface CanvasTelemetryService {
 }
 
 export interface CanvasAssistantGenerationCapability {
-  /** Card-scoped generation is intentionally limited to visual media output. */
+  /** Initial visual output. Media owners use their own kind; text owners default to one offered kind. */
   output: "image" | "video"
+  /** Text owners may offer both visual result kinds without becoming a generation input or replacement target. */
+  availableOutputs?: readonly ("image" | "video")[]
   /** One-shot raw composer draft hydrated from the Canvas-owned latest run. */
   initialPrompt?: string
   /**
@@ -363,15 +365,15 @@ export interface CanvasAssistantGenerationCapability {
    * gets a separate host-owned target without mutating the unresolved owner.
    */
   submissionMode?: "create-pending-node" | "replace-owner-node"
-  /** Persisted owner-node override. Missing means inherit the host's current default. */
+  /** Persisted replacement-owner override. Missing means inherit the host's current default. */
   ownerToolId?: string
-  /** File-card-only mutation; clearing the id restores host-default inheritance. */
+  /** Replacement-owner-only mutation; clearing the id restores host-default inheritance. */
   onOwnerToolIdChange?: (toolId?: string) => void
 }
 
 export interface CanvasAssistantRequest {
   document: CanvasDocument
-  /** Present only when this owner supports direct image/video generation. */
+  /** Present when this owner can be replaced by or related to a generated image/video result. */
   generation?: CanvasAssistantGenerationCapability
   /**
    * Direct incoming file nodes selected as initial, removable @ references.

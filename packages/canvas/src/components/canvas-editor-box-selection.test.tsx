@@ -433,23 +433,16 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
   }
 
   const errors: Error[] = []
-  const imageNode: CanvasNode = {
-    data: {
-      kind: "image",
-      label: "Image",
-      metadata: {},
-      resourceState: { status: "ready", url: "" },
-    },
-    id: "image",
-    measured: { height: 160, width: 240 },
+  const textNode = createTextNode({
+    id: "text",
+    metadata: {},
     position: { x: 80, y: 80 },
-    style: { height: 160, width: 240 },
-    type: "file",
-  }
+    resourceState: { status: "ready" },
+  })
   const container = document.createElement("div")
   document.body.append(container)
   let root: Root | undefined
-  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [imageNode] })
+  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [textNode] })
   const servicesWithAssistant = createCanvasServices({
     assistant: {
       render: () => <textarea aria-label="Card assistant input" />,
@@ -468,7 +461,7 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
       root?.render(renderEditor())
     })
 
-    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="image"]')
+    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="text"]')
     expect(nodeElement).not.toBeNull()
     await act(async () => {
       nodeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
