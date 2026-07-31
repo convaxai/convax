@@ -260,7 +260,10 @@ selection are forbidden. Required dependency cycles reject activation; optional
 runtime calls have bounded depth and re-entrancy.
 
 `@convax/plugin-sdk/client` is the sole authoring owner for the portable
-`convax.plugin-host/8` MessagePort envelopes and Web client. Host API Catalog calls
+`convax.plugin-host/8` MessagePort envelopes and Web client. The sibling
+`@convax/plugin-sdk/pet-client` entry owns the contribution-scoped
+`convax.pet-host/1` client and derives Plugin identity from the immutable Plugin
+origin rather than author input. Host API Catalog calls
 remain separate from inter-Plugin availability and invocation. The client accepts
 only manifest-declared imports, validates their closed request and response schemas,
 bounds bytes and in-flight correlation, and emits sender-scoped cancellation.
@@ -282,7 +285,8 @@ only bounded in-flight duplicate state; completed/billable replay safety belongs
 the provider's durable `operationId`/LRO contract.
 
 Plugin ABI releases roll out in dependency order: publish
-`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
+`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.1` and
+`@convax/plugin-ui@0.1.0`, then the breaking
 Marketplace authoring line (`@convax/marketplace`,
 `@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.1`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
@@ -331,6 +335,7 @@ the Desktop-owned managed-stdio profile.
 | Package                     | Responsibility                                                                                                               |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                   |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                              |
 | `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                           |
 | `@convax/canvas`            | Canvas core, application/business layer, view layer, editor and plugins                                                      |
 | `@convax/project`           | Project lifecycle/registry/private storage and Project capability composition                                                |
@@ -352,6 +357,7 @@ Allowed internal runtime dependencies:
 
 ```text
 @convax/ui             -> none
+@convax/plugin-ui      -> none
 @convax/project-files  -> none
 @convax/workbench      -> none
 @convax/agent-runtime  -> none

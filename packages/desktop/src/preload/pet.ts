@@ -1,33 +1,7 @@
 import { ipcRenderer } from "electron"
+import { isPetHostConnect } from "@convax/plugin-sdk/pet"
 
 const petHostConnectChannel = "pet:connect-host"
-const petHostProtocol = "convax.pet-host/1"
-
-interface PetConnectEnvelope {
-  pluginId: string
-  protocol: typeof petHostProtocol
-  surface: "overlay"
-  type: "connect"
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-}
-
-function isPetConnectEnvelope(value: unknown): value is PetConnectEnvelope {
-  if (!isRecord(value)) return false
-  const keys = Object.keys(value)
-  return (
-    keys.length === 4 &&
-    keys.every((key) => ["pluginId", "protocol", "surface", "type"].includes(key)) &&
-    value.protocol === petHostProtocol &&
-    value.type === "connect" &&
-    value.surface === "overlay" &&
-    typeof value.pluginId === "string" &&
-    value.pluginId.length <= 80 &&
-    /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.pluginId)
-  )
-}
 
 let connected = false
 ipcRenderer.on(petHostConnectChannel, (event, envelope: unknown) => {
@@ -35,7 +9,7 @@ ipcRenderer.on(petHostConnectChannel, (event, envelope: unknown) => {
   if (
     connected ||
     window.top !== window ||
-    !isPetConnectEnvelope(envelope) ||
+    !isPetHostConnect(envelope, "overlay", window.location.hostname) ||
     window.location.protocol !== "convax-plugin:" ||
     window.location.hostname !== envelope.pluginId ||
     ports.length !== 1

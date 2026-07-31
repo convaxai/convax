@@ -217,13 +217,22 @@
     },
     "packages/plugin-sdk": {
       "name": "@convax/plugin-sdk",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "dependencies": {
         "@convax/plugin-api": "workspace:^",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
         "@types/node": "catalog:",
+        "@typescript/native-preview": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    "packages/plugin-ui": {
+      "name": "@convax/plugin-ui",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
         "@typescript/native-preview": "catalog:",
         "typescript": "catalog:",
       },
@@ -492,6 +501,8 @@
     "@convax/plugin-api": ["@convax/plugin-api@workspace:packages/plugin-api"],
 
     "@convax/plugin-sdk": ["@convax/plugin-sdk@workspace:packages/plugin-sdk"],
+
+    "@convax/plugin-ui": ["@convax/plugin-ui@workspace:packages/plugin-ui"],
 
     "@convax/project": ["@convax/project@workspace:packages/project"],
 

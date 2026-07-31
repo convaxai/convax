@@ -176,6 +176,17 @@ for (const directory of standaloneBuildOrder) {
       }
     }
   }
+  if (directory === "plugin-ui") {
+    const theme = await Bun.file(join(cwd, "dist", "theme.css")).text()
+    if (
+      theme.length < 2_000 ||
+      !theme.includes("--ui-surface-canvas:") ||
+      !theme.includes("@media (prefers-color-scheme: dark)") ||
+      /@import\b|https?:\/\/|url\(/.test(theme)
+    ) {
+      throw new Error("@convax/plugin-ui: standalone Plugin theme export is incomplete")
+    }
+  }
   for (const [dependency, version] of Object.entries(manifest.dependencies ?? {})) {
     if (dependency.startsWith("@convax/") && version !== "workspace:^") {
       throw new Error(`${manifest.name}: internal dependency must publish as a compatible semver range: ${dependency}@${version}`)

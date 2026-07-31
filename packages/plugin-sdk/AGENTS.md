@@ -16,6 +16,9 @@ the current Convax Plugin package contract.
 - Its payload-free sender-scoped disconnect control envelope is protocol lifecycle,
   not a Host API or Plugin capability. `client.close()` settles local work, posts
   it best-effort, then closes the MessagePort; teardown never awaits `beforeunload`.
+- The portable contribution-scoped `convax.pet-host/1` contract and Pet surface
+  client. The client derives Plugin identity from the immutable Plugin origin;
+  callers never supply a concrete Plugin id.
 - The rule that an exported operation is one exact verified sidecar MCP tool,
   including the pure `tools/list` input/output schema matcher used by Desktop
   readiness.

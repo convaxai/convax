@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react"
+import { isPetHostConnect, type PetHostSettingsConnect } from "@convax/plugin-sdk/pet"
 import { parseWebPluginAssetUrl } from "../plugin-asset-contract"
-
-const petHostProtocol = "convax.pet-host/1" as const
 
 export interface PetSettingsProvider {
   generation: number
@@ -28,12 +27,6 @@ interface PortLike {
 
 interface FrameWindowLike {
   postMessage(message: unknown, targetOrigin: string, transfer: Transferable[]): void
-}
-
-interface PetSettingsConnectEnvelope extends PetSettingsConnectionIdentity {
-  protocol: typeof petHostProtocol
-  surface: "settings"
-  type: "connect"
 }
 
 interface PetSettingsRelayEvent {
@@ -78,18 +71,11 @@ function sameIdentity(left: PetSettingsProvider, right: PetSettingsProvider) {
 function isSettingsEnvelope(
   value: unknown,
   identity: PetSettingsConnectionIdentity,
-): value is PetSettingsConnectEnvelope {
-  if (!isRecord(value)) return false
-  const keys = Object.keys(value)
+): value is PetHostSettingsConnect {
   return (
-    keys.length === 6 &&
-    keys.every((key) => ["connectionId", "generation", "pluginId", "protocol", "surface", "type"].includes(key)) &&
+    isPetHostConnect(value, "settings", identity.pluginId) &&
     value.connectionId === identity.connectionId &&
-    value.generation === identity.generation &&
-    value.pluginId === identity.pluginId &&
-    value.protocol === petHostProtocol &&
-    value.surface === "settings" &&
-    value.type === "connect"
+    value.generation === identity.generation
   )
 }
 

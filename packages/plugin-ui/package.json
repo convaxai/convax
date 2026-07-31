@@ -1,12 +1,12 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
-  "name": "@convax/plugin-sdk",
-  "version": "0.1.1",
+  "name": "@convax/plugin-ui",
+  "version": "0.1.0",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/microvoid/convax.git",
-    "directory": "packages/plugin-sdk"
+    "directory": "packages/plugin-ui"
   },
   "engines": {
     "node": ">=20.0.0",
@@ -25,40 +25,22 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
-    "./client": {
-      "types": "./dist/client.d.ts",
-      "import": "./dist/client.js",
-      "default": "./dist/client.js"
-    },
-    "./pet": {
-      "types": "./dist/pet.d.ts",
-      "import": "./dist/pet.js",
-      "default": "./dist/pet.js"
-    },
-    "./pet-client": {
-      "types": "./dist/pet-client.d.ts",
-      "import": "./dist/pet-client.js",
-      "default": "./dist/pet-client.js"
-    }
+    "./theme.css": "./dist/theme.css"
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "bun scripts/build-js.ts",
+    "build:js": "bun build --production --target=browser --format=esm --sourcemap=linked --root=src --outdir=dist src/index.ts",
+    "build:css": "bun scripts/build-css.ts",
     "build:types": "tsc -p tsconfig.build.json",
-    "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
+    "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:css && bun run build:types",
     "test": "bun test",
     "typecheck": "tsgo --noEmit",
-    "pack:check": "bun run build && bun scripts/pack-check.ts",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test"
-  },
-  "dependencies": {
-    "@convax/plugin-api": "workspace:^"
   },
   "devDependencies": {
     "@typescript/native-preview": "catalog:",
     "@types/bun": "catalog:",
-    "@types/node": "catalog:",
     "typescript": "catalog:"
   },
   "publishConfig": {
