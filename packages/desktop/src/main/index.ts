@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto"
-import { stat as statFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -28,6 +27,7 @@ import {
   ProjectCanvasResourceHydrator,
   ProjectCanvasResourcePreparation,
   ProjectManagedAssetStore,
+  ProjectResourceReader,
 } from "@convax/project/node"
 import {
   app,
@@ -159,14 +159,16 @@ import { PetWindow } from "./pet-window"
 import { DesktopSkillManager } from "./skill-manager"
 import { MarketplaceArtifactInstaller } from "./marketplace-artifact-installer"
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
+import { createElectronPluginConnectedImageInspector } from "./plugin-connected-image-inspector"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
+import { PluginFrameBindingRegistry } from "./plugin-frame-binding-registry"
 import { desktopBunRuntime, desktopOpenCodeBinaryDirectory } from "./packaged-runtime"
 import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 import {
   createProjectResourceProtocolResponse,
   createProjectResourceUrl,
+  parseProjectResourceUrl,
   projectResourceAccessControlAllowOrigin,
-  resolveProjectResourceProtocolPath,
 } from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 
@@ -260,20 +262,43 @@ function createWindow(
   mainWindow = window
   if (pendingMainWindowActivation) activateMainWindow()
   const webContentsId = window.webContents.id
-  const pluginFrameBindings = new Map<number, string>()
+  const pluginFrameBindings = new PluginFrameBindingRegistry(window.webContents)
+  const pluginFrameBindingSweep = setInterval(() => {
+    pluginFrameBindings.retireUnavailable(window.webContents)
+  }, 30_000)
+  pluginFrameBindingSweep.unref()
+  let pluginFrameBindingsDisposed = false
+  const disposePluginFrameBindings = () => {
+    if (pluginFrameBindingsDisposed) return
+    pluginFrameBindingsDisposed = true
+    clearInterval(pluginFrameBindingSweep)
+    pluginFrameBindings.dispose(window.webContents)
+  }
   trustedWebContents.add(webContentsId)
   window.once("closed", () => {
-    pluginFrameBindings.clear()
+    disposePluginFrameBindings()
     trustedWebContents.delete(webContentsId)
     if (mainWindow === window) mainWindow = null
     projectAssetGcScheduler.closeAll()
   })
+  window.webContents.once("destroyed", disposePluginFrameBindings)
+  window.webContents.on("frame-created", () => {
+    pluginFrameBindings.retireUnavailable(window.webContents)
+  })
   window.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
   const restoreNativeMainWindowControls = () => setNativeMainWindowControlsVisible(process.platform, window, true)
-  window.webContents.on("did-start-navigation", (_event, _url, _isInPlace, isMainFrame) => {
-    if (isMainFrame) restoreNativeMainWindowControls()
+  window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame) {
+      restoreNativeMainWindowControls()
+      if (!isInPlace) pluginFrameBindings.clear(window.webContents)
+      return
+    }
+    pluginFrameBindings.retireUnavailable(window.webContents)
   })
-  window.webContents.on("render-process-gone", restoreNativeMainWindowControls)
+  window.webContents.on("render-process-gone", () => {
+    restoreNativeMainWindowControls()
+    pluginFrameBindings.clear(window.webContents)
+  })
   window.webContents.on("will-navigate", (event, url) => {
     if (!isTrustedRendererUrl(url)) event.preventDefault()
   })
@@ -287,9 +312,9 @@ function createWindow(
       event.preventDefault()
       return
     }
-    const frameId = frame.frameTreeNodeId
-    const boundIdentity = webPluginFrameBindingForNavigation(frame.url, event.url, pluginFrameBindings.get(frameId))
-    if (boundIdentity && !pluginFrameBindings.has(frameId)) pluginFrameBindings.set(frameId, boundIdentity)
+    const existingBinding = pluginFrameBindings.bindingFor(window.webContents, frame)
+    const boundIdentity = webPluginFrameBindingForNavigation(frame.url, event.url, existingBinding)
+    if (boundIdentity && !existingBinding) pluginFrameBindings.bind(window.webContents, frame, boundIdentity)
     if (!isAllowedWebPluginFrameNavigation(frame.url, event.url, boundIdentity)) {
       event.preventDefault()
     }
@@ -301,8 +326,8 @@ function createWindow(
       const binding = webPluginFrameBindingForNavigation("", url)
       const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
       if (!binding || !frame) return
-      const bound = pluginFrameBindings.get(frame.frameTreeNodeId)
-      if (!bound) pluginFrameBindings.set(frame.frameTreeNodeId, binding)
+      const bound = pluginFrameBindings.bindingFor(window.webContents, frame)
+      if (!bound) pluginFrameBindings.bind(window.webContents, frame, binding)
     },
   )
   let closeGate: CloseGate = "idle"
@@ -403,6 +428,7 @@ function startApplication() {
       projectAssets,
       createProjectResourceUrl,
     )
+    const projectResourceReader = new ProjectResourceReader(projectManager, projectAssets)
     const canvasDocumentChanges = new CanvasDocumentChangeBus()
     // The application service uses the initializing document service so a
     // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
@@ -461,8 +487,10 @@ function startApplication() {
     const pluginConnectedMedia = new PluginConnectedMediaService({
       changes: canvasDocumentChanges,
       documents: canvasDocuments,
+      images: createElectronPluginConnectedImageInspector(nativeImage),
       media: managedCanvasMedia,
       plugins: pluginInstallations,
+      resources: canvasResourceHydrator,
     })
     const pluginMaterialization = new PluginMaterializationService({
       application: canvasApplication,
@@ -1552,21 +1580,19 @@ function startApplication() {
         if (request.method !== "GET" && request.method !== "HEAD") {
           return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
         }
-        const resolved = await resolveProjectResourceProtocolPath(request.url, projectManager, projectAssets)
-        const [response, file] = await Promise.all([
-          net.fetch(pathToFileURL(resolved.absolutePath).href, {
-            headers: request.headers,
-            method: request.method,
-          }),
-          statFile(resolved.absolutePath),
-        ])
-        if (!file.isFile()) throw new Error("Project resource is not a file")
+        const parsed = parseProjectResourceUrl(request.url)
+        const resource = await projectResourceReader.read({
+          ...parsed,
+          head: request.method === "HEAD",
+          range: request.headers.get("range"),
+          signal: request.signal,
+        })
         return createProjectResourceProtocolResponse({
           accessControlAllowOrigin: projectResourceAccessControlAllowOrigin(request, trustedRendererUrl),
-          cacheControl: resolved.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+          cacheControl:
+            resource.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
           request,
-          response,
-          size: file.size,
+          resource,
         })
       } catch {
         return new Response("Asset was not found", { status: 404 })

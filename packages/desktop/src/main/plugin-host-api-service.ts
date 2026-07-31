@@ -12,6 +12,7 @@ import {
   parsePluginApiResult,
   pluginApiCatalog,
   type ApiAvailability,
+  type PluginApiGenerationReference,
   type PluginApiId,
 } from "@convax/plugin-api"
 
@@ -32,7 +33,6 @@ import type {
   PluginHostResolvedPrincipal,
   PluginHostTransportContext,
 } from "../plugin-host-api-main-contracts"
-import type { PluginGenerationReference } from "../plugin-host-types"
 
 export interface PluginHostApiServiceOptions {
   createId?: () => string
@@ -148,14 +148,27 @@ export class PluginHostApiService {
       if (closed) return
       closed = true
       connectionAbort.abort(new Error("Plugin Host API connection is closed"))
-      for (const subscription of subscriptions.values()) subscription.close()
-      subscriptions.clear()
-      this.#operations.closeConnection({
-        ...(node ? { binding: node } : {}),
-        connectionId,
-        principal,
-        ...(request.transport ? { transport: request.transport } : {}),
-      })
+      // Revoke sender/frame-owned resources before unrelated subscription
+      // disposal can fail. Lifecycle cleanup is fail-closed and must not rely
+      // on renderer unload code awaiting any operation.
+      try {
+        this.#operations.closeConnection({
+          ...(node ? { binding: node } : {}),
+          connectionId,
+          principal,
+          ...(request.transport ? { transport: request.transport } : {}),
+        })
+      } finally {
+        for (const subscription of subscriptions.values()) {
+          try {
+            subscription.close()
+          } catch {
+            // One subscription cannot block exact-frame resource revocation or
+            // disposal of the remaining subscriptions.
+          }
+        }
+        subscriptions.clear()
+      }
     }
 
     const checkpoint = (
@@ -184,6 +197,7 @@ export class PluginHostApiService {
           throw new Error(`Plugin Host API connection exceeds ${this.#maximumInFlightRequests} in-flight requests`)
         }
         inFlightRequests += 1
+        let rollbackOpenedSession: (() => Promise<boolean>) | undefined
         try {
           throwIfAborted(signal)
           assertSerializedSize(
@@ -215,6 +229,43 @@ export class PluginHostApiService {
             const inputs = await this.#operations.listInputs({ binding, principal, signal })
             await reauthorizeNode(binding)
             result = { inputs: sanitizeInputs(inputs) }
+          } else if (call.method === "canvas.inputs.image.open") {
+            const binding = requireNode(node, call.method)
+            const params = exactRecord(call.params, ["inputKey"], "Plugin image input open request")
+            const inputKey = boundedString(params.inputKey, "Plugin image input key", 2_048)
+            await this.#requireNode(principal, binding, signal, authorized.resolved)
+            const opened = await this.#operations.openImageInput({
+              binding,
+              connectionId,
+              inputKey,
+              principal,
+              signal,
+              transport: requireTransport(request.transport),
+            })
+            rollbackOpenedSession = () =>
+              this.#operations.closeImageInput({
+                binding,
+                connectionId,
+                principal,
+                sessionId: opened.sessionId,
+                transport: requireTransport(request.transport),
+              })
+            await reauthorizeNode(binding)
+            result = sanitizeOpenedImageInput(opened)
+          } else if (call.method === "canvas.inputs.image.close") {
+            const binding = requireNode(node, call.method)
+            const params = exactRecord(call.params, ["sessionId"], "Plugin image input close request")
+            const sessionId = boundedString(params.sessionId, "Plugin image input session id", 128)
+            result = {
+              closed: await this.#operations.closeImageInput({
+                binding,
+                connectionId,
+                principal,
+                sessionId,
+                signal,
+                transport: requireTransport(request.transport),
+              }),
+            }
           } else if (call.method === "canvas.inputs.open") {
             const binding = requireNode(node, call.method)
             const params = exactRecord(call.params, ["inputKey"], "Plugin input open request")
@@ -228,6 +279,14 @@ export class PluginHostApiService {
               signal,
               transport: requireTransport(request.transport),
             })
+            rollbackOpenedSession = () =>
+              this.#operations.closeInput({
+                binding,
+                connectionId,
+                principal,
+                sessionId: opened.sessionId,
+                transport: requireTransport(request.transport),
+              })
             await reauthorizeNode(binding)
             result = sanitizeOpenedInput(opened)
           } else if (call.method === "canvas.inputs.close") {
@@ -403,7 +462,31 @@ export class PluginHostApiService {
             Math.min(this.#maximumResponseBytes, getPluginApiWireContract(call.method).result.maxBytes),
             "Plugin Host API response",
           )
-          return parsePluginApiResult(call.method, structuredClone(result))
+          const parsed = parsePluginApiResult(call.method, structuredClone(result))
+          rollbackOpenedSession = undefined
+          return parsed
+        } catch (error) {
+          if (rollbackOpenedSession) {
+            let revoked = false
+            try {
+              revoked = await rollbackOpenedSession()
+            } catch {
+              // Fall through to exact-frame revocation below.
+            }
+            if (!revoked) {
+              // A failed targeted revocation must not leave an unreachable bearer
+              // session behind. Closing the connection revokes every session for
+              // the same exact sender/frame principal.
+              try {
+                close()
+              } catch {
+                // Preserve the original call failure. The production adapter's
+                // frame revocation is synchronous and non-throwing for a validated
+                // connection identity.
+              }
+            }
+          }
+          throw error
         } finally {
           inFlightRequests -= 1
         }
@@ -677,20 +760,20 @@ function requireNode(binding: PluginHostNodeBinding | undefined, method: PluginA
 
 function sanitizeInputs(inputs: readonly unknown[]) {
   if (!Array.isArray(inputs) || inputs.length > 256) throw new Error("Plugin input catalog is invalid")
-  const ids = new Set<string>()
+  const inputKeys = new Set<string>()
   return inputs.map((candidate, index) => {
     const value = exactRecord(
       candidate,
-      ["durationMs", "height", "id", "kind", "label", "mediaRevision", "mimeType", "name", "status", "width"],
+      ["durationMs", "height", "inputKey", "kind", "label", "mediaRevision", "mimeType", "name", "status", "width"],
       `Plugin input ${index}`,
     )
-    const id = boundedString(value.id, `Plugin input ${index} id`, 2_048)
-    if (ids.has(id)) throw new Error("Plugin input catalog contains duplicate ids")
-    ids.add(id)
+    const inputKey = boundedString(value.inputKey, `Plugin input ${index} key`, 2_048)
+    if (inputKeys.has(inputKey)) throw new Error("Plugin input catalog contains duplicate keys")
+    inputKeys.add(inputKey)
     return {
       ...(optionalFinite(value.durationMs) === undefined ? {} : { durationMs: optionalFinite(value.durationMs) }),
       ...(optionalFinite(value.height) === undefined ? {} : { height: optionalFinite(value.height) }),
-      inputKey: id,
+      inputKey,
       kind: boundedString(value.kind, `Plugin input ${index} kind`, 80),
       label: boundedString(value.label, `Plugin input ${index} label`, 512),
       ...(value.mediaRevision === undefined
@@ -711,7 +794,8 @@ function sanitizeInputs(inputs: readonly unknown[]) {
 function sanitizeOpenedInput(value: unknown) {
   const input = exactRecord(value, ["probe", "sessionId", "url"], "Plugin opened input")
   const url = boundedString(input.url, "Plugin opened input URL", 2_048)
-  if (!url.startsWith("convax-connected-media://")) throw new Error("Plugin opened input URL is invalid")
+  const sessionId = boundedString(input.sessionId, "Plugin opened input session id", 128)
+  requireConnectedMediaBearerUrl(url, sessionId)
   const probe = exactRecord(
     input.probe,
     ["duration", "height", "kind", "mediaRevision", "mimeType", "size", "width"],
@@ -720,8 +804,37 @@ function sanitizeOpenedInput(value: unknown) {
   if (probe.kind !== "audio" && probe.kind !== "video") throw new Error("Plugin opened input kind is invalid")
   return {
     probe: structuredClone(probe),
-    sessionId: boundedString(input.sessionId, "Plugin opened input session id", 128),
+    sessionId,
     url,
+  }
+}
+
+function sanitizeOpenedImageInput(value: unknown) {
+  const result = parsePluginApiResult("canvas.inputs.image.open", value)
+  requireConnectedMediaBearerUrl(result.url, result.sessionId)
+  return result
+}
+
+function requireConnectedMediaBearerUrl(value: string, sessionId: string) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    throw new Error("Plugin opened input bearer URL is invalid")
+  }
+  const segments = url.pathname.split("/").filter(Boolean)
+  if (
+    url.protocol !== "convax-connected-media:" ||
+    url.hostname !== sessionId ||
+    url.username ||
+    url.password ||
+    url.port ||
+    url.search ||
+    url.hash ||
+    segments.length !== 1 ||
+    !/^[a-f0-9]{32}$/u.test(segments[0]!)
+  ) {
+    throw new Error("Plugin opened input bearer URL is invalid")
   }
 }
 
@@ -799,9 +912,9 @@ function optionalGenerationReferences(value: unknown) {
   if (value === undefined) return undefined
   if (!Array.isArray(value) || value.length > 32) throw new Error("Plugin generation references are invalid")
   const seen = new Set<string>()
-  return value.map((candidate, index): PluginGenerationReference => {
-    const reference = exactRecord(candidate, ["nodeId", "role"], `Plugin generation reference ${index}`)
-    const nodeId = boundedString(reference.nodeId, `Plugin generation reference ${index} node id`, 2_048)
+  return value.map((candidate, index): PluginApiGenerationReference => {
+    const reference = exactRecord(candidate, ["inputKey", "role"], `Plugin generation reference ${index}`)
+    const inputKey = boundedString(reference.inputKey, `Plugin generation reference ${index} input key`, 2_048)
     if (
       reference.role !== "text" &&
       reference.role !== "reference_image" &&
@@ -812,10 +925,10 @@ function optionalGenerationReferences(value: unknown) {
     ) {
       throw new Error("Plugin generation reference role is invalid")
     }
-    const key = `${nodeId}\0${reference.role}`
+    const key = `${inputKey}\0${reference.role}`
     if (seen.has(key)) throw new Error("Plugin generation references contain duplicates")
     seen.add(key)
-    return { nodeId, role: reference.role }
+    return { inputKey, role: reference.role }
   })
 }
 

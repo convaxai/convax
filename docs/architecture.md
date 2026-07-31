@@ -105,13 +105,20 @@ A Plugin has two orthogonal surfaces:
    whose audience, grant, scope, side effect, availability version and stable errors
    come from the generated API Catalog. One schema-first
    `@convax/plugin-api` descriptor owns every complete nested request/result
-   contract, refinement, byte budget and schema dialect. TypeScript types, the
-   strict runtime interpreter, generated JSON/Markdown/Skill references and
-   immutable history digests all derive from that descriptor; the SDK derives
+   contract, refinement, byte budget, cross-field numeric constraint and schema
+   dialect. Cross-field constraints serialize their field names and bounds into the
+   contract; API-specific interpreter constants are forbidden because they can
+   change runtime meaning without changing the digest. TypeScript types, the strict
+   runtime interpreter, generated JSON/Markdown/Skill references and immutable
+   history digests all derive from that descriptor; the SDK derives
    `callHostApi` parameters and results by API id instead of accepting `unknown`.
    Generated-Catalog consumers import the canonical artifact schema constant and
    strict `parsePluginApiCatalogArtifact` entry from `@convax/plugin-api`; they do
    not copy a `convax.plugin-api-catalog/*` token or validator.
+   API SemVer, Catalog artifact schema and wire-schema dialect are independent
+   version axes. The current runtime admits one exact artifact/dialect pair. A
+   retired major remains only as digest-bound opaque history and is never routed
+   through the current Host or SDK interpreter.
    Cancellation delivery is explicit Catalog metadata (`cancelable` or
    `commit-preserving`) and is never inferred from side-effect class.
 
@@ -179,7 +186,7 @@ only bounded in-flight duplicate state; completed/billable replay safety belongs
 the provider's durable `operationId`/LRO contract.
 
 Plugin ABI releases roll out in dependency order: publish
-`@convax/plugin-api@1.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
+`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
 Marketplace authoring line (`@convax/marketplace`,
 `@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.0`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
@@ -233,7 +240,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
 | `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell                                                     |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                   |
+| `@convax/web`               | Public marketing site and responsive product storytelling                                                                    |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                    |
 
 Allowed internal runtime dependencies:
@@ -405,6 +412,17 @@ Managed assets are the explicit exception: scoped Project resource capabilities 
 only files admitted from outside the Project into deterministic content-addressed
 paths below `.convax/assets`. Files already inside the Project are referenced
 directly. The rest of `.convax` remains hidden and protected.
+
+`convax-asset:` is the trusted-renderer projection of a Project-owned resource,
+not a filesystem capability. Its URL carries a typed Project reference and, for a
+mutable Project file, the exact SHA-256 content revision. `@convax/project/node`
+resolves and opens the resource, rejects path replacement and final symbolic
+links, validates the revision or managed-asset digest on that opened handle, and
+serves HEAD or one byte range from the same handle. Desktop receives only the
+bounded response body and metadata; it never receives a native path or reopens the
+resource through `file:`. Failure and cancellation close the handle. This
+Project-specific authority remains separate from session-bearing resource
+protocols and does not introduce a global URI broker.
 
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
 non-authoritative. Builtin and Official are
@@ -675,6 +693,17 @@ tree. Scope, revision, placement, native Project paths, Canvas persistence and
 generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
+Web Plugin generation references carry only opaque `inputKey` values issued by the
+Host. Each key is process-ephemeral and cryptographically bound to the exact Plugin
+snapshot, Project/Canvas/owning node, source node, direct edge identity and resource
+revision. It is intentionally not bound to the whole Canvas revision, so unrelated
+node edits and geometry changes do not revoke an otherwise unchanged input. Main
+resolves the key to an internal node reference, and the shared generation service
+then reloads and revalidates the owner, direct edge, resource snapshot and staged
+bytes immediately before a potentially billable external call. Plugins never
+receive or submit that internal node id through the connected-input generation
+reference path; separately granted document projections remain an orthogonal
+capability and cannot substitute a node id for `inputKey`.
 
 A return-delivery operation reuses the same verified executable, input staging,
 revision/source rechecks, cancellation, and at-most-once execution boundary, but
@@ -1120,6 +1149,18 @@ declaration, manifest grant, live scope, sender and cancellation state before
 using the same application service as UI and Agent. Plugin instance-state writes
 may update only that node's namespaced portable state.
 
+The same protocol has one payload-free `disconnect` control envelope. It is
+lifecycle, not a Catalog Host API or Plugin capability: `client.close()` first
+settles local in-flight calls, posts that envelope best-effort, and then closes its
+MessagePort synchronously. The renderer may close only the exact connection already
+bound to that port; the envelope cannot name a frame, Plugin, Project, Canvas, node,
+or renderer/Main connection id. It marks that connection closed immediately and
+awaits the existing fixed renderer/Main disconnect before finishing envelope
+dispatch; Main's handler closes the connection, aborts its work, and revokes all
+sender/frame-owned media sessions before it resolves. Teardown never waits for an
+asynchronous `beforeunload` handler, and malformed or replayed disconnect-shaped
+messages cannot select or widen authority.
+
 Verified Tool sidecars use a separate fixed reverse-MCP adapter with the same exact
 principal rules. Runtime disposal closes the connection and all subscriptions.
 No built-in, default-catalog, vendor, or concrete Plugin id receives a different
@@ -1145,11 +1186,49 @@ synchronization cannot block or reverse a Main commit. Agent and Tool signals ar
 rechecked before durable Canvas saves.
 
 `canvas.inputs.list` returns only pathless, bounded metadata for direct incoming
-file nodes in edge order. `canvas.inputs.open` may open only the exact media stream
-admitted by the generated catalog and manifest grant; it never widens into a
-generic image-byte or Project-file read. The Host currently exposes no generic
-connected-image byte API. A Plugin that needs one must submit a Host capability
-request for human review rather than edit Host code or infer a path.
+file nodes in edge order. `canvas.inputs.open` may open only the exact audio/video
+stream admitted by the generated Catalog and manifest grant; it never widens into
+a generic image-byte or Project-file read. `canvas.inputs.image.open` and
+`canvas.inputs.image.close` are the separate connected-image session lifecycle.
+Open accepts only an opaque `inputKey` from the current node's input listing,
+requires `canvas.connectedImages.read`, and returns a sender/frame-bound opaque
+Host session handle plus a connection-issued, revocable opaque Host URL, bounded
+JPEG/PNG/WebP metadata and an actual-content revision. It never serializes image
+bytes through renderer IPC or exposes a native path.
+
+Main binds issuance, close and revocation to the exact frame principal and direct
+incoming edge, uses the Project-owned stable image reader, performs a bounded
+decode check at the native edge, and revalidates Plugin identity, Canvas revision,
+edge and resource identity after asynchronous work. Electron protocol requests do
+not expose a trustworthy sender/frame principal, so GET/HEAD uses an unguessable
+128-bit bearer URL and revalidates the live Plugin principal and direct edge on
+every fetch; it must not be described as fetch-time frame authentication.
+Cancellation or frame disposal terminates validation and revokes the session;
+close is idempotent and may affect only a session issued to the same sender/frame.
+Neither input API authorizes upload, generation or persistence.
+The Plugin document CSP admits `convax-connected-media:` in `img-src` only for
+an exact installed v8 declaration of `canvas.inputs.image.open` with its grant;
+the existing audio/video API controls `media-src` independently. Neither
+declaration widens `connect-src`.
+
+Custom URI schemes are Host composition adapters, not Plugin contributions.
+Convax intentionally has no global URI handler registry or arbitrary resource
+resolver: verified Plugin package assets, trusted-renderer Project resources,
+connected-media bearer sessions and Pet assets have different authorities and
+lifecycles and must not be collapsed behind a service locator. Audio, video and
+image input sessions already share the bounded `connected-media` owner. If a
+second independent short-lived bearer resource protocol is admitted, extract
+only a headless `opaque-resource-session` kernel for URL codec, constant-time
+token checks, TTL, range, capacity and revocation. Resource authorization,
+validation and domain revalidation remain with their owning service.
+
+`convax-pet-asset:` remains owned by the Pet platform and is projected into
+`img-src` only for the exact declared Pet overlay or settings document of a
+validated `convax.plugin/8` snapshot that contributes `convax.pet-host/1` and
+holds `pet.custom.manage`. The Plugin document's meta policy and the Host response
+header must both admit the source. Missing contribution, missing grant, legacy
+schema, and unrelated Plugin documents keep the scheme closed; it never widens
+`media-src` or `connect-src`.
 
 Input-change commands are invalidation signals only; they do not authorize
 transfer or trigger Tool/Agent calls. Here and in document projections, an input

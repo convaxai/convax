@@ -63,7 +63,20 @@ export interface PluginApiDocumentation {
  */
 export interface PluginApiDefinition<Id extends string = string> {
   readonly id: Id
+  /**
+   * Catalog version that first introduced this stable API id.
+   *
+   * This is identity lineage, not the minimum version that understands the
+   * current request/result contract.
+   */
   readonly since: PluginApiVersion
+  /**
+   * Catalog release that introduced the currently published wire contract.
+   *
+   * A contract digest change advances this value to that exact release while
+   * `since` remains immutable.
+   */
+  readonly contractSince: PluginApiVersion
   readonly audience: readonly PluginApiAudience[]
   readonly completion: PluginApiCompletion
   readonly grant: string | null
@@ -74,7 +87,9 @@ export interface PluginApiDefinition<Id extends string = string> {
 }
 
 /**
- * Authoring form of a Host API contract. `since` is assigned by its release block.
+ * Authoring form of a Host API contract. `since` is assigned by its release block;
+ * `contractSince` explicitly identifies the release that owns the current wire
+ * contract.
  *
  * @public
  */
@@ -104,7 +119,6 @@ export interface PluginApiRelease<
  * @public
  */
 export interface PluginApiCatalog<Definition extends PluginApiDefinition = PluginApiDefinition> {
-  readonly schema: "convax.plugin-api-catalog/1"
   readonly version: PluginApiVersion
   readonly apis: readonly Definition[]
 }
@@ -145,12 +159,14 @@ export type ApiAvailability<Id extends string = string> =
       readonly available: true
       readonly id: Id
       readonly since: PluginApiVersion
+      readonly contractSince: PluginApiVersion
       readonly catalogVersion: PluginApiVersion
     }
   | {
       readonly available: false
       readonly id: Id
       readonly since?: PluginApiVersion
+      readonly contractSince?: PluginApiVersion
       readonly reason: PluginApiUnavailableReason
       readonly recoverable: boolean
     }
@@ -186,6 +202,7 @@ function freezeDefinition<const Definition extends PluginApiDefinitionInput>(
   definition: Definition,
 ): Readonly<Definition & { audience: readonly PluginApiAudience[] }> {
   if (!API_ID.test(definition.id)) throw new TypeError(`Plugin API id is invalid: ${definition.id}`)
+  assertVersion(definition.contractSince, `${definition.id} contractSince`)
   if (definition.grant !== null && !GRANT.test(definition.grant)) {
     throw new TypeError(`Plugin API grant is invalid: ${definition.grant}`)
   }
@@ -285,6 +302,7 @@ export function definePluginApiCatalog(...releases: readonly PluginApiRelease[])
   if (releases.length === 0) throw new TypeError("Plugin API catalog requires at least one release")
   const ids = new Set<string>()
   const apis: PluginApiDefinition[] = []
+  const releaseVersions = new Set(releases.map((release) => release.version))
   let previous: PluginApiVersion | undefined
   for (const release of releases) {
     assertVersion(release.version, "Plugin API release version")
@@ -295,13 +313,20 @@ export function definePluginApiCatalog(...releases: readonly PluginApiRelease[])
     for (const candidate of release.apis) {
       const definition = freezeDefinition(candidate)
       if (ids.has(definition.id)) throw new TypeError(`Plugin API id is duplicated: ${definition.id}`)
+      if (compareVersions(definition.contractSince, release.version) < 0) {
+        throw new TypeError(`Plugin API ${definition.id} contractSince must not precede since`)
+      }
+      if (!releaseVersions.has(definition.contractSince)) {
+        throw new TypeError(
+          `Plugin API ${definition.id} contractSince must identify a Catalog release block`,
+        )
+      }
       ids.add(definition.id)
       apis.push(Object.freeze({ ...definition, since: release.version }))
     }
   }
   if (apis.length === 0) throw new TypeError("Plugin API catalog must contain at least one API")
   return Object.freeze({
-    schema: "convax.plugin-api-catalog/1",
     version: releases[releases.length - 1].version,
     apis: Object.freeze(apis),
   })

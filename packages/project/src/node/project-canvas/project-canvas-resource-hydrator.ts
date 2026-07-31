@@ -41,10 +41,21 @@ export interface ProjectCanvasImageRead {
   size: number
 }
 
+export interface ProjectCanvasImageReadInput {
+  maximumBytes: number
+  projectId: string
+  reference: ProjectResourceReference
+  signal?: AbortSignal
+}
+
+export interface ProjectCanvasImageReadPort {
+  readImage(input: ProjectCanvasImageReadInput): Promise<ProjectCanvasImageRead>
+}
+
 const defaultMaximumMediaBytes = 64 * 1024 * 1024
 const defaultMaximumTextBytes = 16 * 1024 * 1024
 
-export class ProjectCanvasResourceHydrator {
+export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort {
   readonly #maximumMediaBytes: number
   readonly #maximumTextBytes: number
 
@@ -78,11 +89,7 @@ export class ProjectCanvasResourceHydrator {
     )
   }
 
-  async readImage(input: {
-    maximumBytes: number
-    projectId: string
-    reference: ProjectResourceReference
-  }): Promise<ProjectCanvasImageRead> {
+  async readImage(input: ProjectCanvasImageReadInput): Promise<ProjectCanvasImageRead> {
     if (
       !Number.isSafeInteger(input.maximumBytes) ||
       input.maximumBytes < 1 ||
@@ -97,17 +104,26 @@ export class ProjectCanvasResourceHydrator {
     let declaredMediaType: string
     let name: string
     if (reference.kind === "project-file") {
+      input.signal?.throwIfAborted()
       const info = await this.files.readFileInfo({ path: reference.path, projectId: input.projectId })
+      input.signal?.throwIfAborted()
       absolutePath = await this.files.resolveEntryPath({ path: reference.path, projectId: input.projectId })
       declaredMediaType = info.mimeType.toLowerCase()
       name = info.name
     } else {
+      input.signal?.throwIfAborted()
       absolutePath = await this.assets.resolve({ projectId: input.projectId, reference })
       declaredMediaType = (reference.mediaType ?? mimeTypeForPath(reference.name)).toLowerCase()
       name = reference.name
     }
 
-    const { bytes } = await readStableProjectFile(absolutePath, imageReadLabel(reference), input.maximumBytes)
+    const { bytes } = await readStableProjectFile(
+      absolutePath,
+      imageReadLabel(reference),
+      input.maximumBytes,
+      input.signal,
+    )
+    input.signal?.throwIfAborted()
     const mimeType = imageMimeTypeForBytes(bytes)
     if (!mimeType || mimeType !== declaredMediaType) {
       throw new Error("Project image MIME type does not match its byte signature")

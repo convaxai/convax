@@ -1,10 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import type { PluginPrincipal } from "../plugin-capability-contracts"
-import {
-  pluginHostApiRemoteFailure,
-  PluginHostApiResourceUnavailableError,
-} from "../plugin-host-errors"
+import type { PluginHostMutationCheckpoint, PluginHostNodeContext } from "../plugin-host-api-main-contracts"
+import { pluginHostApiRemoteFailure, PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
 import { PluginCanvasImagePublicationPartialSuccessError } from "./plugin-canvas-image-service"
 import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
 
@@ -52,8 +50,11 @@ const document = {
 } as const
 
 function adapter(options?: {
+  document?: () => unknown
+  generation?: Record<string, unknown>
   images?: { createForHostApi: () => Promise<never> }
   open?: () => Promise<never>
+  openImage?: () => Promise<never>
   readTextFile?: () => Promise<never>
 }) {
   const sessions = new Map<string, { frameId: string; senderId: number }>()
@@ -80,6 +81,22 @@ function adapter(options?: {
     sessions.delete(request.sessionId)
     return true
   })
+  const openImage = mock(
+    options?.openImage ??
+      (async () => ({
+        probe: {
+          contentRevision: "d".repeat(64),
+          height: 1,
+          kind: "image" as const,
+          mimeType: "image/png" as const,
+          size: 8,
+          width: 1,
+        },
+        sessionId: "image-session-1",
+        url: "convax-connected-media://image-session-1/token",
+      })),
+  )
+  const closeImage = mock(() => true)
   const instance = new PluginHostApiMainAdapter({
     agent: {} as never,
     application: {} as never,
@@ -93,14 +110,16 @@ function adapter(options?: {
     },
     documents: {
       async load() {
-        return { document, storageVersion: "3" } as never
+        return { document: options?.document?.() ?? document, storageVersion: "3" } as never
       },
     },
-    generation: {} as never,
+    generation: (options?.generation ?? {}) as never,
     images: (options?.images ?? {}) as never,
     media: {
       close: close as never,
+      closeImage: closeImage as never,
       open: open as never,
+      openImage: openImage as never,
       revokeFrame: mock(() => 0),
     },
     projects: {
@@ -115,29 +134,47 @@ function adapter(options?: {
           },
         ]
       },
-      readTextFile: options?.readTextFile ?? (async () => {
-        throw new Error("unused")
-      }),
+      readTextFile:
+        options?.readTextFile ??
+        (async () => {
+          throw new Error("unused")
+        }),
       async resolveEntryPath() {
         throw new Error("unused")
       },
     },
   })
-  return { close, instance, open }
+  return { close, closeImage, instance, open, openImage }
+}
+
+async function currentInputKey(
+  instance: PluginHostApiMainAdapter,
+  input: { binding?: typeof binding; principal?: PluginPrincipal } = {},
+) {
+  const inputs = await instance.listInputs({
+    binding: input.binding ?? binding,
+    principal: input.principal ?? principal,
+  })
+  const key = inputs[0]?.inputKey
+  if (!key) throw new Error("Expected one connected input key")
+  return key
 }
 
 describe("PluginHostApiMainAdapter connected media", () => {
   test("binds sessions to Main-issued sender/frame context and rejects cross-frame close", async () => {
     const { close, instance, open } = adapter()
+    const controller = new AbortController()
+    const inputKey = await currentInputKey(instance)
     const opened = await instance.openInput({
       binding,
       connectionId: "connection-1",
-      inputKey: "source-1",
+      inputKey,
       principal,
+      signal: controller.signal,
       transport: { frameId: "frame-1", senderId: 11 },
     })
 
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ frameId: "frame-1" }), 11)
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ frameId: "frame-1" }), 11, controller.signal)
     await expect(
       instance.closeInput({
         binding,
@@ -165,18 +202,86 @@ describe("PluginHostApiMainAdapter connected media", () => {
         throw new PluginHostApiResourceUnavailableError("native Project file disappeared")
       },
     })
+    const inputKey = await currentInputKey(instance)
 
     const error = await instance
       .openInput({
         binding,
         connectionId: "connection-1",
-        inputKey: "source-1",
+        inputKey,
         principal,
         transport: { frameId: "frame-1", senderId: 11 },
       })
       .catch((failure: unknown) => failure)
     expect(error).toBeInstanceOf(PluginHostApiResourceUnavailableError)
     expect(pluginHostApiRemoteFailure("canvas.inputs.open", error)).toEqual({
+      code: "resource-unavailable",
+      kind: "api",
+      message: "Plugin Host API resource is unavailable",
+      recoverable: true,
+    })
+  })
+
+  test("binds connected-image sessions to the exact Main-issued frame and forwards cancellation", async () => {
+    const { closeImage, instance, openImage } = adapter()
+    const controller = new AbortController()
+    const inputKey = await currentInputKey(instance)
+    const opened = await instance.openImageInput({
+      binding,
+      connectionId: "connection-1",
+      inputKey,
+      principal,
+      signal: controller.signal,
+      transport: { frameId: "frame-1", senderId: 11 },
+    })
+    expect(opened.probe).toMatchObject({ contentRevision: "d".repeat(64), mimeType: "image/png" })
+    expect(openImage).toHaveBeenCalledWith(
+      {
+        canvasId: binding.canvasId,
+        expectedRevision: document.revision,
+        frameId: "frame-1",
+        nodeId: binding.nodeId,
+        pluginId: principal.pluginId,
+        pluginVersion: principal.pluginVersion,
+        projectId: binding.projectId,
+        sourceNodeId: "source-1",
+      },
+      11,
+      controller.signal,
+    )
+    await expect(
+      instance.closeImageInput({
+        binding,
+        connectionId: "connection-1",
+        principal,
+        sessionId: opened.sessionId,
+        signal: controller.signal,
+        transport: { frameId: "frame-1", senderId: 11 },
+      }),
+    ).resolves.toBeTrue()
+    expect(closeImage).toHaveBeenCalledWith(
+      expect.objectContaining({ frameId: "frame-1", sessionId: opened.sessionId }),
+      11,
+    )
+  })
+
+  test("preserves connected-image resource failures for the Catalog error contract", async () => {
+    const { instance } = adapter({
+      async openImage() {
+        throw new PluginHostApiResourceUnavailableError("connected image disappeared")
+      },
+    })
+    const inputKey = await currentInputKey(instance)
+    const error = await instance
+      .openImageInput({
+        binding,
+        connectionId: "connection-1",
+        inputKey,
+        principal,
+        transport: { frameId: "frame-1", senderId: 11 },
+      })
+      .catch((failure: unknown) => failure)
+    expect(pluginHostApiRemoteFailure("canvas.inputs.image.open", error)).toEqual({
       code: "resource-unavailable",
       kind: "api",
       message: "Plugin Host API resource is unavailable",
@@ -191,11 +296,12 @@ describe("PluginHostApiMainAdapter connected media", () => {
         throw bug
       },
     })
+    const inputKey = await currentInputKey(media.instance)
     await expect(
       media.instance.openInput({
         binding,
         connectionId: "connection-1",
-        inputKey: "source-1",
+        inputKey,
         principal,
         transport: { frameId: "frame-1", senderId: 11 },
       }),
@@ -256,5 +362,201 @@ describe("PluginHostApiMainAdapter connected media", () => {
       message: "Plugin Host API completed only the reported durable file publication",
       recoverable: false,
     })
+  })
+})
+
+function generationCheckpoint(
+  liveDocument: {
+    id: string
+    nodes: Array<{
+      data: Record<string, unknown>
+      id: string
+      position: { x: number; y: number }
+      type: string
+    }>
+    revision: number
+  },
+  ownerBinding = binding,
+): PluginHostMutationCheckpoint {
+  return {
+    async checkpoint() {
+      const owner = liveDocument.nodes.find(({ id }) => id === ownerBinding.nodeId)
+      if (!owner) throw new Error("Missing test Plugin owner")
+      return {
+        canvas: { id: ownerBinding.canvasId, name: "Canvas" },
+        documentRevision: liveDocument.revision,
+        node: owner as PluginHostNodeContext["node"],
+        project: { id: ownerBinding.projectId, name: "Project" },
+      }
+    },
+  }
+}
+
+function generationResult() {
+  return {
+    createdNodeIds: ["generated-1"],
+    revision: 4,
+    toolId: "tool-1",
+    warnings: [],
+  }
+}
+
+describe("PluginHostApiMainAdapter generation input keys", () => {
+  test("resolves an opaque key to the internal node reference without invalidating it for unrelated revisions", async () => {
+    const live = structuredClone(document) as any
+    const generate = mock(async (_request: unknown) => generationResult())
+    const { instance } = adapter({
+      document: () => live,
+      generation: { generate, listTools: mock(async () => []) },
+    })
+    const inputKey = await currentInputKey(instance)
+    expect(inputKey).not.toContain("source-1")
+
+    live.revision += 1
+    live.nodes[0].position.x += 50
+    live.nodes.push({
+      data: { kind: "text", label: "Unrelated" },
+      id: "unrelated",
+      position: { x: 500, y: 500 },
+      type: "file",
+    })
+
+    await expect(
+      instance.executeGeneration({
+        binding,
+        checkpoint: generationCheckpoint(live),
+        operationId: "generation-valid",
+        principal,
+        prompt: "Create",
+        references: [{ inputKey, role: "reference_video" }],
+      }),
+    ).resolves.toEqual(generationResult())
+    expect(generate).toHaveBeenCalledTimes(1)
+    expect(generate.mock.calls[0]?.[0]).toMatchObject({
+      expectedRevision: live.revision,
+      referenceConstraint: {
+        ownerNodeId: binding.nodeId,
+        ownerPluginId: principal.pluginId,
+        type: "direct-incoming",
+      },
+      references: [{ nodeId: "source-1", role: "reference_video" }],
+    })
+    expect(JSON.stringify(generate.mock.calls[0]?.[0])).not.toContain("inputKey")
+  })
+
+  test("rejects forged keys and role/type mismatches before calling the generation executor", async () => {
+    const live = structuredClone(document) as any
+    const generate = mock(async (_request: unknown) => generationResult())
+    const { instance } = adapter({
+      document: () => live,
+      generation: { generate, listTools: mock(async () => []) },
+    })
+    const inputKey = await currentInputKey(instance)
+    const base = {
+      binding,
+      checkpoint: generationCheckpoint(live),
+      operationId: "generation-invalid",
+      principal,
+      prompt: "Create",
+    }
+
+    await expect(
+      instance.executeGeneration({
+        ...base,
+        references: [{ inputKey: `${inputKey.slice(0, -1)}x`, role: "reference_video" }],
+      }),
+    ).rejects.toMatchObject({ code: "stale-context" })
+    await expect(
+      instance.executeGeneration({
+        ...base,
+        references: [{ inputKey, role: "reference_image" }],
+      }),
+    ).rejects.toMatchObject({ code: "resource-unavailable" })
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  test("invalidates a key when its direct edge or resource binding changes", async () => {
+    const live = structuredClone(document) as any
+    const generate = mock(async (_request: unknown) => generationResult())
+    const { instance } = adapter({
+      document: () => live,
+      generation: { generate, listTools: mock(async () => []) },
+    })
+    const edgeKey = await currentInputKey(instance)
+    live.edges[0].id = "replacement-edge"
+    live.revision += 1
+    await expect(
+      instance.executeGeneration({
+        binding,
+        checkpoint: generationCheckpoint(live),
+        operationId: "generation-stale-edge",
+        principal,
+        prompt: "Create",
+        references: [{ inputKey: edgeKey, role: "reference_video" }],
+      }),
+    ).rejects.toMatchObject({ code: "stale-context" })
+
+    const resourceKey = await currentInputKey(instance)
+    live.nodes[0].data.resourceState = { contentRevision: "changed-content", status: "ready" }
+    live.revision += 1
+    await expect(
+      instance.executeGeneration({
+        binding,
+        checkpoint: generationCheckpoint(live),
+        operationId: "generation-stale-resource",
+        principal,
+        prompt: "Create",
+        references: [{ inputKey: resourceKey, role: "reference_video" }],
+      }),
+    ).rejects.toMatchObject({ code: "stale-context" })
+    expect(generate).not.toHaveBeenCalled()
+  })
+
+  test("binds keys to the exact Plugin snapshot, owning node, and Project scope", async () => {
+    const live = structuredClone(document) as any
+    const generate = mock(async (_request: unknown) => generationResult())
+    const { instance } = adapter({
+      document: () => live,
+      generation: { generate, listTools: mock(async () => []) },
+    })
+    const inputKey = await currentInputKey(instance)
+    const otherPrincipal = { ...principal, snapshotDigest: "d".repeat(64) }
+    const otherScope = { ...binding, projectId: "project-2" }
+    const otherNode = { ...binding, nodeId: "other-plugin-node" }
+    live.nodes.push({
+      data: {
+        kind: "plugin.fixture",
+        label: "Other owner",
+        metadata: { convaxPlugin: { id: principal.pluginId, version: principal.pluginVersion } },
+      },
+      id: otherNode.nodeId,
+      position: { x: 300, y: 0 },
+      type: "file",
+    })
+    live.edges.push({
+      id: "edge-other-owner",
+      source: "source-1",
+      sourceHandle: "output",
+      target: otherNode.nodeId,
+      targetHandle: "input",
+    })
+
+    for (const [caseName, testBinding, testPrincipal] of [
+      ["snapshot", binding, otherPrincipal],
+      ["scope", otherScope, principal],
+      ["owner", otherNode, principal],
+    ] as const) {
+      await expect(
+        instance.executeGeneration({
+          binding: testBinding,
+          checkpoint: generationCheckpoint(live, testBinding),
+          operationId: `generation-cross-${caseName}`,
+          principal: testPrincipal,
+          prompt: "Create",
+          references: [{ inputKey, role: "reference_video" }],
+        }),
+      ).rejects.toMatchObject({ code: "stale-context" })
+    }
+    expect(generate).not.toHaveBeenCalled()
   })
 })

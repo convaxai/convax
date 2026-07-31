@@ -1,0 +1,447 @@
+name: Publish Plugin API immutable evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published stable @convax/plugin-api version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-api-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify protected release identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
+          test "$COMMIT" = "$GITHUB_SHA"
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          git fetch --no-tags origin refs/heads/convax-next:refs/remotes/origin/convax-next
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/convax-next
+          test "$(jq -r '.name' packages/plugin-api/package.json)" = "@convax/plugin-api"
+          test "$(jq -r '.version' packages/plugin-api/package.json)" = "$VERSION"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Fetch exact published npm bytes
+        id: npm
+        shell: bash
+        run: |
+          set -euo pipefail
+          download="$RUNNER_TEMP/plugin-api-npm"
+          evidence="$RUNNER_TEMP/plugin-api-release"
+          mkdir "$download" "$evidence"
+          npm view "@convax/plugin-api@$VERSION" dist \
+            --registry=https://registry.npmjs.org \
+            --json --loglevel=silent > "$download/npm-dist.json"
+          npm_tarball_url="$(jq -r '.tarball' "$download/npm-dist.json")"
+          npm_integrity="$(jq -r '.integrity' "$download/npm-dist.json")"
+          test "${npm_tarball_url#https://registry.npmjs.org/}" != "$npm_tarball_url"
+          [[ "$npm_integrity" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          tarball="$evidence/convax-plugin-api-$VERSION.tgz"
+          curl --fail --location --silent --show-error \
+            --max-filesize 33554432 \
+            "$npm_tarball_url" \
+            --output "$tarball"
+          test "$(stat -c '%s' "$tarball")" -le 33554432
+          actual_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | base64 -w0)"
+          test "$actual_integrity" = "$npm_integrity"
+          tar -tzf "$tarball" > "$download/inventory.txt"
+          test "$(awk '$0 == "package/package.json" { count += 1 } END { print count + 0 }' "$download/inventory.txt")" -eq 1
+          test "$(awk '$0 == "package/dist/generated/plugin-api.json" { count += 1 } END { print count + 0 }' "$download/inventory.txt")" -eq 1
+          if grep -Eq '(^/|(^|/)\.\.(/|$))' "$download/inventory.txt" ||
+            grep -Fq '\' "$download/inventory.txt"; then
+            echo "package tarball contains an unsafe path" >&2
+            exit 1
+          fi
+          tar -xOzf "$tarball" package/package.json |
+            head -c 131073 > "$download/package.json"
+          test "$(stat -c '%s' "$download/package.json")" -le 131072
+          tar -xOzf "$tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$download/package-plugin-api.json"
+          test "$(stat -c '%s' "$download/package-plugin-api.json")" -le 16777216
+          cp packages/plugin-api/generated/plugin-api.json "$evidence/plugin-api.json"
+          echo "directory=$evidence" >> "$GITHUB_OUTPUT"
+          echo "integrity=$npm_integrity" >> "$GITHUB_OUTPUT"
+          echo "package_catalog=$download/package-plugin-api.json" >> "$GITHUB_OUTPUT"
+          echo "package_json=$download/package.json" >> "$GITHUB_OUTPUT"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+      - name: Run the exact release conformance profile
+        run: bun scripts/plugin-api-release-conformance.ts --output "$RUNNER_TEMP/plugin-api-check-results.json"
+      - name: Bind runtime evidence to npm, Catalog and Host commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="${{ steps.npm.outputs.directory }}"
+          bun scripts/plugin-api-release-evidence.ts \
+            --catalog "$evidence/plugin-api.json" \
+            --check-results "$RUNNER_TEMP/plugin-api-check-results.json" \
+            --commit "$COMMIT" \
+            --output "$evidence/runtime-conformance.json" \
+            --package-catalog "${{ steps.npm.outputs.package_catalog }}" \
+            --package-json "${{ steps.npm.outputs.package_json }}" \
+            --repository "$REPOSITORY" \
+            --repository-id "$GITHUB_REPOSITORY_ID" \
+            --repository-owner-id "$GITHUB_REPOSITORY_OWNER_ID" \
+            --tarball "${{ steps.npm.outputs.tarball }}" \
+            --tarball-integrity "${{ steps.npm.outputs.integrity }}" \
+            --version "$VERSION" \
+            --workflow-ref "$GITHUB_WORKFLOW_REF"
+          (
+            cd "$evidence"
+            sha256sum \
+              "convax-plugin-api-$VERSION.tgz" \
+              plugin-api.json \
+              runtime-conformance.json > SHA256SUMS
+          )
+      - name: Upload unprivileged release candidate
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: plugin-api-release-candidate
+          path: ${{ steps.npm.outputs.directory }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+    env:
+      COMMIT: ${{ github.sha }}
+      VERSION: ${{ inputs.version }}
+      REPOSITORY: microvoid/convax
+      REPOSITORY_ID: "1293264965"
+      REPOSITORY_OWNER_ID: "125447777"
+      IMMUTABLE_RELEASES_OPERATOR_GUARD: ${{ vars.CONVAX_IMMUTABLE_RELEASES_ENABLED }}
+    steps:
+      - name: Verify protected publication identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "$REPOSITORY"
+          test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
+          test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
+          test "$GITHUB_REF" = refs/heads/convax-next
+          test "$COMMIT" = "$GITHUB_SHA"
+          test "$IMMUTABLE_RELEASES_OPERATOR_GUARD" = true
+          [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+      - name: Require the real immutable-Release repository setting
+        env:
+          GH_TOKEN: ${{ secrets.IMMUTABLE_RELEASES_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN"
+          gh api \
+            --header "Accept: application/vnd.github+json" \
+            --header "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/$REPOSITORY/immutable-releases" |
+            jq -e '.enabled == true' >/dev/null
+          gh release verify --help >/dev/null
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: plugin-api-release-candidate
+          path: ${{ runner.temp }}/plugin-api-release
+      - name: Re-fetch npm and verify candidate without repository code
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-api-release"
+          test "$(stat -c '%s' "$evidence/runtime-conformance.json")" -le 262144
+          test "$(stat -c '%s' "$evidence/plugin-api.json")" -le 16777216
+          test "$(stat -c '%s' "$evidence/SHA256SUMS")" -le 65536
+          tarball="$evidence/convax-plugin-api-$VERSION.tgz"
+          test "$(stat -c '%s' "$tarball")" -le 33554432
+          (
+            cd "$evidence"
+            sha256sum --check SHA256SUMS
+          )
+          metadata="$RUNNER_TEMP/npm-package.json"
+          curl --fail --silent --show-error \
+            --max-filesize 1048576 \
+            "https://registry.npmjs.org/@convax%2fplugin-api/$VERSION" \
+            --output "$metadata"
+          npm_tarball_url="$(jq -r '.dist.tarball' "$metadata")"
+          npm_integrity="$(jq -r '.dist.integrity' "$metadata")"
+          test "${npm_tarball_url#https://registry.npmjs.org/}" != "$npm_tarball_url"
+          [[ "$npm_integrity" =~ ^sha512-[A-Za-z0-9+/]+={0,2}$ ]]
+          registry_tarball="$RUNNER_TEMP/npm-registry-package.tgz"
+          curl --fail --location --silent --show-error \
+            --max-filesize 33554432 \
+            "$npm_tarball_url" \
+            --output "$registry_tarball"
+          cmp "$registry_tarball" "$tarball"
+          actual_integrity="sha512-$(openssl dgst -sha512 -binary "$registry_tarball" | base64 -w0)"
+          test "$actual_integrity" = "$npm_integrity"
+          package_json="$RUNNER_TEMP/plugin-api-package.json"
+          package_catalog="$RUNNER_TEMP/plugin-api-catalog.json"
+          tar -xOzf "$registry_tarball" package/package.json |
+            head -c 131073 > "$package_json"
+          tar -xOzf "$registry_tarball" package/dist/generated/plugin-api.json |
+            head -c 16777217 > "$package_catalog"
+          test "$(stat -c '%s' "$package_json")" -le 131072
+          test "$(stat -c '%s' "$package_catalog")" -le 16777216
+          jq -e \
+            --arg version "$VERSION" \
+            '.name == "@convax/plugin-api" and .version == $version' \
+            "$package_json" >/dev/null
+          cmp "$package_catalog" "$evidence/plugin-api.json"
+          tarball_sha256="$(sha256sum "$tarball" | awk '{ print $1 }')"
+          catalog_sha256="$(sha256sum "$evidence/plugin-api.json" | awk '{ print $1 }')"
+          contract_coverage="$(jq -c '[.apis[] | { id, digest: .contract.digest }] | sort_by(.id)' "$evidence/plugin-api.json")"
+          contract_coverage_sha256="$(printf %s "$contract_coverage" | sha256sum | awk '{ print $1 }')"
+          jq -e \
+            --arg catalog_sha256 "$catalog_sha256" \
+            --arg commit "$COMMIT" \
+            --arg contract_coverage_sha256 "$contract_coverage_sha256" \
+            --arg integrity "$npm_integrity" \
+            --arg repository_id "$REPOSITORY_ID" \
+            --arg repository_owner_id "$REPOSITORY_OWNER_ID" \
+            --arg tarball_sha256 "$tarball_sha256" \
+            --arg version "$VERSION" \
+            --arg workflow "$GITHUB_WORKFLOW_REF" \
+            --slurpfile catalog "$evidence/plugin-api.json" \
+            '
+              .schema == "convax.plugin-api-runtime-conformance/1" and
+              .profile == "convax.plugin-api-host-runtime/1" and
+              keys == ["checks", "host", "pluginApi", "profile", "schema", "sigstore", "workflow"] and
+              (.host | keys) == ["commit", "repository", "repositoryId", "repositoryOwnerId"] and
+              (.workflow | keys) == ["ref"] and
+              .host == {
+                repository: "microvoid/convax",
+                repositoryId: $repository_id,
+                repositoryOwnerId: $repository_owner_id,
+                commit: $commit
+              } and
+              .workflow.ref == $workflow and
+              .sigstore == {
+                bundle: {
+                  mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+                  suffix: ".sigstore.json"
+                },
+                certificate: {
+                  identity: ("https://github.com/" + $workflow),
+                  oidcIssuer: "https://token.actions.githubusercontent.com",
+                  workflowName: "Publish Plugin API immutable evidence",
+                  workflowRef: "refs/heads/convax-next",
+                  repository: "microvoid/convax",
+                  sourceSha: $commit,
+                  trigger: "workflow_dispatch"
+                },
+                transparencyLog: { inclusionRequired: true }
+              } and
+              .pluginApi.package == "@convax/plugin-api" and
+              (.pluginApi | keys) == ["catalogSchema", "catalogSha256", "contractCoverage", "contractCoverageSha256", "package", "tarballIntegrity", "tarballSha256", "version"] and
+              .pluginApi.version == $version and
+              .pluginApi.catalogSchema == "convax.plugin-api-catalog/3" and
+              .pluginApi.catalogSha256 == $catalog_sha256 and
+              .pluginApi.tarballSha256 == $tarball_sha256 and
+              .pluginApi.tarballIntegrity == $integrity and
+              .pluginApi.contractCoverage == ($catalog[0].apis | map({ id, digest: .contract.digest }) | sort_by(.id)) and
+              .pluginApi.contractCoverageSha256 == $contract_coverage_sha256 and
+              [.checks[].id] == ["plugin-api-typecheck", "plugin-api-test", "plugin-api-compat", "plugin-api-generate-check", "plugin-api-pack-check", "release-evidence-policy", "host-runtime-conformance"] and
+              all(.checks[]; (keys == ["command", "id", "status"]) and .status == "passed")
+            ' "$evidence/runtime-conformance.json" >/dev/null
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+        with:
+          cosign-release: v3.0.6
+      - name: Publish or verify the Sigstore-backed Plugin API evidence
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/plugin-api-release"
+          identity="$(jq -r '.sigstore.certificate.identity' "$evidence/runtime-conformance.json")"
+          issuer="$(jq -r '.sigstore.certificate.oidcIssuer' "$evidence/runtime-conformance.json")"
+          release_tag="plugin-api-v$VERSION-$COMMIT"
+          expected_assets='["SHA256SUMS","SHA256SUMS.sigstore.json","convax-plugin-api-'"$VERSION"'.tgz","convax-plugin-api-'"$VERSION"'.tgz.sigstore.json","plugin-api.json","plugin-api.json.sigstore.json","runtime-conformance.json","runtime-conformance.json.sigstore.json"]'
+          verify_bundle() {
+            artifact="$1"
+            bundle="$2"
+            test "$(stat -c '%s' "$bundle")" -le 1048576
+            jq -e '
+              .mediaType == "application/vnd.dev.sigstore.bundle.v0.3+json" and
+              (.verificationMaterial.certificate.rawBytes | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries | length == 1) and
+              (.verificationMaterial.tlogEntries[0].inclusionPromise.signedEntryTimestamp | type == "string" and length > 0) and
+              (.verificationMaterial.tlogEntries[0].inclusionProof.rootHash | type == "string" and length > 0)
+            ' "$bundle" >/dev/null
+            cosign verify-blob \
+              --bundle "$bundle" \
+              --certificate-identity "$identity" \
+              --certificate-oidc-issuer "$issuer" \
+              --certificate-github-workflow-name "Publish Plugin API immutable evidence" \
+              --certificate-github-workflow-ref refs/heads/convax-next \
+              --certificate-github-workflow-repository "$REPOSITORY" \
+              --certificate-github-workflow-sha "$COMMIT" \
+              --certificate-github-workflow-trigger workflow_dispatch \
+              "$artifact" >/dev/null
+          }
+          if gh release view "$release_tag" --repo "$REPOSITORY" >/dev/null 2>&1; then
+            existing="$RUNNER_TEMP/existing-plugin-api-release"
+            mkdir "$existing"
+            gh release download "$release_tag" \
+              --repo "$REPOSITORY" \
+              --dir "$existing"
+            actual_assets="$(
+              gh api "repos/$REPOSITORY/releases/tags/$release_tag" |
+                jq -c '[.assets[].name] | sort'
+            )"
+            test "$actual_assets" = "$expected_assets"
+            for asset in \
+              "convax-plugin-api-$VERSION.tgz" \
+              plugin-api.json \
+              runtime-conformance.json \
+              SHA256SUMS; do
+              cmp "$existing/$asset" "$evidence/$asset"
+              verify_bundle "$existing/$asset" "$existing/$asset.sigstore.json"
+            done
+            gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" |
+              jq -e \
+                --arg commit "$COMMIT" \
+                '.object.type == "commit" and .object.sha == $commit' >/dev/null
+            gh release verify "$release_tag" \
+              --repo "$REPOSITORY" \
+              --format json >/dev/null
+            for asset in \
+              "convax-plugin-api-$VERSION.tgz" \
+              plugin-api.json \
+              runtime-conformance.json \
+              SHA256SUMS; do
+              gh release verify-asset "$release_tag" \
+                "$existing/$asset" \
+                --repo "$REPOSITORY" \
+                --format json >/dev/null
+              gh release verify-asset "$release_tag" \
+                "$existing/$asset.sigstore.json" \
+                --repo "$REPOSITORY" \
+                --format json >/dev/null
+            done
+            echo "Existing immutable Release bytes and public Sigstore proofs match the npm-backed evidence." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for asset in \
+            "convax-plugin-api-$VERSION.tgz" \
+            plugin-api.json \
+            runtime-conformance.json \
+            SHA256SUMS; do
+            cosign sign-blob \
+              --yes \
+              --bundle "$evidence/$asset.sigstore.json" \
+              "$evidence/$asset"
+            verify_bundle "$evidence/$asset" "$evidence/$asset.sigstore.json"
+          done
+          release_created=false
+          cleanup_unverified_release() {
+            status="$?"
+            if [ "$status" -ne 0 ] && [ "$release_created" = true ]; then
+              gh release delete "$release_tag" \
+                --repo "$REPOSITORY" \
+                --cleanup-tag \
+                --yes || true
+            fi
+            exit "$status"
+          }
+          trap cleanup_unverified_release EXIT
+          gh release create "$release_tag" \
+            --repo "$REPOSITORY" \
+            --target "$COMMIT" \
+            --title "@convax/plugin-api $VERSION" \
+            --notes "Exact npm package, Catalog and Host runtime conformance evidence." \
+            --latest=false \
+            --draft
+          release_created=true
+          gh release upload "$release_tag" \
+            "$evidence/convax-plugin-api-$VERSION.tgz" \
+            "$evidence/plugin-api.json" \
+            "$evidence/runtime-conformance.json" \
+            "$evidence/SHA256SUMS" \
+            "$evidence/convax-plugin-api-$VERSION.tgz.sigstore.json" \
+            "$evidence/plugin-api.json.sigstore.json" \
+            "$evidence/runtime-conformance.json.sigstore.json" \
+            "$evidence/SHA256SUMS.sigstore.json" \
+            --repo "$REPOSITORY"
+          gh release edit "$release_tag" \
+            --repo "$REPOSITORY" \
+            --draft=false
+          published="$RUNNER_TEMP/published-plugin-api-release"
+          mkdir "$published"
+          gh release download "$release_tag" \
+            --repo "$REPOSITORY" \
+            --dir "$published"
+          actual_assets="$(
+            gh api "repos/$REPOSITORY/releases/tags/$release_tag" |
+              jq -c '[.assets[].name] | sort'
+          )"
+          test "$actual_assets" = "$expected_assets"
+          gh api "repos/$REPOSITORY/git/ref/tags/$release_tag" |
+            jq -e \
+              --arg commit "$COMMIT" \
+              '.object.type == "commit" and .object.sha == $commit' >/dev/null
+          gh release verify "$release_tag" \
+            --repo "$REPOSITORY" \
+            --format json >/dev/null
+          for asset in \
+            "convax-plugin-api-$VERSION.tgz" \
+              plugin-api.json \
+              runtime-conformance.json \
+              SHA256SUMS; do
+            cmp "$published/$asset" "$evidence/$asset"
+            cmp "$published/$asset.sigstore.json" "$evidence/$asset.sigstore.json"
+            verify_bundle "$published/$asset" "$published/$asset.sigstore.json"
+            gh release verify-asset "$release_tag" \
+              "$published/$asset" \
+              --repo "$REPOSITORY" \
+              --format json >/dev/null
+            gh release verify-asset "$release_tag" \
+              "$published/$asset.sigstore.json" \
+              --repo "$REPOSITORY" \
+              --format json >/dev/null
+          done
+          trap - EXIT
+          {
+            echo "### Sigstore-backed Plugin API evidence"
+            echo
+            echo "- Host: \`$REPOSITORY@$COMMIT\`"
+            echo "- package: \`@convax/plugin-api@$VERSION\`"
+            echo "- Release: \`$release_tag\`"
+            echo "- Sigstore: Cosign v3.0.6, public Rekor inclusion required"
+            sed 's/^/- SHA-256: `/' "$evidence/SHA256SUMS" | sed 's/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"

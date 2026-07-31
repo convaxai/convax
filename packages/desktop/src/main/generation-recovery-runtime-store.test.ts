@@ -35,7 +35,7 @@ const plugin: InstalledWebPluginSummary = {
     },
   },
   description: "Recovery test Plugin",
-  hostApi: { major: 1, optional: [], required: [] },
+  hostApi: { major: 2, optional: [], required: [] },
   id: "recovery-test",
   name: "Recovery Test",
   runtime: { args: ["serve", "--stdio"], command: "recovery-test", type: "mcp-stdio" },

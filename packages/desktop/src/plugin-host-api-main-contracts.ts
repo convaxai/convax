@@ -1,8 +1,5 @@
 import type { CanvasNodeData, CanvasPoint } from "@convax/canvas/core"
-import type {
-  PluginApiCall,
-  PluginApiId,
-} from "@convax/plugin-api"
+import type { PluginApiCall, PluginApiGenerationReference, PluginApiId } from "@convax/plugin-api"
 
 import type {
   PluginCanvasCapabilityClient,
@@ -16,12 +13,12 @@ import type {
   PluginCanvasImageResult,
   PluginConnectedInputDescriptor,
   PluginGenerationCanvasResult,
-  PluginGenerationReference,
   PluginGenerationResultMode,
   PluginGenerationToolSummary,
   PluginProjectTextResult,
 } from "./plugin-host-types"
 import type { PluginConnectedMediaOpenResult } from "./plugin-connected-media-contracts"
+import type { PluginConnectedImageOpenResult } from "./plugin-connected-image-contracts"
 import type { WebPluginGenerationModality } from "./plugin-contracts"
 
 export interface PluginHostContextNode {
@@ -142,7 +139,7 @@ export interface PluginHostNodeOperationsPort {
     operationId: string
     principal: PluginPrincipal
     prompt: string
-    references?: readonly PluginGenerationReference[]
+    references?: readonly PluginApiGenerationReference[]
     resultMode?: PluginGenerationResultMode
     signal?: AbortSignal
     toolId?: string
@@ -166,6 +163,22 @@ export interface PluginHostNodeOperationsPort {
     signal?: AbortSignal
     transport: PluginHostTransportContext
   }): Promise<PluginConnectedMediaOpenResult>
+  openImageInput(input: {
+    binding: PluginHostNodeBinding
+    connectionId: string
+    inputKey: string
+    principal: PluginPrincipal
+    signal?: AbortSignal
+    transport: PluginHostTransportContext
+  }): Promise<PluginConnectedImageOpenResult>
+  closeImageInput(input: {
+    binding: PluginHostNodeBinding
+    connectionId: string
+    principal: PluginPrincipal
+    sessionId: string
+    signal?: AbortSignal
+    transport: PluginHostTransportContext
+  }): Promise<boolean>
   promptAgent(input: {
     binding: PluginHostNodeBinding
     checkpoint: PluginHostMutationCheckpoint

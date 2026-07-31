@@ -24,7 +24,7 @@ function provider(id = "convax-pet", version = "0.2.0"): ActiveInstalledWebPlugi
       },
     },
     description: `${id} provider`,
-    hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+    hostApi: { major: 2, optional: [], required: ["host.context.get"] },
     id,
     name: id,
     schema: "convax.plugin/8",

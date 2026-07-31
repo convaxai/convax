@@ -14,6 +14,14 @@ import type {
 export type PluginApiHostContextResult = PluginApiResult<"host.context.get">
 export type PluginApiHostNode = Omit<PluginApiResult<"canvas.node.get">, "revision">
 export type PluginApiConnectedInput = PluginApiResult<"canvas.inputs.list">["inputs"][number]
+/**
+ * A revocable Host session whose URL is a bearer capability. Electron protocol
+ * GET/HEAD requests do not carry a trusted sender/frame principal, so the Host
+ * combines an opaque 128-bit token with revalidation of the issued Plugin
+ * principal and direct Canvas edge before each read.
+ */
+export type PluginApiConnectedImageOpenResult = PluginApiResult<"canvas.inputs.image.open">
+export type PluginApiConnectedImageProbe = PluginApiConnectedImageOpenResult["probe"]
 export type PluginApiConnectedMediaOpenResult = PluginApiResult<"canvas.inputs.open">
 export type PluginApiConnectedMediaProbe = PluginApiConnectedMediaOpenResult["probe"]
 export type PluginApiGenerationReference = NonNullable<PluginApiParams<"generation.execute">["references"]>[number]

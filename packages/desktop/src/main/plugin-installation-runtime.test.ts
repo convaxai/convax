@@ -6,7 +6,13 @@ import os from "node:os"
 import path from "node:path"
 import { parsePluginCapabilityDeclaration, type PluginCapabilityDeclaration } from "@convax/plugin-sdk"
 
-import { ActivePluginSetRevisionConflictError, pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
+import { PluginInstallationClosureStore } from "./plugin-installation-closure-store"
+import { planPluginCapabilityTopology } from "./plugin-capability-binding-plan"
+import {
+  ActivePluginSetRevisionConflictError,
+  PluginInstallationSnapshotStore,
+  pluginSnapshotCanonicalDigest,
+} from "./plugin-installation-snapshots"
 import {
   PluginExecutionSetupRequiredError,
   PluginInstallationRuntime,
@@ -101,7 +107,7 @@ function manifest(
     description: `${id} test Plugin`,
     entry: "index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: ["host.context.get"],
     },
@@ -315,6 +321,58 @@ describe("PluginInstallationRuntime", () => {
     await fs.mkdir(legacy)
     await expect(new PluginInstallationRuntime(root).assertNoLegacyState([legacy])).rejects.toThrow(
       "Unsupported legacy Plugin installation state",
+    )
+  })
+
+  test("rejects a persisted legacy-major ActiveSet without rewriting its pointer or closure", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-installation-runtime-"))
+    roots.push(root)
+    const legacyManifest = JSON.stringify({
+      ...manifest("legacy"),
+      hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+    })
+    const packageFiles = [
+      { bytes: Buffer.from("<h1>legacy</h1>"), path: "index.html" },
+      { bytes: Buffer.from(legacyManifest), path: "manifest.json" },
+    ]
+    const fileIdentities = packageFiles.map((file) => ({
+      path: file.path,
+      sha256: sha256(file.bytes),
+      size: file.bytes.byteLength,
+    }))
+    const legacyManifestIdentity = fileIdentities.find((file) => file.path === "manifest.json")
+    if (!legacyManifestIdentity) throw new Error("Expected a legacy manifest identity")
+    const { path: _manifestPath, ...legacyManifestBytes } = legacyManifestIdentity
+    const snapshots = new PluginInstallationSnapshotStore(path.join(root, "state"))
+    const snapshot = await snapshots.putInstalledSnapshot({
+      authorizations: { capabilityContractDigest: sha256(legacyManifest) },
+      ownedSkills: [],
+      package: {
+        artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+        files: fileIdentities,
+        manifest: legacyManifestBytes,
+      },
+      pluginId: "legacy",
+      sourceIdentity: sha256("legacy source"),
+      version: "1.0.0",
+    })
+    const closures = new PluginInstallationClosureStore(path.join(root, "closures"))
+    await closures.ensureLayout()
+    await closures.publish(snapshot, packageFiles, undefined)
+    const topologyResult = planPluginCapabilityTopology([])
+    if (!topologyResult.ok) throw new Error("Expected an empty Plugin capability topology")
+    const published = await snapshots.compareAndSwapActiveSet(0, {
+      capabilityTopology: topologyResult.topology,
+      plugins: [{ pluginId: "legacy", snapshotDigest: snapshot.digest }],
+    })
+
+    await expect(new PluginInstallationRuntime(root).readActive()).rejects.toThrow(
+      "Immutable Plugin manifest is invalid",
+    )
+
+    expect(await snapshots.readActive()).toEqual(published)
+    expect(await fs.readFile(path.join(root, "closures", snapshot.digest, "package", "manifest.json"), "utf8")).toBe(
+      legacyManifest,
     )
   })
 

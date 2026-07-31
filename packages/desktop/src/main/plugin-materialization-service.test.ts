@@ -24,7 +24,7 @@ function materializationPlugin(version = "1.0.0") {
     description: "Timeline surface",
     entry: "index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: ["canvas.inputs.list", "canvas.inputs.open", "canvas.inputs.close"],
       required: ["host.context.get"],
     },

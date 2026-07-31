@@ -29,6 +29,11 @@ export interface PluginConnectedMediaProbe {
 export interface PluginConnectedMediaOpenResult {
   probe: PluginConnectedMediaProbe
   sessionId: string
+  /**
+   * Opaque bearer URL. Electron's protocol Request has no trusted sender/frame
+   * identity, so possession authorizes GET/HEAD until the Host revokes the
+   * frame/session or a principal/Canvas revalidation fails.
+   */
   url: string
 }
 
