@@ -104,7 +104,7 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
       ],
       revision: 1,
     })),
-    listInstalled: mock(async () => ({ capabilities: [], revision: 1 })),
+    listInstalled: mock(async () => ({ capabilities: [], pluginRuntimeState: "available" as const, revision: 1 })),
     listMarketplaces: mock(async () => [
       {
         health: "available" as const,
@@ -411,6 +411,7 @@ test("uses localized product states and exposes an available update", async () =
           version: "1.0.0",
         },
       ],
+      pluginRuntimeState: "available" as const,
       revision: 1,
     })),
   })
@@ -422,6 +423,40 @@ test("uses localized product states and exposes an available update", async () =
   expect(marketplace.beginUpdate).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
   await act(async () => button("Confirm and update").click())
   expect(marketplace.update).toHaveBeenCalledWith({ selectionToken: "u".repeat(24) })
+})
+
+test("shows a session-wide Plugin outage and does not offer unusable Plugin setup", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          attention: "plugin-runtime-unavailable-for-session",
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Convax Official",
+          state: "attention" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "unavailable-for-session" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+
+  expect(document.body.textContent).toContain("The Plugin subsystem is unavailable for this session")
+  expect(button("Import…").disabled).toBe(true)
+  expect(button("Install Example").disabled).toBe(true)
+  await act(async () => button("Installed").click())
+  expect(document.body.textContent).toContain("Unavailable for this session")
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(button("Update").disabled).toBe(true)
+  expect(button("Disable").disabled).toBe(true)
+  expect(button("Uninstall Example").disabled).toBe(true)
+  expect(marketplace.setup).not.toHaveBeenCalled()
 })
 
 test("previews a Marketplace URL before confirming add", async () => {

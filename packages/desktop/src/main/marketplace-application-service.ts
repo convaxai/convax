@@ -19,6 +19,7 @@ import type {
   MarketplaceCapabilityKind,
   MarketplaceInstalledCapability,
   MarketplaceInventory,
+  MarketplacePluginRuntimeState,
   MarketplaceSettingsSource,
 } from "../marketplace-contracts"
 import type { MarketplaceApplicationPort } from "./marketplace-ipc"
@@ -79,6 +80,8 @@ export interface MarketplaceCapabilityInstallerPort {
 
 export interface MarketplaceApplicationServiceOptions {
   arch?: NodeJS.Architecture
+  assertCapabilityMutationAllowed?(identity: { id: string; kind: MarketplaceCapabilityKind }): void
+  assertLocalImportAllowed?(): void
   fixedCatalog(): Promise<readonly SourceQualifiedItem[]>
   fixedSources(): Promise<readonly MarketplaceSettingsSource[]>
   installer: MarketplaceCapabilityInstallerPort
@@ -87,6 +90,7 @@ export interface MarketplaceApplicationServiceOptions {
   network: NetworkMarketplaceManager
   networkFetch: PinnedHttpsFetcher
   platform?: NodeJS.Platform
+  pluginRuntimeState?: MarketplacePluginRuntimeState
   preinstalledPolicy?(identity: {
     id: string
     kind: MarketplaceCapabilityKind
@@ -187,8 +191,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     if (!policy) return
     const previous = draft.provisioningDecisions.find(
       (decision) =>
-        identityKey(decision.identity) === identityKey(record) &&
-        decision.marketplaceId === policy.marketplaceId,
+        identityKey(decision.identity) === identityKey(record) && decision.marketplaceId === policy.marketplaceId,
     )
     this.#clearProvisioningDecision(draft, record, policy.marketplaceId)
     draft.provisioningDecisions.push({
@@ -238,6 +241,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
 
   async listCatalog(): Promise<MarketplaceCatalogSnapshot> {
     const state = await this.#options.state.read()
+    const pluginRuntimeState = this.#options.pluginRuntimeState ?? "available"
     const groups = aggregateCatalog(
       await this.#catalog(),
       state.installations.map(({ id, kind, sourceKey, version }) => ({ id, kind, sourceKey, version })),
@@ -259,8 +263,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
                 identityKey(record.identity) === identityKey(installed) && record.sourceKey === installed.sourceKey,
             )
           : undefined
+        const runtimeUnavailable = installed?.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
         const grantValid =
-          installed && grant
+          installed && grant && !runtimeUnavailable
             ? await this.#options.installer
                 .verifyAuthorization(installed, grant.authorizationContractDigest)
                 .catch(() => false)
@@ -274,12 +279,14 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
                   sourceLabel:
                     group.sources.find((source) => source.sourceKey === installed.sourceKey)?.marketplaceId ??
                     "Unavailable source",
-                  state: projectInstalledCapability({
-                    executionGrant: grant,
-                    grantValid,
-                    installRecord: installed,
-                    runtimePreference: preference,
-                  }).state,
+                  state: runtimeUnavailable
+                    ? "attention"
+                    : projectInstalledCapability({
+                        executionGrant: grant,
+                        grantValid,
+                        installRecord: installed,
+                        runtimePreference: preference,
+                      }).state,
                   version: installed.version,
                 },
               }
@@ -313,6 +320,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   async listInstalled(): Promise<MarketplaceInventory> {
     const state = await this.#options.state.read()
     const catalog = await this.#catalog()
+    const pluginRuntimeState = this.#options.pluginRuntimeState ?? "available"
     return {
       capabilities: await Promise.all(
         state.installations.map(async (record) => {
@@ -328,10 +336,12 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             (candidate) =>
               identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
           )
+          const runtimeUnavailable = record.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
           const projected = projectInstalledCapability({
             executionGrant: grant,
             grantValid:
               grant !== undefined &&
+              !runtimeUnavailable &&
               (await this.#options.installer
                 .verifyAuthorization(record, grant.authorizationContractDigest)
                 .catch(() => false)),
@@ -339,13 +349,17 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             runtimePreference: preference,
           })
           return {
-            ...(projected.attention ? { attention: projected.attention } : {}),
+            ...(runtimeUnavailable
+              ? { attention: "plugin-runtime-unavailable-for-session" }
+              : projected.attention
+                ? { attention: projected.attention }
+                : {}),
             id: record.id,
             kind: record.kind,
             name: sourceItem?.presentation.name ?? record.id,
             ...(record.runtimeSurface === "none" ? {} : { runtimeScope: record.runtimeSurface }),
             sourceLabel: sourceItem?.marketplaceId ?? "Unavailable source",
-            state: projected.state,
+            state: runtimeUnavailable ? "attention" : projected.state,
             updateAvailable: catalog.some(
               (candidate) =>
                 candidate.kind === record.kind &&
@@ -358,6 +372,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           } satisfies MarketplaceInstalledCapability
         }),
       ),
+      pluginRuntimeState,
       revision: state.revision,
     }
   }
@@ -563,6 +578,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async #installCandidate(candidate: SourceQualifiedItem, mutation: "install" | "update") {
+    this.#options.assertCapabilityMutationAllowed?.(candidate)
     await this.#assertSourcePreflight(candidate)
     const prepared = await this.#prepareCandidate(candidate)
     const result = await this.#options.mutations.withMutation({ identity: candidate, mutation }, async () => {
@@ -720,6 +736,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async importDirectory(directory: string) {
+    this.#options.assertLocalImportAllowed?.()
     const local = this.#options.local
     if (!local) throw new Error("Local Marketplace is unavailable")
     const imported = await local.importDirectory(directory)
@@ -856,6 +873,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     pickExecutable: () => Promise<string | null>,
     mode: MarketplacePluginSetupMode,
   ) {
+    this.#options.assertCapabilityMutationAllowed?.(identity)
     const before = await this.#options.state.read()
     const beforeRecord = before.installations.find((candidate) => identityKey(candidate) === identityKey(identity))
     if (!beforeRecord) throw new Error("Installed capability was not found")
@@ -996,6 +1014,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async uninstall(identity: { id: string; kind: MarketplaceCapabilityKind }) {
+    this.#options.assertCapabilityMutationAllowed?.(identity)
     await this.#options.mutations.withMutation({ identity, mutation: "uninstall" }, async () => {
       const state = await this.#options.state.read()
       const record = state.installations.find((entry) => identityKey(entry) === identityKey(identity))
@@ -1067,10 +1086,12 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async disable(identity: { id: string; kind: MarketplaceCapabilityKind }) {
+    this.#options.assertCapabilityMutationAllowed?.(identity)
     await this.#mutatePreference(identity, "disabled")
   }
 
   async enable(identity: { id: string; kind: MarketplaceCapabilityKind }) {
+    this.#options.assertCapabilityMutationAllowed?.(identity)
     await this.#mutatePreference(identity, "enabled")
   }
 
@@ -1359,9 +1380,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         if (!policy || item.marketplaceId !== policy.marketplaceId) continue
         const state = await this.#options.state.read()
         const removed = state.provisioningDecisions.some(
-          (entry) =>
-            identityKey(entry.identity) === identityKey(item) &&
-            entry.marketplaceId === policy.marketplaceId,
+          (entry) => identityKey(entry.identity) === identityKey(item) && entry.marketplaceId === policy.marketplaceId,
         )
         if (removed) continue
         const installed = state.installations.find((entry) => identityKey(entry) === identityKey(item))

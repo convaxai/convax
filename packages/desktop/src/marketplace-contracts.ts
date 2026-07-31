@@ -1,5 +1,6 @@
 export type MarketplaceCapabilityKind = "mcp-server" | "plugin" | "skill"
 export type MarketplaceCapabilityState = "attention" | "disabled" | "ready" | "setup-required"
+export type MarketplacePluginRuntimeState = "available" | "unavailable-for-session"
 
 export interface MarketplaceCatalogSourceChoice {
   confirmationToken: string
@@ -62,6 +63,7 @@ export interface MarketplaceInstalledCapability {
 
 export interface MarketplaceInventory {
   capabilities: MarketplaceInstalledCapability[]
+  pluginRuntimeState: MarketplacePluginRuntimeState
   revision: number
 }
 
