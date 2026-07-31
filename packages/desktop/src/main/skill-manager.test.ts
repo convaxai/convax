@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { ManagedAgentSkillStore } from "@convax/agent-runtime/node"
+import { CapabilityPublicationRecoveryRequiredError } from "./capability-publication-error"
 import { DesktopSkillManager } from "./skill-manager"
 import { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 import type { PluginOwnedSkillBinding, PluginOwnedSkillReservationSource } from "./skill-manager"
@@ -170,6 +171,115 @@ describe("DesktopSkillManager", () => {
       dispose()
       await setup.manager.installCatalogSkill("storyboard")
       expect(listener).toHaveBeenCalledTimes(2)
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("replaces an existing managed Skill through the recoverable publication path", async () => {
+    const setup = await fixture()
+    try {
+      await setup.manager.installFromFiles({
+        "SKILL.md": skill("storyboard", "Old workflow"),
+      })
+
+      await expect(
+        setup.manager.installFromFiles(
+          {
+            "SKILL.md": skill("storyboard", "Updated workflow"),
+            "references/update.md": "# Updated",
+          },
+          undefined,
+          "storyboard",
+          true,
+        ),
+      ).resolves.toMatchObject({ description: "Updated workflow", name: "storyboard" })
+
+      expect(await setup.store.inspect("storyboard")).toMatchObject({
+        description: "Updated workflow",
+        files: expect.arrayContaining([expect.objectContaining({ path: "references/update.md" })]),
+      })
+      expect(setup.refreshSkills).toHaveBeenCalledTimes(2)
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("retries after replacement bytes were published before Marketplace state committed", async () => {
+    const setup = await fixture()
+    try {
+      await setup.store.installFromFiles({ "SKILL.md": skill("storyboard", "Old workflow") })
+      const files = {
+        "SKILL.md": skill("storyboard", "Recovered workflow"),
+        "references/recovered.md": "# Recovered",
+      }
+      const interrupted = await setup.store.prepareInstallFromFiles(files, {
+        expectedName: "storyboard",
+        replaceExisting: true,
+      })
+      await interrupted.publish()
+
+      await expect(setup.manager.installFromFiles(files, undefined, "storyboard", true, true)).resolves.toMatchObject({
+        description: "Recovered workflow",
+        name: "storyboard",
+      })
+      expect(await setup.store.inspect("storyboard")).toMatchObject({
+        description: "Recovered workflow",
+        files: expect.arrayContaining([expect.objectContaining({ path: "references/recovered.md" })]),
+      })
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("recovery never overwrites an unrelated existing Skill with the same name", async () => {
+    const setup = await fixture()
+    try {
+      await setup.store.installFromFiles({ "SKILL.md": skill("storyboard", "Unrelated workflow") })
+
+      await expect(
+        setup.manager.installFromFiles(
+          { "SKILL.md": skill("storyboard", "Marketplace candidate") },
+          undefined,
+          "storyboard",
+          true,
+          true,
+        ),
+      ).rejects.toThrow("unrelated existing Skill")
+      expect(await setup.store.inspect("storyboard")).toMatchObject({ description: "Unrelated workflow" })
+      expect(setup.refreshSkills).not.toHaveBeenCalled()
+    } finally {
+      await rm(setup.root, { force: true, recursive: true })
+    }
+  })
+
+  test("signals recovery-required when published Skill rollback cannot be proven", async () => {
+    const setup = await fixture()
+    try {
+      await setup.store.installFromFiles({ "SKILL.md": skill("storyboard", "Old workflow") })
+      const prepare = setup.store.prepareInstallFromFiles.bind(setup.store)
+      setup.store.prepareInstallFromFiles = mock(async (files, options) => {
+        const publication = await prepare(files, options)
+        return {
+          ...publication,
+          rollback: async () => {
+            throw new Error("injected rollback failure")
+          },
+        }
+      })
+      setup.refreshSkills.mockRejectedValueOnce(new Error("injected refresh failure"))
+
+      await expect(
+        setup.manager.installFromFiles(
+          { "SKILL.md": skill("storyboard", "Published but ambiguous workflow") },
+          undefined,
+          "storyboard",
+          true,
+        ),
+      ).rejects.toBeInstanceOf(CapabilityPublicationRecoveryRequiredError)
+      expect(await setup.store.inspect("storyboard")).toMatchObject({
+        description: "Published but ambiguous workflow",
+      })
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }

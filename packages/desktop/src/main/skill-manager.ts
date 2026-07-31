@@ -18,6 +18,7 @@ import type {
   DesktopSkillSummary,
 } from "../skill-management-contracts"
 import type { DesktopBuiltinSkillBundle, DesktopBuiltinSkillPresentation } from "./builtin-skill-catalog"
+import { CapabilityPublicationRecoveryRequiredError } from "./capability-publication-error"
 import { createSkillFilePreviews } from "./skill-details"
 import type { DesktopSkillMutationCoordinator } from "./skill-mutation-coordinator"
 
@@ -183,23 +184,74 @@ export class DesktopSkillManager {
   }
 
   async importFromDirectory(sourceDirectory: string, directory = this.defaultDirectory) {
-    return this.mutate(async () => {
-      const installed = await this.store.importFromDirectory(sourceDirectory)
-      return this.finishInstall(installed, directory)
-    })
+    const inspection = await inspectAgentSkillDirectory(sourceDirectory)
+    const files = Object.fromEntries(inspection.files.map((file) => [file.path, file.content]))
+    return this.installFromFiles(files, directory, inspection.name)
+  }
+
+  async replaceFromDirectory(sourceDirectory: string, directory = this.defaultDirectory, recoverExistingOnly = false) {
+    const inspection = await inspectAgentSkillDirectory(sourceDirectory)
+    const files = Object.fromEntries(inspection.files.map((file) => [file.path, file.content]))
+    return this.installFromFiles(files, directory, inspection.name, true, recoverExistingOnly)
   }
 
   async installFromFiles(
     files: Readonly<Record<string, string | Uint8Array>>,
     directory = this.defaultDirectory,
     expectedName?: string,
+    replaceExisting = false,
+    recoverExistingOnly = false,
   ) {
     return this.mutate(async () => {
-      const installed = await this.store.installFromFiles(
-        files,
-        expectedName === undefined ? undefined : { expectedName },
-      )
-      return this.finishInstall(installed, directory)
+      const publication = await this.store.prepareInstallFromFiles(files, {
+        ...(expectedName === undefined ? {} : { expectedName }),
+        replaceExisting,
+      })
+      let published = false
+      try {
+        await this.assertStandaloneOwnershipAllowed(publication.skill)
+        await this.assertNoGlobalConflict(publication.skill, directory)
+        if (
+          recoverExistingOnly &&
+          publication.recovery.operation === "replace" &&
+          publication.recovery.previousSha256 !== publication.recovery.nextSha256
+        ) {
+          throw new Error(`Recovery refused to replace an unrelated existing Skill: ${publication.skill.name}`)
+        }
+        if (recoverExistingOnly && publication.recovery.operation === "replace") {
+          await publication.rollback()
+          return this.summary(publication.skill)
+        }
+        await publication.publish()
+        published = true
+        await this.runtime.refreshSkills()
+        await publication.commit()
+        this.emit()
+        return this.summary(publication.skill)
+      } catch (error) {
+        const recoveryErrors: unknown[] = []
+        try {
+          await publication.rollback()
+        } catch (rollbackError) {
+          recoveryErrors.push(rollbackError)
+        }
+        if (published) {
+          try {
+            await this.runtime.refreshSkills()
+          } catch (refreshError) {
+            recoveryErrors.push(refreshError)
+          }
+        }
+        this.emit()
+        if (recoveryErrors.length > 0) {
+          throw new CapabilityPublicationRecoveryRequiredError(
+            [error, ...recoveryErrors],
+            `Standalone Skill replacement rollback failed: ${publication.skill.name}`,
+            { cause: error },
+          )
+        }
+        throw error
+      }
     })
   }
 
@@ -260,12 +312,11 @@ export class DesktopSkillManager {
   private async finishInstall(installed: ManagedAgentSkill, directory: string) {
     try {
       await this.assertStandaloneInstallAllowed(installed)
-      const conflicts = (await this.runtime.listSkills({ directory })).filter(
-        (skill) => skill.name === installed.name && (!skill.location || !this.store.isManagedLocation(skill.location)),
-      )
-      if (conflicts.length > 0) {
+      try {
+        await this.assertNoGlobalConflict(installed, directory)
+      } catch (error) {
         await this.store.uninstall(installed.name)
-        throw new Error(`A global Skill already uses this name: ${installed.name}`)
+        throw error
       }
       await this.runtime.refreshSkills()
     } catch (error) {
@@ -278,10 +329,7 @@ export class DesktopSkillManager {
 
   private async assertStandaloneInstallAllowed(installed: ManagedAgentSkill) {
     try {
-      const binding = (await this.ownership.reservations()).find((candidate) => candidate.skillName === installed.name)
-      if (binding) {
-        throw new Error(`Skill is managed by Plugin ${binding.pluginName} and cannot be installed independently`)
-      }
+      await this.assertStandaloneOwnershipAllowed(installed)
     } catch (error) {
       try {
         if (!(await this.store.uninstall(installed.name))) {
@@ -297,6 +345,22 @@ export class DesktopSkillManager {
         )
       }
       throw error
+    }
+  }
+
+  private async assertStandaloneOwnershipAllowed(installed: ManagedAgentSkill) {
+    const binding = (await this.ownership.reservations()).find((candidate) => candidate.skillName === installed.name)
+    if (binding) {
+      throw new Error(`Skill is managed by Plugin ${binding.pluginName} and cannot be installed independently`)
+    }
+  }
+
+  private async assertNoGlobalConflict(installed: ManagedAgentSkill, directory: string) {
+    const conflicts = (await this.runtime.listSkills({ directory })).filter(
+      (skill) => skill.name === installed.name && (!skill.location || !this.store.isManagedLocation(skill.location)),
+    )
+    if (conflicts.length > 0) {
+      throw new Error(`A global Skill already uses this name: ${installed.name}`)
     }
   }
 

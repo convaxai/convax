@@ -27,6 +27,7 @@ import type { LocalMarketplacePackage, LocalMarketplaceStore } from "./local-mar
 import type { MarketplacePluginSetupMode } from "./marketplace-plugin-setup-authorization"
 import type { NetworkMarketplaceManager } from "./network-marketplace-manager"
 import type { PinnedHttpsFetcher } from "./pinned-https-fetch"
+import { isCapabilityPublicationRecoveryRequiredError } from "./capability-publication-error"
 import {
   type FileMarketplaceStateStore,
   type CapabilityMutationCoordinator,
@@ -44,13 +45,27 @@ export interface MarketplaceCapabilityInstallerPort {
   installArtifact(
     item: SourceQualifiedItem,
     prepared: { artifactBytes: Uint8Array; companionBytes: Readonly<Record<string, Uint8Array>> },
-    options: { authorizeExecution: boolean },
+    options: {
+      authorizeExecution: boolean
+      previousVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    },
   ): Promise<{ authorizationContractDigest?: string }>
-  installBuiltin(item: SourceQualifiedItem, bytes: Uint8Array): Promise<void>
+  installBuiltin(
+    item: SourceQualifiedItem,
+    bytes: Uint8Array,
+    options?: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean },
+  ): Promise<void>
   installLocal(
     item: LocalMarketplacePackage,
     snapshotDirectory: string,
-    options: { authorizeExecution: boolean },
+    options: {
+      authorizeExecution: boolean
+      previousVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    },
   ): Promise<{ authorizationContractDigest?: string }>
   installMcpMetadata(
     item: SourceQualifiedItem,
@@ -78,9 +93,25 @@ export interface MarketplaceCapabilityInstallerPort {
   verifyAuthorization(record: InstallRecord, authorizationContractDigest: string): Promise<boolean>
 }
 
+interface ActivePluginBinding {
+  active: boolean
+  artifact: {
+    sha256: string
+    size: number
+  }
+  id: string
+  snapshotDigest: string
+  sourceKey: SourceKey
+  version: string
+}
+
 export interface MarketplaceApplicationServiceOptions {
+  activePluginBindings?(): Promise<readonly ActivePluginBinding[]>
   arch?: NodeJS.Architecture
-  assertCapabilityMutationAllowed?(identity: { id: string; kind: MarketplaceCapabilityKind }): void
+  assertCapabilityMutationAllowed?(
+    identity: { id: string; kind: MarketplaceCapabilityKind; sourceKey?: SourceKey },
+    mutation?: "install" | "update",
+  ): void
   assertLocalImportAllowed?(): void
   fixedCatalog(): Promise<readonly SourceQualifiedItem[]>
   fixedSources(): Promise<readonly MarketplaceSettingsSource[]>
@@ -91,6 +122,7 @@ export interface MarketplaceApplicationServiceOptions {
   networkFetch: PinnedHttpsFetcher
   platform?: NodeJS.Platform
   pluginRuntimeState?: MarketplacePluginRuntimeState
+  pluginUpdateRecoveryIds?: ReadonlySet<string>
   preinstalledPolicy?(identity: {
     id: string
     kind: MarketplaceCapabilityKind
@@ -128,6 +160,9 @@ function runtimeSurface(item: SourceQualifiedItem): InstallRecord["runtimeSurfac
 
 function installRecordFor(item: SourceQualifiedItem, previous?: InstallRecord): InstallRecord {
   return {
+    ...(item.kind === "plugin" && item.delivery.kind === "artifact"
+      ? { artifact: { sha256: item.delivery.sha256, size: item.delivery.size } }
+      : {}),
     artifactDigest: sha256Hex(canonicalJson(item.delivery)),
     id: item.id,
     kind: item.kind,
@@ -140,6 +175,122 @@ function installRecordFor(item: SourceQualifiedItem, previous?: InstallRecord): 
 
 function transitionOwner(item: Pick<SourceQualifiedItem, "kind">): CapabilityTransition["owner"] {
   return item.kind === "plugin" ? "plugin-package" : item.kind === "skill" ? "managed-skill" : "mcp-metadata"
+}
+
+function isStandaloneMarketplaceCandidate(item: SourceQualifiedItem) {
+  return item.kind !== "skill" || item.ownerPluginId === undefined
+}
+
+function isExactActivePluginBinding(
+  record: InstallRecord,
+  catalog: readonly SourceQualifiedItem[],
+  bindings: readonly ActivePluginBinding[],
+) {
+  const binding = bindings.find(
+    (candidate) =>
+      candidate.active &&
+      candidate.id === record.id &&
+      candidate.sourceKey === record.sourceKey &&
+      candidate.version === record.version,
+  )
+  if (!binding) return false
+  const catalogArtifact = catalog.find(
+    (candidate) =>
+      candidate.kind === "plugin" &&
+      candidate.id === record.id &&
+      candidate.sourceKey === record.sourceKey &&
+      sha256Hex(canonicalJson(candidate.delivery)) === record.artifactDigest &&
+      candidate.delivery.kind === "artifact",
+  )?.delivery
+  const artifact =
+    record.artifact ??
+    (catalogArtifact?.kind === "artifact" ? { sha256: catalogArtifact.sha256, size: catalogArtifact.size } : undefined)
+  return (
+    artifact !== undefined && binding.artifact.sha256 === artifact.sha256 && binding.artifact.size === artifact.size
+  )
+}
+
+function isResumableManagedSkillPublication(
+  transition: CapabilityTransition,
+  candidate: SourceQualifiedItem,
+  mutation: "install" | "update",
+  previous: InstallRecord | null,
+  next: InstallRecord,
+) {
+  if (
+    candidate.kind !== "skill" ||
+    candidate.ownerPluginId !== undefined ||
+    transition.decision !== "pending" ||
+    transition.phase !== "recovery-required" ||
+    transition.owner !== "managed-skill" ||
+    transition.mutation !== mutation ||
+    transition.identity.id !== candidate.id ||
+    transition.identity.kind !== candidate.kind ||
+    canonicalJson(transition.previous) !== canonicalJson(previous) ||
+    canonicalJson(transition.next) !== canonicalJson(next) ||
+    transition.participants.length !== 1
+  ) {
+    return false
+  }
+  const participant = transition.participants[0]
+  return (
+    participant?.participant === "install-record" &&
+    participant.state === "pending" &&
+    canonicalJson(participant.previous) === canonicalJson(previous) &&
+    canonicalJson(participant.next) === canonicalJson(next) &&
+    participant.digest === capabilityTransitionParticipantDigest(participant)
+  )
+}
+
+function isAbandonableOwnedSkillPublication(transition: CapabilityTransition, record: InstallRecord) {
+  if (
+    record.kind !== "skill" ||
+    transition.decision !== "pending" ||
+    transition.phase !== "recovery-required" ||
+    transition.owner !== "managed-skill" ||
+    (transition.mutation !== "install" && transition.mutation !== "update") ||
+    transition.identity.id !== record.id ||
+    transition.identity.kind !== record.kind ||
+    canonicalJson(transition.previous) !== canonicalJson(record) ||
+    transition.next === null ||
+    transition.participants.length !== 1
+  ) {
+    return false
+  }
+  const participant = transition.participants[0]
+  if (
+    participant?.participant !== "install-record" ||
+    participant.state !== "pending" ||
+    canonicalJson(participant.previous) !== canonicalJson(record) ||
+    canonicalJson(participant.next) !== canonicalJson(transition.next) ||
+    participant.digest !== capabilityTransitionParticipantDigest(participant)
+  ) {
+    return false
+  }
+  return true
+}
+
+function isOrphanedManagedSkillPublication(transition: CapabilityTransition) {
+  if (
+    transition.identity.kind !== "skill" ||
+    transition.decision !== "pending" ||
+    transition.phase !== "recovery-required" ||
+    transition.owner !== "managed-skill" ||
+    transition.mutation !== "install" ||
+    transition.previous !== null ||
+    transition.next === null ||
+    transition.participants.length !== 1
+  ) {
+    return false
+  }
+  const participant = transition.participants[0]
+  return (
+    participant?.participant === "install-record" &&
+    participant.state === "pending" &&
+    participant.previous === null &&
+    canonicalJson(participant.next) === canonicalJson(transition.next) &&
+    participant.digest === capabilityTransitionParticipantDigest(participant)
+  )
 }
 
 export class MarketplaceApplicationService implements MarketplaceApplicationPort {
@@ -239,11 +390,75 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     ]
   }
 
+  async #standaloneCatalog() {
+    return (await this.#catalog()).filter(isStandaloneMarketplaceCandidate)
+  }
+
+  async #activePluginBindings() {
+    if (!this.#options.activePluginBindings) {
+      return { available: false as const, bindings: [] as readonly ActivePluginBinding[] }
+    }
+    try {
+      return { available: true as const, bindings: await this.#options.activePluginBindings() }
+    } catch {
+      return { available: false as const, bindings: [] as readonly ActivePluginBinding[] }
+    }
+  }
+
+  async #bindCurrentPluginArtifact(identity: { id: string; kind: "plugin" }) {
+    const state = await this.#options.state.read()
+    const record = state.installations.find((candidate) => identityKey(candidate) === identityKey(identity))
+    if (!record || record.artifact) return
+    const snapshot = await this.#activePluginBindings()
+    if (!snapshot.available) {
+      throw new Error("Installed Plugin snapshot authority is unavailable")
+    }
+    const binding = snapshot.bindings.find(
+      (candidate) =>
+        candidate.id === record.id && candidate.sourceKey === record.sourceKey && candidate.version === record.version,
+    )
+    if (!binding) {
+      throw new Error("Installed Plugin artifact cannot be bound to an exact immutable snapshot")
+    }
+    await this.#options.state.update((draft) => {
+      if (draft.transitions.some((transition) => identityKey(transition.identity) === identityKey(identity))) {
+        throw new Error("Capability recovery is required")
+      }
+      const current = draft.installations.find((candidate) => identityKey(candidate) === identityKey(identity))
+      if (!current || canonicalJson(current) !== canonicalJson(record)) {
+        throw new Error("Installed Plugin changed before its immutable artifact could be bound")
+      }
+      current.artifact = { ...binding.artifact }
+    })
+  }
+
+  async #resolveTransition(transition: CapabilityTransition) {
+    if (transition.identity.kind !== "plugin" || transition.owner !== "plugin-package") {
+      return this.#options.installer.resolveTransition(transition)
+    }
+    const [catalog, snapshot] = await Promise.all([this.#catalog(), this.#activePluginBindings()])
+    if (!snapshot.available) return "unknown" as const
+    const bindings = snapshot.bindings
+    const previousMatches =
+      transition.previous === null
+        ? !bindings.some((binding) => binding.active && binding.id === transition.identity.id)
+        : isExactActivePluginBinding(transition.previous, catalog, bindings)
+    const nextMatches =
+      transition.next === null
+        ? !bindings.some((binding) => binding.active && binding.id === transition.identity.id)
+        : isExactActivePluginBinding(transition.next, catalog, bindings)
+    if (nextMatches && !previousMatches) return "next" as const
+    if (previousMatches && !nextMatches) return "previous" as const
+    return "unknown" as const
+  }
+
   async listCatalog(): Promise<MarketplaceCatalogSnapshot> {
     const state = await this.#options.state.read()
     const pluginRuntimeState = this.#options.pluginRuntimeState ?? "available"
+    const activePluginBindings = (await this.#activePluginBindings()).bindings
+    const catalog = await this.#standaloneCatalog()
     const groups = aggregateCatalog(
-      await this.#catalog(),
+      catalog,
       state.installations.map(({ id, kind, sourceKey, version }) => ({ id, kind, sourceKey, version })),
     )
     const cards = await Promise.all(
@@ -264,8 +479,12 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             )
           : undefined
         const runtimeUnavailable = installed?.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
+        const runtimeInactive =
+          installed?.kind === "plugin" &&
+          pluginRuntimeState === "available" &&
+          !isExactActivePluginBinding(installed, catalog, activePluginBindings)
         const grantValid =
-          installed && grant && !runtimeUnavailable
+          installed && grant && !runtimeUnavailable && !runtimeInactive
             ? await this.#options.installer
                 .verifyAuthorization(installed, grant.authorizationContractDigest)
                 .catch(() => false)
@@ -279,14 +498,15 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
                   sourceLabel:
                     group.sources.find((source) => source.sourceKey === installed.sourceKey)?.marketplaceId ??
                     "Unavailable source",
-                  state: runtimeUnavailable
-                    ? "attention"
-                    : projectInstalledCapability({
-                        executionGrant: grant,
-                        grantValid,
-                        installRecord: installed,
-                        runtimePreference: preference,
-                      }).state,
+                  state:
+                    runtimeUnavailable || runtimeInactive
+                      ? "attention"
+                      : projectInstalledCapability({
+                          executionGrant: grant,
+                          grantValid,
+                          installRecord: installed,
+                          runtimePreference: preference,
+                        }).state,
                   version: installed.version,
                 },
               }
@@ -321,57 +541,104 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const state = await this.#options.state.read()
     const catalog = await this.#catalog()
     const pluginRuntimeState = this.#options.pluginRuntimeState ?? "available"
+    const activePluginBindings = (await this.#activePluginBindings()).bindings
+    const capabilities = await Promise.all(
+      state.installations.map(async (record) => {
+        const sourceItem = catalog.find(
+          (candidate) =>
+            candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
+        )
+        const grant = state.executionGrants.find(
+          (candidate) =>
+            identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
+        )
+        const preference = state.runtimePreferences.find(
+          (candidate) =>
+            identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
+        )
+        const runtimeUnavailable = record.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
+        const runtimeInactive =
+          record.kind === "plugin" &&
+          pluginRuntimeState === "available" &&
+          !isExactActivePluginBinding(record, catalog, activePluginBindings)
+        const pluginOwnedSkill =
+          record.kind === "skill" && sourceItem?.kind === "skill" && sourceItem.ownerPluginId !== undefined
+        const projected = projectInstalledCapability({
+          executionGrant: grant,
+          grantValid:
+            grant !== undefined &&
+            !runtimeUnavailable &&
+            !runtimeInactive &&
+            (await this.#options.installer
+              .verifyAuthorization(record, grant.authorizationContractDigest)
+              .catch(() => false)),
+          installRecord: record,
+          runtimePreference: preference,
+        })
+        const updateAvailable =
+          !pluginOwnedSkill &&
+          catalog.some(
+            (candidate) =>
+              isStandaloneMarketplaceCandidate(candidate) &&
+              candidate.kind === record.kind &&
+              candidate.id === record.id &&
+              candidate.sourceKey === record.sourceKey &&
+              (candidate.version !== record.version ||
+                sha256Hex(canonicalJson(candidate.delivery)) !== record.artifactDigest),
+          )
+        return {
+          ...(runtimeUnavailable
+            ? { attention: "plugin-runtime-unavailable-for-session" }
+            : runtimeInactive
+              ? { attention: "plugin-runtime-inactive" }
+              : pluginOwnedSkill
+                ? { attention: "plugin-owned-skill-legacy" }
+                : projected.attention
+                  ? { attention: projected.attention }
+                  : {}),
+          id: record.id,
+          kind: record.kind,
+          name: sourceItem?.presentation.name ?? record.id,
+          ...(record.runtimeSurface === "none" ? {} : { runtimeScope: record.runtimeSurface }),
+          sourceLabel: sourceItem?.marketplaceId ?? "Unavailable source",
+          state: runtimeUnavailable || runtimeInactive || pluginOwnedSkill ? "attention" : projected.state,
+          updateAvailable,
+          ...(runtimeUnavailable && updateAvailable && this.#options.pluginUpdateRecoveryIds?.has(record.id)
+            ? { updateRecoveryAvailable: true as const }
+            : {}),
+          version: record.version,
+        } satisfies MarketplaceInstalledCapability
+      }),
+    )
+    const installedIdentities = new Set(state.installations.map(identityKey))
+    const orphanedSkills = state.transitions
+      .filter(
+        (transition) =>
+          isOrphanedManagedSkillPublication(transition) && !installedIdentities.has(identityKey(transition.identity)),
+      )
+      .map((transition): MarketplaceInstalledCapability => {
+        const next = transition.next!
+        const sourceItem = catalog.find(
+          (candidate) =>
+            candidate.kind === "skill" &&
+            candidate.id === next.id &&
+            candidate.sourceKey === next.sourceKey &&
+            candidate.version === next.version &&
+            sha256Hex(canonicalJson(candidate.delivery)) === next.artifactDigest,
+        )
+        return {
+          attention: "managed-skill-recovery",
+          id: next.id,
+          kind: "skill",
+          name: sourceItem?.presentation.name ?? next.id,
+          sourceLabel: sourceItem?.marketplaceId ?? "Recovery required",
+          state: "attention",
+          updateAvailable: sourceItem !== undefined,
+          version: next.version,
+        }
+      })
     return {
-      capabilities: await Promise.all(
-        state.installations.map(async (record) => {
-          const sourceItem = catalog.find(
-            (candidate) =>
-              candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
-          )
-          const grant = state.executionGrants.find(
-            (candidate) =>
-              identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
-          )
-          const preference = state.runtimePreferences.find(
-            (candidate) =>
-              identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
-          )
-          const runtimeUnavailable = record.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
-          const projected = projectInstalledCapability({
-            executionGrant: grant,
-            grantValid:
-              grant !== undefined &&
-              !runtimeUnavailable &&
-              (await this.#options.installer
-                .verifyAuthorization(record, grant.authorizationContractDigest)
-                .catch(() => false)),
-            installRecord: record,
-            runtimePreference: preference,
-          })
-          return {
-            ...(runtimeUnavailable
-              ? { attention: "plugin-runtime-unavailable-for-session" }
-              : projected.attention
-                ? { attention: projected.attention }
-                : {}),
-            id: record.id,
-            kind: record.kind,
-            name: sourceItem?.presentation.name ?? record.id,
-            ...(record.runtimeSurface === "none" ? {} : { runtimeScope: record.runtimeSurface }),
-            sourceLabel: sourceItem?.marketplaceId ?? "Unavailable source",
-            state: runtimeUnavailable ? "attention" : projected.state,
-            updateAvailable: catalog.some(
-              (candidate) =>
-                candidate.kind === record.kind &&
-                candidate.id === record.id &&
-                candidate.sourceKey === record.sourceKey &&
-                (candidate.version !== record.version ||
-                  sha256Hex(canonicalJson(candidate.delivery)) !== record.artifactDigest),
-            ),
-            version: record.version,
-          } satisfies MarketplaceInstalledCapability
-        }),
-      ),
+      capabilities: [...capabilities, ...orphanedSkills],
       pluginRuntimeState,
       revision: state.revision,
     }
@@ -387,7 +654,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const installed = (await this.#options.state.read()).installations.find(
       (record) => identityKey(record) === identityKey(identity),
     )
-    const candidates = (await this.#catalog()).filter(
+    const candidates = (await this.#standaloneCatalog()).filter(
       (candidate) =>
         candidate.kind === identity.kind &&
         candidate.id === identity.id &&
@@ -403,17 +670,24 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     },
     senderId: string,
   ): Promise<MarketplaceCatalogSourceChoice[]> {
-    const installed = (await this.#options.state.read()).installations.find(
-      (record) => identityKey(record) === identityKey(identity),
+    const state = await this.#options.state.read()
+    const installed = state.installations.find((record) => identityKey(record) === identityKey(identity))
+    const orphaned = state.transitions.find(
+      (transition) =>
+        identityKey(transition.identity) === identityKey(identity) && isOrphanedManagedSkillPublication(transition),
     )
-    if (!installed) throw new Error("Installed capability was not found")
-    const candidates = (await this.#catalog()).filter(
+    if (!installed && !orphaned?.next) throw new Error("Installed capability was not found")
+    const expected = installed ?? orphaned!.next!
+    const candidates = (await this.#standaloneCatalog()).filter(
       (candidate) =>
-        candidate.kind === installed.kind &&
-        candidate.id === installed.id &&
-        candidate.sourceKey === installed.sourceKey &&
-        (candidate.version !== installed.version ||
-          sha256Hex(canonicalJson(candidate.delivery)) !== installed.artifactDigest),
+        candidate.kind === expected.kind &&
+        candidate.id === expected.id &&
+        candidate.sourceKey === expected.sourceKey &&
+        (installed
+          ? candidate.version !== installed.version ||
+            sha256Hex(canonicalJson(candidate.delivery)) !== installed.artifactDigest
+          : candidate.version === expected.version &&
+            sha256Hex(canonicalJson(candidate.delivery)) === expected.artifactDigest),
     )
     return this.#sourceChoices(candidates, senderId, this.#updateConfirmationSecret)
   }
@@ -510,13 +784,21 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     )
     this.#consumeToken(token)
     const candidate = await this.#assertCurrentSelection(selection)
-    const installed = (await this.#options.state.read()).installations.find(
-      (record) => identityKey(record) === identityKey(candidate),
+    const state = await this.#options.state.read()
+    const installed = state.installations.find((record) => identityKey(record) === identityKey(candidate))
+    const orphaned = state.transitions.find(
+      (transition) =>
+        identityKey(transition.identity) === identityKey(candidate) &&
+        isOrphanedManagedSkillPublication(transition) &&
+        transition.next?.sourceKey === candidate.sourceKey &&
+        transition.next.version === candidate.version &&
+        transition.next.artifactDigest === sha256Hex(canonicalJson(candidate.delivery)),
     )
-    if (!installed || installed.sourceKey !== candidate.sourceKey) {
+    if ((!installed && !orphaned) || (installed && installed.sourceKey !== candidate.sourceKey)) {
       throw new Error("Marketplace update source is stale")
     }
     if (
+      installed &&
       installed.version === candidate.version &&
       installed.artifactDigest === sha256Hex(canonicalJson(candidate.delivery))
     ) {
@@ -545,7 +827,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async #assertCurrentSelection(selection: ReturnType<typeof verifySelectionToken>) {
-    const candidate = (await this.#catalog()).find(
+    const candidate = (await this.#standaloneCatalog()).find(
       (item) =>
         item.marketplaceId === selection.ref.marketplaceId &&
         item.kind === selection.ref.kind &&
@@ -584,21 +866,46 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     mutation: "install" | "update",
     options: { authorizePluginExecution?: boolean } = {},
   ) {
-    this.#options.assertCapabilityMutationAllowed?.(candidate)
+    if (!isStandaloneMarketplaceCandidate(candidate)) {
+      throw new Error("Plugin-owned Skills are installed and updated only with their owner Plugin")
+    }
+    this.#options.assertCapabilityMutationAllowed?.(candidate, mutation)
     await this.#assertSourcePreflight(candidate)
     const prepared = await this.#prepareCandidate(candidate)
     const result = await this.#options.mutations.withMutation({ identity: candidate, mutation }, async () => {
       await this.#assertCandidateCurrent(candidate)
       await this.#assertSourcePreflight(candidate)
-      const transitionId = randomUUID()
-      const before = await this.#options.state.read()
-      if (before.transitions.some((entry) => identityKey(entry.identity) === identityKey(candidate))) {
-        throw new Error("Capability recovery is required")
+      if (candidate.kind === "plugin" && mutation === "update") {
+        await this.#bindCurrentPluginArtifact({ id: candidate.id, kind: "plugin" })
       }
+      const before = await this.#options.state.read()
       const previous = before.installations.find((entry) => identityKey(entry) === identityKey(candidate)) ?? null
       const next = installRecordFor(candidate, previous ?? undefined)
+      const existingTransition = before.transitions.find(
+        (entry) => identityKey(entry.identity) === identityKey(candidate),
+      )
+      const resuming = existingTransition
+        ? isResumableManagedSkillPublication(existingTransition, candidate, mutation, previous, next)
+        : false
+      if (existingTransition && !resuming) throw new Error("Capability recovery is required")
+      const transitionId = existingTransition?.id ?? randomUUID()
       await this.#options.state.update((draft) => {
-        if (draft.transitions.some((entry) => identityKey(entry.identity) === identityKey(candidate))) {
+        const currentTransition = draft.transitions.find(
+          (entry) => identityKey(entry.identity) === identityKey(candidate),
+        )
+        if (resuming) {
+          if (
+            !currentTransition ||
+            currentTransition.id !== transitionId ||
+            !isResumableManagedSkillPublication(currentTransition, candidate, mutation, previous, next)
+          ) {
+            throw new Error("Capability recovery state changed before retry")
+          }
+          currentTransition.phase = "prepare"
+          currentTransition.revision += 1
+          return
+        }
+        if (currentTransition) {
           throw new Error("Capability recovery is required")
         }
         draft.transitions.push({
@@ -626,6 +933,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           revision: 1,
         })
       })
+      let managedSkillPublicationCompleted = false
       try {
         await this.#advanceTransition(transitionId, "publish")
         let publishedAuthorizationContractDigest: string | undefined
@@ -641,15 +949,28 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         if (prepared.kind === "local") {
           const publication = await this.#options.installer.installLocal(prepared.item, prepared.snapshotDirectory, {
             authorizeExecution: authorizePluginExecution,
+            ...(previous ? { previousVersion: previous.version } : {}),
+            ...(candidate.kind === "skill" && (mutation === "update" || resuming)
+              ? { replaceExistingSkill: true }
+              : {}),
+            ...(candidate.kind === "skill" && resuming && previous === null ? { recoverExistingSkillOnly: true } : {}),
           })
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
         } else if (prepared.kind === "artifact") {
           const publication = await this.#options.installer.installArtifact(candidate, prepared.prepared, {
             authorizeExecution: authorizePluginExecution,
+            ...(previous ? { previousVersion: previous.version } : {}),
+            ...(candidate.kind === "skill" && (mutation === "update" || resuming)
+              ? { replaceExistingSkill: true }
+              : {}),
+            ...(candidate.kind === "skill" && resuming && previous === null ? { recoverExistingSkillOnly: true } : {}),
           })
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
         } else if (prepared.kind === "builtin") {
-          await this.#options.installer.installBuiltin(candidate, prepared.bytes)
+          await this.#options.installer.installBuiltin(candidate, prepared.bytes, {
+            replaceExistingSkill: candidate.kind === "skill" && (mutation === "update" || resuming),
+            recoverExistingSkillOnly: candidate.kind === "skill" && resuming && previous === null,
+          })
         } else {
           const publication = await this.#options.installer.installMcpMetadata(candidate, prepared.companion, {
             asCandidate: authorizedUpdate,
@@ -657,6 +978,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
           preparedMcpCandidate = authorizedUpdate
         }
+        managedSkillPublicationCompleted = candidate.kind === "skill"
         if (preparedMcpCandidate) {
           await this.#options.installer.commitMcpCandidate(candidate)
         }
@@ -712,6 +1034,14 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           .update((draft) => {
             const transition = draft.transitions.find((entry) => entry.id === transitionId)
             if (transition) {
+              if (
+                candidate.kind === "skill" &&
+                !managedSkillPublicationCompleted &&
+                !isCapabilityPublicationRecoveryRequiredError(error)
+              ) {
+                draft.transitions = draft.transitions.filter((entry) => entry.id !== transitionId)
+                return
+              }
               if (error && typeof error === "object" && "committedRecord" in error) {
                 draft.installations = draft.installations.filter(
                   (entry) => identityKey(entry) !== identityKey(candidate),
@@ -748,7 +1078,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const local = this.#options.local
     if (!local) throw new Error("Local Marketplace is unavailable")
     const imported = await local.importDirectory(directory)
-    const item = (await this.#catalog()).find(
+    const item = (await this.#standaloneCatalog()).find(
       (candidate) =>
         candidate.sourceKind === "local" &&
         candidate.kind === imported.kind &&
@@ -836,7 +1166,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async #assertCandidateCurrent(candidate: SourceQualifiedItem) {
-    const current = (await this.#catalog()).find(
+    const current = (await this.#standaloneCatalog()).find(
       (entry) =>
         entry.kind === candidate.kind &&
         entry.id === candidate.id &&
@@ -1006,19 +1336,27 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const selection = verifySelectionToken(token as SelectionToken, { now: Date.now(), senderId }, this.#updateSecret)
     this.#consumeToken(token)
     const candidate = await this.#assertCurrentSelection(selection)
-    const installed = (await this.#options.state.read()).installations.find(
-      (record) => identityKey(record) === identityKey(candidate),
+    const state = await this.#options.state.read()
+    const installed = state.installations.find((record) => identityKey(record) === identityKey(candidate))
+    const orphaned = state.transitions.find(
+      (transition) =>
+        identityKey(transition.identity) === identityKey(candidate) &&
+        isOrphanedManagedSkillPublication(transition) &&
+        transition.next?.sourceKey === candidate.sourceKey &&
+        transition.next.version === candidate.version &&
+        transition.next.artifactDigest === sha256Hex(canonicalJson(candidate.delivery)),
     )
-    if (!installed || installed.sourceKey !== candidate.sourceKey) {
+    if ((!installed && !orphaned) || (installed && installed.sourceKey !== candidate.sourceKey)) {
       throw new Error("Marketplace update source is stale")
     }
     if (
+      installed &&
       installed.version === candidate.version &&
       installed.artifactDigest === sha256Hex(canonicalJson(candidate.delivery))
     ) {
       throw new Error("Marketplace update is stale")
     }
-    await this.#installCandidate(candidate, "update", {
+    await this.#installCandidate(candidate, installed ? "update" : "install", {
       authorizePluginExecution: candidate.kind === "plugin",
     })
     this.#emit()
@@ -1039,10 +1377,49 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     await this.#options.mutations.withMutation({ identity, mutation: "uninstall" }, async () => {
       const state = await this.#options.state.read()
       const record = state.installations.find((entry) => identityKey(entry) === identityKey(identity))
-      if (!record) return
+      const existingTransition = state.transitions.find(
+        (entry) => identityKey(entry.identity) === identityKey(identity),
+      )
+      if (!record) {
+        if (!existingTransition || !isOrphanedManagedSkillPublication(existingTransition)) return
+        await this.#options.state.update((draft) => {
+          const current = draft.transitions.find((entry) => entry.id === existingTransition.id)
+          if (!current || !isOrphanedManagedSkillPublication(current)) {
+            throw new Error("Capability recovery state changed before uninstall")
+          }
+          draft.transitions = draft.transitions.filter((entry) => entry.id !== current.id)
+          draft.executionGrants = draft.executionGrants.filter(
+            (entry) => identityKey(entry.identity) !== identityKey(identity),
+          )
+          draft.runtimePreferences = draft.runtimePreferences.filter(
+            (entry) => identityKey(entry.identity) !== identityKey(identity),
+          )
+        })
+        return
+      }
+      const abandonOwnedSkillPublication =
+        existingTransition !== undefined && isAbandonableOwnedSkillPublication(existingTransition, record)
+      if (existingTransition && !abandonOwnedSkillPublication) {
+        throw new Error("Capability recovery is required")
+      }
       const transitionId = randomUUID()
       await this.#options.state.update((draft) => {
-        if (draft.transitions.some((entry) => identityKey(entry.identity) === identityKey(identity))) {
+        const currentTransition = draft.transitions.find(
+          (entry) => identityKey(entry.identity) === identityKey(identity),
+        )
+        if (abandonOwnedSkillPublication) {
+          if (
+            !currentTransition ||
+            currentTransition.id !== existingTransition.id ||
+            !isAbandonableOwnedSkillPublication(currentTransition, record)
+          ) {
+            throw new Error("Capability recovery state changed before uninstall")
+          }
+          // Explicit uninstall supersedes the rejected owned-Skill publication.
+          // The following uninstall removes whichever managed bytes are present,
+          // so no guess about the interrupted publication is needed.
+          draft.transitions = draft.transitions.filter((entry) => entry.id !== currentTransition.id)
+        } else if (currentTransition) {
           throw new Error("Capability recovery is required")
         }
         draft.transitions.push({
@@ -1302,8 +1679,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     await this.#options.mutations.withMutation({ identity: pending.identity, mutation: pending.mutation }, async () => {
       const current = (await this.#options.state.read()).transitions.find((entry) => entry.id === pending.id)
       if (!current) return
-      const decision =
-        current.decision === "pending" ? await this.#options.installer.resolveTransition(current) : current.decision
+      const decision = current.decision === "pending" ? await this.#resolveTransition(current) : current.decision
       if (decision === "unknown") {
         await this.#markRecoveryRequired(current.id)
         return
@@ -1396,7 +1772,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     )
       return
     const failures: unknown[] = []
-    for (const item of await this.#catalog()) {
+    for (const item of await this.#standaloneCatalog()) {
       try {
         const policy = this.#options.preinstalledPolicy(item)
         if (!policy || item.marketplaceId !== policy.marketplaceId) continue

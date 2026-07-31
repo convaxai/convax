@@ -57,6 +57,8 @@ export interface SourceQualifiedItem {
   compatibility: { convax: string }
   presentation: Presentation
   delivery: MarketplaceDelivery
+  /** Present only for a Skill published atomically inside its owner Plugin closure. */
+  ownerPluginId?: string
 }
 
 export interface CatalogDisplayGroup {

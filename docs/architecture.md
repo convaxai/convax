@@ -704,6 +704,31 @@ integrity/authorization mismatch is not setup-required: the Installed projection
 routes it to an exact-source update/reinstall and never offers setup as a repair for
 missing or changed immutable Plugin bytes.
 
+Registry `ownerPluginId` provenance survives every source-qualified projection.
+Plugin-owned Skills are dependency artifacts of the immutable Plugin closure and are
+removed from standalone catalog and update choices before a transition is created.
+Legacy standalone records remain visible only for diagnosis and explicit removal;
+they are never updated into Plugin ownership independently. Managed-Skill startup
+recovery does not infer `next` from a matching directory name. An explicit retry may
+republish only the exact standalone candidate bound by the pending transition,
+using the managed store's reversible replacement publication. A first-install
+publication orphan is projected in Installed inventory and remains explicitly
+retryable when the exact source candidate remains available. Explicit abandonment
+without Catalog evidence clears only the recovery envelope and never deletes
+ambiguous same-name bytes. The Skill owner reports an explicit recovery-required
+error when publication rollback cannot be proven; the Marketplace coordinator then
+retains the transition instead of inferring either side. Otherwise the transition
+remains recovery-required.
+
+For Plugins, an `InstallRecord` is inventory rather than execution truth.
+`InstalledCapability` may report ready only when the validated ActiveSet contains
+the exact `{id, sourceKey, version, artifact.sha256, artifact.size}` binding.
+Desktop binds a legacy record without artifact identity to the immutable active or
+retired-recovery snapshot before publishing an update. Same-version replacements
+therefore recover by artifact identity, never by version. Records deliberately
+preserved while retired-major Plugins are deactivated remain attention state until
+their verified update is selected into a later ActiveSet.
+
 ### MCP Server runtime boundary
 
 HTTP MCP definitions are configured into OpenCode only after explicit endpoint
@@ -1186,9 +1211,29 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Same-id Plugin install, update and uninstall remain serialized. Unsupported old
   manifests are rejected without migration; no legacy top-level Plugin Skill is
   adopted or materialized.
+- A startup-invalid ActiveSet quarantines every Plugin consumer for that process.
+  Quarantine may expose an update-only recovery path solely when the pointer,
+  snapshots, complete closure inventories, authorization digests and persisted
+  capability topology all validate, and every rejected manifest differs from a
+  currently valid projection only by a lower retired Host API major. An explicit
+  source-bound Marketplace update may then CAS one current candidate while
+  deactivating the remaining retired-major references. Their immutable snapshots
+  and Marketplace install records remain intact for later updates. Install,
+  import, setup, enable, disable and uninstall stay blocked; corrupt bytes,
+  topology drift, future majors and other manifest failures never enter this path.
+  The quarantined process never begins executing repaired bytes and requires a
+  restart after updates.
 - Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
   typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
   never receives Plugin ids or ownership policy.
+- Registry-owned Skill provenance is preserved in `@convax/marketplace`
+  `SourceQualifiedItem` and filtered before standalone selection. Recovery never
+  guesses an owned or standalone Skill publication from directory-name existence;
+  only an explicit exact-candidate standalone retry may resume its pending publish.
+- Marketplace inventory is not runtime authority. A Plugin is projected ready only
+  when its exact id, SourceKey, version and immutable artifact identity occur in the
+  validated ActiveSet. Same-version transition recovery compares the exact artifact,
+  never just the version string.
 - Official and user-added Marketplace v2 sources are consumed only by Desktop main.
   Renderer requests carry stable source/package ids, never URLs, paths or digests.
   Main verifies the accepted source identity, monotonic sequence, compatibility,
