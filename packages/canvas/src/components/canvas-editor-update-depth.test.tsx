@@ -14,11 +14,13 @@ import {
 import { createRoot, type Root } from "react-dom/client"
 import type { CanvasEditorController } from "../editor-context"
 import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
+import type { CanvasSelectionAction } from "../selection-actions"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let EditorProbe: ComponentType | undefined
 let feedbackCommits = 0
 let observedEditor: CanvasEditorController | undefined
+let observedMutationSurface: { disabled: boolean; visible: boolean } | undefined
 let observedReactFlowProps:
   | {
       elementsSelectable?: boolean
@@ -67,12 +69,7 @@ mock.module("@convax/ui", () => ({
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
   Input: () => <input />,
-  Loading: (props: {
-    className?: string
-    description?: ReactNode
-    label?: ReactNode
-    reducedMotion?: boolean
-  }) => (
+  Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
       aria-live="polite"
       className={props.className}
@@ -207,6 +204,7 @@ mock.module("@xyflow/react", () => ({
 const { createCanvasDocument, createTextNode } = await import("../document")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
 const { useCanvasEditor } = await import("../editor-context")
+const { useCanvasMutationSurface } = await import("./canvas-mutation-surface")
 const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
 
@@ -294,11 +292,16 @@ function IdentityFeedbackProbe() {
 
 function EditorStateProbe() {
   observedEditor = useCanvasEditor()
+  observedMutationSurface = useCanvasMutationSurface(observedEditor.readOnly)
   return null
 }
 
 function getObservedEditor() {
   return observedEditor
+}
+
+function getObservedMutationSurface() {
+  return observedMutationSurface
 }
 
 test("does not feed a selection-action refresh back into Canvas document updates", async () => {
@@ -687,6 +690,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
   let root: Root | undefined
   EditorProbe = EditorStateProbe
   observedEditor = undefined
+  observedMutationSurface = undefined
 
   try {
     const container = document.createElement("div")
@@ -726,6 +730,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
       )
     })
     expect(container.textContent).not.toContain("Loading canvas…")
+    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
 
     let reload: Promise<void> | undefined
     await act(async () => {
@@ -734,6 +739,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
     })
 
     expect(observedEditor).toMatchObject({ hydrating: true, readOnly: true })
+    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
     expect(container.textContent).not.toContain("Loading canvas…")
 
     await act(async () => {
@@ -748,11 +754,113 @@ test("keeps an existing Canvas visible while an authoritative document reload is
       readOnly: false,
     })
     expect(container.textContent).not.toContain("Loading canvas…")
+    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
     expect(save).not.toHaveBeenCalled()
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
     observedEditor = undefined
+    observedMutationSurface = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps a running selection action pending across its own authoritative document refresh", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedMutationSurface = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const node = createTextNode({
+      id: "selection-source",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const initialDocument = createCanvasDocument({ id: "selection-action-refresh", nodes: [node] })
+    const authoritativeDocument = { ...initialDocument, revision: 1 }
+    let resolveReload!: (document: typeof authoritativeDocument) => void
+    const pendingReload = new Promise<typeof authoritativeDocument>((resolve) => {
+      resolveReload = resolve
+    })
+    let loadAttempt = 0
+    const load = mock(async () => {
+      loadAttempt += 1
+      return loadAttempt === 1 ? initialDocument : pendingReload
+    })
+    let resolveAction!: () => void
+    const pendingAction = new Promise<void>((resolve) => {
+      resolveAction = resolve
+    })
+    let actionSignal: AbortSignal | undefined
+    const action: CanvasSelectionAction = {
+      async execute(context) {
+        actionSignal = context.signal
+        await pendingAction
+      },
+      id: "selection.long-running",
+      label: "Long-running action",
+    }
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          ref={editorRef}
+          selectionActions={[action]}
+          services={createCanvasServices({ persistence: { load, save: async (document) => document } })}
+        />,
+      )
+    })
+    await act(async () => getObservedEditor()?.selectNodes([node.id]))
+    const visibleAction = getObservedEditor()?.visibleSelectionActions.find((candidate) => candidate.id === action.id)
+    expect(visibleAction).toBeDefined()
+
+    await act(async () => {
+      if (visibleAction) getObservedEditor()?.executeSelectionAction(visibleAction)
+      await Promise.resolve()
+    })
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+
+    let reload: Promise<void> | undefined
+    await act(async () => {
+      reload = editorRef.current?.reloadAuthoritative()
+      await Promise.resolve()
+    })
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
+
+    await act(async () => {
+      resolveReload(authoritativeDocument)
+      await Promise.resolve()
+    })
+    await reload
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+
+    await act(async () => {
+      resolveAction()
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeFalse()
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedMutationSurface = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -972,9 +1080,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
       await Promise.resolve()
     })
     expect(
-      container
-        .querySelector('[data-canvas-composer-overlay="generation"]')
-        ?.closest('[data-canvas-presence="exit"]'),
+      container.querySelector('[data-canvas-composer-overlay="generation"]')?.closest('[data-canvas-presence="exit"]'),
     ).not.toBeNull()
     expect(document.activeElement).toBe(canvasRoot)
     await act(async () => {

@@ -145,7 +145,8 @@ import {
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
-import { CanvasEditorNodeEntryProvider, CanvasOverlayRootProvider } from "../editor-context"
+import { CanvasOverlayRootProvider } from "../editor-context"
+import { CanvasEditorMutationSurfaceProvider } from "./canvas-mutation-surface"
 import {
   isCanvasGenerationComposerSubmissionCurrent,
   type CanvasGenerationComposerSubmission,
@@ -1521,8 +1522,9 @@ function CanvasEditorContent(
     async (
       nodeIds: readonly string[],
       guard: CanvasPostMutationRevealGuard,
-      duration: number = CANVAS_MOTION_DURATION.postMutationReveal,
+      options: { duration?: number; presentEntry?: boolean } = {},
     ) => {
+      const duration = options.duration ?? CANVAS_MOTION_DURATION.postMutationReveal
       if (
         nodeIds.length === 0 ||
         leavingRef.current ||
@@ -1547,7 +1549,7 @@ function CanvasEditorContent(
       ) {
         return false
       }
-      startNodeEntryPresentation(nodeIds)
+      if (options.presentEntry !== false) startNodeEntryPresentation(nodeIds)
       return true
     },
     [
@@ -1658,7 +1660,10 @@ function CanvasEditorContent(
           markUserNavigation()
           const center = command.fit === "center"
           if (center && command.animation === "smooth") {
-            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), CANVAS_MOTION_DURATION.fit)
+            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), {
+              duration: CANVAS_MOTION_DURATION.fit,
+              presentEntry: false,
+            })
           } else {
             await fitDocumentViewport(document, {
               duration,
@@ -1840,9 +1845,18 @@ function CanvasEditorContent(
     })
   }
   const selectionActionExecutor = selectionActionExecutorRef.current
+  const selectionActionUnavailable =
+    (props.readOnly ?? false) || leaving || blockingLoad || Boolean(loadError) || Boolean(saveError)
   const selectionActionController = useMemo(
     () => new AbortController(),
-    [currentViewScopeId, history.document, props.viewId, readOnly, selectedEdgeIds, selectedNodeIds],
+    [
+      currentViewScopeId,
+      history.document.id,
+      props.viewId,
+      selectedEdgeIds,
+      selectedNodeIds,
+      selectionActionUnavailable,
+    ],
   )
   selectionActionControllerRef.current = selectionActionController
   const selectionActionContext = useMemo(
@@ -2218,7 +2232,6 @@ function CanvasEditorContent(
     await startSave(finalized.document)
   }, [startSave])
   const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
-    selectionActionControllerRef.current?.abort()
     hasLocalEditsRef.current = false
     savedRevisionRef.current = document.revision
     const hydrated = canvasHistoryReducer(historyRef.current, { type: "hydrate", document })
@@ -2229,7 +2242,6 @@ function CanvasEditorContent(
   const reloadDocument = useCallback(
     (signal?: AbortSignal) => {
       if (!persistenceService) return Promise.resolve()
-      selectionActionControllerRef.current?.abort()
       const reloadScope = resourceMutationScopeRef.current
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
@@ -2304,7 +2316,6 @@ function CanvasEditorContent(
       if (!persistenceService) {
         return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
       }
-      selectionActionControllerRef.current?.abort()
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
         const reloadScope = resourceMutationScopeRef.current
@@ -3625,11 +3636,15 @@ function CanvasEditorContent(
     [getSafeViewportRect, markUserNavigation, prefersReducedMotion, reactFlow],
   )
 
+  const mutationSurfaceVisible = !(props.readOnly ?? false) && !leaving && !blockingLoad && !loadError && !saveError
+
   return (
-    <CanvasEditorNodeEntryProvider
+    <CanvasEditorMutationSurfaceProvider
       controller={controller}
+      disabled={readOnly}
       onAnimationStart={notifyNodeEntryAnimationStart}
       presentation={nodeEntryPresentation}
+      visible={mutationSurfaceVisible}
     >
       <CanvasOverlayRootProvider root={overlayRoot}>
         <TooltipProvider>
@@ -3956,13 +3971,14 @@ function CanvasEditorContent(
                   </div>
                 ) : null}
 
-                {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && !readOnly ? (
+                {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && mutationSurfaceVisible ? (
                   <SelectionToolbar
                     actions={visibleSelectionActions}
                     canArrange={canArrangeSelection}
                     canDistribute={canDistributeSelection}
                     canGroup={selectionContext.kind === "multi-node"}
                     canUngroup={hasSingleGroupSelection}
+                    disabled={readOnly}
                     isActionPending={isSelectionActionPending}
                     onAlign={align}
                     onAction={executeSelectionAction}
@@ -4219,11 +4235,12 @@ function CanvasEditorContent(
           </ContextMenu>
         </TooltipProvider>
       </CanvasOverlayRootProvider>
-    </CanvasEditorNodeEntryProvider>
+    </CanvasEditorMutationSurfaceProvider>
   )
 }
 
 function IconButton(props: {
+  busy?: boolean
   buttonRef?: ForwardedRef<HTMLButtonElement>
   disabled?: boolean
   expanded?: boolean
@@ -4248,6 +4265,7 @@ function IconButton(props: {
       <span className="inline-flex">
         <Button
           ref={props.buttonRef}
+          aria-busy={props.busy}
           aria-expanded={props.expanded}
           aria-haspopup={props.hasPopup}
           aria-label={props.label}
@@ -4619,6 +4637,7 @@ function SelectionToolbar(props: {
   canDistribute: boolean
   canGroup: boolean
   canUngroup: boolean
+  disabled: boolean
   isActionPending: (actionId: string) => boolean
   nodeIds: string[]
   onAlign: (direction: CanvasAlign) => void
@@ -4666,7 +4685,9 @@ function SelectionToolbar(props: {
   }, [props.canArrange])
   return (
     <NodeToolbar
+      aria-busy={props.disabled || undefined}
       className="convax-selection-toolbar nodrag nowheel"
+      inert={props.disabled || undefined}
       isVisible
       nodeId={props.nodeIds}
       offset={16}
@@ -4698,9 +4719,10 @@ function SelectionToolbar(props: {
           const pending = props.isActionPending(action.id)
           return (
             <IconButton
+              busy={pending}
               key={action.id}
               disabled={pending}
-              icon={pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
+              icon={action.icon ?? <Workflow />}
               label={action.label}
               onClick={() => props.onAction(action)}
               tooltipSide="top"
@@ -4726,6 +4748,7 @@ function SelectionToolbar(props: {
                   const pending = props.isActionPending(action.id)
                   return (
                     <button
+                      aria-busy={pending}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-50",
                         action.presentation?.tone === "destructive" && "text-destructive",
@@ -4739,9 +4762,7 @@ function SelectionToolbar(props: {
                       role="menuitem"
                       type="button"
                     >
-                      <span className="[&>svg]:size-3.5">
-                        {pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
-                      </span>
+                      <span className="[&>svg]:size-3.5">{action.icon ?? <Workflow />}</span>
                       <span>{action.label}</span>
                     </button>
                   )

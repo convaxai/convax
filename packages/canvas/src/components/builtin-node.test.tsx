@@ -40,16 +40,20 @@ mock.module("@xyflow/react", () => ({
   ),
   NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
   NodeToolbar: (props: {
+    "aria-busy"?: boolean
     children?: ReactNode
     className?: string
     "data-canvas-node-entering"?: boolean
+    inert?: boolean
     isVisible?: boolean
   }) => (
     <div
+      aria-busy={props["aria-busy"]}
       className={props.className}
       data-canvas-node-entering={props["data-canvas-node-entering"] || undefined}
       data-node-toolbar
       data-visibility={props.isVisible === undefined ? "default" : String(props.isVisible)}
+      inert={props.inert || undefined}
     >
       {props.children}
     </div>
@@ -90,6 +94,7 @@ const {
   startCanvasSelectionDragFromNode,
   updateCanvasTextDraft,
 } = await import("./builtin-node")
+const { CanvasMutationSurfaceProvider } = await import("./canvas-mutation-surface")
 
 const node: CanvasNode = {
   id: "node-a",
@@ -132,6 +137,8 @@ function renderWithEditor(
     document?: CanvasDocument
     enteringNodeIds?: ReadonlySet<string>
     executeSelectionAction?: CanvasEditorController["executeSelectionAction"]
+    isSelectionActionPending?: CanvasEditorController["isSelectionActionPending"]
+    mutationSurface?: { disabled: boolean; visible: boolean }
     rendererUsesChrome?: boolean
     node?: CanvasNode
     selectionDragArmed?: boolean
@@ -178,7 +185,7 @@ function renderWithEditor(
     finishNodeEntry: () => {},
     finishSelectionDrag: () => {},
     hydrating,
-    isSelectionActionPending: () => false,
+    isSelectionActionPending: options.isSelectionActionPending ?? (() => false),
     quickConnect: () => {},
     relinkResource: () => {},
     relinkSelectedResource: () => {},
@@ -208,9 +215,16 @@ function renderWithEditor(
         },
   )
 
+  const content = (
+    <CanvasEditorProvider controller={controller}>{child(nodeProps(true, targetNode))}</CanvasEditorProvider>
+  )
   return renderToStaticMarkup(
     <CanvasServicesProvider services={services}>
-      <CanvasEditorProvider controller={controller}>{child(nodeProps(true, targetNode))}</CanvasEditorProvider>
+      {options.mutationSurface ? (
+        <CanvasMutationSurfaceProvider {...options.mutationSurface}>{content}</CanvasMutationSurfaceProvider>
+      ) : (
+        content
+      )}
     </CanvasServicesProvider>,
   )
 }
@@ -974,7 +988,7 @@ describe("built-in node toolbar visibility", () => {
     expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
   })
 
-  test("uses React Flow default visibility for the editable sole selected node", () => {
+  test("pins toolbar visibility to the Canvas-owned sole selection", () => {
     const markup = renderWithEditor(selection(["node-a"]), false, (props) => (
       <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={<div data-built-in-toolbar />}>
         <div />
@@ -982,8 +996,27 @@ describe("built-in node toolbar visibility", () => {
     ))
 
     expect(toolbarCount(markup)).toBe(1)
-    expect(markup).toContain('data-visibility="default"')
+    expect(markup).toContain('data-visibility="true"')
     expect(markup).toContain('data-canvas-node-drag-handle="true"')
+  })
+
+  test("keeps a sole-selected toolbar mounted but inert during a non-blocking document refresh", () => {
+    const markup = renderWithEditor(
+      selection(["node-a"]),
+      true,
+      (props) => (
+        <CanvasNodeChrome icon={null} label="Test" node={props} toolbar={<div data-built-in-toolbar />}>
+          <div />
+        </CanvasNodeChrome>
+      ),
+      true,
+      { mutationSurface: { disabled: true, visible: true } },
+    )
+
+    expect(toolbarCount(markup)).toBe(1)
+    expect(openingTagContaining(markup, "data-node-toolbar")).toContain('aria-busy="true"')
+    expect(openingTagContaining(markup, "data-node-toolbar")).toContain('inert=""')
+    expect(openingTagContaining(markup, "data-node-toolbar")).toContain('data-visibility="true"')
   })
 
   test("exposes host-neutral kind and status hooks for semantic appearance", () => {
@@ -1113,6 +1146,7 @@ describe("built-in node toolbar visibility", () => {
   test("adds host selection actions to every eligible node toolbar", () => {
     const action: CanvasSelectionAction = {
       execute: () => undefined,
+      icon: <span data-selection-action-icon />,
       id: "agent.add-to-conversation",
       label: "Add to conversation",
     }
@@ -1153,6 +1187,13 @@ describe("built-in node toolbar visibility", () => {
     expect(withChromeAndContribution).toContain("data-renderer-toolbar")
     expect(withChromeAndContribution).toContain("data-contributed-toolbar")
     expect(withChromeAndContribution.match(/aria-label="Add to conversation"/g)).toHaveLength(1)
+    const pending = renderWithEditor(selection(["node-a"]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      isSelectionActionPending: (actionId) => actionId === action.id,
+      visibleSelectionActions: [action],
+    })
+    expect(pending).toContain('aria-busy="true"')
+    expect(pending).toContain("data-selection-action-icon")
+    expect(pending).not.toContain("data-ui-loading-spinner")
     expect(render(undefined, selection(["node-a", "node-b"]))).not.toContain("Add to conversation")
     expect(render(undefined, selection(["node-a"], ["edge-a"]))).not.toContain("Add to conversation")
     expect(render(undefined, selection(["node-a"]), true)).not.toContain("Add to conversation")
