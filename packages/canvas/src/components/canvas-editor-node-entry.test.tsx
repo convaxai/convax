@@ -420,7 +420,7 @@ test("an explicit host animation preference overrides OS reduced motion", async 
   }
 })
 
-test("centers an outline reveal before starting the inner-shell focus animation", async () => {
+test("centers an outline reveal without replaying the node-entry animation", async () => {
   const restoreWindow = installTestWindow()
   const viewRegistry = createCanvasViewRegistry()
   let resolveCamera!: () => void
@@ -491,8 +491,8 @@ test("centers an outline reveal before starting the inner-shell focus animation"
       await execution
     })
     expect(
-      container.querySelector('[data-id="focus-target"] .convax-node')?.getAttribute("data-canvas-node-entering"),
-    ).toBe("true")
+      container.querySelector('[data-id="focus-target"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
+    ).toBeFalse()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)

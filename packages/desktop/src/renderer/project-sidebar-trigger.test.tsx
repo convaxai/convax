@@ -92,16 +92,15 @@ describe("ProjectSidebarTrigger", () => {
     }
   })
 
-  test("keeps Project identity stable while exposing the pinned sidebar state", () => {
-    const markup = renderToStaticMarkup(
-      <ProjectSidebarTrigger label="Atlas" onClose={() => undefined} onOpen={() => undefined} open />,
-    )
+  test("hides the titlebar entry while the pinned sidebar owns its close action", () => {
+    const markup = renderToStaticMarkup(<ProjectSidebarTrigger hidden label="Atlas" onOpen={() => undefined} />)
 
     expect(markup).not.toContain(">Atlas</span>")
-    expect(markup).toContain('title="Close Atlas"')
-    expect(markup).toContain('aria-expanded="true"')
-    expect(markup).toContain('aria-label="Close project sidebar"')
-    expect(markup).toContain("lucide-panel-left-close")
+    expect(markup).toContain('title="Open Atlas"')
+    expect(markup).toContain('data-project-sidebar-entry-state="hidden"')
+    expect(markup).toContain('aria-label="Open project sidebar"')
+    expect(markup).toContain("lucide-panel-left-open")
+    expect(markup).toContain("invisible opacity-0")
     expect(markup).not.toContain("bg-surface-raised")
   })
 })

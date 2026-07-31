@@ -23,6 +23,8 @@ import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
   ProjectCanvasController,
+  type ProjectCanvasSidebarNode,
+  type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
 import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
 import {
@@ -185,6 +187,12 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
+  const [activeCanvasNodes, setActiveCanvasNodes] = useState<ProjectCanvasSidebarNodeProjection | null>(null)
+  const [sidebarNodeReveal, setSidebarNodeReveal] = useState<{
+    canvasId: string
+    nodeId: string
+    projectId: string
+  } | null>(null)
   const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() => resolveAgentCompactStatus({}))
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
@@ -766,6 +774,67 @@ function App() {
   useEffect(() => {
     if (activeProjectId && activeCanvas) writeLastCanvasPreference(localStorage, activeProjectId, activeCanvas.id)
   }, [activeCanvas, activeProjectId])
+  useEffect(() => {
+    setActiveCanvasNodes((current) =>
+      current && current.projectId === activeProjectId && current.canvasId === activeCanvasId ? current : null,
+    )
+  }, [activeCanvasId, activeProjectId])
+  const publishActiveCanvasNodes = useCallback((document: CanvasDocument) => {
+    const current = pluginHostContextRef.current
+    if (!current.activeProject || current.activeCanvas?.id !== document.id) return
+    const next = {
+      canvasId: document.id,
+      nodes: projectCanvasSidebarNodes(document),
+      projectId: current.activeProject.id,
+    } satisfies ProjectCanvasSidebarNodeProjection
+    setActiveCanvasNodes((previous) => (sameProjectCanvasNodeProjection(previous, next) ? previous : next))
+  }, [])
+  const loadProjectCanvasNodes = useCallback(
+    async ({ canvasId, projectId }: { canvasId: string; projectId: string }) => {
+      const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId: projectId })
+      return snapshot.document ? projectCanvasSidebarNodes(snapshot.document) : []
+    },
+    [],
+  )
+  const activateProjectCanvasNode = useCallback(
+    async ({ canvasId, nodeId }: { canvasId: string; nodeId: string }) => {
+      const projectId = activeProjectId
+      if (!projectId || !(await projectCanvasWorkbench.openCanvas(projectId, canvasId))) return
+      setSidebarNodeReveal({ canvasId, nodeId, projectId })
+    },
+    [activeProjectId, projectCanvasWorkbench],
+  )
+  useEffect(() => {
+    const pending = sidebarNodeReveal
+    if (!pending) return
+    if (pending.projectId !== activeProjectId) {
+      setSidebarNodeReveal(null)
+      return
+    }
+    const mounted = canvasEditorScopeRef.current
+    if (
+      pending.canvasId !== activeCanvasId ||
+      mounted?.projectId !== pending.projectId ||
+      mounted.canvasId !== pending.canvasId
+    ) {
+      return
+    }
+    setSidebarNodeReveal(null)
+    void canvasViewRegistry
+      .execute({
+        command: {
+          animation: appearancePreferences.reducedMotion ? "instant" : "smooth",
+          fit: "center",
+          nodeIds: [pending.nodeId],
+          select: true,
+          type: "nodes.reveal",
+        },
+        expectedDocumentId: pending.canvasId,
+        expectedScopeId: pending.projectId,
+        viewId: "desktop-main",
+      })
+      .catch((error) => console.warn("Could not reveal the Canvas node from the Project sidebar", error))
+  }, [activeCanvasId, activeProjectId, appearancePreferences.reducedMotion, canvasViewRegistry, sidebarNodeReveal])
   const openSkillDetails = useCallback(
     async (name: string) => {
       if (!activeProjectId) return false
@@ -1772,13 +1841,16 @@ function App() {
         content: ({ query }) => (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
+            activeNodes={activeCanvasNodes}
             controller={projectCanvasController}
+            loadNodes={loadProjectCanvasNodes}
             navigationBusy={workbenchSnapshot.changingInput}
             navigationError={workbenchSnapshot.error}
             onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
             onClearNavigationError={() => workbenchController.clearError()}
             onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
             onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+            onNodeActivate={activateProjectCanvasNode}
             query={query}
           />
         ),
@@ -1932,9 +2004,7 @@ function App() {
             leadingActionHostRef={setProjectTitlebarEntryHost}
             onBackToProjects={handleTitlebarBrand}
             platform={window.convax.platform}
-            productLabel={
-              effectivePrimaryDesktopSurface === "workspace" && activeProject ? activeProject.name : "Convax"
-            }
+            productLabel={effectivePrimaryDesktopSurface === "workspace" ? "" : "Convax"}
             rightAction={
               effectivePrimaryDesktopSurface === "workspace" && activeProjectId ? (
                 <AgentDrawerTrigger
@@ -2095,6 +2165,7 @@ function App() {
                         fileRendererRegistry={canvasFileRendererRegistry}
                         initialDocument={initialDocument}
                         nodeRegistry={canvasNodeRegistry}
+                        onDocumentChange={publishActiveCanvasNodes}
                         onInspectorRequest={openCanvasInspector}
                         onSelectionProjectionChange={publishCanvasSelection}
                         readOnly={
@@ -2257,6 +2328,45 @@ function App() {
       </AgentModelCatalogProvider>
     </AgentGenerationPreferenceProvider>
   )
+}
+
+function projectCanvasSidebarNodes(document: CanvasDocument): ProjectCanvasSidebarNode[] {
+  return document.nodes.map((node) => {
+    const name = typeof node.data.name === "string" ? node.data.name.trim() : ""
+    const label = node.data.label.trim() || name || "Untitled node"
+    const preview = projectCanvasSidebarNodePreview(node)
+    return { id: node.id, kind: node.data.kind, label, ...preview }
+  })
+}
+
+function projectCanvasSidebarNodePreview(node: CanvasDocument["nodes"][number]) {
+  const resourceState = node.data.resourceState
+  if (!resourceState || typeof resourceState !== "object") return {}
+  const state = resourceState as { posterUrl?: unknown; url?: unknown }
+  if (node.data.kind === "image" && typeof state.url === "string" && state.url.trim()) {
+    return { previewType: "image" as const, previewUrl: state.url.trim() }
+  }
+  if (node.data.kind === "video") {
+    if (typeof state.posterUrl === "string" && state.posterUrl.trim()) {
+      return { previewType: "image" as const, previewUrl: state.posterUrl.trim() }
+    }
+    if (typeof state.url === "string" && state.url.trim()) {
+      return { previewType: "video" as const, previewUrl: state.url.trim() }
+    }
+  }
+  return {}
+}
+
+function sameProjectCanvasNodeProjection(
+  left: ProjectCanvasSidebarNodeProjection | null,
+  right: ProjectCanvasSidebarNodeProjection,
+) {
+  if (!left || left.canvasId !== right.canvasId || left.projectId !== right.projectId) return false
+  if (left.nodes.length !== right.nodes.length) return false
+  return left.nodes.every((node, index) => {
+    const other = right.nodes[index]
+    return other?.id === node.id && other.kind === node.kind && other.label === node.label
+  })
 }
 
 function Toast({ notification }: { notification: CanvasNotification }) {

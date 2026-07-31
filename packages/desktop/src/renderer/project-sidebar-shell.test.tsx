@@ -117,12 +117,7 @@ describe("Desktop Project sidebar Shell", () => {
       root = createRoot(container)
       await act(async () =>
         root?.render(
-          <ProjectSidebarShell
-            entryLabel="Example"
-            onOpenChange={() => undefined}
-            open={false}
-            size={240}
-          >
+          <ProjectSidebarShell entryLabel="Example" onOpenChange={() => undefined} open={false} size={240}>
             <aside>Project navigation</aside>
           </ProjectSidebarShell>,
         ),
@@ -144,7 +139,7 @@ describe("Desktop Project sidebar Shell", () => {
     }
   })
 
-  test("stays explicitly closed after a titlebar click until the pointer leaves and enters again", async () => {
+  test("hides the titlebar entry while pinned and stays closed after the sidebar close action", async () => {
     const testEnvironment = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
@@ -154,13 +149,14 @@ describe("Desktop Project sidebar Shell", () => {
       await act(async () => root?.render(<ShellHarness />))
       await act(async () => testEnvironment.runFrames())
       const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
-      const trigger = entry.querySelector<HTMLButtonElement>('button[aria-label="Close project sidebar"]')!
+      const close = container.querySelector<HTMLButtonElement>("[data-project-sidebar-close]")!
       const shell = container.querySelector<HTMLElement>(".project-sidebar-shell")!
+      expect(entry.querySelector("[data-project-sidebar-entry-state=hidden]")).not.toBeNull()
 
       await act(async () =>
         entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
       )
-      await act(async () => trigger.click())
+      await act(async () => close.click())
       expect(shell.getAttribute("data-project-sidebar-reveal")).toBe("closed")
       expect(shell.getAttribute("data-project-sidebar-state")).toBe("closed")
 
@@ -294,7 +290,7 @@ describe("Desktop Project sidebar Shell", () => {
     expect(styles).toContain("transition-duration: 0ms")
   })
 
-  test("keeps the Canvas-over-Project hierarchy while search focuses, filters, and returns on Escape", async () => {
+  test("keeps the Project-over-Canvas hierarchy while Canvas search focuses and returns on Escape", async () => {
     const testEnvironment = installTestWindow()
     const filesSnapshot: ProjectFilesControllerSnapshot = {
       error: null,
@@ -353,7 +349,7 @@ describe("Desktop Project sidebar Shell", () => {
 
       const canvasLabel = [...container.querySelectorAll("span")].find((element) => element.textContent === "Canvas")!
       const projectLabel = [...container.querySelectorAll("span")].find((element) => element.textContent === "Project")!
-      expect(canvasLabel.compareDocumentPosition(projectLabel) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+      expect(projectLabel.compareDocumentPosition(canvasLabel) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
       expect(container.querySelector('[data-project-entry-path="brief.md"]')).not.toBeNull()
       const searchTrigger = container.querySelector<HTMLButtonElement>('button[aria-label="Search sidebar"]')!
       await act(async () => searchTrigger.click())
@@ -380,7 +376,7 @@ describe("Desktop Project sidebar Shell", () => {
         projectSearch.dispatchEvent(new InputEvent("input", { bubbles: true, data: "brief", inputType: "insertText" }))
       })
       expect(container.querySelector('[data-project-entry-path="brief.md"]')).not.toBeNull()
-      expect(container.querySelector('[data-project-entry-path="notes.md"]')).toBeNull()
+      expect(container.querySelector('[data-project-entry-path="notes.md"]')).not.toBeNull()
     } finally {
       if (root) await act(async () => root?.unmount())
       container.remove()

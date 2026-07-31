@@ -1521,8 +1521,9 @@ function CanvasEditorContent(
     async (
       nodeIds: readonly string[],
       guard: CanvasPostMutationRevealGuard,
-      duration: number = CANVAS_MOTION_DURATION.postMutationReveal,
+      options: { duration?: number; presentEntry?: boolean } = {},
     ) => {
+      const duration = options.duration ?? CANVAS_MOTION_DURATION.postMutationReveal
       if (
         nodeIds.length === 0 ||
         leavingRef.current ||
@@ -1547,7 +1548,7 @@ function CanvasEditorContent(
       ) {
         return false
       }
-      startNodeEntryPresentation(nodeIds)
+      if (options.presentEntry !== false) startNodeEntryPresentation(nodeIds)
       return true
     },
     [
@@ -1658,7 +1659,10 @@ function CanvasEditorContent(
           markUserNavigation()
           const center = command.fit === "center"
           if (center && command.animation === "smooth") {
-            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), CANVAS_MOTION_DURATION.fit)
+            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), {
+              duration: CANVAS_MOTION_DURATION.fit,
+              presentEntry: false,
+            })
           } else {
             await fitDocumentViewport(document, {
               duration,
