@@ -229,10 +229,17 @@ function abortError(message: string) {
 
 export function generationErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(
-    /^Error invoking remote method ['"]generation:generate['"]:\s*GenerationToolReportedError:\s*/,
-    "",
-  )
+  const wrapper = /^Error invoking remote method ['"]generation:generate['"]:\s*/
+  if (!wrapper.test(message)) return message
+  const normalized = message.replace(wrapper, "").replace(/^[A-Za-z][A-Za-z0-9]*Error:\s*/, "")
+  if (
+    /(?:service|runtime|provider|server).*(?:unavailable|disconnected|offline|not connected|refused|closed|exited|terminated)/i.test(
+      normalized,
+    )
+  ) {
+    return "生成服务不可用，请在“服务”中检查连接后再试。"
+  }
+  return normalized
 }
 
 export async function executeCanvasCardGeneration(input: {

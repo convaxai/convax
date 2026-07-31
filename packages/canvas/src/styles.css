@@ -16,6 +16,7 @@
   --canvas-grid: var(--ui-border-default);
   --canvas-node-background: var(--ui-surface-raised);
   --canvas-node-border: var(--ui-border-default);
+  --canvas-media-radius: 24px;
   --canvas-node-radius: 10px;
   --canvas-success: var(--ui-status-success);
   --canvas-surface: var(--ui-surface-raised);
@@ -163,8 +164,25 @@
 
 .convax-canvas .convax-node__surface--media {
   border-width: 0;
-  border-radius: 24px;
+  border-radius: var(--canvas-media-radius);
   background: transparent;
+}
+
+.convax-canvas .convax-node__surface--video {
+  border: 2px dashed var(--canvas-node-border);
+}
+
+.convax-canvas .convax-generation-status-overlay {
+  border-radius: var(--canvas-node-radius);
+}
+
+.convax-canvas .convax-generation-status-overlay--media {
+  border-radius: var(--canvas-media-radius);
+}
+
+.convax-canvas .convax-generation-status-overlay--video {
+  inset: 2px;
+  border-radius: calc(var(--canvas-media-radius) - 2px);
 }
 
 .convax-canvas .convax-cutout-media {
@@ -271,8 +289,14 @@
 .convax-canvas .convax-node.is-selected .convax-node__surface--media,
 .convax-canvas .react-flow__node.selected .convax-node__surface--media {
   box-shadow:
-    0 0 0 1px var(--canvas-accent),
+    0 0 0 5px var(--canvas-background),
+    0 0 0 8px var(--canvas-accent),
     0 14px 32px -14px color-mix(in srgb, var(--canvas-accent) 34%, transparent);
+}
+
+.convax-canvas .convax-node.is-selected .convax-node__surface--video,
+.convax-canvas .react-flow__node.selected .convax-node__surface--video {
+  border-color: var(--canvas-node-border);
 }
 
 .convax-canvas .react-flow__node.dragging .convax-node__surface {
