@@ -40,36 +40,36 @@
         "name": "marketplace.json",
         "sha256": "99fca1ee3ca090d51eaf3698b63d67cdf3d61a2b303c3801c918405ae5bac11f",
         "size": 566,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-752b20702517fb6bb03e572ba39aa21562b4d1cba802a4c0e62da0e868d38430/marketplace.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "6dbcf081ccab1ca23dc66b37be42f0408bda5ad6931f5e4fd1b513d6bab195f8",
-        "size": 32295,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-752b20702517fb6bb03e572ba39aa21562b4d1cba802a4c0e62da0e868d38430/registry-v2.json"
+        "sha256": "958744daffe7f904ab9d33c64dda85c05b902c26094efe045678f61c81de5bea",
+        "size": 28391,
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/registry-v2.json"
       },
-      "revision": "752b20702517fb6bb03e572ba39aa21562b4d1cba802a4c0e62da0e868d38430",
+      "revision": "59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "dd75311be1830316bfd6cc27929a494f29baa37e8375c5a3274233d59bf17235",
+        "sha256": "09ce75680ec113148dd086d1e4c25e63c026452d4bb5f60d9e75407eec6e3786",
         "size": 16207,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-752b20702517fb6bb03e572ba39aa21562b4d1cba802a4c0e62da0e868d38430/showcase-v2.json"
+        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/showcase-v2.json"
       }
     },
     "packages": [
       {
         "artifact": {
-          "name": "plugin-ffmpeg-tools-0.3.3.zip",
-          "sha256": "197aed4cddf00051cdae41070b0d00be980a9725d70788023ce3fd52ed3a5d8f",
-          "size": 58997,
-          "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.3.3/plugin-ffmpeg-tools-0.3.3.zip"
+          "name": "plugin-ffmpeg-tools-0.4.0.zip",
+          "sha256": "8d634aa398247daf2685ac26627ae291bf97789dae255c19a10aefac367ef526",
+          "size": 60003,
+          "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.0/plugin-ffmpeg-tools-0.4.0.zip"
         },
         "companions": [
           {
             "name": "ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
-            "sha256": "d6d35f342fd0bc64a43db880b90ffca51d5287e04e67266954779ffcf3ff973e",
-            "size": 21801728,
-            "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.3.3/ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
+            "sha256": "5d7b34be9de73972978b1e3931ffa48f6ccedb4244638b30627afe9ea3240c48",
+            "size": 21187504,
+            "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.0/ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -79,14 +79,14 @@
         "marketplaceId": "convax-official",
         "ownedSkills": [
           {
-            "name": "skill-ffmpeg-canvas-0.3.3.zip",
-            "sha256": "9de2ccbe393f4145b91b264175cd089e83eee49e6ed3b2f1577307f6471f29ef",
+            "name": "skill-ffmpeg-canvas-0.4.0.zip",
+            "sha256": "fc16f062c04396ae43580f3854dca5c8cbaec2a202a2f4aee30d30fe3e08c8c4",
             "size": 10831,
-            "url": "https://github.com/microvoid/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.3.3/skill-ffmpeg-canvas-0.3.3.zip"
+            "url": "https://github.com/microvoid/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.4.0/skill-ffmpeg-canvas-0.4.0.zip"
           }
         ],
         "setup": "explicit",
-        "version": "0.3.3"
+        "version": "0.4.0"
       }
     ],
     "policyDigest": "ddd78ddb809166be2698ebd718d2947429bfb17a9071e9c72be655a7713d143e"
