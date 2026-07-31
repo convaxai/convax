@@ -385,12 +385,18 @@ describe("Project Canvas document dehydration", () => {
     ).resolves.toEqual(persistedSubmitting)
     expect(resolutions).toBe(0)
 
-    const failed = finishCanvasNodeGenerationRun(submitting, placeholder.id, "operation-one", "failed", "safe")
+    const failed = finishCanvasNodeGenerationRun(
+      submitting,
+      placeholder.id,
+      "operation-one",
+      "Generation failed",
+    )
     const persistedFailed = dehydrateProjectCanvasDocument(failed)
     expect(getCanvasNodeGenerationRun(persistedFailed.nodes[0]!)).toMatchObject({
-      retrySafety: "safe",
+      failureMessage: "Generation failed",
       status: "failed",
     })
+    expect(getCanvasNodeGenerationRun(persistedFailed.nodes[0]!)).not.toHaveProperty("retrySafety")
 
     const succeededWithoutResource = succeedCanvasNodeGenerationRun(submitting, placeholder.id, "operation-one")
     expect(() => dehydrateProjectCanvasDocument(succeededWithoutResource)).toThrow("reference")
