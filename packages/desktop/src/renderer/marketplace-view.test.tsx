@@ -425,6 +425,61 @@ test("uses localized product states and exposes an available update", async () =
   expect(marketplace.update).toHaveBeenCalledWith({ selectionToken: "u".repeat(24) })
 })
 
+test("routes Plugin integrity failures to reinstall instead of offering setup as a false repair", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          attention: "integrity-or-authorization",
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent-and-convax" as const,
+          sourceLabel: "Convax Official",
+          state: "attention" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+
+  expect(document.body.textContent).toContain("Reinstall required")
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(button("Update")).toBeDefined()
+  expect(marketplace.setup).not.toHaveBeenCalled()
+})
+
+test("keeps setup available only for a capability that actually lacks setup", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "mcp-server" as const,
+          name: "Example",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Example",
+          state: "setup-required" as const,
+          updateAvailable: false,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+  await act(async () => button("Complete setup").click())
+
+  expect(marketplace.setup).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
+})
+
 test("shows a session-wide Plugin outage and does not offer unusable Plugin setup", async () => {
   const marketplace = client({
     listInstalled: mock(async () => ({

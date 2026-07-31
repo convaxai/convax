@@ -211,6 +211,59 @@ test("installs an offline Builtin Skill through all checkpoints with preparation
   })
 })
 
+test("treats a confirmed Plugin install as execution consent without a second setup mutation", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-v1")
+  const item: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/acme/marketplace/releases/download/plugin-example-v1/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+  }
+  const authorizationContractDigest = "f".repeat(64)
+  let setupCalls = 0
+  const { service } = harness({
+    candidates: [item],
+    installer: {
+      installArtifact: async (_item, _prepared, options) => {
+        expect(options.authorizeExecution).toBe(true)
+        return { authorizationContractDigest }
+      },
+      setup: async () => {
+        setupCalls += 1
+        return null
+      },
+      verifyAuthorization: async (_record, expected) => expected === authorizationContractDigest,
+    },
+    prepareFixedArtifact: async () => ({
+      artifactBytes: bytes,
+      companionBytes: {},
+    }),
+    state,
+  })
+
+  await expect(install(service, item)).resolves.toMatchObject({
+    id: item.id,
+    state: "ready",
+  })
+  expect(setupCalls).toBe(0)
+  expect(await state.read()).toMatchObject({
+    executionGrants: [
+      {
+        authorizationContractDigest,
+        identity: { id: item.id, kind: item.kind },
+        sourceKey: item.sourceKey,
+      },
+    ],
+    transitions: [],
+  })
+})
+
 test("startup provisioning installs every missing Builtin member and the exact Official preinstall policy", async () => {
   const state = await stateStore()
   const builtin = skill()
@@ -684,6 +737,63 @@ test("keeps the old record and grant when an authorization-changing candidate pu
   })
 })
 
+test("treats a confirmed Plugin update as fresh execution consent even when the old grant is missing", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-v2")
+  const candidate: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/acme/marketplace/releases/download/plugin-example-v2/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+    version: "2.0.0",
+  }
+  const authorizationContractDigest = "c".repeat(64)
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: "e".repeat(64),
+      id: candidate.id,
+      kind: candidate.kind,
+      revision: 1,
+      runtimeSurface: candidate.runtimeSurface,
+      sourceKey: candidate.sourceKey,
+      version: "1.0.0",
+    })
+  })
+  const { service } = harness({
+    candidates: [candidate],
+    installer: {
+      installArtifact: async (_item, _prepared, options) => {
+        expect(options.authorizeExecution).toBe(true)
+        return { authorizationContractDigest }
+      },
+      verifyAuthorization: async (_record, expected) => expected === authorizationContractDigest,
+    },
+    prepareFixedArtifact: async () => ({
+      artifactBytes: bytes,
+      companionBytes: {},
+    }),
+    state,
+  })
+  const [choice] = await service.beginUpdate({ id: candidate.id, kind: candidate.kind }, "renderer")
+  const confirmed = await service.confirmUpdate(choice!.confirmationToken, "renderer")
+
+  await expect(service.update(confirmed.selectionToken, "renderer")).resolves.toMatchObject({
+    id: candidate.id,
+    state: "ready",
+    version: candidate.version,
+  })
+  expect(await state.read()).toMatchObject({
+    executionGrants: [{ authorizationContractDigest }],
+    installations: [{ version: candidate.version }],
+    transitions: [],
+  })
+})
+
 test("keeps the old Local Plugin record and grant when candidate authorization is canceled", async () => {
   const state = await stateStore()
   const digest = "f".repeat(64)
@@ -779,6 +889,58 @@ test("keeps setup cancellation non-destructive and leaves a runtime capability s
   })
   expect((await state.read()).executionGrants).toEqual([])
   expect((await state.read()).transitions).toEqual([])
+})
+
+test("immediately rolls back a deterministically failed setup transition so retry and update stay available", async () => {
+  const state = await stateStore()
+  const item: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: "f".repeat(64),
+      size: 1,
+      url: "https://github.com/acme/marketplace/releases/download/plugin-example-v1/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+  }
+  const previousGrant = "d".repeat(64)
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(item.delivery)),
+      id: item.id,
+      kind: item.kind,
+      revision: 1,
+      runtimeSurface: item.runtimeSurface,
+      sourceKey: item.sourceKey,
+      version: item.version,
+    })
+    draft.executionGrants.push({
+      authorizationContractDigest: previousGrant,
+      identity: { id: item.id, kind: item.kind },
+      revision: 1,
+      sourceKey: item.sourceKey,
+    })
+  })
+  const { service } = harness({
+    candidates: [item],
+    installer: {
+      resolveTransition: async () => "previous",
+      setup: async () => {
+        throw new Error("installed Plugin snapshot is unavailable")
+      },
+    },
+    state,
+  })
+
+  await expect(service.setup({ id: item.id, kind: item.kind }, async () => null)).rejects.toThrow(
+    "snapshot is unavailable",
+  )
+  expect(await state.read()).toMatchObject({
+    executionGrants: [{ authorizationContractDigest: previousGrant }],
+    installations: [{ id: item.id, version: item.version }],
+    transitions: [],
+  })
 })
 
 test("fails closed on cross-source replacement before publishing bytes", async () => {

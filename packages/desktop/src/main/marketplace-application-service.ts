@@ -534,7 +534,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const installed = (await this.#options.state.read()).installations.some(
       (record) => identityKey(record) === identityKey(candidate),
     )
-    await this.#installCandidate(candidate, installed ? "update" : "install")
+    await this.#installCandidate(candidate, installed ? "update" : "install", {
+      authorizePluginExecution: candidate.kind === "plugin",
+    })
     if (this.#options.preinstalledPolicy?.(candidate)?.setup === "automatic") {
       await this.#ensureAutomaticProductLockSetup(candidate)
     }
@@ -577,7 +579,11 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     return candidate
   }
 
-  async #installCandidate(candidate: SourceQualifiedItem, mutation: "install" | "update") {
+  async #installCandidate(
+    candidate: SourceQualifiedItem,
+    mutation: "install" | "update",
+    options: { authorizePluginExecution?: boolean } = {},
+  ) {
     this.#options.assertCapabilityMutationAllowed?.(candidate)
     await this.#assertSourcePreflight(candidate)
     const prepared = await this.#prepareCandidate(candidate)
@@ -629,15 +635,17 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
             (grant) =>
               identityKey(grant.identity) === identityKey(candidate) && grant.sourceKey === candidate.sourceKey,
           )
+        const authorizePluginExecution =
+          candidate.kind === "plugin" && (options.authorizePluginExecution === true || authorizedUpdate)
         let preparedMcpCandidate = false
         if (prepared.kind === "local") {
           const publication = await this.#options.installer.installLocal(prepared.item, prepared.snapshotDirectory, {
-            authorizeExecution: authorizedUpdate,
+            authorizeExecution: authorizePluginExecution,
           })
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
         } else if (prepared.kind === "artifact") {
           const publication = await this.#options.installer.installArtifact(candidate, prepared.prepared, {
-            authorizeExecution: authorizedUpdate,
+            authorizeExecution: authorizePluginExecution,
           })
           publishedAuthorizationContractDigest = publication.authorizationContractDigest
         } else if (prepared.kind === "builtin") {
@@ -750,7 +758,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const installed = (await this.#options.state.read()).installations.some(
       (record) => identityKey(record) === identityKey(item),
     )
-    await this.#installCandidate(item, installed ? "update" : "install")
+    await this.#installCandidate(item, installed ? "update" : "install", {
+      authorizePluginExecution: item.kind === "plugin",
+    })
     this.#emit()
     return this.#installed(imported.kind, imported.id)
   }
@@ -881,92 +891,101 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const committedGrant: {
       value?: { authorizationContractDigest: string; record: InstallRecord }
     } = {}
-    await this.#options.mutations.withMutation({ identity, mutation: "setup" }, async () => {
-      const state = await this.#options.state.read()
-      const record = state.installations.find((candidate) => identityKey(candidate) === identityKey(identity))
-      if (!record) throw new Error("Installed capability was not found")
-      if (canonicalJson(record) !== canonicalJson(beforeRecord))
-        throw new Error("Installed capability changed during setup")
-      const transitionId = randomUUID()
-      await this.#options.state.update((draft) => {
-        if (draft.transitions.some((entry) => identityKey(entry.identity) === identityKey(identity))) {
-          throw new Error("Capability recovery is required")
-        }
-        draft.transitions.push({
-          decision: "pending",
-          id: transitionId,
-          identity,
-          mutation: "setup",
-          next: record,
-          owner: "execution-grant",
-          participants: [
-            {
-              digest: capabilityTransitionParticipantDigest({
+    let recoveryTransitionId: string | undefined
+    await this.#options.mutations
+      .withMutation({ identity, mutation: "setup" }, async () => {
+        const state = await this.#options.state.read()
+        const record = state.installations.find((candidate) => identityKey(candidate) === identityKey(identity))
+        if (!record) throw new Error("Installed capability was not found")
+        if (canonicalJson(record) !== canonicalJson(beforeRecord))
+          throw new Error("Installed capability changed during setup")
+        const transitionId = randomUUID()
+        recoveryTransitionId = transitionId
+        await this.#options.state.update((draft) => {
+          if (draft.transitions.some((entry) => identityKey(entry.identity) === identityKey(identity))) {
+            throw new Error("Capability recovery is required")
+          }
+          draft.transitions.push({
+            decision: "pending",
+            id: transitionId,
+            identity,
+            mutation: "setup",
+            next: record,
+            owner: "execution-grant",
+            participants: [
+              {
+                digest: capabilityTransitionParticipantDigest({
+                  next: null,
+                  participant: "execution-grant",
+                  previous:
+                    state.executionGrants.find(
+                      (candidate) => identityKey(candidate.identity) === identityKey(identity),
+                    ) ?? null,
+                }),
                 next: null,
                 participant: "execution-grant",
                 previous:
                   state.executionGrants.find(
                     (candidate) => identityKey(candidate.identity) === identityKey(identity),
                   ) ?? null,
-              }),
-              next: null,
-              participant: "execution-grant",
-              previous:
-                state.executionGrants.find((candidate) => identityKey(candidate.identity) === identityKey(identity)) ??
-                null,
-              state: "pending",
-            },
-          ],
-          phase: "prepare",
-          previous: record,
-          revision: 1,
+                state: "pending",
+              },
+            ],
+            phase: "prepare",
+            previous: record,
+            revision: 1,
+          })
         })
+        try {
+          await this.#advanceTransition(transitionId, "publish")
+          const grant = await this.#options.installer.setup(record, prepared, { mode })
+          await this.#options.state.update((draft) => {
+            const transition = draft.transitions.find((entry) => entry.id === transitionId)
+            if (!transition) throw new Error("Capability setup transition disappeared")
+            if (grant) {
+              const previousGrant = draft.executionGrants.find(
+                (candidate) => identityKey(candidate.identity) === identityKey(identity),
+              )
+              draft.executionGrants = draft.executionGrants.filter(
+                (candidate) => identityKey(candidate.identity) !== identityKey(identity),
+              )
+              draft.executionGrants.push({
+                authorizationContractDigest: grant.authorizationContractDigest,
+                identity,
+                revision: (previousGrant?.revision ?? 0) + 1,
+                sourceKey: record.sourceKey,
+              })
+              const nextGrant = draft.executionGrants.find(
+                (candidate) => identityKey(candidate.identity) === identityKey(identity),
+              )!
+              const participant = transition.participants[0]
+              if (participant?.participant === "execution-grant") {
+                participant.next = nextGrant
+                participant.digest = capabilityTransitionParticipantDigest(participant)
+              }
+              transition.decision = "next"
+              committedGrant.value = {
+                authorizationContractDigest: grant.authorizationContractDigest,
+                record,
+              }
+            } else {
+              transition.decision = "previous"
+            }
+            transition.phase = "decide"
+            transition.participants[0]!.state = grant ? "published" : "converged"
+            transition.revision += 1
+          })
+          await this.#convergeTransition(transitionId)
+          recoveryTransitionId = undefined
+        } catch (error) {
+          await this.#markRecoveryRequired(transitionId)
+          throw error
+        }
       })
-      try {
-        await this.#advanceTransition(transitionId, "publish")
-        const grant = await this.#options.installer.setup(record, prepared, { mode })
-        await this.#options.state.update((draft) => {
-          const transition = draft.transitions.find((entry) => entry.id === transitionId)
-          if (!transition) throw new Error("Capability setup transition disappeared")
-          if (grant) {
-            const previousGrant = draft.executionGrants.find(
-              (candidate) => identityKey(candidate.identity) === identityKey(identity),
-            )
-            draft.executionGrants = draft.executionGrants.filter(
-              (candidate) => identityKey(candidate.identity) !== identityKey(identity),
-            )
-            draft.executionGrants.push({
-              authorizationContractDigest: grant.authorizationContractDigest,
-              identity,
-              revision: (previousGrant?.revision ?? 0) + 1,
-              sourceKey: record.sourceKey,
-            })
-            const nextGrant = draft.executionGrants.find(
-              (candidate) => identityKey(candidate.identity) === identityKey(identity),
-            )!
-            const participant = transition.participants[0]
-            if (participant?.participant === "execution-grant") {
-              participant.next = nextGrant
-              participant.digest = capabilityTransitionParticipantDigest(participant)
-            }
-            transition.decision = "next"
-            committedGrant.value = {
-              authorizationContractDigest: grant.authorizationContractDigest,
-              record,
-            }
-          } else {
-            transition.decision = "previous"
-          }
-          transition.phase = "decide"
-          transition.participants[0]!.state = grant ? "published" : "converged"
-          transition.revision += 1
-        })
-        await this.#convergeTransition(transitionId)
-      } catch (error) {
-        await this.#markRecoveryRequired(transitionId)
+      .catch(async (error: unknown) => {
+        if (recoveryTransitionId) await this.#recoverTransition(recoveryTransitionId).catch(() => undefined)
         throw error
-      }
-    })
+      })
     this.#emit()
     if (committedGrant.value) {
       await this.#options.installer.activate(
@@ -999,7 +1018,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     ) {
       throw new Error("Marketplace update is stale")
     }
-    await this.#installCandidate(candidate, "update")
+    await this.#installCandidate(candidate, "update", {
+      authorizePluginExecution: candidate.kind === "plugin",
+    })
     this.#emit()
     return this.#installed(candidate.kind, candidate.id)
   }
@@ -1275,64 +1296,65 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       .catch(() => undefined)
   }
 
+  async #recoverTransition(id: string) {
+    const pending = (await this.#options.state.read()).transitions.find((entry) => entry.id === id)
+    if (!pending) return
+    await this.#options.mutations.withMutation({ identity: pending.identity, mutation: pending.mutation }, async () => {
+      const current = (await this.#options.state.read()).transitions.find((entry) => entry.id === pending.id)
+      if (!current) return
+      const decision =
+        current.decision === "pending" ? await this.#options.installer.resolveTransition(current) : current.decision
+      if (decision === "unknown") {
+        await this.#markRecoveryRequired(current.id)
+        return
+      }
+      await this.#options.state.update((draft) => {
+        const transition = draft.transitions.find((entry) => entry.id === current.id)
+        if (!transition) return
+        transition.decision = decision
+        transition.phase = "decide"
+        transition.revision += 1
+        const selected = decision === "next" ? transition.next : transition.previous
+        draft.installations = draft.installations.filter(
+          (record) => identityKey(record) !== identityKey(transition.identity),
+        )
+        if (selected) {
+          draft.installations.push(selected)
+          if (transition.mutation !== "uninstall") {
+            this.#clearProductLockProvisioningDecision(draft, selected)
+          }
+        }
+        for (const participant of transition.participants) {
+          if (participant.participant === "execution-grant") {
+            const participantRecord = decision === "next" ? participant.next : participant.previous
+            draft.executionGrants = draft.executionGrants.filter(
+              (record) => identityKey(record.identity) !== identityKey(transition.identity),
+            )
+            if (participantRecord) draft.executionGrants.push(participantRecord)
+          } else if (participant.participant === "runtime-preference") {
+            const participantRecord = decision === "next" ? participant.next : participant.previous
+            draft.runtimePreferences = draft.runtimePreferences.filter(
+              (record) => identityKey(record.identity) !== identityKey(transition.identity),
+            )
+            if (participantRecord) draft.runtimePreferences.push(participantRecord)
+          }
+        }
+        if (!selected || selected.runtimeSurface === "none") {
+          draft.executionGrants = draft.executionGrants.filter(
+            (record) => identityKey(record.identity) !== identityKey(transition.identity),
+          )
+          draft.runtimePreferences = draft.runtimePreferences.filter(
+            (record) => identityKey(record.identity) !== identityKey(transition.identity),
+          )
+        }
+      })
+      await this.#convergeTransition(current.id)
+    })
+  }
+
   async recoverTransitions() {
     const transitions = (await this.#options.state.read()).transitions
-    for (const pending of transitions) {
-      await this.#options.mutations.withMutation(
-        { identity: pending.identity, mutation: pending.mutation },
-        async () => {
-          const current = (await this.#options.state.read()).transitions.find((entry) => entry.id === pending.id)
-          if (!current) return
-          const decision =
-            current.decision === "pending" ? await this.#options.installer.resolveTransition(current) : current.decision
-          if (decision === "unknown") {
-            await this.#markRecoveryRequired(current.id)
-            return
-          }
-          await this.#options.state.update((draft) => {
-            const transition = draft.transitions.find((entry) => entry.id === current.id)
-            if (!transition) return
-            transition.decision = decision
-            transition.phase = "decide"
-            transition.revision += 1
-            const selected = decision === "next" ? transition.next : transition.previous
-            draft.installations = draft.installations.filter(
-              (record) => identityKey(record) !== identityKey(transition.identity),
-            )
-            if (selected) {
-              draft.installations.push(selected)
-              if (transition.mutation !== "uninstall") {
-                this.#clearProductLockProvisioningDecision(draft, selected)
-              }
-            }
-            for (const participant of transition.participants) {
-              if (participant.participant === "execution-grant") {
-                const participantRecord = decision === "next" ? participant.next : participant.previous
-                draft.executionGrants = draft.executionGrants.filter(
-                  (record) => identityKey(record.identity) !== identityKey(transition.identity),
-                )
-                if (participantRecord) draft.executionGrants.push(participantRecord)
-              } else if (participant.participant === "runtime-preference") {
-                const participantRecord = decision === "next" ? participant.next : participant.previous
-                draft.runtimePreferences = draft.runtimePreferences.filter(
-                  (record) => identityKey(record.identity) !== identityKey(transition.identity),
-                )
-                if (participantRecord) draft.runtimePreferences.push(participantRecord)
-              }
-            }
-            if (!selected || selected.runtimeSurface === "none") {
-              draft.executionGrants = draft.executionGrants.filter(
-                (record) => identityKey(record.identity) !== identityKey(transition.identity),
-              )
-              draft.runtimePreferences = draft.runtimePreferences.filter(
-                (record) => identityKey(record.identity) !== identityKey(transition.identity),
-              )
-            }
-          })
-          await this.#convergeTransition(current.id)
-        },
-      )
-    }
+    for (const pending of transitions) await this.#recoverTransition(pending.id)
   }
 
   async provisionDefaults() {
