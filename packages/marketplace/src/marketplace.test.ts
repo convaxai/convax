@@ -116,7 +116,7 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("GitHub Pages")
   })
 
-  test("rejects duplicate registry identities and admits only plugin/8 projections", () => {
+  test("rejects duplicate registry identities and admits current or historical Plugin projections", () => {
     const mcpServer = {
       name: "io.example/m",
       description: "Example MCP",
@@ -243,21 +243,29 @@ describe("@convax/marketplace strict contracts", () => {
         ],
       }),
     ).toThrow("manifest schema")
-    expect(() =>
-      parseRegistryV2({
-        ...registry,
-        packages: [
-          {
-            ...registry.packages[0],
+    const historicalPackages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
             manifest: {
               schema: "convax.plugin/7",
               id: "p",
               version: "1.0.0",
             },
-          },
-        ],
-      }),
-    ).toThrow("manifest schema")
+          }
+        : entry,
+    )
+    expect(
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(historicalPackages)),
+        packages: historicalPackages,
+      }).packages[0]?.manifest,
+    ).toEqual({
+      schema: "convax.plugin/7",
+      id: "p",
+      version: "1.0.0",
+    })
     expect(() =>
       parseRegistryV2({
         ...registry,

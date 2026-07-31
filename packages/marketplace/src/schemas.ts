@@ -589,33 +589,42 @@ function parseRegistryPackage(value: unknown): RegistryPackage {
   }
   if (kind === "plugin") {
     const manifest = record(parsed.manifest, "Plugin manifest projection")
-    if (manifest.schema !== "convax.plugin/8" || manifest.id !== id || manifest.version !== version) {
-      if (manifest.id !== id || manifest.version !== version) {
-        throw new TypeError("Plugin manifest identity must match its Registry entry")
-      }
+    if (manifest.id !== id || manifest.version !== version) {
+      throw new TypeError("Plugin manifest identity must match its Registry entry")
+    }
+    const historicalSchema =
+      typeof manifest.schema === "string" && /^convax\.plugin\/[1-7]$/.test(manifest.schema)
+    if (manifest.schema !== "convax.plugin/8" && !historicalSchema) {
       throw new TypeError("Plugin manifest schema is unsupported")
     }
-    const hostApi = record(manifest.hostApi, "Plugin manifest hostApi")
-    strictKeys(hostApi, ["major", "required", "optional"], ["major", "required", "optional"], "Plugin manifest hostApi")
-    const apiId = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/
-    if (hostApi.major !== admittedPluginHostApiMajor) {
-      throw new TypeError(`Plugin manifest hostApi major must be ${admittedPluginHostApiMajor}`)
-    }
-    if (
-      !Array.isArray(hostApi.required) ||
-      !Array.isArray(hostApi.optional) ||
-      [...hostApi.required, ...hostApi.optional].some((api) => typeof api !== "string" || !apiId.test(api))
-    ) {
-      throw new TypeError("Plugin manifest hostApi declaration is invalid")
-    }
-    const requiredApis = hostApi.required as string[]
-    const optionalApis = hostApi.optional as string[]
-    if (
-      new Set(requiredApis).size !== requiredApis.length ||
-      new Set(optionalApis).size !== optionalApis.length ||
-      optionalApis.some((api) => requiredApis.includes(api))
-    ) {
-      throw new TypeError("Plugin manifest hostApi declaration contains duplicate or overlapping APIs")
+    if (!historicalSchema) {
+      const hostApi = record(manifest.hostApi, "Plugin manifest hostApi")
+      strictKeys(
+        hostApi,
+        ["major", "required", "optional"],
+        ["major", "required", "optional"],
+        "Plugin manifest hostApi",
+      )
+      const apiId = /^[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/
+      if (hostApi.major !== admittedPluginHostApiMajor) {
+        throw new TypeError(`Plugin manifest hostApi major must be ${admittedPluginHostApiMajor}`)
+      }
+      if (
+        !Array.isArray(hostApi.required) ||
+        !Array.isArray(hostApi.optional) ||
+        [...hostApi.required, ...hostApi.optional].some((api) => typeof api !== "string" || !apiId.test(api))
+      ) {
+        throw new TypeError("Plugin manifest hostApi declaration is invalid")
+      }
+      const requiredApis = hostApi.required as string[]
+      const optionalApis = hostApi.optional as string[]
+      if (
+        new Set(requiredApis).size !== requiredApis.length ||
+        new Set(optionalApis).size !== optionalApis.length ||
+        optionalApis.some((api) => requiredApis.includes(api))
+      ) {
+        throw new TypeError("Plugin manifest hostApi declaration contains duplicate or overlapping APIs")
+      }
     }
   }
   if (kind !== "plugin" && parsed.manifest !== undefined) throw new TypeError("only Plugin may project a manifest")
