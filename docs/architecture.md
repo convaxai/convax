@@ -346,7 +346,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell                                                     |
 | `@convax/web`               | Public marketing site and responsive product storytelling                                                                    |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                    |
-| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                   |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                    |
 
 Allowed internal runtime dependencies:
 
