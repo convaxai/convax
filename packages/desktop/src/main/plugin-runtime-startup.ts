@@ -2,20 +2,26 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
-import { PluginInstallationRuntime } from "./plugin-installation-runtime"
+import { PluginInstallationRuntime, type RetiredHostApiRecoveryInspection } from "./plugin-installation-runtime"
 
 export const pluginRuntimeUnavailableMessage =
   "Plugin runtime is unavailable for this session; repair the invalid ActiveSet before changing Plugins"
 
 export type DesktopPluginRuntimeStartupState =
   | { readonly state: "ready" }
-  | { readonly errorType: string; readonly state: "quarantined" }
+  | {
+      readonly errorType: string
+      readonly retiredHostApiRecovery?: RetiredHostApiRecoveryInspection
+      readonly state: "quarantined"
+    }
 
 export interface DesktopPluginRuntimeSession {
   readonly dataDirectory: string
   readonly installations: PluginInstallationRuntime
+  readonly updateInstallations: PluginInstallationRuntime
   readonly state: DesktopPluginRuntimeStartupState
   assertMutable(): void
+  assertUpdateMutable(input: { pluginId: string; sourceIdentity: string }): void
   dispose(): Promise<void>
 }
 
@@ -45,11 +51,20 @@ export async function openDesktopPluginRuntimeSession(
     return {
       dataDirectory: userDataDirectory,
       installations: persistent,
+      updateInstallations: persistent,
       state: { state: "ready" },
       assertMutable() {},
+      assertUpdateMutable() {},
       async dispose() {},
     }
   } catch (error) {
+    let retiredHostApiRecovery: RetiredHostApiRecoveryInspection | undefined
+    try {
+      retiredHostApiRecovery = await persistent.inspectRetiredHostApiRecovery()
+    } catch {
+      // Only the narrow, independently verified retired-major case may update
+      // through quarantine. Every other startup failure remains fully sealed.
+    }
     const quarantineDirectory =
       (await options.createTemporaryDirectory?.()) ??
       (await mkdtemp(join(tmpdir(), "convax-plugin-runtime-quarantine-")))
@@ -74,9 +89,20 @@ export async function openDesktopPluginRuntimeSession(
       installations: quarantined,
       state: {
         errorType: error instanceof Error ? error.name : "UnknownError",
+        ...(retiredHostApiRecovery ? { retiredHostApiRecovery } : {}),
         state: "quarantined",
       },
+      updateInstallations: retiredHostApiRecovery ? persistent : quarantined,
       assertMutable() {
+        throw new Error(pluginRuntimeUnavailableMessage)
+      },
+      assertUpdateMutable(input) {
+        if (
+          retiredHostApiRecovery?.plugins.some(
+            (plugin) => plugin.pluginId === input.pluginId && plugin.sourceIdentity === input.sourceIdentity,
+          )
+        )
+          return
         throw new Error(pluginRuntimeUnavailableMessage)
       },
       async dispose() {

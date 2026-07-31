@@ -16,6 +16,7 @@ import {
   PluginInstallationRuntime,
   type PluginInstallationCandidate,
   type PluginInstallationCandidateCompanion,
+  type RetiredHostApiRecoveryInspection,
 } from "./plugin-installation-runtime"
 
 const bunCompanionHeader = Buffer.from("#!/usr/bin/env convax-bun\n")
@@ -37,7 +38,12 @@ export interface PluginSnapshotPublication {
 
 export interface PluginSnapshotInstallOptions {
   readonly allowCurrent?: boolean
+  readonly expectedInstalledVersion?: string
   readonly requireInstalled?: boolean
+}
+
+export interface PluginSnapshotInstallerOptions {
+  readonly retiredHostApiRecovery?: RetiredHostApiRecoveryInspection
 }
 
 function sha256(bytes: Uint8Array | string) {
@@ -78,9 +84,7 @@ function companionCandidate(
   return {
     bytes: companionBytes,
     entryPath: requireWebPluginRelativePath(candidate.command, "Plugin companion command"),
-    mode: companionBytes.subarray(0, bunCompanionHeader.length).equals(bunCompanionHeader)
-      ? "convax-bun"
-      : "native",
+    mode: companionBytes.subarray(0, bunCompanionHeader.length).equals(bunCompanionHeader) ? "convax-bun" : "native",
     target: candidate.target,
   }
 }
@@ -101,23 +105,38 @@ async function validateExecutableContributions(
  * and changes only the global ActiveSet CAS.
  */
 export class PluginSnapshotInstaller {
+  readonly #retiredHostApiRecovery?: RetiredHostApiRecoveryInspection
   readonly #runtime: PluginInstallationRuntime
 
-  constructor(runtime: PluginInstallationRuntime) {
+  constructor(runtime: PluginInstallationRuntime, options: PluginSnapshotInstallerOptions = {}) {
     this.#runtime = runtime
+    this.#retiredHostApiRecovery = options.retiredHostApiRecovery
   }
 
   async install(publication: PluginSnapshotPublication, options: PluginSnapshotInstallOptions = {}) {
     const plugin = manifestFromFiles(publication.files)
     await validateExecutableContributions(plugin, publication.files)
     const companion = companionCandidate(plugin, publication.companion)
-    const current = await this.#runtime.readActive()
-    const installed = current.plugins.find((candidate) => candidate.plugin.id === plugin.id)
-    if (options.requireInstalled && !installed) {
+    const recovery = this.#retiredHostApiRecovery?.plugins.find((candidate) => candidate.pluginId === plugin.id)
+    const current = await this.#runtime.readActive().catch((error: unknown) => {
+      if (!recovery) throw error
+      return null
+    })
+    const installed = current?.plugins.find((candidate) => candidate.plugin.id === plugin.id)
+    if (recovery) {
+      if (publication.sourceIdentity !== recovery.sourceIdentity) {
+        throw new Error(`Retired Host API recovery source does not match the active Plugin snapshot: ${plugin.id}`)
+      }
+      if (options.expectedInstalledVersion && options.expectedInstalledVersion !== recovery.version) {
+        throw new Error(`Marketplace Plugin record does not match the retired active snapshot: ${plugin.id}`)
+      }
+    }
+    const installedVersion = recovery?.version ?? options.expectedInstalledVersion ?? installed?.plugin.version
+    if (options.requireInstalled && installedVersion === undefined) {
       throw new Error(`Plugin update requires an installed Plugin: ${plugin.id}`)
     }
-    if (installed) {
-      const comparison = compareWebPluginVersions(plugin.version, installed.plugin.version)
+    if (installedVersion !== undefined) {
+      const comparison = compareWebPluginVersions(plugin.version, installedVersion)
       if (comparison < 0) throw new Error(`Installed Plugin is newer than the candidate: ${plugin.id}`)
       if (comparison === 0 && !options.allowCurrent) {
         throw new Error(`Plugin update must have a newer version: ${plugin.id}`)
@@ -133,7 +152,9 @@ export class PluginSnapshotInstaller {
       files: publication.files,
       sourceIdentity: publication.sourceIdentity,
     }
-    const next = await this.#runtime.publish(current.revision, candidate)
+    const next = current
+      ? await this.#runtime.publish(current.revision, candidate)
+      : await this.#runtime.publishRetiredHostApiRecovery(this.#retiredHostApiRecovery!.revision, candidate, recovery!)
     const result = next.plugins.find((candidate) => candidate.plugin.id === plugin.id)?.plugin
     if (!result) throw new Error(`Plugin activation did not publish its candidate: ${plugin.id}`)
     return result

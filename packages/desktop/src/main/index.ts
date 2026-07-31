@@ -399,12 +399,19 @@ function startApplication() {
     })
     const pluginRuntimeSession = await openDesktopPluginRuntimeSession(userDataDirectory)
     const pluginInstallations = pluginRuntimeSession.installations
+    const pluginUpdateInstallations = pluginRuntimeSession.updateInstallations
+    const retiredHostApiRecovery =
+      pluginRuntimeSession.state.state === "quarantined" ? pluginRuntimeSession.state.retiredHostApiRecovery : undefined
     if (pluginRuntimeSession.state.state === "quarantined") {
       console.error("Plugin ActiveSet is invalid; Plugin execution is quarantined for this session", {
         errorType: pluginRuntimeSession.state.errorType,
+        updateRecoveryPlugins: retiredHostApiRecovery?.plugins.length ?? 0,
       })
     }
-    const pluginSnapshotInstaller = new PluginSnapshotInstaller(pluginInstallations)
+    const pluginSnapshotInstaller = new PluginSnapshotInstaller(
+      pluginUpdateInstallations,
+      retiredHostApiRecovery ? { retiredHostApiRecovery } : {},
+    )
     const generationEnvironment = generationPluginEnvironment(process.env)
     const pluginServiceAuthorizationCheckpoints = new PluginServiceAuthorizationCheckpointStore(
       join(pluginRuntimeSession.dataDirectory, "plugin-service-authorization-checkpoints"),
@@ -861,8 +868,8 @@ function startApplication() {
       skillMutations,
     )
     const marketplaceArtifactInstaller = new MarketplaceArtifactInstaller({
-      beforePluginPublish: async (pluginId) => {
-        pluginRuntimeSession.assertMutable()
+      beforePluginPublish: async ({ pluginId, sourceIdentity }) => {
+        pluginRuntimeSession.assertUpdateMutable({ pluginId, sourceIdentity })
         await pluginServices.discardPlugin(pluginId)
       },
       deferExecutionAuthorization: true,
@@ -1039,7 +1046,7 @@ function startApplication() {
         return pluginInstallations.executionAuthorizationIdentity(id)
       },
       currentPluginAuthorization: async (id) => {
-        return pluginInstallations.executionAuthorizationIdentity(id)
+        return pluginUpdateInstallations.executionAuthorizationIdentity(id)
       },
       disablePlugin: async (id) => {
         pluginRuntimeSession.assertMutable()
@@ -1053,6 +1060,7 @@ function startApplication() {
         // The durable RuntimePreference is committed before the hard refresh.
       },
       hardRefreshPlugin: async (pluginId) => {
+        if (retiredHostApiRecovery) return
         pluginRuntimeSession.assertMutable()
         availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(pluginId)
@@ -1063,6 +1071,7 @@ function startApplication() {
         await reconcileToolPluginExecutionStateForPlugin(pluginId)
       },
       refreshPetProvider: () => {
+        if (retiredHostApiRecovery) return Promise.resolve()
         pluginRuntimeSession.assertMutable()
         return pets.refresh()
       },
@@ -1073,33 +1082,54 @@ function startApplication() {
           repository,
         })
       },
-      installLocalPlugin: async (directory, options) => {
-        pluginRuntimeSession.assertMutable()
+      installLocalPlugin: async (directory, options, item) => {
         if (!localMarketplaceSourceKey) throw new Error("Local Marketplace SourceKey is unavailable")
+        pluginRuntimeSession.assertUpdateMutable({
+          pluginId: item.id,
+          sourceIdentity: localMarketplaceSourceKey,
+        })
         await pluginSnapshotInstaller.installLocalDirectory(
           directory,
           {
             authorizeExecution: options.authorizeExecution,
             sourceIdentity: localMarketplaceSourceKey,
           },
-          { allowCurrent: true },
+          {
+            allowCurrent: true,
+            ...(options.previousVersion ? { expectedInstalledVersion: options.previousVersion } : {}),
+          },
         )
       },
-      installLocalSkill: async (directory) => {
+      installLocalSkill: async (directory, options) => {
+        if (options.replaceExistingSkill) {
+          await skillManager.replaceFromDirectory(directory, undefined, options.recoverExistingSkillOnly === true)
+          return
+        }
         await skillManager.importFromDirectory(directory)
       },
       mcp: marketplaceMcp,
       remote: marketplaceArtifactInstaller,
       resolveInstalledTransition: async (transition) => {
         if (transition.identity.kind === "plugin") {
-          const current = (await pluginInstallations.list()).find((entry) => entry.id === transition.identity.id)
-          if (!current) return transition.next === null ? "next" : "previous"
-          if (transition.next?.version === current.version) return "next"
-          if (transition.previous?.version === current.version) return "previous"
+          const current = await pluginUpdateInstallations
+            .list()
+            .then((entries) => entries.find((entry) => entry.id === transition.identity.id))
+            .catch((error: unknown) => {
+              if (!retiredHostApiRecovery) throw error
+              return undefined
+            })
+          const currentVersion =
+            current?.version ??
+            retiredHostApiRecovery?.plugins.find((entry) => entry.pluginId === transition.identity.id)?.version
+          if (!currentVersion) return transition.next === null ? "next" : "previous"
+          if (transition.next?.version === currentVersion) return "next"
+          if (transition.previous?.version === currentVersion) return "previous"
           return "unknown"
         }
         const installed = (await skillManager.listManaged()).some((entry) => entry.name === transition.identity.id)
-        return installed ? (transition.next ? "next" : "previous") : transition.next ? "previous" : "next"
+        if (!installed && transition.previous === null) return "previous"
+        if (installed && transition.next === null) return "previous"
+        return "unknown"
       },
       resolvePackage: resolveMarketplacePackage,
       uninstallPlugin: async (id) => {
@@ -1114,8 +1144,60 @@ function startApplication() {
       },
     })
     const marketplace = new MarketplaceApplicationService({
-      assertCapabilityMutationAllowed: (identity) => {
-        if (identity.kind === "plugin") pluginRuntimeSession.assertMutable()
+      activePluginBindings: async () => {
+        let active: Array<{
+          active: boolean
+          artifact: { sha256: string; size: number }
+          id: string
+          snapshotDigest: string
+          sourceKey: SourceKey
+          version: string
+        }> = []
+        let activeReadable = false
+        try {
+          const activeSet = await pluginUpdateInstallations.acquireActivePluginSet()
+          try {
+            active = activeSet.plugins.map((handle) => ({
+              active: true,
+              artifact: { ...handle.descriptor.package.artifact },
+              id: handle.plugin.id,
+              snapshotDigest: handle.identity.snapshotDigest,
+              sourceKey: handle.descriptor.sourceIdentity as SourceKey,
+              version: handle.plugin.version,
+            }))
+            activeReadable = true
+          } finally {
+            activeSet.release()
+          }
+        } catch (error) {
+          if (!retiredHostApiRecovery) throw error
+        }
+        const activeIds = new Set(active.map((binding) => binding.id))
+        return [
+          ...active,
+          ...(retiredHostApiRecovery?.plugins
+            .filter((plugin) => !activeIds.has(plugin.pluginId))
+            .map((plugin) => ({
+              active: !activeReadable,
+              artifact: { ...plugin.artifact },
+              id: plugin.pluginId,
+              snapshotDigest: plugin.snapshotDigest,
+              sourceKey: plugin.sourceIdentity as SourceKey,
+              version: plugin.version,
+            })) ?? []),
+        ]
+      },
+      assertCapabilityMutationAllowed: (identity, mutation) => {
+        if (identity.kind !== "plugin") return
+        if (mutation === "update") {
+          if (!identity.sourceKey) throw new Error("Marketplace Plugin update source is unavailable")
+          pluginRuntimeSession.assertUpdateMutable({
+            pluginId: identity.id,
+            sourceIdentity: identity.sourceKey,
+          })
+          return
+        }
+        pluginRuntimeSession.assertMutable()
       },
       assertLocalImportAllowed: () => pluginRuntimeSession.assertMutable(),
       fixedCatalog: async () => marketplaceProduct?.catalog() ?? [],
@@ -1150,6 +1232,9 @@ function startApplication() {
       network: networkMarketplaces,
       networkFetch: marketplaceFetcher,
       pluginRuntimeState: pluginRuntimeSession.state.state === "quarantined" ? "unavailable-for-session" : "available",
+      ...(retiredHostApiRecovery
+        ? { pluginUpdateRecoveryIds: new Set(retiredHostApiRecovery.plugins.map((plugin) => plugin.pluginId)) }
+        : {}),
       prepareFixedArtifact: async (item) => {
         if (item.sourceKey !== officialSourceKey) return null
         const registryItem = marketplaceProduct?.registry.packages.find(

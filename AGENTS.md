@@ -70,24 +70,24 @@ files under `packages/` add local rules and inherit this contract.
 
 ## Package ownership
 
-| Package                     | Owns                                                                                                                                                                                                   | Must not own                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `@convax/project-files`     | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                                                      | Project registry, Canvas catalog/documents, Workbench state, Electron APIs               |
-| `@convax/project`           | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                       |
-| `@convax/canvas`            | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence |
-| `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
-| `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters    |
+| Package                     | Owns                                                                                                                                                                                                   | Must not own                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `@convax/project-files`     | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                                                      | Project registry, Canvas catalog/documents, Workbench state, Electron APIs                  |
+| `@convax/project`           | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                          |
+| `@convax/canvas`            | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence    |
+| `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                        |
+| `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters       |
 | `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded value schemas, SemVer matching, and deterministic Plugin/Skill reference generation inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins |
-| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                         | React, Desktop appearance state, Host transport, or concrete Plugin composition          |
-| `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
-| `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution   |
-| `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                     | Desktop runtime, concrete marketplace content, credentials, or executing package bytes   |
-| `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                        | Runtime Marketplace state, publishing credentials, or a second validator                 |
-| `@convax/ui`                | Product-agnostic visual primitives and theme                                                                                                                                                           | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                     |
-| `@convax/desktop`           | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                         |
-| `@convax/web`               | Public Convax marketing site, product storytelling, responsive presentation, and public conversion links                                                                                               | Desktop runtime, product domain state, Cloudflare deployment, or API behavior            |
-| `@convax/deploy-cloudflare` | Cloudflare deployment composition, custom-domain routing, static Web assets, and the future `/api` service-binding edge                                                                                | Marketing presentation, API domain logic, credentials, or Desktop behavior               |
-| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                             | Product runtime state, canonical architecture semantics, Desktop behavior, or API logic  |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                        | React, Desktop appearance state, Host transport, or concrete Plugin composition             |
+| `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                       |
+| `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution      |
+| `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                     | Desktop runtime, concrete marketplace content, credentials, or executing package bytes      |
+| `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                        | Runtime Marketplace state, publishing credentials, or a second validator                    |
+| `@convax/ui`                | Product-agnostic visual primitives and theme                                                                                                                                                           | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                        |
+| `@convax/desktop`           | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                            |
+| `@convax/web`               | Public Convax marketing site, product storytelling, responsive presentation, and public conversion links                                                                                               | Desktop runtime, product domain state, Cloudflare deployment, or API behavior               |
+| `@convax/deploy-cloudflare` | Cloudflare deployment composition, custom-domain routing, static Web assets, and the future `/api` service-binding edge                                                                                | Marketing presentation, API domain logic, credentials, or Desktop behavior                  |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                              | Product runtime state, canonical architecture semantics, Desktop behavior, or API logic     |
 
 `Workspace` is intentionally not a current aggregate. Reserve that name for a
 future window/session that coordinates multiple Projects. Do not recreate a
@@ -297,6 +297,10 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 - `convax.plugin/8` may declare owned Skill directories through
   `contributes.skills`. Desktop validates and publishes those Skills atomically with
   their owner Plugin; they cannot be installed, updated, or removed independently.
+  Registry `ownerPluginId` provenance must survive source qualification, and
+  Marketplace must remove owned Skills from standalone choices before creating a
+  transition. A legacy standalone record may be explicitly uninstalled, but it must
+  never be updated into Plugin ownership as an independent Skill.
   A persisted owner binding continues to reserve the Skill name if its materialized
   directory is missing. A pending Plugin transition conservatively reserves both its
   previous and next Skill names and blocks standalone mutation or discovery refresh
@@ -326,6 +330,34 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   `activeRevision`, `activeSetDigest`, and `snapshotDigest`; ambiguity or byte drift
   fails closed. Never reconstruct active state by independently scanning mutable
   Plugin, Skill, authorization, or companion directories.
+- An `InstallRecord` is inventory, not proof that a Plugin is active. Marketplace
+  may project a Plugin as ready only when its exact
+  `{id, sourceKey, version, artifact.sha256, artifact.size}` is in the validated
+  ActiveSet. Before updating a legacy record without artifact identity, Desktop
+  must bind it to the immutable active or recovery snapshot. Preserved records for
+  deactivated recovery candidates remain attention state until their verified
+  update is selected.
+- Managed-Skill recovery must never infer a publication decision from name
+  existence alone. An explicit update may retry only the same source-qualified,
+  immutable standalone candidate against the exact pending transition, using the
+  managed store's replace publication instead of install-only semantics. A
+  first-install publication orphan remains visible as recovery-required. It may be
+  retried only while the exact source candidate is available; abandonment without
+  Catalog evidence clears only the recovery envelope and must preserve ambiguous
+  same-name bytes. A capability owner may clear a failed publication transition
+  only after rollback is proven; an ambiguous rollback must return the explicit
+  recovery-required error contract and retain the transition. Other ambiguous
+  transitions remain recovery-required.
+- A startup-invalid ActiveSet quarantines the whole Plugin subsystem for that
+  process. Permit only an explicit source-bound update when a dedicated recovery
+  inspection proves intact pointer, snapshots, full closure inventories,
+  authorization digests and capability topology, and proves that every rejected
+  manifest differs from a current-valid projection only by a lower retired Host API
+  major. The recovery CAS may select the updated current-major Plugin and deactivate
+  the other retired-major references, but it must preserve their immutable snapshots
+  and Marketplace install records. Every other Plugin mutation remains blocked,
+  repaired bytes stay inert until restart, and corruption, topology drift, future
+  majors or other manifest failures fail closed.
 - Plugin-to-Plugin calls use only a Host-mediated typed capability broker. Providers
   export versioned schemas; callers declare required/optional imports and version
   ranges; ActivePluginSet binds one exact provider snapshot. Lease caller and

@@ -20,11 +20,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((entry) => fs.rm(entry, { force: true, recursive: true })))
 })
 
-function fixture(
-  id = "acme",
-  sequence = 1,
-  packageOverrides?: Record<string, unknown>[],
-) {
+function fixture(id = "acme", sequence = 1, packageOverrides?: Record<string, unknown>[]) {
   const descriptorUrl = `https://${id}.github.io/market/marketplace.json`
   const registryUrl = `https://${id}.github.io/market/registry-v2.json`
   const descriptor = {
@@ -118,6 +114,36 @@ test("binds previews to their renderer and keeps source order monotonic across r
   expect((await manager.listSources())[0]?.sourceOrder).toBe(1)
 })
 
+test("preserves Plugin ownership when projecting a Registry Skill into a source-qualified candidate", async () => {
+  const directory = await root()
+  const ownedSkill = {
+    compatibility: { convax: ">=0.1.0" },
+    delivery: {
+      kind: "artifact" as const,
+      sha256: "a".repeat(64),
+      size: 100,
+      url: "https://github.com/acme/market/releases/download/skill-owned-v1.0.0/owned.zip",
+    },
+    id: "owned-skill",
+    kind: "skill" as const,
+    ownerPluginId: "owner-plugin",
+    presentation: { description: "Owned", name: "Owned" },
+    version: "1.0.0",
+  }
+  const remote = fixture("acme", 1, [ownedSkill])
+  const manager = new NetworkMarketplaceManager({
+    fetcher: { fetch: remote.fetch } as unknown as PinnedHttpsFetcher,
+    root: directory,
+  })
+  const preview = await manager.preview(remote.descriptorUrl, "renderer-1")
+  await manager.add(preview.previewToken, "renderer-1")
+
+  expect((await manager.listCatalog())[0]).toMatchObject({
+    id: ownedSkill.id,
+    ownerPluginId: ownedSkill.ownerPluginId,
+  })
+})
+
 test("rejects a persisted graph whose nested descriptor or computed SourceKey was altered", async () => {
   const directory = await root()
   const file = path.join(directory, "sources-v1.json")
@@ -147,11 +173,7 @@ test("rejects a persisted graph whose nested descriptor or computed SourceKey wa
 
 test("projects Network Plugin surfaces only after canonical v8 parsing", async () => {
   const directory = await root()
-  const remote = fixture(
-    "acme",
-    1,
-    [pluginPackage("canvas-plugin", { canvas: { renderer: { create: true } } })],
-  )
+  const remote = fixture("acme", 1, [pluginPackage("canvas-plugin", { canvas: { renderer: { create: true } } })])
   const manager = new NetworkMarketplaceManager({
     fetcher: { fetch: remote.fetch } as unknown as PinnedHttpsFetcher,
     root: directory,

@@ -4,9 +4,10 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
+import { parseWebPluginManifest } from "../plugin-contracts"
 import { PluginInstallationClosureStore } from "./plugin-installation-closure-store"
 import { planPluginCapabilityTopology } from "./plugin-capability-binding-plan"
-import { PluginInstallationSnapshotStore } from "./plugin-installation-snapshots"
+import { PluginInstallationSnapshotStore, pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
 import { openDesktopPluginRuntimeSession, pluginRuntimeUnavailableMessage } from "./plugin-runtime-startup"
 
 function runtime(readActive: () => Promise<unknown>) {
@@ -36,6 +37,7 @@ test("keeps a valid persisted Plugin runtime available without creating quaranti
 
   expect(session.state).toEqual({ state: "ready" })
   expect(session.installations).toBe(persistent)
+  expect(session.updateInstallations).toBe(persistent)
   expect(session.dataDirectory).toBe("/persisted")
   expect(() => session.assertMutable()).not.toThrow()
   await session.dispose()
@@ -67,6 +69,7 @@ test("quarantines the complete Plugin session after persisted ActiveSet validati
   expect(roots).toEqual(["/persisted/plugin-installations", "/temporary/plugin-installations"])
   expect(session.state).toEqual({ errorType: "PluginInstallationRuntimeError", state: "quarantined" })
   expect(session.installations).toBe(quarantined)
+  expect(session.updateInstallations).toBe(quarantined)
   expect(session.dataDirectory).toBe("/temporary")
   expect(() => session.assertMutable()).toThrow(pluginRuntimeUnavailableMessage)
   await session.dispose()
@@ -107,9 +110,9 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
   const installationRoot = path.join(userDataDirectory, "plugin-installations")
   const snapshotStore = new PluginInstallationSnapshotStore(path.join(installationRoot, "state"))
   const closureStore = new PluginInstallationClosureStore(path.join(installationRoot, "closures"))
-  const legacyManifest = JSON.stringify({
+  const legacyManifestValue = {
     capabilities: [],
-    contributes: {},
+    contributes: { canvas: { renderer: { create: true } } },
     description: "Legacy Plugin persisted before the Host API v2 cutover",
     entry: "index.html",
     hostApi: { major: 1, optional: [], required: ["host.context.get"] },
@@ -117,6 +120,11 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
     name: "Legacy",
     schema: "convax.plugin/8",
     version: "1.0.0",
+  }
+  const legacyManifest = JSON.stringify(legacyManifestValue)
+  const currentProjection = parseWebPluginManifest({
+    ...legacyManifestValue,
+    hostApi: { ...legacyManifestValue.hostApi, major: 2 },
   })
   const packageFiles = [
     { bytes: Buffer.from("<h1>legacy</h1>"), path: "index.html" },
@@ -134,7 +142,12 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
 
   try {
     const snapshot = await snapshotStore.putInstalledSnapshot({
-      authorizations: { capabilityContractDigest: sha256(legacyManifest) },
+      authorizations: {
+        capabilityContractDigest: pluginSnapshotCanonicalDigest({
+          ...currentProjection,
+          hostApi: { ...currentProjection.hostApi, major: 1 },
+        }),
+      },
       ownedSkills: [],
       package: {
         artifact: { sha256: sha256("legacy archive"), size: 2_048 },
@@ -165,9 +178,39 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
     const before = await fileDigests(authorityFiles)
 
     session = await openDesktopPluginRuntimeSession(userDataDirectory)
+    if (!session) throw new Error("Expected a quarantined Plugin runtime session")
+    const activeSession = session
 
-    expect(session.state).toEqual({ errorType: "PluginInstallationRuntimeError", state: "quarantined" })
-    expect(session.dataDirectory).not.toBe(userDataDirectory)
+    expect(activeSession.state).toEqual({
+      errorType: "PluginInstallationRuntimeError",
+      retiredHostApiRecovery: {
+        plugins: [
+          {
+            artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+            pluginId: "legacy",
+            snapshotDigest: snapshot.digest,
+            sourceIdentity: sha256("legacy source"),
+            version: "1.0.0",
+          },
+        ],
+        revision: 1,
+      },
+      state: "quarantined",
+    })
+    expect(activeSession.dataDirectory).not.toBe(userDataDirectory)
+    expect(() =>
+      activeSession.assertUpdateMutable({
+        pluginId: "legacy",
+        sourceIdentity: sha256("legacy source"),
+      }),
+    ).not.toThrow()
+    expect(() =>
+      activeSession.assertUpdateMutable({
+        pluginId: "other",
+        sourceIdentity: sha256("other source"),
+      }),
+    ).toThrow(pluginRuntimeUnavailableMessage)
+    await expect(activeSession.updateInstallations.readActive()).rejects.toThrow("Immutable Plugin manifest is invalid")
     expect(await fileDigests(authorityFiles)).toEqual(before)
   } finally {
     await session?.dispose()

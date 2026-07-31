@@ -58,6 +58,7 @@ export interface MarketplaceInstalledCapability {
   sourceLabel: string
   state: MarketplaceCapabilityState
   updateAvailable: boolean
+  updateRecoveryAvailable?: true
   version: string
 }
 

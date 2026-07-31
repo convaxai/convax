@@ -19,7 +19,7 @@ export interface VerifiedMarketplaceCandidate {
 
 export interface MarketplaceArtifactInstallerOptions {
   arch?: NodeJS.Architecture
-  beforePluginPublish?(pluginId: string): Promise<void> | void
+  beforePluginPublish?(input: { pluginId: string; sourceIdentity: string }): Promise<void> | void
   deferExecutionAuthorization?: boolean
   platform?: NodeJS.Platform
   skillManager: Pick<DesktopSkillManager, "installFromFiles">
@@ -66,7 +66,12 @@ export class MarketplaceArtifactInstaller {
 
   async installVerifiedMarketplaceCandidate(
     candidate: VerifiedMarketplaceCandidate,
-    options: { deferExecutionAuthorization?: boolean } = {},
+    options: {
+      deferExecutionAuthorization?: boolean
+      expectedInstalledVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    } = {},
   ) {
     const { item } = candidate
     if (item.yanked) throw new Error("Yanked Marketplace package cannot be installed")
@@ -80,7 +85,13 @@ export class MarketplaceArtifactInstaller {
     const files = unpackSafeZip(candidate.artifactBytes)
     if (item.kind === "skill") {
       if (item.ownerPluginId) throw new Error(`Skill is provided by Plugin ${item.ownerPluginId}`)
-      return this.#skillManager.installFromFiles(files, undefined, item.id)
+      return this.#skillManager.installFromFiles(
+        files,
+        undefined,
+        item.id,
+        options.replaceExistingSkill === true,
+        options.recoverExistingSkillOnly === true,
+      )
     }
     if (item.kind !== "plugin" || !item.manifest) {
       throw new Error("MCP metadata does not use the Plugin or Skill publication owner")
@@ -113,6 +124,7 @@ export class MarketplaceArtifactInstaller {
       companionArtifacts,
       candidate.sourceIdentity,
       options.deferExecutionAuthorization,
+      options.expectedInstalledVersion,
     )
   }
 
@@ -127,14 +139,13 @@ export class MarketplaceArtifactInstaller {
     }[],
     sourceIdentity: string,
     deferExecutionAuthorization = this.#deferExecutionAuthorization,
+    expectedInstalledVersion?: string,
   ) {
     if (item.kind !== "plugin" || item.delivery.kind !== "artifact") {
       throw new Error("Marketplace Plugin publication requires artifact delivery")
     }
     const command = manifest.runtime?.command
-    const selected = command
-      ? companionArtifacts.filter(({ companion }) => companion.command === command)
-      : []
+    const selected = command ? companionArtifacts.filter(({ companion }) => companion.command === command) : []
     if (command && selected.length !== 1) {
       throw new Error(`Executable Plugin requires exactly one verified runtime companion: ${item.id}`)
     }
@@ -142,7 +153,7 @@ export class MarketplaceArtifactInstaller {
       throw new Error(`Plugin without a local runtime cannot publish companion artifacts: ${item.id}`)
     }
     const runtimeCompanion = selected[0]
-    await this.#beforePluginPublish?.(item.id)
+    await this.#beforePluginPublish?.({ pluginId: item.id, sourceIdentity })
     return this.#snapshotInstaller.install(
       {
         artifact: { sha256: item.delivery.sha256, size: item.delivery.size },
@@ -159,7 +170,10 @@ export class MarketplaceArtifactInstaller {
         files,
         sourceIdentity,
       },
-      { allowCurrent: true },
+      {
+        allowCurrent: true,
+        ...(expectedInstalledVersion ? { expectedInstalledVersion } : {}),
+      },
     )
   }
 }
