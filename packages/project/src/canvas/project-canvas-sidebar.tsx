@@ -7,7 +7,25 @@ import {
   ContextMenuTrigger,
   cn,
 } from "@convax/ui"
-import { MoreHorizontal, PanelsTopLeft, Pencil, Trash2, X } from "lucide-react"
+import {
+  AudioLines,
+  Bot,
+  Box,
+  Boxes,
+  ChevronRight,
+  File,
+  Folder,
+  Image as ImageIcon,
+  LoaderCircle,
+  MoreHorizontal,
+  PanelsTopLeft,
+  Pencil,
+  RotateCw,
+  Trash2,
+  Type,
+  Video,
+  X,
+} from "lucide-react"
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import type { ProjectCanvas } from "./contracts"
 import { ProjectCanvasController } from "./controller"
@@ -15,14 +33,38 @@ import { PROJECT_CANVAS_DRAG_TYPE, serializeProjectCanvasDrag } from "./drag"
 
 export interface ProjectCanvasSidebarProps {
   activeCanvasId: string | null
+  activeNodes?: ProjectCanvasSidebarNodeProjection | null
   controller: ProjectCanvasController
+  loadNodes?(input: { canvasId: string; projectId: string }): Promise<readonly ProjectCanvasSidebarNode[]>
   navigationBusy?: boolean
   navigationError?: string | null
   onActivate(canvasId: string): Promise<unknown> | unknown
   onClearNavigationError?(): void
   onCreate(): Promise<unknown> | unknown
   onDelete(canvasId: string): Promise<unknown> | unknown
+  onNodeActivate?(input: { canvasId: string; nodeId: string }): Promise<unknown> | unknown
   query?: string
+}
+
+export interface ProjectCanvasSidebarNode {
+  id: string
+  kind?: string
+  label: string
+  previewType?: "image" | "video"
+  previewUrl?: string
+}
+
+export interface ProjectCanvasSidebarNodeProjection {
+  canvasId: string
+  nodes: readonly ProjectCanvasSidebarNode[]
+  projectId: string
+}
+
+interface CanvasNodeLoadState {
+  error?: string
+  nodes: readonly ProjectCanvasSidebarNode[]
+  projectId: string
+  status: "error" | "loading" | "ready"
 }
 
 export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
@@ -33,17 +75,96 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
   )
   const [editor, setEditor] = useState<{ canvasId: string; name: string; projectId: string } | null>(null)
   const [pendingDelete, setPendingDelete] = useState<{ canvas: ProjectCanvas; projectId: string } | null>(null)
+  const [expandedCanvasIds, setExpandedCanvasIds] = useState<ReadonlySet<string>>(
+    () => new Set(props.activeCanvasId ? [props.activeCanvasId] : []),
+  )
+  const [nodeLoadState, setNodeLoadState] = useState<Readonly<Record<string, CanvasNodeLoadState>>>({})
+  const nodeLoadRequestsRef = useRef(new Map<string, number>())
+  const nextNodeLoadRequestRef = useRef(0)
   const busy = snapshot.busy || Boolean(props.navigationBusy)
   const error = snapshot.error ?? props.navigationError
   const normalizedQuery = props.query?.trim().toLocaleLowerCase() ?? ""
   const visibleCanvases = normalizedQuery
-    ? snapshot.canvases.filter((canvas) => canvas.name.toLocaleLowerCase().includes(normalizedQuery))
+    ? snapshot.canvases.filter((canvas) => {
+        if (canvas.name.toLocaleLowerCase().includes(normalizedQuery)) return true
+        const nodes = resolveCanvasNodes(canvas.id, snapshot.projectId, props.activeNodes, nodeLoadState)
+        const canLoadOutline = Boolean(
+          props.loadNodes ||
+            (props.activeNodes?.projectId === snapshot.projectId && props.activeNodes.canvasId === canvas.id),
+        )
+        return (
+          (nodes === undefined && canLoadOutline) ||
+          nodes?.some((node) => `${node.label} ${node.kind ?? ""}`.toLocaleLowerCase().includes(normalizedQuery)) ===
+            true
+        )
+      })
     : snapshot.canvases
+
+  const loadCanvasNodes = async (canvasId: string, force = false) => {
+    const projectId = snapshot.projectId
+    if (!projectId || !props.loadNodes || !snapshot.canvases.some((canvas) => canvas.id === canvasId)) return
+    const current = nodeLoadState[canvasId]
+    if (!force && current?.projectId === projectId && (current.status === "loading" || current.status === "ready")) {
+      return
+    }
+    const request = ++nextNodeLoadRequestRef.current
+    nodeLoadRequestsRef.current.set(canvasId, request)
+    setNodeLoadState((states) => ({
+      ...states,
+      [canvasId]: {
+        nodes: states[canvasId]?.projectId === projectId ? (states[canvasId]?.nodes ?? []) : [],
+        projectId,
+        status: "loading",
+      },
+    }))
+    try {
+      const nodes = await props.loadNodes({ canvasId, projectId })
+      const live = props.controller.getSnapshot()
+      if (
+        nodeLoadRequestsRef.current.get(canvasId) !== request ||
+        live.projectId !== projectId ||
+        !live.canvases.some((canvas) => canvas.id === canvasId)
+      ) {
+        return
+      }
+      setNodeLoadState((states) => ({
+        ...states,
+        [canvasId]: { nodes: [...nodes], projectId, status: "ready" },
+      }))
+    } catch (failure) {
+      const live = props.controller.getSnapshot()
+      if (nodeLoadRequestsRef.current.get(canvasId) !== request || live.projectId !== projectId) return
+      setNodeLoadState((states) => ({
+        ...states,
+        [canvasId]: {
+          error: failure instanceof Error ? failure.message : String(failure),
+          nodes: states[canvasId]?.projectId === projectId ? (states[canvasId]?.nodes ?? []) : [],
+          projectId,
+          status: "error",
+        },
+      }))
+    }
+  }
 
   useEffect(() => {
     setEditor(null)
     setPendingDelete(null)
+    nodeLoadRequestsRef.current.clear()
+    setNodeLoadState({})
+    setExpandedCanvasIds(new Set(props.activeCanvasId ? [props.activeCanvasId] : []))
   }, [snapshot.projectId])
+
+  useEffect(() => {
+    const canvasId = props.activeCanvasId
+    if (!canvasId || !snapshot.canvases.some((canvas) => canvas.id === canvasId)) return
+    setExpandedCanvasIds((current) => (current.has(canvasId) ? current : new Set([...current, canvasId])))
+    void loadCanvasNodes(canvasId)
+  }, [props.activeCanvasId, snapshot.projectId])
+
+  useEffect(() => {
+    if (!normalizedQuery) return
+    for (const canvas of snapshot.canvases) void loadCanvasNodes(canvas.id)
+  }, [normalizedQuery, snapshot.projectId])
 
   useEffect(() => {
     if (!pendingDelete) return
@@ -111,25 +232,45 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
       <div
         aria-label="Project canvases"
         className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
-        role="listbox"
+        role="tree"
       >
         {visibleCanvases.map((canvas) => {
           const active = canvas.id === props.activeCanvasId
           const canDelete = snapshot.canvases.length > 1
           const editing = editor?.canvasId === canvas.id
+          const hasActiveNodeProjection =
+            props.activeNodes?.projectId === snapshot.projectId && props.activeNodes.canvasId === canvas.id
+          const showsNodeOutline = Boolean(props.loadNodes || hasActiveNodeProjection)
+          const expanded = showsNodeOutline && expandedCanvasIds.has(canvas.id)
+          const nodes = resolveCanvasNodes(canvas.id, snapshot.projectId, props.activeNodes, nodeLoadState)
+          const loadState = nodeLoadState[canvas.id]
+          const toggleCanvasOutline = () => {
+            if (!showsNodeOutline) return
+            setExpandedCanvasIds((current) => {
+              const next = new Set(current)
+              if (expanded) {
+                next.delete(canvas.id)
+              } else {
+                next.add(canvas.id)
+              }
+              return next
+            })
+            if (!expanded) void loadCanvasNodes(canvas.id)
+          }
           const row = (
             <div
-              aria-selected={active}
               className={cn(
-                "group my-0.5 flex min-h-9 items-center gap-2 rounded-md border border-transparent px-2 py-1.5 text-[13px] outline-none transition-transform duration-100 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none",
+                "group my-0.5 flex h-7 items-center rounded-md pr-1 text-[13px] outline-none transition-transform duration-100 active:scale-[0.99] focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none",
                 active
                   ? "bg-interactive-selected font-medium text-text-primary"
                   : "text-text-secondary hover:bg-interactive-hover hover:text-text-primary active:bg-interactive-pressed",
               )}
-              data-project-canvas-id={canvas.id}
+              data-project-canvas-row=""
               draggable={!editing}
               onClick={() => {
-                if (!editing && !busy) void props.onActivate(canvas.id)
+                if (editing || busy) return
+                if (active && showsNodeOutline) toggleCanvasOutline()
+                else void props.onActivate(canvas.id)
               }}
               onDoubleClick={(event) => {
                 event.stopPropagation()
@@ -149,17 +290,41 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
                 event.dataTransfer.setData("text/plain", canvas.name)
               }}
               onKeyDown={(event) => {
-                if (editing) return
+                if (editing || event.target !== event.currentTarget) return
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault()
-                  if (!busy) void props.onActivate(canvas.id)
+                  if (!busy) {
+                    if (active && showsNodeOutline) toggleCanvasOutline()
+                    else void props.onActivate(canvas.id)
+                  }
                 }
                 if (event.key === "F2") beginRename(canvas)
                 if ((event.key === "Delete" || event.key === "Backspace") && canDelete) beginDelete(canvas)
               }}
-              role="option"
               tabIndex={active || (!props.activeCanvasId && visibleCanvases[0]?.id === canvas.id) ? 0 : -1}
             >
+              <span aria-hidden className="w-4 shrink-0" data-project-canvas-indent="" />
+              {showsNodeOutline ? (
+                <button
+                  aria-label={`${expanded ? "Collapse" : "Expand"} ${canvas.name} nodes`}
+                  className="grid size-6 shrink-0 place-items-center rounded text-text-tertiary outline-none hover:bg-interactive-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+                  onClick={(event) => {
+                    event.preventDefault()
+                    event.stopPropagation()
+                    toggleCanvasOutline()
+                  }}
+                  type="button"
+                >
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                      expanded && "rotate-90",
+                    )}
+                  />
+                </button>
+              ) : (
+                <span className="size-6 shrink-0" />
+              )}
               <PanelsTopLeft className={cn("size-4 shrink-0", active ? "text-brand" : "text-text-tertiary")} />
               {editing ? (
                 <InlineInput
@@ -170,13 +335,13 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
                   value={editor?.name ?? ""}
                 />
               ) : (
-                <span className="min-w-0 flex-1 truncate">{canvas.name}</span>
+                <span className="min-w-0 flex-1 truncate px-1.5">{canvas.name}</span>
               )}
               {!editing ? (
                 <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
                   <button
                     aria-label={`More actions for ${canvas.name}`}
-                    className="grid size-7 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
+                    className="grid size-6 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
                     onClick={(event) => {
                       event.preventDefault()
                       event.stopPropagation()
@@ -200,24 +365,80 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
             </div>
           )
           return (
-            <ContextMenu key={canvas.id}>
-              <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-              <ContextMenuContent className="min-w-40">
-                <ContextMenuItem onSelect={() => beginRename(canvas)}>
-                  <Pencil />
-                  Rename
-                </ContextMenuItem>
-                <ContextMenuSeparator />
-                <ContextMenuItem
-                  className="text-destructive"
-                  disabled={!canDelete}
-                  onSelect={() => beginDelete(canvas)}
-                >
-                  <Trash2 />
-                  Delete canvas
-                </ContextMenuItem>
-              </ContextMenuContent>
-            </ContextMenu>
+            <div
+              aria-expanded={showsNodeOutline ? expanded : undefined}
+              aria-selected={active}
+              data-project-canvas-id={canvas.id}
+              key={canvas.id}
+              role="treeitem"
+            >
+              <ContextMenu>
+                <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+                <ContextMenuContent className="min-w-40">
+                  <ContextMenuItem onSelect={() => beginRename(canvas)}>
+                    <Pencil />
+                    Rename
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    className="text-destructive"
+                    disabled={!canDelete}
+                    onSelect={() => beginDelete(canvas)}
+                  >
+                    <Trash2 />
+                    Delete canvas
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+              {expanded ? (
+                <div className="mb-1 ml-7 border-l border-border-subtle pl-2" role="group">
+                  {!hasActiveNodeProjection &&
+                  loadState?.projectId === snapshot.projectId &&
+                  loadState.status === "loading" &&
+                  !nodes?.length ? (
+                    <div className="flex h-8 items-center gap-2 px-2 text-[11px] text-text-tertiary" role="status">
+                      <LoaderCircle className="size-3 animate-spin" />
+                      Loading nodes…
+                    </div>
+                  ) : !hasActiveNodeProjection &&
+                    loadState?.projectId === snapshot.projectId &&
+                    loadState.status === "error" &&
+                    !nodes?.length ? (
+                    <button
+                      className="flex min-h-8 w-full items-center gap-2 rounded px-2 text-left text-[11px] text-status-danger hover:bg-interactive-hover"
+                      onClick={() => void loadCanvasNodes(canvas.id, true)}
+                      title={loadState.error}
+                      type="button"
+                    >
+                      <RotateCw className="size-3 shrink-0" />
+                      Could not load nodes. Retry
+                    </button>
+                  ) : nodes?.length ? (
+                    nodes.map((node) => (
+                      <button
+                        className="group/node flex min-h-8 w-full items-center gap-2 rounded px-2 text-left text-[12px] text-text-tertiary outline-none hover:bg-interactive-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+                        data-project-canvas-node-id={node.id}
+                        key={node.id}
+                        onClick={() => void props.onNodeActivate?.({ canvasId: canvas.id, nodeId: node.id })}
+                        title={node.label}
+                        type="button"
+                      >
+                        <ProjectCanvasNodePreview
+                          kind={node.kind}
+                          previewType={node.previewType}
+                          previewUrl={node.previewUrl}
+                        />
+                        <span className="min-w-0 flex-1 truncate">{node.label}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="flex h-8 items-center px-2 text-[11px] text-text-tertiary" role="status">
+                      No nodes
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
           )
         })}
       </div>
@@ -273,6 +494,91 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
       ) : null}
     </>
   )
+}
+
+function ProjectCanvasNodePreview({
+  kind = "unknown",
+  previewType = kind === "video" ? "video" : "image",
+  previewUrl,
+}: {
+  kind?: string
+  previewType?: "image" | "video"
+  previewUrl?: string
+}) {
+  const [previewFailed, setPreviewFailed] = useState(false)
+  useEffect(() => setPreviewFailed(false), [previewUrl])
+
+  if (previewUrl && !previewFailed) {
+    return (
+      <span
+        aria-hidden
+        className="grid size-6 shrink-0 place-items-center overflow-hidden rounded border border-border-subtle bg-surface-inset"
+        data-project-canvas-node-preview={kind}
+      >
+        {previewType === "video" ? (
+          <video
+            className="size-full object-cover"
+            muted
+            onError={() => setPreviewFailed(true)}
+            playsInline
+            preload="metadata"
+            src={previewUrl}
+          />
+        ) : (
+          <img
+            alt=""
+            className="size-full object-cover"
+            draggable={false}
+            loading="lazy"
+            onError={() => setPreviewFailed(true)}
+            src={previewUrl}
+          />
+        )}
+      </span>
+    )
+  }
+
+  const icon =
+    kind === "text" ? (
+      <Type />
+    ) : kind === "image" ? (
+      <ImageIcon />
+    ) : kind === "video" ? (
+      <Video />
+    ) : kind === "audio" ? (
+      <AudioLines />
+    ) : kind === "folder" ? (
+      <Folder />
+    ) : kind === "agent" ? (
+      <Bot />
+    ) : kind === "group" ? (
+      <Boxes />
+    ) : kind === "file" ? (
+      <File />
+    ) : (
+      <Box />
+    )
+
+  return (
+    <span
+      aria-hidden
+      className="grid size-6 shrink-0 place-items-center rounded bg-surface-inset text-text-tertiary [&>svg]:size-3.5"
+      data-project-canvas-node-icon={kind}
+    >
+      {icon}
+    </span>
+  )
+}
+
+function resolveCanvasNodes(
+  canvasId: string,
+  projectId: string | null,
+  activeNodes: ProjectCanvasSidebarNodeProjection | null | undefined,
+  loadState: Readonly<Record<string, CanvasNodeLoadState>>,
+) {
+  if (projectId && activeNodes?.projectId === projectId && activeNodes.canvasId === canvasId) return activeNodes.nodes
+  const loaded = loadState[canvasId]
+  return loaded?.projectId === projectId ? loaded.nodes : undefined
 }
 
 function InlineInput(props: {

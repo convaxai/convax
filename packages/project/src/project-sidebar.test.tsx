@@ -233,7 +233,7 @@ describe("ProjectSidebar", () => {
     expect(markup).not.toContain("stale.md")
   })
 
-  test("offers the compact Canvas-over-Project hierarchy without replacing Project ownership", () => {
+  test("offers the compact Project-over-Canvas hierarchy with independently collapsible sections", () => {
     const markup = renderToStaticMarkup(
       <ProjectSidebar
         controller={
@@ -262,11 +262,113 @@ describe("ProjectSidebar", () => {
     expect(markup).toContain('data-project-sidebar-section="canvas"')
     expect(markup).toContain('data-project-sidebar-section="project"')
     expect(markup).toContain("bg-surface-panel")
+    expect(markup).toContain("border-b border-border-subtle")
     expect(markup).toContain("Canvas region")
-    expect(markup.indexOf(">Canvas<")).toBeLessThan(markup.indexOf(">Project<"))
-    expect(markup).toContain('aria-label="Resize Canvas and Project sections"')
+    expect(markup.indexOf(">Project<")).toBeLessThan(markup.indexOf(">Canvas<"))
+    expect(markup).toContain('aria-expanded="true"')
+    expect(markup).toContain('aria-label="Resize Project and Canvas sections"')
+    expect(markup).toContain('aria-valuenow="50"')
+    expect(markup).toContain('aria-label="Open project folder"')
+    expect(markup).not.toContain('aria-label="Refresh files"')
     expect(markup).toContain('aria-label="Rename Example"')
+    expect(markup).toContain('data-project-sidebar-project-actions=""')
     expect(markup).toContain('data-canvas-query=""')
+  })
+
+  test("keeps the splitter and its half-and-half allocation across collapsed section states", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const directoryEntry = {
+      kind: "directory" as const,
+      modifiedAt: 1,
+      name: "Media",
+      parentPath: "",
+      path: "Media",
+    }
+    const workspaceFilesSnapshot: ProjectFilesControllerSnapshot = {
+      ...activeFilesSnapshot,
+      listings: {
+        "": {
+          entries: [directoryEntry],
+          path: "",
+          projectId: "project-1",
+        },
+      },
+    }
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebar
+            controller={
+              {
+                getSnapshot: () => activeSnapshot,
+                initialize: async () => undefined,
+                subscribe: () => () => undefined,
+              } as unknown as ProjectController
+            }
+            extension={{ content: <div>Canvas region</div>, label: "Canvases" }}
+            filesController={
+              {
+                getSnapshot: () => workspaceFilesSnapshot,
+                selectEntry: () => undefined,
+                subscribe: () => () => undefined,
+                toggleDirectory: async () => undefined,
+              } as unknown as ProjectFilesController
+            }
+            presentation="workspace"
+          />,
+        ),
+      )
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[data-project-sidebar-section="canvas"] button[aria-expanded="true"]')
+          ?.click(),
+      )
+      const projectRow = container.querySelector<HTMLElement>('[data-project-entry-path="Media"]')
+      expect(projectRow?.className).toContain("h-7")
+      expect(projectRow?.className).not.toContain("pl-4")
+      expect(projectRow?.className).toContain("text-[13px]")
+      expect(projectRow?.className).toContain("hover:bg-interactive-hover")
+      expect(projectRow?.querySelector<HTMLElement>("[data-project-tree-indent]")?.style.width).toBe("16px")
+      expect(projectRow?.querySelector<HTMLButtonElement>('button[aria-label="Expand Media"]')?.className).toContain(
+        "size-6",
+      )
+      expect(projectRow?.querySelector('button[aria-label="More actions for Media"]')).not.toBeNull()
+      const collapsedProjectSplitter = container.querySelector<HTMLElement>("[data-project-sidebar-splitter]")
+      expect(collapsedProjectSplitter?.getAttribute("aria-disabled")).toBeNull()
+      expect(collapsedProjectSplitter?.tabIndex).toBe(0)
+      await act(async () =>
+        collapsedProjectSplitter?.dispatchEvent(
+          new window.KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" }),
+        ),
+      )
+      expect(collapsedProjectSplitter?.getAttribute("aria-valuenow")).toBe("55")
+
+      await act(async () =>
+        container
+          .querySelector<HTMLButtonElement>('[data-project-sidebar-section="project"] button[aria-expanded="true"]')
+          ?.click(),
+      )
+
+      const splitter = container.querySelector<HTMLElement>("[data-project-sidebar-splitter]")
+      expect(splitter?.getAttribute("aria-label")).toBe("Resize Project and Canvas sections")
+      expect(splitter?.getAttribute("aria-disabled")).toBeNull()
+      expect(splitter?.getAttribute("aria-valuenow")).toBe("55")
+      expect(splitter?.tabIndex).toBe(0)
+      expect(splitter?.querySelector(".bg-brand")).not.toBeNull()
+      expect(container.querySelector<HTMLElement>('[data-project-sidebar-section="canvas"]')?.style.flex).toBe(
+        "0.45 1 0px",
+      )
+      expect(container.querySelector('[data-project-entry-path="Media"]')).toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
   })
 
   test("restores asynchronous media thumbnails, hover previews, and host-owned file activation", async () => {
@@ -291,6 +393,7 @@ describe("ProjectSidebar", () => {
       size: 9 * 1024 * 1024,
     }
     const selectEntry = mock(() => undefined)
+    const openEntry = mock(async () => undefined)
     const onFileActivate = mock(() => undefined)
     const resolveFileUrl = mock(async () => "data:image/png;base64,cHJldmlldw==")
     const filesSnapshot: ProjectFilesControllerSnapshot = {
@@ -318,6 +421,7 @@ describe("ProjectSidebar", () => {
             filesController={
               {
                 getSnapshot: () => filesSnapshot,
+                openEntry,
                 selectEntry,
                 subscribe: () => () => undefined,
               } as unknown as ProjectFilesController
@@ -332,6 +436,11 @@ describe("ProjectSidebar", () => {
         await Promise.resolve()
         await Promise.resolve()
       })
+
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Open project folder"]')?.click(),
+      )
+      expect(openEntry).toHaveBeenCalledWith("")
 
       const row = container.querySelector<HTMLElement>('[data-project-entry-path="Media/reference.png"]')!
       const thumbnail = row.querySelector<HTMLImageElement>("img")

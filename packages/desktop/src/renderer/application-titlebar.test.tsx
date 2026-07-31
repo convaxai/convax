@@ -73,4 +73,20 @@ describe("ApplicationTitlebar", () => {
     expect(markup).not.toContain("data-macos-window-controls")
     expect(markup).not.toContain("Open details")
   })
+
+  test("omits the redundant product label when the workspace supplies an empty label", () => {
+    const markup = renderToStaticMarkup(
+      <ApplicationTitlebar
+        contextLabel="Canvas 1"
+        homeLabel="Back to Projects"
+        onBackToProjects={() => undefined}
+        platform="darwin"
+        productLabel=""
+        surface="workspace"
+      />,
+    )
+
+    expect(markup).not.toContain('data-application-product-name=""')
+    expect(markup).toContain('data-application-titlebar-leading=""')
+  })
 })
