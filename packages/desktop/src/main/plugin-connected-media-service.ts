@@ -59,6 +59,8 @@ interface ConnectedSessionBase {
   absoluteExpiresAt: number
   activeRevision: number
   activeSetDigest: string
+  abortController: AbortController
+  bearerToken: string
   canvasId: string
   expectedRevision: number
   frameId: string
@@ -74,10 +76,10 @@ interface ConnectedSessionBase {
   size: number
   snapshotDigest: string
   sourceNodeId: string
-  bearerToken: string
 }
 
 interface ConnectedStreamSession extends ConnectedSessionBase {
+  activeStreams: Set<Readable>
   identity: ManagedCanvasMediaFileIdentity
   kind: "audio" | "video"
   path: string
@@ -128,7 +130,7 @@ export class PluginConnectedMediaService {
     this.canvasSubscription = input.changes.subscribeAll((event) => {
       for (const [sessionId, session] of this.sessions) {
         if (session.projectId === event.ref.projectId && session.canvasId === event.ref.canvasId) {
-          this.sessions.delete(sessionId)
+          this.revokeSession(sessionId, "Canvas changed while connected media was streaming")
         }
       }
     })
@@ -210,8 +212,9 @@ export class PluginConnectedMediaService {
       absoluteExpiresAt: now + absoluteLifetimeMs,
       activeRevision: principal.activeRevision,
       activeSetDigest: principal.activeSetDigest,
+      abortController: new AbortController(),
       bearerToken,
-      bytes: finalImage.bytes,
+      bytes: Uint8Array.from(finalImage.bytes),
       canvasId: request.canvasId,
       contentRevision: finalImage.contentDigest,
       expectedRevision: document.revision,
@@ -309,6 +312,8 @@ export class PluginConnectedMediaService {
       absoluteExpiresAt: now + absoluteLifetimeMs,
       activeRevision: principal.activeRevision,
       activeSetDigest: principal.activeSetDigest,
+      abortController: new AbortController(),
+      activeStreams: new Set(),
       bearerToken,
       canvasId: request.canvasId,
       expectedRevision: document.revision,
@@ -346,8 +351,7 @@ export class PluginConnectedMediaService {
     if (!session || session.kind === "image" || session.senderId !== senderId || !sameFrame(session, request)) {
       return false
     }
-    this.sessions.delete(request.sessionId)
-    return true
+    return this.revokeSession(request.sessionId, "Connected-media session was explicitly closed")
   }
 
   closeImage(request: PluginConnectedImageCloseInput, senderId: number) {
@@ -358,8 +362,7 @@ export class PluginConnectedMediaService {
     if (!session || session.kind !== "image" || session.senderId !== senderId || !sameFrame(session, request)) {
       return false
     }
-    this.sessions.delete(request.sessionId)
-    return true
+    return this.revokeSession(request.sessionId, "Connected-image session was explicitly closed")
   }
 
   revokeFrame(request: PluginConnectedMediaFrameRef, senderId: number) {
@@ -368,8 +371,7 @@ export class PluginConnectedMediaService {
     let revoked = 0
     for (const [sessionId, session] of this.sessions) {
       if (session.senderId === senderId && sameFrame(session, request)) {
-        this.sessions.delete(sessionId)
-        revoked += 1
+        if (this.revokeSession(sessionId, "Plugin frame was revoked")) revoked += 1
       }
     }
     return revoked
@@ -379,8 +381,7 @@ export class PluginConnectedMediaService {
     let revoked = 0
     for (const [sessionId, session] of this.sessions) {
       if (session.pluginId === pluginId) {
-        this.sessions.delete(sessionId)
-        revoked += 1
+        if (this.revokeSession(sessionId, "Plugin was revoked")) revoked += 1
       }
     }
     return revoked
@@ -390,8 +391,7 @@ export class PluginConnectedMediaService {
     let revoked = 0
     for (const [sessionId, session] of this.sessions) {
       if (session.senderId === senderId) {
-        this.sessions.delete(sessionId)
-        revoked += 1
+        if (this.revokeSession(sessionId, "Plugin sender was revoked")) revoked += 1
       }
     }
     return revoked
@@ -409,7 +409,10 @@ export class PluginConnectedMediaService {
       if (request.method !== "GET" && request.method !== "HEAD") {
         return new Response("Method not allowed", { headers: { Allow: "GET, HEAD" }, status: 405 })
       }
-      await this.revalidate(session)
+      const signal = session.abortController.signal
+      throwIfAborted(signal)
+      await this.revalidate(session, signal)
+      this.requireCurrentSession(session)
       const range = parseSingleHttpByteRange(request.headers.get("range"), session.size)
       if (range === "unsatisfiable") {
         return new Response(null, {
@@ -426,17 +429,36 @@ export class PluginConnectedMediaService {
         return new Response(null, { headers, status: range ? 206 : 200 })
       }
       if (session.kind === "image") {
+        // Images are bounded immutable memory snapshots. Revocation prevents a
+        // later fetch, but cannot retract a Response body already constructed
+        // from this copy.
+        this.requireCurrentSession(session)
         return new Response(session.bytes.slice(start, end + 1), { headers, status: range ? 206 : 200 })
       }
 
       const handle = await fs.open(session.path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0))
+      let stream: Readable | undefined
       try {
+        throwIfAborted(signal)
+        this.requireCurrentSession(session)
         const stat = await handle.stat()
+        throwIfAborted(signal)
+        this.requireCurrentSession(session)
         if (!matchesIdentity(session.identity, stat)) throw new Error("Connected media changed before streaming")
-        const stream = handle.createReadStream({ autoClose: true, end, start })
-        const body = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>
+        const activeStream = handle.createReadStream({ autoClose: true, end, signal, start })
+        stream = activeStream
+        session.activeStreams.add(activeStream)
+        activeStream.once("close", () => {
+          session.activeStreams.delete(activeStream)
+        })
+        if (signal.aborted || this.sessions.get(session.sessionId) !== session) {
+          activeStream.destroy(connectedMediaAbortError("Connected-media session was revoked before streaming"))
+          throw connectedMediaAbortError("Connected-media session was revoked before streaming")
+        }
+        const body = Readable.toWeb(activeStream) as unknown as ReadableStream<Uint8Array>
         return new Response(body, { headers, status: range ? 206 : 200 })
       } catch (error) {
+        stream?.destroy()
         await handle.close().catch(() => undefined)
         throw error
       }
@@ -452,7 +474,9 @@ export class PluginConnectedMediaService {
     for (const controller of this.imageValidationControllers) controller.abort(reason)
     this.imageValidationControllers.clear()
     this.canvasSubscription.close()
-    this.sessions.clear()
+    for (const sessionId of this.sessions.keys()) {
+      this.revokeSession(sessionId, "Connected-media service was disposed")
+    }
   }
 
   private beginImageValidation(request: PluginConnectedImageOpenInput, senderId: number, callerSignal?: AbortSignal) {
@@ -520,8 +544,31 @@ export class PluginConnectedMediaService {
 
   private cleanupExpired(now = this.monotonicNow()) {
     for (const [sessionId, session] of this.sessions) {
-      if (session.idleExpiresAt <= now || session.absoluteExpiresAt <= now) this.sessions.delete(sessionId)
+      if (session.idleExpiresAt <= now || session.absoluteExpiresAt <= now) {
+        this.revokeSession(sessionId, "Connected-media session expired")
+      }
     }
+  }
+
+  private requireCurrentSession(session: ConnectedMediaSession) {
+    throwIfAborted(session.abortController.signal)
+    if (this.sessions.get(session.sessionId) !== session) {
+      throw connectedMediaAbortError("Connected-media session is no longer current")
+    }
+  }
+
+  private revokeSession(sessionId: string, message: string) {
+    const session = this.sessions.get(sessionId)
+    if (!session) return false
+    this.sessions.delete(sessionId)
+    if (!session.abortController.signal.aborted) {
+      session.abortController.abort(connectedMediaAbortError(message))
+    }
+    if (session.kind !== "image") {
+      for (const stream of session.activeStreams) stream.destroy()
+      session.activeStreams.clear()
+    }
+    return true
   }
 
   private renewIdleDeadline(session: ConnectedMediaSession) {
@@ -531,7 +578,9 @@ export class PluginConnectedMediaService {
       session.idleExpiresAt <= now ||
       session.absoluteExpiresAt <= now
     ) {
-      if (this.sessions.get(session.sessionId) === session) this.sessions.delete(session.sessionId)
+      if (this.sessions.get(session.sessionId) === session) {
+        this.revokeSession(session.sessionId, "Connected-media session expired while it was being revalidated")
+      }
       throw new Error("Connected-media session expired while it was being revalidated")
     }
     session.idleExpiresAt = Math.min(now + idleLifetimeMs, session.absoluteExpiresAt)
@@ -642,10 +691,10 @@ export class PluginConnectedMediaService {
     return { document, source }
   }
 
-  private async revalidate(session: ConnectedMediaSession) {
+  private async revalidate(session: ConnectedMediaSession, signal: AbortSignal) {
     const frame = sessionFrame(session)
     const apiId = session.kind === "image" ? "canvas.inputs.image.open" : "canvas.inputs.open"
-    const principal = await this.requirePrincipal(frame, apiId, undefined, {
+    const principal = await this.requirePrincipal(frame, apiId, signal, {
       activeRevision: session.activeRevision,
       activeSetDigest: session.activeSetDigest,
       digest: session.manifestDigest,
@@ -660,22 +709,28 @@ export class PluginConnectedMediaService {
       throw new Error("Plugin changed after the session opened")
     }
     if (session.kind === "image") {
-      const { reference } = await this.requireLiveImageBinding({
-        ...frame,
-        expectedRevision: session.expectedRevision,
-        sourceNodeId: session.sourceNodeId,
-      })
+      const { reference } = await this.requireLiveImageBinding(
+        {
+          ...frame,
+          expectedRevision: session.expectedRevision,
+          sourceNodeId: session.sourceNodeId,
+        },
+        signal,
+      )
       if (!sameProjectResourceReference(reference, session.reference)) {
         throw new Error("Connected image reference changed after the session opened")
       }
       this.renewIdleDeadline(session)
       return
     }
-    const { source } = await this.requireLiveBinding({
-      ...frame,
-      expectedRevision: session.expectedRevision,
-      sourceNodeId: session.sourceNodeId,
-    })
+    const { source } = await this.requireLiveBinding(
+      {
+        ...frame,
+        expectedRevision: session.expectedRevision,
+        sourceNodeId: session.sourceNodeId,
+      },
+      signal,
+    )
     if (source.data.kind !== session.kind) throw new Error("Connected media kind changed")
     const [resolved] = await this.input.media.resolve(
       {
@@ -689,7 +744,10 @@ export class PluginConnectedMediaService {
         allowedKindsDescription: session.kind,
         operationLabel: "Plugin connected-media stream",
       },
+      signal,
     )
+    throwIfAborted(signal)
+    this.requireCurrentSession(session)
     if (
       !resolved ||
       resolved.resourcePath !== session.resourcePath ||
@@ -1115,9 +1173,13 @@ function isAbortError(error: unknown) {
 function throwIfAborted(signal?: AbortSignal) {
   if (!signal?.aborted) return
   if (signal.reason instanceof Error) throw signal.reason
-  throw imageAbortError()
+  throw connectedMediaAbortError()
 }
 
 function imageAbortError(message = "Plugin connected-image operation was canceled") {
+  return new DOMException(message, "AbortError")
+}
+
+function connectedMediaAbortError(message = "Plugin connected-media operation was canceled") {
   return new DOMException(message, "AbortError")
 }

@@ -1214,6 +1214,14 @@ every fetch; it must not be described as fetch-time frame authentication.
 Cancellation or frame disposal terminates validation and revokes the session;
 close is idempotent and may affect only a session issued to the same sender/frame.
 Neither input API authorizes upload, generation or persistence.
+Every issued session owns its abort lifecycle. For audio/video, Main binds every
+active protocol response stream to that lifecycle; explicit close, frame/sender or
+Plugin revocation, Canvas invalidation, expiry cleanup, and service disposal abort
+further file reads and close the stream-owned file descriptor. Bytes already
+delivered or buffered by the protocol stack cannot be recalled. Connected images
+are instead bounded immutable in-memory snapshots: revocation blocks new fetches
+and cancels validation, but a `Response` already constructed from the snapshot
+remains readable.
 The Plugin document CSP admits `convax-connected-media:` in `img-src` only for
 an exact installed v8 declaration of `canvas.inputs.image.open` with its grant;
 the existing audio/video API controls `media-src` independently. Neither
