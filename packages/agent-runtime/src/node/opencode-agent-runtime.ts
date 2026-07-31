@@ -1001,11 +1001,12 @@ export class OpenCodeAgentRuntime implements AgentRuntime {
           await this.startup?.catch(() => undefined)
           await this.disposeOpenCodeInstances()
           this.connectionGeneration += 1
-          this.server?.close()
+          const server = this.server
           this.server = undefined
           this.client = undefined
           this.startup = undefined
           this.lifecycle = { state: "stopped" }
+          server?.close()
         } else {
           const client = await this.getClient()
           unwrap(await client.global.dispose(), "Refresh OpenCode skills")

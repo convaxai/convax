@@ -776,9 +776,11 @@ request. Project or capability changes and a bounded age timer revalidate that
 projection through Main's single-flight catalog refresh. Ready values remain visible
 while revalidation runs, and the committed result notifies both pickers; the
 renderer snapshot never authorizes execution or persists model authority.
-Without an owning node override, a file card inherits that preference only when its
-output matches the card's intrinsic text/image/video/audio kind and accepts the
-current media references.
+Without an owning node override, an image/video replacement card inherits that
+preference only when its output matches the card's intrinsic kind and accepts the
+current media references. A text owner may instead choose image or video output; its
+mounted composer keeps model and tool-option state isolated by output and never
+persists one owner override across those result kinds.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
 catalog only when the owning Plugin contributes the same model through a service and
@@ -791,9 +793,9 @@ and card composers offer the Services route instead of synthesizing an `auto`
 choice. The available catalog is never pruned by current `@` inputs: when no model
 accepts all inputs, the card still shows a concrete matching Agent default or first
 available model and blocks execution until the user removes incompatible inputs or
-chooses a compatible model. A manual card choice stores only the opaque host tool id
-in versioned, namespaced Canvas node metadata; clearing it restores host-default
-resolution. The node override is portable
+chooses a compatible model. A manual image/video replacement-card choice stores only
+the opaque host tool id in versioned, namespaced Canvas node metadata; clearing it
+restores host-default resolution. The node override is portable
 and undoable with the Canvas document, never updates the Agent preference in reverse,
 and requires an exact available output match. Input incompatibility keeps that exact
 model visible but fails closed at submission; missing or output-mismatched ids remain
@@ -816,13 +818,19 @@ Known file-card modalities also constrain the direct model catalog and result: a
 image card accepts only image tools, a video card only video tools, and a mismatched
 Agent default or persisted card override fails closed. This output constraint is
 independent from Agent-mode references, where an explicitly mentioned image may
-still be a valid input to a video tool.
+still be a valid input to a video tool. A text card is the deliberate non-replacement
+case: it may choose image or video, always requests exactly one host-owned pending
+result, and connects that result from the constrained text owner. The owner remains
+unchanged relation context; its body is not implicitly appended to the prompt.
 
 A direct file-card generation persists a Canvas-owned, versioned run on the target
 node, separate from its next-run tool preference and from Plugin-owned state. The run
 retains the normalized user-editable prompt draft, host operation id, resolved
 host-opaque tool id, bounded status, and an optional host-safe opaque sidecar task
-receipt. The draft may be empty when direct incoming text supplies the whole prompt;
+receipt. A terminal run may additionally retain one bounded host-authored failure
+message derived only from a validated service display name; raw sidecar text, native
+diagnostics, paths, credentials, and provider state never enter portable Canvas
+state. The draft may be empty when direct incoming text supplies the whole prompt;
 Main composes the effective model prompt transiently and, for admitted recoverable
 operations, retains it only in the private digest-bound execution snapshot. Main writes
 `submitting` before the external call, updates lifecycle state through Canvas

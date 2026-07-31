@@ -20,6 +20,7 @@ import {
   canvasNodeGenerationRunSchema,
   canvasNodeGenerationRunSchemaV1,
   canvasNodeGenerationRunSchemaV2,
+  canvasNodeGenerationRunSchemaV3,
   finishCanvasNodeGenerationRun,
   getCanvasNodeGenerationRun,
   inspectCanvasNodeGenerationRun,
@@ -76,20 +77,20 @@ describe("Canvas node generation run", () => {
       const source = document({ [canvasNodeGenerationRunKey]: raw })
       const roundTrip = parseCanvasDocument(JSON.parse(JSON.stringify(source)), source.id)
       expect(
-        (roundTrip?.nodes[0]?.data.metadata as Record<string, unknown> | undefined)?.[
-          canvasNodeGenerationRunKey
-        ],
+        (roundTrip?.nodes[0]?.data.metadata as Record<string, unknown> | undefined)?.[canvasNodeGenerationRunKey],
       ).toEqual(raw)
       expect(inspectCanvasNodeGenerationRun(roundTrip!.nodes[0]!)).toMatchObject({ kind: "unreadable" })
-      expect(() => startCanvasNodeGenerationRun(roundTrip!, "image-one", {
-        operationId: "new-operation",
-        prompt: "Do not overwrite",
-        toolId: "creative-tools/image.generate",
-      })).toThrow(CanvasNodeGenerationRunValidationError)
+      expect(() =>
+        startCanvasNodeGenerationRun(roundTrip!, "image-one", {
+          operationId: "new-operation",
+          prompt: "Do not overwrite",
+          toolId: "creative-tools/image.generate",
+        }),
+      ).toThrow(CanvasNodeGenerationRunValidationError)
     }
   })
 
-  test("migrates readable v1 and v2 runs to v3 without overwriting unknown schemas", () => {
+  test("migrates readable v1, v2, and v3 runs to v4 without overwriting unknown schemas", () => {
     const source = document({
       [canvasNodeGenerationRunKey]: {
         operationId: "legacy-operation",
@@ -140,6 +141,23 @@ describe("Canvas node generation run", () => {
       retrySafety: "safe",
       schema: canvasNodeGenerationRunSchema,
       status: "failed",
+      toolId: "creative-tools/image.generate",
+    })
+
+    const v3 = document({
+      [canvasNodeGenerationRunKey]: {
+        operationId: "version-three-operation",
+        prompt: "",
+        schema: canvasNodeGenerationRunSchemaV3,
+        status: "running",
+        toolId: "creative-tools/image.generate",
+      },
+    })
+    expect(getCanvasNodeGenerationRun(v3.nodes[0]!)).toEqual({
+      operationId: "version-three-operation",
+      prompt: "",
+      schema: canvasNodeGenerationRunSchema,
+      status: "running",
       toolId: "creative-tools/image.generate",
     })
   })
@@ -194,23 +212,17 @@ describe("Canvas node generation run", () => {
 
     const receipted = markCanvasNodeGenerationRunRunning(running, "image-one", "operation-one", "task_123")
     expect(getCanvasNodeGenerationRun(receipted.nodes[0]!)?.taskId).toBe("task_123")
-    expect(markCanvasNodeGenerationRunRunning(receipted, "image-one", "operation-one", "task_123")).toBe(
-      receipted,
+    expect(markCanvasNodeGenerationRunRunning(receipted, "image-one", "operation-one", "task_123")).toBe(receipted)
+    expect(() => markCanvasNodeGenerationRunRunning(receipted, "image-one", "operation-one", "task_456")).toThrow(
+      "different task id",
     )
-    expect(() =>
-      markCanvasNodeGenerationRunRunning(receipted, "image-one", "operation-one", "task_456"),
-    ).toThrow("different task id")
-    expect(() => markCanvasNodeGenerationRunRunning(receipted, "image-one", "other-operation")).toThrow(
-      "does not own",
-    )
+    expect(() => markCanvasNodeGenerationRunRunning(receipted, "image-one", "other-operation")).toThrow("does not own")
 
     for (const status of ["failed", "cancelled", "interrupted"] as const) {
       const terminal = finishCanvasNodeGenerationRun(receipted, "image-one", "operation-one", status, "safe")
       expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)?.status).toBe(status)
       expect(getCanvasNodeGenerationRun(terminal.nodes[0]!)?.retrySafety).toBe("safe")
-      expect(() => markCanvasNodeGenerationRunRunning(terminal, "image-one", "operation-one")).toThrow(
-        "cannot return",
-      )
+      expect(() => markCanvasNodeGenerationRunRunning(terminal, "image-one", "operation-one")).toThrow("cannot return")
       expect(() => finishCanvasNodeGenerationRun(terminal, "image-one", "operation-one", status, "safe")).toThrow(
         "already terminal",
       )
@@ -266,6 +278,52 @@ describe("Canvas node generation run", () => {
         toolId: "creative-tools/image.generate",
       }),
     ).toThrow("run is invalid")
+
+    const running = markCanvasNodeGenerationRunRunning(start(), "image-one", "operation-one")
+    const unavailable = finishCanvasNodeGenerationRun(
+      running,
+      "image-one",
+      "operation-one",
+      "failed",
+      "safe",
+      "Creative Tools 服务不可用",
+    )
+    expect(getCanvasNodeGenerationRun(unavailable.nodes[0]!)?.failureMessage).toBe("Creative Tools 服务不可用")
+    const maximumMessage = finishCanvasNodeGenerationRun(
+      running,
+      "image-one",
+      "operation-one",
+      "failed",
+      "safe",
+      "x".repeat(200),
+    )
+    expect(getCanvasNodeGenerationRun(maximumMessage.nodes[0]!)?.failureMessage).toHaveLength(200)
+
+    for (const failureMessage of [
+      "",
+      "x".repeat(201),
+      " unsafe",
+      "unsafe\nmessage",
+      "unsafe\u200bmessage",
+      "unsafe\u2028message",
+      "unsafe\u2029message",
+    ]) {
+      expect(() =>
+        finishCanvasNodeGenerationRun(running, "image-one", "operation-one", "failed", "safe", failureMessage),
+      ).toThrow("failure message is invalid")
+    }
+
+    const activeWithFailure = document({
+      [canvasNodeGenerationRunKey]: {
+        failureMessage: "Must be terminal",
+        operationId: "active-with-failure",
+        prompt: "",
+        schema: canvasNodeGenerationRunSchema,
+        status: "running",
+        toolId: "creative-tools/image.generate",
+      },
+    })
+    expect(inspectCanvasNodeGenerationRun(activeWithFailure.nodes[0]!)).toMatchObject({ kind: "unreadable" })
   })
 
   test("atomically creates a pending owner with submitting state and terminalizes its presentation", () => {
@@ -291,14 +349,24 @@ describe("Canvas node generation run", () => {
       toolId: "creative-tools/image.generate",
     })
 
-    const failed = finishCanvasNodeGenerationRun(created.document, nodeId, "operation-pending", "failed", "safe")
+    const failed = applyCanvasApplicationCommand(created.document, {
+      failureMessage: "Creative Tools 服务不可用",
+      nodeId,
+      operationId: "operation-pending",
+      retrySafety: "safe",
+      status: "failed",
+      type: "generation.run.finish",
+    }).document
     const failedNode = failed.nodes.find((candidate) => candidate.id === nodeId)!
     expect(failedNode.data).toMatchObject({
-      error: "Generation could not be completed",
+      error: "Creative Tools 服务不可用",
       status: "error",
     })
-    expect(getCanvasNodeGenerationRun(failedNode)?.status).toBe("failed")
-    expect(getCanvasNodeGenerationRun(failedNode)?.retrySafety).toBe("safe")
+    expect(getCanvasNodeGenerationRun(failedNode)).toMatchObject({
+      failureMessage: "Creative Tools 服务不可用",
+      retrySafety: "safe",
+      status: "failed",
+    })
 
     const restarted = interruptInactiveCanvasNodeGenerationRuns(created.document, [])
     const restartedNode = restarted.nodes.find((candidate) => candidate.id === nodeId)!
@@ -389,16 +457,17 @@ describe("Canvas node generation run", () => {
       sourceOnly: true,
     })
     const guard = createCanvasGenerationTargetGuard(source.nodes[0]!)
-    const running = markCanvasNodeGenerationRunRunning(startCanvasNodeGenerationRun(source, "image-one", {
-      operationId: "operation-one",
-      prompt: "Draw a fox",
-      toolId: "creative-tools/actual-model",
-    }), "image-one", "operation-one", "task_123")
-    const changedPreference = setCanvasNodeGenerationToolId(
-      running,
+    const running = markCanvasNodeGenerationRunRunning(
+      startCanvasNodeGenerationRun(source, "image-one", {
+        operationId: "operation-one",
+        prompt: "Draw a fox",
+        toolId: "creative-tools/actual-model",
+      }),
       "image-one",
-      "creative-tools/following-model",
+      "operation-one",
+      "task_123",
     )
+    const changedPreference = setCanvasNodeGenerationToolId(running, "image-one", "creative-tools/following-model")
 
     const result = applyCanvasApplicationCommand(changedPreference, {
       type: "resources.replace-generated",
@@ -447,24 +516,28 @@ describe("Canvas node generation run", () => {
       ...source,
       nodes: source.nodes.map((node) => ({ ...node, data: { ...node.data, mimeType: "image/webp" } })),
     }
-    expect(() => applyCanvasApplicationCommand(changed, {
-      type: "resources.replace-generated",
-      expectedTarget: guard,
-      item: { id: "two", kind: "image", metadata: {}, state: { status: "ready", url: "convax://two" } },
-      operationId: "operation-one",
-      targetNodeId: "image-one",
-    })).toThrow(CanvasCommandValidationError)
+    expect(() =>
+      applyCanvasApplicationCommand(changed, {
+        type: "resources.replace-generated",
+        expectedTarget: guard,
+        item: { id: "two", kind: "image", metadata: {}, state: { status: "ready", url: "convax://two" } },
+        operationId: "operation-one",
+        targetNodeId: "image-one",
+      }),
+    ).toThrow(CanvasCommandValidationError)
 
     expect(() =>
       finishCanvasNodeGenerationRun({ ...source, nodes: [] }, "image-one", "operation-one", "failed", "safe"),
     ).toThrow("not found")
-    expect(() => applyCanvasApplicationCommand(source, {
-      type: "resources.replace-generated",
-      expectedTarget: guard,
-      item: { id: "two", kind: "image", metadata: {}, state: { status: "ready", url: "convax://two" } },
-      operationId: "late-operation",
-      targetNodeId: "image-one",
-    })).toThrow("does not own")
+    expect(() =>
+      applyCanvasApplicationCommand(source, {
+        type: "resources.replace-generated",
+        expectedTarget: guard,
+        item: { id: "two", kind: "image", metadata: {}, state: { status: "ready", url: "convax://two" } },
+        operationId: "late-operation",
+        targetNodeId: "image-one",
+      }),
+    ).toThrow("does not own")
   })
 
   test("duplicates active history without copying task ownership", () => {

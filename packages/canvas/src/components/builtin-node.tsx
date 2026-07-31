@@ -2299,8 +2299,7 @@ function CutoutImageBody(props: {
         // Keep the dissolve on the removed-background side of the matte.
         // U²-Net intentionally leaves soft foreground alpha; sampling every
         // source/result delta would put visible grain across skin and clothing.
-        const removedAlpha =
-          resultAlpha < 128 ? Math.max(0, sourcePixels[pixel + 3] - resultAlpha) : 0
+        const removedAlpha = resultAlpha < 128 ? Math.max(0, sourcePixels[pixel + 3] - resultAlpha) : 0
         if (removedAlpha === 0) continue
         const color = count * 4
         sourceX[count] = x
@@ -2542,18 +2541,10 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
   const cutoutGeneration = generationRun?.toolId === "cutout-studio/background.remove" ? generationRun : undefined
-  const cutoutSourceUrl = cutoutGeneration
-    ? connectedImageSourceUrl(editor.document, props.id)
-    : undefined
-  const cutoutScanRequested = Boolean(
-    cutoutGeneration && isCanvasNodeGenerationRunActive(cutoutGeneration),
-  )
+  const cutoutSourceUrl = cutoutGeneration ? connectedImageSourceUrl(editor.document, props.id) : undefined
+  const cutoutScanRequested = Boolean(cutoutGeneration && isCanvasNodeGenerationRunActive(cutoutGeneration))
   const cutoutPresentation =
-    cutoutGeneration?.status === "succeeded"
-      ? "result"
-      : cutoutScanRequested
-        ? "scanning"
-        : "idle"
+    cutoutGeneration?.status === "succeeded" ? "result" : cutoutScanRequested ? "scanning" : "idle"
   const url = data.resourceState?.url
   const supportsFit = data.kind === "image" || data.kind === "video"
   const emptyImage = isCanvasEmptyImageNodeData(data)
@@ -2736,7 +2727,8 @@ function FileGenerationActivityOverlay(props: {
     )
   }
   const title =
-    props.run.status === "failed" ? "生成失败" : props.run.status === "cancelled" ? "生成已取消" : "生成已中断"
+    props.run.failureMessage ??
+    (props.run.status === "failed" ? "生成失败" : props.run.status === "cancelled" ? "生成已取消" : "生成已中断")
   const retryIsSafe = props.run.retrySafety === "safe"
   return (
     <div
@@ -2840,7 +2832,14 @@ function FileAssistantAccessory(
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const visible = Boolean(props.open && assistant && ownsSingleNodeContext && (!editor.readOnly || editor.hydrating))
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
-  const generationOutput = props.data.kind === "image" || props.data.kind === "video" ? props.data.kind : undefined
+  const generationOutputs =
+    props.data.kind === "text"
+      ? (["image", "video"] as const)
+      : props.data.kind === "image" || props.data.kind === "video"
+        ? ([props.data.kind] as const)
+        : undefined
+  const generationOutput = generationOutputs?.[0]
+  const replacesOwner = props.data.kind === "image" || props.data.kind === "video"
   const mentionedNodeIds = getIncomingConnectedCanvasFileNodeIds(editor.document, props.id)
   const open = visible
   useEffect(() => {
@@ -2875,17 +2874,24 @@ function FileAssistantAccessory(
             ...(generationOutput
               ? {
                   generation: {
+                    ...(generationOutputs && generationOutputs.length > 1
+                      ? { availableOutputs: generationOutputs }
+                      : {}),
                     ...(props.generationSubmissionMode === undefined
                       ? {}
                       : { submissionMode: props.generationSubmissionMode }),
                     ...(props.initialGenerationPrompt === undefined
                       ? {}
                       : { initialPrompt: props.initialGenerationPrompt }),
-                    onOwnerToolIdChange: (toolId?: string) => {
-                      editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
-                    },
                     output: generationOutput,
-                    ownerToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
+                    ...(replacesOwner
+                      ? {
+                          onOwnerToolIdChange: (toolId?: string) => {
+                            editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
+                          },
+                          ownerToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
+                        }
+                      : {}),
                   },
                 }
               : {}),
@@ -3018,13 +3024,14 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const [assistantOpen, setAssistantOpen] = useState(false)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const visualMediaAssistant = props.data.kind === "image" || props.data.kind === "video"
+  const directAssistant = visualMediaAssistant || props.data.kind === "text"
   const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)
   useEffect(() => {
     if (ownsSingleNodeContext && !editor.readOnly && assistant) return
     setAssistantOpen(false)
   }, [assistant, editor.readOnly, ownsSingleNodeContext])
   const assistantTrigger: FileAssistantTrigger | null =
-    assistant && !visualMediaAssistant && showMutationToolbar
+    assistant && !directAssistant && showMutationToolbar
       ? {
           open: assistantOpen,
           toggle: () => setAssistantOpen((current) => !current),
@@ -3116,7 +3123,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       (!generationRun || generationRun.status === "succeeded" || dismissedTerminal) ? (
         <FileAssistantAccessory
           {...props}
-          open={visualMediaAssistant || assistantOpen}
+          open={directAssistant || assistantOpen}
           generationSubmissionMode={dismissedTerminal ? terminalRecovery?.submissionMode : undefined}
           initialGenerationPrompt={
             generationRun?.status === "succeeded" || dismissedTerminal ? generationRun?.prompt : undefined

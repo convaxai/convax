@@ -37,7 +37,10 @@ export function subscribeInstalledPluginInventory(
       const inventory = await client.listPlugins()
       if (active && current === request) onInstalled(inventory.installed)
     } catch (error) {
-      if (active && current === request) onError(error)
+      if (active && current === request) {
+        onInstalled([])
+        onError(error)
+      }
     }
   }
   // Subscribe first so a Plugin publication cannot land between the initial

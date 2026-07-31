@@ -354,6 +354,59 @@ export class GenerationToolReportedError extends Error {
   }
 }
 
+const generationServiceUnavailableCodes = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+])
+
+function isGenerationServiceUnavailableFailure(error: unknown) {
+  let current = error
+  for (let depth = 0; depth < 4 && current !== undefined; depth += 1) {
+    try {
+      if (!isRecord(current)) return false
+      // Sidecar result text is untrusted diagnostic input. It may be surfaced by
+      // the thrown error, but must not select portable Canvas presentation.
+      if (current instanceof GenerationToolReportedError) return false
+      if (current instanceof GenerationResourceUnavailableError) return true
+      if (typeof current.code === "string" && generationServiceUnavailableCodes.has(current.code.toUpperCase())) {
+        return true
+      }
+      const message = typeof current.message === "string" ? current.message : ""
+      if (
+        /\b(?:generation model )?service (?:is )?(?:unavailable|disconnected|offline|not connected)\b/i.test(message) ||
+        /\b(?:runtime|server|provider|process|connection|executable)\b.{0,80}\b(?:unavailable|disconnected|offline|refused|closed|exited|terminated)\b/i.test(
+          message,
+        ) ||
+        /\b(?:connection refused|socket hang up|broken pipe)\b/i.test(message)
+      ) {
+        return true
+      }
+      current = current.cause
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+function generationFailureMessage(
+  error: unknown,
+  tool: GenerationToolSummary,
+  status: "failed" | "cancelled" | "interrupted",
+) {
+  if (status === "cancelled" || !isGenerationServiceUnavailableFailure(error)) return undefined
+  const rawServiceName = tool.pluginName
+  if (!rawServiceName || rawServiceName.length > 160 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(rawServiceName)) {
+    return "生成服务不可用"
+  }
+  const serviceName = rawServiceName.replace(/\s+/g, " ").trim()
+  return serviceName ? `${serviceName} 服务不可用` : "生成服务不可用"
+}
+
 export class GenerationResourceUnavailableError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options)
@@ -2870,12 +2923,14 @@ export class GenerationCanvasService {
             terminalStatus = "interrupted"
             retrySafety = "unknown"
           }
+          const failureMessage = generationFailureMessage(error, tool, terminalStatus)
           const terminal = await this.#runs.finish({
             actor,
             canvasId: request.ref.canvasId,
             commandId: `generation:${request.operationId}:terminal`,
             conflictPolicy: "retry",
             expectedRevision: runRevision,
+            ...(failureMessage === undefined ? {} : { failureMessage }),
             nodeId: resultMode.nodeId,
             operationId: request.operationId,
             retrySafety,

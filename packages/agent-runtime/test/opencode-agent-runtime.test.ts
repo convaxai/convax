@@ -641,6 +641,100 @@ describe("OpenCode agent runtime boundaries", () => {
     await runtime.dispose()
   })
 
+  test("fails a hard refresh closed when server close throws and lazily resolves fresh Plugin config", async () => {
+    const directory = join(tmpdir(), "agent-runtime-failed-configuration-refresh")
+    const oldHook = pathToFileURL(join(tmpdir(), "host", "plugin-hooks", "old.mjs")).href
+    const newHook = pathToFileURL(join(tmpdir(), "host", "plugin-hooks", "new.mjs")).href
+    const oldSkillPath = join(tmpdir(), "host", "plugin-skills", "old")
+    const newSkillPath = join(tmpdir(), "host", "plugin-skills", "new")
+    let pluginConfiguration = {
+      hookModules: [{ fileUrl: oldHook }],
+      skillPaths: [oldSkillPath],
+    }
+    const resolvePluginConfiguration = mock(async () => pluginConfiguration)
+    const dispose = mock(async () => ({ data: true }))
+    const oldSessionList = mock(async () => {
+      throw new Error("The stale OpenCode client was reused")
+    })
+    const newSessionList = mock(async () => ({ data: [] }))
+    const close = mock(() => {
+      throw new Error("OpenCode server close failed")
+    })
+    const runtime = new OpenCodeAgentRuntime({ resolvePluginConfiguration })
+    type ServerConfig = {
+      plugin?: Array<string | [string, unknown]>
+      skills?: { paths?: string[] }
+    }
+    type ClientStub = {
+      global?: { dispose(): Promise<unknown> }
+      session: {
+        list(input: unknown): Promise<{ data: unknown[] }>
+      }
+    }
+    const state = runtime as unknown as {
+      client?: ClientStub
+      getClient(): Promise<ClientStub>
+      lifecycle: { state: string }
+      server?: { close(): void }
+      serverConfig(): Promise<ServerConfig>
+      startup?: Promise<ClientStub>
+    }
+    const oldConfig = await state.serverConfig()
+    const oldClient: ClientStub = {
+      global: { dispose },
+      session: { list: oldSessionList },
+    }
+    state.client = oldClient
+    state.server = { close }
+    state.startup = Promise.resolve(oldClient)
+    state.lifecycle = { state: "ready" }
+    const lazilyResolvedConfigs: ServerConfig[] = []
+    state.getClient = async () => {
+      if (state.client) return state.client
+      const config = await state.serverConfig()
+      lazilyResolvedConfigs.push(config)
+      const client: ClientStub = {
+        session: { list: newSessionList },
+      }
+      state.client = client
+      return client
+    }
+
+    try {
+      expect(oldConfig.plugin).toEqual([oldHook])
+      expect(oldConfig.skills?.paths).toEqual([oldSkillPath])
+      pluginConfiguration = {
+        hookModules: [{ fileUrl: newHook }],
+        skillPaths: [newSkillPath],
+      }
+
+      await expect(runtime.refreshConfiguration()).rejects.toThrow("OpenCode server close failed")
+
+      expect(dispose).toHaveBeenCalledTimes(1)
+      expect(close).toHaveBeenCalledTimes(1)
+      expect(state.client).toBeUndefined()
+      expect(state.server).toBeUndefined()
+      expect(state.startup).toBeUndefined()
+      expect(await runtime.getStatus()).toEqual({ state: "stopped" })
+
+      await expect(runtime.listSessions({ directory })).resolves.toEqual([])
+
+      expect(oldSessionList).not.toHaveBeenCalled()
+      expect(newSessionList).toHaveBeenCalledTimes(1)
+      expect(lazilyResolvedConfigs).toEqual([
+        expect.objectContaining({
+          plugin: [newHook],
+          skills: { paths: [newSkillPath], urls: [] },
+        }),
+      ])
+      expect(JSON.stringify(lazilyResolvedConfigs)).not.toContain(oldHook)
+      expect(JSON.stringify(lazilyResolvedConfigs)).not.toContain(oldSkillPath)
+      expect(resolvePluginConfiguration).toHaveBeenCalledTimes(2)
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test("absorbs refreshes queued during a hard refresh without starting another OpenCode generation", async () => {
     let releaseDispose!: () => void
     let markDisposeStarted!: () => void
