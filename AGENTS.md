@@ -86,6 +86,7 @@ files under `packages/` add local rules and inherit this contract.
 | `@convax/desktop`           | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                         |
 | `@convax/web`               | Public Convax marketing site, product storytelling, responsive presentation, and public conversion links                                                                                               | Desktop runtime, product domain state, Cloudflare deployment, or API behavior            |
 | `@convax/deploy-cloudflare` | Cloudflare deployment composition, custom-domain routing, static Web assets, and the future `/api` service-binding edge                                                                                | Marketing presentation, API domain logic, credentials, or Desktop behavior               |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                             | Product runtime state, canonical architecture semantics, Desktop behavior, or API logic  |
 
 `Workspace` is intentionally not a current aggregate. Reserve that name for a
 future window/session that coordinates multiple Projects. Do not recreate a
@@ -105,6 +106,7 @@ project ──> canvas, project-files, ui
 canvas  ──> ui
 agent-runtime, marketplace, plugin-api, project-files, ui, workbench ──> no Convax package
 deploy-cloudflare ──> web; later api through an explicit Cloudflare Service Binding
+docs ──> no Convax package
 ```
 
 - Import another package only through an exported package subpath.
@@ -124,8 +126,9 @@ package may own Canvas business semantics and depend on lower-level declared
 libraries; it must not assume Convax Desktop, a particular Project, hidden monorepo
 source, or ambient application state.
 
-- `@convax/desktop` is the only current private application package. New library
-  packages are independently publishable by default.
+- `@convax/desktop` is the only private product runtime package under `packages/*`.
+  Private applications under `apps/*` are delivery surfaces rather than publishable
+  libraries. New library packages are independently publishable by default.
 - A new package needs one coherent owner/invariant, not merely a convenient folder,
   shared helper bucket, or workaround for a dependency rule.
 - It must have package-local `build`, `clean`, `typecheck`, `test`, `prepack`, and
