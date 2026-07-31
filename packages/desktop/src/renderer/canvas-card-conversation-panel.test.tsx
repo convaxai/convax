@@ -852,13 +852,16 @@ describe("Canvas card generation lifecycle", () => {
     )
   })
 
-  test("does not rewrite ordinary errors or errors from another IPC channel", () => {
-    for (const message of [
-      "Error invoking remote method 'generation:generate': Error: Generation service unavailable",
-      "Error invoking remote method 'plugin-service:status': GenerationToolReportedError: Generation tool failed",
-    ]) {
-      expect(generationErrorMessage(new Error(message))).toBe(message)
-    }
+  test("localizes generation service outages and leaves another IPC channel untouched", () => {
+    expect(
+      generationErrorMessage(
+        new Error("Error invoking remote method 'generation:generate': Error: Generation service unavailable"),
+      ),
+    ).toBe("生成服务不可用，请在“服务”中检查连接后再试。")
+
+    const otherChannel =
+      "Error invoking remote method 'plugin-service:status': GenerationToolReportedError: Generation tool failed"
+    expect(generationErrorMessage(new Error(otherChannel))).toBe(otherChannel)
   })
 
   test("keeps the file owner in Agent context without turning it into a generation mention", () => {

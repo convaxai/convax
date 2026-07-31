@@ -33,13 +33,26 @@ describe("Canvas file-card assistant sizing", () => {
     expect(assistantRule).not.toContain("height: min(380px")
   })
 
-  test("uses aligned borderless chrome for bounded image and video cards", async () => {
+  test("aligns media chrome, gives video a dashed frame, and keeps focus outside the card", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const mediaSurfaceRule = styles.match(/\.convax-canvas \.convax-node__surface--media \{[^}]+\}/s)?.[0] ?? ""
+    const videoSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface--video")
+    const mediaOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--media")
+    const videoOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--video")
+    const selectedMediaRule =
+      styles.match(/\.convax-canvas \.convax-node\.is-selected \.convax-node__surface--media,[\s\S]*?\{[^}]+\}/)?.[0] ??
+      ""
 
+    expect(styles).toContain("--canvas-media-radius: 24px")
     expect(mediaSurfaceRule).toContain("border-width: 0")
-    expect(mediaSurfaceRule).toContain("border-radius: 24px")
+    expect(mediaSurfaceRule).toContain("border-radius: var(--canvas-media-radius)")
     expect(mediaSurfaceRule).toContain("background: transparent")
+    expect(videoSurfaceRule).toContain("border: 2px dashed var(--canvas-node-border)")
+    expect(mediaOverlayRule).toContain("border-radius: var(--canvas-media-radius)")
+    expect(videoOverlayRule).toContain("inset: 2px")
+    expect(videoOverlayRule).toContain("border-radius: calc(var(--canvas-media-radius) - 2px)")
+    expect(selectedMediaRule).toContain("0 0 0 5px var(--canvas-background)")
+    expect(selectedMediaRule).toContain("0 0 0 8px var(--canvas-accent)")
   })
 
   test("gives the expanded editor a calm global paper surface without fixed toolbar chrome", async () => {

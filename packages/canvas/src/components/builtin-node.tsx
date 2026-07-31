@@ -13,7 +13,7 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
-  CircleAlert,
+  Clapperboard,
   Copy,
   Bold,
   Code2,
@@ -2591,7 +2591,10 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
   )
   return (
     <NodeChrome
-      className={supportsFit ? "convax-node__surface--media" : undefined}
+      className={cn(
+        supportsFit && "convax-node__surface--media",
+        data.kind === "video" && "convax-node__surface--video",
+      )}
       icon={mediaIcon(data.kind)}
       label={data.label}
       node={props}
@@ -2691,6 +2694,7 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 }
 
 function FileGenerationActivityOverlay(props: {
+  kind: CanvasNode["data"]["kind"]
   onCancel: () => void
   run: CanvasNodeGenerationRun
 }) {
@@ -2700,7 +2704,11 @@ function FileGenerationActivityOverlay(props: {
       <div
         aria-busy="true"
         aria-live="polite"
-        className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/85 p-4 text-center backdrop-blur-sm"
+        className={cn(
+          "convax-generation-status-overlay absolute inset-0 z-20 grid place-items-center overflow-hidden bg-card/85 p-4 text-center backdrop-blur-sm",
+          (props.kind === "image" || props.kind === "video") && "convax-generation-status-overlay--media",
+          props.kind === "video" && "convax-generation-status-overlay--video",
+        )}
         data-canvas-file-generation-activity={props.run.status}
         data-canvas-generation-run-tool-id={props.run.toolId}
         role="status"
@@ -2708,7 +2716,6 @@ function FileGenerationActivityOverlay(props: {
         <div className="flex flex-col items-center gap-2 text-sm font-medium text-foreground">
           <LoadingSpinner reducedMotion={editor.reducedMotion} size="lg" tone="brand" />
           <span>{props.run.status === "submitting" ? "正在提交…" : "正在生成…"}</span>
-          <span className="max-w-full truncate text-[11px] font-normal text-muted-foreground">{props.run.toolId}</span>
           <Button
             className="nodrag nowheel"
             onClick={(event) => {
@@ -2729,27 +2736,60 @@ function FileGenerationActivityOverlay(props: {
   const title = props.run.failureMessage ?? "生成失败"
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className={cn(
+        "convax-generation-status-overlay pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden bg-black/90 p-4 text-center backdrop-blur-sm",
+        (props.kind === "image" || props.kind === "video") && "convax-generation-status-overlay--media",
+        props.kind === "video" && "convax-generation-status-overlay--video",
+      )}
       data-canvas-file-generation-activity={props.run.status}
       data-canvas-generation-run-tool-id={props.run.toolId}
       role="alert"
     >
-      <div className="flex max-w-full flex-col items-center gap-2.5">
-        <CircleAlert aria-hidden="true" className="size-8 text-destructive/70" strokeWidth={1.5} />
-        <span className="line-clamp-3 max-w-full text-sm font-medium text-destructive">{title}</span>
+      <div className="flex max-w-full flex-col items-center gap-3">
+        <span className="text-muted-foreground [&>svg]:size-8">{generationStatusIcon(props.kind)}</span>
+        <span className="max-w-full text-sm font-medium text-destructive">{title}</span>
       </div>
     </div>
   )
 }
 
-function PersistedResourceStatusOverlay(props: { error?: string; status: "error" | "pending" }) {
+function generationStatusIcon(kind: CanvasNode["data"]["kind"]) {
+  if (kind === "video") return <Clapperboard />
+  if (kind === "image") return <ImageIcon />
+  if (kind === "audio") return <Music2 />
+  return <Sparkles />
+}
+
+function generationFailureTitle(error?: string) {
+  const message = error?.trim()
+  if (message && message.length <= 200 && /^[^<>{}\u0000-\u001f\u007f]+ 服务不可用$/u.test(message)) return message
+  if (
+    message &&
+    /(?:service|runtime|provider|server).*(?:unavailable|disconnected|offline)|(?:服务|运行时).*(?:不可用|断开|离线)/i.test(
+      message,
+    )
+  ) {
+    return "生成服务不可用"
+  }
+  return "生成失败"
+}
+
+function PersistedResourceStatusOverlay(props: {
+  error?: string
+  kind: CanvasNode["data"]["kind"]
+  status: "error" | "pending"
+}) {
   const editor = useCanvasEditor()
   if (props.status === "pending") {
     return (
       <div
         aria-busy="true"
         aria-live="polite"
-        className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-primary/25 bg-card/80 backdrop-blur-sm"
+        className={cn(
+          "convax-generation-status-overlay pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden bg-card/80 backdrop-blur-sm",
+          (props.kind === "image" || props.kind === "video") && "convax-generation-status-overlay--media",
+          props.kind === "video" && "convax-generation-status-overlay--video",
+        )}
         data-canvas-persisted-resource-status="pending"
         role="status"
       >
@@ -2760,17 +2800,20 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
       </div>
     )
   }
+  const title = generationFailureTitle(props.error)
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className={cn(
+        "convax-generation-status-overlay pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden bg-black/90 p-4 text-center backdrop-blur-sm",
+        (props.kind === "image" || props.kind === "video") && "convax-generation-status-overlay--media",
+        props.kind === "video" && "convax-generation-status-overlay--video",
+      )}
       data-canvas-persisted-resource-status="error"
       role="alert"
     >
-      <div className="flex max-w-full flex-col items-center gap-2.5">
-        <CircleAlert aria-hidden="true" className="size-8 text-destructive/70" strokeWidth={1.5} />
-        <span className="line-clamp-3 max-w-full text-sm font-medium text-destructive">
-          {props.error ?? "生成失败"}
-        </span>
+      <div className="flex max-w-full flex-col items-center gap-3">
+        <span className="text-muted-foreground [&>svg]:size-8">{generationStatusIcon(props.kind)}</span>
+        <span className="max-w-full text-sm font-medium text-destructive">{title}</span>
       </div>
     </div>
   )
@@ -3048,7 +3091,11 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
         </ContributedToolbarFileAssistantTriggerContext.Provider>
       </FileAssistantTriggerContext.Provider>
       {persistedResourceStatus ? (
-        <PersistedResourceStatusOverlay error={props.data.error} status={persistedResourceStatus} />
+        <PersistedResourceStatusOverlay
+          error={props.data.error}
+          kind={props.data.kind}
+          status={persistedResourceStatus}
+        />
       ) : null}
       {ContributedToolbar && showMutationToolbar ? (
         <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={82} position={Position.Top}>
@@ -3077,6 +3124,7 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       ) : null}
       {generationRun && generationRun.status !== "succeeded" && !activeCutoutGeneration ? (
         <FileGenerationActivityOverlay
+          kind={props.data.kind}
           onCancel={() => generation?.cancel?.(generationRun.operationId)}
           run={generationRun}
         />
@@ -3086,7 +3134,6 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border bg-card/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm"
           data-canvas-file-generation-activity="succeeded"
           data-canvas-generation-run-tool-id={generationRun.toolId}
-          title={`Generated with ${generationRun.toolId}`}
         >
           已生成
         </div>

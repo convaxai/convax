@@ -674,7 +674,7 @@ describe("built-in node toolbar visibility", () => {
     expect(unmanagedTextMarkup).not.toContain('aria-label="Save editable copy"')
   })
 
-  test("marks image and video cards for aligned borderless media chrome", () => {
+  test("marks image and video cards for aligned media chrome and video-specific framing", () => {
     const imageMarkup = renderWithEditor(selection([]), false, (props) => (
       <BuiltinMediaFileNode
         {...props}
@@ -694,8 +694,10 @@ describe("built-in node toolbar visibility", () => {
     ))
 
     expect(imageMarkup).toContain("convax-node__surface--media")
+    expect(imageMarkup).not.toContain("convax-node__surface--video")
     expect(imageMarkup).toContain('src="asset://portrait"')
     expect(videoMarkup).toContain("convax-node__surface--media")
+    expect(videoMarkup).toContain("convax-node__surface--video")
     expect(videoMarkup).toContain('src="asset://clip"')
   })
 
@@ -965,7 +967,8 @@ describe("built-in node toolbar visibility", () => {
     ))
     expect(failed).toContain('data-canvas-persisted-resource-status="error"')
     expect(failed).toContain('role="alert"')
-    expect(failed).toContain("Generation could not be completed")
+    expect(failed).toContain(">生成失败<")
+    expect(failed).not.toContain("Generation could not be completed")
     expect(failed).not.toContain("修改并重试")
     expect(failed).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
@@ -1498,6 +1501,7 @@ describe("built-in node toolbar visibility", () => {
     })
     expect(activeMarkup).toContain('data-canvas-file-generation-activity="running"')
     expect(activeMarkup).toContain('data-canvas-generation-run-tool-id="plugin.example:image.actual"')
+    expect(activeMarkup).not.toContain(">plugin.example:image.actual<")
     expect(activeMarkup).toContain("正在生成")
     expect(activeMarkup).toContain("取消")
     expect(activeMarkup).toContain('data-slot="loading-spinner"')
@@ -1505,25 +1509,38 @@ describe("built-in node toolbar visibility", () => {
     expect(openingTagContaining(activeMarkup, 'data-canvas-file-generation-activity="running"')).not.toContain("nodrag")
     expect(activeMarkup).toContain("nodrag nowheel")
 
-    const failed = finishCanvasNodeGenerationRun(
-      running,
-      imageNode.id,
-      "operation-one",
-      "Creative Tools 服务不可用",
-    )
+    const failed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one", "Creative Tools 服务不可用")
     const failedMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
       document: failed,
       node: failed.nodes[0],
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
     expect(failedMarkup).toContain("Creative Tools 服务不可用")
-    expect(failedMarkup).toContain("lucide-circle-alert")
+    expect(failedMarkup).toContain("lucide-image")
+    expect(failedMarkup).toContain("convax-generation-status-overlay--media")
     expect(failedMarkup).not.toContain("修改并重试")
     expect(failedMarkup).not.toContain("使用原提示词新建任务")
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).toContain(
       "pointer-events-none",
     )
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain("nodrag")
+
+    const failedVideoNode = {
+      ...failed.nodes[0]!,
+      data: { ...failed.nodes[0]!.data, kind: "video" as const },
+    }
+    const failedVideoMarkup = renderWithEditor(
+      selection([]),
+      false,
+      (props) => <BuiltinCanvasNode {...props} />,
+      false,
+      {
+        document: { ...failed, nodes: [failedVideoNode] },
+        node: failedVideoNode,
+      },
+    )
+    expect(failedVideoMarkup).toContain("lucide-clapperboard")
+    expect(failedVideoMarkup).toContain("convax-generation-status-overlay--video")
 
     const genericFailed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     const genericFailedMarkup = renderWithEditor(
@@ -1556,6 +1573,7 @@ describe("built-in node toolbar visibility", () => {
       },
     )
     expect(succeededMarkup).toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(succeededMarkup).not.toContain("Generated with")
     expect(request?.generation?.initialPrompt).toBe("Persisted prompt")
     expect(request?.generation?.ownerToolId).toBeUndefined()
   })
