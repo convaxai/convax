@@ -13,6 +13,7 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
+  CircleAlert,
   Copy,
   Bold,
   Code2,
@@ -2691,7 +2692,6 @@ export function BuiltinFolderFileNode(props: NodeProps<CanvasNode>) {
 
 function FileGenerationActivityOverlay(props: {
   onCancel: () => void
-  onRecover: (submissionMode: NonNullable<CanvasAssistantGenerationCapability["submissionMode"]>) => void
   run: CanvasNodeGenerationRun
 }) {
   const editor = useCanvasEditor()
@@ -2726,59 +2726,17 @@ function FileGenerationActivityOverlay(props: {
       </div>
     )
   }
-  const title =
-    props.run.failureMessage ??
-    (props.run.status === "failed" ? "生成失败" : props.run.status === "cancelled" ? "生成已取消" : "生成已中断")
-  const retryIsSafe = props.run.retrySafety === "safe"
+  const title = props.run.failureMessage ?? "生成失败"
   return (
     <div
-      className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
       data-canvas-file-generation-activity={props.run.status}
       data-canvas-generation-run-tool-id={props.run.toolId}
       role="alert"
     >
-      <div className="flex max-w-full flex-col items-center gap-2">
-        <span className="text-sm font-medium text-destructive">{title}</span>
-        <span className="max-w-full truncate text-[11px] text-muted-foreground">{props.run.toolId}</span>
-        {retryIsSafe ? (
-          <Button
-            className="nodrag nowheel"
-            onClick={(event) => {
-              event.stopPropagation()
-              props.onRecover("replace-owner-node")
-            }}
-            onPointerDown={(event) => event.stopPropagation()}
-            size="sm"
-            type="button"
-            variant="outline"
-          >
-            修改并重试
-          </Button>
-        ) : (
-          <>
-            <span className="max-w-64 text-[11px] leading-4 text-muted-foreground">
-              外部任务结果未知，此卡片仍锁定以避免重复计费。切换 Agent
-              默认模型不会改变该任务；可以使用原提示词新建独立任务（可能另行计费）。
-            </span>
-            <span
-              className="nodrag nowheel"
-              data-canvas-generation-new-task="true"
-              onPointerDown={(event) => event.stopPropagation()}
-            >
-              <Button
-                onClick={(event) => {
-                  event.stopPropagation()
-                  props.onRecover("create-pending-node")
-                }}
-                size="sm"
-                type="button"
-                variant="outline"
-              >
-                使用原提示词新建任务
-              </Button>
-            </span>
-          </>
-        )}
+      <div className="flex max-w-full flex-col items-center gap-2.5">
+        <CircleAlert aria-hidden="true" className="size-8 text-destructive/70" strokeWidth={1.5} />
+        <span className="line-clamp-3 max-w-full text-sm font-medium text-destructive">{title}</span>
       </div>
     </div>
   )
@@ -2804,14 +2762,14 @@ function PersistedResourceStatusOverlay(props: { error?: string; status: "error"
   }
   return (
     <div
-      className="absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
+      className="pointer-events-none absolute inset-0 z-20 grid place-items-center overflow-hidden rounded-lg border border-destructive/35 bg-card/90 p-4 text-center backdrop-blur-sm"
       data-canvas-persisted-resource-status="error"
       role="alert"
     >
-      <div className="flex max-w-full flex-col items-center gap-2">
-        <span className="text-sm font-medium text-destructive">生成失败</span>
-        <span className="line-clamp-3 max-w-full text-xs text-muted-foreground">
-          {props.error ?? "Resource could not be created"}
+      <div className="flex max-w-full flex-col items-center gap-2.5">
+        <CircleAlert aria-hidden="true" className="size-8 text-destructive/70" strokeWidth={1.5} />
+        <span className="line-clamp-3 max-w-full text-sm font-medium text-destructive">
+          {props.error ?? "生成失败"}
         </span>
       </div>
     </div>
@@ -3040,18 +2998,8 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const generation = useCanvasService("generate")
   const ownerNode = editor.document.nodes.find((node) => node.id === props.id)
   const generationRun = ownerNode ? getCanvasNodeGenerationRun(ownerNode) : undefined
-  const [terminalRecovery, setTerminalRecovery] = useState<{
-    operationId: string
-    submissionMode: NonNullable<CanvasAssistantGenerationCapability["submissionMode"]>
-  }>()
   const activeGeneration = Boolean(generationRun && isCanvasNodeGenerationRunActive(generationRun))
   const activeCutoutGeneration = activeGeneration && generationRun?.toolId === "cutout-studio/background.remove"
-  const dismissedTerminal = Boolean(
-    generationRun &&
-      !activeGeneration &&
-      generationRun.status !== "succeeded" &&
-      terminalRecovery?.operationId === generationRun.operationId,
-  )
   const definition = editor.fileRenderers.resolve(props.data)
   const Renderer = definition?.component
   const ContributedToolbar = definition?.toolbar
@@ -3120,23 +3068,16 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
       ) : null}
       {!persistedResourceStatus &&
       !activeGeneration &&
-      (!generationRun || generationRun.status === "succeeded" || dismissedTerminal) ? (
+      (!generationRun || generationRun.status === "succeeded" || generationRun.status === "failed") ? (
         <FileAssistantAccessory
           {...props}
           open={directAssistant || assistantOpen}
-          generationSubmissionMode={dismissedTerminal ? terminalRecovery?.submissionMode : undefined}
-          initialGenerationPrompt={
-            generationRun?.status === "succeeded" || dismissedTerminal ? generationRun?.prompt : undefined
-          }
+          initialGenerationPrompt={generationRun?.prompt}
         />
       ) : null}
-      {generationRun && generationRun.status !== "succeeded" && !dismissedTerminal && !activeCutoutGeneration ? (
+      {generationRun && generationRun.status !== "succeeded" && !activeCutoutGeneration ? (
         <FileGenerationActivityOverlay
           onCancel={() => generation?.cancel?.(generationRun.operationId)}
-          onRecover={(submissionMode) => {
-            setTerminalRecovery({ operationId: generationRun.operationId, submissionMode })
-            editor.selectNodes([props.id])
-          }}
           run={generationRun}
         />
       ) : null}

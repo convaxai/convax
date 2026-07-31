@@ -164,7 +164,7 @@ describe("Canvas text draft services", () => {
 })
 
 describe("Canvas generation services", () => {
-  test("keeps unknown-result continuation as an explicit separate pending-task contract", () => {
+  test("keeps create-new-result mode as an explicit separate pending-task contract", () => {
     const capability = {
       initialPrompt: "A small rabbit",
       output: "image",

@@ -166,7 +166,7 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   Scheduler–Agent–Supervisor pattern: it schedules and persists, the verified
   sidecar executes, and startup reconciliation supervises recovery. Legacy tools may
   omit the task receipt or LRO contract; startup then changes orphaned
-  submitting/running node runs to `interrupted` and never repeats the call.
+  submitting/running node runs to `failed` and never repeats the call.
 - Tool-custom generation controls come from only the MCP tool's current
   `tools/list.inputSchema`. Main may keep one bounded, display-only, in-memory
   session snapshot of concrete generation models and their projected controls:

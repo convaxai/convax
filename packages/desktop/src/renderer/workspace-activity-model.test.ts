@@ -40,8 +40,7 @@ describe("workspace activity projection", () => {
               convaxGenerationRun: {
                 operationId: "operation-2",
                 prompt: "Create",
-                retrySafety: "unknown",
-                schema: "convax.node-generation-run/2",
+                schema: "convax.node-generation-run/5",
                 status: "failed",
                 toolId: "tool-1",
               },

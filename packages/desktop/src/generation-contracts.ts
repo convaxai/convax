@@ -175,7 +175,7 @@ export interface GenerationCanvasReconcileRequest {
 }
 
 export interface GenerationCanvasReconcileResult {
-  interruptedNodeIds: readonly string[]
+  failedNodeIds: readonly string[]
   revision: number
 }
 

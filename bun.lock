@@ -83,7 +83,7 @@
     },
     "packages/canvas": {
       "name": "@convax/canvas",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "dependencies": {
         "@convax/ui": "workspace:^",
         "@tiptap/core": "catalog:",

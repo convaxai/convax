@@ -1509,8 +1509,6 @@ describe("built-in node toolbar visibility", () => {
       running,
       imageNode.id,
       "operation-one",
-      "failed",
-      "safe",
       "Creative Tools 服务不可用",
     )
     const failedMarkup = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
@@ -1519,43 +1517,27 @@ describe("built-in node toolbar visibility", () => {
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
     expect(failedMarkup).toContain("Creative Tools 服务不可用")
-    expect(failedMarkup).toContain("修改并重试")
-    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain("nodrag")
-    expect(failedMarkup).toContain("nodrag nowheel")
-
-    const indeterminate = finishCanvasNodeGenerationRun(
-      running,
-      imageNode.id,
-      "operation-one",
-      "interrupted",
-      "unknown",
-      "Creative Tools 服务不可用",
+    expect(failedMarkup).toContain("lucide-circle-alert")
+    expect(failedMarkup).not.toContain("修改并重试")
+    expect(failedMarkup).not.toContain("使用原提示词新建任务")
+    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).toContain(
+      "pointer-events-none",
     )
-    const indeterminateMarkup = renderWithEditor(
+    expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).not.toContain("nodrag")
+
+    const genericFailed = finishCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
+    const genericFailedMarkup = renderWithEditor(
       selection([]),
       false,
       (props) => <BuiltinCanvasNode {...props} />,
       false,
       {
-        document: indeterminate,
-        node: indeterminate.nodes[0],
+        document: genericFailed,
+        node: genericFailed.nodes[0],
       },
     )
-    expect(indeterminateMarkup).toContain('data-canvas-file-generation-activity="interrupted"')
-    expect(indeterminateMarkup).toContain("Creative Tools 服务不可用")
-    expect(indeterminateMarkup).toContain("使用原提示词新建任务")
-    expect(indeterminateMarkup).toContain("避免重复计费")
-    expect(indeterminateMarkup).toContain("切换 Agent 默认模型不会改变该任务")
-    expect(indeterminateMarkup).toContain("可能另行计费")
-    expect(indeterminateMarkup).not.toContain("修改并重试")
-    expect(indeterminateMarkup).not.toContain("data-assistant-toolbar")
-    expect(
-      openingTagContaining(indeterminateMarkup, 'data-canvas-file-generation-activity="interrupted"'),
-    ).not.toContain("nodrag")
-    expect(openingTagContaining(indeterminateMarkup, 'data-canvas-generation-new-task="true"')).toContain(
-      'class="nodrag nowheel"',
-    )
-    expect(openingTagContaining(indeterminateMarkup, "使用原提示词新建任务")).not.toContain('disabled=""')
+    expect(genericFailedMarkup).toContain(">生成失败<")
+    expect(genericFailedMarkup).not.toContain("检查日志")
 
     const succeeded = succeedCanvasNodeGenerationRun(running, imageNode.id, "operation-one")
     let request: CanvasAssistantRequest | undefined

@@ -743,16 +743,16 @@ try {
       (node) => node.id === restartFallbackOwner.id,
     )?.data.metadata?.convaxGenerationRun
     if (
-      !reconciledFallback.interruptedNodeIds.includes(restartFallbackOwner.id)
-      || fallbackRun?.status !== "interrupted"
-      || fallbackRun.retrySafety !== "unknown"
+      !reconciledFallback.failedNodeIds.includes(restartFallbackOwner.id)
+      || fallbackRun?.status !== "failed"
+      || "retrySafety" in fallbackRun
     ) {
       throw new Error("Restart reconciliation did not fail closed for an active run without an admitted LRO")
     }
       sessionStorage.setItem("convax.smoke.generation-race.v1", JSON.stringify({
         concurrentConflict: true,
         lateCallbackRejected: lateReplacement.rejected,
-        restartFallbackInterrupted: fallbackRun.status === "interrupted",
+        restartFallbackFailed: fallbackRun.status === "failed",
         status: succeededRun.status,
       }))
       // Direct document commands intentionally do not turn the Renderer into a
@@ -876,7 +876,7 @@ try {
     generationRace?: {
       concurrentConflict?: boolean
       lateCallbackRejected?: boolean
-      restartFallbackInterrupted?: boolean
+      restartFallbackFailed?: boolean
       status?: string
     }
   }
@@ -887,7 +887,7 @@ try {
     summary.language !== "zh-CN" ||
     summary.generationRace?.concurrentConflict !== true ||
     summary.generationRace.lateCallbackRejected !== true ||
-    summary.generationRace.restartFallbackInterrupted !== true ||
+    summary.generationRace.restartFallbackFailed !== true ||
     summary.generationRace.status !== "succeeded"
   ) {
     throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
