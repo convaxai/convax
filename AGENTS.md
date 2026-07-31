@@ -78,6 +78,7 @@ files under `packages/` add local rules and inherit this contract.
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                     |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters    |
 | `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded value schemas, SemVer matching, and deterministic Plugin/Skill reference generation inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                         | React, Desktop appearance state, Host transport, or concrete Plugin composition          |
 | `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                    |
 | `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution   |
 | `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                     | Desktop runtime, concrete marketplace content, credentials, or executing package bytes   |
@@ -102,9 +103,10 @@ desktop ──> agent-runtime, canvas, marketplace, plugin-api, plugin-sdk, proj
 create-convax-marketplace ──> marketplace-kit
 marketplace-kit ──> marketplace, plugin-api, plugin-sdk
 plugin-sdk ──> plugin-api
+plugin-ui ──> no Convax package
 project ──> canvas, project-files, ui
 canvas  ──> ui
-agent-runtime, marketplace, plugin-api, project-files, ui, workbench ──> no Convax package
+agent-runtime, marketplace, plugin-api, plugin-ui, project-files, ui, workbench ──> no Convax package
 deploy-cloudflare ──> web; later api through an explicit Cloudflare Service Binding
 docs ──> no Convax package
 ```

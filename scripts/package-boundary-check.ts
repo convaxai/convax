@@ -51,6 +51,7 @@ const publishablePackageNames = new Set([
   "@convax/marketplace-kit",
   "@convax/plugin-api",
   "@convax/plugin-sdk",
+  "@convax/plugin-ui",
   "@convax/project",
   "@convax/project-files",
   "@convax/ui",
@@ -64,6 +65,7 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
   ["@convax/marketplace", new Set()],
   ["@convax/plugin-api", new Set()],
   ["@convax/plugin-sdk", new Set(["@convax/plugin-api"])],
+  ["@convax/plugin-ui", new Set()],
   ["@convax/marketplace-kit", new Set(["@convax/marketplace", "@convax/plugin-api", "@convax/plugin-sdk"])],
   ["create-convax-marketplace", new Set(["@convax/marketplace-kit"])],
   [
