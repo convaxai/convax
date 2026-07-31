@@ -92,7 +92,7 @@ import { GenerationInputSnapshotStore } from "./generation-input-snapshot-store"
 import { GenerationOperationStore } from "./generation-operation-store"
 import { registerGenerationIpc } from "./generation-ipc"
 import { generationPluginEnvironment, GenerationPluginRuntime } from "./generation-plugin-runtime"
-import { PluginInstallationRuntime } from "./plugin-installation-runtime"
+import { openDesktopPluginRuntimeSession } from "./plugin-runtime-startup"
 import { pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
 import { PluginSnapshotInstaller } from "./plugin-snapshot-installer"
 import {
@@ -397,11 +397,17 @@ function startApplication() {
       inspector: petAssetInspector,
       petsRoot: join(userDataDirectory, "pets"),
     })
-    const pluginInstallations = new PluginInstallationRuntime(join(userDataDirectory, "plugin-installations"))
+    const pluginRuntimeSession = await openDesktopPluginRuntimeSession(userDataDirectory)
+    const pluginInstallations = pluginRuntimeSession.installations
+    if (pluginRuntimeSession.state.state === "quarantined") {
+      console.error("Plugin ActiveSet is invalid; Plugin execution is quarantined for this session", {
+        errorType: pluginRuntimeSession.state.errorType,
+      })
+    }
     const pluginSnapshotInstaller = new PluginSnapshotInstaller(pluginInstallations)
     const generationEnvironment = generationPluginEnvironment(process.env)
     const pluginServiceAuthorizationCheckpoints = new PluginServiceAuthorizationCheckpointStore(
-      join(userDataDirectory, "plugin-service-authorization-checkpoints"),
+      join(pluginRuntimeSession.dataDirectory, "plugin-service-authorization-checkpoints"),
     )
     const reconcileToolPluginExecutionStateForPlugin = async (pluginId: string) => {
       try {
@@ -557,8 +563,8 @@ function startApplication() {
       isPluginEnabled: isMarketplacePluginEnabled,
       pluginRuntimeState: marketplacePluginRuntimeState,
       plugins: pluginInstallations,
-      recoveryRuntimeDirectory: join(userDataDirectory, "generation-sidecars", "runtime-v3"),
-      recoveryStateDirectory: join(userDataDirectory, "generation-sidecars", "operation-v1"),
+      recoveryRuntimeDirectory: join(pluginRuntimeSession.dataDirectory, "generation-sidecars", "runtime-v3"),
+      recoveryStateDirectory: join(pluginRuntimeSession.dataDirectory, "generation-sidecars", "operation-v1"),
     })
     await generationRuntime.initialize()
     const pluginCapabilityBroker = new PluginCapabilityBrokerMainService({
@@ -585,6 +591,7 @@ function startApplication() {
     )
     const availableGenerationTools = new ServiceAwareGenerationTools(generationRuntime, pluginServices)
     const scheduleGenerationCatalogRefresh = (reason: string) => {
+      if (pluginRuntimeSession.state.state === "quarantined") return
       availableGenerationTools.invalidate()
       void availableGenerationTools.refresh().catch((error) => {
         console.warn(`Could not refresh the generation model catalog after ${reason}`, {
@@ -814,7 +821,10 @@ function startApplication() {
       },
     })
     connectPetOverlay = petIpc.connectOverlay
-    const pluginAgentMcpConnection = new PluginAgentMcpConnectionService(agentRuntime, userDataDirectory)
+    const pluginAgentMcpConnection = new PluginAgentMcpConnectionService(
+      agentRuntime,
+      pluginRuntimeSession.dataDirectory,
+    )
     const managedSkillStore = new ManagedAgentSkillStore(openCodeConfigDirectory)
     const skillMutations = new DesktopSkillMutationCoordinator()
     const pluginSkillReservations = {
@@ -851,13 +861,14 @@ function startApplication() {
       skillMutations,
     )
     const marketplaceArtifactInstaller = new MarketplaceArtifactInstaller({
-        beforePluginPublish: async (pluginId) => {
-          await pluginServices.discardPlugin(pluginId)
-        },
-        deferExecutionAuthorization: true,
-        skillManager,
-        snapshotInstaller: pluginSnapshotInstaller,
-      })
+      beforePluginPublish: async (pluginId) => {
+        pluginRuntimeSession.assertMutable()
+        await pluginServices.discardPlugin(pluginId)
+      },
+      deferExecutionAuthorization: true,
+      skillManager,
+      snapshotInstaller: pluginSnapshotInstaller,
+    })
     const marketplaceProductRoot = app.isPackaged
       ? join(process.resourcesPath, "marketplace-product")
       : join(app.getAppPath(), ".packaging", "marketplace-product")
@@ -1002,6 +1013,7 @@ function startApplication() {
     }
     const marketplaceInstaller = new DesktopMarketplaceCapabilityInstaller({
       authorizePlugin: async (id, mode) => {
+        pluginRuntimeSession.assertMutable()
         const current = await pluginInstallations.readActive()
         const plugin = current.plugins.find((entry) => entry.plugin.id === id)?.plugin
         if (!plugin) throw new Error("Installed Plugin is unavailable")
@@ -1030,15 +1042,18 @@ function startApplication() {
         return pluginInstallations.executionAuthorizationIdentity(id)
       },
       disablePlugin: async (id) => {
+        pluginRuntimeSession.assertMutable()
         availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(id)
         await pluginServices.discardPlugin(id)
         scheduleGenerationCatalogRefresh("a Plugin runtime disable")
       },
       enablePlugin: async () => {
+        pluginRuntimeSession.assertMutable()
         // The durable RuntimePreference is committed before the hard refresh.
       },
       hardRefreshPlugin: async (pluginId) => {
+        pluginRuntimeSession.assertMutable()
         availableGenerationTools.invalidate()
         generationRuntime.disposePlugin(pluginId)
         await pluginServices.discardPlugin(pluginId)
@@ -1047,7 +1062,10 @@ function startApplication() {
         scheduleGenerationCatalogRefresh("a Marketplace Plugin change")
         await reconcileToolPluginExecutionStateForPlugin(pluginId)
       },
-      refreshPetProvider: () => pets.refresh(),
+      refreshPetProvider: () => {
+        pluginRuntimeSession.assertMutable()
+        return pets.refresh()
+      },
       fetchArtifact: async (item, artifact) => {
         const repository = await repositoryAuthority(item)
         return marketplaceFetcher.fetch(artifact.url, "release", {
@@ -1056,6 +1074,7 @@ function startApplication() {
         })
       },
       installLocalPlugin: async (directory, options) => {
+        pluginRuntimeSession.assertMutable()
         if (!localMarketplaceSourceKey) throw new Error("Local Marketplace SourceKey is unavailable")
         await pluginSnapshotInstaller.installLocalDirectory(
           directory,
@@ -1084,6 +1103,7 @@ function startApplication() {
       },
       resolvePackage: resolveMarketplacePackage,
       uninstallPlugin: async (id) => {
+        pluginRuntimeSession.assertMutable()
         await pluginSnapshotInstaller.uninstall(id)
       },
       uninstallSkill: async (id) => {
@@ -1094,6 +1114,10 @@ function startApplication() {
       },
     })
     const marketplace = new MarketplaceApplicationService({
+      assertCapabilityMutationAllowed: (identity) => {
+        if (identity.kind === "plugin") pluginRuntimeSession.assertMutable()
+      },
+      assertLocalImportAllowed: () => pluginRuntimeSession.assertMutable(),
       fixedCatalog: async () => marketplaceProduct?.catalog() ?? [],
       fixedSources: async () =>
         marketplaceProduct
@@ -1125,6 +1149,7 @@ function startApplication() {
       mutations: new CapabilityMutationCoordinator(),
       network: networkMarketplaces,
       networkFetch: marketplaceFetcher,
+      pluginRuntimeState: pluginRuntimeSession.state.state === "quarantined" ? "unavailable-for-session" : "available",
       prepareFixedArtifact: async (item) => {
         if (item.sourceKey !== officialSourceKey) return null
         const registryItem = marketplaceProduct?.registry.packages.find(
@@ -1290,13 +1315,17 @@ function startApplication() {
       },
       state: marketplaceState,
     })
-    await legacyMigration.run()
-    await marketplace.recoverTransitions()
-    await provisionMarketplaceForStartup({
-      provision: () => marketplace.provisionDefaults(),
-      report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
-    })
-    scheduleGenerationCatalogRefresh("startup provisioning")
+    if (pluginRuntimeSession.state.state === "ready") {
+      await legacyMigration.run()
+      await marketplace.recoverTransitions()
+      await provisionMarketplaceForStartup({
+        provision: () => marketplace.provisionDefaults(),
+        report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
+      })
+      scheduleGenerationCatalogRefresh("startup provisioning")
+    } else {
+      console.warn("Marketplace Plugin migration and provisioning skipped while the Plugin runtime is quarantined")
+    }
     const fetchPetAsset = (url: string, init: { headers: Headers }) => net.fetch(url, init)
     const disposePetPluginProtocol = registerPetPluginSessionProtocol(
       session,
@@ -1426,13 +1455,31 @@ function startApplication() {
     )
     const disposePluginServiceIpc = registerPluginServiceIpc(
       {
-        authorize: (pluginId, signal) => pluginServices.authorize(pluginId, signal),
-        cancelAuthorization: (pluginId, signal) => pluginServices.cancelAuthorization(pluginId, signal),
-        checkout: (pluginId, planKey, signal) => pluginServices.checkout(pluginId, planKey, signal),
-        getStatus: (pluginId, signal) => pluginServices.getStatus(pluginId, signal),
+        authorize: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.authorize(pluginId, signal)
+        },
+        cancelAuthorization: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.cancelAuthorization(pluginId, signal)
+        },
+        checkout: (pluginId, planKey, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.checkout(pluginId, planKey, signal)
+        },
+        getStatus: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.getStatus(pluginId, signal)
+        },
         listServices: () => pluginServices.listServices(),
-        reauthorize: (pluginId, signal) => pluginServices.reauthorize(pluginId, signal),
-        signOut: (pluginId, signal) => pluginServices.signOut(pluginId, signal),
+        reauthorize: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.reauthorize(pluginId, signal)
+        },
+        signOut: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.signOut(pluginId, signal)
+        },
       },
       {
         isTrustedSender: ipcSecurity.isTrustedSender,
@@ -1503,11 +1550,16 @@ function startApplication() {
       undefined,
       {
         beforeChange: async (pluginId) => {
+          pluginRuntimeSession.assertMutable()
           pluginConnectedMedia.revokePlugin(pluginId)
           await pluginServices.discardPlugin(pluginId)
         },
-        connectAgentMcp: (plugin) => pluginAgentMcpConnection.connect(plugin),
+        connectAgentMcp: (plugin) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginAgentMcpConnection.connect(plugin)
+        },
         installLocal: async (directory) => {
+          pluginRuntimeSession.assertMutable()
           if (!localMarketplace || !localMarketplaceSourceKey) {
             throw new Error("Local Marketplace is unavailable")
           }
@@ -1521,6 +1573,7 @@ function startApplication() {
         },
         listAgentMcpStatuses: (plugins) => pluginAgentMcpConnection.listStatuses(plugins),
         async onDidChange(pluginId) {
+          pluginRuntimeSession.assertMutable()
           availableGenerationTools.invalidate()
           generationRuntime.disposePlugin(pluginId)
           skillManager.notifyInventoryChanged()
@@ -1528,6 +1581,7 @@ function startApplication() {
           scheduleGenerationCatalogRefresh("an installed Plugin change")
         },
         async uninstall(pluginId) {
+          pluginRuntimeSession.assertMutable()
           const current = (await pluginInstallations.list()).some((plugin) => plugin.id === pluginId)
           if (!current) return false
           await pluginSnapshotInstaller.uninstall(pluginId)
@@ -1589,8 +1643,7 @@ function startApplication() {
         })
         return createProjectResourceProtocolResponse({
           accessControlAllowOrigin: projectResourceAccessControlAllowOrigin(request, trustedRendererUrl),
-          cacheControl:
-            resource.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
+          cacheControl: resource.kind === "managed-asset" ? "private, max-age=31536000, immutable" : "no-store",
           request,
           resource,
         })
@@ -1636,6 +1689,7 @@ function startApplication() {
         () => agentPluginConfigurations.dispose(),
         () => managedMcpRuntimes.close(),
         () => pluginConnectedMedia.dispose(),
+        () => pluginRuntimeSession.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
       ],

@@ -84,6 +84,10 @@ function runtimeItem(overrides: Partial<SourceQualifiedItem> = {}): SourceQualif
 }
 
 function harness(options: {
+  assertCapabilityMutationAllowed?: ConstructorParameters<
+    typeof MarketplaceApplicationService
+  >[0]["assertCapabilityMutationAllowed"]
+  assertLocalImportAllowed?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["assertLocalImportAllowed"]
   candidates: SourceQualifiedItem[]
   fixedSources?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["fixedSources"]
   installer?: Partial<MarketplaceCapabilityInstallerPort>
@@ -92,6 +96,7 @@ function harness(options: {
   networkRefresh?: (id: string) => Promise<void>
   preinstalledPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["preinstalledPolicy"]
   prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
+  pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
   refreshFixedSource?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["refreshFixedSource"]
   reservedBuiltinIdentities?: ConstructorParameters<
     typeof MarketplaceApplicationService
@@ -127,6 +132,10 @@ function harness(options: {
   const mutations = new CapabilityMutationCoordinator()
   const service = new MarketplaceApplicationService({
     arch: "arm64",
+    ...(options.assertCapabilityMutationAllowed
+      ? { assertCapabilityMutationAllowed: options.assertCapabilityMutationAllowed }
+      : {}),
+    ...(options.assertLocalImportAllowed ? { assertLocalImportAllowed: options.assertLocalImportAllowed } : {}),
     fixedCatalog: async () => candidates,
     fixedSources: options.fixedSources ?? (async () => []),
     installer,
@@ -161,6 +170,7 @@ function harness(options: {
       },
     } as never,
     platform: "darwin",
+    ...(options.pluginRuntimeState ? { pluginRuntimeState: options.pluginRuntimeState } : {}),
     ...(options.preinstalledPolicy ? { preinstalledPolicy: options.preinstalledPolicy } : {}),
     ...(options.prepareFixedArtifact ? { prepareFixedArtifact: options.prepareFixedArtifact } : {}),
     ...(options.refreshFixedSource ? { refreshFixedSource: options.refreshFixedSource } : {}),
@@ -462,6 +472,160 @@ test("reports an unavailable source only after the installed SourceKey disappear
       },
     ],
   })
+})
+
+test("marks only Plugins unavailable when the Plugin runtime is quarantined for the session", async () => {
+  const state = await stateStore()
+  const server = runtimeItem()
+  const plugin: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: "f".repeat(64),
+      size: 1,
+      url: "https://github.com/acme/marketplace/releases/download/example-plugin-v1/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+  }
+  await state.update((draft) => {
+    for (const item of [plugin, server]) {
+      draft.installations.push({
+        artifactDigest: sha256Hex(canonicalJson(item.delivery)),
+        id: item.id,
+        kind: item.kind,
+        revision: 1,
+        runtimeSurface: item.runtimeSurface,
+        sourceKey: item.sourceKey,
+        version: item.version,
+      })
+      draft.executionGrants.push({
+        authorizationContractDigest: "d".repeat(64),
+        identity: { id: item.id, kind: item.kind },
+        revision: 1,
+        sourceKey: item.sourceKey,
+      })
+    }
+  })
+  const { service } = harness({
+    candidates: [plugin, server],
+    pluginRuntimeState: "unavailable-for-session",
+    state,
+  })
+
+  await expect(service.listInstalled()).resolves.toMatchObject({
+    capabilities: [
+      {
+        attention: "plugin-runtime-unavailable-for-session",
+        id: plugin.id,
+        state: "attention",
+      },
+      {
+        id: server.id,
+        state: "ready",
+      },
+    ],
+    pluginRuntimeState: "unavailable-for-session",
+  })
+  const catalog = await service.listCatalog()
+  expect(catalog.cards.find((card) => card.id === plugin.id)).toMatchObject({
+    installed: { state: "attention" },
+  })
+  expect(catalog.cards.find((card) => card.id === server.id)).toMatchObject({
+    installed: { state: "ready" },
+  })
+})
+
+test("rejects every Plugin mutation before preparing bytes or changing Marketplace state", async () => {
+  const state = await stateStore()
+  const plugin: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: "f".repeat(64),
+      size: 1,
+      url: "https://github.com/acme/marketplace/releases/download/example-plugin-v1/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+  }
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(plugin.delivery)),
+      id: plugin.id,
+      kind: plugin.kind,
+      revision: 1,
+      runtimeSurface: plugin.runtimeSurface,
+      sourceKey: plugin.sourceKey,
+      version: plugin.version,
+    })
+    draft.executionGrants.push({
+      authorizationContractDigest: "d".repeat(64),
+      identity: { id: plugin.id, kind: plugin.kind },
+      revision: 1,
+      sourceKey: plugin.sourceKey,
+    })
+  })
+  const before = await state.read()
+  let prepared = 0
+  const { service } = harness({
+    assertCapabilityMutationAllowed(identity) {
+      if (identity.kind === "plugin") throw new Error("Plugin runtime quarantined")
+    },
+    candidates: [plugin],
+    installer: {
+      installArtifact: async () => {
+        prepared += 1
+        return {}
+      },
+      prepareArtifact: async () => {
+        prepared += 1
+        return { artifactBytes: new Uint8Array(), companionBytes: {} }
+      },
+      prepareSetup: async () => {
+        prepared += 1
+        return {}
+      },
+      uninstall: async () => {
+        prepared += 1
+      },
+    },
+    state,
+  })
+  const [choice] = await service.beginInstall({ id: plugin.id, kind: plugin.kind }, "renderer")
+  const confirmed = await service.confirmInstall(choice!.confirmationToken, "renderer")
+
+  await expect(service.install(confirmed.selectionToken, "renderer")).rejects.toThrow("Plugin runtime quarantined")
+  await expect(service.setup({ id: plugin.id, kind: plugin.kind }, async () => "/tool")).rejects.toThrow(
+    "Plugin runtime quarantined",
+  )
+  await expect(service.disable({ id: plugin.id, kind: plugin.kind })).rejects.toThrow("Plugin runtime quarantined")
+  await expect(service.enable({ id: plugin.id, kind: plugin.kind })).rejects.toThrow("Plugin runtime quarantined")
+  await expect(service.uninstall({ id: plugin.id, kind: plugin.kind })).rejects.toThrow("Plugin runtime quarantined")
+
+  expect(prepared).toBe(0)
+  expect(await state.read()).toEqual(before)
+})
+
+test("rejects local import before the Local Marketplace writes a snapshot", async () => {
+  const state = await stateStore()
+  let imported = 0
+  const { service } = harness({
+    assertLocalImportAllowed() {
+      throw new Error("Plugin runtime quarantined")
+    },
+    candidates: [],
+    local: {
+      importDirectory: async () => {
+        imported += 1
+        throw new Error("must not import")
+      },
+    } as never,
+    state,
+  })
+
+  await expect(service.importDirectory("/chosen/local-package")).rejects.toThrow("Plugin runtime quarantined")
+  expect(imported).toBe(0)
 })
 
 test("keeps the old record and grant when an authorization-changing candidate publication fails", async () => {

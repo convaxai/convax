@@ -64,7 +64,11 @@ function service() {
       version: "1.0.0",
     })),
     listCatalog: mock(async () => ({ cards: [], revision: 1 })),
-    listInstalled: mock(async () => ({ capabilities: [], revision: 1 })),
+    listInstalled: mock(async () => ({
+      capabilities: [],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
     listMarketplaces: mock(async () => []),
     previewMarketplace: mock(async () => ({
       label: "Example",
@@ -111,9 +115,7 @@ test("Marketplace IPC exposes the dedicated descriptor URL exception and opaque 
     }),
   ).resolves.toMatchObject({ label: "Example" })
   expect(application.previewMarketplace).toHaveBeenCalledWith("https://example.github.io/marketplace.json", "1")
-  await expect(
-    handlers.get(marketplaceIpcChannels.addMarketplace)!(event, { previewToken }),
-  ).resolves.toBeUndefined()
+  await expect(handlers.get(marketplaceIpcChannels.addMarketplace)!(event, { previewToken })).resolves.toBeUndefined()
   expect(application.addMarketplace).toHaveBeenCalledWith(previewToken, "1")
   await expect(
     handlers.get(marketplaceIpcChannels.confirmInstall)!(event, {

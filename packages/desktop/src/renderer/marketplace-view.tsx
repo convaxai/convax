@@ -8,6 +8,7 @@ import type {
   MarketplaceCatalogSourceChoice,
   MarketplaceClient,
   MarketplaceInstalledCapability,
+  MarketplacePluginRuntimeState,
   MarketplaceSettingsSource,
 } from "../marketplace-contracts"
 
@@ -32,6 +33,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   const [page, setPage] = useState<Page>("catalog")
   const [catalog, setCatalog] = useState<MarketplaceCatalogCard[]>([])
   const [installed, setInstalled] = useState<MarketplaceInstalledCapability[]>([])
+  const [pluginRuntimeState, setPluginRuntimeState] = useState<MarketplacePluginRuntimeState>("available")
   const [sources, setSources] = useState<MarketplaceSettingsSource[]>([])
   const [sourceChoices, setSourceChoices] = useState<MarketplaceCatalogSourceChoice[]>([])
   const [selectedChoice, setSelectedChoice] = useState<MarketplaceCatalogSourceChoice>()
@@ -57,6 +59,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
     if (request !== refreshRequestRef.current) return
     setCatalog(nextCatalog.cards)
     setInstalled(nextInstalled.capabilities)
+    setPluginRuntimeState(nextInstalled.pluginRuntimeState)
     setSources(nextSources)
   }, [client])
 
@@ -109,22 +112,26 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         }
   const kindLabel = (kind: MarketplaceCatalogCard["kind"]) =>
     kind === "plugin" ? "Plugin" : kind === "skill" ? "Skill" : "MCP Server"
-  const installedStateLabel = (state: MarketplaceInstalledCapability["state"]) =>
-    locale === "zh-CN"
-      ? state === "ready"
-        ? "可用"
-        : state === "disabled"
-          ? "已停用"
-          : state === "setup-required"
-            ? "需要设置"
-            : "需要处理"
-      : state === "ready"
-        ? "Ready"
-        : state === "disabled"
-          ? "Disabled"
-          : state === "setup-required"
-            ? "Setup required"
-            : "Needs attention"
+  const installedStateLabel = (capability: MarketplaceInstalledCapability) =>
+    capability.attention === "plugin-runtime-unavailable-for-session"
+      ? locale === "zh-CN"
+        ? "本会话不可用"
+        : "Unavailable for this session"
+      : locale === "zh-CN"
+        ? capability.state === "ready"
+          ? "可用"
+          : capability.state === "disabled"
+            ? "已停用"
+            : capability.state === "setup-required"
+              ? "需要设置"
+              : "需要处理"
+        : capability.state === "ready"
+          ? "Ready"
+          : capability.state === "disabled"
+            ? "Disabled"
+            : capability.state === "setup-required"
+              ? "Setup required"
+              : "Needs attention"
   const sourceHealthLabel = (health: MarketplaceSettingsSource["health"]) =>
     locale === "zh-CN"
       ? health === "available"
@@ -166,7 +173,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </div>
         <Button
           aria-busy={pendingKeys.has("import")}
-          disabled={pendingKeys.has("import")}
+          disabled={pendingKeys.has("import") || pluginRuntimeState === "unavailable-for-session"}
           onClick={() => void mutate("import", () => client.importCapability())}
           size="sm"
           variant="outline"
@@ -182,11 +189,24 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </p>
       ) : null}
 
+      {pluginRuntimeState === "unavailable-for-session" ? (
+        <p
+          className="rounded-lg border border-border-subtle bg-control-background px-3 py-2 text-sm text-text-secondary"
+          data-plugin-runtime-unavailable="true"
+          role="status"
+        >
+          {locale === "zh-CN"
+            ? "Plugin 子系统本会话不可用。已安装的 Plugin 不会运行，Plugin 变更和本地导入也已停用。修复 Plugin 状态并重启 Convax 后可重试。"
+            : "The Plugin subsystem is unavailable for this session. Installed Plugins will not run, and Plugin changes and local imports are disabled. Repair the Plugin state, then restart Convax."}
+        </p>
+      ) : null}
+
       {page === "catalog" ? (
         <div className="grid gap-3">
           {catalog.map((card) => {
             const pendingKey = capabilityPendingKey(card.kind, card.id)
             const installing = pendingKeys.has(pendingKey)
+            const pluginUnavailable = card.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
             return (
               <article
                 className="rounded-xl border border-border-subtle bg-surface-panel p-4"
@@ -212,7 +232,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                   <Button
                     aria-busy={installing}
                     aria-label={`${text.install} ${card.name}`}
-                    disabled={installing || card.installed !== undefined}
+                    disabled={installing || card.installed !== undefined || pluginUnavailable}
                     onClick={() =>
                       void mutate(pendingKey, async () => {
                         const choices = await client.beginInstall({ id: card.id, kind: card.kind })
@@ -236,91 +256,98 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
 
       {page === "installed" ? (
         <div className="grid gap-3">
-          {installed.map((capability) => (
-            <article
-              className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface-panel p-4"
-              key={`${capability.kind}:${capability.id}`}
-            >
-              <div>
-                <h3 className="font-semibold">{capability.name}</h3>
-                <p className="text-xs text-text-tertiary">
-                  {capability.sourceLabel} · {capability.version} · {installedStateLabel(capability.state)}
-                </p>
-              </div>
-              <div className="flex gap-2">
-                {capability.updateAvailable ? (
-                  <Button
-                    onClick={() => {
-                      const pendingKey = capabilityPendingKey(capability.kind, capability.id)
-                      void mutate(pendingKey, async () => {
-                        const choices = await client.beginUpdate({
-                          id: capability.id,
-                          kind: capability.kind,
+          {installed.map((capability) => {
+            const pluginUnavailable = capability.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
+            return (
+              <article
+                className="flex items-center justify-between gap-4 rounded-xl border border-border-subtle bg-surface-panel p-4"
+                key={`${capability.kind}:${capability.id}`}
+              >
+                <div>
+                  <h3 className="font-semibold">{capability.name}</h3>
+                  <p className="text-xs text-text-tertiary">
+                    {capability.sourceLabel} · {capability.version} · {installedStateLabel(capability)}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  {capability.updateAvailable ? (
+                    <Button
+                      disabled={pluginUnavailable}
+                      onClick={() => {
+                        const pendingKey = capabilityPendingKey(capability.kind, capability.id)
+                        void mutate(pendingKey, async () => {
+                          const choices = await client.beginUpdate({
+                            id: capability.id,
+                            kind: capability.kind,
+                          })
+                          if (choices.length === 0) throw new Error("No update source is available")
+                          setSourceChoiceRequest({ mode: "update", pendingKey })
+                          setSourceChoices(choices)
+                          setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
                         })
-                        if (choices.length === 0) throw new Error("No update source is available")
-                        setSourceChoiceRequest({ mode: "update", pendingKey })
-                        setSourceChoices(choices)
-                        setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
-                      })
-                    }}
-                    size="sm"
-                    variant="outline"
-                  >
-                    {text.update}
-                  </Button>
-                ) : null}
-                {capability.state === "setup-required" || capability.state === "attention" ? (
+                      }}
+                      size="sm"
+                      variant="outline"
+                    >
+                      {text.update}
+                    </Button>
+                  ) : null}
+                  {!pluginUnavailable && (capability.state === "setup-required" || capability.state === "attention") ? (
+                    <Button
+                      onClick={() =>
+                        void mutate(`setup:${capability.kind}:${capability.id}`, () =>
+                          client.setup({ id: capability.id, kind: capability.kind }),
+                        )
+                      }
+                      size="sm"
+                    >
+                      {locale === "zh-CN" ? "完成设置" : "Complete setup"}
+                    </Button>
+                  ) : null}
+                  {capability.state === "disabled" ? (
+                    <Button
+                      disabled={pluginUnavailable}
+                      onClick={() =>
+                        void mutate(`enable:${capability.kind}:${capability.id}`, () =>
+                          client.enable({ id: capability.id, kind: capability.kind }),
+                        )
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      {locale === "zh-CN" ? "启用" : "Enable"}
+                    </Button>
+                  ) : capability.runtimeScope ? (
+                    <Button
+                      disabled={pluginUnavailable}
+                      onClick={() =>
+                        void mutate(`disable:${capability.kind}:${capability.id}`, () =>
+                          client.disable({ id: capability.id, kind: capability.kind }),
+                        )
+                      }
+                      size="sm"
+                      variant="outline"
+                    >
+                      {locale === "zh-CN" ? "停用" : "Disable"}
+                    </Button>
+                  ) : null}
                   <Button
+                    aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${capability.name}`}
+                    disabled={pluginUnavailable}
                     onClick={() =>
-                      void mutate(`setup:${capability.kind}:${capability.id}`, () =>
-                        client.setup({ id: capability.id, kind: capability.kind }),
+                      void mutate(`uninstall:${capability.kind}:${capability.id}`, () =>
+                        client.uninstall({ id: capability.id, kind: capability.kind }),
                       )
                     }
-                    size="sm"
+                    size="icon"
+                    variant="ghost"
                   >
-                    {locale === "zh-CN" ? "完成设置" : "Complete setup"}
+                    <Trash2 />
                   </Button>
-                ) : null}
-                {capability.state === "disabled" ? (
-                  <Button
-                    onClick={() =>
-                      void mutate(`enable:${capability.kind}:${capability.id}`, () =>
-                        client.enable({ id: capability.id, kind: capability.kind }),
-                      )
-                    }
-                    size="sm"
-                    variant="outline"
-                  >
-                    {locale === "zh-CN" ? "启用" : "Enable"}
-                  </Button>
-                ) : capability.runtimeScope ? (
-                  <Button
-                    onClick={() =>
-                      void mutate(`disable:${capability.kind}:${capability.id}`, () =>
-                        client.disable({ id: capability.id, kind: capability.kind }),
-                      )
-                    }
-                    size="sm"
-                    variant="outline"
-                  >
-                    {locale === "zh-CN" ? "停用" : "Disable"}
-                  </Button>
-                ) : null}
-                <Button
-                  aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${capability.name}`}
-                  onClick={() =>
-                    void mutate(`uninstall:${capability.kind}:${capability.id}`, () =>
-                      client.uninstall({ id: capability.id, kind: capability.kind }),
-                    )
-                  }
-                  size="icon"
-                  variant="ghost"
-                >
-                  <Trash2 />
-                </Button>
-              </div>
-            </article>
-          ))}
+                </div>
+              </article>
+            )
+          })}
         </div>
       ) : null}
 
