@@ -419,6 +419,10 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   path, size and SHA-256; runtime silently rechecks it and asks for reinstall on
   missing or changed state, never for first-call approval. Source refresh and
   background update never expand an existing automatic grant.
+- Publish that explicit Plugin execution authorization in the same installation or
+  update transition. Do not project a follow-up Marketplace setup action for an
+  integrity/authorization mismatch: setup cannot repair missing or changed immutable
+  Plugin bytes, which must be reinstalled through the exact-source package flow.
 - Treat an explicit Hook-bearing Plugin install/update as consent to the normalized
   manifest and exact Hook bytes. Load only a private host-owned snapshot, never the
   mutable installed package path. Default provisioning and background updates must

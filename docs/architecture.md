@@ -667,7 +667,7 @@ Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
   -> @convax/marketplace display groups by {kind,id}
   -> explicit exact-source confirmation and sender-scoped SelectionToken
-  -> Desktop install transition publishes static bytes and InstallRecord
+  -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
   -> optional independent setup transition publishes ExecutionGrant
   -> InstalledCapability projects setup-required, ready, disabled or attention
 ```
@@ -695,6 +695,14 @@ dependent recovery envelope. MCP metadata has its own canonical transition. Runt
 revalidates immutable installed bytes, `InstallRecord`, `ExecutionGrant`, and
 `RuntimePreference` without consulting the active source graph, so removing or
 disconnecting a Marketplace disables updates but not a still-safe installed runtime.
+A user-confirmed Plugin install/update, or an explicit Local Plugin import, is the
+execution-consent event and publishes its exact snapshot authorization and
+Marketplace grant in that same durable transition. It never projects a second
+Marketplace setup step. Independent setup remains for MCP endpoint/local-executable
+configuration and the narrowly admitted automatic product-lock preinstall. An
+integrity/authorization mismatch is not setup-required: the Installed projection
+routes it to an exact-source update/reinstall and never offers setup as a repair for
+missing or changed immutable Plugin bytes.
 
 ### MCP Server runtime boundary
 

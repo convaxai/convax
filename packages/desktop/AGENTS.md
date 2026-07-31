@@ -111,6 +111,11 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   the fixed Official source revalidates the packaged product closure but cannot
   silently widen or replace that grant; never pass its reserved identity to the
   user Network Marketplace manager.
+- A user-confirmed Marketplace Plugin install/update and an explicit Local Plugin
+  import publish the exact execution authorization with the immutable snapshot in
+  one transition. They never require a second Marketplace setup click. Keep
+  integrity/authorization mismatch distinct from setup-required state: missing or
+  changed snapshot bytes route to exact-source reinstall/update, not setup.
 - Validate Plugin-owned Skill paths and global names while building the immutable
   ActiveSet. One ActiveSet compare-and-swap publishes the package, Skill, Hook,
   companion and inter-Plugin dependency decision together. Do not materialize owned

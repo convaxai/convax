@@ -117,21 +117,29 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
       ? locale === "zh-CN"
         ? "本会话不可用"
         : "Unavailable for this session"
-      : locale === "zh-CN"
-        ? capability.state === "ready"
-          ? "可用"
-          : capability.state === "disabled"
-            ? "已停用"
-            : capability.state === "setup-required"
-              ? "需要设置"
-              : "需要处理"
-        : capability.state === "ready"
-          ? "Ready"
-          : capability.state === "disabled"
-            ? "Disabled"
-            : capability.state === "setup-required"
-              ? "Setup required"
-              : "Needs attention"
+      : capability.attention === "integrity-or-authorization"
+        ? locale === "zh-CN"
+          ? "需要重新安装"
+          : "Reinstall required"
+        : capability.attention === "setup-required-before-enable"
+          ? locale === "zh-CN"
+            ? "启用前需要设置"
+            : "Setup required before enabling"
+          : locale === "zh-CN"
+            ? capability.state === "ready"
+              ? "可用"
+              : capability.state === "disabled"
+                ? "已停用"
+                : capability.state === "setup-required"
+                  ? "需要设置"
+                  : "需要处理"
+            : capability.state === "ready"
+              ? "Ready"
+              : capability.state === "disabled"
+                ? "Disabled"
+                : capability.state === "setup-required"
+                  ? "Setup required"
+                  : "Needs attention"
   const sourceHealthLabel = (health: MarketplaceSettingsSource["health"]) =>
     locale === "zh-CN"
       ? health === "available"
@@ -292,7 +300,8 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                       {text.update}
                     </Button>
                   ) : null}
-                  {!pluginUnavailable && (capability.state === "setup-required" || capability.state === "attention") ? (
+                  {!pluginUnavailable &&
+                  (capability.state === "setup-required" || capability.attention === "setup-required-before-enable") ? (
                     <Button
                       onClick={() =>
                         void mutate(`setup:${capability.kind}:${capability.id}`, () =>
