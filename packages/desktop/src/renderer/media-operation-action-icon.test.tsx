@@ -7,6 +7,7 @@ describe("MediaOperationActionIcon", () => {
   test.each([
     ["confirmation", "lucide-clapperboard"],
     ["crop-region", "lucide-crop"],
+    ["immediate", "lucide-wand-sparkles"],
     ["time-point", "lucide-image-down"],
     ["time-range", "lucide-scissors"],
   ] satisfies readonly (readonly [MediaOperationEditor, string])[])(

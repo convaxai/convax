@@ -82,6 +82,7 @@ import {
   getIncomingConnectedCanvasFileNodeIds,
 } from "../connections"
 import { useCanvasEditor, useCanvasNodeEntryPresentation, useCanvasOverlayRoot } from "../editor-context"
+import { useCanvasMutationSurface } from "./canvas-mutation-surface"
 import { getCanvasTextFileFormat } from "../file-import"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
 import {
@@ -119,6 +120,7 @@ import {
 export { isCanvasEmptyImageNodeData } from "../document"
 
 function ToolbarButton(props: {
+  busy?: boolean
   destructive?: boolean
   disabled?: boolean
   icon?: ReactNode
@@ -132,6 +134,7 @@ function ToolbarButton(props: {
     <Tooltip content={props.label} side="top">
       <span className="inline-flex">
         <Button
+          aria-busy={props.busy}
           aria-label={props.label}
           aria-pressed={props.pressed}
           className={cn(
@@ -197,9 +200,10 @@ function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAc
         const pending = editor.isSelectionActionPending(action.id)
         return (
           <ToolbarButton
+            busy={pending}
             key={action.id}
             disabled={pending}
-            icon={pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
+            icon={action.icon ?? <Workflow />}
             label={action.label}
             onClick={() => editor.executeSelectionAction(action)}
           />
@@ -223,6 +227,7 @@ function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAc
                 const pending = editor.isSelectionActionPending(action.id)
                 return (
                   <button
+                    aria-busy={pending}
                     className={cn(
                       "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-50",
                       action.presentation?.tone === "destructive" && "text-destructive",
@@ -236,9 +241,7 @@ function NodeSelectionActionButtons(props: { actions: readonly CanvasSelectionAc
                     role="menuitem"
                     type="button"
                   >
-                    <span className="[&>svg]:size-3.5">
-                      {pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
-                    </span>
+                    <span className="[&>svg]:size-3.5">{action.icon ?? <Workflow />}</span>
                     <span>{action.label}</span>
                   </button>
                 )
@@ -304,8 +307,13 @@ function NodeChrome(props: {
     notifyAnimationStart,
     phase: nodeEntryPhase,
   } = useCanvasNodeEntryPresentation(props.node.id, editor.enteringNodeIds)
+  const mutationSurface = useCanvasMutationSurface(editor.readOnly)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.node.id)
-  const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.node.id, editor.readOnly)
+  const showMutationToolbar = canShowNodeLocalMutationSurface(
+    editor.selectionContext,
+    props.node.id,
+    !mutationSurface.visible,
+  )
   const selectionActionsHandledByContribution = useContext(ContributedToolbarSelectionActionContext)
   const assistantTrigger = useContext(FileAssistantTriggerContext)
   const assistantTriggerHandledByContribution = useContext(ContributedToolbarFileAssistantTriggerContext)
@@ -350,9 +358,12 @@ function NodeChrome(props: {
       />
       {toolbar && showMutationToolbar ? (
         <NodeToolbar
+          aria-busy={mutationSurface.disabled || undefined}
           className="convax-node-toolbar nodrag nowheel"
           data-canvas-node-entry-phase={nodeEntryPhase === "idle" ? undefined : nodeEntryPhase}
           data-canvas-node-entering={nodeEntering || undefined}
+          inert={mutationSurface.disabled || undefined}
+          isVisible={showMutationToolbar}
           offset={36}
           onAnimationEnd={(event) => {
             if (
@@ -3020,13 +3031,18 @@ export function BuiltinCanvasNode(props: NodeProps<CanvasNode>) {
 
 function RegisteredFileNode(props: NodeProps<CanvasNode>) {
   const editor = useCanvasEditor()
+  const mutationSurface = useCanvasMutationSurface(editor.readOnly)
   const assistant = useCanvasService("assistant")
   const telemetry = useCanvasService("telemetry")
   const [assistantOpen, setAssistantOpen] = useState(false)
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.id)
   const visualMediaAssistant = props.data.kind === "image" || props.data.kind === "video"
   const directAssistant = visualMediaAssistant || props.data.kind === "text"
-  const showMutationToolbar = canShowNodeLocalMutationSurface(editor.selectionContext, props.id, editor.readOnly)
+  const showMutationToolbar = canShowNodeLocalMutationSurface(
+    editor.selectionContext,
+    props.id,
+    !mutationSurface.visible,
+  )
   useEffect(() => {
     if (ownsSingleNodeContext && !editor.readOnly && assistant) return
     setAssistantOpen(false)
@@ -3098,7 +3114,14 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
         />
       ) : null}
       {ContributedToolbar && showMutationToolbar ? (
-        <NodeToolbar className="convax-node-toolbar nodrag nowheel" offset={82} position={Position.Top}>
+        <NodeToolbar
+          aria-busy={mutationSurface.disabled || undefined}
+          className="convax-node-toolbar nodrag nowheel"
+          inert={mutationSurface.disabled || undefined}
+          isVisible={showMutationToolbar}
+          offset={82}
+          position={Position.Top}
+        >
           {hasHostToolbarActions ? (
             <div className="convax-node-toolbar__cluster">
               <div className="convax-node-toolbar__surface" data-canvas-shortcuts="ignore">
