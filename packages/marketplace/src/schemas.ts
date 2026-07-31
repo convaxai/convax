@@ -199,7 +199,7 @@ const PACKAGE_SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const COMMAND = /^[A-Za-z0-9._-]+$/
 const TARGET = /^(darwin|linux|win32)-(arm64|x64)$/
 const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i
-const admittedPluginHostApiMajor = 2
+const admittedPluginHostApiMajor = 1
 const officialServerAjv = new Ajv({
   strict: true,
   // The published MCP schema uses `required` inside `anyOf` branches while
