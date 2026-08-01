@@ -1459,8 +1459,8 @@
   max-width: 100%;
   min-height: 42px;
   align-items: center;
-  gap: 2px;
-  padding: 4px 5px;
+  gap: 4px;
+  padding: 4px;
   border: 0;
   border-radius: 8px;
   background: color-mix(in oklab, var(--canvas-surface) 88%, transparent);
@@ -1470,19 +1470,12 @@
   backdrop-filter: blur(18px) saturate(120%);
 }
 
-.convax-canvas .convax-toolbar-divider {
-  width: 6px;
-  height: 20px;
-  margin: 0 4px;
-  flex: 0 0 auto;
-  background: transparent;
-}
-
-.convax-canvas .convax-canvas-create-menu,
-.convax-canvas .convax-canvas-more-menu {
+.convax-canvas .convax-canvas-create-menu {
   position: absolute;
   top: calc(100% + 10px);
+  left: 0;
   z-index: 50;
+  width: min(220px, calc(100vw - var(--canvas-safe-left, 0px) - var(--canvas-safe-right, 0px) - 24px));
   max-height: min(360px, calc(100dvh - var(--canvas-safe-top, 0px) - var(--canvas-safe-bottom, 0px) - 88px));
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1494,17 +1487,6 @@
   box-shadow: var(--canvas-floating-shadow);
 }
 
-.convax-canvas .convax-canvas-create-menu {
-  left: 0;
-  width: min(220px, calc(100vw - var(--canvas-safe-left, 0px) - var(--canvas-safe-right, 0px) - 24px));
-}
-
-.convax-canvas .convax-canvas-more-menu {
-  right: 0;
-  bottom: auto;
-  width: 208px;
-}
-
 .convax-canvas .convax-canvas-menu__label {
   min-height: 26px;
   padding: 0 8px;
@@ -1514,8 +1496,7 @@
   line-height: 26px;
 }
 
-.convax-canvas .convax-canvas-create-menu > button,
-.convax-canvas .convax-canvas-more-menu > button {
+.convax-canvas .convax-canvas-create-menu > button {
   display: grid;
   width: 100%;
   min-height: 40px;
@@ -1536,34 +1517,29 @@
     transform var(--canvas-motion-menu) var(--canvas-motion-ease-standard);
 }
 
-.convax-canvas .convax-canvas-create-menu > button:focus-visible,
-.convax-canvas .convax-canvas-more-menu > button:focus-visible {
+.convax-canvas .convax-canvas-create-menu > button:focus-visible {
   background: var(--canvas-interactive-hover, var(--ui-interactive-hover));
   outline: none;
   box-shadow: 0 0 0 2px var(--canvas-accent);
 }
 
 @media (hover: hover) {
-  .convax-canvas .convax-canvas-create-menu > button:hover,
-  .convax-canvas .convax-canvas-more-menu > button:hover {
+  .convax-canvas .convax-canvas-create-menu > button:hover {
     background: var(--canvas-interactive-hover, var(--ui-interactive-hover));
   }
 }
 
-.convax-canvas .convax-canvas-create-menu > button:active,
-.convax-canvas .convax-canvas-more-menu > button:active {
+.convax-canvas .convax-canvas-create-menu > button:active {
   background: var(--canvas-interactive-pressed, var(--ui-interactive-pressed));
   transform: scale(0.96);
 }
 
-.convax-canvas .convax-canvas-create-menu > button:disabled,
-.convax-canvas .convax-canvas-more-menu > button:disabled {
+.convax-canvas .convax-canvas-create-menu > button:disabled {
   opacity: 0.38;
   pointer-events: none;
 }
 
-.convax-canvas .convax-canvas-create-menu svg,
-.convax-canvas .convax-canvas-more-menu svg {
+.convax-canvas .convax-canvas-create-menu svg {
   width: 15px;
   height: 15px;
 }
@@ -2077,8 +2053,7 @@
 
 @media (forced-colors: active) {
   .convax-canvas .convax-creation-toolbar,
-  .convax-canvas .convax-canvas-create-menu,
-  .convax-canvas .convax-canvas-more-menu {
+  .convax-canvas .convax-canvas-create-menu {
     border-color: CanvasText;
     background: Canvas;
     color: CanvasText;
@@ -2087,10 +2062,6 @@
 
   .convax-canvas .convax-creation-toolbar {
     border: 1px solid CanvasText;
-  }
-
-  .convax-canvas .convax-toolbar-divider {
-    background: CanvasText;
   }
 
   .convax-canvas .convax-snap-guide.is-vertical {
