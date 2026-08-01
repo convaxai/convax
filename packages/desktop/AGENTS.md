@@ -18,6 +18,13 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - `renderer`: React shell, controller instances, cross-domain coordinators, host view
   adapters and user preferences; no Node/Electron imports.
 
+Packaged Main and preload code must be self-contained JavaScript bundles. Disable
+automatic dependency externalization, permit only Electron and Node built-ins as
+runtime externals, and fail the build when another bare import remains. Never stage
+or copy a `node_modules` tree into the application archive. Keep the packaged Main
+entry in CommonJS so Electron Vite does not inject its ESM compatibility shim into
+bundled source strings.
+
 ## Composition rules
 
 - Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation and Agent

@@ -1515,6 +1515,14 @@ window coordination; keep the product's visual implementation in the host.
 - Renderer: React shell, controllers, coordinators, view adapters, and preferences;
   no Node/Electron imports.
 
+Packaged Main and preload outputs are complete JavaScript dependency bundles. The
+build disables package dependency externalization and admits only Electron and Node
+built-ins as host-provided imports; a generated-bundle guard rejects every other
+bare static or dynamic import. Main emits one CommonJS entry so Electron Vite does
+not run its ESM compatibility shim over dependency-bundled source strings. Electron
+Builder excludes `node_modules` entirely, so the application archive never relies
+on a staged dependency tree or monorepo workspace layout.
+
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
 capabilities, and Plugin Services. Plugin Services accept only an installed Plugin

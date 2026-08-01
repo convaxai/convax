@@ -541,6 +541,10 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 ## Desktop and IPC rules
 
 - Main owns native filesystem, Electron, Project Node adapters, and Agent runtime.
+- Packaged Desktop Main and preload outputs bundle every JavaScript runtime
+  dependency. Only Electron and Node built-ins may remain external, and the ASAR
+  must not contain or depend on a staged `node_modules` tree. Main emits a `.cjs`
+  entry so dependency bundling cannot trigger Electron Vite's ESM shim.
 - Preload exposes a narrow typed bridge. Renderer code must not import Node/Electron.
 - Renderer Canvas persistence exposes authoritative load plus command execution,
   never a whole-document save. Every Main commit publishes a revision invalidation;
