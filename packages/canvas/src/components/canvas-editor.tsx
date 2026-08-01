@@ -3862,36 +3862,13 @@ function CanvasEditorContent(
                 ) : null}
 
                 <CanvasHeader
-                  canExport={Boolean(exportService)}
-                  canGenerate={Boolean(generateService)}
-                  canRedo={history.future.length > 0}
-                  canUndo={history.past.length > 0}
                   canUpload={Boolean(mutationService)}
                   createItems={connectionNodeTypes}
-                  generating={generating}
                   interactionTool={interactionTool}
                   onAddNode={(type) => addNode(type, undefined, true)}
-                  onExport={exportCanvas}
-                  onGenerate={requestGenerate}
                   onInteractionToolChange={activateInteractionTool}
-                  onRedo={() => dispatch({ type: "redo" })}
-                  onSelectionDragModeChange={(active) => {
-                    if (active) enterSelectionDragMode()
-                    else exitSelectionDragMode()
-                  }}
-                  onUndo={() => dispatch({ type: "undo" })}
                   onUpload={() => uploadInputRef.current?.click()}
                   readOnly={readOnly}
-                  reducedMotion={prefersReducedMotion}
-                  selectionDragMode={
-                    props.selectionDragSource?.mode
-                      ? {
-                          active: selectionDragModeActive,
-                          icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
-                          label: props.selectionDragSource.mode.label,
-                        }
-                      : undefined
-                  }
                 />
 
                 {blockingLoad || loadError ? (
@@ -4319,54 +4296,28 @@ function moveMenuFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
 }
 
 function CanvasHeader(props: {
-  canExport: boolean
-  canGenerate: boolean
-  canRedo: boolean
-  canUndo: boolean
   canUpload: boolean
   createItems: readonly { label: string; type: string }[]
-  generating: boolean
   interactionTool: CanvasInteractionTool
   onAddNode: (type: string) => void
-  onExport: () => void
-  onGenerate: () => void
   onInteractionToolChange: (tool: CanvasInteractionTool) => void
-  onRedo: () => void
-  onSelectionDragModeChange: (active: boolean) => void
-  onUndo: () => void
   onUpload: () => void
   readOnly: boolean
-  reducedMotion: boolean
-  selectionDragMode?: {
-    active: boolean
-    icon: ReactNode
-    label: string
-  }
 }) {
   const [addOpen, setAddOpen] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
   const addMenuRef = useRef<HTMLDivElement>(null)
   const addTriggerRef = useRef<HTMLButtonElement>(null)
-  const moreMenuRef = useRef<HTMLDivElement>(null)
-  const moreTriggerRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!addOpen && !moreOpen) return
+    if (!addOpen) return
     const close = (event: PointerEvent) => {
-      if (
-        event.target instanceof Element &&
-        (addMenuRef.current?.contains(event.target) || moreMenuRef.current?.contains(event.target))
-      )
-        return
+      if (event.target instanceof Element && addMenuRef.current?.contains(event.target)) return
       setAddOpen(false)
-      setMoreOpen(false)
     }
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
-      if (addOpen) addTriggerRef.current?.focus()
-      if (moreOpen) moreTriggerRef.current?.focus()
+      addTriggerRef.current?.focus()
       setAddOpen(false)
-      setMoreOpen(false)
     }
     window.addEventListener("pointerdown", close)
     window.addEventListener("keydown", closeOnEscape)
@@ -4374,7 +4325,7 @@ function CanvasHeader(props: {
       window.removeEventListener("pointerdown", close)
       window.removeEventListener("keydown", closeOnEscape)
     }
-  }, [addOpen, moreOpen])
+  }, [addOpen])
   useEffect(() => {
     if (!props.readOnly) return
     setAddOpen(false)
@@ -4386,13 +4337,6 @@ function CanvasHeader(props: {
     )
     return () => window.cancelAnimationFrame(frame)
   }, [addOpen])
-  useEffect(() => {
-    if (!moreOpen) return
-    const frame = window.requestAnimationFrame(() =>
-      moreMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(),
-    )
-    return () => window.cancelAnimationFrame(frame)
-  }, [moreOpen])
   return (
     <div className="convax-creation-toolbar-frame">
       <div
@@ -4434,29 +4378,15 @@ function CanvasHeader(props: {
           shortcut="H"
           tooltipSide="bottom"
         />
-        {props.selectionDragMode ? (
-          <IconButton
-            disabled={props.readOnly}
-            icon={props.selectionDragMode.icon}
-            label={props.selectionDragMode.label}
-            onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
-            pressed={props.selectionDragMode.active}
-            tooltipSide="bottom"
-          />
-        ) : null}
-        <span aria-hidden="true" className="convax-toolbar-divider" />
         <div className="relative" ref={addMenuRef}>
           <IconButton
             buttonRef={addTriggerRef}
-            disabled={props.readOnly || props.createItems.length === 0}
+            disabled={props.readOnly || (props.createItems.length === 0 && !props.canUpload)}
             expanded={addOpen}
             hasPopup="menu"
             icon={<Plus />}
             label="Add node"
-            onClick={() => {
-              setMoreOpen(false)
-              setAddOpen((open) => !open)
-            }}
+            onClick={() => setAddOpen((open) => !open)}
             pressed={addOpen}
             tooltipSide="bottom"
           />
@@ -4485,89 +4415,20 @@ function CanvasHeader(props: {
                 <span>Add {item.label}</span>
               </button>
             ))}
-          </div>
-        </div>
-        {props.canUpload ? (
-          <IconButton
-            disabled={props.readOnly}
-            icon={<FileUp />}
-            label="Upload"
-            onClick={props.onUpload}
-            tooltipSide="bottom"
-          />
-        ) : null}
-        {props.canGenerate ? (
-          <IconButton
-            disabled={props.readOnly || props.generating}
-            icon={props.generating ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
-            label="Generate"
-            onClick={props.onGenerate}
-            shortcut="⌘↵"
-            tooltipSide="bottom"
-          />
-        ) : null}
-        <span aria-hidden="true" className="convax-toolbar-divider" />
-        <div className="relative" ref={moreMenuRef}>
-          <IconButton
-            buttonRef={moreTriggerRef}
-            expanded={moreOpen}
-            hasPopup="menu"
-            icon={<Ellipsis />}
-            label="More canvas actions"
-            onClick={() => {
-              setAddOpen(false)
-              setMoreOpen((open) => !open)
-            }}
-            pressed={moreOpen}
-            tooltipSide="bottom"
-          />
-          <div
-            className="convax-canvas-more-menu convax-motion-menu"
-            data-canvas-shortcuts="ignore"
-            hidden={!moreOpen}
-            onKeyDown={moveMenuFocus}
-            role="menu"
-          >
-            <button
-              disabled={!props.canUndo || props.readOnly}
-              onClick={() => {
-                props.onUndo()
-                setMoreOpen(false)
-                moreTriggerRef.current?.focus()
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Undo2 />
-              <span>Undo</span>
-              <Shortcut>⌘Z</Shortcut>
-            </button>
-            <button
-              disabled={!props.canRedo || props.readOnly}
-              onClick={() => {
-                props.onRedo()
-                setMoreOpen(false)
-                moreTriggerRef.current?.focus()
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Redo2 />
-              <span>Redo</span>
-              <Shortcut>⇧⌘Z</Shortcut>
-            </button>
-            {props.canExport ? (
+            {props.canUpload ? (
               <button
+                aria-label="Upload files"
+                disabled={props.readOnly}
                 onClick={() => {
-                  props.onExport()
-                  setMoreOpen(false)
-                  moreTriggerRef.current?.focus()
+                  props.onUpload()
+                  setAddOpen(false)
+                  addTriggerRef.current?.focus()
                 }}
                 role="menuitem"
                 type="button"
               >
-                <Download />
-                <span>Export</span>
+                <FileUp />
+                <span>Upload files</span>
               </button>
             ) : null}
           </div>

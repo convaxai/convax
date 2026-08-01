@@ -273,11 +273,14 @@ describe("Canvas-first visual hierarchy", () => {
     const viewportRule = cssRule(styles, ".convax-canvas .convax-viewport-toolbar")
 
     expect(creationRule).toContain("min-height: 42px")
+    expect(creationRule).toContain("gap: 4px")
+    expect(creationRule).toContain("padding: 4px")
     expect(creationRule).toContain("border: 0")
     expect(creationRule).toContain("border-radius: 8px")
     expect(creationRule).toContain("backdrop-filter: blur(18px)")
     expect(viewportRule).toContain("min-height: 42px")
     expect(viewportRule).toContain("--canvas-safe-bottom")
+    expect(styles).not.toContain(".convax-canvas .convax-toolbar-divider")
   })
 
   test("keeps the node-search glyph clear of its input text across host stylesheet order", async () => {
@@ -341,23 +344,14 @@ describe("Canvas-first visual hierarchy", () => {
 })
 
 describe("Canvas theme closure", () => {
-  test("opens both top-toolbar menus below their triggers", async () => {
+  test("opens the top-toolbar create menu below its trigger", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const createMenuRule = cssRule(styles, ".convax-canvas .convax-canvas-create-menu")
-    const moreMenuRule =
-      styles
-        .match(/\.convax-canvas \.convax-canvas-more-menu \{[^}]+\}/gs)
-        ?.find((rule) => rule.includes("right: 0")) ?? ""
 
     expect(createMenuRule).toContain("left: 0")
-    expect(moreMenuRule).toContain("right: 0")
-    expect(moreMenuRule).toContain("bottom: auto")
-    expect(
-      cssRule(styles, ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu"),
-    ).toContain("top: calc(100% + 10px)")
-    expect(
-      cssRule(styles, ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu"),
-    ).toContain("overflow-y: auto")
+    expect(createMenuRule).toContain("top: calc(100% + 10px)")
+    expect(createMenuRule).toContain("overflow-y: auto")
+    expect(styles).not.toContain("convax-canvas-more-menu")
   })
 
   test("keeps the pending connection overlay inside the Canvas coordinate space", async () => {
@@ -387,7 +381,7 @@ describe("Canvas theme closure", () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const selectors = [
       ":is(.convax-canvas, .convax-pending-connection) .convax-connect-menu",
-      ".convax-canvas .convax-canvas-create-menu,\n.convax-canvas .convax-canvas-more-menu",
+      ".convax-canvas .convax-canvas-create-menu",
       ".convax-canvas .convax-arrange-menu",
       ".convax-canvas .convax-zoom-menu",
       ".convax-canvas .convax-tool-surface,\n.convax-canvas .convax-floating-panel",

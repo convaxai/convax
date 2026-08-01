@@ -1212,13 +1212,16 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).not.toContain("Add Audio")
   })
 
-  test("publishes registered node creation through the safe top toolbar without duplicating Search", () => {
+  test("publishes only navigation and creation controls through the evenly spaced top toolbar", () => {
     const markup = renderEditor(
       createCanvasServices({
         generate: {
           describeTool: async (toolId) => ({ fields: [], toolId }),
           generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
           listTools: async () => [],
+        },
+        mutation: {
+          add: async () => ({ createdNodeIds: [], revision: 0, warnings: [] }),
         },
       }),
     )
@@ -1229,15 +1232,17 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).toContain('aria-label="Add Text"')
     expect(markup).toContain('aria-label="Add Image"')
     expect(markup).toContain('aria-label="Add Video"')
+    expect(markup).toContain('aria-label="Upload files"')
     expect(markup).not.toContain('aria-label="Add Audio"')
     expect(markup).not.toContain('aria-label="Add Agent"')
     expect(buttonActions.get("Add node")).toBeFunction()
     expect(buttonActions.get("Upload")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeFunction()
+    expect(buttonActions.get("Generate")).toBeUndefined()
+    expect(buttonActions.get("More canvas actions")).toBeUndefined()
     expect(buttonActions.get("Search")).toBeFunction()
   })
 
-  test("routes top-toolbar Generate presentation to the host without opening Canvas's legacy overlay", () => {
+  test("keeps Generate in the Canvas context menu after removing it from the top toolbar", () => {
     const onGenerateRequest = mock(() => undefined)
     renderEditor(
       createCanvasServices({
@@ -1250,9 +1255,10 @@ describe("CanvasEditor insertion surfaces", () => {
       { onGenerateRequest },
     )
 
-    buttonActions.get("Generate")?.()
+    contextMenuActions.get("Generate⌘↵")?.()
 
     expect(onGenerateRequest).toHaveBeenCalledTimes(1)
+    expect(buttonActions.get("Generate")).toBeUndefined()
   })
 
   test("rejects generation re-entry instead of implicitly cancelling accepted work", async () => {
@@ -1282,7 +1288,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(buttonActions.get("Search")).toBeFunction()
     expect(buttonActions.get("Fit view")).toBeFunction()
     expect(buttonActions.get("Snap and alignment guides")).toBeFunction()
-    expect(buttonActions.get("More canvas actions")).toBeFunction()
+    expect(buttonActions.get("More canvas actions")).toBeUndefined()
   })
 
   test("renders host appearance without producing an editor command", () => {
@@ -1351,6 +1357,7 @@ describe("CanvasEditor external drag mode", () => {
     })
 
     expect(contextMenuActions.get("Drag to Other Apps")).toBeFunction()
+    expect(buttonActions.get("Drag to Other Apps")).toBeUndefined()
   })
 
   test("does not prepare until command-shift is held for a visible drag source", () => {
