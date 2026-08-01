@@ -443,6 +443,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                       </Button>
                     ) : null}
                     {!pluginUnavailable &&
+                    capability.kind !== "plugin" &&
                     capability.runtimeScope &&
                     capability.attention !== "plugin-runtime-inactive" &&
                     (capability.state === "setup-required" ||

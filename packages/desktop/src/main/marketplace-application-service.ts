@@ -1205,6 +1205,10 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   }
 
   async setup(identity: { id: string; kind: MarketplaceCapabilityKind }, pickExecutable: () => Promise<string | null>) {
+    if (identity.kind === "plugin") {
+      this.#options.assertCapabilityMutationAllowed?.(identity)
+      throw new Error("Plugin authorization is established only by install or update")
+    }
     return this.#setup(identity, pickExecutable, "explicit")
   }
 

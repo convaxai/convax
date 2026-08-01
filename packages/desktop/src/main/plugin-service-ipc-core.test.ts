@@ -9,6 +9,7 @@ import {
   parsePluginServiceCheckoutTarget,
   parsePluginServiceTarget,
   PluginServiceIpcOperations,
+  publishPluginServiceChangeToTargets,
   registerPluginServiceIpcCore,
   type PluginServiceExecutor,
 } from "./plugin-service-ipc-core"
@@ -63,6 +64,21 @@ function executor(overrides: Partial<PluginServiceExecutor> = {}): PluginService
 }
 
 describe("Plugin service IPC boundary", () => {
+  test("publishes inventory invalidation only to live renderer targets", () => {
+    const delivered: string[] = []
+    const target = (windowDestroyed: boolean, webContentsDestroyed: boolean) => ({
+      isDestroyed: () => windowDestroyed,
+      webContents: {
+        isDestroyed: () => webContentsDestroyed,
+        send: (channel: string) => delivered.push(channel),
+      },
+    })
+
+    publishPluginServiceChangeToTargets([target(false, false), target(true, false), target(false, true)])
+
+    expect(delivered).toEqual([pluginServiceIpcChannels.changed])
+  })
+
   test("accepts only an exact Plugin id target and defines no generic action channel", () => {
     expect(parsePluginServiceTarget({ pluginId: "account-tools" })).toEqual({ pluginId: "account-tools" })
     expect(() => parsePluginServiceTarget({ pluginId: "account-tools", method: "arbitrary.call" })).toThrow(

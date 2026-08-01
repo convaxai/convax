@@ -546,6 +546,32 @@ test("keeps setup available only for a capability that actually lacks setup", as
   expect(marketplace.setup).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
 })
 
+test("never offers Complete setup for a Plugin even when an older main projects setup-required", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent-and-convax" as const,
+          sourceLabel: "Example",
+          state: "setup-required" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(marketplace.setup).not.toHaveBeenCalled()
+})
+
 test("shows card-local progress while preparing an update and rejects duplicate clicks", async () => {
   type Choices = Awaited<ReturnType<MarketplaceClient["beginUpdate"]>>
   const pendingChoices = deferred<Choices>()

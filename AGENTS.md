@@ -455,6 +455,12 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   update transition. Do not project a follow-up Marketplace setup action for an
   integrity/authorization mismatch: setup cannot repair missing or changed immutable
   Plugin bytes, which must be reinstalled through the exact-source package flow.
+- A static Web Plugin without a companion or Hook still receives one exact
+  installation authorization bound to its capability contract, package artifact,
+  source identity and version. Startup may repair a missing Marketplace grant only
+  when an existing source-bound InstallRecord exactly matches the current ActiveSet
+  snapshot. Version, source or byte drift fails closed and routes to reinstall;
+  never expose a manual Plugin setup action.
 - Treat an explicit Hook-bearing Plugin install/update as consent to the normalized
   manifest and exact Hook bytes. Load only a private host-owned snapshot, never the
   mutable installed package path. Default provisioning and background updates must
