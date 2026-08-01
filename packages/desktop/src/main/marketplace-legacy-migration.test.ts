@@ -5,7 +5,7 @@ import path from "node:path"
 import { afterEach, expect, test } from "bun:test"
 import { builtinSourceKey, type SourceKey } from "@convax/marketplace"
 
-import { MarketplaceLegacyMigration } from "./marketplace-legacy-migration"
+import { MarketplaceLegacyMigration, proveCurrentPluginExecutionAuthorizations } from "./marketplace-legacy-migration"
 import { FileMarketplaceStateStore, type InstallRecord } from "./marketplace-state"
 
 const roots: string[] = []
@@ -146,6 +146,61 @@ test("claims ffmpeg and its old receipt only after exact Official package proof"
         version: "1.0.0",
       },
     ],
+  })
+})
+
+test("repairs a missing Plugin grant only from the exact active source-bound installation", async () => {
+  const { defaults, state } = await harness()
+  const sourceKey = "e".repeat(64) as SourceKey
+  const record: InstallRecord = {
+    artifactDigest: "a".repeat(64),
+    id: "story-director",
+    kind: "plugin",
+    revision: 4,
+    runtimeSurface: "agent-and-convax",
+    sourceKey,
+    version: "2.0.0",
+  }
+  await state.update((draft) => {
+    draft.installations.push(record)
+  })
+  const authorizationContractDigest = "f".repeat(64)
+  const exact = proveCurrentPluginExecutionAuthorizations(await state.read(), [
+    {
+      authorizationContractDigest,
+      id: record.id,
+      sourceIdentity: sourceKey,
+      version: record.version,
+    },
+  ])
+  expect(exact).toEqual([{ authorizationContractDigest, record }])
+  expect(
+    proveCurrentPluginExecutionAuthorizations(await state.read(), [
+      {
+        authorizationContractDigest,
+        id: record.id,
+        sourceIdentity: "d".repeat(64),
+        version: record.version,
+      },
+    ]),
+  ).toEqual([])
+
+  await new MarketplaceLegacyMigration({
+    defaultCapabilitiesFile: defaults,
+    preinstalledPolicies: [],
+    proveInstallations: async () => exact,
+    state,
+  }).run()
+
+  expect(await state.read()).toMatchObject({
+    executionGrants: [
+      {
+        authorizationContractDigest,
+        identity: { id: record.id, kind: "plugin" },
+        sourceKey,
+      },
+    ],
+    installations: [{ id: record.id, revision: record.revision }],
   })
 })
 

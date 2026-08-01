@@ -77,7 +77,11 @@ import { FileLocalMarketplaceImportTransition, LocalMarketplaceStore } from "./l
 import { CapabilityMutationCoordinator, FileMarketplaceStateStore } from "./marketplace-state"
 import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-installer"
 import { MarketplaceApplicationService } from "./marketplace-application-service"
-import { MarketplaceLegacyMigration } from "./marketplace-legacy-migration"
+import {
+  MarketplaceLegacyMigration,
+  proveCurrentPluginExecutionAuthorizations,
+  type MarketplaceInstallationProof,
+} from "./marketplace-legacy-migration"
 import { registerMarketplaceIpc } from "./marketplace-ipc"
 import { provisionMarketplaceForStartup } from "./marketplace-startup-provisioning"
 import { builtinMarketplaceReservation } from "./builtin-marketplace-bundle"
@@ -93,6 +97,7 @@ import { GenerationOperationStore } from "./generation-operation-store"
 import { registerGenerationIpc } from "./generation-ipc"
 import { generationPluginEnvironment, GenerationPluginRuntime } from "./generation-plugin-runtime"
 import { openDesktopPluginRuntimeSession } from "./plugin-runtime-startup"
+import { pluginExecutionAuthorizationIdentity } from "./plugin-installation-runtime"
 import { pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
 import { PluginSnapshotInstaller } from "./plugin-snapshot-installer"
 import {
@@ -137,7 +142,7 @@ import { PluginAgentMcpConnectionService } from "./plugin-agent-mcp-connection"
 import { InstalledPluginPrincipalResolver } from "./plugin-principal-resolver"
 import { pluginConnectedMediaPrivileges, pluginConnectedMediaScheme } from "../plugin-connected-media-contracts"
 import { PluginServiceHost } from "./plugin-service-host"
-import { registerPluginServiceIpc } from "./plugin-service-ipc"
+import { publishPluginServiceChange, registerPluginServiceIpc } from "./plugin-service-ipc"
 import { ServiceAwareGenerationTools } from "./service-aware-generation-tools"
 import { createElectronPluginServiceBrowserAuthorizationBroker } from "./electron-plugin-service-browser-authorization"
 import { createElectronPluginServiceCheckoutNavigation } from "./electron-plugin-service-checkout"
@@ -1069,6 +1074,7 @@ function startApplication() {
         await agentRuntime.refreshConfiguration()
         scheduleGenerationCatalogRefresh("a Marketplace Plugin change")
         await reconcileToolPluginExecutionStateForPlugin(pluginId)
+        publishPluginServiceChange()
       },
       refreshPetProvider: () => {
         if (retiredHostApiRecovery) return Promise.resolve()
@@ -1320,8 +1326,26 @@ function startApplication() {
             : []
         }) ?? [],
       proveInstallations: async () => {
-        if (!marketplaceProduct) return []
-        const proofs = []
+        const marketplaceSnapshot = await marketplaceState.read()
+        const activePluginAuthorizations = []
+        for (const plugin of await pluginInstallations.list()) {
+          const handle = await pluginInstallations.acquireActivePlugin(plugin.id)
+          try {
+            activePluginAuthorizations.push({
+              authorizationContractDigest: pluginExecutionAuthorizationIdentity(handle.descriptor),
+              id: handle.descriptor.pluginId,
+              sourceIdentity: handle.descriptor.sourceIdentity,
+              version: handle.descriptor.version,
+            })
+          } finally {
+            handle.release()
+          }
+        }
+        const proofs: MarketplaceInstallationProof[] = proveCurrentPluginExecutionAuthorizations(
+          marketplaceSnapshot,
+          activePluginAuthorizations,
+        )
+        if (!marketplaceProduct) return proofs
         const storyboard = marketplaceProduct
           .catalog()
           .find((item) => item.kind === "skill" && item.id === "canvas-storyboard" && item.sourceKind === "builtin")
@@ -1664,6 +1688,7 @@ function startApplication() {
           skillManager.notifyInventoryChanged()
           await agentRuntime.refreshConfiguration()
           scheduleGenerationCatalogRefresh("an installed Plugin change")
+          publishPluginServiceChange()
         },
         async uninstall(pluginId) {
           pluginRuntimeSession.assertMutable()

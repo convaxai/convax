@@ -116,6 +116,11 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   one transition. They never require a second Marketplace setup click. Keep
   integrity/authorization mismatch distinct from setup-required state: missing or
   changed snapshot bytes route to exact-source reinstall/update, not setup.
+- For a static Web Plugin, derive that authorization from the exact capability
+  contract, package artifact, source identity and version even when no companion or
+  Hook exists. Startup may backfill a missing Marketplace grant only for an existing
+  InstallRecord whose id, version and source match the current ActiveSet snapshot.
+  Every mismatch remains fail-closed and no Plugin may expose `Complete setup`.
 - Validate Plugin-owned Skill paths and global names while building the immutable
   ActiveSet. One ActiveSet compare-and-swap publishes the package, Skill, Hook,
   companion and inter-Plugin dependency decision together. Do not materialize owned

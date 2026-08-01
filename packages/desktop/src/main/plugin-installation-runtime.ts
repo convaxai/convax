@@ -63,6 +63,18 @@ export function pluginExecutionAuthorizationIdentity(
   descriptor: InstalledPluginSnapshot["descriptor"],
 ): PluginSnapshotDigest | null {
   const { companionExecutionDigest, hookExecutionDigest } = descriptor.authorizations
+  if (descriptor.companion && !companionExecutionDigest) return null
+  if (descriptor.hook && !hookExecutionDigest) return null
+  if (!descriptor.companion && !descriptor.hook) {
+    return pluginSnapshotCanonicalDigest({
+      artifact: descriptor.package.artifact,
+      capabilityContractDigest: descriptor.authorizations.capabilityContractDigest,
+      pluginId: descriptor.pluginId,
+      schema: "convax.plugin-static-authorization/1",
+      sourceIdentity: descriptor.sourceIdentity,
+      version: descriptor.version,
+    })
+  }
   return companionExecutionDigest || hookExecutionDigest
     ? pluginSnapshotCanonicalDigest({
         companionExecutionDigest: companionExecutionDigest ?? null,

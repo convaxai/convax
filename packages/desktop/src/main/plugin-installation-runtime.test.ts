@@ -261,6 +261,20 @@ describe("PluginInstallationRuntime", () => {
     authorizedHandle.release()
   })
 
+  test("derives static Plugin authorization from the exact capability contract and package bytes", async () => {
+    const { runtime } = await fixture()
+    const first = await runtime.publish(0, candidate("alpha", { assetContent: "first" }))
+    const firstAuthorization = await runtime.executionAuthorizationIdentity("alpha")
+
+    expect(firstAuthorization).toMatch(/^[a-f0-9]{64}$/)
+
+    await runtime.publish(first.revision, candidate("alpha", { assetContent: "second" }))
+    const secondAuthorization = await runtime.executionAuthorizationIdentity("alpha")
+
+    expect(secondAuthorization).toMatch(/^[a-f0-9]{64}$/)
+    expect(secondAuthorization).not.toBe(firstAuthorization)
+  })
+
   test("a partial closure never changes the previous active generation", async () => {
     const { root, runtime } = await fixture()
     const first = await runtime.publish(0, candidate("alpha"))

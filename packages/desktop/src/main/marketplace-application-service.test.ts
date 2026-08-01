@@ -288,6 +288,54 @@ test("treats a confirmed Plugin install as execution consent without a second se
   })
 })
 
+test("rejects a legacy explicit Plugin setup before preparing another authorization", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-v1")
+  const item: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/acme/marketplace/releases/download/plugin-example-v1/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+  }
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(item.delivery)),
+      id: item.id,
+      kind: item.kind,
+      revision: 1,
+      runtimeSurface: item.runtimeSurface,
+      sourceKey: item.sourceKey,
+      version: item.version,
+    })
+  })
+  let prepared = 0
+  const { service } = harness({
+    candidates: [item],
+    installer: {
+      prepareSetup: async () => {
+        prepared += 1
+        return {}
+      },
+      setup: async () => {
+        prepared += 1
+        return null
+      },
+    },
+    state,
+  })
+
+  await expect(service.setup({ id: item.id, kind: item.kind }, async () => null)).rejects.toThrow(
+    "only by install or update",
+  )
+  expect(prepared).toBe(0)
+  expect((await state.read()).transitions).toEqual([])
+})
+
 test("startup provisioning installs every missing Builtin member and the exact Official preinstall policy", async () => {
   const state = await stateStore()
   const builtin = skill()
@@ -1095,19 +1143,9 @@ test("keeps setup cancellation non-destructive and leaves a runtime capability s
   expect((await state.read()).transitions).toEqual([])
 })
 
-test("immediately rolls back a deterministically failed setup transition so retry and update stay available", async () => {
+test("immediately rolls back a deterministically failed MCP setup transition so retry and update stay available", async () => {
   const state = await stateStore()
-  const item: SourceQualifiedItem = {
-    ...runtimeItem(),
-    delivery: {
-      kind: "artifact",
-      sha256: "f".repeat(64),
-      size: 1,
-      url: "https://github.com/acme/marketplace/releases/download/plugin-example-v1/plugin.zip",
-    },
-    id: "example-plugin",
-    kind: "plugin",
-  }
+  const item = runtimeItem()
   const previousGrant = "d".repeat(64)
   await state.update((draft) => {
     draft.installations.push({

@@ -135,6 +135,22 @@ export interface PluginServiceIpcTransport<Event extends { sender: PluginService
   removeHandler(channel: string): void
 }
 
+export interface PluginServiceChangeTarget {
+  isDestroyed(): boolean
+  webContents: {
+    isDestroyed(): boolean
+    send(channel: string): void
+  }
+}
+
+/** Publishes one invalidation without exposing a service payload across IPC. */
+export function publishPluginServiceChangeToTargets(targets: readonly PluginServiceChangeTarget[]) {
+  for (const target of targets) {
+    if (target.isDestroyed() || target.webContents.isDestroyed()) continue
+    target.webContents.send(pluginServiceIpcChannels.changed)
+  }
+}
+
 /** Electron-free registration policy shared by production IPC and boundary tests. */
 export function registerPluginServiceIpcCore<Event extends { sender: PluginServiceIpcSender }>(
   executor: PluginServiceExecutor,

@@ -539,11 +539,22 @@ export function projectInstalledCapability(input: {
   if (input.runtimePreference?.desired === "disabled") {
     return {
       ...base,
-      ...(!grantMatches || input.grantValid === false ? { attention: "setup-required-before-enable" as const } : {}),
+      ...(!grantMatches || input.grantValid === false
+        ? {
+            attention:
+              installRecord.kind === "plugin"
+                ? ("integrity-or-authorization" as const)
+                : ("setup-required-before-enable" as const),
+          }
+        : {}),
       state: "disabled",
     }
   }
-  if (!grantMatches) return { ...base, state: "setup-required" }
+  if (!grantMatches) {
+    return installRecord.kind === "plugin"
+      ? { ...base, attention: "integrity-or-authorization", state: "attention" }
+      : { ...base, state: "setup-required" }
+  }
   if (input.grantValid === false) return { ...base, attention: "integrity-or-authorization", state: "attention" }
   return { ...base, state: "ready" }
 }

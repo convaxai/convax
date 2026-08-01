@@ -668,7 +668,7 @@ Builtin + Official + user Network + Host Local adapters
   -> @convax/marketplace display groups by {kind,id}
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
-  -> optional independent setup transition publishes ExecutionGrant
+  -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
   -> InstalledCapability projects setup-required, ready, disabled or attention
 ```
 
@@ -728,6 +728,18 @@ retired-recovery snapshot before publishing an update. Same-version replacements
 therefore recover by artifact identity, never by version. Records deliberately
 preserved while retired-major Plugins are deactivated remain attention state until
 their verified update is selected into a later ActiveSet.
+
+A static Web Plugin has an exact installation authorization even when it contains no
+companion or Hook. That identity binds the normalized capability contract, package
+artifact, source identity and version. On startup, Desktop may repair an older
+missing Marketplace grant only when an existing source-bound InstallRecord matches
+the current ActiveSet Plugin id, version and source exactly. This reconciliation
+cannot claim an unbound Plugin, change source provenance or authorize an incomplete
+companion/Hook snapshot. Any mismatch remains non-executable and routes to
+update/reinstall; Plugin setup is never a user action. The architecture map is
+unchanged because this tightens the existing Desktop Main lifecycle and existing
+Marketplace/ActiveSet stores without adding an owner, dependency, route or trust
+boundary.
 
 ### MCP Server runtime boundary
 
