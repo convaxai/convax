@@ -34,7 +34,8 @@ describe("Desktop test sharding", () => {
       readFile(path.join(repositoryRoot, ".github", "workflows", "package-boundaries.yml"), "utf8"),
       readFile(path.join(repositoryRoot, "turbo.json"), "utf8"),
     ])
-    const testJob = workflow.split("\n  desktop-package:")[0]?.split("\n  test:")[1]
+    const normalizedWorkflow = workflow.replace(/\r\n/gu, "\n")
+    const testJob = normalizedWorkflow.split("\n  desktop-package:")[0]?.split("\n  test:")[1]
     const desktopTestTask = turbo.split('"@convax/desktop#test":')[1]?.split("\n    }")[0]
 
     expect(testJob).toContain("desktop_shard: 1/1")

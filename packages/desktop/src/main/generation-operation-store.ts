@@ -4,6 +4,8 @@ import path from "node:path"
 
 import { isCanvasGenerationOperationId, isCanvasGenerationTaskId } from "@convax/canvas/core"
 
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
+
 export const generationOperationLedgerSchema = "convax.generation-operation-ledger/1" as const
 
 export type GenerationOperationPhase =
@@ -350,18 +352,13 @@ export class GenerationOperationStore {
     const handle = await fs.open(temporary, "wx", 0o600)
     try {
       await handle.writeFile(`${JSON.stringify(ledger, null, 2)}\n`, "utf8")
-      await handle.sync()
+      await syncFileBytes(handle)
     } finally {
       await handle.close()
     }
     try {
       await fs.rename(temporary, target)
-      const directory = await fs.open(this.root, "r")
-      try {
-        await directory.sync()
-      } finally {
-        await directory.close()
-      }
+      await syncDirectoryEntry(this.root)
     } catch (error) {
       await fs.rm(temporary, { force: true })
       throw error
