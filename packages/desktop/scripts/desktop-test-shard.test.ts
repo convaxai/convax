@@ -29,15 +29,18 @@ describe("Desktop test sharding", () => {
   })
 
   test("keeps the Windows quality matrix bound to both Desktop shards", async () => {
-    const workflow = await readFile(
-      path.join(import.meta.dir, "..", "..", "..", ".github", "workflows", "package-boundaries.yml"),
-      "utf8",
-    )
+    const repositoryRoot = path.join(import.meta.dir, "..", "..", "..")
+    const [workflow, turbo] = await Promise.all([
+      readFile(path.join(repositoryRoot, ".github", "workflows", "package-boundaries.yml"), "utf8"),
+      readFile(path.join(repositoryRoot, "turbo.json"), "utf8"),
+    ])
     const testJob = workflow.split("\n  desktop-package:")[0]?.split("\n  test:")[1]
+    const desktopTestTask = turbo.split('"@convax/desktop#test":')[1]?.split("\n    }")[0]
 
     expect(testJob).toContain("desktop_shard: 1/1")
     expect(testJob).toContain("platform: windows shard 1/2\n            desktop_shard: 1/2")
     expect(testJob).toContain("platform: windows shard 2/2\n            desktop_shard: 2/2")
     expect(testJob).toContain("CONVAX_DESKTOP_TEST_SHARD: ${{ matrix.desktop_shard }}")
+    expect(desktopTestTask).toContain('"env": ["CONVAX_DESKTOP_TEST_SHARD"]')
   })
 })

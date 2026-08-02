@@ -32,6 +32,11 @@
     "test": {
       "dependsOn": ["build"],
       "outputs": []
+    },
+    "@convax/desktop#test": {
+      "dependsOn": ["build"],
+      "env": ["CONVAX_DESKTOP_TEST_SHARD"],
+      "outputs": []
     }
   }
 }
