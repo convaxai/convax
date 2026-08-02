@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { inflateSync } from "node:zlib"
 import desktopManifest from "../../package.json"
 import {
@@ -79,12 +79,13 @@ describe("desktop branding", () => {
   })
 
   test("keeps development data in the pre-productName profile", () => {
+    const appDataDirectory = "/Library/Application Support"
     expect(
       desktopUserDataDirectory({
-        appDataDirectory: "/Library/Application Support",
+        appDataDirectory,
         isPackaged: false,
       }),
-    ).toBe("/Library/Application Support/@convax/desktop")
+    ).toBe(join(appDataDirectory, "@convax", "desktop"))
     expect(
       desktopUserDataDirectory({
         appDataDirectory: "/Library/Application Support",
@@ -101,15 +102,16 @@ describe("desktop branding", () => {
   })
 
   test("allows only an explicit, isolated OS-temp profile for packaged smoke", () => {
+    const packagedSmokeDirectory = "/tmp/convax-packaged-smoke-123"
     expect(
       desktopUserDataDirectory({
         appDataDirectory: "/Library/Application Support",
         isPackaged: true,
         packagedSmoke: true,
-        packagedSmokeDirectory: "/tmp/convax-packaged-smoke-123",
+        packagedSmokeDirectory,
         temporaryDirectory: "/tmp",
       }),
-    ).toBe("/tmp/convax-packaged-smoke-123")
+    ).toBe(resolve(packagedSmokeDirectory))
 
     expect(() =>
       desktopUserDataDirectory({
