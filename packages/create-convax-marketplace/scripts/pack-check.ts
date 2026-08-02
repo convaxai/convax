@@ -60,7 +60,7 @@ try {
   await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.1")
   await assertPackedDependency(kitTarball, "@convax/plugin-api", "^2.0.0")
   await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.1.1")
-  await assertPackedDependency(createTarball, "@convax/marketplace-kit", "^0.2.1")
+  await assertPackedDependency(createTarball, "@convax/marketplace-kit", "^0.2.2")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(

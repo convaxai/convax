@@ -14,5 +14,9 @@ export function desktopPackagedSmokeLaunchArguments(options: DesktopPackagedSmok
     // Without this Electron can block on a native Safe Storage authorization
     // prompt when another Convax build already owns the same Keychain item.
     ...(options.platform === "darwin" ? ["--use-mock-keychain"] : []),
+    // GitHub-hosted Linux runners cannot install Electron's setuid sandbox
+    // helper with root ownership. This affects only the test process arguments;
+    // the packaged application itself retains Electron's normal sandbox policy.
+    ...(options.platform === "linux" ? ["--no-sandbox"] : []),
   ]
 }

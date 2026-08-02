@@ -25,6 +25,11 @@ export type MarketplaceSelectionContext = {
     productionPreviousVersion?: string
     releaseTag: string
   }>
+  removedPackages?: Array<{
+    kind: RegistryPackage["kind"]
+    id: string
+    productionVersion: string
+  }>
   baseline: { mode: "v2"; registry: RegistryV2; showcase: ShowcaseV2 }
 }
 
@@ -132,7 +137,19 @@ export function parseMarketplaceSelectionContext(
   value: unknown,
   descriptor: MarketplaceDescriptor,
 ): MarketplaceSelectionContext {
-  exactKeys(value, ["baseline", "descriptor", "schema", "selectedPackages"], "selection context")
+  exactKeys(
+    value,
+    [
+      "baseline",
+      "descriptor",
+      ...(value && typeof value === "object" && !Array.isArray(value) && "removedPackages" in value
+        ? ["removedPackages"]
+        : []),
+      "schema",
+      "selectedPackages",
+    ],
+    "selection context",
+  )
   if (value.schema !== MARKETPLACE_SELECTION_CONTEXT_SCHEMA) {
     throw new TypeError("selection context schema is unsupported")
   }
@@ -142,7 +159,6 @@ export function parseMarketplaceSelectionContext(
   }
   if (
     !Array.isArray(value.selectedPackages) ||
-    value.selectedPackages.length === 0 ||
     value.selectedPackages.length > 16_384
   ) {
     throw new TypeError("selection context must contain bounded selected packages")
@@ -194,9 +210,51 @@ export function parseMarketplaceSelectionContext(
       releaseTag: selection.releaseTag,
     }
   })
-  parsePublishIdentities(selectedPackages.map(packageIdentity))
+  if (selectedPackages.length > 0) {
+    parsePublishIdentities(selectedPackages.map(packageIdentity))
+  }
   if (new Set(selectedPackages.map(({ releaseTag }) => releaseTag)).size !== selectedPackages.length) {
     throw new TypeError("selected packages must use unique immutable Release tags")
+  }
+  if (
+    value.removedPackages !== undefined &&
+    (!Array.isArray(value.removedPackages) || value.removedPackages.length > 16_384)
+  ) {
+    throw new TypeError("selection context must contain bounded removed packages")
+  }
+  const removedPackages = (value.removedPackages ?? []).map((removalValue) => {
+    if (!removalValue || typeof removalValue !== "object" || Array.isArray(removalValue)) {
+      throw new TypeError("removed package must be an object")
+    }
+    const removal = removalValue as Record<string, unknown>
+    exactKeys(removal, ["id", "kind", "productionVersion"], "removed package")
+    if (
+      typeof removal.kind !== "string" ||
+      !ITEM_KINDS.has(removal.kind) ||
+      typeof removal.id !== "string" ||
+      !ID.test(removal.id) ||
+      typeof removal.productionVersion !== "string" ||
+      !VERSION.test(removal.productionVersion)
+    ) {
+      throw new TypeError("removed package identity or production version is invalid")
+    }
+    return {
+      kind: removal.kind as RegistryPackage["kind"],
+      id: removal.id,
+      productionVersion: removal.productionVersion,
+    }
+  })
+  if (removedPackages.length > 0) {
+    parsePublishIdentities(removedPackages.map(packageIdentity))
+  }
+  if (selectedPackages.length + removedPackages.length === 0) {
+    throw new TypeError("selection context must select or remove at least one package")
+  }
+  const selectedIdentities = new Set(selectedPackages.map(packageIdentity))
+  for (const removal of removedPackages) {
+    if (selectedIdentities.has(packageIdentity(removal))) {
+      throw new TypeError(`package ${removal.kind}/${removal.id} cannot be selected and removed`)
+    }
   }
   exactKeys(value.baseline, ["mode", "registry", "showcase"], "selection baseline")
   if (value.baseline.mode !== "v2") throw new TypeError("selection baseline mode must be v2")
@@ -208,6 +266,7 @@ export function parseMarketplaceSelectionContext(
     schema: MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
     descriptor: baselineDescriptor,
     selectedPackages,
+    ...(removedPackages.length === 0 ? {} : { removedPackages }),
     baseline: {
       mode: "v2",
       registry,
@@ -227,10 +286,16 @@ export function mergeSelectedRegistry(
   baselineValue: RegistryV2,
   candidateValue: RegistryV2,
   selectedIdentitiesValue: readonly string[],
+  removedIdentitiesValue: readonly string[] = [],
 ): RegistryV2 {
   const baseline = parseRegistryV2(baselineValue)
   const candidate = parseRegistryV2(candidateValue)
-  const selectedIdentities = parsePublishIdentities(selectedIdentitiesValue)!
+  const selectedIdentities = selectedIdentitiesValue.length === 0
+    ? []
+    : parsePublishIdentities(selectedIdentitiesValue)!
+  const removedIdentities = removedIdentitiesValue.length === 0
+    ? []
+    : parsePublishIdentities(removedIdentitiesValue)!
   if (baseline.marketplaceId !== candidate.marketplaceId) {
     throw new TypeError("candidate Registry belongs to another Marketplace")
   }
@@ -240,6 +305,12 @@ export function mergeSelectedRegistry(
   const baselineByIdentity = packageMap(baseline.packages, "baseline Registry")
   const candidateByIdentity = packageMap(candidate.packages, "candidate Registry")
   const selected = new Set(selectedIdentities)
+  const removed = new Set(removedIdentities)
+  for (const identity of selected) {
+    if (removed.has(identity)) {
+      throw new TypeError(`package ${identity.replace("\0", "/")} cannot be selected and removed`)
+    }
+  }
   for (const identity of selected) {
     const candidateEntry = candidateByIdentity.get(identity)
     if (!candidateEntry) {
@@ -249,9 +320,22 @@ export function mergeSelectedRegistry(
       throw new TypeError(`selected package ${identity.replace("\0", "/")} did not advance its immutable version`)
     }
   }
+  for (const identity of removed) {
+    if (!baselineByIdentity.has(identity)) {
+      throw new TypeError(`removed package ${identity.replace("\0", "/")} is absent from production`)
+    }
+    if (candidateByIdentity.has(identity)) {
+      throw new TypeError(`removed package ${identity.replace("\0", "/")} is still present in source`)
+    }
+  }
   const packages = baseline.packages.map((entry) =>
-    selected.has(packageIdentity(entry)) ? candidateByIdentity.get(packageIdentity(entry))! : entry,
+    removed.has(packageIdentity(entry))
+      ? undefined
+      : selected.has(packageIdentity(entry))
+        ? candidateByIdentity.get(packageIdentity(entry))!
+        : entry,
   )
+    .filter((entry): entry is RegistryPackage => entry !== undefined)
   for (const entry of candidate.packages) {
     const identity = packageIdentity(entry)
     if (selected.has(identity) && !baselineByIdentity.has(identity)) packages.push(entry)
@@ -283,7 +367,10 @@ export function inheritedShowcasePackages(
   package: ShowcaseV2["packages"][number]
   sources: Array<{ source: ShowcaseAsset; targetUrl: string }>
 }> {
-  const selected = new Set(context.selectedPackages.map(packageIdentity))
+  const selected = new Set([
+    ...context.selectedPackages.map(packageIdentity),
+    ...(context.removedPackages ?? []).map(packageIdentity),
+  ])
   return context.baseline.showcase.packages.flatMap((entry) => {
     if (selected.has(packageIdentity(entry))) return []
     const sources = [
@@ -324,6 +411,7 @@ export function assertSelectiveMarketplaceClosure(options: {
     throw new TypeError("selective Registry must preserve its Marketplace and advance production sequence")
   }
   const selected = new Set(context.selectedPackages.map(packageIdentity))
+  const removed = new Set((context.removedPackages ?? []).map(packageIdentity))
   const baselineByIdentity = packageMap(baseline.packages, "baseline Registry")
   const currentByIdentity = packageMap(registry.packages, "selective Registry")
   for (const selection of context.selectedPackages) {
@@ -349,14 +437,24 @@ export function assertSelectiveMarketplaceClosure(options: {
       `selected package ${identity.replace("\0", "/")}`,
     )
   }
+  for (const removal of context.removedPackages ?? []) {
+    const identity = packageIdentity(removal)
+    const previous = baselineByIdentity.get(identity)
+    if (!previous || previous.version !== removal.productionVersion) {
+      throw new TypeError(`removed package ${identity.replace("\0", "/")} does not match production baseline`)
+    }
+    if (currentByIdentity.has(identity)) {
+      throw new TypeError(`removed package ${identity.replace("\0", "/")} remains in the Registry`)
+    }
+  }
   for (const [identity, entry] of baselineByIdentity) {
     const current = currentByIdentity.get(identity)
-    if (!selected.has(identity) && (!current || canonicalJson(current) !== canonicalJson(entry))) {
+    if (!selected.has(identity) && !removed.has(identity) && (!current || canonicalJson(current) !== canonicalJson(entry))) {
       throw new TypeError(`unselected package ${identity.replace("\0", "/")} changed or disappeared`)
     }
   }
   for (const identity of currentByIdentity.keys()) {
-    if (!selected.has(identity) && !baselineByIdentity.has(identity)) {
+    if (!selected.has(identity) && !removed.has(identity) && !baselineByIdentity.has(identity)) {
       throw new TypeError(`unselected source-only package ${identity.replace("\0", "/")} entered the Registry`)
     }
   }
@@ -373,11 +471,13 @@ export function assertSelectiveMarketplaceClosure(options: {
     }
   }
   for (const identity of currentShowcase.keys()) {
-    if (!selected.has(identity) && !expectedShowcase.has(identity)) {
+    if (!selected.has(identity) && !removed.has(identity) && !expectedShowcase.has(identity)) {
       throw new TypeError(`unselected Showcase ${identity.replace("\0", "/")} entered publication`)
     }
   }
   return {
-    inheritedIdentities: new Set([...baselineByIdentity.keys()].filter((identity) => !selected.has(identity))),
+    inheritedIdentities: new Set(
+      [...baselineByIdentity.keys()].filter((identity) => !selected.has(identity) && !removed.has(identity)),
+    ),
   }
 }

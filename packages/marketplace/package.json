@@ -50,7 +50,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:js": "for entry in src/index.ts src/schemas.ts src/server-schema.ts src/canonical.ts src/product-lock.ts src/builtin-archive.ts; do bun build --production --keep-names --target=node --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "build:js": "bun build --production --keep-names --target=node --format=esm --packages=external --sourcemap=linked --root=src --outdir=dist src/index.ts src/schemas.ts src/server-schema.ts src/canonical.ts src/product-lock.ts src/builtin-archive.ts",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:js && bun run build:types",
     "test": "bun test",

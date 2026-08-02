@@ -287,8 +287,8 @@ the provider's durable `operationId`/LRO contract.
 Plugin ABI releases roll out in dependency order: publish
 `@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.1` and
 `@convax/plugin-ui@0.1.0`, then the breaking
-Marketplace authoring line (`@convax/marketplace`,
-`@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.1`), and only
+Marketplace authoring line (`@convax/marketplace` at `0.2.1`, and
+`@convax/marketplace-kit` plus `create-convax-marketplace` at `0.2.2`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
 its authoring dependencies and republishes `convax.plugin/8` artifacts after those
 Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
@@ -344,7 +344,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                            |
 | `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                          |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                               |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation                                              |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs |
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
