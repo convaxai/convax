@@ -1067,7 +1067,7 @@ describe("@convax/marketplace-kit", () => {
     const builtinDir = join(root, "dist/builtin")
     const bundle = await buildBuiltinBundle({ root, outDir: builtinDir })
     expect(bundle.members[0]?.presentation.poster.sha256).toMatch(/^[0-9a-f]{64}$/)
-    expect(bundle.archive.path).toContain("/releases/")
+    expect(bundle.archive.path.split(/[\\/]+/)).toContain("releases")
     const archiveBytes = new Uint8Array(await readFile(bundle.archive.path))
     const parsedBuiltin = parseBuiltinBundleArchive(archiveBytes)
     expect(parsedBuiltin.members.map(({ kind, id }) => `${kind}/${id}`)).toEqual(["skill/canvas-storyboard"])

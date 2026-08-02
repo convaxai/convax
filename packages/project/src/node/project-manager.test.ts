@@ -251,7 +251,7 @@ describe("NodeProjectManager files", () => {
     await expect(manager.resolveEntryPath({ path: "safe.txt:stream", projectId })).rejects.toThrow("Invalid")
   })
 
-  test("preflights case-folded batch targets and nested imported names", async () => {
+  test("preflights case-folded batch targets and nested reserved imported names", async () => {
     await manager.createEntry({ kind: "directory", name: "first", projectId })
     await manager.createEntry({ kind: "directory", name: "second", projectId })
     await manager.createEntry({ kind: "directory", name: "target", projectId })
@@ -264,6 +264,13 @@ describe("NodeProjectManager files", () => {
     expect(await fs.readFile(path.join(projectRoot, "second", "report.TXT"), "utf8")).toBe("two")
 
     const source = path.join(temporaryRoot, "portable-source")
+    await fs.mkdir(source)
+    await fs.writeFile(path.join(source, ".CONVAX"), "reserved")
+    await expect(manager.importEntries({ projectId, sourcePaths: [source] })).rejects.toThrow("reserved")
+  })
+
+  test.skipIf(process.platform === "win32")("rejects nested imported names that are invalid but native", async () => {
+    const source = path.join(temporaryRoot, "portable-invalid-source")
     await fs.mkdir(source)
     await fs.writeFile(path.join(source, "bad:name.txt"), "bad")
     await expect(manager.importEntries({ projectId, sourcePaths: [source] })).rejects.toThrow("Invalid")
