@@ -1,3 +1,5 @@
+import { parseDesktopTestShard, selectDesktopTestShard } from "./desktop-test-shard"
+
 const isolatedModuleMockTests = [
   "electron.vite.config.test.ts",
   "src/main/canvas-external-media-drag-ipc.test.ts",
@@ -27,9 +29,16 @@ for await (const file of testFiles.scan({ cwd: import.meta.dir + "/..", onlyFile
 }
 regularTests.sort()
 
-let exitCode = await runTests(regularTests)
+const shard = parseDesktopTestShard(Bun.env.CONVAX_DESKTOP_TEST_SHARD)
+const shardedRegularTests = selectDesktopTestShard(regularTests, shard)
+const shardedIsolatedTests = selectDesktopTestShard(isolatedModuleMockTests, shard)
+console.log(
+  `Running Desktop test shard ${shard.index}/${shard.total}: ${shardedRegularTests.length} regular and ${shardedIsolatedTests.length} isolated files`,
+)
+
+let exitCode = shardedRegularTests.length === 0 ? 0 : await runTests(shardedRegularTests)
 if (exitCode === 0) {
-  for (const file of isolatedModuleMockTests) {
+  for (const file of shardedIsolatedTests) {
     exitCode = await runTests([file])
     if (exitCode !== 0) break
   }
