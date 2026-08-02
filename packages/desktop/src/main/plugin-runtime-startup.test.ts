@@ -66,7 +66,10 @@ test("quarantines the complete Plugin session after persisted ActiveSet validati
     },
   })
 
-  expect(roots).toEqual(["/persisted/plugin-installations", "/temporary/plugin-installations"])
+  expect(roots).toEqual([
+    path.join("/persisted", "plugin-installations"),
+    path.join("/temporary", "plugin-installations"),
+  ])
   expect(session.state).toEqual({ errorType: "PluginInstallationRuntimeError", state: "quarantined" })
   expect(session.installations).toBe(quarantined)
   expect(session.updateInstallations).toBe(quarantined)
