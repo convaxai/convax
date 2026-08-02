@@ -21,13 +21,16 @@ export class StableProjectFileHandle {
   readonly #absolutePath: string
   #closed = false
   readonly #handle: FileHandle
+  #observedSnapshot: BigIntStats
   readonly #portablePath: string
   #transferred = false
   #verified = false
+  #verifiedDigest: string | undefined
 
   constructor(handle: FileHandle, absolutePath: string, portablePath: string, snapshot: BigIntStats) {
     this.#absolutePath = absolutePath
     this.#handle = handle
+    this.#observedSnapshot = snapshot
     this.#portablePath = portablePath
     this.size = Number(snapshot.size)
     this.snapshot = snapshot
@@ -116,8 +119,10 @@ export class StableProjectFileHandle {
     }
     signal?.throwIfAborted()
     await this.#assertStablePath(offset, signal)
+    const digest = hash.digest("hex")
     this.#verified = true
-    return { bytes, digest: hash.digest("hex") }
+    this.#verifiedDigest = digest
+    return { bytes, digest }
   }
 
   async #assertStablePath(offset: number, signal?: AbortSignal) {
@@ -144,11 +149,11 @@ export class StableProjectFileHandle {
     try {
       while (offset <= input.end) {
         input.signal?.throwIfAborted()
-        await this.#assertOpenHandleUnchanged()
+        await this.#assertOpenHandleUnchanged(input.signal)
         const length = Math.min(stableReadChunkBytes, input.end - offset + 1)
         const bytes = Buffer.allocUnsafe(length)
         const { bytesRead } = await this.#handle.read(bytes, 0, length, offset)
-        await this.#assertOpenHandleUnchanged()
+        await this.#assertOpenHandleUnchanged(input.signal)
         input.signal?.throwIfAborted()
         if (bytesRead !== length) {
           throw new Error(`Project file changed while it was being streamed: ${this.#portablePath}`)
@@ -161,11 +166,53 @@ export class StableProjectFileHandle {
     }
   }
 
-  async #assertOpenHandleUnchanged() {
+  async #assertOpenHandleUnchanged(signal?: AbortSignal) {
     const current = await this.#handle.stat({ bigint: true })
-    if (!current.isFile() || !sameProjectFileSnapshot(this.snapshot, current)) {
+    if (!current.isFile()) {
       throw new Error(`Project file changed while it was being streamed: ${this.#portablePath}`)
     }
+    if (sameProjectFileSnapshot(this.#observedSnapshot, current)) return
+
+    // Linux updates an inode's ctime when its pathname is renamed even though
+    // an already-open handle still points at the same immutable bytes. Accept
+    // only that metadata shape, and re-hash the complete bounded handle before
+    // exposing the next chunk. This also rejects a same-inode rewrite whose
+    // size and mtime were restored after mutation.
+    if (
+      !sameProjectFileIdentity(this.#observedSnapshot, current) ||
+      this.#observedSnapshot.mode !== current.mode ||
+      this.#observedSnapshot.size !== current.size ||
+      this.#observedSnapshot.mtimeNs !== current.mtimeNs ||
+      !this.#verifiedDigest
+    ) {
+      throw new Error(`Project file changed while it was being streamed: ${this.#portablePath}`)
+    }
+    signal?.throwIfAborted()
+    const before = current
+    const digest = await this.#digestOpenHandle(signal)
+    const after = await this.#handle.stat({ bigint: true })
+    signal?.throwIfAborted()
+    if (!sameProjectFileSnapshot(before, after) || digest !== this.#verifiedDigest) {
+      throw new Error(`Project file changed while it was being streamed: ${this.#portablePath}`)
+    }
+    this.#observedSnapshot = after
+  }
+
+  async #digestOpenHandle(signal?: AbortSignal) {
+    const hash = createHash("sha256")
+    const scratch = Buffer.allocUnsafe(Math.min(stableReadChunkBytes, this.size))
+    let offset = 0
+    while (offset < this.size) {
+      signal?.throwIfAborted()
+      const length = Math.min(stableReadChunkBytes, this.size - offset)
+      const { bytesRead } = await this.#handle.read(scratch, 0, length, offset)
+      if (bytesRead !== length) {
+        throw new Error(`Project file changed while it was being streamed: ${this.#portablePath}`)
+      }
+      hash.update(scratch.subarray(0, bytesRead))
+      offset += bytesRead
+    }
+    return hash.digest("hex")
   }
 }
 

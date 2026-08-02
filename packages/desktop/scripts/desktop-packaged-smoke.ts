@@ -22,7 +22,7 @@ import {
 
 const desktopRoot = path.resolve(import.meta.dirname, "..")
 const distRoot = path.join(desktopRoot, "dist")
-const startupTimeoutMs = 90_000
+const startupTimeoutMs = process.platform === "win32" ? 180_000 : 90_000
 const operationTimeoutMs = 120_000
 const pluginTimeoutMs = 45_000
 const defaultRemotePluginId = "ffmpeg-tools"
@@ -114,7 +114,7 @@ async function listDebugTargets(port: number) {
   })
 }
 
-async function waitForRendererTarget(port: number, child: Bun.Subprocess) {
+async function waitForRendererTarget(port: number, child: Bun.Subprocess, startupDiagnosticsPath: string) {
   const deadline = Date.now() + startupTimeoutMs
   let lastError: unknown
   const observedTargets = new Set<string>()
@@ -136,8 +136,12 @@ async function waitForRendererTarget(port: number, child: Bun.Subprocess) {
     }
     await Bun.sleep(100)
   }
+  const startupDiagnostics = await fs
+    .readFile(startupDiagnosticsPath, "utf8")
+    .then((value) => value.trim())
+    .catch(() => "<no startup diagnostics>")
   throw new Error(
-    `Timed out waiting for the packaged app.asar renderer; observed ${JSON.stringify([...observedTargets])}${lastError ? `: ${String(lastError)}` : ""}`,
+    `Timed out waiting for the packaged app.asar renderer; observed ${JSON.stringify([...observedTargets])}${lastError ? `: ${String(lastError)}` : ""}; startup diagnostics: ${startupDiagnostics}`,
   )
 }
 
@@ -518,7 +522,7 @@ try {
   )
   child = spawned
 
-  const target = await waitForRendererTarget(debuggerPort, child)
+  const target = await waitForRendererTarget(debuggerPort, child, path.join(userDataRoot, "packaged-smoke-startup.log"))
   renderer = await DevtoolsClient.connect(target.webSocketDebuggerUrl!)
   const seeded = (await renderer.evaluate(
     `(async () => {

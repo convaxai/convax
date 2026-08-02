@@ -75,6 +75,30 @@ describe("ProjectResourceReader", () => {
     expect(await readBody(result)).toEqual(original.subarray(2, 7))
   })
 
+  test("rejects a same-inode rewrite even when size and mtime are restored", async () => {
+    const target = path.join(projectRoot, "clip.mp4")
+    const original = Buffer.alloc(256 * 1024, 0x31)
+    await fs.writeFile(target, original)
+    const before = await fs.stat(target)
+    const boundedReader = new ProjectResourceReader(manager, assets, { maximumProjectFileBytes: 512 * 1024 })
+
+    const result = await boundedReader.read({
+      contentRevision: digest(original),
+      projectId,
+      reference: { kind: "project-file", path: "clip.mp4" },
+    })
+    const handle = await fs.open(target, "r+")
+    try {
+      const replacement = Buffer.alloc(64 * 1024, 0x32)
+      await handle.write(replacement, 0, replacement.byteLength, original.byteLength - replacement.byteLength)
+    } finally {
+      await handle.close()
+    }
+    await fs.utimes(target, before.atime, before.mtime)
+
+    await expect(readBody(result)).rejects.toThrow(/changed while it was being streamed/i)
+  })
+
   test("fails closed when a Project path becomes a symlink even if its bytes match the revision", async () => {
     const target = path.join(projectRoot, "clip.mp4")
     const outside = path.join(temporaryRoot, "outside.mp4")
