@@ -7,6 +7,9 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { pluginExecutionAuthorizationIdentity } from "../src/main/plugin-installation-runtime"
+import type { InstalledPluginSnapshotDescriptor } from "../src/main/plugin-installation-snapshot-contracts"
+
 import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
 import { assertEmptyPersistedCanvasV2 } from "./desktop-packaged-smoke-canvas"
 import {
@@ -571,21 +574,19 @@ try {
       const ffmpegInstalled = marketplaceInventory.capabilities.find(
         (capability) => capability.kind === "plugin" && capability.id === defaultRemotePluginId,
       )
-      const titlebar = document.querySelector('[data-application-titlebar="true"]')
-      const titlebarButtons = titlebar ? [...titlebar.querySelectorAll("button")] : []
-      const settingsButton = titlebarButtons.at(-1)
-      if (!(settingsButton instanceof HTMLElement)) {
-        throw new Error("The packaged titlebar did not expose Settings")
+      const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
+      if (!(applicationMenuTrigger instanceof HTMLElement)) {
+        throw new Error("The packaged sidebar did not expose the application menu")
       }
-      settingsButton.click()
-      const capabilitiesNavigation = await waitFor(
-        () => document.querySelector('[data-settings-navigation-item="capabilities"]'),
-        "the Marketplace Settings navigation",
+      applicationMenuTrigger.click()
+      const capabilitiesMenuItem = await waitFor(
+        () => document.querySelector('[data-application-menu-item="capabilities"]'),
+        "the application menu Marketplace entry",
       )
-      if (!(capabilitiesNavigation instanceof HTMLElement)) {
-        throw new Error("The packaged Settings did not expose Marketplace navigation")
+      if (!(capabilitiesMenuItem instanceof HTMLElement)) {
+        throw new Error("The packaged application menu did not expose Marketplace")
       }
-      capabilitiesNavigation.click()
+      capabilitiesMenuItem.click()
       await waitFor(
         () => document.querySelector('[data-marketplace-surface="true"]'),
         "the packaged Marketplace Settings surface",
@@ -660,45 +661,63 @@ try {
   const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
   assertEmptyPersistedCanvasV2(await fs.readFile(documentFile, "utf8"))
   await assertLocalMarketplaceIdentity(userDataRoot)
+  const pluginInstallationRoot = path.join(userDataRoot, "plugin-installations")
+  const activePointer = JSON.parse(
+    await fs.readFile(path.join(pluginInstallationRoot, "state", "active-pointer.json"), "utf8"),
+  ) as { activeSetDigest?: string; schema?: string }
+  if (
+    activePointer.schema !== "convax.active-plugin-pointer/1" ||
+    !activePointer.activeSetDigest?.match(/^[a-f0-9]{64}$/)
+  ) {
+    throw new Error(`Packaged Plugin ActiveSet pointer is invalid: ${JSON.stringify(activePointer)}`)
+  }
+  const activeSet = JSON.parse(
+    await fs.readFile(
+      path.join(pluginInstallationRoot, "state", "active-sets", `${activePointer.activeSetDigest}.json`),
+      "utf8",
+    ),
+  ) as { plugins?: Array<{ pluginId?: string; snapshotDigest?: string }>; schema?: string }
+  const ffmpegReference = activeSet.plugins?.find((plugin) => plugin.pluginId === defaultRemotePluginId)
+  if (activeSet.schema !== "convax.active-plugin-set-snapshot/1" || !ffmpegReference?.snapshotDigest) {
+    throw new Error(`Packaged Plugin ActiveSet does not contain ${defaultRemotePluginId}`)
+  }
+  const ffmpegSnapshot = JSON.parse(
+    await fs.readFile(
+      path.join(pluginInstallationRoot, "state", "installed", `${ffmpegReference.snapshotDigest}.json`),
+      "utf8",
+    ),
+  ) as InstalledPluginSnapshotDescriptor
+  const ffmpegClosureRoot = path.join(pluginInstallationRoot, "closures", ffmpegReference.snapshotDigest)
   const ffmpegManifest = JSON.parse(
-    await fs.readFile(path.join(userDataRoot, "plugins", defaultRemotePluginId, "manifest.json"), "utf8"),
+    await fs.readFile(path.join(ffmpegClosureRoot, "package", "manifest.json"), "utf8"),
   ) as { id?: string; runtime?: { command?: string }; version?: string }
   if (
+    ffmpegSnapshot.schema !== "convax.installed-plugin-snapshot/1" ||
+    ffmpegSnapshot.pluginId !== defaultRemotePluginId ||
+    ffmpegSnapshot.version !== seeded.defaultRemote.version ||
     ffmpegManifest.id !== defaultRemotePluginId ||
     ffmpegManifest.version !== seeded.defaultRemote.version ||
     ffmpegManifest.runtime?.command !== "convax-ffmpeg-mcp"
   ) {
     throw new Error(`Packaged default Plugin installation is invalid: ${JSON.stringify(ffmpegManifest)}`)
   }
-  const companionCommandRoot = path.join(
-    userDataRoot,
-    "plugin-companions",
-    defaultRemotePluginId,
-    ffmpegManifest.version,
-    ffmpegManifest.runtime.command,
-  )
-  const companionVersions = await fs.readdir(companionCommandRoot, { withFileTypes: true })
-  const companionVersion = companionVersions.find((entry) => entry.isDirectory() && !entry.isSymbolicLink())?.name
-  if (!companionVersion || companionVersions.filter((entry) => entry.isDirectory()).length !== 1) {
-    throw new Error(`Packaged FFmpeg companion installation is invalid: ${companionCommandRoot}`)
-  }
-  const companionRoot = path.join(companionCommandRoot, companionVersion)
-  const companionReceipt = JSON.parse(
-    await fs.readFile(path.join(companionRoot, ".convax-companion.json"), "utf8"),
-  ) as { command?: string; pluginId?: string; pluginVersion?: string; schema?: string; sha256?: string; size?: number }
-  const companionExecutable = path.join(companionRoot, ffmpegManifest.runtime.command)
+  const companion = ffmpegSnapshot.companion
+  const companionExecutable = companion
+    ? path.join(ffmpegClosureRoot, "companion", ...companion.entryPath.split("/"))
+    : ""
   if (
-    companionReceipt.schema !== "convax.plugin-companion/1" ||
-    companionReceipt.pluginId !== defaultRemotePluginId ||
-    companionReceipt.pluginVersion !== ffmpegManifest.version ||
-    companionReceipt.command !== ffmpegManifest.runtime.command ||
+    !companion ||
+    companion.entryPath !== ffmpegManifest.runtime.command ||
     !(await regularFile(companionExecutable)) ||
-    (await sha256(companionExecutable)) !== companionReceipt.sha256 ||
-    (await fs.stat(companionExecutable)).size !== companionReceipt.size
+    (await sha256(companionExecutable)) !== companion.sha256 ||
+    (await fs.stat(companionExecutable)).size !== companion.size
   ) {
-    throw new Error(`Packaged FFmpeg companion receipt is invalid: ${JSON.stringify(companionReceipt)}`)
+    throw new Error(`Packaged FFmpeg immutable companion is invalid: ${JSON.stringify(companion)}`)
   }
+  const authorizationContractDigest = pluginExecutionAuthorizationIdentity(ffmpegSnapshot)
+  if (!authorizationContractDigest) throw new Error("Packaged FFmpeg immutable authorization is missing")
   await assertAutomaticPreinstalledAuthorization(userDataRoot, {
+    authorizationContractDigest,
     id: defaultRemotePluginId,
     version: ffmpegManifest.version,
   })

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
@@ -35,22 +34,10 @@ describe("packaged smoke automatic preinstall assertions", () => {
     ).toThrow("must be ready")
   })
 
-  test("requires one managed receipt and its exact ExecutionGrant", async () => {
+  test("requires the immutable Plugin authorization digest in its exact ExecutionGrant", async () => {
     const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-preinstall-smoke-"))
     roots.push(userDataRoot)
-    const authorizationDirectory = path.join(userDataRoot, "plugin-authorizations", "ffmpeg-tools")
-    await fs.mkdir(authorizationDirectory, { recursive: true })
-    const key = "a".repeat(64)
-    await fs.writeFile(
-      path.join(authorizationDirectory, `${key}.json`),
-      JSON.stringify({
-        bindingKind: "managed",
-        key,
-        pluginId: "ffmpeg-tools",
-        pluginVersion: "0.3.1",
-        schema: "convax.tool-plugin-authorization/1",
-      }),
-    )
+    const authorizationContractDigest = "a".repeat(64)
     const sourceKey = "b".repeat(64)
     await fs.mkdir(path.join(userDataRoot, "marketplaces"), { recursive: true })
     await fs.writeFile(
@@ -58,9 +45,7 @@ describe("packaged smoke automatic preinstall assertions", () => {
       JSON.stringify({
         executionGrants: [
           {
-            authorizationContractDigest: createHash("sha256")
-              .update(JSON.stringify({ hook: null, tool: key }))
-              .digest("hex"),
+            authorizationContractDigest,
             identity: { id: "ffmpeg-tools", kind: "plugin" },
             revision: 1,
             sourceKey,
@@ -78,7 +63,11 @@ describe("packaged smoke automatic preinstall assertions", () => {
       }),
     )
     await expect(
-      assertAutomaticPreinstalledAuthorization(userDataRoot, { id: "ffmpeg-tools", version: "0.3.1" }),
+      assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        authorizationContractDigest,
+        id: "ffmpeg-tools",
+        version: "0.3.1",
+      }),
     ).resolves.toBeUndefined()
     await fs.writeFile(
       path.join(userDataRoot, "marketplaces", "state-v1.json"),
@@ -89,7 +78,11 @@ describe("packaged smoke automatic preinstall assertions", () => {
       }),
     )
     await expect(
-      assertAutomaticPreinstalledAuthorization(userDataRoot, { id: "ffmpeg-tools", version: "0.3.1" }),
+      assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        authorizationContractDigest,
+        id: "ffmpeg-tools",
+        version: "0.3.1",
+      }),
     ).rejects.toThrow(
       "ExecutionGrant",
     )
