@@ -1,1 +1,3 @@
 packages/plugin-api/history/*.json text eol=lf
+packages/plugin-api/generated/plugin-api.json text eol=lf
+packages/plugin-api/generated/plugin-api.md text eol=lf

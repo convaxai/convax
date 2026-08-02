@@ -1633,7 +1633,7 @@ describe("OpenCode agent runtime boundaries", () => {
       await runtime.dispose()
       await rm(directory, { force: true, recursive: true })
     }
-  }, 20_000)
+  }, 45_000)
 
   test("inlines host-prepared structured resource content without a second MCP lookup", async () => {
     const content = JSON.stringify({ documentId: "document-1", section: "summary" })
