@@ -7,6 +7,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
+import { parseMarketplaceProductLock } from "@convax/marketplace"
 import { pluginExecutionAuthorizationIdentity } from "../src/main/plugin-installation-runtime"
 import type { InstalledPluginSnapshotDescriptor } from "../src/main/plugin-installation-snapshot-contracts"
 
@@ -467,6 +468,13 @@ try {
   const seededProject = await seedProject(userDataRoot, projectRoot)
   const executable = await resolvePackagedExecutable()
   const packagedRuntime = await verifyPackagedLayout(executable)
+  const productLock = parseMarketplaceProductLock(
+    JSON.parse(await fs.readFile(path.resolve(desktopRoot, "..", "..", "marketplaces.lock.json"), "utf8")),
+  )
+  const runtimeTarget = `${process.platform}-${process.arch}`
+  const preinstalledDefaultExpected = productLock.policy.preinstalledPackages.some(
+    (entry) => entry.id === defaultRemotePluginId && entry.targets.some((target) => target === runtimeTarget),
+  )
   const portReservation = reservePort()
   const debuggerPort = portReservation.port
   portReservation.stop(true)
@@ -546,9 +554,13 @@ try {
       }
       const inventory = await window.convax.plugins.listPlugins()
       const defaultRemotePluginId = ${JSON.stringify(defaultRemotePluginId)}
+      const preinstalledDefaultExpected = ${JSON.stringify(preinstalledDefaultExpected)}
       const packagedDefault = inventory.installed.find((plugin) => plugin.id === defaultRemotePluginId)
-      if (!packagedDefault) {
+      if (preinstalledDefaultExpected && !packagedDefault) {
         throw new Error("Packaged default Plugin did not install from the offline seed: " + defaultRemotePluginId)
+      }
+      if (!preinstalledDefaultExpected && packagedDefault) {
+        throw new Error("Packaged default Plugin installed outside its declared target: " + defaultRemotePluginId)
       }
       const settingsSources = await window.convax.marketplaces.listMarketplaces()
       const marketplaceCatalog = await window.convax.marketplaces.listCatalog()
@@ -598,7 +610,7 @@ try {
       }
       return {
         canvasId,
-        defaultRemote: { id: packagedDefault.id, version: packagedDefault.version },
+        defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
           catalogCard,
           ffmpegInstalled,
@@ -625,14 +637,20 @@ try {
   }
   if (
     seeded.canvasId !== "canvas-main" ||
-    seeded.defaultRemote?.id !== defaultRemotePluginId ||
-    !seeded.defaultRemote.version ||
+    preinstalledDefaultExpected !== Boolean(seeded.defaultRemote) ||
+    (seeded.defaultRemote !== undefined &&
+      (seeded.defaultRemote.id !== defaultRemotePluginId || !seeded.defaultRemote.version)) ||
     seeded.projectId !== seededProject.id ||
     typeof seeded.protocol !== "string"
   ) {
     throw new Error(`Unexpected packaged seed result: ${JSON.stringify(seeded)}`)
   }
-  assertMarketplaceSmokeSnapshot(seeded.marketplace)
+  assertMarketplaceSmokeSnapshot(
+    seeded.marketplace,
+    preinstalledDefaultExpected && seeded.defaultRemote?.version
+      ? { id: defaultRemotePluginId, version: seeded.defaultRemote.version }
+      : undefined,
+  )
   const agent = (await renderer.evaluate(
     `(async () => {
       const projects = await window.convax.projects.listProjects()
@@ -661,70 +679,74 @@ try {
   const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
   assertEmptyPersistedCanvasV2(await fs.readFile(documentFile, "utf8"))
   await assertLocalMarketplaceIdentity(userDataRoot)
-  const pluginInstallationRoot = path.join(userDataRoot, "plugin-installations")
-  const activePointer = JSON.parse(
-    await fs.readFile(path.join(pluginInstallationRoot, "state", "active-pointer.json"), "utf8"),
-  ) as { activeSetDigest?: string; schema?: string }
-  if (
-    activePointer.schema !== "convax.active-plugin-pointer/1" ||
-    !activePointer.activeSetDigest?.match(/^[a-f0-9]{64}$/)
-  ) {
-    throw new Error(`Packaged Plugin ActiveSet pointer is invalid: ${JSON.stringify(activePointer)}`)
+  if (preinstalledDefaultExpected) {
+    const defaultRemote = seeded.defaultRemote
+    if (!defaultRemote?.version) throw new Error("Packaged default Plugin identity is missing")
+    const pluginInstallationRoot = path.join(userDataRoot, "plugin-installations")
+    const activePointer = JSON.parse(
+      await fs.readFile(path.join(pluginInstallationRoot, "state", "active-pointer.json"), "utf8"),
+    ) as { activeSetDigest?: string; schema?: string }
+    if (
+      activePointer.schema !== "convax.active-plugin-pointer/1" ||
+      !activePointer.activeSetDigest?.match(/^[a-f0-9]{64}$/)
+    ) {
+      throw new Error(`Packaged Plugin ActiveSet pointer is invalid: ${JSON.stringify(activePointer)}`)
+    }
+    const activeSet = JSON.parse(
+      await fs.readFile(
+        path.join(pluginInstallationRoot, "state", "active-sets", `${activePointer.activeSetDigest}.json`),
+        "utf8",
+      ),
+    ) as { plugins?: Array<{ pluginId?: string; snapshotDigest?: string }>; schema?: string }
+    const ffmpegReference = activeSet.plugins?.find((plugin) => plugin.pluginId === defaultRemotePluginId)
+    if (activeSet.schema !== "convax.active-plugin-set-snapshot/1" || !ffmpegReference?.snapshotDigest) {
+      throw new Error(`Packaged Plugin ActiveSet does not contain ${defaultRemotePluginId}`)
+    }
+    const ffmpegSnapshot = JSON.parse(
+      await fs.readFile(
+        path.join(pluginInstallationRoot, "state", "installed", `${ffmpegReference.snapshotDigest}.json`),
+        "utf8",
+      ),
+    ) as InstalledPluginSnapshotDescriptor
+    const ffmpegClosureRoot = path.join(pluginInstallationRoot, "closures", ffmpegReference.snapshotDigest)
+    const ffmpegManifest = JSON.parse(
+      await fs.readFile(path.join(ffmpegClosureRoot, "package", "manifest.json"), "utf8"),
+    ) as { id?: string; runtime?: { command?: string }; version?: string }
+    if (
+      ffmpegSnapshot.schema !== "convax.installed-plugin-snapshot/1" ||
+      ffmpegSnapshot.pluginId !== defaultRemotePluginId ||
+      ffmpegSnapshot.version !== defaultRemote.version ||
+      ffmpegManifest.id !== defaultRemotePluginId ||
+      ffmpegManifest.version !== defaultRemote.version ||
+      ffmpegManifest.runtime?.command !== "convax-ffmpeg-mcp"
+    ) {
+      throw new Error(`Packaged default Plugin installation is invalid: ${JSON.stringify(ffmpegManifest)}`)
+    }
+    const companion = ffmpegSnapshot.companion
+    const companionExecutable = companion
+      ? path.join(ffmpegClosureRoot, "companion", ...companion.entryPath.split("/"))
+      : ""
+    if (
+      !companion ||
+      companion.entryPath !== ffmpegManifest.runtime.command ||
+      !(await regularFile(companionExecutable)) ||
+      (await sha256(companionExecutable)) !== companion.sha256 ||
+      (await fs.stat(companionExecutable)).size !== companion.size
+    ) {
+      throw new Error(`Packaged FFmpeg immutable companion is invalid: ${JSON.stringify(companion)}`)
+    }
+    const authorizationContractDigest = pluginExecutionAuthorizationIdentity(ffmpegSnapshot)
+    if (!authorizationContractDigest) throw new Error("Packaged FFmpeg immutable authorization is missing")
+    await assertAutomaticPreinstalledAuthorization(userDataRoot, {
+      authorizationContractDigest,
+      id: defaultRemotePluginId,
+      version: ffmpegManifest.version,
+    })
   }
-  const activeSet = JSON.parse(
-    await fs.readFile(
-      path.join(pluginInstallationRoot, "state", "active-sets", `${activePointer.activeSetDigest}.json`),
-      "utf8",
-    ),
-  ) as { plugins?: Array<{ pluginId?: string; snapshotDigest?: string }>; schema?: string }
-  const ffmpegReference = activeSet.plugins?.find((plugin) => plugin.pluginId === defaultRemotePluginId)
-  if (activeSet.schema !== "convax.active-plugin-set-snapshot/1" || !ffmpegReference?.snapshotDigest) {
-    throw new Error(`Packaged Plugin ActiveSet does not contain ${defaultRemotePluginId}`)
-  }
-  const ffmpegSnapshot = JSON.parse(
-    await fs.readFile(
-      path.join(pluginInstallationRoot, "state", "installed", `${ffmpegReference.snapshotDigest}.json`),
-      "utf8",
-    ),
-  ) as InstalledPluginSnapshotDescriptor
-  const ffmpegClosureRoot = path.join(pluginInstallationRoot, "closures", ffmpegReference.snapshotDigest)
-  const ffmpegManifest = JSON.parse(
-    await fs.readFile(path.join(ffmpegClosureRoot, "package", "manifest.json"), "utf8"),
-  ) as { id?: string; runtime?: { command?: string }; version?: string }
-  if (
-    ffmpegSnapshot.schema !== "convax.installed-plugin-snapshot/1" ||
-    ffmpegSnapshot.pluginId !== defaultRemotePluginId ||
-    ffmpegSnapshot.version !== seeded.defaultRemote.version ||
-    ffmpegManifest.id !== defaultRemotePluginId ||
-    ffmpegManifest.version !== seeded.defaultRemote.version ||
-    ffmpegManifest.runtime?.command !== "convax-ffmpeg-mcp"
-  ) {
-    throw new Error(`Packaged default Plugin installation is invalid: ${JSON.stringify(ffmpegManifest)}`)
-  }
-  const companion = ffmpegSnapshot.companion
-  const companionExecutable = companion
-    ? path.join(ffmpegClosureRoot, "companion", ...companion.entryPath.split("/"))
-    : ""
-  if (
-    !companion ||
-    companion.entryPath !== ffmpegManifest.runtime.command ||
-    !(await regularFile(companionExecutable)) ||
-    (await sha256(companionExecutable)) !== companion.sha256 ||
-    (await fs.stat(companionExecutable)).size !== companion.size
-  ) {
-    throw new Error(`Packaged FFmpeg immutable companion is invalid: ${JSON.stringify(companion)}`)
-  }
-  const authorizationContractDigest = pluginExecutionAuthorizationIdentity(ffmpegSnapshot)
-  if (!authorizationContractDigest) throw new Error("Packaged FFmpeg immutable authorization is missing")
-  await assertAutomaticPreinstalledAuthorization(userDataRoot, {
-    authorizationContractDigest,
-    id: defaultRemotePluginId,
-    version: ffmpegManifest.version,
-  })
   await assertNoLegacyDefaultCapabilityReceipt(userDataRoot)
 
   console.log(
-    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${defaultRemotePluginId}, ${agent.providerCount} OpenCode providers)`,
+    `Packaged Desktop smoke passed (${path.basename(executable)}, OpenCode ${packagedRuntime.version}, ${seeded.projectId}, ${preinstalledDefaultExpected ? defaultRemotePluginId : "no target-specific preinstall"}, ${agent.providerCount} OpenCode providers)`,
   )
   const application =
     process.platform === "darwin" ? path.resolve(path.dirname(executable), "..", "..") : path.dirname(executable)

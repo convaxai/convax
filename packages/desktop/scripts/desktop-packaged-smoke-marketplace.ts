@@ -80,7 +80,10 @@ export async function assertNoLegacyDefaultCapabilityReceipt(userDataRoot: strin
   throw new Error("Packaged Marketplace recreated the legacy default capability receipt")
 }
 
-export function assertMarketplaceSmokeSnapshot(snapshot: unknown) {
+export function assertMarketplaceSmokeSnapshot(
+  snapshot: unknown,
+  automaticPreinstall?: { id: string; version: string },
+) {
   if (!isRecord(snapshot)) throw new Error("Packaged Marketplace smoke snapshot is invalid")
   if (snapshot.marketplaceSurfaceVisible !== true) {
     throw new Error("Packaged Desktop did not expose the Marketplace Settings surface")
@@ -135,13 +138,20 @@ export function assertMarketplaceSmokeSnapshot(snapshot: unknown) {
   ) {
     throw new Error("Packaged Marketplace did not install the Builtin canvas-storyboard Skill")
   }
-  if (!isRecord(snapshot.ffmpegInstalled) || snapshot.ffmpegInstalled.sourceLabel !== "convax-official") {
-    throw new Error("Packaged Marketplace did not retain the Official ffmpeg-tools source")
+  if (automaticPreinstall === undefined) {
+    if (snapshot.ffmpegInstalled !== undefined) {
+      throw new Error("Packaged Marketplace installed a target-specific Plugin on an unsupported target")
+    }
+    return
   }
-  assertAutomaticPreinstalledCapability(snapshot.ffmpegInstalled, {
-    id: "ffmpeg-tools",
-    version: String(snapshot.ffmpegInstalled.version),
-  })
+  if (
+    !isRecord(snapshot.ffmpegInstalled) ||
+    snapshot.ffmpegInstalled.id !== automaticPreinstall.id ||
+    snapshot.ffmpegInstalled.sourceLabel !== "convax-official"
+  ) {
+    throw new Error("Packaged Marketplace did not retain the declared Official automatic preinstall")
+  }
+  assertAutomaticPreinstalledCapability(snapshot.ffmpegInstalled, automaticPreinstall)
 }
 
 export async function assertLocalMarketplaceIdentity(userDataRoot: string) {

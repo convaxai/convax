@@ -83,9 +83,7 @@ describe("packaged smoke automatic preinstall assertions", () => {
         id: "ffmpeg-tools",
         version: "0.3.1",
       }),
-    ).rejects.toThrow(
-      "ExecutionGrant",
-    )
+    ).rejects.toThrow("ExecutionGrant")
   })
 
   test("does not recreate the legacy default capability receipt", async () => {
@@ -98,57 +96,107 @@ describe("packaged smoke automatic preinstall assertions", () => {
 
   test("validates source-locked Builtin storyboard and Official automatic preinstall without exposing internal sources", () => {
     expect(() =>
-      assertMarketplaceSmokeSnapshot({
-        catalogCard: { id: "canvas-storyboard", kind: "skill" },
-        ffmpegInstalled: {
-          id: "ffmpeg-tools",
-          kind: "plugin",
-          sourceLabel: "convax-official",
-          state: "ready",
-          version: "0.3.1",
+      assertMarketplaceSmokeSnapshot(
+        {
+          catalogCard: { id: "canvas-storyboard", kind: "skill" },
+          ffmpegInstalled: {
+            id: "ffmpeg-tools",
+            kind: "plugin",
+            sourceLabel: "convax-official",
+            state: "ready",
+            version: "0.3.1",
+          },
+          marketplaceSurfaceVisible: true,
+          settingsSources: [{ id: "convax-official", removable: false }],
+          storyboardSources: ["convax-builtin"],
+          storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
+          storyboardInstalled: {
+            id: "canvas-storyboard",
+            kind: "skill",
+            sourceLabel: "convax-builtin",
+            state: "ready",
+            version: "1.0.0",
+          },
         },
-        marketplaceSurfaceVisible: true,
-        settingsSources: [{ id: "convax-official", removable: false }],
-        storyboardSources: ["convax-builtin"],
-        storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
-        storyboardInstalled: {
-          id: "canvas-storyboard",
-          kind: "skill",
-          sourceLabel: "convax-builtin",
-          state: "ready",
-          version: "1.0.0",
-        },
-      }),
+        { id: "ffmpeg-tools", version: "0.3.1" },
+      ),
     ).not.toThrow()
     expect(() =>
-      assertMarketplaceSmokeSnapshot({
-        catalogCard: { id: "canvas-storyboard", kind: "skill" },
-        ffmpegInstalled: {
-          id: "ffmpeg-tools",
-          kind: "plugin",
-          sourceLabel: "convax-official",
-          state: "ready",
-          version: "0.3.1",
+      assertMarketplaceSmokeSnapshot(
+        {
+          catalogCard: { id: "canvas-storyboard", kind: "skill" },
+          ffmpegInstalled: {
+            id: "ffmpeg-tools",
+            kind: "plugin",
+            sourceLabel: "convax-official",
+            state: "ready",
+            version: "0.3.1",
+          },
+          marketplaceSurfaceVisible: true,
+          settingsSources: [
+            { id: "convax-official", removable: false },
+            { id: "convax-local", removable: false },
+          ],
+          storyboardSources: ["convax-builtin"],
+          storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
+          storyboardInstalled: {
+            id: "canvas-storyboard",
+            kind: "skill",
+            sourceLabel: "convax-builtin",
+            state: "ready",
+            version: "1.0.0",
+          },
         },
-        marketplaceSurfaceVisible: true,
-        settingsSources: [
-          { id: "convax-official", removable: false },
-          { id: "convax-local", removable: false },
-        ],
-        storyboardSources: ["convax-builtin"],
-        storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
-        storyboardInstalled: {
-          id: "canvas-storyboard",
-          kind: "skill",
-          sourceLabel: "convax-builtin",
-          state: "ready",
-          version: "1.0.0",
-        },
-      }),
+        { id: "ffmpeg-tools", version: "0.3.1" },
+      ),
     ).toThrow("internal source")
     expect(() =>
+      assertMarketplaceSmokeSnapshot(
+        {
+          catalogCard: { id: "canvas-storyboard", kind: "skill" },
+          ffmpegInstalled: {
+            id: "ffmpeg-tools",
+            kind: "plugin",
+            sourceLabel: "convax-official",
+            state: "ready",
+            version: "0.3.1",
+          },
+          marketplaceSurfaceVisible: true,
+          settingsSources: [{ id: "convax-official", removable: false }],
+          storyboardSources: ["convax-builtin", "convax-official"],
+          storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
+          storyboardInstalled: {
+            id: "canvas-storyboard",
+            kind: "skill",
+            sourceLabel: "convax-builtin",
+            state: "ready",
+            version: "1.0.0",
+          },
+        },
+        { id: "ffmpeg-tools", version: "0.3.1" },
+      ),
+    ).toThrow("source-locked")
+  })
+
+  test("requires target-specific automatic preinstalls to stay absent on unsupported targets", () => {
+    const snapshot = {
+      catalogCard: { id: "canvas-storyboard", kind: "skill" },
+      marketplaceSurfaceVisible: true,
+      settingsSources: [{ id: "convax-official", removable: false }],
+      storyboardSources: ["convax-builtin"],
+      storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
+      storyboardInstalled: {
+        id: "canvas-storyboard",
+        kind: "skill",
+        sourceLabel: "convax-builtin",
+        state: "ready",
+        version: "1.0.0",
+      },
+    }
+    expect(() => assertMarketplaceSmokeSnapshot(snapshot)).not.toThrow()
+    expect(() =>
       assertMarketplaceSmokeSnapshot({
-        catalogCard: { id: "canvas-storyboard", kind: "skill" },
+        ...snapshot,
         ffmpegInstalled: {
           id: "ffmpeg-tools",
           kind: "plugin",
@@ -156,19 +204,8 @@ describe("packaged smoke automatic preinstall assertions", () => {
           state: "ready",
           version: "0.3.1",
         },
-        marketplaceSurfaceVisible: true,
-        settingsSources: [{ id: "convax-official", removable: false }],
-        storyboardSources: ["convax-builtin", "convax-official"],
-        storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
-        storyboardInstalled: {
-          id: "canvas-storyboard",
-          kind: "skill",
-          sourceLabel: "convax-builtin",
-          state: "ready",
-          version: "1.0.0",
-        },
       }),
-    ).toThrow("source-locked")
+    ).toThrow("unsupported target")
   })
 
   test("validates the transparent Local source identity from userData", async () => {
