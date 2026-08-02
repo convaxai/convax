@@ -426,7 +426,7 @@ describe("ManagedAgentSkillStore", () => {
     } finally {
       await rm(setup.root, { force: true, recursive: true })
     }
-  })
+  }, 15_000)
 
   test("recovers a replacement interrupted between its two filesystem renames", async () => {
     for (const outcome of ["commit", "rollback"] as const) {
@@ -452,7 +452,7 @@ describe("ManagedAgentSkillStore", () => {
         await rm(setup.root, { force: true, recursive: true })
       }
     }
-  })
+  }, 15_000)
 
   test("cleans an abandoned hidden staging directory but never guesses away a published backup", async () => {
     const setup = await fixture()

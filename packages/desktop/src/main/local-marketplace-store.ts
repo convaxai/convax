@@ -13,10 +13,8 @@ import {
   type SourceQualifiedItem,
 } from "@convax/marketplace"
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
-import {
-  parsePluginRuntimeSurface,
-  projectMcpRuntimeSurface,
-} from "./marketplace-runtime-surface"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
+import { parsePluginRuntimeSurface, projectMcpRuntimeSurface } from "./marketplace-runtime-surface"
 import type { MarketplaceItemKind } from "./marketplace-state"
 
 export interface LocalMarketplaceIdentity {
@@ -143,9 +141,7 @@ function skillName(bytes: Uint8Array) {
 function packageIdentity(kind: MarketplaceItemKind, files: readonly InventoryFile[]) {
   const byPath = new Map(files.map((file) => [file.path, file]))
   if (kind === "plugin") {
-    const { manifest } = parsePluginRuntimeSurface(
-      decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"),
-    )
+    const { manifest } = parsePluginRuntimeSurface(decodeJson(byPath.get("manifest.json")!.bytes, "manifest.json"))
     return {
       id: requireIdentityText(manifest.id, "Plugin id"),
       version: requireIdentityText(manifest.version, "Plugin version"),
@@ -395,18 +391,13 @@ async function atomicJson(file: string, value: unknown) {
     const handle = await fs.open(temporary, "wx", 0o600)
     try {
       await handle.writeFile(`${JSON.stringify(value)}\n`)
-      await handle.sync()
+      await syncFileBytes(handle)
     } finally {
       await handle.close()
     }
     await fs.rename(temporary, file)
     published = true
-    const directoryHandle = await fs.open(directory, "r")
-    try {
-      await directoryHandle.sync()
-    } finally {
-      await directoryHandle.close()
-    }
+    await syncDirectoryEntry(directory)
   } finally {
     if (!published) await fs.rm(temporary, { force: true })
   }
@@ -419,19 +410,14 @@ async function createJson(file: string, value: unknown) {
   const handle = await fs.open(temporary, "wx", 0o600)
   try {
     await handle.writeFile(`${JSON.stringify(value)}\n`)
-    await handle.sync()
+    await syncFileBytes(handle)
   } finally {
     await handle.close()
   }
   try {
     await fs.link(temporary, file)
     await fs.unlink(temporary)
-    const directoryHandle = await fs.open(directory, "r")
-    try {
-      await directoryHandle.sync()
-    } finally {
-      await directoryHandle.close()
-    }
+    await syncDirectoryEntry(directory)
   } catch (error) {
     await fs.rm(temporary, { force: true })
     throw error
@@ -824,7 +810,7 @@ export class LocalMarketplaceStore {
         const handle = await fs.open(destination, "wx", file.mode & 0o111 ? 0o700 : 0o600)
         try {
           await handle.writeFile(file.bytes)
-          await handle.sync()
+          await syncFileBytes(handle)
         } finally {
           await handle.close()
         }
