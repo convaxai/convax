@@ -1429,7 +1429,7 @@ function App() {
       flush: flushCanvasForAgent,
       icon: <FileOutput />,
       label:
-        locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder、剪映或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+        locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder 或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
       mode: {
         description:
           locale === "zh-CN"

@@ -1486,7 +1486,7 @@ short-lived opaque ticket. Before publication, Main derives a bounded native pre
 from the first staged material; multi-selection adds a count badge, while video and
 audio may use the operating-system thumbnail or associated file icon. Electron's
 native `webContents.startDrag` publishes those copies and the prepared preview to the
-operating system, so Finder, JianYing and other file-drop consumers
+operating system, so Finder and other file-drop consumers
 share the same path without destination-specific UI automation. Expired, canceled,
 consumed and crash-left stages are bounded and removed by Main. Windows remains an
 explicit native-drag WIP until its behavior is verified; no automation fallback is

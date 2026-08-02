@@ -552,7 +552,7 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
 - Native file drag-out uses a short-lived sender-scoped opaque ticket: Main validates
   the live managed Canvas media selection, stages host-owned copies, and synchronously
   starts Electron's drag. Renderer/preload never receive native paths, and targets
-  such as Finder or JianYing must not introduce UI automation branches.
+  such as Finder or another external application must not introduce UI automation branches.
 - Keep bridge namespaces separate: `projects`, `projectFiles`, `projects.canvases`,
   `canvas`, `generation`, `agent`, `plugins`, `pluginCapabilities`, and
   `pluginServices`; keep IPC prefixes

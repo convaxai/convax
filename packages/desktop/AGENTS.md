@@ -340,7 +340,7 @@ bundled source strings.
   companion Tool contribution in `convax-plugins`; platform support and failure
   derive from its target closure, not a Desktop product branch.
 - Native Canvas media drag-out is destination-neutral and uses Electron's native
-  `webContents.startDrag`; do not special-case Finder or drive JianYing UI. Renderer
+  `webContents.startDrag`; do not special-case Finder or drive third-party application UI. Renderer
   may hold only a short-lived sender-scoped opaque ticket. Main reloads the exact
   active selection, accepts only managed image/video/audio files, stages host-owned
   copies below its private drag directory, and removes abandoned or expired stages.
