@@ -594,6 +594,59 @@ describe("@convax/marketplace-kit", () => {
         descriptor,
       ),
     ).toThrow("cannot change")
+    await rm(join(root, "packages/skills/steady-skill"), { recursive: true })
+    await writePlugin("nexus-service", "0.3.8", "deployed Nexus")
+    const removal = await buildMarketplace({
+      root,
+      outDir: join(root, "removed"),
+      official: false,
+      previousDescriptorPath: join(deployedDir, "marketplace.json"),
+      previousRegistryPath: join(deployedDir, "registry-v2.json"),
+      previousShowcasePath: join(deployedDir, "showcase-v2.json"),
+      publishSelections: [],
+      removeSelections: [
+        {
+          kind: "skill",
+          id: "steady-skill",
+          version: "1.0.0",
+        },
+      ],
+      fetchArtifact,
+    })
+    expect(removal.registry.packages.map(({ kind, id, version }) => `${kind}/${id}@${version}`)).toEqual([
+      "plugin/nexus-service@0.3.8",
+    ])
+    expect(removal.showcase.packages).toEqual([])
+    expect(removal.artifacts).toEqual([])
+    expect(removal.releasePlan.releases.map(({ tag }) => tag)).toEqual([
+      `registry-v2-${removal.registry.revision}`,
+    ])
+    expect(removal.selectionContext?.removedPackages).toEqual([
+      {
+        kind: "skill",
+        id: "steady-skill",
+        productionVersion: "1.0.0",
+      },
+    ])
+    await expect(
+      buildMarketplace({
+        root,
+        outDir: join(root, "removed-wrong-version"),
+        official: false,
+        previousDescriptorPath: join(deployedDir, "marketplace.json"),
+        previousRegistryPath: join(deployedDir, "registry-v2.json"),
+        previousShowcasePath: join(deployedDir, "showcase-v2.json"),
+        publishSelections: [],
+        removeSelections: [
+          {
+            kind: "skill",
+            id: "steady-skill",
+            version: "1.0.1",
+          },
+        ],
+        fetchArtifact,
+      }),
+    ).rejects.toThrow("does not match production baseline")
     await writePlugin("nexus-service", "0.3.7", "regressed Nexus")
     await expect(
       buildMarketplace({
@@ -1014,7 +1067,7 @@ describe("@convax/marketplace-kit", () => {
     const builtinDir = join(root, "dist/builtin")
     const bundle = await buildBuiltinBundle({ root, outDir: builtinDir })
     expect(bundle.members[0]?.presentation.poster.sha256).toMatch(/^[0-9a-f]{64}$/)
-    expect(bundle.archive.path).toContain("/releases/")
+    expect(bundle.archive.path.split(/[\\/]+/)).toContain("releases")
     const archiveBytes = new Uint8Array(await readFile(bundle.archive.path))
     const parsedBuiltin = parseBuiltinBundleArchive(archiveBytes)
     expect(parsedBuiltin.members.map(({ kind, id }) => `${kind}/${id}`)).toEqual(["skill/canvas-storyboard"])

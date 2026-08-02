@@ -18,6 +18,13 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
 - `renderer`: React shell, controller instances, cross-domain coordinators, host view
   adapters and user preferences; no Node/Electron imports.
 
+Packaged Main and preload code must be self-contained JavaScript bundles. Disable
+automatic dependency externalization, permit only Electron and Node built-ins as
+runtime externals, and fail the build when another bare import remains. Never stage
+or copy a `node_modules` tree into the application archive. Keep the packaged Main
+entry in CommonJS so Electron Vite does not inject its ESM compatibility shim into
+bundled source strings.
+
 ## Composition rules
 
 - Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation and Agent
@@ -333,7 +340,7 @@ test fixtures, but it must not keep a hand-maintained copy of a concrete Plugin.
   companion Tool contribution in `convax-plugins`; platform support and failure
   derive from its target closure, not a Desktop product branch.
 - Native Canvas media drag-out is destination-neutral and uses Electron's native
-  `webContents.startDrag`; do not special-case Finder or drive JianYing UI. Renderer
+  `webContents.startDrag`; do not special-case Finder or drive third-party application UI. Renderer
   may hold only a short-lived sender-scoped opaque ticket. Main reloads the exact
   active selection, accepts only managed image/video/audio files, stages host-owned
   copies below its private drag directory, and removes abandoned or expired stages.

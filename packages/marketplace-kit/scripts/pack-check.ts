@@ -129,6 +129,11 @@ const options: BuildMarketplaceOptions = {
     previousVersion: "1.0.0",
     releaseTag: "plugin-example-v1.1.0",
   }],
+  removeSelections: [{
+    kind: "skill",
+    id: "retired-example",
+    version: "1.0.0",
+  }],
   fetchArtifact: async () => new Uint8Array([1]),
 }
 const context: MarketplaceSelectionContext | undefined = undefined

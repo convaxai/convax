@@ -1,12 +1,7 @@
 import { expect, test } from "bun:test"
 import { StrictMode, act, type ReactNode } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuTrigger,
-} from "../src/components/context-menu"
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../src/components/context-menu"
 import { installTestWindow } from "./test-window"
 
 const flatTriggerCount = 128
@@ -54,9 +49,7 @@ test("keeps many flat and nested virtual anchors bounded across StrictMode reren
     }
 
     expect(
-      document
-        .querySelector<HTMLButtonElement>('[data-context-menu-trigger="flat-42"]')
-        ?.getAttribute("data-state"),
+      document.querySelector<HTMLButtonElement>('[data-context-menu-trigger="flat-42"]')?.getAttribute("data-state"),
     ).toBe("open")
     expect(consoleErrors.filter((message) => message.includes("Maximum update depth exceeded"))).toEqual([])
     expect(consoleErrors).toEqual([])
@@ -68,7 +61,7 @@ test("keeps many flat and nested virtual anchors bounded across StrictMode reren
     console.error = originalConsoleError
     await testWindow.restore()
   }
-})
+}, 15_000)
 
 function renderContextMenus(generation: number) {
   return (

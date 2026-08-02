@@ -33,7 +33,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:browser": "for entry in src/index.ts src/contracts.ts src/canvas/index.ts; do bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "build:browser": "bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/index.ts src/contracts.ts src/canvas/index.ts",
     "build:node": "bun build --production --keep-names --target=node --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/node/index.ts",
     "build:css": "bun scripts/build-css.ts",
     "build:types": "tsc -p tsconfig.build.json",

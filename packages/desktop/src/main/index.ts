@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import { appendFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -368,6 +369,18 @@ function createWindow(
 
 function startApplication() {
   const userDataDirectory = app.getPath("userData")
+  const recordPackagedSmokeStartup = async (stage: string, error?: unknown) => {
+    if (!packagedSmoke) return
+    const detail =
+      error instanceof Error ? `${error.name}: ${error.message}\n${error.stack ?? ""}` : String(error ?? "")
+    await appendFile(
+      join(userDataDirectory, "packaged-smoke-startup.log"),
+      `${new Date().toISOString()} ${stage}${detail ? ` ${detail}` : ""}\n`,
+      "utf8",
+    ).catch((diagnosticError) => {
+      console.warn("Could not record packaged smoke startup diagnostics", diagnosticError)
+    })
+  }
   const quarantinedDevelopmentCaches = quarantineLegacyDevelopmentCaches(
     userDataDirectory,
     developmentCachePolicy.legacyDirectoryNames,
@@ -388,6 +401,7 @@ function startApplication() {
   app.on("second-instance", activateMainWindow)
 
   void app.whenReady().then(async () => {
+    await recordPackagedSmokeStartup("electron-ready")
     if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
 
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
@@ -403,6 +417,7 @@ function startApplication() {
       petsRoot: join(userDataDirectory, "pets"),
     })
     const pluginRuntimeSession = await openDesktopPluginRuntimeSession(userDataDirectory)
+    await recordPackagedSmokeStartup("plugin-runtime-ready")
     const pluginInstallations = pluginRuntimeSession.installations
     const pluginUpdateInstallations = pluginRuntimeSession.updateInstallations
     const retiredHostApiRecovery =
@@ -579,6 +594,7 @@ function startApplication() {
       recoveryStateDirectory: join(pluginRuntimeSession.dataDirectory, "generation-sidecars", "operation-v1"),
     })
     await generationRuntime.initialize()
+    await recordPackagedSmokeStartup("generation-runtime-ready")
     const pluginCapabilityBroker = new PluginCapabilityBrokerMainService({
       installations: pluginInstallations,
       principals: pluginPrincipals,
@@ -1431,6 +1447,7 @@ function startApplication() {
         provision: () => marketplace.provisionDefaults(),
         report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
       })
+      await recordPackagedSmokeStartup("marketplace-provisioned")
       scheduleGenerationCatalogRefresh("startup provisioning")
     } else {
       console.warn("Marketplace Plugin migration and provisioning skipped while the Plugin runtime is quarantined")
@@ -1443,6 +1460,7 @@ function startApplication() {
       fetchPetAsset,
     )
     await pets.initialize()
+    await recordPackagedSmokeStartup("pets-ready")
     const petActivityNotifier = new PetActivityNotifier({
       createNotification(options) {
         return Notification.isSupported() ? new Notification(options) : undefined
@@ -1837,6 +1855,7 @@ function startApplication() {
     })
 
     createWindow(projectManager, projectAssetGcScheduler)
+    await recordPackagedSmokeStartup("window-created")
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
         void removeQuarantinedDevelopmentCaches(userDataDirectory).catch((error) => {

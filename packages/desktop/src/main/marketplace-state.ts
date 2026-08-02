@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path"
 
 import { canonicalJson, sha256Hex, type SourceKey } from "@convax/marketplace"
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 
 export type MarketplaceItemKind = "plugin" | "skill" | "mcp-server"
 export type InstalledCapabilityState = "attention" | "disabled" | "ready" | "setup-required"
@@ -500,18 +501,13 @@ export class FileMarketplaceStateStore {
       const handle = await fs.open(temporary, "wx", 0o600)
       try {
         await handle.writeFile(serialized, "utf8")
-        await handle.sync()
+        await syncFileBytes(handle)
       } finally {
         await handle.close()
       }
       await fs.rename(temporary, this.#file)
       published = true
-      const directoryHandle = await fs.open(directory, "r")
-      try {
-        await directoryHandle.sync()
-      } finally {
-        await directoryHandle.close()
-      }
+      await syncDirectoryEntry(directory)
     } finally {
       if (!published) await fs.rm(temporary, { force: true })
     }

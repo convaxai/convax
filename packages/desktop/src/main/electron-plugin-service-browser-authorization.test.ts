@@ -258,7 +258,7 @@ describe("Electron Plugin service browser authorization", () => {
     expect(rootWindow.options).toMatchObject({
       show: false,
       webPreferences: {
-        preload: expect.stringContaining("/preload/plugin-service-browser-authorization.js"),
+        preload: expect.stringMatching(/[\\/]preload[\\/]plugin-service-browser-authorization\.js$/),
         sandbox: true,
       },
     })

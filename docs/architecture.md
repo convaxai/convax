@@ -287,8 +287,8 @@ the provider's durable `operationId`/LRO contract.
 Plugin ABI releases roll out in dependency order: publish
 `@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.1` and
 `@convax/plugin-ui@0.1.0`, then the breaking
-Marketplace authoring line (`@convax/marketplace`,
-`@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.1`), and only
+Marketplace authoring line (`@convax/marketplace` at `0.2.1`, and
+`@convax/marketplace-kit` plus `create-convax-marketplace` at `0.2.2`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
 its authoring dependencies and republishes `convax.plugin/8` artifacts after those
 Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
@@ -344,7 +344,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                            |
 | `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                          |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                               |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation                                              |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs |
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
@@ -1486,7 +1486,7 @@ short-lived opaque ticket. Before publication, Main derives a bounded native pre
 from the first staged material; multi-selection adds a count badge, while video and
 audio may use the operating-system thumbnail or associated file icon. Electron's
 native `webContents.startDrag` publishes those copies and the prepared preview to the
-operating system, so Finder, JianYing and other file-drop consumers
+operating system, so Finder and other file-drop consumers
 share the same path without destination-specific UI automation. Expired, canceled,
 consumed and crash-left stages are bounded and removed by Main. Windows remains an
 explicit native-drag WIP until its behavior is verified; no automation fallback is
@@ -1514,6 +1514,14 @@ window coordination; keep the product's visual implementation in the host.
 - Preload: the narrow typed `window.convax` bridge; no business state.
 - Renderer: React shell, controllers, coordinators, view adapters, and preferences;
   no Node/Electron imports.
+
+Packaged Main and preload outputs are complete JavaScript dependency bundles. The
+build disables package dependency externalization and admits only Electron and Node
+built-ins as host-provided imports; a generated-bundle guard rejects every other
+bare static or dynamic import. Main emits one CommonJS entry so Electron Vite does
+not run its ESM compatibility shim over dependency-bundled source strings. Electron
+Builder excludes `node_modules` entirely, so the application archive never relies
+on a staged dependency tree or monorepo workspace layout.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin

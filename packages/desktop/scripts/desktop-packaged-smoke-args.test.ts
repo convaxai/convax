@@ -22,4 +22,21 @@ describe("Desktop packaged smoke launch arguments", () => {
       }),
     ).not.toContain("--use-mock-keychain")
   })
+
+  test("disables Electron's setuid sandbox only for the Linux smoke process", () => {
+    expect(
+      desktopPackagedSmokeLaunchArguments({
+        debuggerPort: 9_224,
+        executable: "/tmp/convax",
+        platform: "linux",
+      }),
+    ).toContain("--no-sandbox")
+    expect(
+      desktopPackagedSmokeLaunchArguments({
+        debuggerPort: 9_224,
+        executable: "/tmp/Convax Dev.app/Contents/MacOS/Convax Dev",
+        platform: "darwin",
+      }),
+    ).not.toContain("--no-sandbox")
+  })
 })

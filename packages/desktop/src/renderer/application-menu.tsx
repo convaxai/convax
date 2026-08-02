@@ -147,6 +147,7 @@ export function ApplicationMenuPanel({
       {featureFlags.skillsAndPlugins ? (
         <button
           className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+          data-application-menu-item="capabilities"
           onClick={() => onOpenSettings("capabilities")}
           role="menuitem"
           type="button"
@@ -245,6 +246,7 @@ export function ApplicationMenu({
           "flex items-center rounded-lg text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40",
           compact ? "size-8 justify-center" : "w-full gap-2.5 px-2 py-1.5",
         )}
+        data-application-menu-trigger="true"
         onClick={() => {
           if (!open) updatePosition()
           setOpen((current) => !current)
