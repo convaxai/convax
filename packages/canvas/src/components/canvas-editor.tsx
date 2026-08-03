@@ -479,6 +479,7 @@ export function resolveCanvasGroupMenuCapabilities(input: {
   const expandedGroup = input.hasSingleGroupSelection && !input.singleGroupFolded
   const foldedGroup = input.hasSingleGroupSelection && input.singleGroupFolded
   return {
+    canArrangeChildren: expandedGroup,
     canFold: input.canGroupSelection || (expandedGroup && !input.singleGroupFoldUnsupported),
     canGroup: input.canGroupSelection,
     canUngroup: expandedGroup,
@@ -1307,10 +1308,11 @@ function CanvasEditorContent(
   const arrangeNodeIds = useMemo(() => {
     const ids = [...selection.nodeIds]
     if (ids.length !== 1) return ids
+    if (!groupMenuCapabilities.canArrangeChildren) return ids
     const selected = nodeById.get(ids[0])
-    if (selected?.data.kind !== "group") return ids
+    if (!selected) return ids
     return history.document.nodes.filter((node) => node.parentId === selected.id).map((node) => node.id)
-  }, [history.document.nodes, nodeById, selection.nodeIds])
+  }, [groupMenuCapabilities.canArrangeChildren, history.document.nodes, nodeById, selection.nodeIds])
   const arrangeNodes = arrangeNodeIds.flatMap((id) => {
     const node = nodeById.get(id)
     return node ? [node] : []
@@ -4758,6 +4760,9 @@ function CanvasEditorContent(
                     <SelectionToolbar
                       actions={visibleSelectionActions}
                       canArrange={canArrangeSelection}
+                      showArrangeActions={
+                        selectionContext.kind === "multi-node" || groupMenuCapabilities.canArrangeChildren
+                      }
                       canDistribute={canDistributeSelection}
                       disabled={readOnly}
                       canFold={groupMenuCapabilities.canFold}
@@ -5435,6 +5440,7 @@ const selectionLayoutActions = [
 function SelectionToolbar(props: {
   actions: readonly CanvasSelectionAction[]
   canArrange: boolean
+  showArrangeActions: boolean
   canDistribute: boolean
   canFold: boolean
   canGroup: boolean
@@ -5570,89 +5576,93 @@ function SelectionToolbar(props: {
             ) : null}
           </div>
         ) : null}
-        <span className="mx-1 h-5 w-px bg-border" />
-        <div ref={menuRef} className="relative">
-          <IconButton
-            disabled={!props.canArrange}
-            icon={<AlignStartVertical />}
-            label="Align and arrange"
-            onClick={() => setArrangeMenuOpen((open) => !open)}
-            pressed={arrangeMenuOpen}
-            tooltipSide="top"
-          />
-          {arrangeMenuOpen ? (
-            <div
-              className="convax-arrange-menu convax-motion-menu convax-motion-menu--centered"
-              data-canvas-shortcuts="ignore"
-              role="menu"
-            >
-              <div className="convax-arrange-menu__title">Align</div>
-              <div className="convax-arrange-menu__grid" role="group">
-                {selectionAlignActions.map((action) => (
-                  <button
-                    key={action.direction}
-                    className="convax-arrange-menu__action"
-                    onClick={() => {
-                      props.onAlign(action.direction)
-                      setArrangeMenuOpen(false)
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    {action.icon}
-                    <span>{action.label}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="convax-arrange-menu__title">Distribute</div>
-              <div className="convax-arrange-menu__grid convax-arrange-menu__grid--two" role="group">
-                {selectionDistributeActions.map((action) => (
-                  <button
-                    key={action.axis}
-                    className="convax-arrange-menu__action"
-                    disabled={!props.canDistribute}
-                    onClick={() => {
-                      props.onDistribute(action.axis)
-                      setArrangeMenuOpen(false)
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    {action.icon}
-                    <span>{action.label}</span>
-                  </button>
-                ))}
-              </div>
-              <div className="convax-arrange-menu__title">Layout</div>
-              <div className="convax-arrange-menu__grid" role="group">
-                {selectionLayoutActions.map((action) => (
-                  <button
-                    key={action.layout}
-                    className="convax-arrange-menu__action"
-                    onClick={() => {
-                      props.onLayout(action.layout)
-                      setArrangeMenuOpen(false)
-                    }}
-                    role="menuitem"
-                    type="button"
-                  >
-                    {action.icon}
-                    <span>{action.label}</span>
-                  </button>
-                ))}
-              </div>
+        {props.showArrangeActions ? (
+          <>
+            <span className="mx-1 h-5 w-px bg-border" />
+            <div ref={menuRef} className="relative">
+              <IconButton
+                disabled={!props.canArrange}
+                icon={<AlignStartVertical />}
+                label="Align and arrange"
+                onClick={() => setArrangeMenuOpen((open) => !open)}
+                pressed={arrangeMenuOpen}
+                tooltipSide="top"
+              />
+              {arrangeMenuOpen ? (
+                <div
+                  className="convax-arrange-menu convax-motion-menu convax-motion-menu--centered"
+                  data-canvas-shortcuts="ignore"
+                  role="menu"
+                >
+                  <div className="convax-arrange-menu__title">Align</div>
+                  <div className="convax-arrange-menu__grid" role="group">
+                    {selectionAlignActions.map((action) => (
+                      <button
+                        key={action.direction}
+                        className="convax-arrange-menu__action"
+                        onClick={() => {
+                          props.onAlign(action.direction)
+                          setArrangeMenuOpen(false)
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {action.icon}
+                        <span>{action.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="convax-arrange-menu__title">Distribute</div>
+                  <div className="convax-arrange-menu__grid convax-arrange-menu__grid--two" role="group">
+                    {selectionDistributeActions.map((action) => (
+                      <button
+                        key={action.axis}
+                        className="convax-arrange-menu__action"
+                        disabled={!props.canDistribute}
+                        onClick={() => {
+                          props.onDistribute(action.axis)
+                          setArrangeMenuOpen(false)
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {action.icon}
+                        <span>{action.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="convax-arrange-menu__title">Layout</div>
+                  <div className="convax-arrange-menu__grid" role="group">
+                    {selectionLayoutActions.map((action) => (
+                      <button
+                        key={action.layout}
+                        className="convax-arrange-menu__action"
+                        onClick={() => {
+                          props.onLayout(action.layout)
+                          setArrangeMenuOpen(false)
+                        }}
+                        role="menuitem"
+                        type="button"
+                      >
+                        {action.icon}
+                        <span>{action.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-        <IconButton
-          disabled={!props.canArrange}
-          icon={<LayoutGrid />}
-          label="Tidy up"
-          onClick={props.onTidy}
-          shortcut="⌥⇧F"
-          tooltipSide="top"
-        />
-        <span className="mx-1 h-5 w-px bg-border" />
+            <IconButton
+              disabled={!props.canArrange}
+              icon={<LayoutGrid />}
+              label="Tidy up"
+              onClick={props.onTidy}
+              shortcut="⌥⇧F"
+              tooltipSide="top"
+            />
+            <span className="mx-1 h-5 w-px bg-border" />
+          </>
+        ) : null}
         <IconButton icon={<Trash2 />} label="Delete" onClick={props.onDelete} shortcut="⌫" tooltipSide="top" />
       </div>
     </NodeToolbar>

@@ -143,6 +143,111 @@ describe("ProjectCanvasSidebar", () => {
     expect(markup.indexOf('aria-label="Collapse Canvas 1 nodes"')).toBeLessThan(markup.indexOf(">Canvas 1<"))
   })
 
+  test("expands nested Group rows without activating the Group node", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const onNodeActivate = mock(() => undefined)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectCanvasSidebar
+            activeCanvasId="canvas-1"
+            activeNodes={{
+              canvasId: "canvas-1",
+              nodes: [
+                {
+                  children: [
+                    { id: "question", kind: "text", label: "Question" },
+                    {
+                      children: [{ id: "source", kind: "image", label: "Source image" }],
+                      id: "references",
+                      kind: "group",
+                      label: "References",
+                    },
+                  ],
+                  folderColor: "green",
+                  id: "research",
+                  kind: "group",
+                  label: "Research",
+                },
+              ],
+              projectId: "project-1",
+            }}
+            controller={controller}
+            onActivate={() => undefined}
+            onCreate={() => undefined}
+            onDelete={() => undefined}
+            onNodeActivate={onNodeActivate}
+          />,
+        ),
+      )
+
+      const research = container.querySelector<HTMLButtonElement>('[data-project-canvas-node-id="research"]')!
+      expect(research.dataset.projectCanvasNodeDepth).toBe("0")
+      expect(research.querySelector('[data-project-canvas-node-icon="fold"]')).not.toBeNull()
+      expect(research.querySelector('[data-ui-folder-glyph]')).not.toBeNull()
+      expect(container.querySelector('[data-project-canvas-node-id="question"]')).toBeNull()
+
+      await act(async () => research.click())
+      expect(onNodeActivate).not.toHaveBeenCalled()
+      expect(container.querySelector('[data-project-canvas-node-id="question"]')).not.toBeNull()
+      expect(container.querySelector('[data-project-canvas-node-id="source"]')).toBeNull()
+
+      const references = container.querySelector<HTMLButtonElement>('[data-project-canvas-node-id="references"]')!
+      expect(references.querySelector('[data-project-canvas-node-icon="group"]')).not.toBeNull()
+      await act(async () => references.click())
+      const source = container.querySelector<HTMLButtonElement>('[data-project-canvas-node-id="source"]')!
+      expect(source.dataset.projectCanvasNodeDepth).toBe("2")
+
+      await act(async () => source.click())
+      expect(onNodeActivate).toHaveBeenCalledWith({ canvasId: "canvas-1", nodeId: "source" })
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("reveals the ancestor path when the sidebar query matches a nested node", () => {
+    const markup = renderToStaticMarkup(
+      <ProjectCanvasSidebar
+        activeCanvasId="canvas-1"
+        activeNodes={{
+          canvasId: "canvas-1",
+          nodes: [
+            {
+              children: [
+                {
+                  children: [{ id: "moodboard", kind: "image", label: "Summer moodboard" }],
+                  id: "references",
+                  kind: "group",
+                  label: "References",
+                },
+              ],
+              id: "research",
+              kind: "group",
+              label: "Research",
+            },
+          ],
+          projectId: "project-1",
+        }}
+        controller={controller}
+        onActivate={() => undefined}
+        onCreate={() => undefined}
+        onDelete={() => undefined}
+        query="moodboard"
+      />,
+    )
+
+    expect(markup).toContain('data-project-canvas-node-id="research"')
+    expect(markup).toContain('data-project-canvas-node-id="references"')
+    expect(markup).toContain('data-project-canvas-node-id="moodboard"')
+    expect(markup).toContain('data-project-canvas-node-depth="2"')
+  })
+
   test("toggles the active Canvas outline from its row and reopens it when the Canvas becomes active again", async () => {
     const restoreWindow = installTestWindow()
     const container = document.createElement("div")

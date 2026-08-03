@@ -66,6 +66,9 @@ mock.module("@convax/ui", () => ({
     size?: string
     variant?: string
   }) => <button {...props}>{children}</button>,
+  FolderGlyph: (props: { size?: string }) => (
+    <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: Passthrough,
@@ -532,6 +535,60 @@ test("accepts expanded Group resize dimensions while protecting folded presentat
     expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("treats a folded Group as one node and hides child arrangement controls", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const group = createGroupNode({
+      height: 360,
+      id: "folded-group",
+      position: { x: 40, y: 60 },
+      width: 520,
+    })
+    const first = {
+      ...createTextNode({
+        id: "first-child",
+        metadata: {},
+        position: { x: 40, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const second = {
+      ...createTextNode({
+        id: "second-child",
+        metadata: {},
+        position: { x: 300, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const foldedDocument = setCanvasGroupFolded(
+      createCanvasDocument({ id: "folded-group-menu", nodes: [group, first, second] }),
+      group.id,
+      true,
+    )
+
+    await act(async () => {
+      root?.render(<CanvasEditor initialDocument={foldedDocument} services={createCanvasServices()} />)
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([{ id: group.id, selected: true, type: "select" }])
+    })
+
+    expect(container.querySelector('button[aria-label="Unfold"]')).not.toBeNull()
+    expect(container.querySelector('button[aria-label="Align and arrange"]')).toBeNull()
+    expect(container.querySelector('button[aria-label="Tidy up"]')).toBeNull()
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

@@ -23,7 +23,6 @@ import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
   ProjectCanvasController,
-  type ProjectCanvasSidebarNode,
   type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
 import {
@@ -133,6 +132,10 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
+import {
+  projectCanvasSidebarNodes,
+  sameProjectCanvasNodeProjection,
+} from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import { ProjectHome } from "./project-home"
@@ -2361,45 +2364,6 @@ function App() {
       </AgentModelCatalogProvider>
     </AgentGenerationPreferenceProvider>
   )
-}
-
-function projectCanvasSidebarNodes(document: CanvasDocument): ProjectCanvasSidebarNode[] {
-  return document.nodes.map((node) => {
-    const name = typeof node.data.name === "string" ? node.data.name.trim() : ""
-    const label = node.data.label.trim() || name || "Untitled node"
-    const preview = projectCanvasSidebarNodePreview(node)
-    return { id: node.id, kind: node.data.kind, label, ...preview }
-  })
-}
-
-function projectCanvasSidebarNodePreview(node: CanvasDocument["nodes"][number]) {
-  const resourceState = node.data.resourceState
-  if (!resourceState || typeof resourceState !== "object") return {}
-  const state = resourceState as { posterUrl?: unknown; url?: unknown }
-  if (node.data.kind === "image" && typeof state.url === "string" && state.url.trim()) {
-    return { previewType: "image" as const, previewUrl: state.url.trim() }
-  }
-  if (node.data.kind === "video") {
-    if (typeof state.posterUrl === "string" && state.posterUrl.trim()) {
-      return { previewType: "image" as const, previewUrl: state.posterUrl.trim() }
-    }
-    if (typeof state.url === "string" && state.url.trim()) {
-      return { previewType: "video" as const, previewUrl: state.url.trim() }
-    }
-  }
-  return {}
-}
-
-function sameProjectCanvasNodeProjection(
-  left: ProjectCanvasSidebarNodeProjection | null,
-  right: ProjectCanvasSidebarNodeProjection,
-) {
-  if (!left || left.canvasId !== right.canvasId || left.projectId !== right.projectId) return false
-  if (left.nodes.length !== right.nodes.length) return false
-  return left.nodes.every((node, index) => {
-    const other = right.nodes[index]
-    return other?.id === node.id && other.kind === node.kind && other.label === node.label
-  })
 }
 
 function Toast({ notification }: { notification: CanvasNotification }) {

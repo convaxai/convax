@@ -109,7 +109,7 @@ describe("Canvas-first visual hierarchy", () => {
     expect(pickerRule).toContain("width: min(328px, calc(100% - 24px))")
     expect(pickerRule).toContain("overscroll-behavior: contain")
     expect(colorRule).not.toContain("--canvas-group-color")
-    expect(styles).toMatch(/data-canvas-group-color="default"[^}]+--canvas-group-color: oklch\(0\.74 0\.035 82\)/)
+    expect(folderRule).toContain("--canvas-group-color: oklch(0.74 0.035 82)")
     expect(styles).toMatch(/data-canvas-group-color="green"[^}]+--canvas-group-color: oklch\(0\.74 0\.115 146\)/)
     expect(emojiGridRule).toContain("max-height: 220px")
     expect(emojiGridRule).toContain("overflow-y: auto")

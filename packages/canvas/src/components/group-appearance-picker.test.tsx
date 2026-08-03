@@ -56,6 +56,8 @@ describe("Canvas group appearance picker", () => {
     expect(markup).toContain('aria-label="Folder color"')
     expect(markup).toContain('aria-label="Folder emoji"')
     expect(markup).toContain('data-canvas-group-color="green"')
+    expect(markup).toContain('data-ui-folder-glyph=""')
+    expect(markup).toContain('data-ui-folder-glyph-size="picker"')
     expect(markup).toContain('aria-label="Leaf" aria-pressed="true"')
     expect(markup).toContain("🍃")
     expect(markup).toContain('aria-label="Peace"')

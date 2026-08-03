@@ -7,6 +7,7 @@ import {
   canvasGroupAppearanceSchema,
   defaultCanvasGroupAppearance,
   getCanvasGroupAppearance,
+  getCanvasGroupColorValue,
   setCanvasGroupAppearance,
 } from "./group-appearance"
 import { canvasHistoryReducer, createCanvasHistory } from "./history"
@@ -21,6 +22,11 @@ function groupNode(id = "group") {
 }
 
 describe("Canvas group appearance", () => {
+  test("projects every bounded folder color to its shared visual material", () => {
+    expect(getCanvasGroupColorValue("default")).toBe("oklch(0.74 0.035 82)")
+    expect(getCanvasGroupColorValue("green")).toBe("oklch(0.74 0.115 146)")
+  })
+
   test("stores one bounded appearance while preserving unrelated metadata", () => {
     const group = groupNode()
     group.data.metadata = { source: "brief.md" }

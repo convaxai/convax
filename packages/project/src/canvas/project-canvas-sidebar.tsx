@@ -1,3 +1,4 @@
+import { getCanvasGroupColorValue, type CanvasGroupColor } from "@convax/canvas/core"
 import {
   Button,
   ContextMenu,
@@ -5,6 +6,7 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  FolderGlyph,
   cn,
 } from "@convax/ui"
 import {
@@ -26,7 +28,7 @@ import {
   Video,
   X,
 } from "lucide-react"
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
+import { type Dispatch, type SetStateAction, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import type { ProjectCanvas } from "./contracts"
 import { ProjectCanvasController } from "./controller"
 import { PROJECT_CANVAS_DRAG_TYPE, serializeProjectCanvasDrag } from "./drag"
@@ -47,6 +49,8 @@ export interface ProjectCanvasSidebarProps {
 }
 
 export interface ProjectCanvasSidebarNode {
+  children?: readonly ProjectCanvasSidebarNode[]
+  folderColor?: CanvasGroupColor
   id: string
   kind?: string
   label: string
@@ -78,6 +82,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
   const [expandedCanvasIds, setExpandedCanvasIds] = useState<ReadonlySet<string>>(
     () => new Set(props.activeCanvasId ? [props.activeCanvasId] : []),
   )
+  const [expandedNodeKeys, setExpandedNodeKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [nodeLoadState, setNodeLoadState] = useState<Readonly<Record<string, CanvasNodeLoadState>>>({})
   const nodeLoadRequestsRef = useRef(new Map<string, number>())
   const nextNodeLoadRequestRef = useRef(0)
@@ -94,8 +99,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
         )
         return (
           (nodes === undefined && canLoadOutline) ||
-          nodes?.some((node) => `${node.label} ${node.kind ?? ""}`.toLocaleLowerCase().includes(normalizedQuery)) ===
-            true
+          nodes?.some((node) => projectCanvasNodeMatchesQuery(node, normalizedQuery)) === true
         )
       })
     : snapshot.canvases
@@ -152,6 +156,7 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
     nodeLoadRequestsRef.current.clear()
     setNodeLoadState({})
     setExpandedCanvasIds(new Set(props.activeCanvasId ? [props.activeCanvasId] : []))
+    setExpandedNodeKeys(new Set())
   }, [snapshot.projectId])
 
   useEffect(() => {
@@ -241,8 +246,11 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
           const hasActiveNodeProjection =
             props.activeNodes?.projectId === snapshot.projectId && props.activeNodes.canvasId === canvas.id
           const showsNodeOutline = Boolean(props.loadNodes || hasActiveNodeProjection)
-          const expanded = showsNodeOutline && expandedCanvasIds.has(canvas.id)
           const nodes = resolveCanvasNodes(canvas.id, snapshot.projectId, props.activeNodes, nodeLoadState)
+          const hasMatchingNode = Boolean(
+            normalizedQuery && nodes?.some((node) => projectCanvasNodeMatchesQuery(node, normalizedQuery)),
+          )
+          const expanded = showsNodeOutline && (expandedCanvasIds.has(canvas.id) || hasMatchingNode)
           const loadState = nodeLoadState[canvas.id]
           const toggleCanvasOutline = () => {
             if (!showsNodeOutline) return
@@ -414,23 +422,14 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
                       Could not load nodes. Retry
                     </button>
                   ) : nodes?.length ? (
-                    nodes.map((node) => (
-                      <button
-                        className="group/node flex min-h-8 w-full items-center gap-2 rounded px-2 text-left text-[12px] text-text-tertiary outline-none hover:bg-interactive-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-focus-ring/40"
-                        data-project-canvas-node-id={node.id}
-                        key={node.id}
-                        onClick={() => void props.onNodeActivate?.({ canvasId: canvas.id, nodeId: node.id })}
-                        title={node.label}
-                        type="button"
-                      >
-                        <ProjectCanvasNodePreview
-                          kind={node.kind}
-                          previewType={node.previewType}
-                          previewUrl={node.previewUrl}
-                        />
-                        <span className="min-w-0 flex-1 truncate">{node.label}</span>
-                      </button>
-                    ))
+                    <ProjectCanvasNodeRows
+                      canvasId={canvas.id}
+                      expandedNodeKeys={expandedNodeKeys}
+                      nodes={nodes}
+                      onActivate={props.onNodeActivate}
+                      query={normalizedQuery}
+                      setExpandedNodeKeys={setExpandedNodeKeys}
+                    />
                   ) : (
                     <div className="flex h-8 items-center px-2 text-[11px] text-text-tertiary" role="status">
                       No nodes
@@ -496,17 +495,136 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
   )
 }
 
+function ProjectCanvasNodeRows({
+  canvasId,
+  depth = 0,
+  expandedNodeKeys,
+  nodes,
+  onActivate,
+  query,
+  setExpandedNodeKeys,
+}: {
+  canvasId: string
+  depth?: number
+  expandedNodeKeys: ReadonlySet<string>
+  nodes: readonly ProjectCanvasSidebarNode[]
+  onActivate?: ProjectCanvasSidebarProps["onNodeActivate"]
+  query: string
+  setExpandedNodeKeys: Dispatch<SetStateAction<ReadonlySet<string>>>
+}) {
+  return nodes.map((node) => {
+    const children = node.children ?? []
+    const expandable = children.length > 0
+    const nodeKey = `${canvasId}:${node.id}`
+    const revealsQueryMatch = Boolean(query && children.some((child) => projectCanvasNodeMatchesQuery(child, query)))
+    const expanded = expandable && (expandedNodeKeys.has(nodeKey) || revealsQueryMatch)
+    const setExpanded = (nextExpanded: boolean) => {
+      setExpandedNodeKeys((current) => {
+        const next = new Set(current)
+        if (nextExpanded) next.add(nodeKey)
+        else next.delete(nodeKey)
+        return next
+      })
+    }
+
+    return (
+      <div aria-expanded={expandable ? expanded : undefined} key={node.id} role="treeitem">
+        <button
+          className="group/node flex min-h-8 w-full items-center gap-1.5 rounded py-1 pr-2 text-left text-[12px] text-text-tertiary outline-none hover:bg-interactive-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+          data-project-canvas-node-depth={depth}
+          data-project-canvas-node-id={node.id}
+          onClick={() => {
+            if (expandable) setExpanded(!expanded)
+            else void onActivate?.({ canvasId, nodeId: node.id })
+          }}
+          onKeyDown={(event) => {
+            if (!expandable) return
+            if (event.key === "ArrowRight" && !expanded) {
+              event.preventDefault()
+              setExpanded(true)
+            }
+            if (event.key === "ArrowLeft" && expanded) {
+              event.preventDefault()
+              setExpanded(false)
+            }
+          }}
+          style={{ paddingInlineStart: `${4 + depth * 16}px` }}
+          title={node.label}
+          type="button"
+        >
+          <span
+            aria-hidden
+            className="grid size-4 shrink-0 place-items-center text-text-tertiary"
+            data-project-canvas-node-disclosure={expandable ? (expanded ? "expanded" : "collapsed") : "leaf"}
+          >
+            {expandable ? (
+              <ChevronRight
+                className={cn(
+                  "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                  expanded && "rotate-90",
+                )}
+              />
+            ) : null}
+          </span>
+          <ProjectCanvasNodePreview
+            folderColor={node.folderColor}
+            kind={node.kind}
+            previewType={node.previewType}
+            previewUrl={node.previewUrl}
+          />
+          <span className="min-w-0 flex-1 truncate">{node.label}</span>
+        </button>
+        {expanded ? (
+          <div role="group">
+            <ProjectCanvasNodeRows
+              canvasId={canvasId}
+              depth={depth + 1}
+              expandedNodeKeys={expandedNodeKeys}
+              nodes={children}
+              onActivate={onActivate}
+              query={query}
+              setExpandedNodeKeys={setExpandedNodeKeys}
+            />
+          </div>
+        ) : null}
+      </div>
+    )
+  })
+}
+
+function projectCanvasNodeMatchesQuery(node: ProjectCanvasSidebarNode, query: string): boolean {
+  return (
+    `${node.label} ${node.kind ?? ""}`.toLocaleLowerCase().includes(query) ||
+    (node.children ?? []).some((child) => projectCanvasNodeMatchesQuery(child, query))
+  )
+}
+
 function ProjectCanvasNodePreview({
+  folderColor,
   kind = "unknown",
   previewType = kind === "video" ? "video" : "image",
   previewUrl,
 }: {
+  folderColor?: CanvasGroupColor
   kind?: string
   previewType?: "image" | "video"
   previewUrl?: string
 }) {
   const [previewFailed, setPreviewFailed] = useState(false)
   useEffect(() => setPreviewFailed(false), [previewUrl])
+
+  if (folderColor) {
+    return (
+      <span
+        aria-hidden
+        className="grid size-6 shrink-0 place-items-center"
+        data-project-canvas-node-folder-color={folderColor}
+        data-project-canvas-node-icon="fold"
+      >
+        <FolderGlyph color={getCanvasGroupColorValue(folderColor)} size="compact" />
+      </span>
+    )
+  }
 
   if (previewUrl && !previewFailed) {
     return (

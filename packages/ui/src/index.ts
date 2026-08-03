@@ -30,6 +30,7 @@ export {
   type DisclosureProps,
 } from "./components/disclosure"
 export { Input } from "./components/input"
+export { FolderGlyph, type FolderGlyphProps, type FolderGlyphSize } from "./components/folder-glyph"
 export {
   Loading,
   LoadingSkeleton,
