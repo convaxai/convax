@@ -80,7 +80,7 @@ describe("appearance preferences", () => {
     })
   })
 
-  test("returns Paper and Purple defaults for missing, malformed, unknown, old, or partial records", () => {
+  test("returns Graphite and Purple defaults for missing, malformed, unknown, old, or partial records", () => {
     const invalidValues = [
       null,
       "{",

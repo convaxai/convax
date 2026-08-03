@@ -188,6 +188,10 @@ user directory.
   or business operations. Edge adapters do not recreate domain invariants.
 - Main's Canvas application service/repository is the sole authoritative document
   state and persistent writer. Renderer state is an optimistic, fallible projection.
+- Renderer may retain and persist one bounded, versioned, last-complete Marketplace
+  display projection so remounts and cold windows render immediately. It must
+  revalidate through Main at window startup and never use that projection as
+  installation, source, grant, or runtime authority.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,

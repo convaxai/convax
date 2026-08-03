@@ -23,9 +23,10 @@ or durable domain authority.
 - Switching Project synchronously resets Workbench scope and scopes Project Files
   and Project Canvas controllers. Guard asynchronous results so prior-scope
   responses cannot overwrite the current projection.
-- Browser storage contains renderer preferences and Workbench recovery choices only.
-  Loading a preference may choose an initial Input; Workbench is canonical
-  afterward.
+- Browser storage contains renderer preferences, Workbench recovery choices, and
+  one bounded versioned Marketplace display cache only. Loading a preference may
+  choose an initial Input; Workbench is canonical afterward. The Marketplace cache
+  remains a disposable projection and Main remains authoritative.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
   concrete viewport budgets, CSS animation, and persistence of user preferences.
 
@@ -40,6 +41,10 @@ or durable domain authority.
   runtime preferences are display projections. Main must revalidate the exact
   ActiveSet/snapshot identity, live schema/service status, grants, scope, and
   revisions before action.
+- Marketplace UI may render its last complete strictly validated projection
+  immediately across remounts and cold windows while revalidating it through Main
+  at Renderer startup. Persist only bounded renderer-safe fields; never let the
+  projection authorize a selection, install, update, setup, or runtime action.
 - Keep the Agent generation model as the user-global renderer preference. A Canvas
   card may persist only its own opaque output-tool override through Canvas; card
   changes never update the Agent default in reverse or create a second catalog.

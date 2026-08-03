@@ -111,12 +111,12 @@ flowchart TB
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
     ProjectRoot["Project root / .convax<br/>identity, Canvas catalog/documents, managed assets"]
-    LocalStorage["Browser localStorage<br/>Workbench and renderer preferences only"]
+    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace display cache"]
   end
 
   Main --> UserData
   Main --> ProjectRoot
-  Renderer -. preferences only .-> LocalStorage
+  Renderer -. non-authoritative UI state only .-> LocalStorage
 
   subgraph Delivery["Independent delivery surfaces"]
     Web["@convax/web<br/>public marketing site"]
@@ -362,7 +362,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                            |
 | `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                          |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                               |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal  |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs |
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
@@ -518,7 +518,8 @@ Packaged app Resources/
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
-browser localStorage                    per-user Workbench/renderer preferences
+browser localStorage                    per-user Workbench/renderer preferences and one
+                                        bounded disposable Marketplace display projection
 
 <project root>/
   Notes/                                user-visible Canvas-created text files
@@ -567,6 +568,21 @@ commits one atomic decision containing both its immutable snapshot identity and
 complete next decision. Source removal retains the security high-water and installed
 runtime. Each installed `{kind,id}` is locked to the exact source identity in its
 `InstallRecord`; update from another source is rejected until uninstall.
+Renderer persists the last complete Marketplace display projection as one bounded,
+versioned, strictly validated browser cache and also retains it in process memory.
+At window startup it immediately begins a Main revalidation; Settings renders the
+cached projection synchronously across both remounts and cold windows while that
+local read completes. The cache admits only renderer-safe catalog, installed-state,
+runtime-state, and source-presentation fields; malformed, oversized, unknown-field,
+or Main-authority-shaped data is ignored. It never contains a SourceKey, native
+path, token, digest, grant, or ActiveSet identity and never authorizes selection,
+installation, setup, runtime use, or any other mutation. Main listing reads the
+accepted local source snapshots and installed stores without refreshing the network;
+only an explicit add or refresh action fetches source metadata. A first-ever window
+or an invalid cache retains the explicit loading state until Main supplies the first
+complete projection. The architecture map keeps the existing browser-storage node
+and now records this additional disposable projection; no dependency or trust route
+changes.
 
 `marketplaces.lock.json` is the sole product input for packaged Marketplace bytes.
 Its policy declares Builtin/Official sources and `preinstalledPackages`; its resolved

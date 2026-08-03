@@ -4,6 +4,7 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 
 import type { MarketplaceClient } from "../marketplace-contracts"
+import { preloadMarketplaceProjection } from "./marketplace-projection-cache"
 import { MarketplaceSurface } from "./marketplace-view"
 
 let root: Root | null = null
@@ -169,6 +170,165 @@ function deferred<T>() {
   })
   return { promise, resolve }
 }
+
+test("shows an explicit loading state before the first Marketplace projection arrives", async () => {
+  const firstCatalog = deferred<Awaited<ReturnType<MarketplaceClient["listCatalog"]>>>()
+  const marketplace = client({ listCatalog: mock(() => firstCatalog.promise) })
+
+  await render(marketplace)
+  expect(document.querySelector('[data-marketplace-loading="true"]')).not.toBeNull()
+  expect(document.body.textContent).toContain("Loading extensions…")
+
+  await act(async () => {
+    firstCatalog.resolve({
+      cards: [
+        {
+          description: "Loaded capability",
+          id: "loaded",
+          kind: "plugin",
+          name: "Loaded",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 1,
+    })
+    await firstCatalog.promise
+  })
+  expect(document.querySelector('[data-marketplace-loading="true"]')).toBeNull()
+  expect(document.body.textContent).toContain("Loaded")
+})
+
+test("reuses the window-startup projection warmup when Settings opens", async () => {
+  const firstCatalog = deferred<Awaited<ReturnType<MarketplaceClient["listCatalog"]>>>()
+  const listCatalog = mock(() => firstCatalog.promise)
+  const marketplace = client({ listCatalog })
+  const warmup = preloadMarketplaceProjection(marketplace, window.localStorage)
+
+  await render(marketplace)
+  expect(listCatalog).toHaveBeenCalledTimes(1)
+
+  await act(async () => {
+    firstCatalog.resolve({
+      cards: [
+        {
+          description: "Warmed before Settings",
+          id: "warmed",
+          kind: "plugin",
+          name: "Warmed",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 1,
+    })
+    await warmup
+  })
+  expect(document.body.textContent).toContain("Warmed")
+})
+
+test("renders the last complete projection immediately across remounts while revalidating it", async () => {
+  type Catalog = Awaited<ReturnType<MarketplaceClient["listCatalog"]>>
+  const revalidation = deferred<Catalog>()
+  let request = 0
+  const marketplace = client({
+    listCatalog: mock(() => {
+      request += 1
+      if (request === 1) {
+        return Promise.resolve({
+          cards: [
+            {
+              description: "Cached capability",
+              id: "cached",
+              kind: "plugin" as const,
+              name: "Cached",
+              otherSourceCount: 0,
+            },
+          ],
+          revision: 1,
+        })
+      }
+      return revalidation.promise
+    }),
+  })
+
+  await render(marketplace)
+  expect(document.body.textContent).toContain("Cached")
+  await act(async () => root?.unmount())
+  root = null
+  container?.replaceChildren()
+
+  await render(marketplace)
+  expect(request).toBe(2)
+  expect(document.querySelector('[data-marketplace-loading="true"]')).toBeNull()
+  expect(document.body.textContent).toContain("Cached")
+
+  await act(async () => {
+    revalidation.resolve({
+      cards: [
+        {
+          description: "Fresh capability",
+          id: "fresh",
+          kind: "plugin",
+          name: "Fresh",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 2,
+    })
+    await revalidation.promise
+  })
+  expect(document.body.textContent).toContain("Fresh")
+  expect(document.body.textContent).not.toContain("Cached")
+})
+
+test("renders the durable display projection immediately for a cold renderer client", async () => {
+  const firstClient = client({
+    listCatalog: mock(async () => ({
+      cards: [
+        {
+          description: "Persisted local capability",
+          id: "persisted",
+          kind: "plugin" as const,
+          name: "Persisted",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 1,
+    })),
+  })
+  await render(firstClient)
+  expect(document.body.textContent).toContain("Persisted")
+  await act(async () => root?.unmount())
+  root = null
+  container?.replaceChildren()
+
+  type Catalog = Awaited<ReturnType<MarketplaceClient["listCatalog"]>>
+  const revalidation = deferred<Catalog>()
+  const listCatalog = mock(() => revalidation.promise)
+  const coldClient = client({ listCatalog })
+  await render(coldClient)
+
+  expect(listCatalog).toHaveBeenCalledTimes(1)
+  expect(document.querySelector('[data-marketplace-loading="true"]')).toBeNull()
+  expect(document.body.textContent).toContain("Persisted")
+
+  await act(async () => {
+    revalidation.resolve({
+      cards: [
+        {
+          description: "Revalidated local capability",
+          id: "revalidated",
+          kind: "plugin",
+          name: "Revalidated",
+          otherSourceCount: 0,
+        },
+      ],
+      revision: 2,
+    })
+    await revalidation.promise
+  })
+  expect(document.body.textContent).toContain("Revalidated")
+  expect(document.body.textContent).not.toContain("Persisted")
+})
 
 test("renders one aggregated card and requires an explicit source choice", async () => {
   const marketplace = client()

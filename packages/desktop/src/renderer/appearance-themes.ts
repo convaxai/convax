@@ -3,6 +3,7 @@ import type { SemanticThemeTokens } from "@convax/ui"
 
 export const appearancePresetIds = ["paper", "graphite", "midnight", "studio"] as const
 export type AppearancePresetId = (typeof appearancePresetIds)[number]
+export const defaultAppearancePresetId: AppearancePresetId = "graphite"
 export type AppearanceColorScheme = "light" | "dark"
 export const appearanceAccentIds = ["violet", "blue", "cyan", "green", "orange", "rose"] as const
 export type AppearanceAccentId = (typeof appearanceAccentIds)[number]
@@ -402,7 +403,7 @@ export function isAppearancePresetId(value: unknown): value is AppearancePresetI
 }
 
 export function resolveAppearancePresetId(value: unknown): AppearancePresetId {
-  return isAppearancePresetId(value) ? value : "paper"
+  return isAppearancePresetId(value) ? value : defaultAppearancePresetId
 }
 
 export function resolveAppAppearanceTheme(value: unknown): AppAppearanceTheme {

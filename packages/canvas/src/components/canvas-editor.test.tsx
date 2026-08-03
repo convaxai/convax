@@ -1497,13 +1497,25 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(source).toContain("props.onGenerationStateChange?.(false)")
   })
 
-  test("keeps Search in the bottom-left viewport toolbar while restoring top creation tools", async () => {
+  test("moves Search to the top Canvas toolbar while keeping viewport controls at the bottom-left", async () => {
     const source = await Bun.file(new URL("./canvas-editor.tsx", import.meta.url)).text()
     const markup = renderEditor()
+    const canvasHeaderSource = source.slice(
+      source.indexOf("function CanvasHeader"),
+      source.indexOf("function CanvasSelectionDragModeStatus"),
+    )
+    const viewportToolbarSource = source.slice(
+      source.indexOf("function ViewportToolbar"),
+      source.indexOf("function CanvasContextMenu"),
+    )
 
     expect(markup).toContain("convax-viewport-toolbar bottom-3 left-3")
     expect(markup).toContain("convax-creation-toolbar-frame")
     expect(markup).toContain('aria-label="Canvas tools"')
+    expect(canvasHeaderSource).toContain('label="Search"')
+    expect(canvasHeaderSource).toContain("onClick={props.onSearch}")
+    expect(viewportToolbarSource).not.toContain('label="Search"')
+    expect(viewportToolbarSource).not.toContain("onSearch:")
     expect(source).toContain('className="convax-node-search__input"')
     expect(source).toContain('className="convax-node-search__backdrop"')
     expect(source).toContain('data-convax-node-search-panel="true"')

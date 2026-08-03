@@ -117,6 +117,7 @@ import {
   type MediaOperationInput,
 } from "./media-operation-selection-action"
 import { MediaOperationDialog } from "./media-operation-dialog"
+import { preloadMarketplaceProjection } from "./marketplace-projection-cache"
 import {
   canRunPluginMaterialization,
   listInstalledPluginMaterializationActions,
@@ -2394,6 +2395,9 @@ const root = document.getElementById("app")
 if (!(root instanceof HTMLElement)) throw new Error("App root was not found")
 const reactRoot = import.meta.hot?.data.root ?? createRoot(root)
 if (import.meta.hot) import.meta.hot.data.root = reactRoot
+void preloadMarketplaceProjection(window.convax.marketplaces).catch((error) =>
+  console.error("Could not warm the local Marketplace display projection", error),
+)
 void changeAppLanguage(readAppLanguagePreference(localStorage))
 reactRoot.render(
   <I18nextProvider i18n={appI18n}>

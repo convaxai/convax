@@ -8,9 +8,13 @@ import type {
   MarketplaceCatalogSourceChoice,
   MarketplaceClient,
   MarketplaceInstalledCapability,
-  MarketplacePluginRuntimeState,
   MarketplaceSettingsSource,
 } from "../marketplace-contracts"
+import {
+  getMarketplaceProjection,
+  preloadMarketplaceProjection,
+  refreshMarketplaceProjection,
+} from "./marketplace-projection-cache"
 
 export interface MarketplaceSurfaceProps {
   className?: string
@@ -37,11 +41,10 @@ function capabilityPendingKey(kind: MarketplaceCatalogCard["kind"], id: string) 
 }
 
 export function MarketplaceSurface({ className, client, locale }: MarketplaceSurfaceProps) {
+  const initialProjection = getMarketplaceProjection(client)
   const [page, setPage] = useState<Page>("catalog")
-  const [catalog, setCatalog] = useState<MarketplaceCatalogCard[]>([])
-  const [installed, setInstalled] = useState<MarketplaceInstalledCapability[]>([])
-  const [pluginRuntimeState, setPluginRuntimeState] = useState<MarketplacePluginRuntimeState>("available")
-  const [sources, setSources] = useState<MarketplaceSettingsSource[]>([])
+  const [projection, setProjection] = useState(initialProjection ?? null)
+  const [loading, setLoading] = useState(initialProjection === null)
   const [sourceChoices, setSourceChoices] = useState<MarketplaceCatalogSourceChoice[]>([])
   const [selectedChoice, setSelectedChoice] = useState<MarketplaceCatalogSourceChoice>()
   const [sourceChoiceRequest, setSourceChoiceRequest] = useState<SourceChoiceRequest>()
@@ -63,31 +66,40 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
       ? "无法完成此操作。请重试或在 Marketplace 设置中检查状态。"
       : "The operation could not be completed. Try again or check Marketplace settings."
 
-  const refresh = useCallback(() => {
-    const request = ++refreshRequestRef.current
-    let current!: Promise<void>
-    current = (async () => {
-      const [nextCatalog, nextInstalled, nextSources] = await Promise.all([
-        client.listCatalog(),
-        client.listInstalled(),
-        client.listMarketplaces(),
-      ])
-      if (request !== refreshRequestRef.current) {
-        const latest = latestRefreshPromiseRef.current
-        if (latest && latest !== current) await latest
-        return
-      }
-      setCatalog(nextCatalog.cards)
-      setInstalled(nextInstalled.capabilities)
-      setPluginRuntimeState(nextInstalled.pluginRuntimeState)
-      setSources(nextSources)
-    })()
-    latestRefreshPromiseRef.current = current
-    return current
-  }, [client])
+  const refresh = useCallback(
+    (force = true) => {
+      const request = ++refreshRequestRef.current
+      if (getMarketplaceProjection(client) === null) setLoading(true)
+      let current!: Promise<void>
+      current = (async () => {
+        try {
+          const nextProjection = await (force
+            ? refreshMarketplaceProjection(client)
+            : preloadMarketplaceProjection(client))
+          if (request !== refreshRequestRef.current) {
+            const latest = latestRefreshPromiseRef.current
+            if (latest && latest !== current) await latest
+            return
+          }
+          setProjection(nextProjection)
+          setError(undefined)
+        } finally {
+          if (request === refreshRequestRef.current) setLoading(false)
+        }
+      })()
+      latestRefreshPromiseRef.current = current
+      return current
+    },
+    [client],
+  )
+
+  const catalog = projection?.catalog ?? []
+  const installed = projection?.installed ?? []
+  const pluginRuntimeState = projection?.pluginRuntimeState ?? "available"
+  const sources = projection?.sources ?? []
 
   useEffect(() => {
-    void refresh().catch(() => setError(safeFailure))
+    void refresh(false).catch(() => setError(safeFailure))
     return client.onDidChange(() => {
       void refresh().catch(() => setError(safeFailure))
     })
@@ -155,6 +167,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           import: "导入…",
           install: "安装",
           installed: "已安装",
+          loading: "正在加载扩展…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplace",
           preview: "预览",
@@ -175,6 +188,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           import: "Import…",
           install: "Install",
           installed: "Installed",
+          loading: "Loading extensions…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplaces",
           preview: "Preview",
@@ -252,7 +266,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
             : "Needs attention"
 
   return (
-    <section className={cn("space-y-5", className)} data-marketplace-surface="true">
+    <section aria-busy={loading || undefined} className={cn("space-y-5", className)} data-marketplace-surface="true">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex gap-1 rounded-lg bg-control-background p-1">
           {(
@@ -275,7 +289,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </div>
         <Button
           aria-busy={pendingKeys.has("import")}
-          disabled={pendingKeys.has("import") || pluginRuntimeState === "unavailable-for-session"}
+          disabled={loading || pendingKeys.has("import") || pluginRuntimeState === "unavailable-for-session"}
           onClick={() => void mutate("import", () => client.importCapability())}
           size="sm"
           variant="outline"
@@ -291,7 +305,18 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </p>
       ) : null}
 
-      {pluginRuntimeState === "unavailable-for-session" ? (
+      {loading ? (
+        <div
+          className="flex min-h-40 items-center justify-center gap-2 rounded-xl border border-border-subtle bg-surface-panel text-sm text-text-secondary"
+          data-marketplace-loading="true"
+          role="status"
+        >
+          <LoadingSpinner size="sm" />
+          {text.loading}
+        </div>
+      ) : null}
+
+      {!loading && pluginRuntimeState === "unavailable-for-session" ? (
         <p
           className="rounded-lg border border-border-subtle bg-control-background px-3 py-2 text-sm text-text-secondary"
           data-plugin-runtime-unavailable="true"
@@ -307,7 +332,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </p>
       ) : null}
 
-      {page === "catalog" ? (
+      {!loading && page === "catalog" ? (
         <div className="grid gap-3">
           {catalog.map((card) => {
             const pendingKey = capabilityPendingKey(card.kind, card.id)
@@ -390,7 +415,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </div>
       ) : null}
 
-      {page === "installed" ? (
+      {!loading && page === "installed" ? (
         <div className="grid gap-3">
           {installed.map((capability) => {
             const pendingKey = capabilityPendingKey(capability.kind, capability.id)
@@ -565,7 +590,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </div>
       ) : null}
 
-      {page === "marketplaces" ? (
+      {!loading && page === "marketplaces" ? (
         <div className="space-y-5">
           <div className="rounded-xl border border-border-subtle bg-surface-panel p-4">
             <label className="text-sm font-medium" htmlFor="marketplace-url">

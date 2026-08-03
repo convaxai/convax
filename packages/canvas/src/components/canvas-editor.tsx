@@ -4645,6 +4645,7 @@ function CanvasEditorContent(
                     interactionTool={interactionTool}
                     onAddNode={(type) => addNode(type, undefined, true)}
                     onInteractionToolChange={activateInteractionTool}
+                    onSearch={() => setSearchOpen(true)}
                     onUpload={(kind) => {
                       cancelSelectionDrag()
                       if (kind === "image") imageUploadInputRef.current?.click()
@@ -4795,7 +4796,6 @@ function CanvasEditorContent(
                     onLayout={layoutCanvas}
                     onLayoutStrategyChange={changeAutoLayoutStrategy}
                     onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
-                    onSearch={() => setSearchOpen(true)}
                     onSnapChange={() =>
                       setSnapEnabled((enabled) => {
                         if (enabled) setSnapLines([])
@@ -5259,6 +5259,7 @@ function CanvasHeader(props: {
   interactionTool: CanvasInteractionTool
   onAddNode: (type: string) => void
   onInteractionToolChange: (tool: CanvasInteractionTool) => void
+  onSearch: () => void
   onUpload: (kind: "files" | "image" | "video") => void
   readOnly: boolean
 }) {
@@ -5336,6 +5337,7 @@ function CanvasHeader(props: {
           shortcut="H"
           tooltipSide="bottom"
         />
+        <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="bottom" />
         <div className="relative" ref={addMenuRef}>
           <IconButton
             buttonRef={addTriggerRef}
@@ -5744,7 +5746,6 @@ function ViewportToolbar(props: {
   onLayout: () => void
   onLayoutStrategyChange: (strategy: CanvasDirectedAutoLayoutStrategy) => void
   onMiniMapChange: () => void
-  onSearch: () => void
   onSnapChange: () => void
   onZoomIn: () => void
   onZoomOut: () => void
@@ -5794,8 +5795,6 @@ function ViewportToolbar(props: {
   }, [zoomMenuOpen])
   return (
     <ToolSurface className="convax-viewport-toolbar bottom-3 left-3 gap-0.5">
-      <IconButton icon={<Search />} label="Search" onClick={props.onSearch} shortcut="⌘F" tooltipSide="top" />
-      <span className="mx-1 h-5 w-px bg-border" />
       <IconButton icon={<Focus />} label="Fit view" onClick={props.onFit} shortcut="⌘0" tooltipSide="top" />
       <IconButton
         icon={<CanvasEdgeVisibilityIcon />}

@@ -109,8 +109,14 @@ contract and its routed references.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender
   validation, bounded messages, stale-scope checks, and cancellation at every
   process crossing.
-- Browser storage is for renderer preferences and Workbench recovery choices only.
-  It is never canonical domain, installation, execution, or authorization state.
+- Browser storage is for renderer preferences, Workbench recovery choices, and one
+  bounded versioned Marketplace display cache only. It is never canonical domain,
+  installation, execution, or authorization state.
+- Marketplace settings seed from the last complete safe Renderer projection across
+  remounts and cold windows, then revalidate in the background at window startup.
+  Strictly reject malformed, oversized, unknown-field, or Main-authority-shaped
+  cache data; never accept it as Marketplace, installation, grant, or ActiveSet
+  authority.
 - Every cancellable cross-process operation uses a sender-scoped opaque id only for
   lifecycle correlation. Authority and scope are independently derived and
   revalidated by Main.

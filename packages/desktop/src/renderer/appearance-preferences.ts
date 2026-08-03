@@ -1,4 +1,5 @@
 import {
+  defaultAppearancePresetId,
   defaultCustomAccentColor,
   isAppearanceAccentSelectionId,
   isAppearancePresetId,
@@ -25,7 +26,7 @@ export const defaultAppearancePreferences: AppearancePreferences = Object.freeze
   customAccent: defaultCustomAccentColor,
   highContrast: false,
   reducedMotion: false,
-  theme: "paper",
+  theme: defaultAppearancePresetId,
 })
 
 interface AppearanceStorageReader {
@@ -112,7 +113,13 @@ export function applyAppearancePreferences(target: AppearanceAttributeTarget, pr
   target.setAttribute("data-canvas-theme", safePreferences.theme)
   target.setAttribute("data-high-contrast", String(safePreferences.highContrast))
   target.setAttribute("data-reduced-motion", String(safePreferences.reducedMotion))
-  const customProperties = ["--ui-brand", "--ui-focus-ring", "--ui-on-brand", "--ui-on-selection", "--ui-selection"] as const
+  const customProperties = [
+    "--ui-brand",
+    "--ui-focus-ring",
+    "--ui-on-brand",
+    "--ui-on-selection",
+    "--ui-selection",
+  ] as const
   if (safePreferences.accent !== "custom") {
     for (const property of customProperties) target.style?.removeProperty(property)
     return

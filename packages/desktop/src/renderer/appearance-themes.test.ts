@@ -64,11 +64,11 @@ describe("appearance themes", () => {
     }
   })
 
-  test("falls back unknown preset identifiers to Paper", () => {
+  test("falls back unknown preset identifiers to the default Graphite theme", () => {
     expect(resolveAppearancePresetId("midnight")).toBe("midnight")
-    expect(resolveAppearancePresetId("removed-theme")).toBe("paper")
-    expect(resolveAppearancePresetId(null)).toBe("paper")
-    expect(resolveAppAppearanceTheme("removed-theme")).toBe(appAppearanceThemes.paper)
+    expect(resolveAppearancePresetId("removed-theme")).toBe("graphite")
+    expect(resolveAppearancePresetId(null)).toBe("graphite")
+    expect(resolveAppAppearanceTheme("removed-theme")).toBe(appAppearanceThemes.graphite)
   })
 
   test("resolves six scheme-aware accents across App and Canvas without weakening contrast", () => {
@@ -159,11 +159,13 @@ describe("appearance themes", () => {
 
   test("ships CSS selectors containing every semantic variable for all presets", () => {
     const css = readFileSync(join(import.meta.dir, "appearance-themes.css"), "utf8")
+    const html = readFileSync(join(import.meta.dir, "index.html"), "utf8")
     expect(css).toContain(":root[data-app-theme]")
+    expect(css).toContain(':root,\n:root[data-app-theme="graphite"]')
+    expect(css).not.toContain(':root,\n:root[data-app-theme="paper"]')
+    expect(html).toContain('<meta name="color-scheme" content="dark light" />')
     expect(css).toContain("--background: var(--ui-surface-canvas)")
-    expect(css).toContain(
-      "--accent: var(--ui-interactive-selected)",
-    )
+    expect(css).toContain("--accent: var(--ui-interactive-selected)")
     expect(css).not.toContain("--accent: var(--ui-status-info-surface)")
     expect(css).toContain("--canvas-interactive-hover: var(--ui-interactive-hover)")
     expect(css).toContain("--canvas-surface: var(--ui-surface-raised)")
