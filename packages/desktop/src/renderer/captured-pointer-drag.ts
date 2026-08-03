@@ -22,7 +22,8 @@ export interface CapturedPointerDragOptions {
   onSettled?(): void
   pointerId: number
   suppressClickAfterCommit?: boolean
-  update(clientX: number): void
+  /** Return `commit` when the current update reaches a terminal drag state. */
+  update(clientX: number): "commit" | undefined
 }
 
 /** Keeps the originating separator alive until its resize transaction settles. */
@@ -39,8 +40,8 @@ function browserClock(): CapturedPointerDragClock {
 
 /**
  * Owns one horizontal drag, optionally with pointer capture. Raw moves are
- * reduced to the last coordinate in each animation frame; the exact pointer-up
- * coordinate is always flushed before commit.
+ * reduced to the last coordinate in each animation frame. A terminal update
+ * commits immediately; otherwise the exact pointer-up coordinate is flushed.
  */
 export function startCapturedPointerDrag(options: CapturedPointerDragOptions): CapturedPointerDragSession | null {
   const source = options.eventSource ?? window
@@ -56,6 +57,9 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
       clickSuppressionFrameId = null
     }
     source.removeEventListener("click", suppressCommittedClick, true)
+    source.removeEventListener("pointerup", finishCommittedClickSuppression, true)
+    source.removeEventListener("pointercancel", clearCommittedClickSuppression, true)
+    source.removeEventListener("blur", clearCommittedClickSuppression, true)
   }
   const suppressCommittedClick = (event: Event) => {
     const eventPointerId =
@@ -67,13 +71,30 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
     event.stopImmediatePropagation()
     clearCommittedClickSuppression()
   }
-  const armCommittedClickSuppression = () => {
-    if (!options.suppressClickAfterCommit) return
-    source.addEventListener("click", suppressCommittedClick, true)
+  const finishCommittedClickSuppression = (event: Event) => {
+    const pointer = pointerEvent(event)
+    if (!pointer || pointer.pointerId !== options.pointerId) return
+    source.removeEventListener("pointerup", finishCommittedClickSuppression, true)
+    source.removeEventListener("pointercancel", clearCommittedClickSuppression, true)
+    source.removeEventListener("blur", clearCommittedClickSuppression, true)
     clickSuppressionFrameId = clock.requestFrame(() => {
       clickSuppressionFrameId = null
       source.removeEventListener("click", suppressCommittedClick, true)
     })
+  }
+  const armCommittedClickSuppression = (pointerReleased: boolean) => {
+    if (!options.suppressClickAfterCommit) return
+    source.addEventListener("click", suppressCommittedClick, true)
+    if (pointerReleased) {
+      clickSuppressionFrameId = clock.requestFrame(() => {
+        clickSuppressionFrameId = null
+        source.removeEventListener("click", suppressCommittedClick, true)
+      })
+      return
+    }
+    source.addEventListener("pointerup", finishCommittedClickSuppression, true)
+    source.addEventListener("pointercancel", clearCommittedClickSuppression, true)
+    source.addEventListener("blur", clearCommittedClickSuppression, true)
   }
   const flushPending = () => {
     frameId = null
@@ -81,7 +102,7 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
     pendingClientX = null
     if (clientX === null) return
     try {
-      options.update(clientX)
+      applyUpdate(clientX, false)
     } catch (error) {
       cancel()
       throw error
@@ -112,22 +133,37 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
     if (!pointer || pointer.pointerId !== options.pointerId) return
     schedule(pointer.clientX)
   }
-  const finish = (event: Event) => {
-    const pointer = pointerEvent(event)
-    if (!pointer || pointer.pointerId !== options.pointerId || settled) return
+  const commit = (pointerReleased: boolean) => {
+    if (settled) return false
     settled = true
     cancelPending()
     detach()
     releaseCapture()
-    armCommittedClickSuppression()
+    armCommittedClickSuppression(pointerReleased)
     try {
-      options.update(pointer.clientX)
       options.commit()
     } catch (error) {
       options.cancel()
       throw error
     } finally {
       options.onSettled?.()
+    }
+    return true
+  }
+  const applyUpdate = (clientX: number, pointerReleased: boolean) => {
+    if (options.update(clientX) !== "commit") return false
+    commit(pointerReleased)
+    return true
+  }
+  const finish = (event: Event) => {
+    const pointer = pointerEvent(event)
+    if (!pointer || pointer.pointerId !== options.pointerId || settled) return
+    cancelPending()
+    try {
+      if (!applyUpdate(pointer.clientX, true)) commit(true)
+    } catch (error) {
+      cancel()
+      throw error
     }
   }
   const cancel = (event?: Event) => {

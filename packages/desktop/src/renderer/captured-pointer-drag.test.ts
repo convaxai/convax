@@ -70,11 +70,55 @@ describe("captured pointer drag", () => {
     expect(resizeWiring).toMatch(/startCapturedPointerDrag\(\{[\s\S]*?captureTarget,/)
     expect(resizeWiring).toContain('presentation.utilityPresentation === "dock"')
     expect(resizeWiring).toContain("suppressClickAfterCommit: true")
+    expect(resizeWiring).toContain('return resizedPart.visible ? undefined : "commit"')
   })
 
   test("retains a resize handle after the part crosses its collapse threshold", () => {
     expect(shouldMountResizeHandle(false, true)).toBeTrue()
     expect(shouldMountResizeHandle(false, false)).toBeFalse()
+  })
+
+  test("commits and exits the drag as soon as an update reaches a terminal state", () => {
+    const source = new EventTarget()
+    const captureTarget = new TestPointerTarget()
+    const updates: number[] = []
+    const commit = mock(() => undefined)
+    const cancel = mock(() => undefined)
+    const settled = mock(() => undefined)
+    const leakedClick = mock(() => undefined)
+    const { clock, frames, run } = testClock()
+
+    startCapturedPointerDrag({
+      cancel,
+      captureTarget,
+      clock,
+      commit,
+      eventSource: source,
+      onSettled: settled,
+      pointerId: 4,
+      suppressClickAfterCommit: true,
+      update: (clientX) => {
+        updates.push(clientX)
+        return "commit" as const
+      },
+    })
+    source.dispatchEvent(pointerEvent("pointermove", 4, 80))
+    run(frames[0])
+
+    expect(updates).toEqual([80])
+    expect(commit).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(captureTarget.hasPointerCapture(4)).toBeFalse()
+
+    source.dispatchEvent(pointerEvent("pointermove", 4, 90))
+    source.dispatchEvent(pointerEvent("pointerup", 4, 90))
+    source.addEventListener("click", leakedClick)
+    const click = pointerEvent("click", 4, 90)
+    expect(source.dispatchEvent(click)).toBeFalse()
+    expect(leakedClick).not.toHaveBeenCalled()
+    expect(updates).toEqual([80])
+    expect(commit).toHaveBeenCalledTimes(1)
   })
 
   test("commits a window-owned drag without requiring pointer capture", () => {
@@ -90,7 +134,10 @@ describe("captured pointer drag", () => {
       commit,
       eventSource: source,
       pointerId: 2,
-      update: (clientX) => updates.push(clientX),
+      update: (clientX) => {
+        updates.push(clientX)
+        return undefined
+      },
     })
 
     expect(session).not.toBeNull()
@@ -140,7 +187,10 @@ describe("captured pointer drag", () => {
       eventSource: source,
       onSettled: settled,
       pointerId: 7,
-      update: (clientX) => updates.push(clientX),
+      update: (clientX) => {
+        updates.push(clientX)
+        return undefined
+      },
     })
 
     expect(session).not.toBeNull()

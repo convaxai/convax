@@ -1522,6 +1522,8 @@ function App() {
         const requested = startSize + (clientX - startX) * direction
         const constrained = Math.min(requested, Math.max(0, available))
         workbenchLayoutController.updateResize(constrained - startSize)
+        const resizedPart = getWorkbenchLayoutPartSnapshot(workbenchLayoutController.getSnapshot(), partId)!
+        return resizedPart.visible ? undefined : "commit"
       }
 
       let session: CapturedPointerDragSession | null = null

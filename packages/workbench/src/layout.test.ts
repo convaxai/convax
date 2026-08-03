@@ -219,27 +219,31 @@ describe("WorkbenchLayoutController", () => {
     expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(true)
   })
 
-  test("latches a cooldown collapse for the rest of its drag even after the deadline", () => {
-    let now = 10_000
-    const controller = new WorkbenchLayoutController({
-      ...options({
-        [WorkbenchLayoutParts.SecondarySidebar]: { collapseReopenDelayMs: 1_000 },
-      }),
-      now: () => now,
-    })
+  test("starts either sidebar's reopen cooldown when a drag collapse commits, not while held", () => {
+    for (const partId of Object.values(WorkbenchLayoutParts)) {
+      let now = 10_000
+      const controller = new WorkbenchLayoutController({
+        ...options({
+          [WorkbenchLayoutParts.PrimarySidebar]: { collapseReopenDelayMs: 1_000, collapseThreshold: 140 },
+          [WorkbenchLayoutParts.SecondarySidebar]: { collapseReopenDelayMs: 1_000 },
+        }),
+        now: () => now,
+      })
 
-    controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
-    controller.updateResize(-300)
-    now += 1_000
-    controller.updateResize(-150)
+      controller.beginResize(partId)
+      controller.updateResize(-300)
+      now += 1_000
+      controller.updateResize(-150)
 
-    expect(getWorkbenchLayoutPartSnapshot(
-      controller.getSnapshot(),
-      WorkbenchLayoutParts.SecondarySidebar,
-    )?.visible).toBe(false)
-    controller.endResize()
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]?.visible).toBe(false)
-    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(true)
+      expect(getWorkbenchLayoutPartSnapshot(controller.getSnapshot(), partId)?.visible).toBe(false)
+      controller.endResize()
+      expect(controller.getSnapshot().parts[partId]?.visible).toBe(false)
+      expect(controller.setPartVisible(partId, true)).toBe(false)
+      now += 999
+      expect(controller.setPartVisible(partId, true)).toBe(false)
+      now += 1
+      expect(controller.setPartVisible(partId, true)).toBe(true)
+    }
   })
 
   test("cancelResize restores both size and visibility", () => {

@@ -8,7 +8,7 @@ export type WorkbenchStandardLayoutPartId = typeof WorkbenchLayoutParts[keyof ty
 export interface WorkbenchLayoutPartConfiguration {
   /** Collapses at this raw size; reopening in the same drag must also reach minSize. */
   collapseThreshold?: number
-  /** Blocks reopening for this duration once a drag crosses the collapse threshold. */
+  /** Blocks reopening for this duration after a drag collapse commits. */
   collapseReopenDelayMs?: number
   initialSize: number
   initialVisible: boolean
@@ -61,7 +61,6 @@ interface ResizeTransaction {
   collapseLatched?: boolean
   initialPart: Readonly<WorkbenchLayoutPartSnapshot>
   partId: string
-  reopenBlockedUntil?: number
 }
 
 /** DOM-free state and transaction controller for Workbench layout parts. */
@@ -146,8 +145,6 @@ export class WorkbenchLayoutController {
     const reopenDelay = configuration.collapseReopenDelayMs ?? 0
     if (crossedCollapseThreshold && reopenDelay > 0 && !transaction.collapseLatched) {
       transaction.collapseLatched = true
-      transaction.reopenBlockedUntil = this.now() + reopenDelay
-      this.reopenBlockedUntil.set(transaction.partId, transaction.reopenBlockedUntil)
     }
     const collapsed = configuration.collapseThreshold !== undefined
       && (
@@ -177,6 +174,10 @@ export class WorkbenchLayoutController {
           size: clamp(current.size, configuration.minSize, configuration.maxSize),
         }
       : current
+    const reopenDelay = configuration.collapseReopenDelayMs ?? 0
+    if (!committed.visible && transaction.collapseLatched && reopenDelay > 0) {
+      this.reopenBlockedUntil.set(transaction.partId, this.now() + reopenDelay)
+    }
     const parts = replacePart(this.snapshot.parts, transaction.partId, committed)
     this.resizeTransaction = null
     this.replaceSnapshot(parts, null)
@@ -184,14 +185,7 @@ export class WorkbenchLayoutController {
   }
 
   cancelResize() {
-    const transaction = this.resizeTransaction
-    if (!transaction) return false
-    if (
-      transaction.reopenBlockedUntil !== undefined
-      && this.reopenBlockedUntil.get(transaction.partId) === transaction.reopenBlockedUntil
-    ) {
-      this.reopenBlockedUntil.delete(transaction.partId)
-    }
+    if (!this.resizeTransaction) return false
     this.resizeTransaction = null
     this.replaceSnapshot(this.snapshot.parts, null)
     return true
