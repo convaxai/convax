@@ -1,4 +1,9 @@
-import { getCanvasGroupColorValue, type CanvasGroupColor } from "@convax/canvas/core"
+import {
+  getCanvasGroupColorValue,
+  getCanvasGroupEmoji,
+  type CanvasGroupColor,
+  type CanvasGroupEmoji,
+} from "@convax/canvas/core"
 import {
   Button,
   ContextMenu,
@@ -51,6 +56,7 @@ export interface ProjectCanvasSidebarProps {
 export interface ProjectCanvasSidebarNode {
   children?: readonly ProjectCanvasSidebarNode[]
   folderColor?: CanvasGroupColor
+  folderEmoji?: CanvasGroupEmoji
   id: string
   kind?: string
   label: string
@@ -572,7 +578,20 @@ function ProjectCanvasNodeRows({
             previewType={node.previewType}
             previewUrl={node.previewUrl}
           />
-          <span className="min-w-0 flex-1 truncate">{node.label}</span>
+          <span className="flex min-w-0 flex-1 items-center gap-1">
+            {node.folderColor ? (
+              <span
+                aria-hidden
+                className="grid size-4 shrink-0 place-items-center text-[13px] leading-none"
+                data-project-canvas-node-folder-emoji={node.folderEmoji ?? "folder"}
+              >
+                {getCanvasGroupEmoji(node.folderEmoji ?? "folder")}
+              </span>
+            ) : null}
+            <span className="min-w-0 truncate" data-project-canvas-node-label="">
+              {node.label}
+            </span>
+          </span>
         </button>
         {expanded ? (
           <div role="group">
@@ -621,7 +640,11 @@ function ProjectCanvasNodePreview({
         data-project-canvas-node-folder-color={folderColor}
         data-project-canvas-node-icon="fold"
       >
-        <FolderGlyph color={getCanvasGroupColorValue(folderColor)} size="compact" />
+        <FolderGlyph
+          className="translate-y-0.5"
+          color={getCanvasGroupColorValue(folderColor)}
+          size="compact"
+        />
       </span>
     )
   }

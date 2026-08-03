@@ -3377,6 +3377,7 @@ function CanvasEditorContent(
   const quickConnect = useCallback(
     (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
       if (readOnly) return
+      const focusAfterCreate = targetPosition !== undefined
       if (nodeType === "text") {
         const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
         if (!anchor) return
@@ -3399,13 +3400,16 @@ function CanvasEditorContent(
             direction: side === "right" ? "from-anchor" : "to-anchor",
             mode: "connect",
           },
+          focusAfterCreate,
         )
         return
       }
-      if (!documentRef.current.nodes.some((node) => node.id === nodeId)) return
+      const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
+      if (!anchor) return
       const created = createNodeForType(nodeType, targetPosition ?? { x: 0, y: 0 })
       if (!created) return
-      presentNodeEntries([created.id])
+      if (focusAfterCreate) prepareFocusedNodeEntries([created.id])
+      else presentNodeEntries([created.id])
       commit((document) => {
         const anchor = document.nodes.find((node) => node.id === nodeId)
         if (!anchor) return document
@@ -3455,16 +3459,35 @@ function CanvasEditorContent(
         )
       })
       selectNodes([created.id])
+      if (focusAfterCreate && !anchor.parentId) {
+        setPendingNodeFocus({ guard: getPostMutationRevealGuard(), nodeIds: [created.id] })
+      } else if (focusAfterCreate && anchor.parentId) {
+        window.requestAnimationFrame(() => {
+          startNodeEntryPresentation([created.id])
+          void reactFlowRef.current.fitView({
+            duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+            ease: canvasViewportEase,
+            interpolate: "smooth",
+            maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+            nodes: [{ id: created.id }],
+            padding: CANVAS_CENTER_FIT_PADDING,
+          })
+        })
+      }
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
     [
       addTextResource,
       commit,
       createNodeForType,
+      getPostMutationRevealGuard,
       groupFocus.focusedGroupId,
       presentNodeEntries,
+      prepareFocusedNodeEntries,
+      prefersReducedMotion,
       readOnly,
       selectNodes,
+      startNodeEntryPresentation,
       telemetryService,
     ],
   )

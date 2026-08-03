@@ -1564,6 +1564,13 @@
   transition: opacity var(--canvas-motion-feedback) var(--canvas-motion-ease-standard);
 }
 
+.convax-canvas .convax-node__connection::before {
+  position: absolute;
+  inset: -26px;
+  border-radius: 50%;
+  content: "";
+}
+
 .convax-canvas .convax-node__connection--left {
   right: auto !important;
   left: -64px !important;
@@ -1577,6 +1584,8 @@
 }
 
 .convax-canvas .convax-node__connection-icon {
+  --canvas-connection-magnet-x: 0px;
+  --canvas-connection-magnet-y: 0px;
   display: flex;
   width: 32px;
   height: 32px;
@@ -1586,15 +1595,18 @@
   border-radius: 50%;
   background: var(--canvas-interactive-hover, var(--ui-interactive-hover));
   color: var(--canvas-text);
+  opacity: 1;
   pointer-events: none;
-  transform: scale(0.55);
+  transform: translate3d(var(--canvas-connection-magnet-x), var(--canvas-connection-magnet-y), 0) scale(0.55);
   transition:
     color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
     background var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
     border-color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
     box-shadow var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
+    opacity var(--canvas-motion-press) var(--canvas-motion-ease-standard),
     transform var(--canvas-motion-port) var(--canvas-motion-ease-elastic);
   box-shadow: var(--canvas-floating-shadow);
+  will-change: transform;
 }
 
 .convax-canvas .convax-node__connection-icon svg {
@@ -1613,20 +1625,24 @@
 
 .convax-canvas .convax-node:hover .convax-node__connection-icon,
 .convax-canvas .convax-node.is-selected .convax-node__connection-icon {
-  transform: scale(1);
+  transform: translate3d(var(--canvas-connection-magnet-x), var(--canvas-connection-magnet-y), 0) scale(1);
 }
 
 .convax-canvas .convax-node__connection:hover .convax-node__connection-icon,
 .convax-canvas .convax-node__connection[aria-expanded="true"] .convax-node__connection-icon,
-.convax-canvas .convax-node__connection.connecting .convax-node__connection-icon,
 .convax-canvas .convax-node__connection.valid .convax-node__connection-icon {
   border-color: var(--canvas-accent);
   background: var(--canvas-accent);
   color: var(--canvas-accent-foreground);
-  transform: scale(1.35);
+  transform: translate3d(var(--canvas-connection-magnet-x), var(--canvas-connection-magnet-y), 0) scale(1.35);
   box-shadow:
     0 0 0 4px var(--canvas-accent-soft),
     0 8px 18px -8px color-mix(in srgb, var(--canvas-accent) 55%, transparent);
+}
+
+.convax-canvas .convax-node__connection.connecting .convax-node__connection-icon {
+  opacity: 0;
+  transform: translate3d(0, 0, 0) scale(0.72);
 }
 
 .convax-canvas .convax-connect-menu-positioner {

@@ -12,6 +12,7 @@ describe("pending Canvas connections", () => {
       }),
     ).toEqual({
       sourcePoint: { x: 370, y: 205 },
+      sourceScale: 1.5,
       targetPoint: { x: 670, y: 430 },
     })
   })
@@ -25,10 +26,12 @@ describe("pending Canvas connections", () => {
 
     expect(resolvePendingConnectionOverlayGeometry({ ...input, viewport: { x: 0, y: 0, zoom: 1 } })).toEqual({
       sourcePoint: { x: 100, y: 110 },
+      sourceScale: 1,
       targetPoint: { x: -40, y: 260 },
     })
     expect(resolvePendingConnectionOverlayGeometry({ ...input, viewport: { x: 300, y: -70, zoom: 0.5 } })).toEqual({
       sourcePoint: { x: 350, y: -15 },
+      sourceScale: 0.5,
       targetPoint: { x: 280, y: 60 },
     })
   })

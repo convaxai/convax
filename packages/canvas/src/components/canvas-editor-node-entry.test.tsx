@@ -10,11 +10,18 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { NodeProps } from "@xyflow/react"
+import { CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import type { CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let renderedNodes: CanvasNode[] = []
 let renderNodes = true
+let connectStart:
+  | ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void)
+  | undefined
+let connectEnd:
+  | ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void)
+  | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
 function Passthrough(props: { children?: ReactNode }) {
@@ -107,8 +114,22 @@ void mock.module("@xyflow/react", () => ({
   BackgroundVariant: { Dots: "dots", Lines: "lines" },
   BaseEdge: () => null,
   EdgeLabelRenderer: Passthrough,
-  Handle: (props: { children?: ReactNode; id?: string }) => (
-    <div data-canvas-test-handle={props.id}>{props.children}</div>
+  Handle: ({
+    children,
+    id,
+    isConnectable: _isConnectable,
+    position: _position,
+    type: _type,
+    ...props
+  }: ButtonHTMLAttributes<HTMLButtonElement> & {
+    id?: string
+    isConnectable?: boolean
+    position?: string
+    type?: string
+  }) => (
+    <button {...props} data-canvas-test-handle={id} type="button">
+      {children}
+    </button>
   ),
   MiniMap: () => null,
   NodeResizer: () => null,
@@ -135,9 +156,13 @@ void mock.module("@xyflow/react", () => ({
     children?: ReactNode
     nodeTypes?: Record<string, ComponentType<NodeProps<CanvasNode>>>
     nodes?: CanvasNode[]
+    onConnectEnd?: (event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void
+    onConnectStart?: (event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void
     onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
     renderedNodes = props.nodes ?? []
+    connectStart = props.onConnectStart
+    connectEnd = props.onConnectEnd
     return (
       <div
         className="react-flow__pane"
@@ -186,7 +211,16 @@ void mock.module("@xyflow/react", () => ({
   applyNodeChanges: (_changes: unknown, nodes: unknown) => nodes,
   getBezierPath: () => ["", 0, 0, 0, 0],
   useConnection: (selector: (state: { inProgress: boolean }) => unknown) => selector({ inProgress: false }),
-  useInternalNode: () => undefined,
+  useInternalNode: (id: string) => {
+    const node = renderedNodes.find((candidate) => candidate.id === id)
+    if (!node) return undefined
+    return {
+      height: 200,
+      internals: { positionAbsolute: node.position },
+      measured: { height: 200, width: 320 },
+      width: 320,
+    }
+  },
   useReactFlow: () => ({
     fitView: async () => undefined,
     getNode: (id: string) => renderedNodes.find((node) => node.id === id),
@@ -205,7 +239,7 @@ void mock.module("@xyflow/react", () => ({
 const [
   { CanvasEditor },
   { CanvasNodeChrome },
-  { createCanvasDocument, createMediaNode, createTextNode },
+  { createAgentNode, createCanvasDocument, createMediaNode, createTextNode },
   { createCanvasNodeRegistry },
   { createCanvasServices },
   { createCanvasViewRegistry },
@@ -244,6 +278,15 @@ function createTestRegistry() {
       },
       label: "File",
       type: "file",
+    },
+    {
+      component: TestNode,
+      create: ({ position }) => {
+        const id = `created-${++nextNodeId}`
+        return createAgentNode({ id, position })
+      },
+      label: "Agent",
+      type: "agent",
     },
   ])
 }
@@ -621,6 +664,220 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
     expect(
       container.querySelector('[data-id="header-created"] .convax-node')?.getAttribute("data-canvas-node-entry-phase"),
     ).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("focuses a node created after dragging a connection to empty canvas before its entry presentation", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let resolveCamera!: () => void
+  const cameraFinished = new Promise<void>((resolve) => {
+    resolveCamera = resolve
+  })
+  let root: Root | undefined
+  renderNodes = true
+  nextNodeId = 0
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root?.render(editorElement(editorRef, "drag-connect-focus")))
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
+    })
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null })
+
+    await act(async () => {
+      connectStart?.(new MouseEvent("mousedown", { clientX: 340, clientY: 140 }), {
+        handleId: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        nodeId: "hydrated",
+      })
+      connectEnd?.(new MouseEvent("mouseup", { clientX: 900, clientY: 520 }), {
+        fromNode: { id: "hydrated" },
+        isValid: false,
+      })
+      await Promise.resolve()
+    })
+
+    const agentOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
+      (button) => button.textContent?.includes("Agent"),
+    )
+    expect(agentOption).toBeDefined()
+    await act(async () => {
+      agentOption?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="created-1"] .convax-node')
+    const focusCall = setViewport.mock.calls.find((call) => call[1]?.duration === 400)
+    expect(focusCall).toBeDefined()
+    expect(focusCall?.[0]).toMatchObject({ zoom: 1.2 })
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
+
+    await act(async () => {
+      resolveCamera()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps click-to-connect creation on the immediate entry path without camera focus", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  nextNodeId = 0
+  setViewport.mockClear()
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root?.render(editorElement(editorRef, "click-connect-entry")))
+    await act(async () => editorRef.current?.selectNodes(["hydrated"]))
+
+    const outputHandle = container.querySelector<HTMLButtonElement>(
+      `[data-id="hydrated"] [data-canvas-test-handle="${CANVAS_NODE_OUTPUT_HANDLE_ID}"]`,
+    )
+    await act(async () => outputHandle?.click())
+    const agentOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
+      (button) => button.textContent?.includes("Agent"),
+    )
+    expect(agentOption).toBeDefined()
+    await act(async () => agentOption?.click())
+
+    const created = container.querySelector<HTMLElement>('[data-id="created-1"] .convax-node')
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeFalse()
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("focuses a text node created after dragging a connection to empty canvas", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({
+    id: "drag-connect-text-focus",
+    nodes: [
+      createMediaNode({
+        id: "anchor",
+        position: { x: 20, y: 40 },
+        resource: { id: "anchor", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+  let authoritative = initial
+  let resolveCamera!: () => void
+  const cameraFinished = new Promise<void>((resolve) => {
+    resolveCamera = resolve
+  })
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initial}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createTextNode({
+                      id: "drag-created-text",
+                      metadata: {},
+                      position: input.anchor,
+                      resourceState: { status: "ready" },
+                    }),
+                  ],
+                  revision: authoritative.revision + 1,
+                }
+                return { createdNodeIds: ["drag-created-text"], revision: authoritative.revision, warnings: [] }
+              },
+            },
+            persistence: {
+              load: async () => authoritative,
+              save: async (document) => document,
+            },
+          })}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
+    })
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => null })
+
+    await act(async () => {
+      connectStart?.(new MouseEvent("mousedown", { clientX: 340, clientY: 140 }), {
+        handleId: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        nodeId: "anchor",
+      })
+      connectEnd?.(new MouseEvent("mouseup", { clientX: 900, clientY: 520 }), {
+        fromNode: { id: "anchor" },
+        isValid: false,
+      })
+      await Promise.resolve()
+    })
+
+    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
+      (button) => button.textContent?.includes("Text"),
+    )
+    expect(textOption).toBeDefined()
+    await act(async () => {
+      textOption?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="drag-created-text"] .convax-node')
+    expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeTrue()
+    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
+
+    await act(async () => {
+      resolveCamera()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)

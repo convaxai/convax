@@ -17,7 +17,7 @@ export function PendingConnectionMenu(props: {
   const viewport = useViewport()
   if (!sourceNode) return null
 
-  const { sourcePoint, targetPoint } = resolvePendingConnectionOverlayGeometry({
+  const { sourcePoint, sourceScale, targetPoint } = resolvePendingConnectionOverlayGeometry({
     side: props.side,
     sourceBounds: {
       height: sourceNode.measured.height ?? sourceNode.height ?? 0,
@@ -40,11 +40,10 @@ export function PendingConnectionMenu(props: {
     <div className="convax-pending-connection" data-convax-pending-connection="menu">
       <svg aria-hidden="true" className="convax-pending-connection__svg">
         <path className="convax-pending-connection__line" d={path} />
-        <circle className="convax-pending-connection__source" cx={sourcePoint.x} cy={sourcePoint.y} r={16} />
-        <path
-          className="convax-pending-connection__plus"
-          d={`M ${sourcePoint.x - 6} ${sourcePoint.y} H ${sourcePoint.x + 6} M ${sourcePoint.x} ${sourcePoint.y - 6} V ${sourcePoint.y + 6}`}
-        />
+        <g transform={`translate(${sourcePoint.x} ${sourcePoint.y}) scale(${sourceScale})`}>
+          <circle className="convax-pending-connection__source" cx={0} cy={0} r={16} />
+          <path className="convax-pending-connection__plus" d="M -6 0 H 6 M 0 -6 V 6" />
+        </g>
       </svg>
       <div
         className="convax-pending-connection__menu"
@@ -73,12 +72,13 @@ export function resolvePendingConnectionOverlayGeometry(input: {
   sourceBounds: { height: number; width: number; x: number; y: number }
   targetPosition: CanvasPoint
   viewport: Viewport
-}): { sourcePoint: CanvasPoint; targetPoint: CanvasPoint } {
+}): { sourcePoint: CanvasPoint; sourceScale: number; targetPoint: CanvasPoint } {
   return {
     sourcePoint: projectCanvasPointToOverlay(
       resolveCanvasCardHandlePoint(input.sourceBounds, input.side),
       input.viewport,
     ),
+    sourceScale: input.viewport.zoom,
     targetPoint: projectCanvasPointToOverlay(input.targetPosition, input.viewport),
   }
 }

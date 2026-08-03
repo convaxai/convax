@@ -60,6 +60,7 @@ import {
   type DragEvent,
   type ErrorInfo,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
   type Ref,
   type ReactNode,
   useCallback,
@@ -121,6 +122,10 @@ import type {
 } from "../types"
 import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
 import { ConnectionNodeMenu } from "./connection-node-menu"
+import {
+  projectCanvasConnectionHandlePointer,
+  resolveCanvasConnectionHandleMagnetOffset,
+} from "./connection-handle-motion"
 import { CanvasMediaViewer } from "./canvas-media-viewer"
 import { FileRendererBoundary } from "./file-renderer-boundary"
 import { CanvasGroupAppearancePicker } from "./group-appearance-picker"
@@ -307,6 +312,79 @@ function FileAssistantTriggerButton(props: { trigger: FileAssistantTrigger }) {
   )
 }
 
+function NodeConnectionHandle(props: {
+  connectionInProgress: boolean
+  expanded: boolean
+  onToggle: () => void
+  readOnly: boolean
+  reducedMotion: boolean
+  side: "left" | "right"
+}) {
+  const iconRef = useRef<HTMLSpanElement>(null)
+  const resetMagnet = useCallback(() => {
+    iconRef.current?.style.removeProperty("--canvas-connection-magnet-x")
+    iconRef.current?.style.removeProperty("--canvas-connection-magnet-y")
+  }, [])
+  const moveMagnet = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (props.connectionInProgress || props.reducedMotion) {
+        resetMagnet()
+        return
+      }
+
+      const trigger = event.currentTarget
+      const viewportBounds = trigger.getBoundingClientRect()
+      const triggerSize = { width: trigger.offsetWidth, height: trigger.offsetHeight }
+      const pointer = projectCanvasConnectionHandlePointer(
+        { x: event.clientX, y: event.clientY },
+        viewportBounds,
+        triggerSize,
+      )
+      const offset = resolveCanvasConnectionHandleMagnetOffset(pointer, triggerSize)
+      iconRef.current?.style.setProperty("--canvas-connection-magnet-x", `${offset.x.toFixed(2)}px`)
+      iconRef.current?.style.setProperty("--canvas-connection-magnet-y", `${offset.y.toFixed(2)}px`)
+    },
+    [props.connectionInProgress, props.reducedMotion, resetMagnet],
+  )
+
+  useEffect(() => {
+    if (props.connectionInProgress || props.reducedMotion) resetMagnet()
+  }, [props.connectionInProgress, props.reducedMotion, resetMagnet])
+
+  const left = props.side === "left"
+  return (
+    <Handle
+      aria-disabled={props.readOnly}
+      aria-expanded={!props.readOnly && props.expanded}
+      aria-label={left ? "Connect input on left" : "Connect output on right"}
+      className={`convax-node__connection convax-node__connection--${props.side}`}
+      id={left ? CANVAS_NODE_INPUT_HANDLE_ID : CANVAS_NODE_OUTPUT_HANDLE_ID}
+      isConnectable={!props.readOnly}
+      onClick={
+        props.readOnly
+          ? undefined
+          : (event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              props.onToggle()
+            }
+      }
+      onPointerCancel={resetMagnet}
+      onPointerLeave={resetMagnet}
+      onPointerMove={moveMagnet}
+      position={left ? Position.Left : Position.Right}
+      style={props.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
+      type={left ? "target" : "source"}
+    >
+      {!props.readOnly ? (
+        <span className="convax-node__connection-icon" ref={iconRef}>
+          <Plus />
+        </span>
+      ) : null}
+    </Handle>
+  )
+}
+
 function NodeConnectionHandles(props: { nodeId: string }) {
   const editor = useCanvasEditor()
   const ownsSingleNodeContext = isSingleNodeSelectionContext(editor.selectionContext, props.nodeId)
@@ -321,58 +399,22 @@ function NodeConnectionHandles(props: { nodeId: string }) {
   }, [connectionInProgress])
   return (
     <>
-      <Handle
-        aria-disabled={editor.readOnly}
-        aria-expanded={!editor.readOnly && connectMenuSide === "left"}
-        aria-label="Connect input on left"
-        className="convax-node__connection convax-node__connection--left"
-        id={CANVAS_NODE_INPUT_HANDLE_ID}
-        isConnectable={!editor.readOnly}
-        onClick={
-          editor.readOnly
-            ? undefined
-            : (event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                setConnectMenuSide((current) => (current === "left" ? null : "left"))
-              }
-        }
-        position={Position.Left}
-        style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
-        type="target"
-      >
-        {!editor.readOnly ? (
-          <span className="convax-node__connection-icon">
-            <Plus />
-          </span>
-        ) : null}
-      </Handle>
-      <Handle
-        aria-disabled={editor.readOnly}
-        aria-expanded={!editor.readOnly && connectMenuSide === "right"}
-        aria-label="Connect output on right"
-        className="convax-node__connection convax-node__connection--right"
-        id={CANVAS_NODE_OUTPUT_HANDLE_ID}
-        isConnectable={!editor.readOnly}
-        onClick={
-          editor.readOnly
-            ? undefined
-            : (event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                setConnectMenuSide((current) => (current === "right" ? null : "right"))
-              }
-        }
-        position={Position.Right}
-        style={editor.readOnly ? { opacity: 0, pointerEvents: "none" } : undefined}
-        type="source"
-      >
-        {!editor.readOnly ? (
-          <span className="convax-node__connection-icon">
-            <Plus />
-          </span>
-        ) : null}
-      </Handle>
+      <NodeConnectionHandle
+        connectionInProgress={connectionInProgress}
+        expanded={connectMenuSide === "left"}
+        onToggle={() => setConnectMenuSide((current) => (current === "left" ? null : "left"))}
+        readOnly={editor.readOnly}
+        reducedMotion={editor.reducedMotion}
+        side="left"
+      />
+      <NodeConnectionHandle
+        connectionInProgress={connectionInProgress}
+        expanded={connectMenuSide === "right"}
+        onToggle={() => setConnectMenuSide((current) => (current === "right" ? null : "right"))}
+        readOnly={editor.readOnly}
+        reducedMotion={editor.reducedMotion}
+        side="right"
+      />
       {!editor.readOnly && connectMenuSide ? (
         <NodeToolbar
           className="convax-connect-menu-positioner nodrag nowheel"

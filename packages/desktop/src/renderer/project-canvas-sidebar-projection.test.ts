@@ -74,6 +74,7 @@ describe("Project Canvas sidebar projection", () => {
           }),
         ],
         folderColor: "green",
+        folderEmoji: "leaf",
         id: "group",
       }),
     ])
@@ -86,6 +87,7 @@ describe("Project Canvas sidebar projection", () => {
         {
           children: [{ id: "image", kind: "image", label: "Image", previewUrl: "asset://first" }],
           folderColor: "green" as const,
+          folderEmoji: "leaf" as const,
           id: "group",
           kind: "group",
           label: "Group",
@@ -110,6 +112,12 @@ describe("Project Canvas sidebar projection", () => {
       sameProjectCanvasNodeProjection(base, {
         ...base,
         nodes: [{ ...base.nodes[0]!, folderColor: "blue" }],
+      }),
+    ).toBe(false)
+    expect(
+      sameProjectCanvasNodeProjection(base, {
+        ...base,
+        nodes: [{ ...base.nodes[0]!, folderEmoji: "sparkles" }],
       }),
     ).toBe(false)
   })

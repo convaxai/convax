@@ -169,6 +169,7 @@ describe("ProjectCanvasSidebar", () => {
                     },
                   ],
                   folderColor: "green",
+                  folderEmoji: "leaf",
                   id: "research",
                   kind: "group",
                   label: "Research",
@@ -186,9 +187,18 @@ describe("ProjectCanvasSidebar", () => {
       )
 
       const research = container.querySelector<HTMLButtonElement>('[data-project-canvas-node-id="research"]')!
+      const folderPreview = research.querySelector<HTMLElement>('[data-project-canvas-node-icon="fold"]')!
+      const folderGlyph = folderPreview.querySelector<HTMLElement>('[data-ui-folder-glyph]')!
+      const folderEmoji = research.querySelector<HTMLElement>('[data-project-canvas-node-folder-emoji="leaf"]')!
+      const folderLabel = research.querySelector<HTMLElement>('[data-project-canvas-node-label]')!
       expect(research.dataset.projectCanvasNodeDepth).toBe("0")
-      expect(research.querySelector('[data-project-canvas-node-icon="fold"]')).not.toBeNull()
-      expect(research.querySelector('[data-ui-folder-glyph]')).not.toBeNull()
+      expect(folderGlyph).not.toBeNull()
+      expect(folderEmoji.textContent).toContain("🍃")
+      expect(folderEmoji.className).not.toContain("absolute")
+      expect(folderEmoji.className).not.toContain("translate-y-0.5")
+      expect(folderGlyph.className).toContain("translate-y-0.5")
+      expect(folderPreview.nextElementSibling?.contains(folderEmoji)).toBe(true)
+      expect(folderEmoji.nextElementSibling).toBe(folderLabel)
       expect(container.querySelector('[data-project-canvas-node-id="question"]')).toBeNull()
 
       await act(async () => research.click())

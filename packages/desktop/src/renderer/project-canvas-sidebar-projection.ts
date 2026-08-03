@@ -16,13 +16,15 @@ export function projectCanvasSidebarNodes(document: CanvasDocument): ProjectCanv
     const node = nodesById.get(entry.id)
     const name = typeof node?.data.name === "string" ? node.data.name.trim() : ""
     const label = node?.data.label.trim() || name || "Untitled node"
+    const folderAppearance =
+      node?.data.kind === "group" && isCanvasGroupFolded(node) ? getCanvasGroupAppearance(node) : null
     return {
       children: entry.children.map(projectEntry),
       id: entry.id,
       kind: entry.kind,
       label,
-      ...(node?.data.kind === "group" && isCanvasGroupFolded(node)
-        ? { folderColor: getCanvasGroupAppearance(node).color }
+      ...(folderAppearance
+        ? { folderColor: folderAppearance.color, folderEmoji: folderAppearance.emoji }
         : {}),
       ...(node ? projectCanvasSidebarNodePreview(node) : {}),
     }
@@ -66,6 +68,7 @@ function sameProjectCanvasNodes(
     return (
       other?.id === node.id &&
       other.folderColor === node.folderColor &&
+      other.folderEmoji === node.folderEmoji &&
       other.kind === node.kind &&
       other.label === node.label &&
       other.previewType === node.previewType &&

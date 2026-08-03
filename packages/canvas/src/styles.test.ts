@@ -248,9 +248,9 @@ describe("Canvas-first visual hierarchy", () => {
     expect(nodeRule).toContain("animation: convax-node-enter var(--canvas-motion-node-enter)")
     expect(styles).not.toMatch(/\.convax-node\.is-selected > \.convax-node__entry-shell/)
     expect(portRule).toContain("transform var(--canvas-motion-port) var(--canvas-motion-ease-elastic)")
-    expect(portRule).toContain("transform: scale(0.55)")
+    expect(portRule).toContain("scale(0.55)")
     expect(styles).toMatch(
-      /\.convax-node__connection:hover \.convax-node__connection-icon,[\s\S]*?transform: scale\(1\.35\)/,
+      /\.convax-node__connection:hover \.convax-node__connection-icon,[\s\S]*?transform:[^;]*scale\(1\.35\)/,
     )
     expect(styles).toContain(".convax-canvas .react-flow__node.selected .convax-node__surface")
     expect(pendingConnectionRule).toContain("stroke: var(--canvas-edge")
@@ -278,6 +278,19 @@ describe("Canvas-first visual hierarchy", () => {
     expect(generationKeyframes).toContain("translateY(0)")
     expect(generationKeyframes).not.toContain("scale(")
     expect(styles).toMatch(/@keyframes convax-selection-toolbar-enter \{[\s\S]*?translateY\(5px\) scale\(0\.92\)/)
+  })
+
+  test("gives magnetic connection buttons a broad trigger without duplicating the dragged source", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const triggerRule = cssRule(styles, ".convax-canvas .convax-node__connection::before")
+    const draggingSourceRule = cssRule(
+      styles,
+      ".convax-canvas .convax-node__connection.connecting .convax-node__connection-icon",
+    )
+
+    expect(triggerRule).toContain("inset: -26px")
+    expect(draggingSourceRule).toContain("opacity: 0")
+    expect(draggingSourceRule).toContain("translate3d(0, 0, 0)")
   })
 
   test("clamps Canvas-owned overlays to host-provided safe viewport insets", async () => {
