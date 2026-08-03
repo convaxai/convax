@@ -6,6 +6,12 @@ import {
   type PluginServiceUsageHistory,
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
+import {
+  readPluginServiceProjection,
+  rendererPluginServiceProjectionStorage,
+  writePluginServiceProjection,
+  type PluginServiceProjectionStorage,
+} from "./plugin-service-projection-cache"
 
 export interface PluginServiceViewEntry extends PluginServiceSummary {
   error?: string
@@ -39,13 +45,31 @@ function errorMessage(error: unknown) {
 
 export class PluginServicesController {
   readonly #listeners = new Set<() => void>()
+  readonly #storage: PluginServiceProjectionStorage | undefined
   #actionEpoch = 0
   #disposed = false
   #generation = 0
-  #snapshot: PluginServicesSnapshot = { loading: true, services: [] }
+  #snapshot: PluginServicesSnapshot
   #unsubscribe?: () => void
 
-  constructor(private readonly client: PluginServiceClient) {}
+  constructor(
+    private readonly client: PluginServiceClient,
+    options: { storage?: PluginServiceProjectionStorage } = {},
+  ) {
+    this.#storage = options.storage ?? rendererPluginServiceProjectionStorage()
+    const cached = readPluginServiceProjection(this.#storage)
+    this.#snapshot = {
+      loading: cached === null,
+      services:
+        cached?.services.map((service) => ({
+          ...service,
+          actions: [...service.actions],
+          capabilities: [...service.capabilities],
+          loading: service.status === undefined,
+          models: service.models.map((model) => ({ ...model })),
+        })) ?? [],
+    }
+  }
 
   readonly getSnapshot = () => this.#snapshot
 
@@ -72,12 +96,26 @@ export class PluginServicesController {
       services = await this.client.listServices()
     } catch (error) {
       if (this.#disposed || generation !== this.#generation) return
-      this.#setSnapshot({ error: errorMessage(error), loading: false, services: [] })
+      this.#setSnapshot({ error: errorMessage(error), loading: false, services: this.#snapshot.services })
       return
     }
     if (this.#disposed || generation !== this.#generation) return
-    const entries = services.map((service) => ({ ...service, actions: [...service.actions], loading: true }))
+    const previousByPluginId = new Map(this.#snapshot.services.map((service) => [service.pluginId, service]))
+    const entries = services.map((service) => {
+      const previous = previousByPluginId.get(service.pluginId)
+      const unchanged = previous && summaryFingerprint(previous) === summaryFingerprint(service) ? previous : undefined
+      return {
+        ...service,
+        actions: [...service.actions],
+        capabilities: [...service.capabilities],
+        loading: unchanged?.status === undefined,
+        models: service.models.map((model) => ({ ...model })),
+        ...(unchanged?.status === undefined ? {} : { status: unchanged.status }),
+        ...(unchanged?.usageHistory === undefined ? {} : { usageHistory: unchanged.usageHistory }),
+      }
+    })
     this.#setSnapshot({ loading: false, services: entries })
+    this.#writeProjection()
     await Promise.all(entries.map((entry) => this.#loadStatus(entry, generation)))
   }
 
@@ -109,7 +147,15 @@ export class PluginServicesController {
               ? await this.client.cancelAuthorization(target)
               : await this.client.signOut(target)
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
-        this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
+        const clearsUsage = action === "authorize" || action === "reauthorize" || action === "sign_out"
+        this.#replace(pluginId, (current) => ({
+          ...current,
+          error: undefined,
+          loading: false,
+          status,
+          ...(clearsUsage ? { usageHistory: undefined } : {}),
+        }))
+        this.#writeProjection()
       }
       await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
@@ -143,6 +189,7 @@ export class PluginServicesController {
       const status = await this.client.checkout({ planKey, pluginId })
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
+        this.#writeProjection()
       }
       await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
@@ -179,6 +226,7 @@ export class PluginServicesController {
           loading: false,
           status: nextStatus,
         }))
+        this.#writeProjection()
       })
       .catch((error: unknown) => {
         if (!this.#isCurrent(entry, fingerprint, generation)) return
@@ -207,8 +255,10 @@ export class PluginServicesController {
       const usageHistory = await this.#usageHistory(entry.pluginId)
       if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
       this.#replace(entry.pluginId, (current) => ({ ...current, usageHistory }))
+      this.#writeProjection()
     } catch {
-      // Usage history is optional and must not invalidate an otherwise valid status.
+      // Usage history is optional. Keep the last complete projection visible
+      // when its independent background refresh fails.
     }
   }
 
@@ -229,5 +279,11 @@ export class PluginServicesController {
   #setSnapshot(snapshot: PluginServicesSnapshot) {
     this.#snapshot = snapshot
     for (const listener of this.#listeners) listener()
+  }
+
+  #writeProjection() {
+    writePluginServiceProjection(this.#storage, {
+      services: this.#snapshot.services.map(({ error: _error, loading: _loading, ...service }) => service),
+    })
   }
 }

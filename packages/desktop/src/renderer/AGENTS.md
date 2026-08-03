@@ -24,9 +24,9 @@ or durable domain authority.
   and Project Canvas controllers. Guard asynchronous results so prior-scope
   responses cannot overwrite the current projection.
 - Browser storage contains renderer preferences, Workbench recovery choices, and
-  one bounded versioned Marketplace display cache only. Loading a preference may
-  choose an initial Input; Workbench is canonical afterward. The Marketplace cache
-  remains a disposable projection and Main remains authoritative.
+  bounded versioned Marketplace and Plugin Service display caches only. Loading a
+  preference may choose an initial Input; Workbench is canonical afterward. Both
+  caches remain disposable projections and Main remains authoritative.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
   concrete viewport budgets, CSS animation, and persistence of user preferences.
 
@@ -44,6 +44,10 @@ or durable domain authority.
 - Service usage history is an optional bounded display list. Render every admitted
   record, keep filtering/navigation local to the Services surface, and never infer
   execution or billing authority from it.
+- Seed Services from the last complete strictly validated projection across cold
+  windows, preserve those values while inventory, status, and usage refresh in the
+  background, clear prior usage on credential-changing actions, and discard an entry
+  when its Plugin contribution fingerprint changes.
 - Marketplace UI may render its last complete strictly validated projection
   immediately across remounts and cold windows while revalidating it through Main
   at Renderer startup. Persist only bounded renderer-safe fields; never let the

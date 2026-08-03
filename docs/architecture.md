@@ -111,7 +111,7 @@ flowchart TB
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
     ProjectRoot["Project root / .convax<br/>identity, Canvas catalog/documents, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace display cache"]
+    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service display caches"]
   end
 
   Main --> UserData
@@ -464,6 +464,7 @@ boundary checker fails closed until those admissions are complete.
 | Standalone Skill filesystem publication                  | `@convax/agent-runtime/node`                 | Generic reversible transaction; no Plugin ownership knowledge                |
 | Plugin-owned Skill selection and provenance              | Desktop main                                 | Immutable ActiveSet closure paths enter Agent Runtime through a generic port |
 | Installed Plugin snapshots and ActiveSet                 | Desktop main                                 | One global CAS pointer; exact snapshot leases bind all runtime use           |
+| Plugin Service status and usage display                  | Installed sidecar through Desktop main       | Renderer may retain only a disposable last-complete safe projection          |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -518,8 +519,8 @@ Packaged app Resources/
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
-browser localStorage                    per-user Workbench/renderer preferences and one
-                                        bounded disposable Marketplace display projection
+browser localStorage                    per-user Workbench/renderer preferences plus bounded
+                                        disposable Marketplace and Plugin Service display projections
 
 <project root>/
   Notes/                                user-visible Canvas-created text files
@@ -1089,6 +1090,19 @@ canonical timestamps. Missing tools, invalid output, and transient failures degr
 only this optional history to unavailable; they do not suppress a valid status.
 Renderer settings receive no token, cookie, AK/SK, URL, native path, raw content or
 arbitrary MCP method. Destructive sign-out remains a host-rendered, confirmed action.
+
+Renderer retains the last complete validated Plugin Service display projection in
+process memory and one bounded, versioned browser cache. Cold windows therefore
+render the prior installed summaries, status, credits and optional usage history
+synchronously, then revalidate the installed list and refresh status and usage as
+independent background reads. An unchanged service keeps its prior values visible
+through that refresh; a Plugin version or contribution change invalidates the old
+entry, while a credential-changing action clears prior usage before it refreshes.
+Malformed, oversized, unknown-field, URL/path/credential-shaped, or
+Main-authority-shaped cache data is ignored. The projection never authorizes a
+service action, generation/Agent execution, Checkout Plan, credential state, or
+billing decision; Main and the exact sidecar remain live authority at every action
+and dispatch boundary.
 An authorization action may request the one fixed main-only browser-cookie exchange
 in a fresh non-persistent sandboxed Electron session.
 

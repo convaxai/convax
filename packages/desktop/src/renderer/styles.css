@@ -97,35 +97,25 @@
 }
 
 .project-home__bloom {
-  background:
-    radial-gradient(
-      circle at 50% 39%,
-      color-mix(in oklab, var(--ui-brand) 13%, transparent) 0,
-      color-mix(in oklab, var(--ui-brand) 5%, transparent) 24rem,
-      transparent 40rem
-    );
+  background: radial-gradient(
+    circle at 50% 39%,
+    color-mix(in oklab, var(--ui-brand) 13%, transparent) 0,
+    color-mix(in oklab, var(--ui-brand) 5%, transparent) 24rem,
+    transparent 40rem
+  );
 }
 
 .project-home__grid {
   opacity: 0.56;
-  background-image:
-    radial-gradient(
-      circle,
-      color-mix(in oklab, var(--ui-border-default) 76%, transparent) 0.75px,
-      transparent 0.85px
-    );
+  background-image: radial-gradient(
+    circle,
+    color-mix(in oklab, var(--ui-border-default) 76%, transparent) 0.75px,
+    transparent 0.85px
+  );
   background-position: center;
   background-size: 1.5rem 1.5rem;
-  -webkit-mask-image: radial-gradient(
-    ellipse at 50% 40%,
-    var(--ui-text-primary) 0,
-    transparent 68%
-  );
-  mask-image: radial-gradient(
-    ellipse at 50% 40%,
-    var(--ui-text-primary) 0,
-    transparent 68%
-  );
+  -webkit-mask-image: radial-gradient(ellipse at 50% 40%, var(--ui-text-primary) 0, transparent 68%);
+  mask-image: radial-gradient(ellipse at 50% 40%, var(--ui-text-primary) 0, transparent 68%);
 }
 
 .project-home__content {

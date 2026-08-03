@@ -84,6 +84,13 @@ An optional fixed `service.usage.list` call is a Services display projection onl
 Its bounded history never participates in generation availability, preparation,
 dispatch, billing authority, or recovery.
 
+Renderer may persist the last complete validated Service display projection so a
+cold window can show the installed list, status, credits, and optional usage history
+immediately. Installed inventory, status, and usage revalidate independently in the
+background while prior values remain visible. The cache is bounded, versioned, and
+display-only. Credential-changing actions clear prior usage before reloading it;
+every action and generation dispatch still uses live Main/sidecar checks.
+
 Plugin-to-Plugin exports name the exact MCP tool operation. Availability and
 execution must use the same lease-derived sidecar session; echoing identity strings
 is not provenance.

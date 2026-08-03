@@ -147,7 +147,7 @@ describe("ServiceCatalogController", () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(controller.getSnapshot().services[1]).toMatchObject({
-      loading: true,
+      loading: false,
       state: "connected",
     })
     expect(serviceGenerationAvailabilityVersion(controller.getSnapshot(), ["creative-service"])).toBe(readyVersion)

@@ -7,6 +7,7 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
+import { writePluginServiceProjection } from "./plugin-service-projection-cache"
 import { PluginServicesController } from "./plugin-services-controller"
 
 const summary: PluginServiceSummary = {
@@ -55,6 +56,14 @@ function client(overrides: Partial<PluginServiceClient> = {}): PluginServiceClie
     reauthorize: mock(async () => connected),
     signOut: mock(async () => disconnected),
     ...overrides,
+  }
+}
+
+function storage() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
   }
 }
 
@@ -109,6 +118,116 @@ describe("PluginServicesController", () => {
     expect(controller.getSnapshot().services[0]?.status).toEqual(disconnected)
     await expect(controller.perform("account-tools", "reauthorize")).rejects.toThrow("no longer available")
     expect(serviceClient.reauthorize).not.toHaveBeenCalled()
+    controller.dispose()
+  })
+
+  test("hydrates the last complete Service projection synchronously and revalidates it in the background", async () => {
+    const target = storage()
+    expect(
+      writePluginServiceProjection(target, {
+        services: [{ ...summary, status: connected }],
+      }),
+    ).toBe(true)
+    const pendingStatus = deferred<PluginServiceStatus>()
+    const serviceClient = client({ getStatus: mock(async () => pendingStatus.promise) })
+    const controller = new PluginServicesController(serviceClient, { storage: target })
+
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      services: [{ loading: false, pluginId: "account-tools", status: connected }],
+    })
+
+    const refresh = controller.refresh()
+    while ((serviceClient.getStatus as ReturnType<typeof mock>).mock.calls.length === 0) await Promise.resolve()
+    expect(controller.getSnapshot().services[0]).toMatchObject({ loading: false, status: connected })
+
+    pendingStatus.resolve(disconnected)
+    await refresh
+    expect(controller.getSnapshot().services[0]).toMatchObject({ loading: false, status: disconnected })
+    controller.dispose()
+  })
+
+  test("refreshes status and usage concurrently without hiding the last values", async () => {
+    const target = storage()
+    const previousUsage = {
+      availability: "available" as const,
+      records: [{ amount: 9 }],
+      schema: pluginServiceUsageSchema,
+      unit: "credits",
+    }
+    writePluginServiceProjection(target, {
+      services: [{ ...summary, status: connected, usageHistory: previousUsage }],
+    })
+    const pendingStatus = deferred<PluginServiceStatus>()
+    const pendingUsage = deferred<{
+      availability: "available"
+      records: readonly { amount: number }[]
+      schema: typeof pluginServiceUsageSchema
+      unit: string
+    }>()
+    const serviceClient = client({
+      getStatus: mock(async () => pendingStatus.promise),
+      getUsageHistory: mock(async () => pendingUsage.promise),
+    })
+    const controller = new PluginServicesController(serviceClient, { storage: target })
+    const refresh = controller.refresh()
+    while (
+      (serviceClient.getStatus as ReturnType<typeof mock>).mock.calls.length === 0 ||
+      (serviceClient.getUsageHistory as ReturnType<typeof mock>).mock.calls.length === 0
+    ) {
+      await Promise.resolve()
+    }
+
+    expect(controller.getSnapshot().services[0]).toMatchObject({
+      loading: false,
+      status: connected,
+      usageHistory: previousUsage,
+    })
+    pendingStatus.resolve(disconnected)
+    while (controller.getSnapshot().services[0]?.status !== disconnected) await Promise.resolve()
+    expect(controller.getSnapshot().services[0]?.status).toEqual(disconnected)
+
+    pendingUsage.resolve({
+      availability: "available",
+      records: [{ amount: 2 }],
+      schema: pluginServiceUsageSchema,
+      unit: "credits",
+    })
+    await refresh
+    expect(controller.getSnapshot().services[0]?.usageHistory).toMatchObject({ records: [{ amount: 2 }] })
+    controller.dispose()
+  })
+
+  test("clears cached usage after a credential-changing action even when history refresh fails", async () => {
+    const target = storage()
+    writePluginServiceProjection(target, {
+      services: [
+        {
+          ...summary,
+          status: connected,
+          usageHistory: {
+            availability: "available",
+            records: [{ amount: 9 }],
+            schema: pluginServiceUsageSchema,
+            unit: "credits",
+          },
+        },
+      ],
+    })
+    const serviceClient = client({
+      getUsageHistory: mock(async () => {
+        throw new Error("usage unavailable after sign-out")
+      }),
+    })
+    const controller = new PluginServicesController(serviceClient, { storage: target })
+
+    await controller.perform("account-tools", "sign_out")
+
+    expect(controller.getSnapshot().services[0]).toMatchObject({ status: disconnected })
+    expect(controller.getSnapshot().services[0]?.usageHistory).toBeUndefined()
+    const hydrated = new PluginServicesController(serviceClient, { storage: target })
+    expect(hydrated.getSnapshot().services[0]?.usageHistory).toBeUndefined()
+    hydrated.dispose()
     controller.dispose()
   })
 

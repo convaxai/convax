@@ -192,6 +192,11 @@ user directory.
   display projection so remounts and cold windows render immediately. It must
   revalidate through Main at window startup and never use that projection as
   installation, source, grant, or runtime authority.
+- Renderer may likewise persist one bounded, versioned, last-complete Plugin Service
+  display projection containing only validated summaries, status, credits, and
+  optional usage history. It renders that projection immediately, refreshes status
+  and usage independently in the background, and never treats it as authorization,
+  execution availability, Checkout, or billing authority.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,
