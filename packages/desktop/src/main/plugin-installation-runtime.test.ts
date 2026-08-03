@@ -324,9 +324,9 @@ describe("PluginInstallationRuntime", () => {
     const active = await runtime.publish(0, candidate("alpha"))
     const snapshotDigest = active.plugins[0].identity.snapshotDigest
     const indexPath = path.join(root, "closures", snapshotDigest, "package", "index.html")
-    if (process.platform !== "win32") await fs.chmod(indexPath, 0o600)
+    await fs.chmod(indexPath, 0o600)
     await fs.writeFile(indexPath, "<h1>tampered</h1>", { mode: 0o400 })
-    if (process.platform !== "win32") await fs.chmod(indexPath, 0o400)
+    await fs.chmod(indexPath, 0o400)
 
     await expect(new PluginInstallationRuntime(root).readActive()).rejects.toBeInstanceOf(
       PluginInstallationRuntimeError,

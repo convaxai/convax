@@ -529,6 +529,7 @@ function setup(
       PATH: "/usr/local/bin:/usr/bin",
       SECRET_API_KEY: "must-not-leak",
     },
+    platform: "linux",
     plugins,
     ...runtimeOptions,
   })

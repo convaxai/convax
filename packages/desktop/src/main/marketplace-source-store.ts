@@ -12,6 +12,7 @@ import {
 } from "@convax/marketplace"
 import type { MarketplaceItemKind } from "./marketplace-state"
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 
 export interface AcceptedMarketplaceCatalogItem {
   contractDigest: string
@@ -204,18 +205,13 @@ async function atomicWrite(file: string, bytes: string) {
     const handle = await fs.open(temporary, "wx", 0o600)
     try {
       await handle.writeFile(bytes, "utf8")
-      await handle.sync()
+      await syncFileBytes(handle)
     } finally {
       await handle.close()
     }
     await fs.rename(temporary, file)
     published = true
-    const directoryHandle = await fs.open(directory, "r")
-    try {
-      await directoryHandle.sync()
-    } finally {
-      await directoryHandle.close()
-    }
+    await syncDirectoryEntry(directory)
   } finally {
     if (!published) await fs.rm(temporary, { force: true })
   }
@@ -380,7 +376,7 @@ export class FileMarketplaceSourceStore {
       const handle = await fs.open(snapshot, "wx", 0o600)
       try {
         await handle.writeFile(catalogBytes, "utf8")
-        await handle.sync()
+        await syncFileBytes(handle)
       } finally {
         await handle.close()
       }
@@ -402,7 +398,7 @@ export class FileMarketplaceSourceStore {
         const handle = await fs.open(replacement, "wx", 0o600)
         try {
           await handle.writeFile(catalogBytes, "utf8")
-          await handle.sync()
+          await syncFileBytes(handle)
         } finally {
           await handle.close()
         }

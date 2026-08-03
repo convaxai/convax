@@ -15,6 +15,7 @@ import {
 } from "@convax/marketplace"
 
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 import {
   createManagedMcpLaunchTemplateFromVerifiedExtension,
   type ManagedMcpExecutableBinding,
@@ -201,17 +202,12 @@ async function atomicWrite(file: string, state: MetadataState) {
   const handle = await fs.open(temporary, "wx", 0o600)
   try {
     await handle.writeFile(bytes)
-    await handle.sync()
+    await syncFileBytes(handle)
   } finally {
     await handle.close()
   }
   await fs.rename(temporary, file)
-  const parent = await fs.open(directory, "r")
-  try {
-    await parent.sync()
-  } finally {
-    await parent.close()
-  }
+  await syncDirectoryEntry(directory)
 }
 
 export class MarketplaceMcpMetadataStore {
@@ -593,19 +589,14 @@ async function publishImmutableExecutable(file: string, bytes: Uint8Array, expec
   const handle = await fs.open(temporary, "wx", 0o700)
   try {
     await handle.writeFile(bytes)
-    await handle.sync()
+    await syncFileBytes(handle)
   } finally {
     await handle.close()
   }
   try {
     await fs.link(temporary, file)
     await fs.unlink(temporary)
-    const parent = await fs.open(directory, "r")
-    try {
-      await parent.sync()
-    } finally {
-      await parent.close()
-    }
+    await syncDirectoryEntry(directory)
   } catch (error) {
     await fs.rm(temporary, { force: true })
     if (!(error && typeof error === "object" && "code" in error && error.code === "EEXIST")) throw error
