@@ -928,7 +928,7 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain(">A small rabbit</textarea>")
   })
 
-  test("keeps image generation and Agent modes inside one large unfocused composer surface", () => {
+  test("keeps image generation compact while preserving the larger Agent conversation mode", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
       generate: async () => ({ createdNodeIds: ["generated"], revision: 8, toolId: "tools/image", warnings: [] }),
@@ -954,8 +954,11 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).toContain('aria-label="Generation prompt"')
     expect(markup).not.toContain('autofocus=""')
     expect(markup).toContain('data-canvas-card-generation-surface="single"')
-    expect(markup).toContain("min-h-16 max-h-32 flex-1 resize-none")
-    expect(markup).toContain("min-h-[152px]")
+    expect(markup).toContain("min-h-10 max-h-20 flex-none resize-none")
+    expect(markup).toContain("[field-sizing:content]")
+    expect(markup).toContain('rows="1"')
+    expect(markup).toContain("min-h-[96px]")
+    expect(markup).not.toContain("min-h-[152px]")
     expect(markup).not.toContain("rounded-2xl border border-border/60 bg-card shadow-sm")
     expect(markup).not.toContain("Auto")
     expect(markup).not.toContain("自动")

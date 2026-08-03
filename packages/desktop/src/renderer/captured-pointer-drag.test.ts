@@ -29,7 +29,7 @@ class FailingPointerTarget extends TestPointerTarget {
 }
 
 function pointerEvent(type: string, pointerId: number, clientX = 0) {
-  const event = new Event(type)
+  const event = new Event(type, { cancelable: true })
   Object.defineProperties(event, {
     clientX: { value: clientX },
     pointerId: { value: pointerId },
@@ -68,6 +68,9 @@ describe("captured pointer drag", () => {
     expect(end).toBeGreaterThan(start)
     expect(resizeWiring).toContain("const captureTarget = workspaceShellRef.current")
     expect(resizeWiring).toMatch(/startCapturedPointerDrag\(\{[\s\S]*?captureTarget,/)
+    expect(resizeWiring).toContain('presentation.utilityPresentation === "dock"')
+    expect(resizeWiring).toContain("suppressClickAfterCommit: true")
+    expect(resizeWiring).toContain('return resizedPart.visible ? undefined : "commit"')
   })
 
   test("retains a resize handle after the part crosses its collapse threshold", () => {
@@ -75,18 +78,66 @@ describe("captured pointer drag", () => {
     expect(shouldMountResizeHandle(false, false)).toBeFalse()
   })
 
+  test("commits and exits the drag as soon as an update reaches a terminal state", () => {
+    const source = new EventTarget()
+    const captureTarget = new TestPointerTarget()
+    const updates: number[] = []
+    const commit = mock(() => undefined)
+    const cancel = mock(() => undefined)
+    const settled = mock(() => undefined)
+    const leakedClick = mock(() => undefined)
+    const { clock, frames, run } = testClock()
+
+    startCapturedPointerDrag({
+      cancel,
+      captureTarget,
+      clock,
+      commit,
+      eventSource: source,
+      onSettled: settled,
+      pointerId: 4,
+      suppressClickAfterCommit: true,
+      update: (clientX) => {
+        updates.push(clientX)
+        return "commit" as const
+      },
+    })
+    source.dispatchEvent(pointerEvent("pointermove", 4, 80))
+    run(frames[0])
+
+    expect(updates).toEqual([80])
+    expect(commit).toHaveBeenCalledTimes(1)
+    expect(cancel).not.toHaveBeenCalled()
+    expect(settled).toHaveBeenCalledTimes(1)
+    expect(captureTarget.hasPointerCapture(4)).toBeFalse()
+
+    source.dispatchEvent(pointerEvent("pointermove", 4, 90))
+    source.dispatchEvent(pointerEvent("pointerup", 4, 90))
+    source.addEventListener("click", leakedClick)
+    const click = pointerEvent("click", 4, 90)
+    expect(source.dispatchEvent(click)).toBeFalse()
+    expect(leakedClick).not.toHaveBeenCalled()
+    expect(updates).toEqual([80])
+    expect(commit).toHaveBeenCalledTimes(1)
+  })
+
   test("commits a window-owned drag without requiring pointer capture", () => {
     const source = new EventTarget()
     const updates: number[] = []
     const commit = mock(() => undefined)
     const cancel = mock(() => undefined)
+    const { clock } = testClock()
 
     const session = startCapturedPointerDrag({
       cancel,
+      clock,
       commit,
       eventSource: source,
       pointerId: 2,
-      update: (clientX) => updates.push(clientX),
+      update: (clientX) => {
+        updates.push(clientX)
+        return undefined
+      },
     })
 
     expect(session).not.toBeNull()
@@ -94,6 +145,29 @@ describe("captured pointer drag", () => {
     expect(updates).toEqual([96])
     expect(commit).toHaveBeenCalledTimes(1)
     expect(cancel).not.toHaveBeenCalled()
+  })
+
+  test("swallows the committed pointer click before it can reach newly exposed Canvas content", () => {
+    const source = new EventTarget()
+    const leakedClick = mock(() => undefined)
+    const { clock } = testClock()
+
+    startCapturedPointerDrag({
+      cancel: () => undefined,
+      clock,
+      commit: () => undefined,
+      eventSource: source,
+      pointerId: 2,
+      suppressClickAfterCommit: true,
+      update: () => undefined,
+    })
+    source.dispatchEvent(pointerEvent("pointerup", 2, 96))
+    source.addEventListener("click", leakedClick)
+    const click = pointerEvent("click", 2, 96)
+
+    expect(source.dispatchEvent(click)).toBeFalse()
+    expect(click.defaultPrevented).toBeTrue()
+    expect(leakedClick).not.toHaveBeenCalled()
   })
 
   test("filters pointer ids, coalesces moves, and flushes the exact release before commit", () => {
@@ -113,7 +187,10 @@ describe("captured pointer drag", () => {
       eventSource: source,
       onSettled: settled,
       pointerId: 7,
-      update: (clientX) => updates.push(clientX),
+      update: (clientX) => {
+        updates.push(clientX)
+        return undefined
+      },
     })
 
     expect(session).not.toBeNull()

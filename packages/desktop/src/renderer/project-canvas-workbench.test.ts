@@ -46,7 +46,7 @@ function catalogHarness(initial = [canvas("canvas-one"), canvas("canvas-two")]) 
 }
 
 describe("Project Canvas Workbench coordination", () => {
-  test("captures the selected Project resource before waiting for a slow Canvas flush", async () => {
+  test("captures the selected Project resource and binds relink to Main's post-flush revision", async () => {
     let snapshot: ProjectFilesControllerSnapshot = {
       error: null,
       expandedPaths: [],
@@ -75,8 +75,9 @@ describe("Project Canvas Workbench coordination", () => {
     const flush = mock(async () => {
       markFlushStarted()
       await flushBarrier
+      return { id: "canvas-one", revision: 8 }
     })
-    const relink = mock(async (input: unknown) => ({ input, revision: 8, warnings: [] }))
+    const relink = mock(async (input: unknown) => ({ input, revision: 9, warnings: [] }))
 
     const operation = runProjectCanvasResourceRelink({
       activeCanvasId: "canvas-one",
@@ -99,10 +100,43 @@ describe("Project Canvas Workbench coordination", () => {
     expect(relink).toHaveBeenCalledWith({
       canvasId: "canvas-one",
       commandId: "renderer:relink",
-      expectedRevision: 7,
+      expectedRevision: 8,
       nodeId: "missing-image",
       source: { kind: "host-file", path: "first.png" },
     })
+  })
+
+  test("rejects relink when flush cannot resolve the active authoritative Canvas", async () => {
+    const createLocalFileToken = mock(() => "local-file-token")
+    const relink = mock(async () => ({ revision: 8, warnings: [] }))
+
+    await expect(
+      runProjectCanvasResourceRelink({
+        activeCanvasId: "canvas-one",
+        activeProjectId: "project-one",
+        createCommandId: () => "renderer:relink",
+        flush: async () => ({ id: "canvas-two", revision: 8 }),
+        projectFiles: {
+          getSnapshot: () => ({
+            error: null,
+            expandedPaths: [],
+            listings: {},
+            loadingPaths: [],
+            projectId: "project-one",
+            selectedPaths: [],
+          }),
+        },
+        request: {
+          expectedRevision: 7,
+          file: new File(["image"], "image.png", { type: "image/png" }),
+          nodeId: "missing-image",
+          signal: new AbortController().signal,
+        },
+        resources: { createLocalFileToken, relink },
+      }),
+    ).rejects.toThrow("Canvas resource relink could not resolve Main's authoritative document")
+    expect(createLocalFileToken).not.toHaveBeenCalled()
+    expect(relink).not.toHaveBeenCalled()
   })
 
   test("rejects an invalid Project selection before flushing or invoking relink IPC", async () => {

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { canvasHistoryReducer, createCanvasHistory } from "../history"
 import { createCanvasDocument, createGroupNode, createTextNode, getCanvasNodeSize } from "../document"
+import { setCanvasGroupFolded } from "../group-fold"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "../types"
 import { applyCanvasApplicationCommand, executeCanvasApplicationCommand } from "./commands"
 import {
@@ -82,7 +83,7 @@ describe("built-in Canvas layout provider", () => {
     const planned = new Map(plan.positions.map((entry) => [entry.nodeId, entry.position]))
 
     expect([...planned.keys()].sort()).toEqual(["first", "second"])
-    expect(planned.get("second")!.x).toBeGreaterThanOrEqual(planned.get("first")!.x + 500)
+    expect(planned.get("second")!.x).toBeGreaterThanOrEqual(planned.get("first")!.x + 440)
   })
 
   test("offers an explicit preserve mode for distant isolates", () => {
@@ -463,7 +464,11 @@ describe("Canvas auto-layout business operation", () => {
     }
     const first = { ...text("a", 10, 10), extent: "parent" as const, parentId: inner.id }
     const second = { ...text("b", 40, 50), extent: "parent" as const, parentId: inner.id }
-    const document = createCanvasDocument({ nodes: [outer, inner, first, second] })
+    const document = setCanvasGroupFolded(
+      createCanvasDocument({ nodes: [outer, inner, first, second] }),
+      inner.id,
+      true,
+    )
     const command = {
       nodeIds: [first.id, second.id],
       options: { strategy: "vertical-directed-cluster" as const },

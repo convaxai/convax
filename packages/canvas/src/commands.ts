@@ -1,6 +1,7 @@
-import { createCanvasId, createGroupNode, getCanvasNodeSize } from "./document"
+import { createCanvasId, createGroupNode, getCanvasNodePresentationSize, getCanvasNodeSize } from "./document"
 import { cloneCanvasNodeGenerationRunData } from "./generation-run"
-import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID, isCanvasConnectableNode } from "./connections"
+import { setCanvasGroupFolded } from "./group-fold"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "./connections"
 import type { CanvasDocument, CanvasEdge, CanvasNode, CanvasPoint, CanvasSize } from "./types"
 
 export type CanvasAlign = "left" | "center" | "right" | "top" | "middle" | "bottom"
@@ -59,6 +60,33 @@ function getTopLevelNodeIds(document: CanvasDocument, nodeIds: readonly string[]
   })
 }
 
+function getCanvasGroupableNodes(document: CanvasDocument, nodeIds: readonly string[]) {
+  const topLevelIds = getTopLevelNodeIds(document, nodeIds)
+  const selected = document.nodes.filter((node) => topLevelIds.includes(node.id))
+  if (selected.length < 2) return []
+  const parentId = selected[0]?.parentId
+  return selected.every((node) => node.parentId === parentId) ? selected : []
+}
+
+export function canGroupCanvasNodes(document: CanvasDocument, nodeIds: readonly string[]) {
+  return getCanvasGroupableNodes(document, nodeIds).length >= 2
+}
+
+function getNodeWorldPosition(document: CanvasDocument, nodeId: string): CanvasPoint {
+  const nodes = nodeMap(document)
+  const visited = new Set<string>()
+  let current = nodes.get(nodeId)
+  let x = 0
+  let y = 0
+  while (current && !visited.has(current.id)) {
+    visited.add(current.id)
+    x += current.position.x
+    y += current.position.y
+    current = current.parentId ? nodes.get(current.parentId) : undefined
+  }
+  return { x, y }
+}
+
 function updateNodes(document: CanvasDocument, update: (node: CanvasNode) => CanvasNode) {
   return { ...document, nodes: document.nodes.map(update) }
 }
@@ -76,10 +104,6 @@ export function connectCanvasNodes(
   connection: Pick<CanvasEdge, "source" | "target"> & Partial<CanvasEdge>,
 ): CanvasDocument {
   if (connection.source === connection.target) return document
-  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
-  const source = nodes.get(connection.source)
-  const target = nodes.get(connection.target)
-  if ((source && !isCanvasConnectableNode(source)) || (target && !isCanvasConnectableNode(target))) return document
   const duplicate = document.edges.some(
     (edge) => edge.source === connection.source && edge.target === connection.target,
   )
@@ -261,10 +285,9 @@ export function groupCanvasNodes(
   label = "Group",
 ): CanvasCommandResult {
   const topLevelIds = getTopLevelNodeIds(document, nodeIds)
-  const selected = document.nodes.filter((node) => topLevelIds.includes(node.id))
+  const selected = getCanvasGroupableNodes(document, topLevelIds)
   if (selected.length < 2) return { document, selectedNodeIds: topLevelIds }
-  const parentId = selected[0].parentId
-  if (!selected.every((node) => node.parentId === parentId)) return { document, selectedNodeIds: topLevelIds }
+  const parentId = selected[0]!.parentId
   const padding = 40
   const minX = Math.min(...selected.map((node) => node.position.x))
   const minY = Math.min(...selected.map((node) => node.position.y))
@@ -296,6 +319,19 @@ export function groupCanvasNodes(
   }
 }
 
+export function foldCanvasNodes(
+  document: CanvasDocument,
+  nodeIds: readonly string[],
+  label = "Group",
+): CanvasCommandResult {
+  const grouped = groupCanvasNodes(document, nodeIds, label)
+  if (grouped.document === document || grouped.selectedNodeIds.length !== 1) return grouped
+  return {
+    ...grouped,
+    document: setCanvasGroupFolded(grouped.document, grouped.selectedNodeIds[0]!, true),
+  }
+}
+
 export function ungroupCanvasNode(document: CanvasDocument, groupId: string): CanvasCommandResult {
   const group = document.nodes.find((node) => node.id === groupId && node.data.kind === "group")
   if (!group) return { document, selectedNodeIds: [] }
@@ -315,7 +351,68 @@ export function ungroupCanvasNode(document: CanvasDocument, groupId: string): Ca
       },
     ]
   })
-  return { document: { ...document, nodes }, selectedNodeIds: childIds }
+  return {
+    document: {
+      ...document,
+      edges: document.edges.filter((edge) => edge.source !== groupId && edge.target !== groupId),
+      nodes,
+    },
+    selectedNodeIds: childIds,
+  }
+}
+
+export function reparentCanvasNodes(
+  document: CanvasDocument,
+  nodeIds: readonly string[],
+  parentId: string | undefined,
+  options: { preserveWorldPosition?: boolean } = {},
+): CanvasCommandResult {
+  const topLevelIds = getTopLevelNodeIds(document, nodeIds)
+  if (topLevelIds.length === 0) return { document, selectedNodeIds: [] }
+  const nodes = nodeMap(document)
+  const parent = parentId ? nodes.get(parentId) : undefined
+  if (parentId && parent?.data.kind !== "group") return { document, selectedNodeIds: topLevelIds }
+  if (parentId) {
+    for (const nodeId of topLevelIds) {
+      let ancestor: CanvasNode | undefined = parent
+      const visited = new Set<string>()
+      while (ancestor && !visited.has(ancestor.id)) {
+        if (ancestor.id === nodeId) return { document, selectedNodeIds: topLevelIds }
+        visited.add(ancestor.id)
+        ancestor = ancestor.parentId ? nodes.get(ancestor.parentId) : undefined
+      }
+    }
+  }
+  if (topLevelIds.every((nodeId) => nodes.get(nodeId)?.parentId === parentId)) {
+    return { document, selectedNodeIds: topLevelIds }
+  }
+
+  const preserveWorldPosition = options.preserveWorldPosition ?? true
+  const worldPositions = preserveWorldPosition
+    ? new Map(topLevelIds.map((nodeId) => [nodeId, getNodeWorldPosition(document, nodeId)]))
+    : new Map<string, CanvasPoint>()
+  const parentWorldPosition = parentId ? getNodeWorldPosition(document, parentId) : { x: 0, y: 0 }
+  const reparentedIds = new Set(topLevelIds)
+  const nextNodes = document.nodes.map((node) => {
+    if (!reparentedIds.has(node.id)) return node
+    const worldPosition = worldPositions.get(node.id)
+    return {
+      ...node,
+      extent: parentId ? ("parent" as const) : undefined,
+      parentId,
+      position:
+        preserveWorldPosition && worldPosition
+          ? {
+              x: worldPosition.x - parentWorldPosition.x,
+              y: worldPosition.y - parentWorldPosition.y,
+            }
+          : node.position,
+    }
+  })
+  return {
+    document: { ...document, nodes: nextNodes },
+    selectedNodeIds: topLevelIds,
+  }
 }
 
 export function layoutCanvasNodes(
@@ -331,8 +428,8 @@ export function layoutCanvasNodes(
   const gap = input?.gap ?? 80
   const startX = Math.min(...selected.map((node) => node.position.x))
   const startY = Math.min(...selected.map((node) => node.position.y))
-  const maxWidth = Math.max(...selected.map((node) => getCanvasNodeSize(node).width))
-  const maxHeight = Math.max(...selected.map((node) => getCanvasNodeSize(node).height))
+  const maxWidth = Math.max(...selected.map((node) => getCanvasNodePresentationSize(node).width))
+  const maxHeight = Math.max(...selected.map((node) => getCanvasNodePresentationSize(node).height))
   const layout = input?.layout ?? "grid"
   const columns =
     layout === "grid" ? Math.ceil(Math.sqrt(selected.length)) : layout === "horizontal" ? selected.length : 1
@@ -359,11 +456,11 @@ export function alignCanvasNodes(
   if (selected.length < 2) return document
   const left = Math.min(...selected.map((node) => node.position.x))
   const top = Math.min(...selected.map((node) => node.position.y))
-  const right = Math.max(...selected.map((node) => node.position.x + getCanvasNodeSize(node).width))
-  const bottom = Math.max(...selected.map((node) => node.position.y + getCanvasNodeSize(node).height))
+  const right = Math.max(...selected.map((node) => node.position.x + getCanvasNodePresentationSize(node).width))
+  const bottom = Math.max(...selected.map((node) => node.position.y + getCanvasNodePresentationSize(node).height))
   return updateNodes(document, (node) => {
     if (!ids.has(node.id)) return node
-    const size = getCanvasNodeSize(node)
+    const size = getCanvasNodePresentationSize(node)
     const x =
       direction === "left"
         ? left
@@ -399,20 +496,26 @@ export function distributeCanvasNodes(
   const first = selected[0]
   const last = selected.at(-1)
   if (!last) return document
-  const firstSize = getCanvasNodeSize(first)
+  const firstSize = getCanvasNodePresentationSize(first)
   const start = axis === "horizontal" ? first.position.x + firstSize.width : first.position.y + firstSize.height
   const end = axis === "horizontal" ? last.position.x : last.position.y
   const middleSize = selected
     .slice(1, -1)
     .reduce(
-      (total, node) => total + (axis === "horizontal" ? getCanvasNodeSize(node).width : getCanvasNodeSize(node).height),
+      (total, node) =>
+        total +
+        (axis === "horizontal" ? getCanvasNodePresentationSize(node).width : getCanvasNodePresentationSize(node).height),
       0,
     )
   const gap = (end - start - middleSize) / (selected.length - 1)
   const positions = new Map<string, number>()
   selected.slice(1, -1).reduce((cursor, node) => {
     positions.set(node.id, cursor + gap)
-    return cursor + gap + (axis === "horizontal" ? getCanvasNodeSize(node).width : getCanvasNodeSize(node).height)
+    return (
+      cursor +
+      gap +
+      (axis === "horizontal" ? getCanvasNodePresentationSize(node).width : getCanvasNodePresentationSize(node).height)
+    )
   }, start)
   return updateNodes(document, (node) => {
     const position = positions.get(node.id)

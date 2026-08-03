@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test"
 import { createCanvasDocument, createGroupNode, createTextNode } from "./document"
-import { createCanvasNodeSnapSession, resolveCanvasNodeSnap } from "./snapping"
+import {
+  createCanvasNodeSnapSession,
+  resolveCanvasNodeSnap,
+  resolveCanvasNodeSnapScopeNodeIds,
+} from "./snapping"
 
 function text(id: string, x: number, y: number, width = 120, height = 80) {
   return {
@@ -78,5 +82,46 @@ describe("Canvas node snapping", () => {
     const result = resolveCanvasNodeSnap(childSession, new Map([[child.id, { x: 276, y: 100 }]]), 8)
     expect(result.offset.x).toBe(4)
     expect(result.lines).toContainEqual({ axis: "x", value: 500 })
+  })
+
+  test("only snaps to nodes in the current visible group scope", () => {
+    const group = createGroupNode({ height: 220, id: "group", position: { x: 100, y: 100 }, width: 260 })
+    const hiddenChild = { ...text("hidden-child", 300, 0), extent: "parent" as const, parentId: group.id }
+    const rootSource = text("root-source", 0, 0)
+    const rootTarget = text("root-target", 600, 0)
+    const document = createCanvasDocument({ nodes: [group, hiddenChild, rootSource, rootTarget] })
+
+    const overview = createCanvasNodeSnapSession(
+      document,
+      [rootSource.id],
+      new Set([group.id, rootSource.id, rootTarget.id]),
+    )
+    expect(overview.candidates.map((candidate) => candidate.id)).toEqual([group.id, rootTarget.id])
+
+    const focused = createCanvasNodeSnapSession(document, [hiddenChild.id], new Set([hiddenChild.id]))
+    expect(focused.candidates).toEqual([])
+  })
+
+  test("keeps expanded Group children snapping within their own hierarchy level", () => {
+    const group = createGroupNode({ height: 220, id: "group", position: { x: 100, y: 100 }, width: 260 })
+    const firstChild = { ...text("first-child", 20, 30), extent: "parent" as const, parentId: group.id }
+    const secondChild = { ...text("second-child", 160, 30), extent: "parent" as const, parentId: group.id }
+    const rootTarget = text("root-target", 500, 200)
+    const document = createCanvasDocument({ nodes: [group, firstChild, secondChild, rootTarget] })
+
+    const childSession = createCanvasNodeSnapSession(
+      document,
+      [firstChild.id],
+      resolveCanvasNodeSnapScopeNodeIds(document, [firstChild.id]),
+    )
+    expect(childSession.candidates.map((candidate) => candidate.id)).toEqual([secondChild.id])
+
+    const rootSession = createCanvasNodeSnapSession(
+      document,
+      [rootTarget.id],
+      resolveCanvasNodeSnapScopeNodeIds(document, [rootTarget.id]),
+    )
+    expect(rootSession.candidates.map((candidate) => candidate.id)).toEqual([group.id])
+    expect(resolveCanvasNodeSnapScopeNodeIds(document, [firstChild.id, rootTarget.id])).toEqual(new Set())
   })
 })

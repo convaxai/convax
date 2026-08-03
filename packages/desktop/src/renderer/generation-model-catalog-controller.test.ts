@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test"
+import { afterEach, describe, expect, mock, test } from "bun:test"
 
 import type {
   GenerationOutputModality,
@@ -6,6 +6,19 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import { GenerationModelCatalogController } from "./generation-model-catalog-controller"
+
+const activeControllers = new Set<GenerationModelCatalogController>()
+
+function createController(...args: ConstructorParameters<typeof GenerationModelCatalogController>) {
+  const controller = new GenerationModelCatalogController(...args)
+  activeControllers.add(controller)
+  return controller
+}
+
+afterEach(() => {
+  for (const controller of activeControllers) controller.dispose()
+  activeControllers.clear()
+})
 
 function deferred<T>() {
   let reject!: (reason?: unknown) => void
@@ -58,12 +71,12 @@ describe("GenerationModelCatalogController", () => {
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools: mock(async () => []),
     }
-    expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 0 })).toThrow("refresh age is invalid")
-    expect(() => new GenerationModelCatalogController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
+    expect(() => createController(client, { refreshAfterMs: 0 })).toThrow("refresh age is invalid")
+    expect(() => createController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
       "refresh age is invalid",
     )
-    expect(() => new GenerationModelCatalogController(client, { retryAfterMs: 0 })).toThrow("retry age is invalid")
-    expect(() => new GenerationModelCatalogController(client, { retryAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
+    expect(() => createController(client, { retryAfterMs: 0 })).toThrow("retry age is invalid")
+    expect(() => createController(client, { retryAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
       "retry age is invalid",
     )
   })
@@ -71,7 +84,7 @@ describe("GenerationModelCatalogController", () => {
   test("single-flights initial discovery and serves remounts from the full cached catalog", async () => {
     const pending = deferred<readonly GenerationToolSummary[]>()
     const listTools = mock(() => pending.promise)
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools,
     })
@@ -111,7 +124,7 @@ describe("GenerationModelCatalogController", () => {
         scheduledRefresh = undefined
       }
     })
-    const controller = new GenerationModelCatalogController(
+    const controller = createController(
       {
         describeTool: mock(async ({ toolId }) => description(toolId)),
         listTools,
@@ -160,7 +173,7 @@ describe("GenerationModelCatalogController", () => {
         if (scheduledRefresh === callback) scheduledRefresh = undefined
       }
     })
-    const controller = new GenerationModelCatalogController(
+    const controller = createController(
       {
         describeTool: mock(async ({ toolId }) => description(toolId)),
         listTools,
@@ -210,7 +223,7 @@ describe("GenerationModelCatalogController", () => {
     const listTools = mock()
       .mockResolvedValueOnce([tool("model-v1")])
       .mockImplementationOnce(() => refresh.promise)
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools,
     })
@@ -253,7 +266,7 @@ describe("GenerationModelCatalogController", () => {
     const listTools = mock()
       .mockResolvedValueOnce([tool("model-v1")])
       .mockImplementationOnce(() => refresh.promise)
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools,
     })
@@ -279,7 +292,7 @@ describe("GenerationModelCatalogController", () => {
     const listTools = mock()
       .mockResolvedValueOnce([tool("model-v1")])
       .mockResolvedValueOnce([tool("model-v2")])
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools,
     })
@@ -304,7 +317,7 @@ describe("GenerationModelCatalogController", () => {
     const listTools = mock(({ scopeId }: { scopeId: string }) =>
       scopeId === "project-a" ? projectA.promise : projectB.promise,
     )
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools,
     })
@@ -331,7 +344,7 @@ describe("GenerationModelCatalogController", () => {
     const describeTool = mock()
       .mockImplementationOnce(() => initial.promise)
       .mockImplementationOnce(() => updated.promise)
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool,
       listTools: mock(async () => [tool("model-one")]),
     })
@@ -373,7 +386,7 @@ describe("GenerationModelCatalogController", () => {
     const describeTool = mock(({ scopeId, toolId }: { scopeId: string; toolId: string }) =>
       scopeId === "project-a" ? projectA.promise : Promise.resolve(description(toolId, "Project B")),
     )
-    const controller = new GenerationModelCatalogController({
+    const controller = createController({
       describeTool,
       listTools: mock(async () => [tool("model-one")]),
     })

@@ -1,5 +1,5 @@
 import { setCanvasNodeGeometry } from "../commands"
-import { getCanvasNodeSize } from "../document"
+import { getCanvasNodePresentationSize, getCanvasNodeSize } from "../document"
 import type { CanvasDocument, CanvasPoint, CanvasSize } from "../types"
 
 export type CanvasAutoLayoutStrategy = "component-packing" | "horizontal-directed-cluster" | "vertical-directed-cluster"
@@ -135,7 +135,7 @@ export function createCanvasLayoutSnapshot(document: CanvasDocument): CanvasLayo
       id: node.id,
       parentId: node.parentId,
       position: { ...node.position },
-      size: getCanvasNodeSize(node),
+      size: getCanvasNodePresentationSize(node),
     })),
     revision: document.revision,
   }

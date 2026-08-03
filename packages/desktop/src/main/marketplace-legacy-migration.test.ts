@@ -242,6 +242,39 @@ test("converts an absent previously provisioned Plugin into a source-bound remov
   ])
 })
 
+test("does not duplicate an existing removal decision when the preinstall policy changes", async () => {
+  const { defaults, state } = await harness()
+  await fs.writeFile(
+    defaults,
+    `${JSON.stringify({
+      plugins: ["ffmpeg-tools"],
+      schema: "convax.default-capabilities/1",
+      skills: [],
+    })}\n`,
+  )
+  const sourceKey = "b".repeat(64) as SourceKey
+  const migrate = (observedPolicyRevision: number, policyEntryDigest: string) =>
+    new MarketplaceLegacyMigration({
+      defaultCapabilitiesFile: defaults,
+      preinstalledPolicies: [
+        {
+          identity: { id: "ffmpeg-tools", kind: "plugin" },
+          marketplaceId: "convax-official",
+          observedPolicyRevision,
+          policyEntryDigest,
+          sourceKey,
+        },
+      ],
+      proveInstallations: async () => [],
+      state,
+    }).run()
+
+  await migrate(1, "c".repeat(64))
+  await migrate(2, "d".repeat(64))
+
+  expect((await state.read()).provisioningDecisions).toHaveLength(1)
+})
+
 test("fails closed on corrupt legacy authority instead of guessing provenance", async () => {
   const { defaults, state } = await harness()
   await fs.writeFile(defaults, '{"schema":"wrong"}\n')

@@ -408,7 +408,7 @@ describe("canvas application commands", () => {
     })
   })
 
-  test("rejects new primitive, patch, and resource relations to structural groups", () => {
+  test("accepts structural groups as whole-group endpoints across every relation command", () => {
     const group = createGroupNode({ id: "group", height: 300, position: { x: 0, y: 0 }, width: 400 })
     const card = createTextNode({
       id: "card",
@@ -418,43 +418,126 @@ describe("canvas application commands", () => {
     })
     const document = createCanvasDocument({ id: "canvas-groups", nodes: [group, card] })
 
-    expect(() =>
-      applyCanvasBusinessCommand(document, {
-        connection: { source: group.id, target: card.id },
-        type: "nodes.connect",
-      }),
-    ).toThrow("structural group is not connectable")
+    const connected = applyCanvasBusinessCommand(document, {
+      connection: { source: group.id, target: card.id },
+      type: "nodes.connect",
+    })
+    expect(connected.document.edges).toEqual([
+      expect.objectContaining({ source: group.id, target: card.id }),
+    ])
 
     const patch = createCanvasDocumentPatchCommand(document, {
       ...document,
       edges: [{ id: "group-edge", source: card.id, target: group.id }],
     })
-    expect(() => applyCanvasBusinessCommand(document, patch)).toThrow("structural group is not connectable")
+    expect(applyCanvasBusinessCommand(document, patch).document.edges).toEqual([
+      expect.objectContaining({ id: "group-edge", source: card.id, target: group.id }),
+    ])
 
+    const added = applyCanvasBusinessCommand(document, {
+      items: [
+        {
+          item: { id: "text", kind: "text", metadata: {}, state: { status: "ready", text: "New" } },
+          nodeId: "new-text",
+        },
+      ],
+      placement: { anchor: { x: 0, y: 0 } },
+      relation: { anchorNodeIds: [group.id], mode: "connect" },
+      type: "resources.add",
+    })
+    expect(added.document.edges).toEqual([
+      expect.objectContaining({ source: group.id, target: "new-text" }),
+    ])
+
+    const pending = applyCanvasBusinessCommand(document, {
+      kind: "image",
+      label: "Pending",
+      nodeId: "pending",
+      placement: { anchor: { x: 0, y: 0 } },
+      relation: { anchorNodeIds: [group.id], mode: "connect" },
+      type: "resources.pending.create",
+    })
+    expect(pending.document.edges).toEqual([
+      expect.objectContaining({ source: group.id, target: "pending" }),
+    ])
+
+    const nested = applyCanvasBusinessCommand(document, {
+      items: [
+        {
+          item: { id: "nested-text", kind: "text", metadata: {}, state: { status: "ready", text: "Nested" } },
+          nodeId: "nested-text",
+        },
+      ],
+      placement: { anchor: { x: 32, y: 48 }, parentId: group.id },
+      type: "resources.add",
+    })
+    expect(nested.document.nodes.find((node) => node.id === "nested-text")).toMatchObject({
+      extent: "parent",
+      parentId: group.id,
+      position: { x: 32, y: 48 },
+    })
     expect(() =>
       applyCanvasBusinessCommand(document, {
         items: [
           {
-            item: { id: "text", kind: "text", metadata: {}, state: { status: "ready", text: "New" } },
-            nodeId: "new-text",
+            item: { id: "invalid", kind: "text", metadata: {}, state: { status: "ready", text: "Invalid" } },
+            nodeId: "invalid",
           },
         ],
-        placement: { anchor: { x: 0, y: 0 } },
-        relation: { anchorNodeIds: [group.id], mode: "connect" },
+        placement: { anchor: { x: 0, y: 0 }, parentId: card.id },
         type: "resources.add",
       }),
-    ).toThrow("structural group is not connectable")
+    ).toThrow("is not a structural group")
+  })
+
+  test("reparents through the revision-bound application command and rejects group cycles", () => {
+    const outer = createGroupNode({
+      id: "outer",
+      height: 300,
+      position: { x: 100, y: 80 },
+      width: 400,
+    })
+    const inner = createGroupNode({
+      id: "inner",
+      height: 180,
+      parentId: outer.id,
+      position: { x: 40, y: 30 },
+      width: 240,
+    })
+    const card = createTextNode({
+      id: "card",
+      metadata: {},
+      position: { x: 600, y: 300 },
+      resourceState: { status: "ready", text: "Card" },
+    })
+    const document = createCanvasDocument({ id: "canvas-reparent", nodes: [outer, inner, card] })
+
+    const applied = applyCanvasBusinessCommand(document, {
+      nodeIds: [card.id],
+      parentId: inner.id,
+      type: "nodes.reparent",
+    })
+    expect(applied.affectedNodeIds).toEqual([card.id])
+    expect(applied.document.nodes.find((node) => node.id === card.id)).toMatchObject({
+      extent: "parent",
+      parentId: inner.id,
+      position: { x: 460, y: 190 },
+    })
 
     expect(() =>
       applyCanvasBusinessCommand(document, {
-        kind: "image",
-        label: "Pending",
-        nodeId: "pending",
-        placement: { anchor: { x: 0, y: 0 } },
-        relation: { anchorNodeIds: [group.id], mode: "connect" },
-        type: "resources.pending.create",
+        nodeIds: [outer.id],
+        parentId: inner.id,
+        type: "nodes.reparent",
       }),
-    ).toThrow("structural group is not connectable")
+    ).toThrow("would create a group cycle")
+    expect(() =>
+      applyCanvasBusinessCommand(document, {
+        nodeIds: [card.id],
+        parentId: "",
+        type: "nodes.reparent",
+      }),
+    ).toThrow("Canvas reparent target id is required")
   })
 
   test.each(["text", "image", "video", "audio"] as const)(

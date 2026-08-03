@@ -77,10 +77,20 @@ Canvas owns document and editor semantics independently of Project and Agent.
   media selections alone participate in `acceptedInputs` compatibility.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
-- Every connectable card has one fixed left input and one fixed right output.
-  `edge.source` is the right/output card and `edge.target` is the left/input card;
-  moving cards must never adapt ports to top/bottom or reverse their roles. Structural
-  groups remain non-connectable containers.
+- Folder-resource browsing enters a transient read-only focus projection supplied
+  through a host-neutral service. Opaque folder-entry ids may be passed back only to
+  that service; projected entries never enter the Canvas document, selection,
+  relationships, history, persistence, or Agent capabilities.
+- Every card has one fixed left input and one fixed right output. `edge.source` is
+  the right/output card and `edge.target` is the left/input card; moving cards must
+  never adapt ports to top/bottom or reverse their roles. Structural Groups are
+  connectable whole-Group endpoints. Their edges never fan out to descendants, and
+  focus projection hides cross-scope Group edges without rewriting them. Focused
+  resource creation and parentage are one application command/CAS. Groups remain
+  expanded unless an explicit persisted Fold state projects them as compact folders;
+  Unfold restores the durable child-container presentation without moving children
+  or rewriting relationships. File-input
+  inference remains direct and file-only.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web
   packages, permissions, iframe transport, Project/Agent calls and package storage

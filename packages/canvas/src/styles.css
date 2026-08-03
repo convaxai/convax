@@ -67,8 +67,595 @@
   overflow: visible;
 }
 
-.convax-canvas .react-flow__node:has(> [data-canvas-group]) {
+.convax-canvas .react-flow__node:has(> [data-canvas-group-focus-root]) {
   z-index: -1 !important;
+  pointer-events: none !important;
+}
+
+.convax-canvas .convax-group-folder {
+  --canvas-group-color: oklch(0.74 0.035 82);
+  --canvas-group-back: color-mix(in oklab, var(--canvas-group-color) 70%, var(--canvas-surface));
+  --canvas-group-front: color-mix(in oklab, var(--canvas-group-color) 58%, var(--canvas-surface));
+  --canvas-group-deep: color-mix(in oklab, var(--canvas-group-color) 82%, var(--canvas-text));
+  isolation: isolate;
+  color: var(--canvas-text);
+  transition:
+    opacity var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
+    transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="gray"] {
+  --canvas-group-color: oklch(0.69 0.018 255);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="brown"] {
+  --canvas-group-color: oklch(0.67 0.075 58);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="orange"] {
+  --canvas-group-color: oklch(0.78 0.13 60);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="yellow"] {
+  --canvas-group-color: oklch(0.87 0.12 92);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="green"] {
+  --canvas-group-color: oklch(0.74 0.115 146);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="blue"] {
+  --canvas-group-color: oklch(0.73 0.105 245);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="purple"] {
+  --canvas-group-color: oklch(0.72 0.11 305);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="pink"] {
+  --canvas-group-color: oklch(0.78 0.105 350);
+}
+
+.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="red"] {
+  --canvas-group-color: oklch(0.71 0.135 27);
+}
+
+.convax-canvas .convax-group-appearance-picker__color[data-canvas-group-color="default"] {
+  --canvas-group-color: oklch(0.74 0.035 82);
+}
+
+.convax-canvas .convax-group-folder__back {
+  position: absolute;
+  z-index: 1;
+  inset: 18px 0 7px;
+  border-radius: 16px;
+  background: var(--canvas-group-back);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 44%, transparent),
+    inset 0 -9px 18px color-mix(in oklab, var(--canvas-group-deep) 12%, transparent),
+    0 13px 26px -17px color-mix(in oklab, var(--canvas-group-deep) 54%, transparent);
+}
+
+.convax-canvas .convax-group-folder__tab {
+  position: absolute;
+  top: -9px;
+  left: 14px;
+  width: 76px;
+  height: 27px;
+  border-radius: 12px 12px 5px 5px;
+  background: var(--canvas-group-back);
+  box-shadow: inset 0 1px 0 color-mix(in oklab, white 46%, transparent);
+}
+
+.convax-canvas .convax-group-folder__papers {
+  position: absolute;
+  z-index: 2;
+  top: 20px;
+  right: 15px;
+  left: 15px;
+  height: 76px;
+  pointer-events: none;
+}
+
+.convax-canvas .convax-group-folder__paper {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 76%;
+  height: 72px;
+  margin-left: -38%;
+  overflow: hidden;
+  border-radius: 8px 8px 4px 4px;
+  background: color-mix(in oklab, var(--canvas-surface) 96%, var(--canvas-group-color));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--canvas-text) 9%, transparent),
+    0 6px 12px -8px rgb(0 0 0 / 44%);
+  transform-origin: 50% 100%;
+  transition: transform 220ms var(--canvas-motion-ease-enter);
+}
+
+.convax-canvas .convax-group-folder__paper[data-paper-index="0"] {
+  z-index: 3;
+  transform: translate(-7px, -1px) rotate(-3.4deg);
+}
+
+.convax-canvas .convax-group-folder__paper[data-paper-index="1"] {
+  z-index: 2;
+  transform: translate(8px, 2px) rotate(3.1deg);
+}
+
+.convax-canvas .convax-group-folder__paper[data-paper-index="2"] {
+  z-index: 1;
+  transform: translate(1px, 6px) rotate(-0.8deg);
+}
+
+.convax-canvas .convax-group-folder__paper-content {
+  display: flex;
+  height: 100%;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  padding: 9px;
+  color: color-mix(in oklab, var(--canvas-text) 72%, var(--canvas-group-color));
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.convax-canvas .convax-group-folder__paper-content img {
+  width: calc(100% + 18px);
+  height: calc(100% + 18px);
+  max-width: none;
+  margin: -9px;
+  object-fit: cover;
+  outline: 1px solid color-mix(in oklab, var(--canvas-text) 10%, transparent);
+  outline-offset: -1px;
+}
+
+.convax-canvas .convax-group-folder__paper-content svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  opacity: 0.68;
+}
+
+.convax-canvas .convax-group-folder__paper-content span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convax-canvas .convax-group-folder__front {
+  position: absolute;
+  z-index: 3;
+  inset: 50px 0 0;
+  border-radius: 14px 14px 16px 16px;
+  background: var(--canvas-group-front);
+  box-shadow:
+    inset 0 1px 0 color-mix(in oklab, white 52%, transparent),
+    inset 0 -13px 22px color-mix(in oklab, var(--canvas-group-deep) 11%, transparent),
+    0 17px 30px -18px color-mix(in oklab, var(--canvas-group-deep) 62%, transparent);
+  transition: transform var(--canvas-motion-feedback) var(--canvas-motion-ease-enter);
+}
+
+.convax-canvas .convax-group-folder__overflow {
+  position: absolute;
+  z-index: 5;
+  top: 42px;
+  right: 11px;
+  display: grid;
+  min-width: 27px;
+  height: 22px;
+  place-items: center;
+  padding-inline: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--canvas-group-deep) 74%, var(--canvas-surface));
+  color: color-mix(in oklab, white 92%, var(--canvas-group-color));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 24%),
+    0 5px 12px -7px rgb(0 0 0 / 70%);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+
+.convax-canvas .convax-group-folder__content {
+  position: absolute;
+  z-index: 6;
+  inset: 60px 12px 12px;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.convax-canvas .convax-group-folder__emoji {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+  outline: none;
+  transition:
+    background-color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
+    transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
+}
+
+.convax-canvas .convax-group-folder__emoji:disabled {
+  opacity: 0.76;
+}
+
+.convax-canvas .convax-group-folder__emoji:focus-visible {
+  outline: 2px solid var(--canvas-edge-active);
+  outline-offset: 2px;
+}
+
+.convax-canvas .convax-group-folder__emoji:active:not(:disabled) {
+  transform: scale(0.95);
+}
+
+.convax-canvas .convax-group-folder__title {
+  overflow: hidden;
+  color: color-mix(in oklab, var(--canvas-text) 91%, var(--canvas-group-deep));
+  caret-color: currentColor;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  line-height: 22px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.convax-canvas .convax-group-folder__title:focus-visible {
+  box-shadow: none;
+}
+
+.convax-canvas .convax-group-folder__meta {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  color: color-mix(in oklab, var(--canvas-text) 58%, var(--canvas-group-deep));
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 520;
+}
+
+.convax-canvas .convax-group-folder.is-selected .convax-group-folder__front {
+  box-shadow:
+    0 0 0 3px var(--canvas-accent-soft),
+    inset 0 1px 0 color-mix(in oklab, white 52%, transparent),
+    inset 0 -13px 22px color-mix(in oklab, var(--canvas-group-deep) 11%, transparent),
+    0 17px 30px -16px color-mix(in oklab, var(--canvas-accent) 45%, transparent);
+}
+
+.convax-canvas .convax-group-folder.is-drop-target {
+  transform: scale(1.018);
+}
+
+.convax-canvas .convax-group-folder.is-drop-target .convax-group-folder__front {
+  box-shadow:
+    0 0 0 5px var(--canvas-accent-soft),
+    inset 0 1px 0 color-mix(in oklab, white 52%, transparent),
+    inset 0 -13px 22px color-mix(in oklab, var(--canvas-group-deep) 11%, transparent),
+    0 18px 34px -15px color-mix(in oklab, var(--canvas-accent) 52%, transparent);
+}
+
+.convax-canvas .react-flow__node.is-connection-target .convax-group-folder__front {
+  box-shadow:
+    0 0 0 4px var(--canvas-accent-soft),
+    inset 0 1px 0 color-mix(in oklab, white 52%, transparent),
+    inset 0 -13px 22px color-mix(in oklab, var(--canvas-group-deep) 11%, transparent),
+    0 17px 30px -15px color-mix(in oklab, var(--canvas-accent) 48%, transparent);
+}
+
+.convax-canvas .convax-group-appearance-picker {
+  position: absolute;
+  z-index: 70;
+  width: min(328px, calc(100% - 24px));
+  max-height: calc(100% - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 12px;
+  border: 1px solid color-mix(in oklab, var(--canvas-text) 10%, transparent);
+  border-radius: 14px;
+  background: var(--canvas-surface);
+  box-shadow:
+    0 20px 50px -24px rgb(0 0 0 / 48%),
+    0 4px 14px -8px rgb(0 0 0 / 30%);
+  color: var(--canvas-text);
+  opacity: 1;
+  transform: none;
+  transform-origin: 50% 0;
+  transition:
+    opacity var(--canvas-motion-menu) var(--canvas-motion-ease-enter),
+    transform var(--canvas-motion-menu) var(--canvas-motion-ease-enter);
+}
+
+.convax-canvas .convax-group-appearance-picker[data-positioned="false"] {
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-4px) scale(0.98);
+}
+
+.convax-canvas .convax-group-appearance-picker__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 3px 11px;
+}
+
+.convax-canvas .convax-group-appearance-picker__preview {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--canvas-accent-soft);
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 23px;
+  line-height: 1;
+}
+
+.convax-canvas .convax-group-appearance-picker__title {
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.008em;
+}
+
+.convax-canvas .convax-group-appearance-picker__subtitle {
+  margin-top: 2px;
+  color: var(--canvas-text-muted);
+  font-size: 10px;
+}
+
+.convax-canvas .convax-group-appearance-picker__section {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in oklab, var(--canvas-text) 8%, transparent);
+}
+
+.convax-canvas .convax-group-appearance-picker__section + .convax-group-appearance-picker__section {
+  margin-top: 10px;
+}
+
+.convax-canvas .convax-group-appearance-picker__section-label {
+  margin-bottom: 7px;
+  color: var(--canvas-text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.convax-canvas .convax-group-appearance-picker__colors {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.convax-canvas .convax-group-appearance-picker__color {
+  display: grid;
+  min-width: 0;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  outline: none;
+  transition:
+    background-color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
+    transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
+}
+
+.convax-canvas .convax-group-appearance-picker__color > span {
+  position: relative;
+  display: block;
+  width: 26px;
+  height: 19px;
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--canvas-group-color) 64%, var(--canvas-surface));
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 34%),
+    0 3px 7px -5px rgb(0 0 0 / 65%);
+}
+
+.convax-canvas .convax-group-appearance-picker__color > span::before {
+  position: absolute;
+  top: -4px;
+  left: 3px;
+  width: 10px;
+  height: 6px;
+  border-radius: 3px 3px 0 0;
+  background: inherit;
+  content: "";
+}
+
+.convax-canvas .convax-group-appearance-picker__color.is-selected {
+  background: var(--canvas-accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--canvas-accent) 38%, transparent);
+}
+
+.convax-canvas .convax-group-appearance-picker__color:focus-visible,
+.convax-canvas .convax-group-appearance-picker__emoji:focus-visible {
+  box-shadow: 0 0 0 2px var(--canvas-edge-active);
+}
+
+.convax-canvas .convax-group-appearance-picker__color:active,
+.convax-canvas .convax-group-appearance-picker__emoji:active {
+  transform: scale(0.95);
+}
+
+.convax-canvas .convax-group-appearance-picker__emojis {
+  display: grid;
+  max-height: 220px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 4px 2px 2px;
+  scrollbar-color: color-mix(in oklab, var(--canvas-text) 24%, transparent) transparent;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.convax-canvas .convax-group-appearance-picker__emojis::-webkit-scrollbar {
+  width: 8px;
+}
+
+.convax-canvas .convax-group-appearance-picker__emojis::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.convax-canvas .convax-group-appearance-picker__emojis::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--canvas-text) 28%, transparent);
+  background-clip: padding-box;
+}
+
+.convax-canvas .convax-group-appearance-picker__emoji {
+  display: grid;
+  min-width: 0;
+  height: 40px;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 21px;
+  line-height: 1;
+  outline: none;
+  transition:
+    background-color var(--canvas-motion-feedback) var(--canvas-motion-ease-standard),
+    transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
+}
+
+.convax-canvas .convax-group-appearance-picker__emoji.is-selected {
+  background: var(--canvas-accent-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--canvas-accent) 35%, transparent);
+}
+
+@media (hover: hover) {
+  .convax-canvas .convax-group-folder:hover .convax-group-folder__paper[data-paper-index="0"] {
+    transform: translate(-25px, -12px) rotate(-8deg);
+  }
+
+  .convax-canvas .convax-group-folder:hover .convax-group-folder__paper[data-paper-index="1"] {
+    transform: translate(25px, -14px) rotate(8deg);
+  }
+
+  .convax-canvas .convax-group-folder:hover .convax-group-folder__paper[data-paper-index="2"] {
+    transform: translate(1px, -7px) rotate(-1deg);
+  }
+
+  .convax-canvas .convax-group-appearance-picker__color:hover,
+  .convax-canvas .convax-group-appearance-picker__emoji:hover {
+    background-color: color-mix(in oklab, var(--canvas-surface) 55%, var(--canvas-accent-soft));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .convax-canvas .convax-group-folder,
+  .convax-canvas .convax-group-folder__front,
+  .convax-canvas .convax-group-folder__paper,
+  .convax-canvas .convax-group-folder__emoji,
+  .convax-canvas .convax-group-appearance-picker,
+  .convax-canvas .convax-group-appearance-picker__color,
+  .convax-canvas .convax-group-appearance-picker__emoji {
+    transition-duration: 0ms;
+  }
+}
+
+@media (forced-colors: active) {
+  .convax-canvas .convax-group-folder__back,
+  .convax-canvas .convax-group-folder__front,
+  .convax-canvas .convax-group-folder__paper,
+  .convax-canvas .convax-group-folder__emoji,
+  .convax-canvas .convax-group-appearance-picker,
+  .convax-canvas .convax-group-appearance-picker__color > span {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+    box-shadow: none;
+  }
+
+  .convax-canvas .convax-group-folder.is-selected .convax-group-folder__front,
+  .convax-canvas .convax-group-folder.is-drop-target .convax-group-folder__front,
+  .convax-canvas .convax-group-folder__emoji:focus-visible,
+  .convax-canvas .convax-group-appearance-picker__color:focus-visible,
+  .convax-canvas .convax-group-appearance-picker__emoji:focus-visible {
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+}
+
+.convax-canvas .convax-group-breadcrumb {
+  position: absolute;
+  top: calc(var(--canvas-safe-top, 0px) + 66px);
+  left: calc(var(--canvas-safe-left, 0px) + 12px);
+  z-index: 20;
+  display: flex;
+  max-width: calc(100% - var(--canvas-safe-left, 0px) - var(--canvas-safe-right, 0px) - 24px);
+  min-height: 34px;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+  padding: 3px;
+  border: 1px solid color-mix(in oklab, var(--canvas-node-border) 80%, transparent);
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--canvas-surface) 88%, transparent);
+  box-shadow: 0 10px 26px -20px rgb(0 0 0 / 60%);
+  backdrop-filter: blur(18px) saturate(120%);
+}
+
+.convax-canvas .convax-group-breadcrumb__item {
+  display: flex;
+  min-width: 0;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 7px;
+  background: transparent;
+  color: var(--canvas-text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.convax-canvas .convax-group-breadcrumb__item:hover:not(:disabled) {
+  background: var(--canvas-accent-soft);
+  color: var(--canvas-text);
+}
+
+.convax-canvas .convax-group-breadcrumb__item[aria-current="page"] {
+  color: var(--canvas-text);
+  font-weight: 600;
+}
+
+.convax-canvas .convax-group-breadcrumb__item svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+.convax-canvas .convax-group-breadcrumb__item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.convax-canvas .convax-group-breadcrumb__separator {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--canvas-text-muted);
+  opacity: 0.56;
 }
 
 .convax-canvas .react-flow__selection {
@@ -458,6 +1045,8 @@
 
 .convax-canvas .convax-node-assistant > div {
   width: 100%;
+  min-width: min(480px, calc(100vw - 32px));
+  max-width: min(780px, calc(100vw - 32px));
 }
 
 .convax-canvas .convax-agent-node > * {

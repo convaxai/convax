@@ -67,6 +67,11 @@ bundled source strings.
 - Renderer and Agent never edit private Canvas/Project JSON. Use typed clients and
   repository/application services. Native Project-file and managed-asset access uses
   one narrow typed, scoped resource bridge.
+- Desktop adapts Project-directory folder focus through the existing Project Files
+  listing client. Resolve the root from Main's authoritative active Canvas node,
+  keep requested directories below that root, recheck Project/Canvas scope after
+  awaits, and return only bounded renderer-safe entries to Canvas. Do not add a
+  second filesystem bridge or persist the transient projection.
 - Desktop may label and contribute the native media drag source, but Canvas owns the
   persistent drag-out mode and selection interaction. Keep native staging, live
   Project/Canvas/selection revalidation and Electron `startDrag` in Main; renderer

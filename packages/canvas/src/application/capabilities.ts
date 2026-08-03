@@ -81,6 +81,12 @@ export const canvasCommandCapabilities = [
     layer: "primitive",
   },
   {
+    commandType: "nodes.reparent",
+    defaultForAgent: false,
+    description: "Move selected nodes into or out of one structural group while preserving their world position.",
+    layer: "primitive",
+  },
+  {
     commandType: "nodes.setGeometry",
     defaultForAgent: false,
     description: "Atomically replace absolute positions and optional sizes for a set of nodes.",

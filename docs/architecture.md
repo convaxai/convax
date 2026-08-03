@@ -158,11 +158,29 @@ into `ProjectController`.
 A Canvas is an independent document with its own schema, revision, commands,
 business operations, queries, view commands, and editor. Project owns the catalog
 relationship and persistence adapter, but it does not own Canvas document semantics.
-Every connectable card has exactly one left-side input and one right-side output.
-Canvas edges are directed from `source` (right/output) to `target` (left/input);
-moving cards never changes those port roles. Structural groups are containers rather
-than connectable cards, and new primitive or resource-relation commands reject a
-group endpoint.
+Every Canvas card has exactly one left-side input and one right-side output. Canvas
+edges are directed from `source` (right/output) to `target` (left/input); moving
+cards never changes those port roles. A structural Group is connectable as one
+whole-Group endpoint. Its edges attach to the Group identity, never fan out to
+descendants, and disappear from the focused projection when they cross that scope
+without being rewritten. A resource created while a Group is focused is placed and
+parented by one Main-owned Canvas command; the renderer never follows a successful
+root insertion with a second reparent save. Group is the expanded structural
+container by default. Fold is a persisted presentation state that projects the same
+Group as a compact folder; Unfold restores the expanded container without moving
+children or rewriting relationships. Camera, placement, snapping, and layout use
+the active presentation geometry while durable expanded bounds continue to describe
+the child coordinate container. File-input inference remains direct and file-only, so a
+Group relation does not implicitly contribute child resources.
+
+A Project-directory folder is different from a structural Group/Fold: it remains
+one connectable Canvas file node backed by a `project-directory` reference. Its
+double-click focus is a transient read-only projection of the current directory
+listing through an injected Canvas service. Desktop resolves the authoritative
+owning node, delegates to the existing scoped Project Files capability, bounds the
+result, and rechecks active Project/Canvas scope after asynchronous work. Canvas may
+pan, zoom, and navigate those opaque projected entries, but it never persists them,
+selects them into Workbench, connects or moves them, or adds them to history.
 
 ### Workbench
 
@@ -433,6 +451,7 @@ boundary checker fails closed until those admissions are complete.
 | Active Canvas/file                                       | `WorkbenchController.activeInput/surface`    | Sole source for the displayed primary content                                |
 | Canvas node selection                                    | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view                                |
 | Canvas document and revision                             | Main Canvas application service/repository   | Sole persistent writer; renderer is an optimistic projection                 |
+| Focused Project-directory listing                        | Transient Canvas view + Project Files port   | Read-only bounded projection; never Canvas document state                    |
 | Node generation preference and latest run                | Owning Canvas `file` node                    | Separate bounded Canvas-owned namespaces; Main coordinates live work         |
 | Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage     |
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence                   |

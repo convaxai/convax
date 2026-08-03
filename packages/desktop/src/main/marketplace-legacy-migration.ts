@@ -132,8 +132,7 @@ export class MarketplaceLegacyMigration {
         const decided = draft.provisioningDecisions.some(
           (decision) =>
             identityKey(decision.identity) === identityKey(policy.identity) &&
-            decision.sourceKey === policy.sourceKey &&
-            decision.policyEntryDigest === policy.policyEntryDigest,
+            decision.marketplaceId === policy.marketplaceId,
         )
         if (installed || decided) continue
         draft.provisioningDecisions.push({

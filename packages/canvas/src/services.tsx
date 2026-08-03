@@ -20,6 +20,8 @@ export interface CanvasResourceMutationRequest {
   anchor: CanvasPoint
   expectedRevision: number
   files?: readonly File[]
+  /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
+  parentId?: string
   relation?: {
     anchorNodeIds: readonly string[]
     direction?: "from-anchor" | "to-anchor"
@@ -53,6 +55,41 @@ export interface CanvasResourceMutationService {
 export interface CanvasResourceHydrationService {
   markStale(document: CanvasDocument): CanvasDocument
   hydrateStale(input: { document: CanvasDocument; signal: AbortSignal }): Promise<CanvasDocument>
+}
+
+export interface CanvasFolderBrowseEntry {
+  /** Host-opaque identifier that is valid only for the owning folder node. */
+  id: string
+  kind: "file" | "folder"
+  label: string
+}
+
+export interface CanvasFolderBrowsePathEntry {
+  /** Host-opaque directory identifier passed back to `list`. */
+  id: string
+  label: string
+}
+
+export interface CanvasFolderBrowseListing {
+  entries: readonly CanvasFolderBrowseEntry[]
+  path: readonly CanvasFolderBrowsePathEntry[]
+  totalCount: number
+  truncated: boolean
+}
+
+/**
+ * Host-provided, read-only projection of a folder resource. Canvas treats entry
+ * ids as opaque and never persists the returned listing into its document.
+ */
+export interface CanvasFolderBrowseService {
+  list(input: {
+    context: CanvasServiceContext
+    directoryId?: string
+    ownerNodeId: string
+    signal: AbortSignal
+  }): Promise<CanvasFolderBrowseListing>
+  /** Invalidates the active transient listing after host filesystem changes. */
+  subscribe?: (listener: () => void) => () => void
 }
 
 export interface CanvasTextResourceService {
@@ -190,6 +227,8 @@ export interface CanvasGenerateRequest {
   /** Trusted host output cardinality guard; this is never sent to the generation tool. */
   expectedOutputCount?: number
   output?: CanvasGenerationOutput
+  /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
+  parentId?: string
   prompt: string
   /**
    * Existing Canvas text nodes whose authoritative text the host appends to
@@ -391,6 +430,7 @@ export interface CanvasAssistantService {
 
 export interface CanvasServiceMap {
   assistant: CanvasAssistantService
+  folderBrowse: CanvasFolderBrowseService
   hydration: CanvasResourceHydrationService
   mutation: CanvasResourceMutationService
   generate: CanvasGenerateService
