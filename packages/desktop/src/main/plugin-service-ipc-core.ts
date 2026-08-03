@@ -3,6 +3,7 @@ import {
   pluginServiceIpcChannels,
   type PluginServiceStatus,
   type PluginServiceSummary,
+  type PluginServiceUsageHistory,
 } from "../plugin-service-contracts"
 
 export interface PluginServiceIpcSender {
@@ -124,6 +125,7 @@ export interface PluginServiceExecutor {
   cancelAuthorization(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   checkout(pluginId: string, planKey: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   getStatus(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
+  getUsageHistory(pluginId: string, signal?: AbortSignal): Promise<PluginServiceUsageHistory>
   listServices(): Promise<readonly PluginServiceSummary[]>
   reauthorize(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
   signOut(pluginId: string, signal?: AbortSignal): Promise<PluginServiceStatus>
@@ -184,6 +186,7 @@ export function registerPluginServiceIpcCore<Event extends { sender: PluginServi
     return executor.listServices()
   })
   register(pluginServiceIpcChannels.getStatus, (pluginId, signal) => executor.getStatus(pluginId, signal))
+  register(pluginServiceIpcChannels.getUsageHistory, (pluginId, signal) => executor.getUsageHistory(pluginId, signal))
   register(pluginServiceIpcChannels.authorize, (pluginId, signal) => executor.authorize(pluginId, signal), true)
   register(pluginServiceIpcChannels.reauthorize, (pluginId, signal) => executor.reauthorize(pluginId, signal), true)
   register(

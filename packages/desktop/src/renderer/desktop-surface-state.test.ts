@@ -39,4 +39,13 @@ describe("Desktop surface state", () => {
     })
     expect(closeDesktopSettings(second)).toEqual({ kind: "workspace" })
   })
+
+  test("carries a concrete Service target into Settings", () => {
+    expect(openDesktopSettings(createDesktopSurfaceState(), "services", undefined, "plugin:account-tools")).toEqual({
+      initialSection: "services",
+      initialServiceId: "plugin:account-tools",
+      kind: "settings",
+      returnTo: "home",
+    })
+  })
 })

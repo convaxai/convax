@@ -1,8 +1,20 @@
 import { Button, Input, cn } from "@convax/ui"
-import { Bot, CircleAlert, Cloud, LoaderCircle, LogOut, Search, Settings2 } from "lucide-react"
+import {
+  AudioLines,
+  Bot,
+  CircleAlert,
+  Cloud,
+  ImageIcon,
+  LoaderCircle,
+  LogOut,
+  MessageSquareText,
+  Search,
+  Settings2,
+  Video,
+} from "lucide-react"
 import { useId, useMemo, useState, type ReactNode } from "react"
 
-import type { PluginServiceStatus } from "../plugin-service-contracts"
+import type { PluginServiceStatus, ServiceCapability } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import { appMessage, type AppLocale } from "./app-language"
 import {
@@ -16,7 +28,11 @@ import {
   serviceStateLabel,
 } from "./service-display-format"
 import type { ServiceCatalogEntry } from "./service-catalog-controller"
-import { serviceModelResults } from "./service-model-filter"
+import {
+  serviceModelCapabilityOrder,
+  serviceModelResults,
+  type ServiceModelCapabilityFilter,
+} from "./service-model-filter"
 
 function serviceStateTone(state: PluginServiceStatus["state"]) {
   return state === "connected"
@@ -279,30 +295,111 @@ function ServiceConnectionDetails({ locale, service }: { locale: AppLocale; serv
   )
 }
 
-function ServiceModelDirectory({ locale, service }: { locale: AppLocale; service: ServiceCatalogEntry }) {
-  const [query, setQuery] = useState("")
+function ServiceUsageHistory({ locale, service }: { locale: AppLocale; service: ServiceCatalogEntry }) {
+  if (service.kind !== "plugin") return null
+  const history = service.usageHistory
   const titleId = useId()
-  const listId = useId()
-  const resultId = useId()
-  const result = useMemo(() => serviceModelResults(service.models, query), [query, service.models])
-  const searching = query.trim().length > 0
-  const showSearch = service.models.length > 6
+  const availableHistory = history?.availability === "available" ? history : undefined
+  const records = availableHistory?.records
+  const usageUnit = availableHistory?.unit ?? ""
 
   return (
     <section aria-labelledby={titleId} className="convax-service-section">
       <div className="flex items-baseline justify-between gap-3">
         <h4 className="text-sm font-semibold text-text-primary" id={titleId}>
-          {appMessage(locale, "services.models")}
+          {appMessage(locale, "services.usageHistory")}
         </h4>
-        {!showSearch ? (
-          <span className="shrink-0 text-xs tabular-nums text-text-tertiary">
-            {appMessage(locale, "services.modelCount", { count: service.models.length })}
+        {records ? (
+          <span className="text-[11px] tabular-nums text-text-tertiary">
+            {appMessage(locale, "services.usageHistoryCount", { count: records.length })}
           </span>
         ) : null}
       </div>
+      {records?.length ? (
+        <ol className="convax-service-usage-list mt-3 overflow-y-auto">
+          {records.map((record, index) => (
+            <li className="convax-service-usage-row" data-service-usage-record="" key={`${index}:${record.amount}`}>
+              <div className="min-w-0 flex-1">
+                <span className="block truncate text-xs font-medium text-text-primary" dir="auto">
+                  {record.label ?? appMessage(locale, "services.usageHistoryRecord", { index: index + 1 })}
+                </span>
+                {record.occurredAt ? (
+                  <time className="mt-0.5 block text-[10px] text-text-tertiary" dateTime={record.occurredAt}>
+                    {new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(
+                      new Date(record.occurredAt),
+                    )}
+                  </time>
+                ) : null}
+              </div>
+              <span className="shrink-0 text-xs font-semibold tabular-nums text-text-primary">
+                {appMessage(locale, "services.usageRecordAmount", {
+                  unit: usageUnit,
+                  value: metricValue(record.amount, locale),
+                })}
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p
+          className="mt-3 rounded-lg bg-surface-inset/35 px-3 py-5 text-center text-xs text-text-tertiary"
+          role="status"
+        >
+          {records ? appMessage(locale, "services.usageHistoryEmpty") : appMessage(locale, "services.unavailableData")}
+        </p>
+      )}
+    </section>
+  )
+}
+
+function ServiceModelDirectory({ locale, service }: { locale: AppLocale; service: ServiceCatalogEntry }) {
+  const [query, setQuery] = useState("")
+  const [capability, setCapability] = useState<ServiceModelCapabilityFilter>("all")
+  const titleId = useId()
+  const listId = useId()
+  const resultId = useId()
+  const result = useMemo(
+    () => serviceModelResults(service.models, query, capability),
+    [capability, query, service.models],
+  )
+  const filtering = query.trim().length > 0 || capability !== "all"
+  const showSearch = service.models.length > 6
+
+  const modelCapabilityLabel = (value: ServiceCapability) => appMessage(locale, `services.modelCapability.${value}`)
+
+  const capabilityIcon = (value: Exclude<ServiceModelCapabilityFilter, "all">) =>
+    value === "llm" ? (
+      <Bot />
+    ) : value === "text" ? (
+      <MessageSquareText />
+    ) : value === "image" ? (
+      <ImageIcon />
+    ) : value === "video" ? (
+      <Video />
+    ) : (
+      <AudioLines />
+    )
+
+  return (
+    <section aria-labelledby={titleId} className="convax-service-model-panel">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h4 className="text-xs font-semibold text-text-primary" id={titleId}>
+          {appMessage(locale, "services.models")}
+        </h4>
+        <span
+          aria-live="polite"
+          className="shrink-0 text-[11px] tabular-nums text-text-tertiary"
+          id={resultId}
+          role="status"
+        >
+          {filtering
+            ? appMessage(locale, "services.modelResultCount", { count: result.matches.length })
+            : appMessage(locale, "services.modelCount", { count: service.models.length })}
+        </span>
+      </div>
 
       {showSearch ? (
-        <div className="convax-service-model-toolbar mt-3">
+        <div className="convax-service-model-toolbar mt-2.5">
           <label className="relative min-w-0 flex-1">
             <Search
               aria-hidden="true"
@@ -313,23 +410,33 @@ function ServiceModelDirectory({ locale, service }: { locale: AppLocale; service
               aria-controls={listId}
               aria-describedby={resultId}
               aria-label={appMessage(locale, "services.searchModels")}
-              className="h-9 border-border-subtle bg-control-background pl-9 text-xs shadow-none"
+              className="h-8 rounded-full border-border-subtle bg-control-background pl-8 text-xs shadow-none"
               onInput={(event) => setQuery(event.currentTarget.value)}
               placeholder={appMessage(locale, "services.searchModelsPlaceholder")}
               type="search"
               value={query}
             />
           </label>
-          <p
-            aria-live="polite"
-            className="shrink-0 text-xs tabular-nums text-text-tertiary"
-            id={resultId}
-            role="status"
-          >
-            {searching
-              ? appMessage(locale, "services.modelResultCount", { count: result.matches.length })
-              : appMessage(locale, "services.modelCount", { count: service.models.length })}
-          </p>
+        </div>
+      ) : null}
+
+      {service.models.length ? (
+        <div
+          aria-label={appMessage(locale, "services.filterModels")}
+          className="convax-service-model-filters mt-2 flex flex-wrap gap-1"
+          role="group"
+        >
+          {(["all", ...serviceModelCapabilityOrder] as const).map((filter) => (
+            <button
+              aria-pressed={capability === filter}
+              className="convax-service-model-filter"
+              key={filter}
+              onClick={() => setCapability(filter)}
+              type="button"
+            >
+              {filter === "all" ? appMessage(locale, "services.allModels") : modelCapabilityLabel(filter)}
+            </button>
+          ))}
         </div>
       ) : null}
 
@@ -338,26 +445,60 @@ function ServiceModelDirectory({ locale, service }: { locale: AppLocale; service
           <>
             <ul
               aria-label={appMessage(locale, "services.modelListLabel")}
-              className="convax-service-model-list mt-3 overflow-y-auto"
+              className="convax-service-model-list mt-2 overflow-y-auto"
               id={listId}
             >
               {result.rendered.map((model) => (
-                <li className="convax-service-model-row" data-service-model={model.id} key={model.id}>
-                  <div className="min-w-0">
-                    <span className="break-words text-[13px] font-medium leading-5 text-text-primary" dir="auto">
-                      {model.name}
+                <li
+                  className="convax-service-model-row"
+                  data-service-model={model.id}
+                  data-service-model-type={model.capability}
+                  key={model.id}
+                >
+                  <span className="convax-service-model-icon" data-capability={model.capability} aria-hidden="true">
+                    {capabilityIcon(model.capability)}
+                  </span>
+                  <div className="convax-service-model-identity min-w-0">
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="min-w-0 truncate text-xs font-medium leading-5 text-text-primary" dir="auto">
+                        {model.name}
+                      </span>
+                      {model.default ? (
+                        <span className="shrink-0 whitespace-nowrap text-[10px] font-medium text-primary">
+                          {appMessage(locale, "services.defaultModel")}
+                        </span>
+                      ) : null}
                     </span>
-                    {model.default ? (
-                      <span className="ml-2 whitespace-nowrap text-[10px] font-medium text-primary">
-                        {appMessage(locale, "services.defaultModel")}
+                    {model.providerName ? (
+                      <span
+                        className="convax-service-model-provider block truncate text-[10px] text-text-tertiary"
+                        dir="auto"
+                      >
+                        {model.providerName}
                       </span>
                     ) : null}
                   </div>
-                  <span className="convax-service-model-provider break-words text-xs text-text-tertiary" dir="auto">
-                    {model.providerName ?? ""}
+                  <span className="sr-only">
+                    {appMessage(locale, "services.modelCapabilityLabel", {
+                      capability: modelCapabilityLabel(model.capability),
+                    })}
                   </span>
-                  <span className="justify-self-end text-[10px] font-medium text-text-tertiary">
-                    {capabilityLabel(locale, model.capability)}
+                  <span
+                    className="convax-service-model-capabilities"
+                    data-service-model-capabilities=""
+                    aria-hidden="true"
+                  >
+                    {serviceModelCapabilityOrder.map((candidate) => (
+                      <span
+                        className="convax-service-model-capability"
+                        data-active={candidate === model.capability}
+                        data-capability={candidate}
+                        data-service-model-capability={candidate}
+                        key={candidate}
+                      >
+                        {modelCapabilityLabel(candidate)}
+                      </span>
+                    ))}
                   </span>
                 </li>
               ))}
@@ -538,6 +679,8 @@ export function ServiceDetail({
         ) : null}
 
         <ServiceConnectionDetails locale={locale} service={service} />
+
+        <ServiceUsageHistory locale={locale} service={service} />
 
         {service.kind === "plugin" && !actions.includes("authorize") && !actions.includes("reauthorize") ? (
           <p className="text-xs leading-5 text-text-tertiary">

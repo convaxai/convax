@@ -3,6 +3,7 @@ import { describe, expect, mock, test } from "bun:test"
 import {
   pluginServiceIpcChannels,
   pluginServiceStatusSchema,
+  pluginServiceUsageSchema,
   type PluginServiceStatus,
 } from "../plugin-service-contracts"
 import {
@@ -56,6 +57,7 @@ function executor(overrides: Partial<PluginServiceExecutor> = {}): PluginService
     cancelAuthorization: mock(async () => status),
     checkout: mock(async () => status),
     getStatus: mock(async () => status),
+    getUsageHistory: mock(async () => ({ availability: "unavailable" as const, schema: pluginServiceUsageSchema })),
     listServices: mock(async () => []),
     reauthorize: mock(async () => status),
     signOut: mock(async () => status),
@@ -91,6 +93,7 @@ describe("Plugin service IPC boundary", () => {
       "plugin-service:checkout",
       "plugin-service:changed",
       "plugin-service:status",
+      "plugin-service:usage-history",
       "plugin-service:list",
       "plugin-service:reauthorize",
       "plugin-service:sign-out",
@@ -191,7 +194,7 @@ describe("Plugin service IPC boundary", () => {
     expect(changes).toEqual(Array.from({ length: 5 }, () => pluginServiceIpcChannels.changed))
 
     dispose()
-    expect(removed).toHaveLength(7)
+    expect(removed).toHaveLength(8)
   })
 
   test("does not publish a service change when the mutation fails", async () => {

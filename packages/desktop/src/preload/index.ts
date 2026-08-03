@@ -487,6 +487,7 @@ const pluginServiceClient = {
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
   checkout: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.checkout, input),
   getStatus: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.getStatus, input),
+  getUsageHistory: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.getUsageHistory, input),
   listServices: () => ipcRenderer.invoke(pluginServiceIpcChannels.listServices),
   onDidChange(listener) {
     const handleChange = () => listener()

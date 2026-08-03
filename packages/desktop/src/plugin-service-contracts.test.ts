@@ -1,6 +1,11 @@
 import { describe, expect, test } from "bun:test"
 
-import { parsePluginServiceStatus, pluginServiceStatusSchema } from "./plugin-service-contracts"
+import {
+  parsePluginServiceStatus,
+  parsePluginServiceUsageHistory,
+  pluginServiceStatusSchema,
+  pluginServiceUsageSchema,
+} from "./plugin-service-contracts"
 
 function status(overrides: Record<string, unknown> = {}) {
   return {
@@ -128,5 +133,41 @@ describe("Plugin service display status", () => {
     expect(() =>
       parsePluginServiceStatus(status({ usage: { availability: "available", consumed: -1, unit: "credits" } })),
     ).toThrow("value is invalid")
+  })
+})
+
+describe("Plugin service usage history", () => {
+  test("accepts every bounded usage record and preserves order", () => {
+    expect(
+      parsePluginServiceUsageHistory({
+        availability: "available",
+        records: [{ amount: 7, label: "Image generation", occurredAt: "2026-08-03T08:09:10.000Z" }, { amount: 3 }],
+        schema: pluginServiceUsageSchema,
+        unit: "credits",
+      }),
+    ).toEqual({
+      availability: "available",
+      records: [{ amount: 7, label: "Image generation", occurredAt: "2026-08-03T08:09:10.000Z" }, { amount: 3 }],
+      schema: pluginServiceUsageSchema,
+      unit: "credits",
+    })
+  })
+
+  test("rejects unbounded, secret-bearing, and noncanonical usage records", () => {
+    const history = (records: unknown[]) => ({
+      availability: "available",
+      records,
+      schema: pluginServiceUsageSchema,
+      unit: "credits",
+    })
+    expect(() => parsePluginServiceUsageHistory(history(Array.from({ length: 21 }, () => ({ amount: 1 }))))).toThrow(
+      "invalid",
+    )
+    expect(() => parsePluginServiceUsageHistory(history([{ amount: 1, label: "Bearer private-token-value" }]))).toThrow(
+      "bounded display text",
+    )
+    expect(() => parsePluginServiceUsageHistory(history([{ amount: 1, occurredAt: "2026-08-03" }]))).toThrow(
+      "timestamp is invalid",
+    )
   })
 })

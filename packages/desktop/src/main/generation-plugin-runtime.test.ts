@@ -1553,7 +1553,7 @@ describe("GenerationPluginRuntime", () => {
     }
     const { clients, plugins, runtime } = setup(
       [staticPlugin(), installedService],
-      ["service.status", "service.sign_out"],
+      ["service.status", "service.usage.list", "service.sign_out"],
       undefined,
       async () => executable,
     )
@@ -1573,6 +1573,7 @@ describe("GenerationPluginRuntime", () => {
 
     const firstStatus = await runtime.callService("account-tools", "status")
     const secondStatus = await runtime.callService("account-tools", "status")
+    await runtime.callService("account-tools", "usage")
     expect(clients[0]!.listSignals).toEqual([])
     await runtime.callService("account-tools", "sign_out")
     expect(firstStatus.authorizationIdentity).toBe(plugins.authorizationIdentities.get(installedService.id))
@@ -1586,6 +1587,7 @@ describe("GenerationPluginRuntime", () => {
     expect(clients[0].calls.map(({ input, name, requestTimeoutMs }) => ({ input, name, requestTimeoutMs }))).toEqual([
       { input: {}, name: "service.status", requestTimeoutMs: undefined },
       { input: {}, name: "service.status", requestTimeoutMs: undefined },
+      { input: {}, name: "service.usage.list", requestTimeoutMs: undefined },
       { input: {}, name: "service.sign_out", requestTimeoutMs: undefined },
     ])
   })

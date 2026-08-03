@@ -1076,11 +1076,17 @@ as [`ffmpeg-tool-plugin.md`](ffmpeg-tool-plugin.md) are non-normative examples.
 
 The same executable Tool Plugin may optionally contribute a user-global service
 surface. This does not create a second runtime or provider registry: Desktop reuses
-the already verified MCP sidecar and calls only fixed `service.status` and explicitly
-manifest-authorized `service.*` actions. `convax.plugin-service-status/2` is the only
+the already verified MCP sidecar and calls only fixed `service.status`, optional
+read-only `service.usage.list`, and explicitly manifest-authorized `service.*`
+actions. `convax.plugin-service-status/2` is the only
 accepted status version and requires bounded account, credential-verification,
 current Plan, Billing/Checkout, credit and usage projections; unsupported data
 remains explicitly unavailable. Status v1 is rejected rather than adapted.
+`service.usage.list` may additionally return only
+`convax.plugin-service-usage/1`: one bounded display unit and at most 20 ordered,
+settled usage records with non-negative amounts and optional bounded labels and
+canonical timestamps. Missing tools, invalid output, and transient failures degrade
+only this optional history to unavailable; they do not suppress a valid status.
 Renderer settings receive no token, cookie, AK/SK, URL, native path, raw content or
 arbitrary MCP method. Destructive sign-out remains a host-rendered, confirmed action.
 An authorization action may request the one fixed main-only browser-cookie exchange
@@ -1100,8 +1106,9 @@ settings. Plugin generation capabilities and model rows are derived from the
 installed manifest. An LLM contribution may additionally opt into the fixed
 `llm.models.list` runtime catalog; Desktop validates that bounded catalog in Main and
 projects the resulting connected Plugin provider back into its owning Service card.
-Dynamic account, Plan, Billing, credit and usage data still comes only from the
-bounded service status. The existing OpenCode Agent runtime contributes a safe display-only
+Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
+from the bounded service status; the optional bounded usage-history tool supplies
+display records only. The existing OpenCode Agent runtime contributes a safe display-only
 projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to

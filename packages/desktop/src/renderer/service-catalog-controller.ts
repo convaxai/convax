@@ -4,6 +4,7 @@ import type {
   PluginServiceClient,
   PluginServiceState,
   PluginServiceStatus,
+  PluginServiceUsageHistory,
   ServiceCapability,
   ServiceModelSummary,
 } from "../plugin-service-contracts"
@@ -45,6 +46,7 @@ export interface PluginServiceCatalogEntry extends ServiceCatalogEntryBase {
   kind: "plugin"
   pluginId: string
   status?: PluginServiceStatus
+  usageHistory?: PluginServiceUsageHistory
   version: string
 }
 
@@ -158,6 +160,7 @@ function pluginEntry(
     serviceId: `plugin:${service.pluginId}`,
     state: service.status?.state ?? stableState ?? "unknown",
     status: service.status,
+    usageHistory: service.usageHistory,
     version: service.version,
   }
 }

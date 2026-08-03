@@ -1165,34 +1165,37 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   /** Calls one host-defined service tool with a fixed bounded input; arbitrary MCP names never enter here. */
   async callService(
     pluginId: string,
-    call: "status" | WebPluginServiceAction,
+    call: "status" | "usage" | WebPluginServiceAction,
     signal?: AbortSignal,
     input?: { readonly planKey: string },
   ): Promise<PluginServiceMcpCallResult> {
     if (signal?.aborted) throw abortError(signal.reason)
     const plugins = await this.#discover()
     const selected = this.#selectService(plugins, pluginId)
-    if (call !== "status" && !selected.manifest.contributes.service!.actions.includes(call)) {
+    if (call !== "status" && call !== "usage" && !selected.manifest.contributes.service!.actions.includes(call)) {
       throw new Error(`Plugin service action is not declared: ${pluginId}`)
     }
     const runtime = await this.#runtimeFor(selected)
     const toolName =
       call === "status"
         ? pluginServiceMcpTools.status
-        : call === "authorize"
-          ? pluginServiceMcpTools.authorize
-          : call === "reauthorize"
-            ? pluginServiceMcpTools.reauthorize
-            : call === "authorization.cancel"
-              ? pluginServiceMcpTools.cancelAuthorization
-              : call === "checkout"
-                ? pluginServiceMcpTools.checkout
-                : pluginServiceMcpTools.signOut
+        : call === "usage"
+          ? pluginServiceMcpTools.usage
+          : call === "authorize"
+            ? pluginServiceMcpTools.authorize
+            : call === "reauthorize"
+              ? pluginServiceMcpTools.reauthorize
+              : call === "authorization.cancel"
+                ? pluginServiceMcpTools.cancelAuthorization
+                : call === "checkout"
+                  ? pluginServiceMcpTools.checkout
+                  : pluginServiceMcpTools.signOut
     try {
       // Service status is a fixed contribution contract, so call it directly.
       // Enumerating every tool first can block on an unrelated dynamic generation
       // catalog and consume the bounded service-availability budget.
-      const availableTools = call === "status" ? undefined : await this.#availableTools(runtime, signal)
+      const availableTools =
+        call === "status" || call === "usage" ? undefined : await this.#availableTools(runtime, signal)
       if (availableTools && !availableTools.has(toolName)) {
         throw new Error(`Plugin service ${pluginId} did not expose its fixed MCP tool: ${toolName}`)
       }
@@ -1254,7 +1257,8 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       // Status is a read-only availability probe and shares the process with
       // generation/recovery. A transient probe failure must not tear down an
       // accepted LRO or an in-flight authorization hosted by that runtime.
-      if (call !== "status" && !(error instanceof Error && error.name === "AbortError")) this.#evict(runtime)
+      if (call !== "status" && call !== "usage" && !(error instanceof Error && error.name === "AbortError"))
+        this.#evict(runtime)
       throw error
     }
   }
@@ -2130,12 +2134,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       return this.#waitForExactRuntime(pending, signal)
     }
     const controller = new AbortController()
-    const promise = this.#startHistoricalCapabilityRuntime(
-      provider,
-      handle,
-      currentFingerprint,
-      controller.signal,
-    )
+    const promise = this.#startHistoricalCapabilityRuntime(provider, handle, currentFingerprint, controller.signal)
     const starting: StartingExactPluginRuntime = {
       cancel: () => controller.abort(new Error("Plugin capability runtime start was canceled")),
       fingerprint: currentFingerprint,
@@ -2345,10 +2344,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       }
     }
     for (const starting of this.#startingByIdentity.values()) {
-      if (
-        starting.fingerprint !== null &&
-        discovered.get(starting.pluginId)?.fingerprint !== starting.fingerprint
-      ) {
+      if (starting.fingerprint !== null && discovered.get(starting.pluginId)?.fingerprint !== starting.fingerprint) {
         starting.cancel()
       }
     }

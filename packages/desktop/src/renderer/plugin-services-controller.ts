@@ -1,10 +1,17 @@
-import type { PluginServiceClient, PluginServiceStatus, PluginServiceSummary } from "../plugin-service-contracts"
+import {
+  pluginServiceUsageSchema,
+  type PluginServiceClient,
+  type PluginServiceStatus,
+  type PluginServiceSummary,
+  type PluginServiceUsageHistory,
+} from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 
 export interface PluginServiceViewEntry extends PluginServiceSummary {
   error?: string
   loading: boolean
   status?: PluginServiceStatus
+  usageHistory?: PluginServiceUsageHistory
 }
 
 export interface PluginServicesSnapshot {
@@ -104,6 +111,7 @@ export class PluginServicesController {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
       }
+      await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
@@ -136,6 +144,7 @@ export class PluginServicesController {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
       }
+      await this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     } catch (error) {
       if (this.#isCurrent(entry, fingerprint, generation, actionEpoch)) {
         this.#replace(pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
@@ -160,13 +169,46 @@ export class PluginServicesController {
 
   async #loadStatus(entry: PluginServiceViewEntry, generation: number) {
     const fingerprint = summaryFingerprint(entry)
+    const status = this.client
+      .getStatus({ pluginId: entry.pluginId })
+      .then((nextStatus) => {
+        if (!this.#isCurrent(entry, fingerprint, generation)) return
+        this.#replace(entry.pluginId, (current) => ({
+          ...current,
+          error: undefined,
+          loading: false,
+          status: nextStatus,
+        }))
+      })
+      .catch((error: unknown) => {
+        if (!this.#isCurrent(entry, fingerprint, generation)) return
+        this.#replace(entry.pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+      })
+    const usage = this.#refreshUsageHistory(entry, fingerprint, generation)
+    await Promise.all([status, usage])
+  }
+
+  async #usageHistory(pluginId: string): Promise<PluginServiceUsageHistory> {
+    return (
+      (await this.client.getUsageHistory?.({ pluginId })) ?? {
+        availability: "unavailable",
+        schema: pluginServiceUsageSchema,
+      }
+    )
+  }
+
+  async #refreshUsageHistory(
+    entry: PluginServiceSummary,
+    fingerprint: string,
+    generation: number,
+    actionEpoch?: number,
+  ) {
     try {
-      const status = await this.client.getStatus({ pluginId: entry.pluginId })
-      if (!this.#isCurrent(entry, fingerprint, generation)) return
-      this.#replace(entry.pluginId, (current) => ({ ...current, error: undefined, loading: false, status }))
-    } catch (error) {
-      if (!this.#isCurrent(entry, fingerprint, generation)) return
-      this.#replace(entry.pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
+      const usageHistory = await this.#usageHistory(entry.pluginId)
+      if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
+      this.#replace(entry.pluginId, (current) => ({ ...current, usageHistory }))
+    } catch {
+      // Usage history is optional and must not invalidate an otherwise valid status.
     }
   }
 

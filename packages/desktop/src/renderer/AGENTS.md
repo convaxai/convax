@@ -41,6 +41,9 @@ or durable domain authority.
   runtime preferences are display projections. Main must revalidate the exact
   ActiveSet/snapshot identity, live schema/service status, grants, scope, and
   revisions before action.
+- Service usage history is an optional bounded display list. Render every admitted
+  record, keep filtering/navigation local to the Services surface, and never infer
+  execution or billing authority from it.
 - Marketplace UI may render its last complete strictly validated projection
   immediately across remounts and cold windows while revalidating it through Main
   at Renderer startup. Persist only bounded renderer-safe fields; never let the

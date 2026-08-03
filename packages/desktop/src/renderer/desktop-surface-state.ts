@@ -6,6 +6,7 @@ export type DesktopSurfaceState =
   | { kind: DesktopPrimarySurface }
   | {
       initialSection: SettingsSection
+      initialServiceId?: string
       initialSkillName?: string
       kind: "settings"
       returnTo: DesktopPrimarySurface
@@ -23,10 +24,12 @@ export function openDesktopSettings(
   current: DesktopSurfaceState,
   initialSection: SettingsSection,
   initialSkillName?: string,
+  initialServiceId?: string,
 ): DesktopSurfaceState {
   const returnTo = current.kind === "settings" ? current.returnTo : current.kind
   return {
     initialSection,
+    ...(initialServiceId ? { initialServiceId } : {}),
     ...(initialSkillName ? { initialSkillName } : {}),
     kind: "settings",
     returnTo,

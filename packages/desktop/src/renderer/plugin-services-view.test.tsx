@@ -66,6 +66,39 @@ function installTestWindow() {
 }
 
 describe("Plugin Services host UI", () => {
+  test("opens a concrete Service target directly", () => {
+    const markup = renderToStaticMarkup(
+      <PluginServicesSurface
+        initialServiceId="plugin:account-tools"
+        locale="en"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{
+          loading: false,
+          services: [
+            {
+              authentication: "not-applicable",
+              billing: { kind: "free" },
+              capabilities: ["llm"],
+              description: "Built in",
+              kind: "builtin",
+              loading: false,
+              models: [],
+              name: "OpenCode",
+              serviceId: "builtin:opencode",
+              state: "connected",
+            },
+            baseService,
+          ],
+        }}
+      />,
+    )
+
+    expect(markup).toContain('data-service-detail="plugin:account-tools"')
+    expect(markup).toContain('data-service-directory-item="plugin:account-tools"')
+    expect(markup).toContain('aria-current="page"')
+  })
+
   test("shows the authoritative Plan and Upgrade action advertised by the Plugin", () => {
     const markup = renderToStaticMarkup(
       <PluginServicesSurface
@@ -137,7 +170,7 @@ describe("Plugin Services host UI", () => {
     )
 
     expect(markup).toContain("Account Tools")
-    expect(markup.match(/Not supported or unavailable/g)?.length).toBe(5)
+    expect(markup.match(/Not supported or unavailable/g)?.length).toBe(6)
     expect(markup).toContain("does not provide in-app authorization")
     expect(markup).toContain("Sign out")
     expect(markup).not.toContain("Reconfigure")
@@ -168,6 +201,12 @@ describe("Plugin Services host UI", () => {
                 state: "connected",
                 usage: { availability: "available", consumed: 19, period: "本月", unit: "积分" },
               },
+              usageHistory: {
+                availability: "available",
+                records: [{ amount: 7 }, { amount: 3 }],
+                schema: "convax.plugin-service-usage/1",
+                unit: "积分",
+              },
               version: "2.0.0",
             },
           ],
@@ -180,6 +219,9 @@ describe("Plugin Services host UI", () => {
     expect(markup).toContain('<span class="tabular-nums">80.5</span> <span dir="auto">积分</span>')
     expect(markup).toContain('<span class="tabular-nums">19</span> <span dir="auto">积分</span>')
     expect(markup).toContain('<span dir="auto">本月</span>')
+    expect(markup.match(/data-service-usage-record=/g)).toHaveLength(2)
+    expect(markup).toContain("−7 积分")
+    expect(markup).toContain("−3 积分")
     expect(markup).toContain("重新配置")
     expect(markup).toContain('data-service-action="reauthorize" data-service-action-priority="primary"')
     expect(markup).toContain('data-service-action="sign_out" data-service-action-priority="danger-secondary"')
@@ -341,6 +383,42 @@ describe("Plugin Services host UI", () => {
     expect(markup).not.toContain("Sign out")
   })
 
+  test("renders every model as a fixed five-column capability matrix with only its declared type active", async () => {
+    const markup = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{ loading: false, services: [baseService] }}
+      />,
+    )
+    const testWindow = new Window({ url: "https://convax.test/" })
+    try {
+      testWindow.document.body.innerHTML = markup
+      const filterLabels = [...testWindow.document.querySelectorAll(".convax-service-model-filter")].map((item) =>
+        item.textContent?.trim(),
+      )
+      expect(filterLabels).toEqual(["全部", "Agent", "文本", "生图", "视频", "音频"])
+
+      const imageRow = testWindow.document.querySelector('[data-service-model="seedream"]')
+      const videoRow = testWindow.document.querySelector('[data-service-model="seedance"]')
+      expect(imageRow?.querySelectorAll("[data-service-model-capability]")).toHaveLength(5)
+      expect(videoRow?.querySelectorAll("[data-service-model-capability]")).toHaveLength(5)
+      expect(imageRow?.querySelector('[data-service-model-capability="image"]')?.getAttribute("data-active")).toBe(
+        "true",
+      )
+      expect(imageRow?.querySelector('[data-service-model-capability="video"]')?.getAttribute("data-active")).toBe(
+        "false",
+      )
+      expect(videoRow?.querySelector('[data-service-model-capability="video"]')?.getAttribute("data-active")).toBe(
+        "true",
+      )
+      expect(imageRow?.textContent).toContain("Agent文本生图视频音频")
+    } finally {
+      await testWindow.happyDOM.close()
+    }
+  })
+
   test("filters a model catalog by model, provider, or capability", () => {
     const models = [
       { capability: "llm" as const, id: "zen", name: "North Mini Code", providerName: "OpenCode Zen" },
@@ -351,6 +429,7 @@ describe("Plugin Services host UI", () => {
     expect(filterServiceModels(models, "IMAGE")).toEqual([models[1]])
     expect(filterServiceModels(models, "north")).toEqual([models[0]])
     expect(filterServiceModels(models, "  ")).toBe(models)
+    expect(filterServiceModels(models, "", "image")).toEqual([models[1]])
   })
 
   test("bounds a large model catalog and directs people to search", () => {
@@ -386,7 +465,7 @@ describe("Plugin Services host UI", () => {
     expect(markup.match(/data-service-model=/g)).toHaveLength(50)
     expect(markup).toContain("Showing the first 50 of 60 models")
     expect(markup).toContain('aria-live="polite"')
-    expect(markup).toContain(">60 models</p>")
+    expect(markup).toContain(">60 models</span>")
   })
 
   test("shows a quiet service-level empty state without mounting an empty workspace", () => {
@@ -428,7 +507,7 @@ describe("Plugin Services host UI", () => {
                   kind: "builtin",
                   loading: false,
                   models: Array.from({ length: 60 }, (_, index) => ({
-                    capability: "llm" as const,
+                    capability: index === 59 ? ("image" as const) : ("llm" as const),
                     id: `model-${index}`,
                     name: `Model ${index}`,
                     providerName: index === 59 ? "Special Provider" : "Standard Provider",
@@ -465,6 +544,16 @@ describe("Plugin Services host UI", () => {
       expect(document.body.textContent).toContain("0 results")
       expect(document.body.textContent).toContain("No models match this search.")
       expect(document.querySelectorAll("[data-service-model]")).toHaveLength(0)
+
+      await act(async () => {
+        setSearchValue("")
+        Array.from(document.querySelectorAll<HTMLButtonElement>(".convax-service-model-filter"))
+          .find((button) => button.textContent === "Image")
+          ?.click()
+      })
+      expect(document.body.textContent).toContain("1 results")
+      expect(document.querySelectorAll("[data-service-model]")).toHaveLength(1)
+      expect(document.body.textContent).toContain("Model 59")
     } finally {
       if (root) await act(async () => root?.unmount())
       await restoreWindow()
@@ -609,7 +698,7 @@ describe("Plugin Services host UI", () => {
 
     expect(styles).toContain("container: service-surface / inline-size")
     expect(styles).toContain("@container service-surface (min-width: 44rem)")
-    expect(styles).toContain("@container service-detail (min-width: 36rem)")
+    expect(styles).toContain("@container service-detail (min-width: 29rem)")
     expect(styles).toContain("flex: 0 0 min(15rem, 82cqw)")
     expect(styles).not.toContain(".convax-services-workspace {\n  min-height:")
     expect(styles).not.toContain(".convax-services-workspace {\n  box-shadow:")

@@ -12,7 +12,7 @@ interface ApplicationMenuProps {
   compact?: boolean
   featureFlags?: DesktopFeatureFlags
   locale: AppLocale
-  onOpenSettings(target: ApplicationMenuTarget): void
+  onOpenSettings(target: ApplicationMenuTarget, serviceId?: string): void
   services?: ServiceCatalogSnapshot
 }
 
@@ -50,7 +50,7 @@ export function ApplicationMenuPanel({
 }: {
   featureFlags?: DesktopFeatureFlags
   locale: AppLocale
-  onOpenSettings(target: ApplicationMenuTarget): void
+  onOpenSettings(target: ApplicationMenuTarget, serviceId?: string): void
   panelRef?: React.Ref<HTMLDivElement>
   position?: MenuPosition
   services?: ServiceCatalogSnapshot
@@ -106,8 +106,9 @@ export function ApplicationMenuPanel({
               {services.services.map((service) => (
                 <button
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left outline-none hover:bg-accent focus-visible:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                  data-application-service={service.serviceId}
                   key={service.serviceId}
-                  onClick={() => onOpenSettings("services")}
+                  onClick={() => onOpenSettings("services", service.serviceId)}
                   role="menuitem"
                   type="button"
                 >
@@ -231,9 +232,9 @@ export function ApplicationMenu({
     }
   }, [open, updatePosition])
 
-  const openSettings = (target: ApplicationMenuTarget) => {
+  const openSettings = (target: ApplicationMenuTarget, serviceId?: string) => {
     setOpen(false)
-    onOpenSettings(target)
+    onOpenSettings(target, serviceId)
   }
 
   return (

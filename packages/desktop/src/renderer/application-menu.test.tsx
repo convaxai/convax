@@ -102,6 +102,7 @@ describe("ApplicationMenu", () => {
     expect(markup).toContain("免费")
     expect(markup).toContain("LLM")
     expect(markup).toContain("小云雀生成")
+    expect(markup).toContain('data-application-service="plugin:xiaoyunque-generation"')
     expect(markup).toContain("生图 · 生视频")
     expect(markup).toContain("需要授权")
     expect(markup).not.toContain("Creator")

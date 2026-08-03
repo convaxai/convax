@@ -106,6 +106,7 @@ function ServiceDirectoryItem({
 
 export function ServicesSurface({
   className,
+  initialServiceId,
   locale,
   onAction,
   onCheckout,
@@ -114,6 +115,7 @@ export function ServicesSurface({
   snapshot,
 }: {
   className?: string
+  initialServiceId?: string
   locale: AppLocale
   onAction(pluginId: string, action: WebPluginServiceAction): void
   onCheckout?(pluginId: string, planKey: string): void
@@ -121,7 +123,12 @@ export function ServicesSurface({
   onRefresh(): void
   snapshot: ServiceCatalogSnapshot
 }) {
-  const [selectedServiceId, setSelectedServiceId] = useState(snapshot.services[0]?.serviceId)
+  const initialServiceAvailable = Boolean(
+    initialServiceId && snapshot.services.some((service) => service.serviceId === initialServiceId),
+  )
+  const [selectedServiceId, setSelectedServiceId] = useState(
+    initialServiceAvailable ? initialServiceId : snapshot.services[0]?.serviceId,
+  )
   const selectedService =
     snapshot.services.find((service) => service.serviceId === selectedServiceId) ?? snapshot.services[0]
   const totalModels = snapshot.services.reduce((total, service) => total + service.models.length, 0)
@@ -132,6 +139,10 @@ export function ServicesSurface({
   useEffect(() => {
     if (selectedService?.serviceId !== selectedServiceId) setSelectedServiceId(selectedService?.serviceId)
   }, [selectedService?.serviceId, selectedServiceId])
+
+  useEffect(() => {
+    if (initialServiceAvailable) setSelectedServiceId(initialServiceId)
+  }, [initialServiceAvailable, initialServiceId])
 
   function navigateFrom(serviceId: string, key: "first" | "last" | "next" | "previous") {
     const index = snapshot.services.findIndex((service) => service.serviceId === serviceId)

@@ -80,6 +80,10 @@ backoff so a still-starting service is not cached as permanently ready. The
 snapshot is never persisted or treated as execution authority: Main reloads the
 selected tool schema and service status immediately before execution.
 
+An optional fixed `service.usage.list` call is a Services display projection only.
+Its bounded history never participates in generation availability, preparation,
+dispatch, billing authority, or recovery.
+
 Plugin-to-Plugin exports name the exact MCP tool operation. Availability and
 execution must use the same lease-derived sidecar session; echoing identity strings
 is not provenance.

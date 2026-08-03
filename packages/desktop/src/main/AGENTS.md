@@ -50,6 +50,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Plugin ids, providers, vendors, model names, and filenames are never behavior
   switches. Runtime behavior derives from validated manifests, advertised tools,
   verified bytes, fixed host handlers, and durable grants.
+- Optional Plugin service usage history is a fixed bounded read projection. A
+  missing or invalid history tool degrades to unavailable without evicting the
+  sidecar or replacing a valid status; stale Plugin identity still fails closed.
 - External execution uses the exact install-authorized and re-fingerprinted
   entrypoint or immutable host-owned snapshot. Terminate the owned process tree on
   disposal and fail closed when the platform cannot guarantee ownership.

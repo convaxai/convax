@@ -30,6 +30,7 @@ export interface SettingsViewProps {
   className?: string
   featureFlags?: DesktopFeatureFlags
   initialSection?: SettingsSection
+  initialServiceId?: string
   initialSkillName?: string
   languagePreference: AppLanguagePreference
   locale: AppLocale
@@ -103,6 +104,7 @@ export function SettingsView({
   className,
   featureFlags = desktopFeatureFlags,
   initialSection = "general",
+  initialServiceId,
   initialSkillName,
   languagePreference,
   locale,
@@ -326,6 +328,7 @@ export function SettingsView({
             />
           ) : section === "services" ? (
             <ServicesSurface
+              initialServiceId={initialServiceId}
               locale={locale}
               onAction={onServiceAction}
               onCheckout={onServiceCheckout}

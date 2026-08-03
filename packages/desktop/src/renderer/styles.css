@@ -463,34 +463,148 @@
   gap: 1rem 2rem;
 }
 
+.convax-service-usage-list {
+  max-height: min(22rem, 46vh);
+  padding: 0.25rem;
+  border: 1px solid color-mix(in oklab, var(--ui-border-default) 55%, transparent);
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--ui-surface-inset) 34%, var(--ui-surface-raised));
+  scrollbar-gutter: stable;
+}
+
+.convax-service-usage-row {
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.4375rem 0.625rem;
+  border-radius: 0.5rem;
+}
+
+.convax-service-usage-row:hover {
+  background: color-mix(in oklab, var(--ui-interactive-hover) 58%, transparent);
+}
+
 .convax-service-model-toolbar {
   display: flex;
   align-items: center;
   gap: 0.75rem;
 }
 
+.convax-service-model-panel {
+  min-width: 0;
+  padding: 0.75rem;
+  border: 1px solid color-mix(in oklab, var(--ui-border-default) 55%, transparent);
+  border-radius: 0.625rem;
+  background: color-mix(in oklab, var(--ui-surface-inset) 34%, var(--ui-surface-raised));
+}
+
+.convax-service-model-filter {
+  min-height: 1.375rem;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  color: var(--ui-text-tertiary);
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1rem;
+  outline: none;
+}
+
+.convax-service-model-filter:hover {
+  background: var(--ui-interactive-hover);
+  color: var(--ui-text-secondary);
+}
+
+.convax-service-model-filter[aria-pressed="true"] {
+  color: var(--ui-brand);
+  background: color-mix(in oklab, var(--ui-brand) 13%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--ui-brand) 24%, transparent);
+}
+
+.convax-service-model-filter:focus-visible {
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--ui-focus-ring) 55%, transparent);
+}
+
 .convax-service-model-list {
   max-height: min(24rem, 50vh);
-  border-top: 1px solid var(--ui-border-subtle);
   scrollbar-gutter: stable;
 }
 
 .convax-service-model-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.25rem 0.75rem;
+  grid-template-columns: 0.875rem minmax(8rem, 1fr) auto;
+  gap: 0.75rem;
   align-items: center;
   min-height: 2.75rem;
-  padding: 0.625rem 0.25rem;
-  border-bottom: 1px solid color-mix(in oklab, var(--ui-border-subtle) 62%, var(--ui-surface-raised));
+  padding: 0.4375rem 0.5rem;
+  border-radius: 0.5rem;
 }
 
 .convax-service-model-row:hover {
   background: color-mix(in oklab, var(--ui-interactive-hover) 58%, transparent);
 }
 
-.convax-service-model-provider {
-  grid-column: 1 / -1;
+.convax-service-model-icon {
+  display: grid;
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--model-capability-tone, var(--ui-brand));
+}
+
+.convax-service-model-icon > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.convax-service-model-capabilities {
+  display: grid;
+  grid-template-columns: repeat(5, max-content);
+  gap: 0.125rem;
+  justify-content: end;
+}
+
+.convax-service-model-capability {
+  padding: 0.0625rem 0.3125rem;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  color: var(--ui-text-disabled);
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 0.875rem;
+  white-space: nowrap;
+}
+
+.convax-service-model-capability[data-active="true"] {
+  border-color: color-mix(in oklab, var(--model-capability-tone) 52%, transparent);
+  color: var(--model-capability-tone);
+  background: color-mix(in oklab, var(--model-capability-tone) 12%, transparent);
+}
+
+.convax-service-model-icon[data-capability="llm"],
+.convax-service-model-capability[data-capability="llm"] {
+  --model-capability-tone: var(--ui-brand);
+}
+
+.convax-service-model-icon[data-capability="text"],
+.convax-service-model-capability[data-capability="text"] {
+  --model-capability-tone: var(--ui-status-info);
+}
+
+.convax-service-model-icon[data-capability="image"],
+.convax-service-model-capability[data-capability="image"] {
+  --model-capability-tone: var(--ui-status-success);
+}
+
+.convax-service-model-icon[data-capability="video"],
+.convax-service-model-capability[data-capability="video"] {
+  --model-capability-tone: var(--ui-status-danger);
+}
+
+.convax-service-model-icon[data-capability="audio"],
+.convax-service-model-capability[data-capability="audio"] {
+  --model-capability-tone: var(--ui-status-warning);
 }
 
 @container service-surface (min-width: 44rem) {
@@ -519,17 +633,6 @@
 @container service-detail (min-width: 29rem) {
   .convax-service-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
-@container service-detail (min-width: 36rem) {
-  .convax-service-model-row {
-    grid-template-columns: minmax(0, 1.4fr) minmax(7rem, 0.8fr) auto;
-    gap: 0.75rem;
-  }
-
-  .convax-service-model-provider {
-    grid-column: auto;
   }
 }
 

@@ -1598,6 +1598,10 @@ function startApplication() {
           pluginRuntimeSession.assertMutable()
           return pluginServices.getStatus(pluginId, signal)
         },
+        getUsageHistory: (pluginId, signal) => {
+          pluginRuntimeSession.assertMutable()
+          return pluginServices.getUsageHistory(pluginId, signal)
+        },
         listServices: () => pluginServices.listServices(),
         reauthorize: (pluginId, signal) => {
           pluginRuntimeSession.assertMutable()

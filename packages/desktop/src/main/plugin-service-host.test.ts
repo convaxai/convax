@@ -1,6 +1,10 @@
 import { describe, expect, mock, spyOn, test } from "bun:test"
 
-import { pluginServiceStatusSchema, type PluginServiceSummary } from "../plugin-service-contracts"
+import {
+  pluginServiceStatusSchema,
+  pluginServiceUsageSchema,
+  type PluginServiceSummary,
+} from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import { PluginServiceHost, type PluginServiceToolRuntime } from "./plugin-service-host"
 import {
@@ -98,8 +102,37 @@ describe("PluginServiceHost", () => {
     expect(JSON.stringify(await host.getStatus("account-tools"))).not.toContain("secret-must-not-cross-preload")
   })
 
+  test("returns bounded usage records and degrades an optional tool failure", async () => {
+    let available = true
+    const host = new PluginServiceHost({
+      async callService(_pluginId, call) {
+        if (call !== "usage") return { structuredContent: status }
+        return available
+          ? {
+              structuredContent: {
+                availability: "available",
+                records: [{ amount: 7 }, { amount: 3 }],
+                schema: pluginServiceUsageSchema,
+                unit: "credits",
+              },
+            }
+          : { isError: true }
+      },
+      listServices: async () => [summary],
+    })
+
+    await expect(host.getUsageHistory("account-tools")).resolves.toMatchObject({
+      records: [{ amount: 7 }, { amount: 3 }],
+    })
+    available = false
+    await expect(host.getUsageHistory("account-tools")).resolves.toEqual({
+      availability: "unavailable",
+      schema: pluginServiceUsageSchema,
+    })
+  })
+
   test("maps host methods to fixed actions and never accepts an action payload", async () => {
-    const calls: Array<{ call: "status" | WebPluginServiceAction; pluginId: string }> = []
+    const calls: Array<{ call: "status" | "usage" | WebPluginServiceAction; pluginId: string }> = []
     const onServiceMutation = mock(async () => undefined)
     const runtime: PluginServiceToolRuntime = {
       async callService(pluginId, call) {
@@ -359,7 +392,7 @@ describe("PluginServiceHost", () => {
     const host = new PluginServiceHost(
       {
         callService: async (_pluginId, call) => {
-          if (call === "status") throw new Error("unexpected status call")
+          if (call === "status" || call === "usage") throw new Error("unexpected read call")
           calls.push(call)
           if (call === "authorization.cancel") return { structuredContent: status }
           return {
@@ -405,7 +438,7 @@ describe("PluginServiceHost", () => {
     let pending = false
     const runtime: PluginServiceToolRuntime = {
       async callService(_pluginId, call) {
-        if (call === "status") throw new Error("unexpected status call")
+        if (call === "status" || call === "usage") throw new Error("unexpected read call")
         calls.push(call)
         if (call === "authorization.cancel") {
           pending = false
@@ -454,7 +487,7 @@ describe("PluginServiceHost", () => {
     const host = new PluginServiceHost(
       {
         async callService(_pluginId, call) {
-          if (call === "status") throw new Error("unexpected status call")
+          if (call === "status" || call === "usage") throw new Error("unexpected read call")
           calls.push(call)
           if (call === "authorization.cancel") throw new Error("cleanup failed")
           return {

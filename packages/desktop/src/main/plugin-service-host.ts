@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto"
 
 import {
+  parsePluginServiceUsageHistory,
   parsePluginServiceStatus,
+  pluginServiceUsageSchema,
   type PluginServiceStatus,
   type PluginServiceSummary,
+  type PluginServiceUsageHistory,
 } from "../plugin-service-contracts"
 import type { WebPluginServiceAction } from "../plugin-contracts"
 import type { GenerationPluginRuntime } from "./generation-plugin-runtime"
@@ -47,7 +50,7 @@ interface ActivePluginServiceControl {
 export interface PluginServiceToolRuntime {
   callService(
     pluginId: string,
-    call: "status" | WebPluginServiceAction,
+    call: "status" | "usage" | WebPluginServiceAction,
     signal?: AbortSignal,
     input?: { readonly planKey: string },
   ): Promise<PluginServiceToolCallResult>
@@ -138,6 +141,20 @@ export class PluginServiceHost {
 
   async getStatus(pluginId: string, signal?: AbortSignal) {
     return this.#call(pluginId, "status", signal)
+  }
+
+  async getUsageHistory(pluginId: string, signal?: AbortSignal): Promise<PluginServiceUsageHistory> {
+    const before = await this.#installed(pluginId)
+    try {
+      const result = await this.runtime.callService(pluginId, "usage", signal)
+      if (result.isError || !result.structuredContent) throw new Error("Plugin service usage history is unavailable")
+      await this.#assertCurrent(before)
+      return parsePluginServiceUsageHistory(result.structuredContent)
+    } catch (error) {
+      if (signal?.aborted || (error instanceof Error && error.name === "AbortError")) throw error
+      await this.#assertCurrent(before)
+      return { availability: "unavailable", schema: pluginServiceUsageSchema }
+    }
   }
 
   async authorize(pluginId: string, signal?: AbortSignal) {

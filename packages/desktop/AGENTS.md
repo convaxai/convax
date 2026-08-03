@@ -65,6 +65,9 @@ contract and its routed references.
 - Keep Project lifecycle, Project Files, Project Canvas, Canvas, generation, Agent,
   Plugin, Plugin capability, and Plugin service bridge namespaces distinct. Do not
   add general file methods to `window.convax.projects` or a generic invoke bridge.
+- Plugin service usage history crosses Main/Preload only through the fixed optional
+  `service.usage.list` projection. Keep it bounded and display-only; failure must
+  not invalidate an otherwise valid service status or become billing authority.
 - Derive the active Canvas/file from Workbench Surface only. Project Canvas owns
   catalog CRUD; Desktop coordinators may own save guards, fallback, rollback, and
   preference flows, but not a second active selection.

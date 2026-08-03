@@ -1,6 +1,7 @@
 import type { WebPluginServiceAction } from "./plugin-contracts"
 
 export const pluginServiceStatusSchema = "convax.plugin-service-status/2" as const
+export const pluginServiceUsageSchema = "convax.plugin-service-usage/1" as const
 
 export const pluginServiceIpcChannels = {
   authorize: "plugin-service:authorize",
@@ -8,6 +9,7 @@ export const pluginServiceIpcChannels = {
   checkout: "plugin-service:checkout",
   changed: "plugin-service:changed",
   getStatus: "plugin-service:status",
+  getUsageHistory: "plugin-service:usage-history",
   listServices: "plugin-service:list",
   reauthorize: "plugin-service:reauthorize",
   signOut: "plugin-service:sign-out",
@@ -21,6 +23,7 @@ export const pluginServiceMcpTools = {
   reauthorize: "service.reauthorize",
   signOut: "service.sign_out",
   status: "service.status",
+  usage: "service.usage.list",
 } as const
 
 export type PluginServiceState = "connected" | "disconnected" | "attention" | "unknown"
@@ -90,6 +93,24 @@ export interface PluginServiceStatus {
     | { availability: "unavailable" }
 }
 
+export interface PluginServiceUsageRecord {
+  amount: number
+  label?: string
+  occurredAt?: string
+}
+
+export type PluginServiceUsageHistory =
+  | {
+      availability: "available"
+      records: readonly PluginServiceUsageRecord[]
+      schema: typeof pluginServiceUsageSchema
+      unit: string
+    }
+  | {
+      availability: "unavailable"
+      schema: typeof pluginServiceUsageSchema
+    }
+
 export interface PluginServiceTarget {
   pluginId: string
 }
@@ -104,6 +125,7 @@ export interface PluginServiceClient {
   cancelAuthorization(input: PluginServiceTarget): Promise<PluginServiceStatus>
   checkout(input: PluginServiceCheckoutTarget): Promise<PluginServiceStatus>
   getStatus(input: PluginServiceTarget): Promise<PluginServiceStatus>
+  getUsageHistory?(input: PluginServiceTarget): Promise<PluginServiceUsageHistory>
   listServices(): Promise<readonly PluginServiceSummary[]>
   onDidChange(listener: () => void): () => void
   reauthorize(input: PluginServiceTarget): Promise<PluginServiceStatus>
@@ -170,6 +192,61 @@ function requirePlanKey(value: unknown, label: string) {
   const key = requireDisplayString(value, label, 80)
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)) throw new Error(`${label} is invalid`)
   return key
+}
+
+function requireCanonicalTimestamp(value: unknown, label: string) {
+  if (typeof value !== "string" || value.length > 32) throw new Error(`${label} is invalid`)
+  const parsed = new Date(value)
+  if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString() !== value) throw new Error(`${label} is invalid`)
+  return value
+}
+
+/** Reduces an optional service usage tool result to at most 20 display-only records. */
+export function parsePluginServiceUsageHistory(value: unknown): PluginServiceUsageHistory {
+  const usage = requireRecord(value, "Plugin service usage history")
+  if (usage.schema !== pluginServiceUsageSchema) throw new Error("Plugin service usage history schema is invalid")
+  if (usage.availability === "unavailable") {
+    requireExactKeys(usage, ["availability", "schema"], ["availability", "schema"], "Plugin service usage history")
+    return { availability: "unavailable", schema: pluginServiceUsageSchema }
+  }
+  requireExactKeys(
+    usage,
+    ["availability", "records", "schema", "unit"],
+    ["availability", "records", "schema", "unit"],
+    "Plugin service usage history",
+  )
+  if (usage.availability !== "available" || !Array.isArray(usage.records) || usage.records.length > 20) {
+    throw new Error("Plugin service usage history is invalid")
+  }
+  const records = usage.records.map((raw, index) => {
+    const record = requireRecord(raw, `Plugin service usage record ${index}`)
+    requireExactKeys(record, ["amount", "label", "occurredAt"], ["amount"], `Plugin service usage record ${index}`)
+    if (
+      typeof record.amount !== "number" ||
+      !Number.isFinite(record.amount) ||
+      record.amount < 0 ||
+      record.amount > 1e15
+    ) {
+      throw new Error(`Plugin service usage record ${index} amount is invalid`)
+    }
+    return {
+      amount: record.amount,
+      ...(record.label === undefined
+        ? {}
+        : { label: requireDisplayString(record.label, `Plugin service usage record ${index} label`, 120) }),
+      ...(record.occurredAt === undefined
+        ? {}
+        : {
+            occurredAt: requireCanonicalTimestamp(record.occurredAt, `Plugin service usage record ${index} timestamp`),
+          }),
+    }
+  })
+  return {
+    availability: "available",
+    records,
+    schema: pluginServiceUsageSchema,
+    unit: requireDisplayString(usage.unit, "Plugin service usage history unit", 32),
+  }
 }
 
 function parseBillingInterval(value: unknown, label: string): PluginServiceBillingInterval | undefined {

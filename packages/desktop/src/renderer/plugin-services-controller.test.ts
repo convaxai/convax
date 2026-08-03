@@ -2,6 +2,7 @@ import { describe, expect, mock, test } from "bun:test"
 
 import {
   pluginServiceStatusSchema,
+  pluginServiceUsageSchema,
   type PluginServiceClient,
   type PluginServiceStatus,
   type PluginServiceSummary,
@@ -87,7 +88,13 @@ describe("PluginServicesController", () => {
   })
 
   test("loads installed services and applies only explicitly declared fixed actions", async () => {
-    const serviceClient = client()
+    const usageHistory = {
+      availability: "available" as const,
+      records: [{ amount: 7 }, { amount: 3 }],
+      schema: pluginServiceUsageSchema,
+      unit: "credits",
+    }
+    const serviceClient = client({ getUsageHistory: mock(async () => usageHistory) })
     const controller = new PluginServicesController(serviceClient)
     await controller.refresh()
 
@@ -95,6 +102,7 @@ describe("PluginServicesController", () => {
       loading: false,
       pluginId: "account-tools",
       status: connected,
+      usageHistory,
     })
     await controller.perform("account-tools", "sign_out")
     expect(serviceClient.signOut).toHaveBeenCalledWith({ pluginId: "account-tools" })

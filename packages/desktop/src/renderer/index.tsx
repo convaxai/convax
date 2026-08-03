@@ -231,6 +231,7 @@ function App() {
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const settingsSurface = desktopSurface.kind === "settings" ? desktopSurface : null
   const settingsSection = settingsSurface?.initialSection
+  const settingsServiceId = settingsSurface?.initialServiceId
   const settingsSkillName = settingsSurface?.initialSkillName
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
@@ -883,10 +884,10 @@ function App() {
     [activeProjectId],
   )
   const openSettings = useCallback(
-    (target: ApplicationMenuTarget) => {
+    (target: ApplicationMenuTarget, serviceId?: string) => {
       workspaceEntryCoordinator.cancelPendingEntry()
       closeMediaOperationDialog()
-      setDesktopSurface((current) => openDesktopSettings(current, target))
+      setDesktopSurface((current) => openDesktopSettings(current, target, undefined, serviceId))
     },
     [closeMediaOperationDialog, workspaceEntryCoordinator],
   )
@@ -2384,6 +2385,7 @@ function App() {
                 appearanceSaveState={appearanceSaveState}
                 className="absolute inset-0 z-[100]"
                 initialSection={settingsSection}
+                initialServiceId={settingsServiceId}
                 initialSkillName={settingsSkillName}
                 languagePreference={languagePreference}
                 locale={locale}
