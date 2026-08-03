@@ -4503,13 +4503,16 @@ describe("GenerationCanvasService", () => {
     ])
   })
 
-  test("stages project-file media through the Project containment port", async () => {
+  test("stages multiply-linked project-file media through the Project containment port", async () => {
     const root = await temporaryDirectory()
     const mediaDirectory = path.join(root, "Media")
     const referencePath = path.join(mediaDirectory, "reference.png")
+    const publicationStagingDirectory = path.join(root, ".convax", "staging")
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
     await fs.mkdir(mediaDirectory)
+    await fs.mkdir(publicationStagingDirectory, { recursive: true })
     await fs.writeFile(referencePath, png)
+    await fs.link(referencePath, path.join(publicationStagingDirectory, "retained-publication-alias"))
     const image = createMediaNode({
       id: "project-image",
       position: { x: 0, y: 0 },

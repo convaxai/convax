@@ -3226,6 +3226,7 @@ export class GenerationCanvasService {
         description: `Generation reference file ${reference.nodeId}`,
         expectedRealPath: resolved.sourceSnapshot.realPath,
         expectedSize: size,
+        linkPolicy: "stable-count",
         maximumBytes: this.#maxInputFileBytes,
         prepareTarget: () => target,
         signal,

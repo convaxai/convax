@@ -50,7 +50,7 @@ describe("Canvas file-card assistant sizing", () => {
     expect(styles).toContain("--canvas-media-radius: 24px")
     expect(mediaSurfaceRule).toContain("border-width: 0")
     expect(mediaSurfaceRule).toContain("border-radius: var(--canvas-media-radius)")
-    expect(mediaSurfaceRule).toContain("background: transparent")
+    expect(mediaSurfaceRule).toContain("background: var(--canvas-node-background)")
     expect(videoSurfaceRule).toContain("border: 2px dashed var(--canvas-node-border)")
     expect(mediaOverlayRule).toContain("border-radius: var(--canvas-media-radius)")
     expect(videoOverlayRule).toContain("inset: 2px")
