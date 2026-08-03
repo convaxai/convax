@@ -174,6 +174,11 @@ bundled source strings.
   vendor state until a terminal result or caller cancellation. Agent transport must
   relay content-free MCP progress so its timeout remains an inactivity guard rather
   than an absolute generation cutoff.
+- Treat a multiply-linked source as valid only for a typed Project resource being
+  staged as generation input, because Project publication may retain one bounded
+  `.convax/staging` alias. Require its link count and complete native snapshot to
+  remain unchanged through the copy. Keep the default single-link rule for Plugin
+  outputs, executable snapshots and every other caller.
 - For immediate Plugin generation feedback, create a host-owned pending Canvas
   resource in Main before `tools/call`, then replace or fail that exact guarded node.
   The sandboxed caller may opt into the mode but cannot choose a node id or target;

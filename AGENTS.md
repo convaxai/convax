@@ -484,6 +484,11 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   Launch the install-authorized entrypoint through a verified host-owned snapshot,
   terminate the whole process tree on disposal, and fail closed on platforms where
   the host lacks a process-tree ownership primitive.
+- A validated Project resource may have an unchanged positive hard-link count while
+  `.convax/staging` retains its bounded publication alias. Only generation input
+  staging may accept that Project-qualified stable link count. Executable snapshots,
+  sidecar outputs and every other native copy retain the single-link requirement;
+  any identity, link-count, size, timestamp or real-path drift fails before execution.
 - Generated content enters Canvas only through `CanvasResourceBusinessService` after
   Main publishes it without overwriting an existing object as a user-visible Project
   file under `Generated/`. Existing nodes reference that Project file. A failed

@@ -884,6 +884,13 @@ receive or submit that internal node id through the connected-input generation
 reference path; separately granted document projections remain an orthogonal
 capability and cannot substitute a node id for `inputKey`.
 
+Project publication may retain a bounded `.convax/staging` hard-link alias while the
+user-visible `Notes/` or `Generated/` entry is already authoritative. Generation
+input staging therefore accepts an already validated Project resource only when its
+positive link count, native identity, size, timestamps and real path remain unchanged
+through the copy. The generic default remains single-link: verified executable
+snapshots, sidecar outputs and every non-Project caller do not inherit this exception.
+
 A return-delivery operation reuses the same verified executable, input staging,
 revision/source rechecks, cancellation, and at-most-once execution boundary, but
 returns one bounded text result and performs no Canvas resource import or node
