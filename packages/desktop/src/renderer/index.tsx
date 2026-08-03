@@ -26,7 +26,12 @@ import {
   type ProjectCanvasSidebarNode,
   type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
-import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
+import {
+  getWorkbenchLayoutPartSnapshot,
+  WorkbenchController,
+  WorkbenchLayoutController,
+  WorkbenchLayoutParts,
+} from "@convax/workbench"
 import {
   CheckCircle2,
   FileOutput,
@@ -128,6 +133,7 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
+import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import { ProjectHome } from "./project-home"
 import {
@@ -174,6 +180,11 @@ const primarySidebarBounds = workspaceShellMetrics.primarySidebar
 const secondarySidebarBounds = workspaceShellMetrics.utilitySidebar
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
+const sidebarCollapseReopenDelayMs = 1_000
+
+function ensureWorkbenchPartVisible(controller: WorkbenchLayoutController, partId: string) {
+  return controller.getSnapshot().parts[partId]?.visible === true || controller.setPartVisible(partId, true)
+}
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -308,6 +319,7 @@ function App() {
     return new WorkbenchLayoutController({
       parts: {
         [WorkbenchLayoutParts.PrimarySidebar]: {
+          collapseReopenDelayMs: sidebarCollapseReopenDelayMs,
           collapseThreshold: primarySidebarCollapseThreshold,
           initialSize: initialLayoutPreferences.primarySidebar.size,
           initialVisible: initialLayoutPreferences.primarySidebar.visible,
@@ -315,6 +327,7 @@ function App() {
           minSize: primarySidebarBounds.minSize,
         },
         [WorkbenchLayoutParts.SecondarySidebar]: {
+          collapseReopenDelayMs: sidebarCollapseReopenDelayMs,
           collapseThreshold: secondarySidebarCollapseThreshold,
           initialSize: initialLayoutPreferences.secondarySidebar.size,
           initialVisible: initialLayoutPreferences.secondarySidebar.visible,
@@ -661,6 +674,7 @@ function App() {
       ) {
         return
       }
+      if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
       setCanvasInspector(projection)
       setWorkspaceUtilityDrawer(
         openInspectorUtility(
@@ -668,7 +682,6 @@ function App() {
           `${projection.nodeId}:${projection.revision}`,
         ),
       )
-      workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
     },
     [activeCanvasId, activeProjectId, workbenchLayoutController],
   )
@@ -980,6 +993,7 @@ function App() {
           ),
           operationId,
           ...(request.output ? { output: request.output } : {}),
+          ...(request.parentId ? { parentId: request.parentId } : {}),
           prompt: request.prompt,
           ...(request.promptContextNodeIds?.length ? { promptContextNodeIds: request.promptContextNodeIds } : {}),
           ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
@@ -995,6 +1009,16 @@ function App() {
       },
     }
     return createCanvasServices({
+      folderBrowse: createProjectFolderBrowseService({
+        currentScope: () => {
+          const current = pluginHostContextRef.current
+          return current.activeProject && current.activeCanvas
+            ? { canvasId: current.activeCanvas.id, projectId: current.activeProject.id }
+            : null
+        },
+        flush: flushAuthoritativeCanvas,
+        projectFiles: window.convax.projectFiles,
+      }),
       draftDecision: {
         decide({ count }) {
           if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
@@ -1086,7 +1110,7 @@ function App() {
             activeCanvasId,
             activeProjectId,
             createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-            flush: flushCanvasForAgent,
+            flush: flushAuthoritativeCanvas,
             projectFiles: projectFilesController,
             request,
             resources: window.convax.canvas.resources,
@@ -1428,8 +1452,7 @@ function App() {
       client,
       flush: flushCanvasForAgent,
       icon: <FileOutput />,
-      label:
-        locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder 或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+      label: locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder 或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
       mode: {
         description:
           locale === "zh-CN"
@@ -1479,8 +1502,8 @@ function App() {
 
       const update = (clientX: number) => {
         const layout = workbenchLayoutController.getSnapshot()
-        const primary = layout.parts[WorkbenchLayoutParts.PrimarySidebar]!
-        const secondary = layout.parts[WorkbenchLayoutParts.SecondarySidebar]!
+        const primary = getWorkbenchLayoutPartSnapshot(layout, WorkbenchLayoutParts.PrimarySidebar)!
+        const secondary = getWorkbenchLayoutPartSnapshot(layout, WorkbenchLayoutParts.SecondarySidebar)!
         const presentation = resolveWorkspaceLayout({
           agentVisible: secondary.visible,
           projectSidebarVisible: primary.visible,
@@ -1491,7 +1514,7 @@ function App() {
         const available =
           partId === WorkbenchLayoutParts.PrimarySidebar
             ? window.innerWidth - occupiedBySecondary - workspaceShellMetrics.minimumCanvasPeekSize
-            : presentation.agent === "dock"
+            : presentation.utilityPresentation === "dock"
               ? window.innerWidth - occupiedByPrimary - workspaceShellMetrics.minimumCanvasPeekSize
               : presentation.utilityPresentation === "overlay"
                 ? window.innerWidth - workspaceShellMetrics.utilityOverlayInset * 2
@@ -1514,6 +1537,7 @@ function App() {
           if (workbenchResizeSessionRef.current === session) workbenchResizeSessionRef.current = null
         },
         pointerId: event.pointerId,
+        suppressClickAfterCommit: true,
         update,
       })
       if (session) workbenchResizeSessionRef.current = session
@@ -1521,8 +1545,11 @@ function App() {
     [workbenchLayoutController],
   )
 
-  const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
-  const secondarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.SecondarySidebar]!
+  const primarySidebar = getWorkbenchLayoutPartSnapshot(workbenchLayoutSnapshot, WorkbenchLayoutParts.PrimarySidebar)!
+  const secondarySidebar = getWorkbenchLayoutPartSnapshot(
+    workbenchLayoutSnapshot,
+    WorkbenchLayoutParts.SecondarySidebar,
+  )!
   useEffect(() => {
     setWorkspaceUtilityDrawer((current) => {
       if (!secondarySidebar.visible) return closedWorkspaceUtilityDrawer
@@ -1567,9 +1594,9 @@ function App() {
   const openAgentDrawer = useCallback(
     (returnFocusTarget?: HTMLElement | null) => {
       if (!activeProjectId) return
+      if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
       utilityReturnFocusTargetRef.current = returnFocusTarget ?? null
       setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-      workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
     },
     [activeProjectId, workbenchLayoutController],
   )
@@ -1595,8 +1622,10 @@ function App() {
           if (!activeProjectId) throw new Error("Open a Project before using this Plugin in Agent")
           const lease = await workspaceEntryCoordinator.acquire({ projectId: activeProjectId })
           if (!lease) throw new Error("The active Project changed before Agent was ready")
+          if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) {
+            throw new Error("The Agent panel is temporarily locked after resizing")
+          }
           setWorkspaceUtilityDrawer(openAgentUtility(lease.projectId))
-          workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
           const panel = await waitForMountedWorkspaceTarget({
             read: () => {
               const mounted = agentPanelScopeRef.current
@@ -1744,8 +1773,10 @@ function App() {
           try {
             const lease = await workspaceEntryCoordinator.acquire({ projectId: target.projectId })
             if (!lease) throw new Error("The activity Project is no longer available")
+            if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) {
+              throw new Error("The Agent panel is temporarily locked after resizing")
+            }
             setWorkspaceUtilityDrawer(openAgentUtility(lease.projectId))
-            workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
             const panel = await waitForMountedWorkspaceTarget({
               read: () => {
                 const mounted = agentPanelScopeRef.current

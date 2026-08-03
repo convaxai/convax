@@ -94,10 +94,19 @@ describe("Canvas resource IPC", () => {
       ],
     }
     const prepare = mock(async () => prepared)
-    const relinkPreparedResource = mock(async () => applicationResult())
+    const relinkPreparedResource = mock(async function (this: { receiver: string }) {
+      expect(this.receiver).toBe("canvas-resource-service")
+      return applicationResult()
+    })
+    const resources = {
+      addPreparedResources: mock(),
+      addResources: mock(),
+      receiver: "canvas-resource-service",
+      relinkPreparedResource,
+    }
     let active = { canvasId: "canvas-main", projectId: "project-one", revision: 7 }
     registerCanvasResourceIpc(
-      { addPreparedResources: mock(), addResources: mock(), relinkPreparedResource },
+      resources,
       { prepare, withAdmittedLocalFiles: mock() },
       {
         documents: { load: mock(async () => ({ document, storageVersion: "v7" })) },
@@ -694,6 +703,7 @@ describe("Canvas resource IPC", () => {
             sourcePath: "/native/outside.png",
           },
         ],
+        parentId: "focused-group",
         sources: [],
       }),
     )
@@ -720,6 +730,7 @@ describe("Canvas resource IPC", () => {
       canvasId: "canvas-main",
       commandId: "renderer-add",
       expectedRevision: 7,
+      parentId: "focused-group",
       relation: undefined,
       scopeId: "project-one",
       sources: [],

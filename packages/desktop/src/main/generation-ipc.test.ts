@@ -308,7 +308,12 @@ describe("generation IPC", () => {
       { describeTool: async () => description, generate, listTools: async () => [] },
       { isTrustedSender: () => true },
     )
-    const related = { ...request, expectedOutputCount: 1, relationAnchorNodeIds: ["silent-video"] }
+    const related = {
+      ...request,
+      expectedOutputCount: 1,
+      parentId: "focused-group",
+      relationAnchorNodeIds: ["silent-video"],
+    }
 
     await expect(Promise.resolve(invoke(generationIpcChannels.generate, related))).resolves.toEqual(result)
     expect(generate).toHaveBeenCalledWith(related, expect.any(AbortSignal))

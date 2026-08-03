@@ -229,6 +229,7 @@ describe("preload Canvas resource client", () => {
     const result = await client.add(
       request({
         localFiles: [{ mediaType: file.type, name: file.name, sourceId: "outside", sourceToken }],
+        parentId: "focused-group",
       }),
     )
 
@@ -245,6 +246,7 @@ describe("preload Canvas resource client", () => {
           sourcePath: "/native/outside.png",
         },
       ],
+      parentId: "focused-group",
       projectId: "project-one",
       sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
     })

@@ -182,6 +182,22 @@ describe("canvas fit viewport", () => {
     expect(resolveCanvasFitViewport(input)).toEqual({ x: 200, y: 100, zoom: 2 })
   })
 
+  test("fits an overview scope without including a distant hidden group child", () => {
+    const document = createDocument([
+      createNode("group", { x: 0, y: 0 }, { width: 200, height: 160 }),
+      createNode("hidden-child", { x: 10_000, y: 10_000 }, { width: 100, height: 100 }, "group"),
+      createNode("outside", { x: 300, y: 0 }, { width: 100, height: 100 }),
+    ])
+
+    expect(
+      resolveCanvasFitViewport({
+        bounds: { width: 800, height: 400, maxZoom: 2 },
+        document,
+        nodeIds: ["group", "outside"],
+      }),
+    ).toEqual({ x: 0, y: 40, zoom: 2 })
+  })
+
   test("centers fitted content inside an inset safe rectangle", () => {
     const document = createDocument([createNode("node", { x: 100, y: 50 }, { width: 200, height: 100 })])
     expect(

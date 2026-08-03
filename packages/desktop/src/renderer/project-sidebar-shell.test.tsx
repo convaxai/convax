@@ -74,6 +74,35 @@ function ShellHarness({ initialOpen = true }: { initialOpen?: boolean }) {
 }
 
 describe("Desktop Project sidebar Shell", () => {
+  test("retains a host-provided resize handle after crossing the collapse threshold", async () => {
+    const testEnvironment = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectSidebarShell
+            entryLabel="Atlas"
+            onOpenChange={() => undefined}
+            open={false}
+            resizeHandle={<span data-resize-handle="" />}
+            size={240}
+          >
+            <aside>Project navigation</aside>
+          </ProjectSidebarShell>,
+        ),
+      )
+
+      expect(container.querySelector("[data-resize-handle]")).not.toBeNull()
+    } finally {
+      await act(async () => root?.unmount())
+      container.remove()
+      await testEnvironment.restore()
+    }
+  })
+
   test("ports the single stable Project identity into the application titlebar host", async () => {
     const testEnvironment = installTestWindow()
     const container = document.createElement("div")

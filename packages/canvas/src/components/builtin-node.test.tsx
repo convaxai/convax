@@ -7,6 +7,8 @@ import { createAgentNode, createCanvasDocument, createGroupNode, createMediaNode
 import { CanvasEditorProvider, type CanvasEditorController } from "../editor-context"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
 import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import { setCanvasGroupAppearance } from "../group-appearance"
+import { setCanvasGroupFolded } from "../group-fold"
 import {
   finishCanvasNodeGenerationRun,
   markCanvasNodeGenerationRunRunning,
@@ -18,6 +20,7 @@ import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } 
 import { deriveCanvasSelectionContext } from "../selection-context"
 import { CanvasServicesProvider, createCanvasServices, type CanvasAssistantRequest } from "../services"
 import type { CanvasDocument, CanvasMediaNodeData, CanvasNode, CanvasSelection } from "../types"
+import { CanvasGroupPresentationProvider, type CanvasGroupPresentationController } from "./group-presentation-context"
 
 mock.module("@xyflow/react", () => ({
   Handle: (props: {
@@ -38,7 +41,14 @@ mock.module("@xyflow/react", () => ({
       {props.children}
     </div>
   ),
-  NodeResizer: (props: { isVisible?: boolean }) => (props.isVisible === false ? null : <div data-node-resizer />),
+  NodeResizer: (props: { isVisible?: boolean; keepAspectRatio?: boolean; lineStyle?: { display?: string } }) =>
+    props.isVisible === false ? null : (
+      <div
+        data-keep-aspect-ratio={String(Boolean(props.keepAspectRatio))}
+        data-node-resizer
+        data-side-resize={props.lineStyle?.display === "none" ? "hidden" : "visible"}
+      />
+    ),
   NodeToolbar: (props: {
     "aria-busy"?: boolean
     children?: ReactNode
@@ -87,6 +97,7 @@ const {
   moveCanvasTextLineMenuIndex,
   rebaseCanvasTextDraft,
   resolveCanvasTextHandleTarget,
+  resolveCanvasGroupTitleEdit,
   runCanvasTextInlineCommand,
   saveCanvasTextDraft,
   shouldUpdateCutoutMediaSize,
@@ -139,6 +150,9 @@ function renderWithEditor(
     executeSelectionAction?: CanvasEditorController["executeSelectionAction"]
     isSelectionActionPending?: CanvasEditorController["isSelectionActionPending"]
     mutationSurface?: { disabled: boolean; visible: boolean }
+    focusedGroupId?: string | null
+    groupDropTargetId?: string | null
+    groupSummaries?: CanvasGroupPresentationController["summaries"]
     rendererUsesChrome?: boolean
     node?: CanvasNode
     selectionDragArmed?: boolean
@@ -216,7 +230,18 @@ function renderWithEditor(
   )
 
   const content = (
-    <CanvasEditorProvider controller={controller}>{child(nodeProps(true, targetNode))}</CanvasEditorProvider>
+    <CanvasEditorProvider controller={controller}>
+      <CanvasGroupPresentationProvider
+        controller={{
+          dropTargetId: options.groupDropTargetId ?? null,
+          focus: () => {},
+          focusedGroupId: options.focusedGroupId ?? null,
+          summaries: options.groupSummaries ?? new Map(),
+        }}
+      >
+        {child(nodeProps(true, targetNode))}
+      </CanvasGroupPresentationProvider>
+    </CanvasEditorProvider>
   )
   return renderToStaticMarkup(
     <CanvasServicesProvider services={services}>
@@ -663,6 +688,11 @@ describe("built-in node toolbar visibility", () => {
     expect(imageMarkup).not.toContain("Empty image")
     expect(folderMarkup).toContain('aria-label="Relink selected Project directory"')
     expect(folderMarkup).not.toContain('aria-label="Relink local file"')
+    expect(folderMarkup).toContain("data-canvas-folder-card")
+    expect(folderMarkup).toContain("data-canvas-project-folder")
+    expect(folderMarkup).toContain("convax-group-folder__paper")
+    expect(folderMarkup).toContain("Project folder")
+    expect(folderMarkup).not.toContain("convax-node__title")
     expect(textMarkup).toContain('aria-label="Save editable copy"')
 
     const unmanagedTextMarkup = renderWithEditor(
@@ -713,6 +743,35 @@ describe("built-in node toolbar visibility", () => {
     expect(videoMarkup).toContain("convax-node__surface--media")
     expect(videoMarkup).toContain("convax-node__surface--video")
     expect(videoMarkup).toContain('src="asset://clip"')
+  })
+
+  test("keeps image and video cards fitted and replaces the fit toggle with full-screen viewing", () => {
+    for (const kind of ["image", "video"] as const) {
+      const mediaNode = createMediaNode({
+        id: `${kind}-fit-only`,
+        position: { x: 0, y: 0 },
+        resource: {
+          id: `${kind}-fit-only`,
+          kind,
+          metadata: {},
+          state: { status: "ready", url: `asset://${kind}-fit-only` },
+        },
+      })
+      const legacyCoverNode = { ...mediaNode, data: { ...mediaNode.data, fit: "cover" as const } }
+      const markup = renderWithEditor(
+        selection([legacyCoverNode.id]),
+        false,
+        (props) => <BuiltinMediaFileNode {...props} />,
+        false,
+        { node: legacyCoverNode },
+      )
+
+      expect(markup).toContain("object-contain")
+      expect(markup).not.toContain("object-cover")
+      expect(markup).toContain(`aria-label="View ${kind} full screen"`)
+      expect(markup).not.toContain("Fill frame")
+      expect(markup).not.toContain("Fit inside frame")
+    }
   })
 
   test("runs cutout scan and dissolve on the adjacent generated image node", () => {
@@ -1115,6 +1174,79 @@ describe("built-in node toolbar visibility", () => {
     expect(render(selection(["node-a"]), true)).not.toContain("data-node-resizer")
   })
 
+  test("limits media, file, and Project folder cards to corner-only proportional resize", () => {
+    for (const kind of ["image", "video", "audio", "file"] as const) {
+      const mediaNode = createMediaNode({
+        id: `${kind}-resize`,
+        position: { x: 0, y: 0 },
+        resource: {
+          id: `${kind}-resize`,
+          kind,
+          metadata: {},
+          state: { status: "ready", url: `asset://${kind}-resize` },
+        },
+      })
+      const markup = renderWithEditor(
+        selection([mediaNode.id]),
+        false,
+        (props) => <BuiltinMediaFileNode {...props} />,
+        false,
+        { node: mediaNode },
+      )
+
+      expect(markup).toContain('data-keep-aspect-ratio="true"')
+      expect(markup).toContain('data-side-resize="hidden"')
+    }
+
+    const folderNode: CanvasNode = {
+      id: "folder-proportional-resize",
+      type: "file",
+      position: { x: 0, y: 0 },
+      data: {
+        kind: "folder",
+        label: "Design assets",
+        metadata: {},
+        resourceState: { status: "ready" },
+      },
+    }
+    const folderMarkup = renderWithEditor(
+      selection([folderNode.id]),
+      false,
+      (props) => <BuiltinFolderFileNode {...props} />,
+      false,
+      { node: folderNode },
+    )
+
+    expect(folderMarkup).toContain('data-keep-aspect-ratio="true"')
+    expect(folderMarkup).toContain('data-side-resize="hidden"')
+
+    const textNode = createTextNode({
+      id: "text-free-resize",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: {
+        contentRevision: "a".repeat(64),
+        editableText: true,
+        status: "ready",
+        text: "Free resize",
+      },
+    })
+    const textMarkup = renderWithEditor(
+      selection([textNode.id]),
+      false,
+      (props) => (
+        <CanvasNodeChrome icon={null} label="Text" node={props}>
+          <div />
+        </CanvasNodeChrome>
+      ),
+      false,
+      { node: textNode },
+    )
+
+    expect(textMarkup).toContain('data-keep-aspect-ratio="false"')
+    expect(textMarkup).toContain('data-side-resize="visible"')
+  })
+
   test("passes single-card activation instead of aggregate membership to registered renderers", () => {
     const render = (currentSelection: CanvasSelection) =>
       renderWithEditor(currentSelection, false, (props) => <BuiltinCanvasNode {...props} />)
@@ -1124,7 +1256,7 @@ describe("built-in node toolbar visibility", () => {
     expect(render(selection(["node-a"], ["edge-a"]))).toContain('data-selected="false"')
   })
 
-  test("suppresses per-card group focus and resize chrome in aggregate selection", () => {
+  test("renders unmarked structural Groups expanded without a conflicting local toolbar", () => {
     const group = createGroupNode({
       height: 240,
       id: "group-a",
@@ -1135,12 +1267,96 @@ describe("built-in node toolbar visibility", () => {
       renderWithEditor(currentSelection, false, (props) => <BuiltinCanvasNode {...props} />, false, { node: group })
 
     const single = render(selection([group.id]))
-    expect(single).toContain("ring-2")
+    expect(single).toContain("data-canvas-group")
+    expect(single).toContain('data-handle-id="target-left"')
+    expect(single).toContain('data-handle-id="source-right"')
+    expect(single.match(/data-handle-connectable="true"/g)).toHaveLength(2)
     expect(single).toContain("data-node-resizer")
+    expect(single).not.toContain("data-node-toolbar")
 
     const multi = render(selection([group.id, "node-b"]))
-    expect(multi).not.toContain("ring-2")
     expect(multi).not.toContain("data-node-resizer")
+    expect(
+      renderWithEditor(selection([group.id]), true, (props) => <BuiltinCanvasNode {...props} />, false, {
+        node: group,
+      }),
+    ).not.toContain("data-node-resizer")
+  })
+
+  test("shows bounded material previews and becomes an inert parent while focused", () => {
+    const group = createGroupNode({
+      height: 240,
+      id: "group-preview",
+      label: "References",
+      position: { x: 0, y: 0 },
+      width: 360,
+    })
+    const summary = {
+      externalIncomingCount: 1,
+      externalOutgoingCount: 1,
+      itemCount: 5,
+      nestedGroupCount: 1,
+      previews: [
+        { id: "image", kind: "image" as const, label: "Moodboard", url: "asset://moodboard" },
+        { id: "notes", kind: "text" as const, label: "Notes" },
+      ],
+    }
+    const document = setCanvasGroupFolded(
+      setCanvasGroupAppearance(createCanvasDocument({ id: "canvas-test", nodes: [group] }), group.id, {
+        color: "green",
+        emoji: "leaf",
+      }),
+      group.id,
+      true,
+    )
+    const customizedGroup = document.nodes[0]!
+    const folder = renderWithEditor(selection([group.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      document,
+      groupDropTargetId: group.id,
+      groupSummaries: new Map([[group.id, summary]]),
+      node: customizedGroup,
+    })
+
+    expect(folder).toContain('src="asset://moodboard"')
+    expect(folder).toContain('data-canvas-group-color="green"')
+    expect(folder).toContain('data-canvas-group-emoji="leaf"')
+    expect(folder).toContain("🍃")
+    expect(folder).toContain("convax-group-folder__paper")
+    expect(folder).toContain("convax-group-folder__overflow")
+    expect(folder).toContain("+3")
+    expect(folder).toContain("5 items")
+    expect(folder).toContain("1 folder")
+    expect(folder).toContain("is-drop-target")
+    expect(folder).toContain("Rename group")
+    expect(folder).toContain('maxLength="20"')
+    expect(folder).not.toContain("data-node-toolbar")
+
+    const focused = renderWithEditor(selection([]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
+      focusedGroupId: group.id,
+      node: group,
+    })
+    expect(focused).toContain("data-canvas-group-focus-root")
+    expect(focused).not.toContain("data-canvas-group-folder")
+  })
+
+  test("preserves legacy group titles on blur and cancels edited titles on Escape", () => {
+    const legacy = "A legacy group title longer than twenty characters"
+    expect(
+      resolveCanvasGroupTitleEdit({
+        cancelled: false,
+        changed: false,
+        draft: legacy,
+        persisted: legacy,
+      }),
+    ).toEqual({ shouldCommit: false, title: legacy })
+    expect(
+      resolveCanvasGroupTitleEdit({
+        cancelled: true,
+        changed: true,
+        draft: "Unwanted edit",
+        persisted: legacy,
+      }),
+    ).toEqual({ shouldCommit: false, title: legacy })
   })
 
   test("adds host selection actions to every eligible node toolbar", () => {

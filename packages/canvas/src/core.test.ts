@@ -2,12 +2,14 @@ import { describe, expect, test } from "bun:test"
 import {
   addCanvasNodes,
   alignCanvasNodes,
+  canGroupCanvasNodes,
   connectCanvasNodes,
   distributeCanvasNodes,
   duplicateCanvasSelection,
   groupCanvasNodes,
   layoutCanvasNodes,
   mentionCanvasResource,
+  reparentCanvasNodes,
   removeCanvasElements,
   setCanvasTextNodeTitle,
   ungroupCanvasNode,
@@ -623,13 +625,33 @@ describe("canvas commands", () => {
     ).toHaveLength(1)
   })
 
-  test("does not create data-flow edges to or from structural groups", () => {
+  test("connects structural groups as whole-group endpoints with canonical ports", () => {
     const group = createGroupNode({ id: "group", height: 300, position: { x: 0, y: 0 }, width: 400 })
     const card = createTextNode({ id: "card", position: { x: 500, y: 0 } })
     const document = createCanvasDocument({ nodes: [group, card] })
 
-    expect(connectCanvasNodes(document, { source: group.id, target: card.id })).toBe(document)
-    expect(connectCanvasNodes(document, { source: card.id, target: group.id })).toBe(document)
+    const outgoing = connectCanvasNodes(document, { source: group.id, target: card.id })
+    expect(outgoing.edges).toEqual([
+      expect.objectContaining({
+        source: group.id,
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        target: card.id,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      }),
+    ])
+
+    const incoming = connectCanvasNodes(outgoing, { source: card.id, target: group.id })
+    expect(incoming.edges).toEqual([
+      outgoing.edges[0],
+      expect.objectContaining({
+        source: card.id,
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        target: group.id,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      }),
+    ])
+    expect(getIncomingConnectedCanvasFileNodeIds(incoming, card.id)).toEqual([])
+    expect(getIncomingConnectedCanvasFileNodeIds(incoming, group.id)).toEqual([card.id])
   })
 
   test("groups and ungroups without changing world positions", () => {
@@ -648,6 +670,65 @@ describe("canvas commands", () => {
       [first.id, first.position],
       [second.id, second.position],
     ])
+  })
+
+  test("offers Group and Fold only for two effective siblings", () => {
+    const group = createGroupNode({ height: 240, id: "group", position: { x: 20, y: 30 }, width: 320 })
+    const child = { ...createTextNode({ id: "child", position: { x: 40, y: 50 } }), parentId: group.id }
+    const sibling = createTextNode({ id: "sibling", position: { x: 500, y: 50 } })
+    const document = createCanvasDocument({ nodes: [group, child, sibling] })
+
+    expect(canGroupCanvasNodes(document, [group.id, sibling.id])).toBe(true)
+    expect(canGroupCanvasNodes(document, [group.id, child.id])).toBe(false)
+    expect(canGroupCanvasNodes(document, [child.id, sibling.id])).toBe(false)
+  })
+
+  test("removes incoming and outgoing group relations when ungrouping", () => {
+    const group = createGroupNode({ height: 240, id: "group", position: { x: 20, y: 30 }, width: 320 })
+    const child = { ...createTextNode({ id: "child", position: { x: 40, y: 50 } }), parentId: group.id }
+    const peer = createTextNode({ id: "peer", position: { x: 500, y: 50 } })
+    const withOutgoing = connectCanvasNodes(createCanvasDocument({ nodes: [group, child, peer] }), {
+      source: group.id,
+      target: peer.id,
+    })
+    const connected = connectCanvasNodes(withOutgoing, { source: peer.id, target: group.id })
+
+    const ungrouped = ungroupCanvasNode(connected, group.id)
+
+    expect(ungrouped.document.edges).toEqual([])
+    expect(parseCanvasDocument(ungrouped.document, ungrouped.document.id)).toEqual(ungrouped.document)
+  })
+
+  test("reparents cards and nested groups without changing world positions or allowing cycles", () => {
+    const target = createGroupNode({
+      height: 400,
+      id: "target",
+      position: { x: 300, y: 200 },
+      width: 500,
+    })
+    const card = createTextNode({ id: "card", position: { x: 420, y: 270 } })
+    const nested = createGroupNode({
+      height: 240,
+      id: "nested",
+      parentId: target.id,
+      position: { x: 40, y: 60 },
+      width: 300,
+    })
+    const document = createCanvasDocument({ nodes: [target, card, nested] })
+
+    const reparented = reparentCanvasNodes(document, [card.id], target.id)
+    expect(reparented.document.nodes.find((node) => node.id === card.id)).toMatchObject({
+      extent: "parent",
+      parentId: target.id,
+      position: { x: 120, y: 70 },
+    })
+
+    const rejected = reparentCanvasNodes(document, [target.id], nested.id)
+    expect(rejected.document).toBe(document)
+    expect(reparentCanvasNodes(document, [card.id], "missing").document).toBe(document)
+
+    const adopted = reparentCanvasNodes(document, [card.id], target.id, { preserveWorldPosition: false })
+    expect(adopted.document.nodes.find((node) => node.id === card.id)?.position).toEqual(card.position)
   })
 
   test("duplicates selected nodes and remaps their internal edges", () => {

@@ -131,7 +131,7 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
         style={{ "--project-sidebar-size": `${props.size}px` } as React.CSSProperties}
       >
         <div className="project-sidebar-shell__panel">{props.children}</div>
-        {props.open ? props.resizeHandle : null}
+        {props.resizeHandle}
       </div>
       {props.entryPortal
         ? createPortal(

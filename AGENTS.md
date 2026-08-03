@@ -234,14 +234,28 @@ reset, overwrite, migrate, or garbage-collect unsupported portable data.
   the prior Project.
 - Canvas document mutation never means “write JSON.” UI and Agent callers use the
   same Canvas application services and revision/conflict handling.
-- Every connectable Canvas card has exactly one left input and one right output.
-  Edges run from `source` (right/output) to `target` (left/input), and card movement
-  never switches ports to top/bottom. When a card-scoped Agent, generation, or
-  Plugin flow infers that card's inputs, only direct incoming sources qualify.
+- Every Canvas card, including a structural Group, has exactly one left input and
+  one right output. Edges run from `source` (right/output) to `target`
+  (left/input), and card movement never switches ports to top/bottom. A Group edge
+  attaches to the Group identity and never expands to its descendants; Group focus
+  hides edges that cross the focused scope without rewriting them. Resources created
+  in a focused Group commit their parentage in the same authoritative Canvas command,
+  and an explicit Fold state projects the Group as a compact folder without changing
+  its persisted child-container bounds or relationships. An unmarked Group remains
+  expanded, and Unfold restores that container presentation. When a
+  card-scoped Agent, generation, or Plugin flow infers that card's file inputs,
+  only direct incoming file sources qualify, so an incoming Group is not flattened
+  into child resources.
 - Main's Canvas application service/repository is the only authoritative document
   state and the only persistent writer. Renderer edits are optimistic projections
   that submit element-level commands with `expectedRevision`; renderer never saves
   a whole document or arbitrates Main mutations.
+- A Project-directory folder remains one connectable Canvas file node. Double-click
+  browsing is a transient, read-only host projection over the existing scoped
+  Project Files capability: projected entries are never persisted as Canvas nodes,
+  selected into Workbench, connected, moved, or added to undo history. The host
+  revalidates the active Project/Canvas, authoritative owning node, and descendant
+  directory before and after asynchronous listing.
 - File-backed content and Canvas state are not one transaction. Create or publish the
   user file first, then commit its Canvas reference. If the Canvas commit fails, keep
   the file and report partial success. Managed-asset admission may likewise leave an

@@ -15,6 +15,7 @@ import type {
   CanvasTextNodeData,
 } from "./types"
 import { getCanvasTextFileFormat } from "./file-import"
+import { isCanvasGroupFolded } from "./group-fold"
 import { fitCanvasMediaSizeWithinBounds } from "./media-sizing"
 
 /** Wide only at the persistence boundary so legacy node types never leak into the public model. */
@@ -254,6 +255,20 @@ export function getCanvasNodeSize(node: CanvasNode) {
     width: node.measured?.width ?? node.width ?? styleWidth ?? 240,
     height: node.measured?.height ?? node.height ?? styleHeight ?? 160,
   }
+}
+
+export const CANVAS_GROUP_FOLDER_SIZE = {
+  height: 160,
+  width: 200,
+} as const
+
+/**
+ * Geometry used when a node participates in overview UI operations. Structural
+ * Folded Groups retain their expanded child bounds in persistence while using
+ * compact folder geometry in overview operations.
+ */
+export function getCanvasNodePresentationSize(node: CanvasNode) {
+  return node.data.kind === "group" && isCanvasGroupFolded(node) ? CANVAS_GROUP_FOLDER_SIZE : getCanvasNodeSize(node)
 }
 
 function isCanvasNode(value: unknown) {

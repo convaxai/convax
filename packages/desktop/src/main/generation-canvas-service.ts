@@ -847,6 +847,7 @@ function validateRequest(request: GenerationCanvasRequest) {
   if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
     throw new Error("Generation anchor must contain finite coordinates")
   }
+  if (request.parentId !== undefined) requireIdentifier(request.parentId, "Generation parent node id")
   if (!Array.isArray(request.references) || request.references.length > 32) {
     throw new Error("Generation accepts at most 32 Canvas references")
   }
@@ -2207,6 +2208,7 @@ export class GenerationCanvasService {
       expectedOutputCount: request.expectedOutputCount,
       expectedRevision: request.expectedRevision,
       output: request.output,
+      parentId: request.parentId,
       prompt: request.prompt,
       promptContextNodeIds: request.promptContextNodeIds ?? [],
       ref: request.ref,
@@ -2360,6 +2362,7 @@ export class GenerationCanvasService {
           expectedRevision: request.expectedRevision,
           kind: tool.output,
           operationId: request.operationId,
+          ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
           prompt: workingRequest.prompt.trim(),
           relation: generationResultRelation(request),
           scopeId: request.ref.scopeId,
@@ -2816,6 +2819,7 @@ export class GenerationCanvasService {
                 commandId: `generation:${workingRequest.operationId}`,
                 conflictPolicy: "retry",
                 expectedRevision: workingRequest.expectedRevision,
+                ...(workingRequest.parentId === undefined ? {} : { parentId: workingRequest.parentId }),
                 relation: generationResultRelation(workingRequest),
                 scopeId: workingRequest.ref.scopeId,
                 ...(signal ? { signal } : {}),

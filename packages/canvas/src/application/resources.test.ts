@@ -787,6 +787,55 @@ describe("canvas resource business service", () => {
     expect(result.document.nodes[0]!.data).not.toHaveProperty("format")
   })
 
+  test("creates a focused resource inside its Group in the same application save", async () => {
+    const group = createGroupNode({
+      height: 480,
+      id: "focused-group",
+      position: { x: 300, y: 200 },
+      width: 640,
+    })
+    let snapshot: CanvasDocumentSnapshot = {
+      document: createCanvasDocument({ id: "canvas-main", nodes: [group] }),
+      storageVersion: "v0",
+    }
+    let saveCalls = 0
+    const business = new CanvasResourceBusinessService(
+      {
+        async prepare() {
+          return { items: [preparedText("Nested")] }
+        },
+      },
+      new CanvasApplicationService({
+        async load() {
+          return snapshot
+        },
+        async save(request) {
+          saveCalls += 1
+          snapshot = { document: request.document, storageVersion: "v1" }
+          return { storageVersion: "v1" }
+        },
+      }),
+    )
+
+    const result = await business.addResources({
+      actor: { id: "ui", kind: "ui" },
+      anchor: { x: 40, y: 60 },
+      canvasId: "canvas-main",
+      commandId: "focused-add",
+      expectedRevision: 0,
+      parentId: group.id,
+      scopeId: "project",
+      sources: [{ kind: "new-text", sourceId: "prepared", text: "Nested" }],
+    })
+
+    expect(saveCalls).toBe(1)
+    expect(result.document.nodes.find((node) => node.id === result.createdNodeIds[0])).toMatchObject({
+      extent: "parent",
+      parentId: group.id,
+      position: { x: 40, y: 60 },
+    })
+  })
+
   test("prepares serializable sources then applies the shared sizing, placement, relation, and persistence rules", async () => {
     let snapshot: CanvasDocumentSnapshot = {
       document: createCanvasDocument({

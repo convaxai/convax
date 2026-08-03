@@ -670,7 +670,9 @@ describe("GenerationCanvasService", () => {
   test("commits text output without changing the caller's selection or viewport", async () => {
     const { calls, published, resourceRequests, service, viewRequests } = setup({})
 
-    await expect(service.generate(request(), { id: "renderer:1", kind: "ui" })).resolves.toEqual({
+    await expect(
+      service.generate(request({ parentId: "focused-group" }), { id: "renderer:1", kind: "ui" }),
+    ).resolves.toEqual({
       createdNodeIds: ["generated-one"],
       revision: 1,
       toolId: "creative-tools/write",
@@ -707,6 +709,7 @@ describe("GenerationCanvasService", () => {
       canvasId: "canvas-one",
       commandId: "generation:operation-one",
       expectedRevision: 0,
+      parentId: "focused-group",
       scopeId: "project-one",
       sources: [{ kind: "host-file", path: "Generated/generated-1.md" }],
     })
@@ -1410,6 +1413,7 @@ describe("GenerationCanvasService", () => {
     const generation = harness.service.generate(
       request({
         output: "image",
+        parentId: "focused-group",
         references: [{ nodeId: harness.reference.id, role: "text" }],
         resultMode: { type: "create-pending-node" },
         toolId: "creative-tools/draw",
@@ -1428,6 +1432,7 @@ describe("GenerationCanvasService", () => {
       expectedRevision: 0,
       kind: "image",
       operationId: "operation-one",
+      parentId: "focused-group",
       prompt: "Draw a small fox",
       relation: {
         anchorNodeIds: [harness.reference.id],

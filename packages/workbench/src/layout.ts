@@ -6,8 +6,10 @@ export const WorkbenchLayoutParts = {
 export type WorkbenchStandardLayoutPartId = typeof WorkbenchLayoutParts[keyof typeof WorkbenchLayoutParts]
 
 export interface WorkbenchLayoutPartConfiguration {
-  /** Raw requested size at or below this value collapses the part. */
+  /** Collapses at this raw size; reopening in the same drag must also reach minSize. */
   collapseThreshold?: number
+  /** Blocks reopening for this duration once a drag crosses the collapse threshold. */
+  collapseReopenDelayMs?: number
   initialSize: number
   initialVisible: boolean
   maxSize: number
@@ -28,17 +30,20 @@ export type WorkbenchLayoutPartsConfiguration = Record<string, WorkbenchLayoutPa
 }
 
 export interface WorkbenchLayoutControllerOptions {
+  now?(): number
   parts: WorkbenchLayoutPartsConfiguration
 }
 
 export interface WorkbenchLayoutPartSnapshot {
-  /** The expanded size. It remains available while the part is hidden. */
+  /** The committed expanded size. It remains available while the part is hidden. */
   size: number
   visible: boolean
 }
 
 export interface WorkbenchLayoutResizeSnapshot {
   partId: string
+  /** Transient geometry for rendering the active drag without persisting it. */
+  preview: Readonly<WorkbenchLayoutPartSnapshot>
 }
 
 export interface WorkbenchLayoutSnapshot {
@@ -46,20 +51,31 @@ export interface WorkbenchLayoutSnapshot {
   resize: Readonly<WorkbenchLayoutResizeSnapshot> | null
 }
 
+export function getWorkbenchLayoutPartSnapshot(snapshot: WorkbenchLayoutSnapshot, partId: string) {
+  return snapshot.resize?.partId === partId
+    ? snapshot.resize.preview
+    : snapshot.parts[partId]
+}
+
 interface ResizeTransaction {
+  collapseLatched?: boolean
   initialPart: Readonly<WorkbenchLayoutPartSnapshot>
   partId: string
+  reopenBlockedUntil?: number
 }
 
 /** DOM-free state and transaction controller for Workbench layout parts. */
 export class WorkbenchLayoutController {
   private readonly configurations = new Map<string, Readonly<WorkbenchLayoutPartConfiguration>>()
   private readonly listeners = new Set<() => void>()
+  private readonly now: () => number
+  private readonly reopenBlockedUntil = new Map<string, number>()
   private resizeTransaction: ResizeTransaction | null = null
   private snapshot: WorkbenchLayoutSnapshot
 
   constructor(options: WorkbenchLayoutControllerOptions) {
     requireStandardParts(options.parts)
+    this.now = options.now ?? Date.now
     const parts: Record<string, Readonly<WorkbenchLayoutPartSnapshot>> = {}
     for (const [partId, input] of Object.entries(options.parts)) {
       const configuration = validateConfiguration(partId, input)
@@ -80,6 +96,13 @@ export class WorkbenchLayoutController {
     const part = this.requirePart(partId)
     if (this.resizeTransaction) throw new Error("Workbench part visibility cannot change during a resize.")
     if (part.visible === visible) return false
+    if (visible) {
+      const blockedUntil = this.reopenBlockedUntil.get(partId)
+      if (blockedUntil !== undefined) {
+        if (this.now() < blockedUntil) return false
+        this.reopenBlockedUntil.delete(partId)
+      }
+    }
     this.replacePart(partId, { ...part, visible })
     return true
   }
@@ -106,7 +129,7 @@ export class WorkbenchLayoutController {
     if (this.resizeTransaction) throw new Error("A Workbench resize is already active.")
     if (!part.visible) return false
     this.resizeTransaction = { initialPart: part, partId }
-    this.replaceSnapshot(this.snapshot.parts, { partId })
+    this.replaceSnapshot(this.snapshot.parts, { partId, preview: part })
     return true
   }
 
@@ -117,37 +140,66 @@ export class WorkbenchLayoutController {
     const requestedSize = transaction.initialPart.size + delta
     if (!Number.isFinite(requestedSize)) throw new Error("Workbench requested size must be finite.")
     const configuration = this.configurations.get(transaction.partId)!
-    const next = configuration.collapseThreshold !== undefined
+    const current = this.snapshot.resize!.preview
+    const crossedCollapseThreshold = configuration.collapseThreshold !== undefined
       && requestedSize <= configuration.collapseThreshold
+    const reopenDelay = configuration.collapseReopenDelayMs ?? 0
+    if (crossedCollapseThreshold && reopenDelay > 0 && !transaction.collapseLatched) {
+      transaction.collapseLatched = true
+      transaction.reopenBlockedUntil = this.now() + reopenDelay
+      this.reopenBlockedUntil.set(transaction.partId, transaction.reopenBlockedUntil)
+    }
+    const collapsed = configuration.collapseThreshold !== undefined
+      && (
+        crossedCollapseThreshold
+        || transaction.collapseLatched
+        || (!current.visible && requestedSize < configuration.minSize)
+      )
+    const next = collapsed
       ? { size: transaction.initialPart.size, visible: false }
       : {
-          size: clamp(requestedSize, configuration.minSize, configuration.maxSize),
+          size: clamp(requestedSize, configuration.collapseThreshold ?? configuration.minSize, configuration.maxSize),
           visible: true,
         }
-    const current = this.snapshot.parts[transaction.partId]!
     if (current.size === next.size && current.visible === next.visible) return false
-    this.replacePart(transaction.partId, next)
+    this.replaceSnapshot(this.snapshot.parts, { partId: transaction.partId, preview: next })
     return true
   }
 
   endResize() {
-    if (!this.resizeTransaction) return false
+    const transaction = this.resizeTransaction
+    if (!transaction) return false
+    const current = this.snapshot.resize!.preview
+    const configuration = this.configurations.get(transaction.partId)!
+    const committed = current.visible
+      ? {
+          ...current,
+          size: clamp(current.size, configuration.minSize, configuration.maxSize),
+        }
+      : current
+    const parts = replacePart(this.snapshot.parts, transaction.partId, committed)
     this.resizeTransaction = null
-    this.replaceSnapshot(this.snapshot.parts, null)
+    this.replaceSnapshot(parts, null)
     return true
   }
 
   cancelResize() {
     const transaction = this.resizeTransaction
     if (!transaction) return false
+    if (
+      transaction.reopenBlockedUntil !== undefined
+      && this.reopenBlockedUntil.get(transaction.partId) === transaction.reopenBlockedUntil
+    ) {
+      this.reopenBlockedUntil.delete(transaction.partId)
+    }
     this.resizeTransaction = null
-    const parts = replacePart(this.snapshot.parts, transaction.partId, transaction.initialPart)
-    this.replaceSnapshot(parts, null)
+    this.replaceSnapshot(this.snapshot.parts, null)
     return true
   }
 
   dispose() {
     this.resizeTransaction = null
+    this.reopenBlockedUntil.clear()
     this.listeners.clear()
   }
 
@@ -208,6 +260,12 @@ function validateConfiguration(partId: string, input: WorkbenchLayoutPartConfigu
       throw new Error(`Workbench collapse threshold is outside its constraints: ${partId}`)
     }
   }
+  if (input.collapseReopenDelayMs !== undefined) {
+    requireFiniteNumber(input.collapseReopenDelayMs, `${partId} collapse reopen delay`)
+    if (input.collapseThreshold === undefined || input.collapseReopenDelayMs < 0) {
+      throw new Error(`Workbench collapse reopen delay is invalid: ${partId}`)
+    }
+  }
   return Object.freeze({ ...input })
 }
 
@@ -223,7 +281,12 @@ function createSnapshot(
   parts: WorkbenchLayoutSnapshot["parts"],
   resize: WorkbenchLayoutResizeSnapshot | null,
 ): WorkbenchLayoutSnapshot {
-  return Object.freeze({ parts: Object.freeze(parts), resize: resize ? Object.freeze({ ...resize }) : null })
+  return Object.freeze({
+    parts: Object.freeze(parts),
+    resize: resize
+      ? Object.freeze({ ...resize, preview: Object.freeze({ ...resize.preview }) })
+      : null,
+  })
 }
 
 function requireFiniteNumber(value: number, label: string) {

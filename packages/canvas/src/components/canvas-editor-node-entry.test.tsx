@@ -49,6 +49,11 @@ void mock.module("@convax/ui", () => ({
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
+  Dialog: Passthrough,
+  DialogClose: Passthrough,
+  DialogContent: Passthrough,
+  DialogDescription: Passthrough,
+  DialogTitle: Passthrough,
   Input: (props: ButtonHTMLAttributes<HTMLInputElement>) => <input {...props} />,
   Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div

@@ -126,6 +126,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
           commandId: input.commandId,
           expectedRevision: input.expectedRevision,
           externalFiles: resolved,
+          ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
           projectId: input.projectId,
           ...(input.relation === undefined ? {} : { relation: input.relation }),
           sources,

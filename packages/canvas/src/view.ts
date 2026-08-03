@@ -1,4 +1,4 @@
-import { getCanvasNodeSize } from "./document"
+import { getCanvasNodePresentationSize } from "./document"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 export const CANVAS_VIEW_MIN_ZOOM = 0.15
@@ -140,7 +140,7 @@ export function resolveCanvasFitViewport({
     const node = nodeById.get(nodeId)
     if (!node) continue
     const position = getCanvasNodeWorldPosition(node, nodeById, worldPositionById)
-    const size = getCanvasNodeSize(node)
+    const size = getCanvasNodePresentationSize(node)
     if (
       !position ||
       !Number.isFinite(size.width) ||
@@ -231,6 +231,7 @@ function isCanvasFitZoomLimit(value: number | undefined) {
 
 export interface CanvasViewSnapshot {
   documentId: string
+  focusedGroupId?: string | null
   revision: number
   scopeId: string
   selectedEdgeIds: string[]

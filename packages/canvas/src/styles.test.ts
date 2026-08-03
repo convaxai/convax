@@ -12,6 +12,7 @@ describe("Canvas file-card assistant sizing", () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const overlayRule = cssRule(styles, ".convax-canvas .convax-canvas-composer-overlay")
     const assistantRule = styles.match(/\.convax-canvas \.convax-node-assistant \{[^}]+\}/s)?.[0] ?? ""
+    const assistantContentRule = cssRule(styles, ".convax-canvas .convax-node-assistant > div")
 
     expect(overlayRule).toContain("position: absolute")
     expect(overlayRule).toContain("--canvas-safe-bottom")
@@ -26,6 +27,9 @@ describe("Canvas file-card assistant sizing", () => {
     expect(styles).toMatch(
       /\.convax-canvas \.convax-canvas-composer-overlay > \* \{[^}]*width: min\(600px, 100%\)[^}]*pointer-events: auto/s,
     )
+    expect(assistantContentRule).toContain("width: 100%")
+    expect(assistantContentRule).toContain("min-width: min(480px, calc(100vw - 32px))")
+    expect(assistantContentRule).toContain("max-width: min(780px, calc(100vw - 32px))")
     expect(assistantRule).toContain("height: auto")
     expect(assistantRule).toContain("border: 0")
     expect(assistantRule).toContain("background: transparent")
@@ -87,6 +91,42 @@ describe("Canvas file-card assistant sizing", () => {
 })
 
 describe("Canvas-first visual hierarchy", () => {
+  test("renders folded Groups as layered folders with paper overflow and a bounded appearance picker", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+    const folderRule = cssRule(styles, ".convax-canvas .convax-group-folder")
+    const frontRule = cssRule(styles, ".convax-canvas .convax-group-folder__front")
+    const pickerRule = cssRule(styles, ".convax-canvas .convax-group-appearance-picker")
+    const colorRule = cssRule(styles, ".convax-canvas .convax-group-appearance-picker__color")
+    const emojiGridRule = cssRule(styles, ".convax-canvas .convax-group-appearance-picker__emojis")
+    const titleRule = cssRule(styles, ".convax-canvas .convax-group-folder__title")
+
+    expect(folderRule).toContain("--canvas-group-color")
+    expect(frontRule).toContain("background: var(--canvas-group-front)")
+    expect(frontRule).toContain("inset 0 -13px 22px")
+    expect(styles).toContain('.convax-group-folder__paper[data-paper-index="2"]')
+    expect(styles).toContain(".convax-group-folder__overflow")
+    expect(styles).not.toContain(".convax-group-folder__preview-item")
+    expect(pickerRule).toContain("width: min(328px, calc(100% - 24px))")
+    expect(pickerRule).toContain("overscroll-behavior: contain")
+    expect(colorRule).not.toContain("--canvas-group-color")
+    expect(styles).toMatch(/data-canvas-group-color="default"[^}]+--canvas-group-color: oklch\(0\.74 0\.035 82\)/)
+    expect(styles).toMatch(/data-canvas-group-color="green"[^}]+--canvas-group-color: oklch\(0\.74 0\.115 146\)/)
+    expect(emojiGridRule).toContain("max-height: 220px")
+    expect(emojiGridRule).toContain("overflow-y: auto")
+    expect(emojiGridRule).toContain("scrollbar-width: thin")
+    expect(styles).toContain(".convax-group-appearance-picker__emojis::-webkit-scrollbar-thumb")
+    expect(styles).toContain("grid-template-columns: repeat(7, minmax(0, 1fr))")
+    expect(styles).toContain('.convax-group-folder:hover .convax-group-folder__paper[data-paper-index="0"]')
+    expect(styles).toContain('.convax-group-folder:hover .convax-group-folder__paper[data-paper-index="1"]')
+    expect(cssRule(styles, ".convax-canvas .convax-group-folder__emoji")).toContain("font-size: 16px")
+    expect(titleRule).toContain("text-overflow: ellipsis")
+    expect(titleRule).toContain("line-height: 22px")
+    expect(cssRule(styles, ".convax-canvas .convax-group-folder__title:focus-visible")).toContain("box-shadow: none")
+    expect(styles).toMatch(
+      /@media \(forced-colors: active\) \{[\s\S]*\.convax-canvas \.convax-group-folder__back,[\s\S]*border: 1px solid CanvasText;/,
+    )
+  })
+
   test("uses semantic appearance variables for the canvas and node surface", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const canvasRule = styles.match(/\.convax-canvas \{[^}]+\}/s)?.[0] ?? ""
@@ -140,13 +180,14 @@ describe("Canvas-first visual hierarchy", () => {
     expect(titleRule).toContain("user-select: none")
   })
 
-  test("keeps line resizing without rendering four corner dots", async () => {
+  test("keeps free and proportional resize handles visually unobtrusive", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const handleRule = cssRule(styles, ".convax-canvas .react-flow__resize-control.convax-node-resizer__handle::after")
 
     expect(handleRule).toContain("display: none")
     expect(handleRule).toContain("content: none")
     expect(handleRule).not.toContain("border-radius")
+    expect(styles).not.toContain("convax-node-resizer__handle--proportional")
   })
 
   test("uses opacity and shadow without scaling the node surface while dragging", async () => {

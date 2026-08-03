@@ -21,6 +21,7 @@ export interface CapturedPointerDragOptions {
   eventSource?: EventTarget
   onSettled?(): void
   pointerId: number
+  suppressClickAfterCommit?: boolean
   update(clientX: number): void
 }
 
@@ -46,8 +47,34 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
   const clock = options.clock ?? browserClock()
   let frameId: number | null = null
   let pendingClientX: number | null = null
+  let clickSuppressionFrameId: number | null = null
   let settled = false
 
+  const clearCommittedClickSuppression = () => {
+    if (clickSuppressionFrameId !== null) {
+      clock.cancelFrame(clickSuppressionFrameId)
+      clickSuppressionFrameId = null
+    }
+    source.removeEventListener("click", suppressCommittedClick, true)
+  }
+  const suppressCommittedClick = (event: Event) => {
+    const eventPointerId =
+      "pointerId" in event && typeof event.pointerId === "number"
+        ? event.pointerId
+        : null
+    if (eventPointerId !== null && eventPointerId !== options.pointerId) return
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    clearCommittedClickSuppression()
+  }
+  const armCommittedClickSuppression = () => {
+    if (!options.suppressClickAfterCommit) return
+    source.addEventListener("click", suppressCommittedClick, true)
+    clickSuppressionFrameId = clock.requestFrame(() => {
+      clickSuppressionFrameId = null
+      source.removeEventListener("click", suppressCommittedClick, true)
+    })
+  }
   const flushPending = () => {
     frameId = null
     const clientX = pendingClientX
@@ -92,6 +119,7 @@ export function startCapturedPointerDrag(options: CapturedPointerDragOptions): C
     cancelPending()
     detach()
     releaseCapture()
+    armCommittedClickSuppression()
     try {
       options.update(pointer.clientX)
       options.commit()
