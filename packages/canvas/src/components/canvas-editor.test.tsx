@@ -230,6 +230,7 @@ const {
   handleCanvasResourceRelinkSelection,
   handleCanvasResourceUploadSelection,
   linkCanvasReloadAbortSignal,
+  projectCanvasFocusedNode,
   replaceCanvasNodeResourceState,
   resolveCanvasGroupFolderDropTarget,
   resolveCanvasGroupMenuCapabilities,
@@ -359,6 +360,41 @@ describe("CanvasEditor edge port projection", () => {
 })
 
 describe("CanvasEditor group folder projection", () => {
+  test("removes the focused Group boundary from its direct children without changing persisted parentage", () => {
+    const group = createGroupNode({ height: 520, id: "group", position: { x: 300, y: 120 }, width: 760 })
+    const child = {
+      ...createTextNode({
+        id: "child",
+        metadata: {},
+        position: { x: 40, y: 50 },
+        resourceState: { status: "ready" as const },
+      }),
+      extent: "parent" as const,
+      parentId: group.id,
+    }
+    const nestedGroup = {
+      ...createGroupNode({ height: 320, id: "nested", parentId: group.id, position: { x: 80, y: 90 }, width: 480 }),
+      extent: "parent" as const,
+    }
+    const nestedChild = {
+      ...createTextNode({
+        id: "nested-child",
+        metadata: {},
+        position: { x: 20, y: 30 },
+        resourceState: { status: "ready" as const },
+      }),
+      extent: "parent" as const,
+      parentId: nestedGroup.id,
+    }
+
+    expect(projectCanvasFocusedNode(child, group.id)).toMatchObject({ parentId: group.id })
+    expect(projectCanvasFocusedNode(child, group.id).extent).toBeUndefined()
+    expect(projectCanvasFocusedNode(nestedGroup, group.id).extent).toBeUndefined()
+    expect(projectCanvasFocusedNode(nestedChild, group.id).extent).toBe("parent")
+    expect(projectCanvasFocusedNode(child, null).extent).toBe("parent")
+    expect(child.extent).toBe("parent")
+  })
+
   test("keeps Group, Fold, Ungroup, and Unfold menu capabilities mutually explicit", () => {
     expect(
       resolveCanvasGroupMenuCapabilities({

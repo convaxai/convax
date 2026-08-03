@@ -402,6 +402,16 @@ function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
   }
 }
 
+/**
+ * Group focus is a view projection over the same durable hierarchy. Its direct
+ * children keep their parent-relative coordinates, but the hidden focus root
+ * must not keep constraining pointer movement to its persisted frame.
+ */
+export function projectCanvasFocusedNode(node: CanvasNode, focusedGroupId: string | null): CanvasNode {
+  if (!focusedGroupId || node.parentId !== focusedGroupId || node.extent === undefined) return node
+  return { ...node, extent: undefined }
+}
+
 interface PendingConnection {
   nodeId: string
   side: "left" | "right"
@@ -1350,34 +1360,37 @@ function CanvasEditorContent(
         const isFocusRoot = node.id === groupFocus.focusedGroupId
         const isFolder = node.data.kind === "group" && !isFocusRoot && isCanvasGroupFolded(node)
         const projected = projectCanvasNodeInitialDimensions(
-          isFocusRoot
-            ? {
-                ...node,
-                draggable: false,
-                extent: undefined,
-                focusable: false,
-                parentId: undefined,
-                position: { x: 0, y: 0 },
-                selectable: false,
-                selected: false,
-                zIndex: -1,
-              }
-            : isFolder
+          projectCanvasFocusedNode(
+            isFocusRoot
               ? {
                   ...node,
-                  height: undefined,
-                  initialHeight: CANVAS_GROUP_FOLDER_SIZE.height,
-                  initialWidth: CANVAS_GROUP_FOLDER_SIZE.width,
-                  measured: undefined,
-                  style: {
-                    ...node.style,
-                    height: CANVAS_GROUP_FOLDER_SIZE.height,
-                    width: CANVAS_GROUP_FOLDER_SIZE.width,
-                  },
-                  width: undefined,
-                  zIndex: 0,
+                  draggable: false,
+                  extent: undefined,
+                  focusable: false,
+                  parentId: undefined,
+                  position: { x: 0, y: 0 },
+                  selectable: false,
+                  selected: false,
+                  zIndex: -1,
                 }
-              : node,
+              : isFolder
+                ? {
+                    ...node,
+                    height: undefined,
+                    initialHeight: CANVAS_GROUP_FOLDER_SIZE.height,
+                    initialWidth: CANVAS_GROUP_FOLDER_SIZE.width,
+                    measured: undefined,
+                    style: {
+                      ...node.style,
+                      height: CANVAS_GROUP_FOLDER_SIZE.height,
+                      width: CANVAS_GROUP_FOLDER_SIZE.width,
+                    },
+                    width: undefined,
+                    zIndex: 0,
+                  }
+                : node,
+            groupFocus.focusedGroupId,
+          ),
         )
         const selected = selection.nodeIds.has(node.id)
         const isConnectionTarget = node.id === connectionTargetNodeId
