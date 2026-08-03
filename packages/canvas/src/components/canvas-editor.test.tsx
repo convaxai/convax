@@ -616,6 +616,10 @@ describe("CanvasEditor resource mutation", () => {
     expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
 
     const markup = renderEditor()
+    expect(markup).toMatch(/accept="image\/\*"[^>]*data-canvas-resource-picker="image"/)
+    expect(markup).toMatch(/accept="video\/\*"[^>]*data-canvas-resource-picker="video"/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="image"[^>]*multiple/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="video"[^>]*multiple/)
     expect(markup).toContain('data-canvas-resource-picker="upload"')
     expect(markup).toContain('data-canvas-resource-picker="relink"')
     expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)

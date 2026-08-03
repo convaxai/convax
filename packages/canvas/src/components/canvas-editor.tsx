@@ -1047,6 +1047,8 @@ function CanvasEditorContent(
     setOverlayRoot(element)
   }, [])
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const imageUploadInputRef = useRef<HTMLInputElement>(null)
+  const videoUploadInputRef = useRef<HTMLInputElement>(null)
   const searchPanelRef = useRef<HTMLDivElement>(null)
   const relinkInputRef = useRef<HTMLInputElement>(null)
   const relinkNodeIdRef = useRef<string | null>(null)
@@ -3714,12 +3716,20 @@ function CanvasEditorContent(
       runResourceMutation(
         { anchor, files, sources: [], transfer },
         {
+          focusCreatedNodes: position === undefined,
           parentGroupId: groupFocus.focusedGroupId,
-          revealCreatedNodes: position === undefined,
         },
       )
     },
     [groupFocus.focusedGroupId, mutationService, pointAtCenter, readOnly, runResourceMutation],
+  )
+  const handleUploadInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = [...(event.currentTarget.files ?? [])]
+      handleCanvasResourceUploadSelection(files, uploadFiles)
+      event.currentTarget.value = ""
+    },
+    [uploadFiles],
   )
   const runGenerate = useCallback(
     (submission: CanvasGenerationComposerSubmission) => {
@@ -4633,7 +4643,12 @@ function CanvasEditorContent(
                     interactionTool={interactionTool}
                     onAddNode={(type) => addNode(type, undefined, true)}
                     onInteractionToolChange={activateInteractionTool}
-                    onUpload={() => uploadInputRef.current?.click()}
+                    onUpload={(kind) => {
+                      cancelSelectionDrag()
+                      if (kind === "image") imageUploadInputRef.current?.click()
+                      else if (kind === "video") videoUploadInputRef.current?.click()
+                      else uploadInputRef.current?.click()
+                    }}
                     readOnly={readOnly}
                   />
                   {folderFocus ? (
@@ -4922,15 +4937,27 @@ function CanvasEditorContent(
                   ) : null}
 
                   <input
+                    ref={imageUploadInputRef}
+                    accept="image/*"
+                    className="hidden"
+                    data-canvas-resource-picker="image"
+                    onChange={handleUploadInputChange}
+                    type="file"
+                  />
+                  <input
+                    ref={videoUploadInputRef}
+                    accept="video/*"
+                    className="hidden"
+                    data-canvas-resource-picker="video"
+                    onChange={handleUploadInputChange}
+                    type="file"
+                  />
+                  <input
                     ref={uploadInputRef}
                     className="hidden"
                     data-canvas-resource-picker="upload"
                     multiple
-                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                      const files = [...(event.currentTarget.files ?? [])]
-                      handleCanvasResourceUploadSelection(files, uploadFiles)
-                      event.currentTarget.value = ""
-                    }}
+                    onChange={handleUploadInputChange}
                     type="file"
                   />
                   <input
@@ -5227,7 +5254,7 @@ function CanvasHeader(props: {
   interactionTool: CanvasInteractionTool
   onAddNode: (type: string) => void
   onInteractionToolChange: (tool: CanvasInteractionTool) => void
-  onUpload: () => void
+  onUpload: (kind: "files" | "image" | "video") => void
   readOnly: boolean
 }) {
   const [addOpen, setAddOpen] = useState(false)
@@ -5330,7 +5357,8 @@ function CanvasHeader(props: {
                 disabled={props.readOnly}
                 key={item.type}
                 onClick={() => {
-                  props.onAddNode(item.type)
+                  if (item.type === "image" || item.type === "video") props.onUpload(item.type)
+                  else props.onAddNode(item.type)
                   setAddOpen(false)
                   addTriggerRef.current?.focus()
                 }}
@@ -5346,7 +5374,7 @@ function CanvasHeader(props: {
                 aria-label="Upload files"
                 disabled={props.readOnly}
                 onClick={() => {
-                  props.onUpload()
+                  props.onUpload("files")
                   setAddOpen(false)
                   addTriggerRef.current?.focus()
                 }}

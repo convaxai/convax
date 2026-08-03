@@ -1590,3 +1590,62 @@ test("navigates the top creation menu by keyboard and restores its trigger on Es
     await restoreWindow()
   }
 })
+
+test("opens filtered pickers from top media actions without creating empty nodes", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const add = mock(async () => ({ createdNodeIds: [], revision: 0, warnings: [] }))
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "top-media-picker" })}
+          services={createCanvasServices({ mutation: { add } })}
+        />,
+      )
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
+    const imageInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="image"]')
+    const videoInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="video"]')
+    const imageClick = mock(() => undefined)
+    const videoClick = mock(() => undefined)
+    Object.defineProperty(imageInput, "click", { configurable: true, value: imageClick })
+    Object.defineProperty(videoInput, "click", { configurable: true, value: videoClick })
+
+    await act(async () => {
+      trigger?.click()
+    })
+    const imageAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Image"]')
+    await act(async () => {
+      imageAction?.click()
+    })
+
+    expect(imageClick).toHaveBeenCalledTimes(1)
+    expect(add).not.toHaveBeenCalled()
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+
+    await act(async () => {
+      trigger?.click()
+    })
+    const videoAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Video"]')
+    await act(async () => {
+      videoAction?.click()
+    })
+
+    expect(videoClick).toHaveBeenCalledTimes(1)
+    expect(add).not.toHaveBeenCalled()
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})

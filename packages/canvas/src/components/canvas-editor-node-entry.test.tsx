@@ -626,6 +626,123 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
   }
 })
 
+test("focuses a picker-created image before entry and clears a held external-drag hint", async () => {
+  const restoreWindow = installTestWindow()
+  const initial = createCanvasDocument({ id: "picker-create-entry" })
+  let authoritative = initial
+  let resolveCamera!: () => void
+  const cameraFinished = new Promise<void>((resolve) => {
+    resolveCamera = resolve
+  })
+  const prepare = mock(async () => ({ dispose: () => undefined, start: () => undefined }))
+  let root: Root | undefined
+  renderNodes = true
+  setViewport.mockImplementation(async (_viewport, options) => {
+    if ((options?.duration ?? 0) > 0) await cameraFinished
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initial}
+          selectionDragSource={{
+            id: "native-files",
+            label: "Keep holding Command-Shift",
+            prepare,
+            shortcutModifier: "meta",
+            visible: () => true,
+          }}
+          services={createCanvasServices({
+            mutation: {
+              async add(input) {
+                authoritative = {
+                  ...authoritative,
+                  nodes: [
+                    ...authoritative.nodes,
+                    createMediaNode({
+                      id: "picker-created",
+                      position: { x: 1_200, y: 400 },
+                      resource: {
+                        id: "picker-created",
+                        kind: "image",
+                        metadata: {},
+                        state: { status: "ready" },
+                      },
+                    }),
+                  ],
+                  revision: authoritative.revision + 1,
+                }
+                expect(input.files).toHaveLength(1)
+                return { createdNodeIds: ["picker-created"], revision: authoritative.revision, warnings: [] }
+              },
+            },
+            persistence: {
+              load: async () => authoritative,
+              save: async (document) => document,
+            },
+          })}
+        />,
+      )
+      await Promise.resolve()
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
+    })
+
+    const chordDown = new Event("keydown", { bubbles: true })
+    Object.defineProperties(chordDown, {
+      key: { value: "Shift" },
+      metaKey: { value: true },
+      shiftKey: { value: true },
+    })
+    await act(async () => {
+      window.dispatchEvent(chordDown)
+      await Promise.resolve()
+    })
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
+      await Promise.resolve()
+      container.querySelector<HTMLButtonElement>('button[aria-label="Add Image"]')?.click()
+      await Promise.resolve()
+    })
+    const imageInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="image"]')!
+    Object.defineProperty(imageInput, "files", {
+      configurable: true,
+      value: [{ name: "picked.png", type: "image/png" }],
+    })
+    await act(async () => {
+      imageInput.dispatchEvent(new Event("change", { bubbles: true }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    const created = container.querySelector<HTMLElement>('[data-id="picker-created"] .convax-node')
+    expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
+
+    await act(async () => {
+      resolveCamera()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(created?.dataset.canvasNodeEntering).toBe("true")
+    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+  } finally {
+    setViewport.mockReset()
+    setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("runs the context-menu-created text node through the same camera focus and entry sequence as the top toolbar", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({
