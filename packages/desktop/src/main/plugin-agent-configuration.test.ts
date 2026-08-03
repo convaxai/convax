@@ -17,7 +17,7 @@ function plugin(version: string, url: string, skillName: string) {
     },
     description: "Agent configuration test Plugin",
     entry: "index.html",
-    hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+    hostApi: { major: 2, optional: [], required: ["host.context.get"] },
     id: "remote-editor",
     name: "Remote Editor",
     schema: "convax.plugin/8",

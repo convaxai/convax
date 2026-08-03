@@ -11,7 +11,7 @@ function manifest(overrides: Partial<InstalledPlugin> = {}): InstalledPlugin {
     description: "Canvas tool",
     entry: "web/index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: ["host.context.get", "canvas.document.get"],
     },
@@ -98,7 +98,7 @@ describe("InstalledPluginPrincipalResolver", () => {
     let plugin = manifest({
       capabilities: ["canvas.node.read"],
       hostApi: {
-        major: 1,
+        major: 2,
         optional: ["future.canvas.inspect"],
         required: ["host.context.get", "canvas.node.get"],
       },
@@ -120,7 +120,7 @@ describe("InstalledPluginPrincipalResolver", () => {
     plugin = {
       ...plugin,
       hostApi: {
-        major: 1,
+        major: 2,
         optional: [],
         required: ["host.context.get", "future.canvas.mutate"],
       },
@@ -147,7 +147,7 @@ describe("InstalledPluginPrincipalResolver", () => {
       capabilities: ["projects.read"],
       contributes: {},
       entry: undefined,
-      hostApi: { major: 1, optional: [], required: ["projects.list"] },
+      hostApi: { major: 2, optional: [], required: ["projects.list"] },
       runtime: { command: "canvas-tool-mcp", type: "mcp-stdio" },
     })
     await expect(resolver.issue("canvas-tool", "web")).rejects.toThrow("Headless Plugin")
@@ -165,7 +165,7 @@ describe("InstalledPluginPrincipalResolver", () => {
       capabilities: ["projects.read"],
       contributes: {},
       entry: undefined,
-      hostApi: { major: 1, optional: [], required: ["projects.list"] },
+      hostApi: { major: 2, optional: [], required: ["projects.list"] },
       runtime: { command: "canvas-tool-mcp", type: "mcp-stdio" },
     })
     const resolver = new InstalledPluginPrincipalResolver({

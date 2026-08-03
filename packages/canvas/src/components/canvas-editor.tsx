@@ -47,6 +47,7 @@ import {
   AlignVerticalSpaceBetween,
   Bot,
   Check,
+  ChevronRight,
   ChevronUp,
   ClipboardPaste,
   Columns3,
@@ -56,6 +57,8 @@ import {
   FileOutput,
   FileUp,
   Focus,
+  Folder,
+  FolderOpen,
   Group,
   Hand,
   ImagePlus,
@@ -122,12 +125,14 @@ import { canvasAppearanceStyle, resolveCanvasAppearance, type CanvasAppearanceIn
 import {
   addCanvasNodes,
   alignCanvasNodes,
+  canGroupCanvasNodes,
   type CanvasAlign,
   type CanvasDistribute,
   type CanvasLayout,
   connectCanvasNodes,
   distributeCanvasNodes,
   duplicateCanvasSelection,
+  foldCanvasNodes,
   groupCanvasNodes,
   layoutCanvasNodes,
   removeCanvasElements,
@@ -144,8 +149,18 @@ import {
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
-import { createCanvasId, getCanvasNodeSize, parseCanvasDocument } from "../document"
-import { CanvasEditorNodeEntryProvider, CanvasOverlayRootProvider } from "../editor-context"
+import {
+  CANVAS_GROUP_FOLDER_SIZE,
+  createCanvasId,
+  getCanvasNodePresentationSize,
+  parseCanvasDocument,
+} from "../document"
+import { createCanvasFolderFocusNodes, getCanvasFolderFocusEntry } from "../directory-focus"
+import { CanvasOverlayRootProvider } from "../editor-context"
+import { CanvasEditorMutationSurfaceProvider } from "./canvas-mutation-surface"
+import { CanvasGroupPresentationProvider } from "./group-presentation-context"
+import { hasUnsupportedCanvasGroupFold, isCanvasGroupFolded, setCanvasGroupFolded } from "../group-fold"
+import { projectCanvasGroupFocus, resolveCanvasGroupFocusForNodes } from "../group-focus"
 import {
   isCanvasGenerationComposerSubmissionCurrent,
   type CanvasGenerationComposerSubmission,
@@ -175,7 +190,12 @@ import {
   type CanvasInteractionTool,
 } from "../interaction"
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
-import { createCanvasNodeSnapSession, type CanvasNodeSnapSession, type CanvasSnapLine } from "../snapping"
+import {
+  createCanvasNodeSnapSession,
+  resolveCanvasNodeSnapScopeNodeIds,
+  type CanvasNodeSnapSession,
+  type CanvasSnapLine,
+} from "../snapping"
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
 import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
@@ -198,6 +218,8 @@ import {
   CanvasServicesProvider,
   createCanvasPendingDraftRegistry,
   type CanvasNotification,
+  type CanvasFolderBrowseListing,
+  type CanvasFolderBrowsePathEntry,
   type CanvasPendingDraft,
   type CanvasResourceMutationRequest,
   type CanvasResourceHydrationService,
@@ -411,7 +433,57 @@ function getCanvasCardAtScreenPoint(
   const nodeId = nodeElement.getAttribute("data-id")
   if (!nodeId || nodeId === sourceNodeId) return null
   const node = canvasDocument.nodes.find((candidate) => candidate.id === nodeId)
-  return node && node.data.kind !== "group" ? node.id : null
+  return node?.id ?? null
+}
+
+function getCanvasGroupFolderAtScreenPoint(
+  root: HTMLElement | null,
+  canvasDocument: CanvasDocument,
+  point: CanvasPoint,
+  excludedNodeIds: ReadonlySet<string>,
+) {
+  if (!root || typeof document === "undefined") return null
+  const elements =
+    typeof document.elementsFromPoint === "function"
+      ? document.elementsFromPoint(point.x, point.y)
+      : [document.elementFromPoint(point.x, point.y)].filter((element): element is Element => Boolean(element))
+  const paintedNodeIds: string[] = []
+  for (const element of elements) {
+    const nodeElement = element.closest(".react-flow__node[data-id]")
+    if (!nodeElement || !root.contains(nodeElement)) continue
+    const nodeId = nodeElement.getAttribute("data-id")
+    if (nodeId) paintedNodeIds.push(nodeId)
+  }
+  return resolveCanvasGroupFolderDropTarget(canvasDocument, paintedNodeIds, excludedNodeIds)
+}
+
+export function resolveCanvasGroupFolderDropTarget(
+  canvasDocument: CanvasDocument,
+  paintedNodeIds: readonly string[],
+  excludedNodeIds: ReadonlySet<string>,
+) {
+  for (const nodeId of paintedNodeIds) {
+    if (excludedNodeIds.has(nodeId)) continue
+    const node = canvasDocument.nodes.find((candidate) => candidate.id === nodeId)
+    return node?.data.kind === "group" ? node.id : null
+  }
+  return null
+}
+
+export function resolveCanvasGroupMenuCapabilities(input: {
+  canGroupSelection: boolean
+  hasSingleGroupSelection: boolean
+  singleGroupFolded: boolean
+  singleGroupFoldUnsupported: boolean
+}) {
+  const expandedGroup = input.hasSingleGroupSelection && !input.singleGroupFolded
+  const foldedGroup = input.hasSingleGroupSelection && input.singleGroupFolded
+  return {
+    canFold: input.canGroupSelection || (expandedGroup && !input.singleGroupFoldUnsupported),
+    canGroup: input.canGroupSelection,
+    canUngroup: expandedGroup,
+    canUnfold: foldedGroup && !input.singleGroupFoldUnsupported,
+  }
 }
 
 function getNodeWorldPosition(document: CanvasDocument, nodeId: string): CanvasPoint {
@@ -753,6 +825,7 @@ export function settleCanvasReloadFailure(input: {
 }
 
 export async function completeCanvasResourceMutation(input: {
+  afterReload?: (createdNodeIds: readonly string[]) => Promise<void> | void
   cancelPreparedNodes?: (createdNodeIds: readonly string[]) => void
   currentScope: () => CanvasResourceMutationScopeToken
   operationScope: CanvasResourceMutationScopeToken
@@ -773,6 +846,7 @@ export async function completeCanvasResourceMutation(input: {
     !input.signal.aborted && isCanvasResourceMutationScopeCurrent(input.currentScope, input.operationScope)
   if (!isActive()) return
   const createdNodeIds = [...new Set(input.result.createdNodeIds)]
+  const warnings = [...input.result.warnings]
   let prepared = false
   try {
     input.prepareCreatedNodes?.(createdNodeIds)
@@ -812,6 +886,17 @@ export async function completeCanvasResourceMutation(input: {
     return
   }
   try {
+    await input.afterReload?.(createdNodeIds)
+  } catch {
+    // Resource admission already succeeded. A follow-up Canvas organization
+    // command may be retried independently without hiding the new resource.
+    warnings.push("Items were added, but follow-up organization failed.")
+  }
+  if (!isActive()) {
+    cancelPreparedNodes()
+    return
+  }
+  try {
     if (!input.prepareCreatedNodes) input.presentCreatedNodes?.(createdNodeIds)
   } catch {
     // Compatibility presentation never changes the committed resource outcome.
@@ -835,8 +920,8 @@ export async function completeCanvasResourceMutation(input: {
     return
   }
   input.show({
-    description: input.result.warnings.length ? input.result.warnings.join("\n") : undefined,
-    kind: input.result.warnings.length ? "warning" : "success",
+    description: warnings.length ? warnings.join("\n") : undefined,
+    kind: warnings.length ? "warning" : "success",
     title: `${createdNodeIds.length} item${createdNodeIds.length === 1 ? "" : "s"} added`,
   })
 }
@@ -885,6 +970,16 @@ export const CanvasEditor = forwardRef<CanvasEditorHandle, CanvasEditorProps>(fu
   )
 })
 
+interface CanvasFolderFocusState {
+  directoryId?: string
+  error: string | null
+  listing: CanvasFolderBrowseListing | null
+  loading: boolean
+  ownerNodeId: string
+  path: readonly CanvasFolderBrowsePathEntry[]
+  returnGroupId: string | null
+}
+
 function CanvasEditorContent(
   props: CanvasEditorProps & {
     editorRef: ForwardedRef<CanvasEditorHandle>
@@ -917,6 +1012,9 @@ function CanvasEditorContent(
   const [insertPoint, setInsertPoint] = useState<CanvasPoint | null>(null)
   const [pendingConnection, setPendingConnection] = useState<PendingConnection | null>(null)
   const [connectionTargetNodeId, setConnectionTargetNodeId] = useState<string | null>(null)
+  const [focusedGroupId, setFocusedGroupId] = useState<string | null>(null)
+  const [folderFocus, setFolderFocus] = useState<CanvasFolderFocusState | null>(null)
+  const [groupDropTargetId, setGroupDropTargetId] = useState<string | null>(null)
   const [pendingNodeFocus, setPendingNodeFocus] = useState<{
     guard: CanvasPostMutationRevealGuard
     nodeIds: readonly string[]
@@ -949,6 +1047,8 @@ function CanvasEditorContent(
     setOverlayRoot(element)
   }, [])
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const imageUploadInputRef = useRef<HTMLInputElement>(null)
+  const videoUploadInputRef = useRef<HTMLInputElement>(null)
   const searchPanelRef = useRef<HTMLDivElement>(null)
   const relinkInputRef = useRef<HTMLInputElement>(null)
   const relinkNodeIdRef = useRef<string | null>(null)
@@ -961,6 +1061,10 @@ function CanvasEditorContent(
   const selectionDragModeActiveRef = useRef(false)
   const connectionStartRef = useRef<ConnectionStart | null>(null)
   const connectionTargetNodeIdRef = useRef<string | null>(null)
+  const focusedGroupIdRef = useRef(focusedGroupId)
+  const folderFocusRef = useRef(folderFocus)
+  const folderFocusRequestRef = useRef<AbortController | null>(null)
+  const groupDropTargetIdRef = useRef<string | null>(null)
   const ignoreConnectionPaneClickRef = useRef(false)
   const altDragRef = useRef<{ duplicatedNodeIdBySourceId: ReadonlyMap<string, string> } | null>(null)
   const snapSessionRef = useRef<CanvasNodeSnapSession | null>(null)
@@ -1014,6 +1118,7 @@ function CanvasEditorContent(
   const reactFlowRef = useRef(reactFlow)
   reactFlowRef.current = reactFlow
   const mutationService = useCanvasService("mutation")
+  const folderBrowseService = useCanvasService("folderBrowse")
   const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
   const persistenceService = useCanvasService("persistence")
@@ -1038,6 +1143,8 @@ function CanvasEditorContent(
   const hydratingRef = useRef(Boolean(persistenceService))
   const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
   documentRef.current = history.document
+  focusedGroupIdRef.current = focusedGroupId
+  folderFocusRef.current = folderFocus
   historyRef.current = history
   saveErrorRef.current = saveError
   selectionRef.current = selection
@@ -1075,19 +1182,29 @@ function CanvasEditorContent(
     connectionTargetNodeIdRef.current = nodeId
     setConnectionTargetNodeId(nodeId)
   }, [])
+  const updateGroupDropTarget = useCallback((nodeId: string | null) => {
+    if (groupDropTargetIdRef.current === nodeId) return
+    groupDropTargetIdRef.current = nodeId
+    setGroupDropTargetId(nodeId)
+  }, [])
   useLayoutEffect(() => {
     for (const controller of operationControllersRef.current) controller.abort()
     operationControllersRef.current.clear()
     abortCanvasReload(reloadControllerRef.current)
     snapSessionRef.current = null
     setSnapLines([])
+    folderFocusRequestRef.current?.abort()
+    folderFocusRequestRef.current = null
+    setFolderFocus(null)
+    setFocusedGroupId(null)
+    updateGroupDropTarget(null)
     cameraMotionGenerationRef.current += 1
     try {
       void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
     } catch {
       // React Flow may not be mounted for the previous scope yet.
     }
-  }, [currentViewScopeId, history.document.id])
+  }, [currentViewScopeId, history.document.id, updateGroupDropTarget])
   useEffect(() => {
     if (history.gestureStart) return
     snapSessionRef.current = null
@@ -1117,7 +1234,13 @@ function CanvasEditorContent(
     props.fileRendererRegistry.getVersion,
   )
 
-  const readOnly = (props.readOnly ?? false) || leaving || hydrating || Boolean(loadError) || Boolean(saveError)
+  const readOnly =
+    (props.readOnly ?? false) ||
+    leaving ||
+    hydrating ||
+    Boolean(loadError) ||
+    Boolean(saveError) ||
+    Boolean(folderFocus)
   const baseInteractionPolicy = resolveCanvasInteractionPolicy({
     readOnly,
     selectionDragChordHeld: false,
@@ -1161,8 +1284,26 @@ function CanvasEditorContent(
     () => new Map(history.document.nodes.map((node) => [node.id, node])),
     [history.document.nodes],
   )
+  const groupFocus = useMemo(
+    () => projectCanvasGroupFocus(history.document, focusedGroupId),
+    [focusedGroupId, history.document],
+  )
+  useEffect(() => {
+    if (focusedGroupId && groupFocus.focusedGroupId !== focusedGroupId) setFocusedGroupId(null)
+  }, [focusedGroupId, groupFocus.focusedGroupId])
   const hasSingleGroupSelection =
     selectionContext.kind === "single-node" && nodeById.get(selectionContext.nodeId)?.data.kind === "group"
+  const selectedGroup =
+    hasSingleGroupSelection && selectionContext.kind === "single-node"
+      ? nodeById.get(selectionContext.nodeId)
+      : undefined
+  const selectedGroupFolded = isCanvasGroupFolded(selectedGroup)
+  const groupMenuCapabilities = resolveCanvasGroupMenuCapabilities({
+    canGroupSelection: selectionContext.kind === "multi-node" && canGroupCanvasNodes(history.document, selectedNodeIds),
+    hasSingleGroupSelection,
+    singleGroupFolded: selectedGroupFolded,
+    singleGroupFoldUnsupported: hasUnsupportedCanvasGroupFold(selectedGroup),
+  })
   const arrangeNodeIds = useMemo(() => {
     const ids = [...selection.nodeIds]
     if (ids.length !== 1) return ids
@@ -1177,12 +1318,24 @@ function CanvasEditorContent(
   const canArrangeSelection =
     arrangeNodes.length >= 2 && arrangeNodes.every((node) => node.parentId === arrangeNodes[0]?.parentId)
   const canDistributeSelection = canArrangeSelection && arrangeNodes.length >= 3
+  const folderFocusNodes = useMemo(
+    () =>
+      folderFocus?.listing
+        ? createCanvasFolderFocusNodes({
+            listing: folderFocus.listing,
+            ownerNodeId: folderFocus.ownerNodeId,
+            reservedNodeIds: history.document.nodes.map((node) => node.id),
+          })
+        : [],
+    [folderFocus, history.document.nodes],
+  )
   const canvasNodeIds = useMemo(
-    () => history.document.nodes.filter((node) => !node.parentId).map((node) => node.id),
-    [history.document.nodes],
+    () => (folderFocus ? folderFocusNodes.map((node) => node.id) : [...groupFocus.scopeNodeIds]),
+    [folderFocus, folderFocusNodes, groupFocus.scopeNodeIds],
   )
   const canLayoutCanvas = !readOnly && canvasNodeIds.length >= 2
   const nodes = useMemo(() => {
+    if (folderFocus) return folderFocusNodes
     const depth = (node: CanvasNode, visited = new Set<string>()): number => {
       if (visited.has(node.id)) return 0
       visited.add(node.id)
@@ -1190,10 +1343,43 @@ function CanvasEditorContent(
       return parent ? depth(parent, visited) + 1 : 0
     }
     return history.document.nodes
+      .filter((node) => groupFocus.visibleNodeIds.has(node.id))
       .map((node) => {
-        const projected = projectCanvasNodeInitialDimensions(node)
+        const isFocusRoot = node.id === groupFocus.focusedGroupId
+        const isFolder = node.data.kind === "group" && !isFocusRoot && isCanvasGroupFolded(node)
+        const projected = projectCanvasNodeInitialDimensions(
+          isFocusRoot
+            ? {
+                ...node,
+                draggable: false,
+                extent: undefined,
+                focusable: false,
+                parentId: undefined,
+                position: { x: 0, y: 0 },
+                selectable: false,
+                selected: false,
+                zIndex: -1,
+              }
+            : isFolder
+              ? {
+                  ...node,
+                  height: undefined,
+                  initialHeight: CANVAS_GROUP_FOLDER_SIZE.height,
+                  initialWidth: CANVAS_GROUP_FOLDER_SIZE.width,
+                  measured: undefined,
+                  style: {
+                    ...node.style,
+                    height: CANVAS_GROUP_FOLDER_SIZE.height,
+                    width: CANVAS_GROUP_FOLDER_SIZE.width,
+                  },
+                  width: undefined,
+                  zIndex: 0,
+                }
+              : node,
+        )
         const selected = selection.nodeIds.has(node.id)
         const isConnectionTarget = node.id === connectionTargetNodeId
+        if (isFocusRoot) return projected
         if (node.selected === selected && !isConnectionTarget) return projected
         return {
           ...projected,
@@ -1202,10 +1388,19 @@ function CanvasEditorContent(
         }
       })
       .sort((left, right) => depth(left) - depth(right))
-  }, [connectionTargetNodeId, history.document.nodes, nodeById, selection.nodeIds])
+  }, [
+    connectionTargetNodeId,
+    folderFocus,
+    folderFocusNodes,
+    groupFocus.focusedGroupId,
+    groupFocus.visibleNodeIds,
+    history.document.nodes,
+    nodeById,
+    selection.nodeIds,
+  ])
   const edges = useMemo(() => {
-    if (edgesHidden) return []
-    return history.document.edges.map((edge) => ({
+    if (edgesHidden || folderFocus) return []
+    return groupFocus.edges.map((edge) => ({
       ...edge,
       animated: shouldAnimateCanvasEdge(edge, selection),
       selected: selection.edgeIds.has(edge.id),
@@ -1213,7 +1408,7 @@ function CanvasEditorContent(
       targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
       type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
     }))
-  }, [edgesHidden, history.document.edges, selection])
+  }, [edgesHidden, folderFocus, groupFocus.edges, selection])
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
     const definitions = props.nodeRegistry.list()
@@ -1359,6 +1554,7 @@ function CanvasEditorContent(
   const getViewSnapshot = useCallback(
     (): CanvasViewSnapshot => ({
       documentId: documentRef.current.id,
+      focusedGroupId: focusedGroupIdRef.current,
       revision: documentRef.current.revision,
       scopeId: props.viewScopeId ?? "",
       selectedEdgeIds: [...selectionRef.current.edgeIds],
@@ -1387,7 +1583,7 @@ function CanvasEditorContent(
     const ready = uniqueNodeIds.every((nodeId) => {
       const node = document.nodes.find((item) => item.id === nodeId)
       if (!node) return false
-      const size = getCanvasNodeSize(node)
+      const size = getCanvasNodePresentationSize(node)
       return isPositiveFiniteDimension(size.width) && isPositiveFiniteDimension(size.height)
     })
     return ready && isCurrent()
@@ -1463,6 +1659,225 @@ function CanvasEditorContent(
     },
     [getSafeViewportRect, prefersReducedMotion],
   )
+  const navigateGroupFocus = useCallback(
+    async (requestedGroupId: string | null, fitScope = true) => {
+      const document = documentRef.current
+      const requestedGroup = requestedGroupId
+        ? document.nodes.find((node) => node.id === requestedGroupId && node.data.kind === "group")
+        : undefined
+      const nextGroupId = requestedGroup?.id ?? null
+      if (nextGroupId === focusedGroupId) return false
+      markUserNavigation()
+      updateSelection([])
+      setFocusedGroupId(nextGroupId)
+      await new Promise<void>((resolve) => {
+        if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+          resolve()
+          return
+        }
+        window.requestAnimationFrame(() => resolve())
+      })
+      if (!fitScope) return true
+      const scopeNodeIds = document.nodes
+        .filter((node) => (nextGroupId ? node.parentId === nextGroupId : !node.parentId))
+        .map((node) => node.id)
+      if (scopeNodeIds.length === 0) return true
+      await reactFlowRef.current.fitView({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodes: scopeNodeIds.map((id) => ({ id })),
+        padding: CANVAS_FIT_PADDING,
+      })
+      return true
+    },
+    [focusedGroupId, markUserNavigation, prefersReducedMotion, updateSelection],
+  )
+  const focusGroup = useCallback(
+    (groupId: string) => {
+      folderFocusRequestRef.current?.abort()
+      folderFocusRequestRef.current = null
+      setFolderFocus(null)
+      void navigateGroupFocus(groupId)
+    },
+    [navigateGroupFocus],
+  )
+  const waitForFocusProjection = useCallback(
+    () =>
+      new Promise<void>((resolve) => {
+        if (typeof window === "undefined" || typeof window.requestAnimationFrame !== "function") {
+          resolve()
+          return
+        }
+        window.requestAnimationFrame(() => resolve())
+      }),
+    [],
+  )
+  const fitFolderFocusListing = useCallback(
+    async (listing: CanvasFolderBrowseListing, ownerNodeId: string) => {
+      const nodeIds = createCanvasFolderFocusNodes({
+        listing,
+        ownerNodeId,
+        reservedNodeIds: documentRef.current.nodes.map((node) => node.id),
+      }).map((node) => node.id)
+      if (nodeIds.length === 0) return
+      await waitForFocusProjection()
+      await reactFlowRef.current.fitView({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodes: nodeIds.map((id) => ({ id })),
+        padding: CANVAS_FIT_PADDING,
+      })
+    },
+    [prefersReducedMotion, waitForFocusProjection],
+  )
+  const leaveFolderFocus = useCallback(
+    async (fitScope = true) => {
+      const current = folderFocusRef.current
+      if (!current) return false
+      folderFocusRequestRef.current?.abort()
+      folderFocusRequestRef.current = null
+      markUserNavigation()
+      updateSelection([])
+      setFolderFocus(null)
+      setFocusedGroupId(current.returnGroupId)
+      if (!fitScope) return true
+      await waitForFocusProjection()
+      const document = documentRef.current
+      const scopeNodeIds = document.nodes
+        .filter((node) => (current.returnGroupId ? node.parentId === current.returnGroupId : !node.parentId))
+        .map((node) => node.id)
+      if (scopeNodeIds.length === 0) return true
+      await reactFlowRef.current.fitView({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodes: scopeNodeIds.map((id) => ({ id })),
+        padding: CANVAS_FIT_PADDING,
+      })
+      return true
+    },
+    [markUserNavigation, prefersReducedMotion, updateSelection, waitForFocusProjection],
+  )
+  const navigateFolderFocus = useCallback(
+    async (
+      ownerNodeId: string,
+      directoryId?: string,
+      options?: {
+        fitScope?: boolean
+        path?: readonly CanvasFolderBrowsePathEntry[]
+        preserveListing?: boolean
+        userNavigation?: boolean
+      },
+    ) => {
+      const owner = documentRef.current.nodes.find((node) => node.id === ownerNodeId && node.data.kind === "folder")
+      if (!owner) return false
+      const current = folderFocusRef.current
+      const returnGroupId = current?.returnGroupId ?? focusedGroupIdRef.current
+      const path = options?.path ?? current?.path ?? [{ id: directoryId ?? ownerNodeId, label: owner.data.label }]
+      if (options?.userNavigation !== false) {
+        markUserNavigation()
+        updateSelection([])
+      }
+      setFocusedGroupId(null)
+      folderFocusRequestRef.current?.abort()
+      const controller = new AbortController()
+      folderFocusRequestRef.current = controller
+      setFolderFocus({
+        directoryId,
+        error: null,
+        listing: options?.preserveListing ? (current?.listing ?? null) : null,
+        loading: true,
+        ownerNodeId,
+        path,
+        returnGroupId,
+      })
+      if (!folderBrowseService) {
+        if (folderFocusRequestRef.current === controller) {
+          setFolderFocus({
+            directoryId,
+            error: "Folder browsing is unavailable.",
+            listing: null,
+            loading: false,
+            ownerNodeId,
+            path,
+            returnGroupId,
+          })
+        }
+        return false
+      }
+      try {
+        const listing = await folderBrowseService.list({
+          context: {
+            documentId: documentRef.current.id,
+            selectedNodeIds: [],
+            source: props.viewId ?? "canvas",
+          },
+          ...(directoryId === undefined ? {} : { directoryId }),
+          ownerNodeId,
+          signal: controller.signal,
+        })
+        if (controller.signal.aborted || folderFocusRequestRef.current !== controller) return false
+        setFolderFocus({
+          directoryId,
+          error: null,
+          listing,
+          loading: false,
+          ownerNodeId,
+          path: listing.path,
+          returnGroupId,
+        })
+        if (options?.fitScope !== false) await fitFolderFocusListing(listing, ownerNodeId)
+        return true
+      } catch (error) {
+        if (controller.signal.aborted || folderFocusRequestRef.current !== controller) return false
+        setFolderFocus({
+          directoryId,
+          error: error instanceof Error ? error.message : "The folder could not be opened.",
+          listing: options?.preserveListing ? (current?.listing ?? null) : null,
+          loading: false,
+          ownerNodeId,
+          path,
+          returnGroupId,
+        })
+        return false
+      }
+    },
+    [fitFolderFocusListing, folderBrowseService, markUserNavigation, props.viewId, updateSelection],
+  )
+  useEffect(() => {
+    if (
+      !folderFocus ||
+      documentRef.current.nodes.some((node) => node.id === folderFocus.ownerNodeId && node.data.kind === "folder")
+    ) {
+      return
+    }
+    void leaveFolderFocus(false)
+  }, [folderFocus, history.document.nodes, leaveFolderFocus])
+  useEffect(() => {
+    if (!folderBrowseService?.subscribe) return
+    return folderBrowseService.subscribe(() => {
+      const current = folderFocusRef.current
+      if (!current) return
+      void navigateFolderFocus(current.ownerNodeId, current.directoryId, {
+        fitScope: false,
+        path: current.path,
+        preserveListing: true,
+        userNavigation: false,
+      })
+    })
+  }, [folderBrowseService, navigateFolderFocus])
+  useEffect(
+    () => () => {
+      folderFocusRequestRef.current?.abort()
+      folderFocusRequestRef.current = null
+    },
+    [],
+  )
   useLayoutEffect(() => {
     if (hydrating || loadError || !rootRef.current) return
     const scope = `${currentViewScopeId}:${history.document.id}`
@@ -1473,8 +1888,17 @@ function CanvasEditorContent(
     })
     if (action === "skip") return
     initialCameraScopeRef.current = scope
-    if (action === "mark-and-fit") void fitDocumentViewport(history.document, { duration: 0 })
-  }, [currentViewScopeId, fitDocumentViewport, history.document, hydrating, loadError])
+    if (action === "mark-and-fit") {
+      void reactFlowRef.current.fitView({
+        duration: 0,
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodes: canvasNodeIds.map((id) => ({ id })),
+        padding: CANVAS_FIT_PADDING,
+      })
+    }
+  }, [canvasNodeIds, currentViewScopeId, history.document, hydrating, loadError])
   const revealCanvasNodesAfterMutation = useCallback(
     async (nodeIds: readonly string[], guard: CanvasPostMutationRevealGuard) => {
       if (
@@ -1521,8 +1945,9 @@ function CanvasEditorContent(
     async (
       nodeIds: readonly string[],
       guard: CanvasPostMutationRevealGuard,
-      duration: number = CANVAS_MOTION_DURATION.postMutationReveal,
+      options: { duration?: number; presentEntry?: boolean } = {},
     ) => {
+      const duration = options.duration ?? CANVAS_MOTION_DURATION.postMutationReveal
       if (
         nodeIds.length === 0 ||
         leavingRef.current ||
@@ -1547,7 +1972,7 @@ function CanvasEditorContent(
       ) {
         return false
       }
-      startNodeEntryPresentation(nodeIds)
+      if (options.presentEntry !== false) startNodeEntryPresentation(nodeIds)
       return true
     },
     [
@@ -1646,6 +2071,11 @@ function CanvasEditorContent(
         const resolved = resolveNodeIds(command.nodeIds)
         foundNodeIds = resolved.foundNodeIds
         missingNodeIds = resolved.missingNodeIds
+        const revealGroupId = resolveCanvasGroupFocusForNodes(document, foundNodeIds)
+        if (foundNodeIds.length > 0 && revealGroupId === undefined) {
+          throw new Error("Canvas reveal targets must belong to one direct group scope")
+        }
+        const groupScopeChanged = revealGroupId === undefined ? false : await navigateGroupFocus(revealGroupId, false)
         if (command.select) updateSelection(foundNodeIds)
         if ((command.fit ?? "contain") !== "none" && foundNodeIds.length > 0) {
           const focusGuard = getPostMutationRevealGuard()
@@ -1657,8 +2087,20 @@ function CanvasEditorContent(
           }
           markUserNavigation()
           const center = command.fit === "center"
-          if (center && command.animation === "smooth") {
-            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), CANVAS_MOTION_DURATION.fit)
+          if (groupScopeChanged || typeof revealGroupId === "string") {
+            await reactFlowRef.current.fitView({
+              duration,
+              ease: canvasViewportEase,
+              interpolate: "smooth",
+              maxZoom: center ? CANVAS_CENTER_FIT_MAX_ZOOM : CANVAS_FIT_MAX_ZOOM,
+              nodes: foundNodeIds.map((id) => ({ id })),
+              padding: center ? CANVAS_CENTER_FIT_PADDING : CANVAS_FIT_PADDING,
+            })
+          } else if (center && command.animation === "smooth") {
+            await focusCanvasNodes(foundNodeIds, getPostMutationRevealGuard(), {
+              duration: CANVAS_MOTION_DURATION.fit,
+              presentEntry: false,
+            })
           } else {
             await fitDocumentViewport(document, {
               duration,
@@ -1673,9 +2115,14 @@ function CanvasEditorContent(
         const resolved = resolveCanvasFitTargetNodeIds(document, command.nodeIds)
         foundNodeIds = resolved.foundNodeIds
         missingNodeIds = resolved.missingNodeIds
+        const fitGroupId = resolved.explicit ? resolveCanvasGroupFocusForNodes(document, foundNodeIds) : undefined
         if (resolved.explicit && foundNodeIds.length === 0) {
           return { foundNodeIds, missingNodeIds, snapshot: getViewSnapshot() }
         }
+        if (resolved.explicit && fitGroupId === undefined) {
+          throw new Error("Canvas fit targets must belong to one direct group scope")
+        }
+        const fitGroupScopeChanged = fitGroupId === undefined ? false : await navigateGroupFocus(fitGroupId, false)
         if (resolved.explicit) {
           const focusGuard = getPostMutationRevealGuard()
           const geometryReady = confirmCanvasNodeGeometry(foundNodeIds, () =>
@@ -1686,12 +2133,28 @@ function CanvasEditorContent(
           }
         }
         markUserNavigation()
-        await fitDocumentViewport(document, {
-          duration,
-          maxZoom: command.maxZoom,
-          nodeIds: resolved.explicit ? foundNodeIds : undefined,
-          padding: command.padding,
-        })
+        if (
+          fitGroupScopeChanged ||
+          typeof fitGroupId === "string" ||
+          (!resolved.explicit && groupFocus.focusedGroupId)
+        ) {
+          const nodeIds = fitGroupId !== undefined ? foundNodeIds : [...groupFocus.scopeNodeIds]
+          await reactFlowRef.current.fitView({
+            duration,
+            ease: canvasViewportEase,
+            interpolate: "smooth",
+            maxZoom: command.maxZoom,
+            nodes: nodeIds.map((id) => ({ id })),
+            padding: command.padding,
+          })
+        } else {
+          await fitDocumentViewport(document, {
+            duration,
+            maxZoom: command.maxZoom,
+            nodeIds: resolved.explicit ? foundNodeIds : [...groupFocus.scopeNodeIds],
+            padding: command.padding,
+          })
+        }
       }
       if (command.type === "viewport.center") {
         if (!Number.isFinite(command.position.x) || !Number.isFinite(command.position.y)) {
@@ -1732,7 +2195,10 @@ function CanvasEditorContent(
       focusCanvasNodes,
       getPostMutationRevealGuard,
       getViewSnapshot,
+      groupFocus.focusedGroupId,
+      groupFocus.scopeNodeIds,
       markUserNavigation,
+      navigateGroupFocus,
       notificationService,
       prefersReducedMotion,
       reactFlow,
@@ -1789,8 +2255,26 @@ function CanvasEditorContent(
   )
   const fitCanvas = useCallback(() => {
     markUserNavigation()
-    void fitDocumentViewport(documentRef.current)
-  }, [fitDocumentViewport, markUserNavigation])
+    if (groupFocus.focusedGroupId) {
+      void reactFlowRef.current.fitView({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodes: [...groupFocus.scopeNodeIds].map((id) => ({ id })),
+        padding: CANVAS_FIT_PADDING,
+      })
+      return
+    }
+    void fitDocumentViewport(documentRef.current, { nodeIds: canvasNodeIds })
+  }, [
+    canvasNodeIds,
+    fitDocumentViewport,
+    groupFocus.focusedGroupId,
+    groupFocus.scopeNodeIds,
+    markUserNavigation,
+    prefersReducedMotion,
+  ])
   const nextInsertPoint = useCallback(
     (index = 0) => {
       const point = insertPoint ?? pointerRef.current ?? pointAtCenter()
@@ -1840,9 +2324,18 @@ function CanvasEditorContent(
     })
   }
   const selectionActionExecutor = selectionActionExecutorRef.current
+  const selectionActionUnavailable =
+    (props.readOnly ?? false) || leaving || blockingLoad || Boolean(loadError) || Boolean(saveError)
   const selectionActionController = useMemo(
     () => new AbortController(),
-    [currentViewScopeId, history.document, props.viewId, readOnly, selectedEdgeIds, selectedNodeIds],
+    [
+      currentViewScopeId,
+      history.document.id,
+      props.viewId,
+      selectedEdgeIds,
+      selectedNodeIds,
+      selectionActionUnavailable,
+    ],
   )
   selectionActionControllerRef.current = selectionActionController
   const selectionActionContext = useMemo(
@@ -2218,7 +2711,6 @@ function CanvasEditorContent(
     await startSave(finalized.document)
   }, [startSave])
   const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
-    selectionActionControllerRef.current?.abort()
     hasLocalEditsRef.current = false
     savedRevisionRef.current = document.revision
     const hydrated = canvasHistoryReducer(historyRef.current, { type: "hydrate", document })
@@ -2229,7 +2721,6 @@ function CanvasEditorContent(
   const reloadDocument = useCallback(
     (signal?: AbortSignal) => {
       if (!persistenceService) return Promise.resolve()
-      selectionActionControllerRef.current?.abort()
       const reloadScope = resourceMutationScopeRef.current
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
@@ -2304,7 +2795,6 @@ function CanvasEditorContent(
       if (!persistenceService) {
         return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
       }
-      selectionActionControllerRef.current?.abort()
       return reloadQueueRef.current.request(async () => {
         if (signal?.aborted) return
         const reloadScope = resourceMutationScopeRef.current
@@ -2525,7 +3015,7 @@ function CanvasEditorContent(
   const runResourceMutation = useCallback(
     (
       input: Omit<CanvasResourceMutationRequest, "expectedRevision" | "signal">,
-      options: { focusCreatedNodes?: boolean; revealCreatedNodes?: boolean } = {},
+      options: { focusCreatedNodes?: boolean; parentGroupId?: string | null; revealCreatedNodes?: boolean } = {},
     ) => {
       if (!mutationService || readOnly) return
       const controller = new AbortController()
@@ -2539,6 +3029,7 @@ function CanvasEditorContent(
           const result = await mutationService.add({
             ...input,
             expectedRevision: document.revision,
+            ...(options.parentGroupId ? { parentId: options.parentGroupId } : {}),
             signal: controller.signal,
           })
           await completeCanvasResourceMutation({
@@ -2550,6 +3041,23 @@ function CanvasEditorContent(
             result,
             runViewEffect: revealGuard
               ? async (createdNodeIds) => {
+                  if (options.parentGroupId) {
+                    if (
+                      focusedGroupIdRef.current === options.parentGroupId &&
+                      isCanvasPostMutationRevealGuardCurrent(revealGuard, getPostMutationRevealGuard())
+                    ) {
+                      startNodeEntryPresentation(createdNodeIds)
+                      await reactFlowRef.current.fitView({
+                        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+                        ease: canvasViewportEase,
+                        interpolate: "smooth",
+                        maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+                        nodes: createdNodeIds.map((id) => ({ id })),
+                        padding: CANVAS_CENTER_FIT_PADDING,
+                      })
+                    }
+                    return
+                  }
                   if (options.focusCreatedNodes) {
                     try {
                       const focused = await focusCanvasNodes(createdNodeIds, revealGuard)
@@ -2561,7 +3069,11 @@ function CanvasEditorContent(
                   } else await revealCanvasNodesAfterMutation(createdNodeIds, revealGuard)
                 }
               : undefined,
-            selectNodes,
+            selectNodes: (createdNodeIds) => {
+              if (!options.parentGroupId || focusedGroupIdRef.current === options.parentGroupId) {
+                selectNodes(createdNodeIds)
+              }
+            },
             show: (notification) => notificationService?.show(notification),
             signal: controller.signal,
           })
@@ -2580,6 +3092,7 @@ function CanvasEditorContent(
     },
     [
       cancelNodeEntries,
+      dispatch,
       getPostMutationRevealGuard,
       focusCanvasNodes,
       mutationService,
@@ -2587,10 +3100,12 @@ function CanvasEditorContent(
       notifyError,
       presentNodeEntries,
       prepareFocusedNodeEntries,
+      prefersReducedMotion,
       readOnly,
       reloadAuthoritativeDocument,
       revealCanvasNodesAfterMutation,
       selectNodes,
+      startNodeEntryPresentation,
     ],
   )
   const runResourceRelink = useCallback(
@@ -2689,13 +3204,16 @@ function CanvasEditorContent(
           relation,
           sources: [{ kind: "new-text", sourceId: createCanvasId("source"), text: "" }],
         },
-        focusAfterCreate ? { focusCreatedNodes: true } : {},
+        {
+          ...(focusAfterCreate ? { focusCreatedNodes: true } : {}),
+          parentGroupId: groupFocus.focusedGroupId,
+        },
       )
       setNodeMenuOpen(false)
       setInsertPoint(null)
       telemetryService?.track({ name: "canvas.node.added", properties: { type: "text" } })
     },
-    [nextInsertPoint, nextViewportInsertPoint, runResourceMutation, telemetryService],
+    [groupFocus.focusedGroupId, nextInsertPoint, nextViewportInsertPoint, runResourceMutation, telemetryService],
   )
   const createNodeForType = useCallback(
     (type: string, position: CanvasPoint, data?: Record<string, unknown>) => {
@@ -2720,23 +3238,37 @@ function CanvasEditorContent(
       const createdAt = position ?? insertPoint ?? pointAtCenter()
       const provisional = createNodeForType(type, createdAt)
       if (!provisional) return undefined
-      const size = getCanvasNodeSize(provisional)
+      const size = getCanvasNodePresentationSize(provisional)
       const preferredPosition = focusAfterCreate && position === undefined ? nextViewportInsertPoint(size) : createdAt
       const created = { ...provisional, position: preferredPosition }
+      const parentId = groupFocus.focusedGroupId ?? undefined
       const node = {
         ...created,
+        extent: parentId ? ("parent" as const) : created.extent,
+        parentId,
         position:
-          focusAfterCreate && position === undefined
+          parentId || (focusAfterCreate && position === undefined)
             ? preferredPosition
-            : findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodeSize(created)),
+            : findOpenCanvasPoint(history.document, preferredPosition, getCanvasNodePresentationSize(created)),
       }
       const result = addCanvasNodes(history.document, [node])
       if (focusAfterCreate) prepareFocusedNodeEntries([node.id])
       else presentNodeEntries([node.id])
       dispatch({ type: "commit", document: result.document })
       selectNodes(result.selectedNodeIds)
-      if (focusAfterCreate) {
+      if (focusAfterCreate && !parentId) {
         setPendingNodeFocus({ guard: getPostMutationRevealGuard(), nodeIds: [node.id] })
+      } else if (focusAfterCreate && parentId) {
+        window.requestAnimationFrame(() => {
+          void reactFlowRef.current.fitView({
+            duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+            ease: canvasViewportEase,
+            interpolate: "smooth",
+            maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+            nodes: [{ id: node.id }],
+            padding: CANVAS_CENTER_FIT_PADDING,
+          })
+        })
       }
       setNodeMenuOpen(false)
       setInsertPoint(null)
@@ -2748,11 +3280,13 @@ function CanvasEditorContent(
       createNodeForType,
       history.document,
       getPostMutationRevealGuard,
+      groupFocus.focusedGroupId,
       insertPoint,
       nextViewportInsertPoint,
       pointAtCenter,
       presentNodeEntries,
       prepareFocusedNodeEntries,
+      prefersReducedMotion,
       readOnly,
       selectNodes,
       telemetryService,
@@ -2844,10 +3378,11 @@ function CanvasEditorContent(
       if (nodeType === "text") {
         const anchor = documentRef.current.nodes.find((node) => node.id === nodeId)
         if (!anchor) return
-        const anchorSize = getCanvasNodeSize(anchor)
-        const parentPosition = anchor.parentId
-          ? getNodeWorldPosition(documentRef.current, anchor.parentId)
-          : { x: 0, y: 0 }
+        const anchorSize = getCanvasNodePresentationSize(anchor)
+        const parentPosition =
+          anchor.parentId && anchor.parentId !== groupFocus.focusedGroupId
+            ? getNodeWorldPosition(documentRef.current, anchor.parentId)
+            : { x: 0, y: 0 }
         const anchorWorld = {
           x: anchor.position.x + parentPosition.x,
           y: anchor.position.y + parentPosition.y,
@@ -2872,9 +3407,12 @@ function CanvasEditorContent(
       commit((document) => {
         const anchor = document.nodes.find((node) => node.id === nodeId)
         if (!anchor) return document
-        const anchorSize = getCanvasNodeSize(anchor)
-        const createdSize = getCanvasNodeSize(created)
-        const parentPosition = anchor.parentId ? getNodeWorldPosition(document, anchor.parentId) : { x: 0, y: 0 }
+        const anchorSize = getCanvasNodePresentationSize(anchor)
+        const createdSize = getCanvasNodePresentationSize(created)
+        const parentPosition =
+          anchor.parentId && anchor.parentId !== groupFocus.focusedGroupId
+            ? getNodeWorldPosition(document, anchor.parentId)
+            : { x: 0, y: 0 }
         const localTarget = targetPosition
           ? { x: targetPosition.x - parentPosition.x, y: targetPosition.y - parentPosition.y }
           : null
@@ -2917,7 +3455,16 @@ function CanvasEditorContent(
       selectNodes([created.id])
       telemetryService?.track({ name: "canvas.node.connected", properties: { side, type: nodeType } })
     },
-    [addTextResource, commit, createNodeForType, presentNodeEntries, readOnly, selectNodes, telemetryService],
+    [
+      addTextResource,
+      commit,
+      createNodeForType,
+      groupFocus.focusedGroupId,
+      presentNodeEntries,
+      readOnly,
+      selectNodes,
+      telemetryService,
+    ],
   )
   const remove = useCallback(() => {
     commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
@@ -2931,20 +3478,56 @@ function CanvasEditorContent(
     [commit, updateSelection],
   )
   const group = useCallback(() => {
-    if (selectionContext.kind !== "multi-node") return
+    if (!groupMenuCapabilities.canGroup || selectionContext.kind !== "multi-node") return
     const result = groupCanvasNodes(history.document, selectedNodeIds)
     presentNodeEntries(result.selectedNodeIds)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [history.document, presentNodeEntries, selectedNodeIds, selectNodes, selectionContext.kind])
+  }, [
+    groupMenuCapabilities.canGroup,
+    history.document,
+    presentNodeEntries,
+    selectedNodeIds,
+    selectNodes,
+    selectionContext.kind,
+  ])
+  const fold = useCallback(() => {
+    if (selectionContext.kind === "multi-node") {
+      if (!groupMenuCapabilities.canFold) return
+      const result = foldCanvasNodes(history.document, selectedNodeIds)
+      presentNodeEntries(result.selectedNodeIds)
+      dispatch({ type: "commit", document: result.document })
+      selectNodes(result.selectedNodeIds)
+      return
+    }
+    if (!groupMenuCapabilities.canFold || selectionContext.kind !== "single-node") return
+    dispatch({
+      type: "commit",
+      document: setCanvasGroupFolded(history.document, selectionContext.nodeId, true),
+    })
+  }, [
+    groupMenuCapabilities.canFold,
+    history.document,
+    presentNodeEntries,
+    selectedNodeIds,
+    selectNodes,
+    selectionContext,
+  ])
+  const unfold = useCallback(() => {
+    if (!groupMenuCapabilities.canUnfold || selectionContext.kind !== "single-node") return
+    dispatch({
+      type: "commit",
+      document: setCanvasGroupFolded(history.document, selectionContext.nodeId, false),
+    })
+  }, [groupMenuCapabilities.canUnfold, history.document, selectionContext])
   const ungroup = useCallback(() => {
-    if (!hasSingleGroupSelection || selectionContext.kind !== "single-node") return
+    if (!groupMenuCapabilities.canUngroup || selectionContext.kind !== "single-node") return
     const groupId = selectionContext.nodeId
     if (!groupId) return
     const result = ungroupCanvasNode(history.document, groupId)
     dispatch({ type: "commit", document: result.document })
     selectNodes(result.selectedNodeIds)
-  }, [hasSingleGroupSelection, history.document, selectNodes, selectionContext])
+  }, [groupMenuCapabilities.canUngroup, history.document, selectNodes, selectionContext])
   const align = useCallback(
     (direction: CanvasAlign) => {
       if (!hasNodeOnlySelection || !canArrangeSelection) return
@@ -2981,16 +3564,31 @@ function CanvasEditorContent(
     (strategy: CanvasDirectedAutoLayoutStrategy) => {
       if (!canLayoutCanvas || hydratingRef.current || leavingRef.current) return
       const result = applyCanvasBusinessCommand(documentRef.current, {
+        ...(groupFocus.focusedGroupId ? { nodeIds: canvasNodeIds } : {}),
         options: { strategy },
         type: "canvas.auto-layout",
       })
       dispatch({ document: result.document, type: "commit" })
-      void fitDocumentViewport(result.document, {
-        maxZoom: CANVAS_FIT_MAX_ZOOM,
-        padding: CANVAS_FIT_PADDING,
-      })
+      if (groupFocus.focusedGroupId) {
+        window.requestAnimationFrame(() => {
+          void reactFlowRef.current.fitView({
+            duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+            ease: canvasViewportEase,
+            interpolate: "smooth",
+            maxZoom: CANVAS_FIT_MAX_ZOOM,
+            nodes: canvasNodeIds.map((id) => ({ id })),
+            padding: CANVAS_FIT_PADDING,
+          })
+        })
+      } else {
+        void fitDocumentViewport(result.document, {
+          maxZoom: CANVAS_FIT_MAX_ZOOM,
+          nodeIds: canvasNodeIds,
+          padding: CANVAS_FIT_PADDING,
+        })
+      }
     },
-    [canLayoutCanvas, dispatch, fitDocumentViewport],
+    [canLayoutCanvas, canvasNodeIds, dispatch, fitDocumentViewport, groupFocus.focusedGroupId, prefersReducedMotion],
   )
   const layoutCanvas = useCallback(() => runCanvasLayout(autoLayoutStrategy), [autoLayoutStrategy, runCanvasLayout])
   const changeAutoLayoutStrategy = useCallback(
@@ -3024,19 +3622,34 @@ function CanvasEditorContent(
             }
           : undefined
       const prepared = prepareCanvasClipboardPaste(payload, offset)
+      const parentGroupId = groupFocus.focusedGroupId ?? undefined
+      const selectedIds = new Set(prepared.selectedNodeIds)
+      const pastedNodes = parentGroupId
+        ? prepared.nodes.map((node) =>
+            selectedIds.has(node.id) ? { ...node, extent: "parent" as const, parentId: parentGroupId } : node,
+          )
+        : prepared.nodes
       presentNodeEntries(prepared.selectedNodeIds)
       dispatch({
         type: "commit-update",
         update: (document) => ({
           ...document,
           edges: [...document.edges, ...prepared.edges],
-          nodes: [...document.nodes, ...prepared.nodes],
+          nodes: [...document.nodes, ...pastedNodes],
         }),
       })
       selectNodes(prepared.selectedNodeIds)
       return true
     },
-    [dispatch, insertPoint, notificationService, presentNodeEntries, props.clipboardScope, selectNodes],
+    [
+      dispatch,
+      groupFocus.focusedGroupId,
+      insertPoint,
+      notificationService,
+      presentNodeEntries,
+      props.clipboardScope,
+      selectNodes,
+    ],
   )
   const copy = useCallback(() => {
     const payload = getClipboardPayload()
@@ -3100,9 +3713,23 @@ function CanvasEditorContent(
     ) => {
       if (!mutationService || (files.length === 0 && !transfer) || readOnly) return
       const anchor = position ?? pointerRef.current ?? pointAtCenter()
-      runResourceMutation({ anchor, files, sources: [], transfer }, { revealCreatedNodes: position === undefined })
+      runResourceMutation(
+        { anchor, files, sources: [], transfer },
+        {
+          focusCreatedNodes: position === undefined,
+          parentGroupId: groupFocus.focusedGroupId,
+        },
+      )
     },
-    [mutationService, pointAtCenter, readOnly, runResourceMutation],
+    [groupFocus.focusedGroupId, mutationService, pointAtCenter, readOnly, runResourceMutation],
+  )
+  const handleUploadInputChange = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = [...(event.currentTarget.files ?? [])]
+      handleCanvasResourceUploadSelection(files, uploadFiles)
+      event.currentTarget.value = ""
+    },
+    [uploadFiles],
   )
   const runGenerate = useCallback(
     (submission: CanvasGenerationComposerSubmission) => {
@@ -3125,6 +3752,7 @@ function CanvasEditorContent(
       const expectedRevision = document.revision
       const revealGuard = getPostMutationRevealGuard()
       const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
+      const parentGroupId = groupFocus.focusedGroupId
       generationControllerRef.current = { controller, documentId }
       void (async () => {
         await startSave(document)
@@ -3139,6 +3767,7 @@ function CanvasEditorContent(
           context: { documentId, selectedNodeIds: submission.selectedNodeIds, source: "canvas" },
           expectedRevision,
           output: submission.tool.output,
+          ...(parentGroupId ? { parentId: parentGroupId } : {}),
           prompt: submission.prompt,
           ...(submission.promptContextNodeIds.length > 0
             ? { promptContextNodeIds: submission.promptContextNodeIds }
@@ -3170,12 +3799,28 @@ function CanvasEditorContent(
             }
             if (refreshed && !controller.signal.aborted && documentRef.current.id === documentId) {
               presentNodeEntries(result.createdNodeIds)
-              selectNodes(result.createdNodeIds)
-              try {
-                await revealCanvasNodesAfterMutation(result.createdNodeIds, revealGuard)
-              } catch {
-                // A post-commit camera effect is optional and cannot turn
-                // successful generation into a refresh or mutation failure.
+              if (!parentGroupId || focusedGroupIdRef.current === parentGroupId) {
+                selectNodes(result.createdNodeIds)
+                try {
+                  if (
+                    parentGroupId &&
+                    isCanvasPostMutationRevealGuardCurrent(revealGuard, getPostMutationRevealGuard())
+                  ) {
+                    await reactFlowRef.current.fitView({
+                      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
+                      ease: canvasViewportEase,
+                      interpolate: "smooth",
+                      maxZoom: CANVAS_CENTER_FIT_MAX_ZOOM,
+                      nodes: result.createdNodeIds.map((id) => ({ id })),
+                      padding: CANVAS_CENTER_FIT_PADDING,
+                    })
+                  } else {
+                    await revealCanvasNodesAfterMutation(result.createdNodeIds, revealGuard)
+                  }
+                } catch {
+                  // A post-commit camera effect is optional and cannot turn
+                  // successful generation into a refresh or mutation failure.
+                }
               }
             }
             if (controller.signal.aborted || documentRef.current.id !== documentId) return
@@ -3202,13 +3847,16 @@ function CanvasEditorContent(
         })
     },
     [
+      dispatch,
       generateService,
       getPostMutationRevealGuard,
+      groupFocus.focusedGroupId,
       insertPoint,
       notificationService,
       notifyError,
       pointAtCenter,
       presentNodeEntries,
+      prefersReducedMotion,
       props.onGenerationStateChange,
       props.viewScopeId,
       readOnly,
@@ -3279,9 +3927,12 @@ function CanvasEditorContent(
       paste,
       redo: () => dispatch({ type: "redo" }),
       select: () => activateInteractionTool("select"),
-      selectAll: () => selectNodes(history.document.nodes.filter((node) => !node.parentId).map((node) => node.id)),
+      selectAll: () => selectNodes(canvasNodeIds),
       undo: () => dispatch({ type: "undo" }),
-      ungroup,
+      ungroup: () => {
+        if (groupMenuCapabilities.canUnfold) unfold()
+        else ungroup()
+      },
       zoomIn: () => {
         markUserNavigation()
         void reactFlow.zoomIn({
@@ -3306,6 +3957,41 @@ function CanvasEditorContent(
       externalDragArmed: selectionDragChordHeld,
     },
   )
+  const handleCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const interactiveTarget =
+      typeof Element !== "undefined" && event.target instanceof Element
+        ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
+        : null
+    if (!interactiveTarget && event.key === "Escape" && folderFocus) {
+      event.preventDefault()
+      event.stopPropagation()
+      const parent = folderFocus.path.at(-2)
+      if (parent) {
+        void navigateFolderFocus(folderFocus.ownerNodeId, parent.id, {
+          path: folderFocus.path.slice(0, -1),
+        })
+      } else {
+        void leaveFolderFocus()
+      }
+      return
+    }
+    if (!interactiveTarget && event.key === "Escape" && groupFocus.focusedGroupId) {
+      event.preventDefault()
+      event.stopPropagation()
+      void navigateGroupFocus(groupFocus.parentGroupId)
+      return
+    }
+    if (!interactiveTarget && event.key === "Enter" && hasSingleGroupSelection) {
+      const groupId = selectionContext.kind === "single-node" ? selectionContext.nodeId : null
+      if (groupId) {
+        event.preventDefault()
+        event.stopPropagation()
+        focusGroup(groupId)
+        return
+      }
+    }
+    shortcutHandler(event)
+  }
   const controller = useMemo(
     () => ({
       document: history.document,
@@ -3386,6 +4072,15 @@ function CanvasEditorContent(
       visibleSelectionDragSource,
     ],
   )
+  const groupPresentationController = useMemo(
+    () => ({
+      dropTargetId: groupDropTargetId,
+      focus: focusGroup,
+      focusedGroupId: groupFocus.focusedGroupId,
+      summaries: groupFocus.summaries,
+    }),
+    [focusGroup, groupDropTargetId, groupFocus.focusedGroupId, groupFocus.summaries],
+  )
   const handleEdgesChange = useCallback(
     (changes: EdgeChange<CanvasEdge>[]) => {
       const selectionChanges = changes.filter((change) => change.type === "select")
@@ -3400,6 +4095,7 @@ function CanvasEditorContent(
   )
   const handleNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
+      if (folderFocusRef.current) return
       let effectiveChanges = altDragRef.current
         ? remapCanvasDuplicateDragChanges(changes, altDragRef.current.duplicatedNodeIdBySourceId)
         : changes
@@ -3422,7 +4118,13 @@ function CanvasEditorContent(
       if (documentChanges.length === 0) return
       const measurementChanges = canvasPointerNavigationOnly
         ? []
-        : documentChanges.filter((change) => change.type === "dimensions")
+        : documentChanges.filter((change) => {
+            if (change.type !== "dimensions") return false
+            const node = nodeById.get(change.id)
+            return (
+              node?.data.kind !== "group" || (!isCanvasGroupFolded(node) && change.id !== groupFocus.focusedGroupId)
+            )
+          })
       const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
       if (measurementChanges.length > 0) {
         dispatch({
@@ -3448,6 +4150,8 @@ function CanvasEditorContent(
       canvasPointerNavigationOnly,
       canvasPointerSelectionEnabled,
       dispatch,
+      groupFocus.focusedGroupId,
+      nodeById,
       replaceSelection,
     ],
   )
@@ -3534,6 +4238,7 @@ function CanvasEditorContent(
       if (!canvasPointerMutationEnabled) return
       dispatch({ type: "begin-gesture" })
       altDragRef.current = null
+      updateGroupDropTarget(null)
       setSnapLines([])
       let snapDocument = documentRef.current
       let draggingIds = draggedNodes.length > 0 ? draggedNodes.map((draggedNode) => draggedNode.id) : [node.id]
@@ -3550,16 +4255,63 @@ function CanvasEditorContent(
           selectNodes(plan.selectedNodeIds)
         }
       }
-      snapSessionRef.current = snapEnabledRef.current ? createCanvasNodeSnapSession(snapDocument, draggingIds) : null
+      snapSessionRef.current = snapEnabledRef.current
+        ? createCanvasNodeSnapSession(
+            snapDocument,
+            draggingIds,
+            resolveCanvasNodeSnapScopeNodeIds(snapDocument, draggingIds),
+          )
+        : null
     },
-    [canvasPointerMutationEnabled, dispatch, presentNodeEntries, selectNodes],
+    [canvasPointerMutationEnabled, dispatch, presentNodeEntries, selectNodes, updateGroupDropTarget],
   )
-  const handleNodeDragStop = useCallback(() => {
-    altDragRef.current = null
-    snapSessionRef.current = null
-    setSnapLines([])
-    dispatch({ type: "end-gesture" })
-  }, [dispatch])
+  const handleNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
+    (event, node, draggedNodes) => {
+      if (!canvasPointerMutationEnabled) return
+      const pointer = getEventClientPoint(event)
+      if (!pointer) {
+        updateGroupDropTarget(null)
+        return
+      }
+      const duplicatedIds = altDragRef.current?.duplicatedNodeIdBySourceId
+      const draggedIds = new Set(
+        (draggedNodes.length > 0 ? draggedNodes : [node]).map(
+          (draggedNode) => duplicatedIds?.get(draggedNode.id) ?? draggedNode.id,
+        ),
+      )
+      updateGroupDropTarget(
+        getCanvasGroupFolderAtScreenPoint(rootRef.current, documentRef.current, pointer, draggedIds),
+      )
+    },
+    [canvasPointerMutationEnabled, updateGroupDropTarget],
+  )
+  const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
+    (_, node, draggedNodes) => {
+      const duplicatedIds = altDragRef.current?.duplicatedNodeIdBySourceId
+      const draggedIds = (draggedNodes.length > 0 ? draggedNodes : [node]).map(
+        (draggedNode) => duplicatedIds?.get(draggedNode.id) ?? draggedNode.id,
+      )
+      const targetGroupId = groupDropTargetIdRef.current
+      if (canvasPointerMutationEnabled && targetGroupId) {
+        dispatch({
+          type: "replace-update",
+          update: (document) =>
+            applyCanvasBusinessCommand(document, {
+              nodeIds: draggedIds,
+              parentId: targetGroupId,
+              type: "nodes.reparent",
+            }).document,
+        })
+        selectNodes(draggedIds)
+      }
+      altDragRef.current = null
+      snapSessionRef.current = null
+      setSnapLines([])
+      updateGroupDropTarget(null)
+      dispatch({ type: "end-gesture" })
+    },
+    [canvasPointerMutationEnabled, dispatch, selectNodes, updateGroupDropTarget],
+  )
   const handleBoxSelectionStart = useCallback(() => {
     if (!canvasPointerSelectionEnabled) {
       boxSelectionActiveRef.current = false
@@ -3625,605 +4377,674 @@ function CanvasEditorContent(
     [getSafeViewportRect, markUserNavigation, prefersReducedMotion, reactFlow],
   )
 
+  const mutationSurfaceVisible = !(props.readOnly ?? false) && !leaving && !blockingLoad && !loadError && !saveError
+
   return (
-    <CanvasEditorNodeEntryProvider
+    <CanvasEditorMutationSurfaceProvider
       controller={controller}
+      disabled={readOnly}
       onAnimationStart={notifyNodeEntryAnimationStart}
       presentation={nodeEntryPresentation}
+      visible={mutationSurfaceVisible}
     >
-      <CanvasOverlayRootProvider root={overlayRoot}>
-        <TooltipProvider>
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <div
-                ref={setCanvasRoot}
-                className={cn(
-                  "convax-canvas relative size-full overflow-hidden bg-background text-foreground outline-none",
-                  spacePanning && "is-space-panning",
-                  interactionTool === "hand" && "is-hand-tool",
-                  leaving && "is-leaving",
-                  props.className,
-                )}
-                data-canvas-color-scheme={appearance.colorScheme}
-                data-canvas-reduced-motion={String(prefersReducedMotion)}
-                data-canvas-tool={interactionTool}
-                onCopy={onCanvasCopy}
-                onDragOver={(event) => {
-                  if (!mutationService || !canvasPointerMutationEnabled) return
-                  event.preventDefault()
-                  event.dataTransfer.dropEffect = "copy"
-                }}
-                onDrop={(event) => {
-                  if (!mutationService || !canvasPointerMutationEnabled) return
-                  event.preventDefault()
-                  const types = Array.from(event.dataTransfer.types)
-                  uploadFiles(
-                    [...event.dataTransfer.files],
-                    reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
-                    {
-                      data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
-                      types,
-                    },
-                  )
-                }}
-                onDoubleClick={(event) => {
-                  if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("react-flow__pane"))
-                    return
-                  const bounds = rootRef.current?.getBoundingClientRect()
-                  if (!bounds) return
-                  const viewport = reactFlow.getViewport()
-                  const next = resolveCanvasAnchoredZoomViewport({
-                    anchor: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
-                    targetZoom: Math.min(
-                      CANVAS_MAX_ZOOM,
-                      Math.max(CANVAS_MIN_ZOOM, viewport.zoom * (event.shiftKey ? 0.5 : 2)),
-                    ),
-                    viewport,
-                  })
-                  if (!next) return
-                  markUserNavigation()
-                  void reactFlow.setViewport(next, {
-                    duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.doubleClickZoom, prefersReducedMotion),
-                    ease: canvasViewportEase,
-                    interpolate: "smooth",
-                  })
-                }}
-                onKeyDown={shortcutHandler}
-                onPaste={onCanvasPaste}
-                onPointerCancelCapture={() => {
-                  boxSelectionActiveRef.current = false
-                  boxSelectionBaselineRef.current = null
-                  altDragRef.current = null
-                  snapSessionRef.current = null
-                  setSnapLines([])
-                  dispatch({ type: "cancel-gesture" })
-                }}
-                onPointerDownCapture={(event) => {
-                  const canvasRoot = rootRef.current
-                  const interactiveTarget =
-                    event.target instanceof Element
-                      ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
-                      : null
-                  if (event.button === 0 && (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))) {
-                    canvasRoot?.focus({ preventScroll: true })
-                  }
-                  if (
-                    event.button === 0 &&
-                    canvasPointerSelectionEnabled &&
-                    event.target instanceof HTMLElement &&
-                    event.target.classList.contains("react-flow__pane")
-                  ) {
-                    boxSelectionBaselineRef.current = {
-                      edgeIds: new Set<string>(),
-                      nodeIds: new Set(selectionRef.current.nodeIds),
-                    }
-                  }
-                }}
-                onPointerMove={(event) => {
-                  const connectionStart = connectionStartRef.current
-                  if (connectionStart) {
-                    updateConnectionTargetNode(
-                      getCanvasCardAtScreenPoint(
-                        rootRef.current,
-                        documentRef.current,
-                        { x: event.clientX, y: event.clientY },
-                        connectionStart.nodeId,
-                      ),
-                    )
-                  }
-                  if (
-                    !(event.target instanceof HTMLElement) ||
-                    event.target.closest("button, input, textarea, [data-canvas-shortcuts='ignore']")
-                  )
-                    return
-                  pointerRef.current = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
-                }}
-                style={{
-                  ...canvasAppearanceStyle(appearance),
-                  ...canvasMotionStyle(prefersReducedMotion),
-                  ...viewportInsetStyle,
-                }}
-                tabIndex={0}
-              >
-                <ReactFlow
-                  colorMode={appearance.colorScheme}
-                  connectOnClick={false}
-                  connectionRadius={CANVAS_CONNECTION_RADIUS}
-                  connectionDragThreshold={4}
-                  connectionLineComponent={CanvasConnectionLine}
-                  deleteKeyCode={null}
-                  edgeTypes={edgeTypes}
-                  edges={edges}
-                  elementsSelectable={interactionProps.elementsSelectable}
-                  maxZoom={CANVAS_MAX_ZOOM}
-                  minZoom={CANVAS_MIN_ZOOM}
-                  multiSelectionKeyCode={[...CANVAS_MULTI_SELECTION_KEYS]}
-                  nodeTypes={nodeTypes}
-                  nodes={nodes}
-                  nodesConnectable={interactionProps.nodesConnectable}
-                  nodesDraggable={interactionProps.nodesDraggable}
-                  nodesFocusable
-                  nodeDragThreshold={4}
-                  onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
-                  autoPanOnNodeFocus={false}
-                  panActivationKeyCode="Space"
-                  panOnDrag={interactionProps.panOnDrag}
-                  panOnScroll
-                  selectionKeyCode={null}
-                  selectionOnDrag={interactionProps.selectionOnDrag}
-                  selectionMode={SelectionMode.Partial}
-                  snapGrid={CANVAS_SNAP_GRID}
-                  snapToGrid={snapEnabled}
-                  zoomActivationKeyCode={[...CANVAS_ZOOM_ACTIVATION_KEYS]}
-                  zoomOnDoubleClick={false}
-                  zoomOnPinch
-                  zoomOnScroll={false}
-                  onConnect={handleConnect}
-                  onConnectEnd={handleConnectEnd}
-                  onConnectStart={handleConnectStart}
-                  onEdgesChange={handleEdgesChange}
-                  onNodeContextMenu={(_, node) => {
-                    if (canvasPointerSelectionEnabled && !selection.nodeIds.has(node.id)) selectNodes([node.id])
-                    setInsertPoint(node.position)
+      <CanvasGroupPresentationProvider controller={groupPresentationController}>
+        <CanvasOverlayRootProvider root={overlayRoot}>
+          <TooltipProvider>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div
+                  ref={setCanvasRoot}
+                  className={cn(
+                    "convax-canvas relative size-full overflow-hidden bg-background text-foreground outline-none",
+                    spacePanning && "is-space-panning",
+                    interactionTool === "hand" && "is-hand-tool",
+                    leaving && "is-leaving",
+                    props.className,
+                  )}
+                  data-canvas-color-scheme={appearance.colorScheme}
+                  data-canvas-reduced-motion={String(prefersReducedMotion)}
+                  data-canvas-tool={interactionTool}
+                  onCopy={onCanvasCopy}
+                  onDragOver={(event) => {
+                    if (!mutationService || !canvasPointerMutationEnabled) return
+                    event.preventDefault()
+                    event.dataTransfer.dropEffect = "copy"
                   }}
-                  onNodeDoubleClick={(_, node) => {
-                    if (canvasPointerSelectionEnabled) selectNodes([node.id])
-                  }}
-                  onNodeDragStart={handleNodeDragStart}
-                  onNodeDragStop={handleNodeDragStop}
-                  onNodesChange={handleNodesChange}
-                  onMoveStart={(event) => {
-                    if (event) markUserNavigation()
-                  }}
-                  onSelectionEnd={handleBoxSelectionEnd}
-                  onSelectionStart={handleBoxSelectionStart}
-                  onPaneClick={() => {
-                    boxSelectionActiveRef.current = false
-                    boxSelectionBaselineRef.current = null
-                    if (ignoreConnectionPaneClickRef.current) {
-                      ignoreConnectionPaneClickRef.current = false
-                      return
-                    }
-                    if (canvasPointerSelectionEnabled) {
-                      updateSelection([])
-                      setPendingConnection(null)
-                    }
-                    rootRef.current?.focus()
-                  }}
-                  onPaneContextMenu={(event) => {
-                    setInsertPoint(reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
-                    rootRef.current?.focus()
-                  }}
-                >
-                  {appearance.gridStyle !== "none" ? (
-                    <Background
-                      color={`${appearance.gridColor}4d`}
-                      gap={appearance.gridGap}
-                      size={appearance.gridSize}
-                      variant={appearance.gridStyle === "lines" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
-                    />
-                  ) : null}
-                  <CanvasSnapGuides lines={snapLines} />
-                  {miniMapVisible ? (
-                    <MiniMap
-                      className="convax-canvas-minimap !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
-                      maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
-                      nodeColor="var(--muted-foreground)"
-                      pannable
-                      zoomable
-                    />
-                  ) : null}
-                </ReactFlow>
-                {pendingConnection ? (
-                  <PendingConnectionMenu
-                    items={connectionNodeTypes}
-                    onSelect={(type) => {
-                      const connection = pendingConnection
-                      setPendingConnection(null)
-                      quickConnect(connection.nodeId, connection.side, type, connection.targetPosition)
-                    }}
-                    side={pendingConnection.side}
-                    sourceNodeId={pendingConnection.nodeId}
-                    targetPosition={pendingConnection.targetPosition}
-                  />
-                ) : null}
-
-                {selectionDragModeActive && props.selectionDragSource?.mode ? (
-                  <CanvasSelectionDragModeStatus
-                    description={props.selectionDragSource.mode.description}
-                    exitLabel={props.selectionDragSource.mode.exitLabel}
-                    icon={props.selectionDragSource.icon ?? <FileOutput className="size-4" />}
-                    onExit={exitSelectionDragMode}
-                  />
-                ) : null}
-
-                <CanvasHeader
-                  canExport={Boolean(exportService)}
-                  canGenerate={Boolean(generateService)}
-                  canRedo={history.future.length > 0}
-                  canUndo={history.past.length > 0}
-                  canUpload={Boolean(mutationService)}
-                  createItems={connectionNodeTypes}
-                  generating={generating}
-                  interactionTool={interactionTool}
-                  onAddNode={(type) => addNode(type, undefined, true)}
-                  onExport={exportCanvas}
-                  onGenerate={requestGenerate}
-                  onInteractionToolChange={activateInteractionTool}
-                  onRedo={() => dispatch({ type: "redo" })}
-                  onSelectionDragModeChange={(active) => {
-                    if (active) enterSelectionDragMode()
-                    else exitSelectionDragMode()
-                  }}
-                  onUndo={() => dispatch({ type: "undo" })}
-                  onUpload={() => uploadInputRef.current?.click()}
-                  readOnly={readOnly}
-                  reducedMotion={prefersReducedMotion}
-                  selectionDragMode={
-                    props.selectionDragSource?.mode
-                      ? {
-                          active: selectionDragModeActive,
-                          icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
-                          label: props.selectionDragSource.mode.label,
-                        }
-                      : undefined
-                  }
-                />
-
-                {blockingLoad || loadError ? (
-                  <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
-                    {loadError ? (
-                      <div
-                        aria-live="assertive"
-                        className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm"
-                        role="alert"
-                      >
-                        <TriangleAlert className="size-5 text-destructive" />
-                        <div>
-                          <div className="font-medium text-foreground">Canvas could not be loaded</div>
-                          <div className="mt-1 text-xs">{loadError}</div>
-                        </div>
-                        <Button
-                          onClick={() => {
-                            authoritativeLoadRequestedRef.current = true
-                            loadBarrierRef.current = createCanvasLoadBarrier()
-                            setLoadAttempt((attempt) => attempt + 1)
-                          }}
-                          size="sm"
-                          variant="outline"
-                        >
-                          Retry
-                        </Button>
-                      </div>
-                    ) : (
-                      <Loading
-                        className="max-w-sm rounded-md border border-border bg-card px-5 py-4 shadow-sm"
-                        label="Loading canvas…"
-                        reducedMotion={prefersReducedMotion}
-                      />
-                    )}
-                  </div>
-                ) : null}
-
-                {saveError ? (
-                  <div className="fixed inset-0 z-[100] grid place-items-center bg-background/80 backdrop-blur-[2px]">
-                    <div className="flex max-w-md flex-col items-center gap-3 rounded-md border border-destructive/30 bg-card px-6 py-5 text-center text-sm shadow-lg">
-                      <TriangleAlert className="size-6 text-destructive" />
-                      <div>
-                        <div className="font-medium text-foreground">Canvas has unsaved changes</div>
-                        <div className="mt-1 text-xs text-muted-foreground">{saveError}</div>
-                      </div>
-                      <div className="flex gap-2">
-                        <Button onClick={() => setSaveAttempt((attempt) => attempt + 1)} size="sm">
-                          Retry save
-                        </Button>
-                        <Button
-                          disabled={!history.gestureStart && history.past.length === 0}
-                          onClick={() => {
-                            setSaveError(null)
-                            dispatch({ type: history.gestureStart ? "cancel-gesture" : "undo" })
-                          }}
-                          size="sm"
-                          variant="outline"
-                        >
-                          Revert last change
-                        </Button>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        This window stays open until the canvas is saved or the last change is reverted.
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-
-                {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && !readOnly ? (
-                  <SelectionToolbar
-                    actions={visibleSelectionActions}
-                    canArrange={canArrangeSelection}
-                    canDistribute={canDistributeSelection}
-                    canGroup={selectionContext.kind === "multi-node"}
-                    canUngroup={hasSingleGroupSelection}
-                    isActionPending={isSelectionActionPending}
-                    onAlign={align}
-                    onAction={executeSelectionAction}
-                    onDelete={remove}
-                    onDistribute={distribute}
-                    onDuplicate={duplicate}
-                    onGroup={group}
-                    onLayout={layout}
-                    onTidy={tidySelection}
-                    nodeIds={selectedNodeIds}
-                    onUngroup={ungroup}
-                  />
-                ) : null}
-
-                <ViewportToolbar
-                  autoLayoutStrategy={autoLayoutStrategy}
-                  canLayout={canLayoutCanvas}
-                  edgesHidden={edgesHidden}
-                  miniMapVisible={miniMapVisible}
-                  onEdgesHiddenChange={() => setEdgesHidden((hidden) => !hidden)}
-                  onFit={fitCanvas}
-                  onLayout={layoutCanvas}
-                  onLayoutStrategyChange={changeAutoLayoutStrategy}
-                  onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
-                  onSearch={() => setSearchOpen(true)}
-                  onSnapChange={() =>
-                    setSnapEnabled((enabled) => {
-                      if (enabled) setSnapLines([])
-                      return !enabled
-                    })
-                  }
-                  onZoomIn={() => {
-                    markUserNavigation()
-                    void reactFlow.zoomIn({
-                      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-                      ease: canvasViewportEase,
-                      interpolate: "smooth",
-                    })
-                  }}
-                  onZoomOut={() => {
-                    markUserNavigation()
-                    void reactFlow.zoomOut({
-                      duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-                      ease: canvasViewportEase,
-                      interpolate: "smooth",
-                    })
-                  }}
-                  onZoomPreset={zoomToPreset}
-                  snapEnabled={snapEnabled}
-                />
-
-                {nodeMenuOpen ? (
-                  <FloatingPanel className="convax-safe-centered-panel top-20 w-64">
-                    <div className="mb-2 px-1 text-xs font-medium text-muted-foreground">Add to canvas</div>
-                    <div className="grid grid-cols-2 gap-1">
-                      {connectionNodeTypes.map((definition) => (
-                        <Button
-                          key={definition.type}
-                          className="justify-start"
-                          onClick={() => addNode(definition.type, undefined, true)}
-                          size="sm"
-                          variant="ghost"
-                        >
-                          {definition.type === "text" ? (
-                            <Type />
-                          ) : definition.type === "agent" ? (
-                            <Sparkles />
-                          ) : (
-                            <FileUp />
-                          )}
-                          {definition.label}
-                        </Button>
-                      ))}
-                    </div>
-                  </FloatingPanel>
-                ) : null}
-
-                {generatePresence.present && generateService ? (
-                  <FloatingPanel
-                    aria-hidden={!generateOpen || undefined}
-                    className="convax-canvas-composer-overlay convax-generation-surface"
-                    data-canvas-presence={generatePresence.phase}
-                    inert={!generateOpen || undefined}
-                  >
-                    <div
-                      data-canvas-composer-overlay="generation"
-                      data-canvas-shortcuts="ignore"
-                      onKeyDownCapture={(event) => {
-                        if (event.key !== "Escape") return
-                        event.preventDefault()
-                        event.stopPropagation()
-                        closeGenerate()
-                      }}
-                    >
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <span className="text-xs font-medium text-muted-foreground">Generate on this canvas</span>
-                        <Button
-                          aria-label="Close generation composer"
-                          onClick={closeGenerate}
-                          size="icon-sm"
-                          variant="ghost"
-                        >
-                          <X />
-                        </Button>
-                      </div>
-                      <CanvasGenerationPanel
-                        autoFocus={generateOpen}
-                        disabled={!generateOpen || readOnly}
-                        document={history.document}
-                        generateService={generateService}
-                        onSubmit={runGenerate}
-                        reducedMotion={prefersReducedMotion}
-                        scopeId={currentViewScopeId}
-                        selectedNodeIds={selectedNodeIds}
-                        submitting={generating}
-                      />
-                    </div>
-                  </FloatingPanel>
-                ) : null}
-
-                {searchOpen ? (
-                  <div
-                    aria-label="Search nodes"
-                    aria-modal="true"
-                    className="convax-node-search__layer"
-                    data-canvas-shortcuts="ignore"
-                    role="dialog"
-                  >
-                    <div aria-hidden="true" className="convax-node-search__backdrop" />
-                    <div data-convax-node-search-panel="true" ref={searchPanelRef}>
-                      <FloatingPanel className="convax-node-search__panel convax-safe-centered-panel top-20 w-[min(380px,calc(100%-32px))]">
-                        <div className="relative">
-                          <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-                          <Input
-                            autoFocus
-                            className="convax-node-search__input"
-                            data-canvas-shortcuts="ignore"
-                            onChange={(event) => setQuery(event.currentTarget.value)}
-                            placeholder="Search nodes"
-                            value={query}
-                          />
-                        </div>
-                        <div className="mt-2 max-h-64 overflow-auto">
-                          {searchResults.map((node) => (
-                            <button
-                              key={node.id}
-                              className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
-                              onClick={() => {
-                                setSearchOpen(false)
-                                void executeViewCommand({
-                                  animation: "smooth",
-                                  fit: "center",
-                                  nodeIds: [node.id],
-                                  select: true,
-                                  type: "nodes.reveal",
-                                })
-                              }}
-                              type="button"
-                            >
-                              <span className="size-2 rounded-full bg-muted-foreground" />
-                              <span className="truncate">{node.label}</span>
-                              <span className="ml-auto text-xs text-muted-foreground">{node.kind}</span>
-                            </button>
-                          ))}
-                        </div>
-                      </FloatingPanel>
-                    </div>
-                  </div>
-                ) : null}
-
-                <input
-                  ref={uploadInputRef}
-                  className="hidden"
-                  data-canvas-resource-picker="upload"
-                  multiple
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    const files = [...(event.currentTarget.files ?? [])]
-                    handleCanvasResourceUploadSelection(files, uploadFiles)
-                    event.currentTarget.value = ""
-                  }}
-                  type="file"
-                />
-                <input
-                  ref={relinkInputRef}
-                  className="hidden"
-                  data-canvas-resource-picker="relink"
-                  onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                    const relinkNodeId = relinkNodeIdRef.current
-                    relinkNodeIdRef.current = null
-                    handleCanvasResourceRelinkSelection(
-                      relinkNodeId,
-                      [...(event.currentTarget.files ?? [])],
-                      (nodeId, file) => {
-                        if (!mutationService?.relink) return
-                        void runResourceRelink(
-                          ({ expectedRevision, signal }) =>
-                            mutationService.relink!({ expectedRevision, file, nodeId, signal }),
-                          "Resource relinked",
-                        )
+                  onDrop={(event) => {
+                    if (!mutationService || !canvasPointerMutationEnabled) return
+                    event.preventDefault()
+                    const types = Array.from(event.dataTransfer.types)
+                    uploadFiles(
+                      [...event.dataTransfer.files],
+                      reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }),
+                      {
+                        data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
+                        types,
                       },
                     )
-                    event.currentTarget.value = ""
                   }}
-                  type="file"
-                />
-              </div>
-            </ContextMenuTrigger>
-            <CanvasContextMenu
-              canArrange={hasNodeOnlySelection && canArrangeSelection}
-              canDistribute={hasNodeOnlySelection && canDistributeSelection}
-              canExport={Boolean(exportService)}
-              canGenerate={Boolean(generateService)}
-              canGroup={selectionContext.kind === "multi-node"}
-              canRedo={history.future.length > 0}
-              canUngroup={hasSingleGroupSelection}
-              canUndo={history.past.length > 0}
-              canUpload={Boolean(mutationService)}
-              createItems={connectionNodeTypes}
-              generating={generating}
-              hasNodeSelection={hasNodeOnlySelection}
-              hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
-              onAddNode={(type) => addNode(type, nextInsertPoint(), true)}
-              onAlign={align}
-              onCopy={copy}
-              onDelete={remove}
-              onDistribute={distribute}
-              onDuplicate={duplicate}
-              onExport={exportCanvas}
-              onFit={fitCanvas}
-              onGenerate={requestGenerate}
-              onGroup={group}
-              onLayout={tidySelection}
-              onPaste={paste}
-              onRedo={() => dispatch({ type: "redo" })}
-              onSelectionDragModeChange={(active) => {
-                if (active) enterSelectionDragMode()
-                else exitSelectionDragMode()
-              }}
-              onUngroup={ungroup}
-              onUndo={() => dispatch({ type: "undo" })}
-              onUpload={() => uploadInputRef.current?.click()}
-              readOnly={readOnly}
-              selectionDragMode={
-                props.selectionDragSource?.mode
-                  ? {
-                      active: selectionDragModeActive,
-                      icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
-                      label: props.selectionDragSource.mode.label,
+                  onDoubleClick={(event) => {
+                    if (!(event.target instanceof HTMLElement) || !event.target.classList.contains("react-flow__pane"))
+                      return
+                    const bounds = rootRef.current?.getBoundingClientRect()
+                    if (!bounds) return
+                    const viewport = reactFlow.getViewport()
+                    const next = resolveCanvasAnchoredZoomViewport({
+                      anchor: { x: event.clientX - bounds.left, y: event.clientY - bounds.top },
+                      targetZoom: Math.min(
+                        CANVAS_MAX_ZOOM,
+                        Math.max(CANVAS_MIN_ZOOM, viewport.zoom * (event.shiftKey ? 0.5 : 2)),
+                      ),
+                      viewport,
+                    })
+                    if (!next) return
+                    markUserNavigation()
+                    void reactFlow.setViewport(next, {
+                      duration: resolveCanvasMotionDuration(
+                        CANVAS_MOTION_DURATION.doubleClickZoom,
+                        prefersReducedMotion,
+                      ),
+                      ease: canvasViewportEase,
+                      interpolate: "smooth",
+                    })
+                  }}
+                  onKeyDown={handleCanvasKeyDown}
+                  onPaste={onCanvasPaste}
+                  onPointerCancelCapture={() => {
+                    boxSelectionActiveRef.current = false
+                    boxSelectionBaselineRef.current = null
+                    altDragRef.current = null
+                    snapSessionRef.current = null
+                    setSnapLines([])
+                    updateGroupDropTarget(null)
+                    dispatch({ type: "cancel-gesture" })
+                  }}
+                  onPointerDownCapture={(event) => {
+                    const canvasRoot = rootRef.current
+                    const interactiveTarget =
+                      event.target instanceof Element
+                        ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
+                        : null
+                    if (event.button === 0 && (!interactiveTarget || !canvasRoot?.contains(interactiveTarget))) {
+                      canvasRoot?.focus({ preventScroll: true })
                     }
-                  : undefined
-              }
-              viewportInsets={props.viewportInsets}
-            />
-          </ContextMenu>
-        </TooltipProvider>
-      </CanvasOverlayRootProvider>
-    </CanvasEditorNodeEntryProvider>
+                    if (
+                      event.button === 0 &&
+                      canvasPointerSelectionEnabled &&
+                      event.target instanceof HTMLElement &&
+                      event.target.classList.contains("react-flow__pane")
+                    ) {
+                      boxSelectionBaselineRef.current = {
+                        edgeIds: new Set<string>(),
+                        nodeIds: new Set(selectionRef.current.nodeIds),
+                      }
+                    }
+                  }}
+                  onPointerMove={(event) => {
+                    const connectionStart = connectionStartRef.current
+                    if (connectionStart) {
+                      updateConnectionTargetNode(
+                        getCanvasCardAtScreenPoint(
+                          rootRef.current,
+                          documentRef.current,
+                          { x: event.clientX, y: event.clientY },
+                          connectionStart.nodeId,
+                        ),
+                      )
+                    }
+                    if (
+                      !(event.target instanceof HTMLElement) ||
+                      event.target.closest("button, input, textarea, [data-canvas-shortcuts='ignore']")
+                    )
+                      return
+                    pointerRef.current = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY })
+                  }}
+                  style={{
+                    ...canvasAppearanceStyle(appearance),
+                    ...canvasMotionStyle(prefersReducedMotion),
+                    ...viewportInsetStyle,
+                  }}
+                  tabIndex={0}
+                >
+                  <ReactFlow
+                    colorMode={appearance.colorScheme}
+                    connectOnClick={false}
+                    connectionRadius={CANVAS_CONNECTION_RADIUS}
+                    connectionDragThreshold={4}
+                    connectionLineComponent={CanvasConnectionLine}
+                    deleteKeyCode={null}
+                    edgeTypes={edgeTypes}
+                    edges={edges}
+                    elementsSelectable={interactionProps.elementsSelectable}
+                    maxZoom={CANVAS_MAX_ZOOM}
+                    minZoom={CANVAS_MIN_ZOOM}
+                    multiSelectionKeyCode={[...CANVAS_MULTI_SELECTION_KEYS]}
+                    nodeTypes={nodeTypes}
+                    nodes={nodes}
+                    nodesConnectable={interactionProps.nodesConnectable}
+                    nodesDraggable={interactionProps.nodesDraggable}
+                    nodesFocusable
+                    nodeDragThreshold={4}
+                    onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
+                    autoPanOnNodeFocus={false}
+                    panActivationKeyCode="Space"
+                    panOnDrag={interactionProps.panOnDrag}
+                    panOnScroll
+                    selectionKeyCode={null}
+                    selectionOnDrag={interactionProps.selectionOnDrag}
+                    selectionMode={SelectionMode.Partial}
+                    snapGrid={CANVAS_SNAP_GRID}
+                    snapToGrid={snapEnabled}
+                    zoomActivationKeyCode={[...CANVAS_ZOOM_ACTIVATION_KEYS]}
+                    zoomOnDoubleClick={false}
+                    zoomOnPinch
+                    zoomOnScroll={false}
+                    onConnect={handleConnect}
+                    onConnectEnd={handleConnectEnd}
+                    onConnectStart={handleConnectStart}
+                    onEdgesChange={handleEdgesChange}
+                    onNodeContextMenu={(_, node) => {
+                      if (getCanvasFolderFocusEntry(node)) return
+                      if (canvasPointerSelectionEnabled && !selection.nodeIds.has(node.id)) selectNodes([node.id])
+                      setInsertPoint(node.position)
+                    }}
+                    onNodeDoubleClick={(_, node) => {
+                      const folderEntry = getCanvasFolderFocusEntry(node)
+                      if (folderEntry?.kind === "folder") {
+                        const current = folderFocusRef.current
+                        const nextPath = current
+                          ? [...current.path, { id: folderEntry.entryId, label: node.data.label }]
+                          : undefined
+                        void navigateFolderFocus(folderEntry.ownerNodeId, folderEntry.entryId, { path: nextPath })
+                        return
+                      }
+                      if (node.data.kind === "group") {
+                        focusGroup(node.id)
+                        return
+                      }
+                      if (node.data.kind === "folder") {
+                        void navigateFolderFocus(node.id)
+                        return
+                      }
+                      if (canvasPointerSelectionEnabled) selectNodes([node.id])
+                    }}
+                    onNodeDrag={handleNodeDrag}
+                    onNodeDragStart={handleNodeDragStart}
+                    onNodeDragStop={handleNodeDragStop}
+                    onNodesChange={handleNodesChange}
+                    onMoveStart={(event) => {
+                      if (event) markUserNavigation()
+                    }}
+                    onSelectionEnd={handleBoxSelectionEnd}
+                    onSelectionStart={handleBoxSelectionStart}
+                    onPaneClick={() => {
+                      boxSelectionActiveRef.current = false
+                      boxSelectionBaselineRef.current = null
+                      if (ignoreConnectionPaneClickRef.current) {
+                        ignoreConnectionPaneClickRef.current = false
+                        return
+                      }
+                      if (canvasPointerSelectionEnabled) {
+                        updateSelection([])
+                        setPendingConnection(null)
+                      }
+                      rootRef.current?.focus()
+                    }}
+                    onPaneContextMenu={(event) => {
+                      setInsertPoint(reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY }))
+                      rootRef.current?.focus()
+                    }}
+                  >
+                    {appearance.gridStyle !== "none" ? (
+                      <Background
+                        color={`${appearance.gridColor}4d`}
+                        gap={appearance.gridGap}
+                        size={appearance.gridSize}
+                        variant={appearance.gridStyle === "lines" ? BackgroundVariant.Lines : BackgroundVariant.Dots}
+                      />
+                    ) : null}
+                    <CanvasSnapGuides lines={snapLines} />
+                    {miniMapVisible ? (
+                      <MiniMap
+                        className="convax-canvas-minimap !h-24 !w-36 !rounded-md !border !border-border !bg-card !shadow-sm"
+                        maskColor="color-mix(in oklab, var(--background) 68%, transparent)"
+                        nodeColor="var(--muted-foreground)"
+                        pannable
+                        zoomable
+                      />
+                    ) : null}
+                  </ReactFlow>
+                  {pendingConnection ? (
+                    <PendingConnectionMenu
+                      items={connectionNodeTypes}
+                      onSelect={(type) => {
+                        const connection = pendingConnection
+                        setPendingConnection(null)
+                        quickConnect(connection.nodeId, connection.side, type, connection.targetPosition)
+                      }}
+                      side={pendingConnection.side}
+                      sourceNodeId={pendingConnection.nodeId}
+                      targetPosition={pendingConnection.targetPosition}
+                    />
+                  ) : null}
+
+                  {selectionDragModeActive && props.selectionDragSource?.mode ? (
+                    <CanvasSelectionDragModeStatus
+                      description={props.selectionDragSource.mode.description}
+                      exitLabel={props.selectionDragSource.mode.exitLabel}
+                      icon={props.selectionDragSource.icon ?? <FileOutput className="size-4" />}
+                      onExit={exitSelectionDragMode}
+                    />
+                  ) : null}
+
+                  <CanvasHeader
+                    canUpload={Boolean(mutationService)}
+                    createItems={connectionNodeTypes}
+                    interactionTool={interactionTool}
+                    onAddNode={(type) => addNode(type, undefined, true)}
+                    onInteractionToolChange={activateInteractionTool}
+                    onUpload={(kind) => {
+                      cancelSelectionDrag()
+                      if (kind === "image") imageUploadInputRef.current?.click()
+                      else if (kind === "video") videoUploadInputRef.current?.click()
+                      else uploadInputRef.current?.click()
+                    }}
+                    readOnly={readOnly}
+                  />
+                  {folderFocus ? (
+                    <CanvasBreadcrumb
+                      onNavigate={(directoryId) => {
+                        if (directoryId === null) {
+                          void leaveFolderFocus()
+                          return
+                        }
+                        const index = folderFocus.path.findIndex((entry) => entry.id === directoryId)
+                        if (index < 0) return
+                        void navigateFolderFocus(folderFocus.ownerNodeId, directoryId, {
+                          path: folderFocus.path.slice(0, index + 1),
+                        })
+                      }}
+                      path={folderFocus.path}
+                    />
+                  ) : groupFocus.focusedGroupId ? (
+                    <CanvasBreadcrumb
+                      onNavigate={(groupId) => {
+                        void navigateGroupFocus(groupId)
+                      }}
+                      path={groupFocus.focusPath}
+                    />
+                  ) : null}
+                  {folderFocus ? (
+                    <CanvasFolderFocusStatus
+                      focus={folderFocus}
+                      onRetry={() => {
+                        void navigateFolderFocus(folderFocus.ownerNodeId, folderFocus.directoryId, {
+                          path: folderFocus.path,
+                          preserveListing: true,
+                          userNavigation: false,
+                        })
+                      }}
+                      reducedMotion={prefersReducedMotion}
+                    />
+                  ) : null}
+
+                  {blockingLoad || loadError ? (
+                    <div className="absolute inset-0 z-40 grid place-items-center bg-background/75 backdrop-blur-[2px]">
+                      {loadError ? (
+                        <div
+                          aria-live="assertive"
+                          className="flex max-w-sm flex-col items-center gap-3 rounded-md border border-border bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-sm"
+                          role="alert"
+                        >
+                          <TriangleAlert className="size-5 text-destructive" />
+                          <div>
+                            <div className="font-medium text-foreground">Canvas could not be loaded</div>
+                            <div className="mt-1 text-xs">{loadError}</div>
+                          </div>
+                          <Button
+                            onClick={() => {
+                              authoritativeLoadRequestedRef.current = true
+                              loadBarrierRef.current = createCanvasLoadBarrier()
+                              setLoadAttempt((attempt) => attempt + 1)
+                            }}
+                            size="sm"
+                            variant="outline"
+                          >
+                            Retry
+                          </Button>
+                        </div>
+                      ) : (
+                        <Loading
+                          className="max-w-sm rounded-md border border-border bg-card px-5 py-4 shadow-sm"
+                          label="Loading canvas…"
+                          reducedMotion={prefersReducedMotion}
+                        />
+                      )}
+                    </div>
+                  ) : null}
+
+                  {saveError ? (
+                    <div className="fixed inset-0 z-[100] grid place-items-center bg-background/80 backdrop-blur-[2px]">
+                      <div className="flex max-w-md flex-col items-center gap-3 rounded-md border border-destructive/30 bg-card px-6 py-5 text-center text-sm shadow-lg">
+                        <TriangleAlert className="size-6 text-destructive" />
+                        <div>
+                          <div className="font-medium text-foreground">Canvas has unsaved changes</div>
+                          <div className="mt-1 text-xs text-muted-foreground">{saveError}</div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button onClick={() => setSaveAttempt((attempt) => attempt + 1)} size="sm">
+                            Retry save
+                          </Button>
+                          <Button
+                            disabled={!history.gestureStart && history.past.length === 0}
+                            onClick={() => {
+                              setSaveError(null)
+                              dispatch({ type: history.gestureStart ? "cancel-gesture" : "undo" })
+                            }}
+                            size="sm"
+                            variant="outline"
+                          >
+                            Revert last change
+                          </Button>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          This window stays open until the canvas is saved or the last change is reverted.
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {(selectionContext.kind === "multi-node" || hasSingleGroupSelection) && mutationSurfaceVisible ? (
+                    <SelectionToolbar
+                      actions={visibleSelectionActions}
+                      canArrange={canArrangeSelection}
+                      canDistribute={canDistributeSelection}
+                      disabled={readOnly}
+                      canFold={groupMenuCapabilities.canFold}
+                      canGroup={groupMenuCapabilities.canGroup}
+                      canUngroup={groupMenuCapabilities.canUngroup}
+                      canUnfold={groupMenuCapabilities.canUnfold}
+                      isActionPending={isSelectionActionPending}
+                      onAlign={align}
+                      onAction={executeSelectionAction}
+                      onDelete={remove}
+                      onDistribute={distribute}
+                      onDuplicate={duplicate}
+                      onFold={fold}
+                      onGroup={group}
+                      onLayout={layout}
+                      onTidy={tidySelection}
+                      nodeIds={selectedNodeIds}
+                      onUngroup={ungroup}
+                      onUnfold={unfold}
+                    />
+                  ) : null}
+
+                  <ViewportToolbar
+                    autoLayoutStrategy={autoLayoutStrategy}
+                    canLayout={canLayoutCanvas}
+                    edgesHidden={edgesHidden}
+                    miniMapVisible={miniMapVisible}
+                    onEdgesHiddenChange={() => setEdgesHidden((hidden) => !hidden)}
+                    onFit={fitCanvas}
+                    onLayout={layoutCanvas}
+                    onLayoutStrategyChange={changeAutoLayoutStrategy}
+                    onMiniMapChange={() => setMiniMapVisible((visible) => !visible)}
+                    onSearch={() => setSearchOpen(true)}
+                    onSnapChange={() =>
+                      setSnapEnabled((enabled) => {
+                        if (enabled) setSnapLines([])
+                        return !enabled
+                      })
+                    }
+                    onZoomIn={() => {
+                      markUserNavigation()
+                      void reactFlow.zoomIn({
+                        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+                        ease: canvasViewportEase,
+                        interpolate: "smooth",
+                      })
+                    }}
+                    onZoomOut={() => {
+                      markUserNavigation()
+                      void reactFlow.zoomOut({
+                        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+                        ease: canvasViewportEase,
+                        interpolate: "smooth",
+                      })
+                    }}
+                    onZoomPreset={zoomToPreset}
+                    snapEnabled={snapEnabled}
+                  />
+
+                  {nodeMenuOpen ? (
+                    <FloatingPanel className="convax-safe-centered-panel top-20 w-64">
+                      <div className="mb-2 px-1 text-xs font-medium text-muted-foreground">Add to canvas</div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {connectionNodeTypes.map((definition) => (
+                          <Button
+                            key={definition.type}
+                            className="justify-start"
+                            onClick={() => addNode(definition.type, undefined, true)}
+                            size="sm"
+                            variant="ghost"
+                          >
+                            {definition.type === "text" ? (
+                              <Type />
+                            ) : definition.type === "agent" ? (
+                              <Sparkles />
+                            ) : (
+                              <FileUp />
+                            )}
+                            {definition.label}
+                          </Button>
+                        ))}
+                      </div>
+                    </FloatingPanel>
+                  ) : null}
+
+                  {generatePresence.present && generateService ? (
+                    <FloatingPanel
+                      aria-hidden={!generateOpen || undefined}
+                      className="convax-canvas-composer-overlay convax-generation-surface"
+                      data-canvas-presence={generatePresence.phase}
+                      inert={!generateOpen || undefined}
+                    >
+                      <div
+                        data-canvas-composer-overlay="generation"
+                        data-canvas-shortcuts="ignore"
+                        onKeyDownCapture={(event) => {
+                          if (event.key !== "Escape") return
+                          event.preventDefault()
+                          event.stopPropagation()
+                          closeGenerate()
+                        }}
+                      >
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <span className="text-xs font-medium text-muted-foreground">Generate on this canvas</span>
+                          <Button
+                            aria-label="Close generation composer"
+                            onClick={closeGenerate}
+                            size="icon-sm"
+                            variant="ghost"
+                          >
+                            <X />
+                          </Button>
+                        </div>
+                        <CanvasGenerationPanel
+                          autoFocus={generateOpen}
+                          disabled={!generateOpen || readOnly}
+                          document={history.document}
+                          generateService={generateService}
+                          onSubmit={runGenerate}
+                          reducedMotion={prefersReducedMotion}
+                          scopeId={currentViewScopeId}
+                          selectedNodeIds={selectedNodeIds}
+                          submitting={generating}
+                        />
+                      </div>
+                    </FloatingPanel>
+                  ) : null}
+
+                  {searchOpen ? (
+                    <div
+                      aria-label="Search nodes"
+                      aria-modal="true"
+                      className="convax-node-search__layer"
+                      data-canvas-shortcuts="ignore"
+                      role="dialog"
+                    >
+                      <div aria-hidden="true" className="convax-node-search__backdrop" />
+                      <div data-convax-node-search-panel="true" ref={searchPanelRef}>
+                        <FloatingPanel className="convax-node-search__panel convax-safe-centered-panel top-20 w-[min(380px,calc(100%-32px))]">
+                          <div className="relative">
+                            <Search className="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                            <Input
+                              autoFocus
+                              className="convax-node-search__input"
+                              data-canvas-shortcuts="ignore"
+                              onChange={(event) => setQuery(event.currentTarget.value)}
+                              placeholder="Search nodes"
+                              value={query}
+                            />
+                          </div>
+                          <div className="mt-2 max-h-64 overflow-auto">
+                            {searchResults.map((node) => (
+                              <button
+                                key={node.id}
+                                className="flex w-full items-center gap-2 rounded-sm px-2 py-2 text-left text-sm hover:bg-accent"
+                                onClick={() => {
+                                  setSearchOpen(false)
+                                  void executeViewCommand({
+                                    animation: "smooth",
+                                    fit: "center",
+                                    nodeIds: [node.id],
+                                    select: true,
+                                    type: "nodes.reveal",
+                                  })
+                                }}
+                                type="button"
+                              >
+                                <span className="size-2 rounded-full bg-muted-foreground" />
+                                <span className="truncate">{node.label}</span>
+                                <span className="ml-auto text-xs text-muted-foreground">{node.kind}</span>
+                              </button>
+                            ))}
+                          </div>
+                        </FloatingPanel>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <input
+                    ref={imageUploadInputRef}
+                    accept="image/*"
+                    className="hidden"
+                    data-canvas-resource-picker="image"
+                    onChange={handleUploadInputChange}
+                    type="file"
+                  />
+                  <input
+                    ref={videoUploadInputRef}
+                    accept="video/*"
+                    className="hidden"
+                    data-canvas-resource-picker="video"
+                    onChange={handleUploadInputChange}
+                    type="file"
+                  />
+                  <input
+                    ref={uploadInputRef}
+                    className="hidden"
+                    data-canvas-resource-picker="upload"
+                    multiple
+                    onChange={handleUploadInputChange}
+                    type="file"
+                  />
+                  <input
+                    ref={relinkInputRef}
+                    className="hidden"
+                    data-canvas-resource-picker="relink"
+                    onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                      const relinkNodeId = relinkNodeIdRef.current
+                      relinkNodeIdRef.current = null
+                      handleCanvasResourceRelinkSelection(
+                        relinkNodeId,
+                        [...(event.currentTarget.files ?? [])],
+                        (nodeId, file) => {
+                          if (!mutationService?.relink) return
+                          void runResourceRelink(
+                            ({ expectedRevision, signal }) =>
+                              mutationService.relink!({ expectedRevision, file, nodeId, signal }),
+                            "Resource relinked",
+                          )
+                        },
+                      )
+                      event.currentTarget.value = ""
+                    }}
+                    type="file"
+                  />
+                </div>
+              </ContextMenuTrigger>
+              <CanvasContextMenu
+                canArrange={hasNodeOnlySelection && canArrangeSelection}
+                canDistribute={hasNodeOnlySelection && canDistributeSelection}
+                canExport={Boolean(exportService)}
+                canFold={groupMenuCapabilities.canFold}
+                canGenerate={Boolean(generateService)}
+                canGroup={groupMenuCapabilities.canGroup}
+                canRedo={history.future.length > 0}
+                canUngroup={groupMenuCapabilities.canUngroup}
+                canUnfold={groupMenuCapabilities.canUnfold}
+                canUndo={history.past.length > 0}
+                canUpload={Boolean(mutationService)}
+                createItems={connectionNodeTypes}
+                generating={generating}
+                hasNodeSelection={hasNodeOnlySelection}
+                hasSelection={selectedNodeIds.length > 0 || selectedEdgeIds.length > 0}
+                onAddNode={(type) => addNode(type, nextInsertPoint(), true)}
+                onAlign={align}
+                onCopy={copy}
+                onDelete={remove}
+                onDistribute={distribute}
+                onDuplicate={duplicate}
+                onExport={exportCanvas}
+                onFit={fitCanvas}
+                onFold={fold}
+                onGenerate={requestGenerate}
+                onGroup={group}
+                onLayout={tidySelection}
+                onPaste={paste}
+                onRedo={() => dispatch({ type: "redo" })}
+                onSelectionDragModeChange={(active) => {
+                  if (active) enterSelectionDragMode()
+                  else exitSelectionDragMode()
+                }}
+                onUngroup={ungroup}
+                onUnfold={unfold}
+                onUndo={() => dispatch({ type: "undo" })}
+                onUpload={() => uploadInputRef.current?.click()}
+                readOnly={readOnly}
+                selectionDragMode={
+                  props.selectionDragSource?.mode
+                    ? {
+                        active: selectionDragModeActive,
+                        icon: props.selectionDragSource.icon ?? <FileOutput className="size-4" />,
+                        label: props.selectionDragSource.mode.label,
+                      }
+                    : undefined
+                }
+                viewportInsets={props.viewportInsets}
+              />
+            </ContextMenu>
+          </TooltipProvider>
+        </CanvasOverlayRootProvider>
+      </CanvasGroupPresentationProvider>
+    </CanvasEditorMutationSurfaceProvider>
   )
 }
 
 function IconButton(props: {
+  busy?: boolean
   buttonRef?: ForwardedRef<HTMLButtonElement>
   disabled?: boolean
   expanded?: boolean
@@ -4248,6 +5069,7 @@ function IconButton(props: {
       <span className="inline-flex">
         <Button
           ref={props.buttonRef}
+          aria-busy={props.busy}
           aria-expanded={props.expanded}
           aria-haspopup={props.hasPopup}
           aria-label={props.label}
@@ -4314,55 +5136,141 @@ function moveMenuFocus(event: ReactKeyboardEvent<HTMLDivElement>) {
   else items[currentIndex < 0 ? items.length - 1 : (currentIndex - 1 + items.length) % items.length]?.focus()
 }
 
+function CanvasBreadcrumb(props: {
+  onNavigate: (entryId: string | null) => void
+  path: readonly { id: string; label: string }[]
+}) {
+  return (
+    <nav aria-label="Canvas path" className="convax-group-breadcrumb" data-canvas-shortcuts="ignore">
+      <button className="convax-group-breadcrumb__item" onClick={() => props.onNavigate(null)} type="button">
+        <FolderOpen />
+        <span>Canvas</span>
+      </button>
+      {props.path.map((entry, index) => {
+        const current = index === props.path.length - 1
+        return (
+          <span className="contents" key={entry.id}>
+            <ChevronRight aria-hidden="true" className="convax-group-breadcrumb__separator" />
+            <button
+              aria-current={current ? "page" : undefined}
+              className="convax-group-breadcrumb__item"
+              disabled={current}
+              onClick={() => props.onNavigate(entry.id)}
+              type="button"
+            >
+              <span>{entry.label}</span>
+            </button>
+          </span>
+        )
+      })}
+    </nav>
+  )
+}
+
+function CanvasFolderFocusStatus(props: {
+  focus: CanvasFolderFocusState
+  onRetry: () => void
+  reducedMotion: boolean
+}) {
+  const listing = props.focus.listing
+  if (props.focus.loading && !listing) {
+    return (
+      <div
+        className="pointer-events-none absolute inset-0 z-10 grid place-items-center"
+        data-canvas-folder-focus-state="loading"
+      >
+        <Loading
+          className="rounded-md bg-card px-4 py-3 shadow-sm"
+          label="Opening folder…"
+          reducedMotion={props.reducedMotion}
+        />
+      </div>
+    )
+  }
+  if (props.focus.error) {
+    return (
+      <div
+        className="pointer-events-none absolute inset-0 z-10 grid place-items-center"
+        data-canvas-folder-focus-state="error"
+      >
+        <div
+          aria-live="assertive"
+          className="pointer-events-auto flex max-w-sm flex-col items-center gap-3 rounded-md bg-card px-5 py-4 text-center text-sm text-muted-foreground shadow-md"
+          role="alert"
+        >
+          <TriangleAlert className="size-5 text-destructive" />
+          <div>
+            <div className="font-medium text-foreground">Folder could not be opened</div>
+            <div className="mt-1 text-xs">{props.focus.error}</div>
+          </div>
+          <Button onClick={props.onRetry} size="sm" variant="outline">
+            Retry
+          </Button>
+        </div>
+      </div>
+    )
+  }
+  if (listing && listing.entries.length === 0) {
+    return (
+      <div
+        className="pointer-events-none absolute inset-0 z-10 grid place-items-center"
+        data-canvas-folder-focus-state="empty"
+      >
+        <div className="flex flex-col items-center gap-2 rounded-md bg-card/90 px-5 py-4 text-sm text-muted-foreground shadow-sm">
+          <FolderOpen className="size-5" />
+          <span>This folder is empty</span>
+        </div>
+      </div>
+    )
+  }
+  if (listing?.truncated) {
+    return (
+      <div
+        aria-live="polite"
+        className="pointer-events-none absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md bg-card px-3 py-2 text-xs text-muted-foreground shadow-sm"
+        data-canvas-folder-focus-state="truncated"
+      >
+        Showing 200 of {listing.totalCount} items
+      </div>
+    )
+  }
+  if (props.focus.loading && listing) {
+    return (
+      <div
+        aria-live="polite"
+        className="pointer-events-none absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md bg-card px-3 py-2 text-xs text-muted-foreground shadow-sm"
+        data-canvas-folder-focus-state="refreshing"
+      >
+        Refreshing folder…
+      </div>
+    )
+  }
+  return null
+}
+
 function CanvasHeader(props: {
-  canExport: boolean
-  canGenerate: boolean
-  canRedo: boolean
-  canUndo: boolean
   canUpload: boolean
   createItems: readonly { label: string; type: string }[]
-  generating: boolean
   interactionTool: CanvasInteractionTool
   onAddNode: (type: string) => void
-  onExport: () => void
-  onGenerate: () => void
   onInteractionToolChange: (tool: CanvasInteractionTool) => void
-  onRedo: () => void
-  onSelectionDragModeChange: (active: boolean) => void
-  onUndo: () => void
-  onUpload: () => void
+  onUpload: (kind: "files" | "image" | "video") => void
   readOnly: boolean
-  reducedMotion: boolean
-  selectionDragMode?: {
-    active: boolean
-    icon: ReactNode
-    label: string
-  }
 }) {
   const [addOpen, setAddOpen] = useState(false)
-  const [moreOpen, setMoreOpen] = useState(false)
   const addMenuRef = useRef<HTMLDivElement>(null)
   const addTriggerRef = useRef<HTMLButtonElement>(null)
-  const moreMenuRef = useRef<HTMLDivElement>(null)
-  const moreTriggerRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
-    if (!addOpen && !moreOpen) return
+    if (!addOpen) return
     const close = (event: PointerEvent) => {
-      if (
-        event.target instanceof Element &&
-        (addMenuRef.current?.contains(event.target) || moreMenuRef.current?.contains(event.target))
-      )
-        return
+      if (event.target instanceof Element && addMenuRef.current?.contains(event.target)) return
       setAddOpen(false)
-      setMoreOpen(false)
     }
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return
       event.preventDefault()
-      if (addOpen) addTriggerRef.current?.focus()
-      if (moreOpen) moreTriggerRef.current?.focus()
+      addTriggerRef.current?.focus()
       setAddOpen(false)
-      setMoreOpen(false)
     }
     window.addEventListener("pointerdown", close)
     window.addEventListener("keydown", closeOnEscape)
@@ -4370,7 +5278,7 @@ function CanvasHeader(props: {
       window.removeEventListener("pointerdown", close)
       window.removeEventListener("keydown", closeOnEscape)
     }
-  }, [addOpen, moreOpen])
+  }, [addOpen])
   useEffect(() => {
     if (!props.readOnly) return
     setAddOpen(false)
@@ -4382,13 +5290,6 @@ function CanvasHeader(props: {
     )
     return () => window.cancelAnimationFrame(frame)
   }, [addOpen])
-  useEffect(() => {
-    if (!moreOpen) return
-    const frame = window.requestAnimationFrame(() =>
-      moreMenuRef.current?.querySelector<HTMLButtonElement>('[role="menuitem"]:not(:disabled)')?.focus(),
-    )
-    return () => window.cancelAnimationFrame(frame)
-  }, [moreOpen])
   return (
     <div className="convax-creation-toolbar-frame">
       <div
@@ -4430,29 +5331,15 @@ function CanvasHeader(props: {
           shortcut="H"
           tooltipSide="bottom"
         />
-        {props.selectionDragMode ? (
-          <IconButton
-            disabled={props.readOnly}
-            icon={props.selectionDragMode.icon}
-            label={props.selectionDragMode.label}
-            onClick={() => props.onSelectionDragModeChange(!props.selectionDragMode?.active)}
-            pressed={props.selectionDragMode.active}
-            tooltipSide="bottom"
-          />
-        ) : null}
-        <span aria-hidden="true" className="convax-toolbar-divider" />
         <div className="relative" ref={addMenuRef}>
           <IconButton
             buttonRef={addTriggerRef}
-            disabled={props.readOnly || props.createItems.length === 0}
+            disabled={props.readOnly || (props.createItems.length === 0 && !props.canUpload)}
             expanded={addOpen}
             hasPopup="menu"
             icon={<Plus />}
             label="Add node"
-            onClick={() => {
-              setMoreOpen(false)
-              setAddOpen((open) => !open)
-            }}
+            onClick={() => setAddOpen((open) => !open)}
             pressed={addOpen}
             tooltipSide="bottom"
           />
@@ -4470,7 +5357,8 @@ function CanvasHeader(props: {
                 disabled={props.readOnly}
                 key={item.type}
                 onClick={() => {
-                  props.onAddNode(item.type)
+                  if (item.type === "image" || item.type === "video") props.onUpload(item.type)
+                  else props.onAddNode(item.type)
                   setAddOpen(false)
                   addTriggerRef.current?.focus()
                 }}
@@ -4481,89 +5369,20 @@ function CanvasHeader(props: {
                 <span>Add {item.label}</span>
               </button>
             ))}
-          </div>
-        </div>
-        {props.canUpload ? (
-          <IconButton
-            disabled={props.readOnly}
-            icon={<FileUp />}
-            label="Upload"
-            onClick={props.onUpload}
-            tooltipSide="bottom"
-          />
-        ) : null}
-        {props.canGenerate ? (
-          <IconButton
-            disabled={props.readOnly || props.generating}
-            icon={props.generating ? <LoadingSpinner reducedMotion={props.reducedMotion} size="sm" /> : <Sparkles />}
-            label="Generate"
-            onClick={props.onGenerate}
-            shortcut="⌘↵"
-            tooltipSide="bottom"
-          />
-        ) : null}
-        <span aria-hidden="true" className="convax-toolbar-divider" />
-        <div className="relative" ref={moreMenuRef}>
-          <IconButton
-            buttonRef={moreTriggerRef}
-            expanded={moreOpen}
-            hasPopup="menu"
-            icon={<Ellipsis />}
-            label="More canvas actions"
-            onClick={() => {
-              setAddOpen(false)
-              setMoreOpen((open) => !open)
-            }}
-            pressed={moreOpen}
-            tooltipSide="bottom"
-          />
-          <div
-            className="convax-canvas-more-menu convax-motion-menu"
-            data-canvas-shortcuts="ignore"
-            hidden={!moreOpen}
-            onKeyDown={moveMenuFocus}
-            role="menu"
-          >
-            <button
-              disabled={!props.canUndo || props.readOnly}
-              onClick={() => {
-                props.onUndo()
-                setMoreOpen(false)
-                moreTriggerRef.current?.focus()
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Undo2 />
-              <span>Undo</span>
-              <Shortcut>⌘Z</Shortcut>
-            </button>
-            <button
-              disabled={!props.canRedo || props.readOnly}
-              onClick={() => {
-                props.onRedo()
-                setMoreOpen(false)
-                moreTriggerRef.current?.focus()
-              }}
-              role="menuitem"
-              type="button"
-            >
-              <Redo2 />
-              <span>Redo</span>
-              <Shortcut>⇧⌘Z</Shortcut>
-            </button>
-            {props.canExport ? (
+            {props.canUpload ? (
               <button
+                aria-label="Upload files"
+                disabled={props.readOnly}
                 onClick={() => {
-                  props.onExport()
-                  setMoreOpen(false)
-                  moreTriggerRef.current?.focus()
+                  props.onUpload("files")
+                  setAddOpen(false)
+                  addTriggerRef.current?.focus()
                 }}
                 role="menuitem"
                 type="button"
               >
-                <Download />
-                <span>Export</span>
+                <FileUp />
+                <span>Upload files</span>
               </button>
             ) : null}
           </div>
@@ -4617,8 +5436,11 @@ function SelectionToolbar(props: {
   actions: readonly CanvasSelectionAction[]
   canArrange: boolean
   canDistribute: boolean
+  canFold: boolean
   canGroup: boolean
   canUngroup: boolean
+  disabled: boolean
+  canUnfold: boolean
   isActionPending: (actionId: string) => boolean
   nodeIds: string[]
   onAlign: (direction: CanvasAlign) => void
@@ -4626,10 +5448,12 @@ function SelectionToolbar(props: {
   onDelete: () => void
   onDistribute: (axis: CanvasDistribute) => void
   onDuplicate: () => void
+  onFold: () => void
   onGroup: () => void
   onLayout: (layout: CanvasLayout) => void
   onTidy: () => void
   onUngroup: () => void
+  onUnfold: () => void
 }) {
   const [arrangeMenuOpen, setArrangeMenuOpen] = useState(false)
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false)
@@ -4666,7 +5490,9 @@ function SelectionToolbar(props: {
   }, [props.canArrange])
   return (
     <NodeToolbar
+      aria-busy={props.disabled || undefined}
       className="convax-selection-toolbar nodrag nowheel"
+      inert={props.disabled || undefined}
       isVisible
       nodeId={props.nodeIds}
       offset={16}
@@ -4677,30 +5503,25 @@ function SelectionToolbar(props: {
         data-canvas-shortcuts="ignore"
       >
         <IconButton icon={<Copy />} label="Duplicate" onClick={props.onDuplicate} shortcut="⌘D" tooltipSide="top" />
-        <IconButton
-          disabled={!props.canGroup}
-          icon={<Group />}
-          label="Group"
-          onClick={props.onGroup}
-          shortcut="⌘G"
-          tooltipSide="top"
-        />
-        <IconButton
-          disabled={!props.canUngroup}
-          icon={<Ungroup />}
-          label="Ungroup"
-          onClick={props.onUngroup}
-          shortcut="⇧⌘G"
-          tooltipSide="top"
-        />
+        {props.canGroup ? (
+          <IconButton icon={<Group />} label="Group" onClick={props.onGroup} shortcut="⌘G" tooltipSide="top" />
+        ) : null}
+        {props.canFold ? <IconButton icon={<Folder />} label="Fold" onClick={props.onFold} tooltipSide="top" /> : null}
+        {props.canUnfold ? (
+          <IconButton icon={<FolderOpen />} label="Unfold" onClick={props.onUnfold} shortcut="⇧⌘G" tooltipSide="top" />
+        ) : null}
+        {props.canUngroup ? (
+          <IconButton icon={<Ungroup />} label="Ungroup" onClick={props.onUngroup} shortcut="⇧⌘G" tooltipSide="top" />
+        ) : null}
         {props.actions.length > 0 ? <span className="mx-1 h-5 w-px bg-border" /> : null}
         {partitionedActions.primary.map((action) => {
           const pending = props.isActionPending(action.id)
           return (
             <IconButton
+              busy={pending}
               key={action.id}
               disabled={pending}
-              icon={pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
+              icon={action.icon ?? <Workflow />}
               label={action.label}
               onClick={() => props.onAction(action)}
               tooltipSide="top"
@@ -4726,6 +5547,7 @@ function SelectionToolbar(props: {
                   const pending = props.isActionPending(action.id)
                   return (
                     <button
+                      aria-busy={pending}
                       className={cn(
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-xs hover:bg-accent disabled:opacity-50",
                         action.presentation?.tone === "destructive" && "text-destructive",
@@ -4739,9 +5561,7 @@ function SelectionToolbar(props: {
                       role="menuitem"
                       type="button"
                     >
-                      <span className="[&>svg]:size-3.5">
-                        {pending ? <LoadingSpinner size="sm" /> : (action.icon ?? <Workflow />)}
-                      </span>
+                      <span className="[&>svg]:size-3.5">{action.icon ?? <Workflow />}</span>
                       <span>{action.label}</span>
                     </button>
                   )
@@ -5092,10 +5912,12 @@ function CanvasContextMenu(props: {
   canArrange: boolean
   canDistribute: boolean
   canExport: boolean
+  canFold: boolean
   canGenerate: boolean
   canGroup: boolean
   canRedo: boolean
   canUngroup: boolean
+  canUnfold: boolean
   canUndo: boolean
   canUpload: boolean
   createItems: readonly { label: string; type: string }[]
@@ -5110,6 +5932,7 @@ function CanvasContextMenu(props: {
   onDuplicate: () => void
   onExport: () => void
   onFit: () => void
+  onFold: () => void
   onGenerate: () => void
   onGroup: () => void
   onLayout: () => void
@@ -5117,6 +5940,7 @@ function CanvasContextMenu(props: {
   onRedo: () => void
   onSelectionDragModeChange: (active: boolean) => void
   onUngroup: () => void
+  onUnfold: () => void
   onUndo: () => void
   onUpload: () => void
   readOnly: boolean
@@ -5224,6 +6048,18 @@ function CanvasContextMenu(props: {
         <ContextMenuItem onSelect={props.onGroup}>
           <Group />
           Group<Shortcut>⌘G</Shortcut>
+        </ContextMenuItem>
+      ) : null}
+      {props.canFold && !props.readOnly ? (
+        <ContextMenuItem onSelect={props.onFold}>
+          <Folder />
+          Fold
+        </ContextMenuItem>
+      ) : null}
+      {props.canUnfold && !props.readOnly ? (
+        <ContextMenuItem onSelect={props.onUnfold}>
+          <FolderOpen />
+          Unfold<Shortcut>⇧⌘G</Shortcut>
         </ContextMenuItem>
       ) : null}
       {props.canUngroup && !props.readOnly ? (

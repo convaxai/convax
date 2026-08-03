@@ -3,7 +3,7 @@ import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/29"
+export const desktopProtocolVersion = "convax.desktop-ipc/32"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -32,6 +32,7 @@ export interface CanvasResourceAddInput {
     sourceToken: string
   }[]
   projectId: string
+  parentId?: string
   relation?: {
     anchorNodeIds: readonly string[]
     direction?: "from-anchor" | "to-anchor"

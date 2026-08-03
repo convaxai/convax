@@ -12,6 +12,11 @@ export interface StableFileCopyOptions {
   description: string
   expectedRealPath: string
   expectedSize?: number
+  /**
+   * Project publication may intentionally retain a second hard-link alias for
+   * bounded cleanup. Every other caller remains single-link by default.
+   */
+  linkPolicy?: "single" | "stable-count"
   maximumBytes: number
   prepareTarget(context: StableFileCopyContext): Promise<string> | string
   signal?: AbortSignal
@@ -36,11 +41,16 @@ function sameFileIdentity(left: BigIntStats, right: BigIntStats) {
   return left.dev === right.dev && left.ino === right.ino
 }
 
-function sameFileSnapshot(left: BigIntStats, right: BigIntStats) {
+function acceptsLinkCount(stat: BigIntStats, policy: "single" | "stable-count") {
+  return policy === "single" ? stat.nlink === 1n : stat.nlink >= 1n
+}
+
+function sameFileSnapshot(left: BigIntStats, right: BigIntStats, policy: "single" | "stable-count") {
   return (
     sameFileIdentity(left, right) &&
-    left.nlink === 1n &&
-    right.nlink === 1n &&
+    acceptsLinkCount(left, policy) &&
+    acceptsLinkCount(right, policy) &&
+    left.nlink === right.nlink &&
     left.size === right.size &&
     left.mtimeNs === right.mtimeNs &&
     left.ctimeNs === right.ctimeNs
@@ -101,6 +111,7 @@ async function assertUnchangedAfterCopy(
   before: BigIntStats,
   size: number,
   description: string,
+  linkPolicy: "single" | "stable-count",
 ) {
   try {
     const extra = Buffer.allocUnsafe(1)
@@ -111,12 +122,12 @@ async function assertUnchangedAfterCopy(
     if (
       extraBytes !== 0 ||
       !after.isFile() ||
-      after.nlink !== 1n ||
+      !acceptsLinkCount(after, linkPolicy) ||
       !pathAfterCopy.isFile() ||
       pathAfterCopy.isSymbolicLink() ||
-      pathAfterCopy.nlink !== 1n ||
-      !sameFileSnapshot(before, after) ||
-      !sameFileSnapshot(after, pathAfterCopy) ||
+      !acceptsLinkCount(pathAfterCopy, linkPolicy) ||
+      !sameFileSnapshot(before, after, linkPolicy) ||
+      !sameFileSnapshot(after, pathAfterCopy, linkPolicy) ||
       resolvedAfterCopy !== expectedRealPath
     ) {
       throw changedError(description)
@@ -134,6 +145,10 @@ async function assertUnchangedAfterCopy(
  */
 export async function copyStableFile(options: StableFileCopyOptions) {
   validateMaximumBytes(options.maximumBytes)
+  const linkPolicy = options.linkPolicy ?? "single"
+  if (linkPolicy !== "single" && linkPolicy !== "stable-count") {
+    throw new Error("Stable file copy link policy is invalid")
+  }
   if (
     options.expectedSize !== undefined &&
     (!Number.isSafeInteger(options.expectedSize) ||
@@ -144,8 +159,10 @@ export async function copyStableFile(options: StableFileCopyOptions) {
   }
 
   const pathBeforeOpen = await fs.lstat(options.sourcePath, { bigint: true })
-  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink() || pathBeforeOpen.nlink !== 1n) {
-    throw new Error(`${options.description} must be a regular single-link file`)
+  if (!pathBeforeOpen.isFile() || pathBeforeOpen.isSymbolicLink() || !acceptsLinkCount(pathBeforeOpen, linkPolicy)) {
+    throw new Error(
+      `${options.description} must be a regular ${linkPolicy === "single" ? "single-link " : ""}file`,
+    )
   }
   if (pathBeforeOpen.size < 1n || pathBeforeOpen.size > BigInt(options.maximumBytes)) {
     throw new Error(`${options.description} is empty or exceeds the configured size limit`)
@@ -165,8 +182,8 @@ export async function copyStableFile(options: StableFileCopyOptions) {
     const resolvedBeforeCopy = await fs.realpath(options.sourcePath)
     if (
       !before.isFile() ||
-      before.nlink !== 1n ||
-      !sameFileSnapshot(pathBeforeOpen, before) ||
+      !acceptsLinkCount(before, linkPolicy) ||
+      !sameFileSnapshot(pathBeforeOpen, before, linkPolicy) ||
       resolvedBeforeCopy !== options.expectedRealPath
     ) {
       throw changedError(options.description)
@@ -187,6 +204,7 @@ export async function copyStableFile(options: StableFileCopyOptions) {
       before,
       size,
       options.description,
+      linkPolicy,
     )
     assertNotAborted(options.signal)
     return target

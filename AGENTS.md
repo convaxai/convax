@@ -12,14 +12,13 @@ their own scope.
 - `packages/agent-runtime`: host-agnostic OpenCode integration.
 - `packages/canvas`, `packages/project`, `packages/project-files`, and
   `packages/workbench`: product domain and coordination packages.
-- `packages/plugin-api`: published Host API catalog and generated contract source.
-- `packages/plugin-sdk`: published Plugin package, contribution, and inter-Plugin
-  contract source.
+- `packages/plugin-api`, `packages/plugin-sdk`, and `packages/plugin-ui`: published
+  Plugin Host contracts, authoring ABI, and browser-safe Plugin UI foundations.
 - `packages/marketplace`, `packages/marketplace-kit`, and
   `packages/create-convax-marketplace`: Marketplace protocol and authoring tools.
 - `packages/ui`: product-agnostic visual primitives and theme.
-- `apps/web`: public marketing application.
-- `apps/deploy-cloudflare`: public Cloudflare deployment composition.
+- `apps/web`, `apps/deploy-cloudflare`, and `apps/docs`: independent product Web,
+  deployment, and documentation surfaces.
 
 This repository owns the Convax Host and platform. Concrete Plugins, Plugin-owned
 Skills, standalone Skills, MCP servers, and companion tools belong in the sibling
@@ -53,6 +52,7 @@ the contract instead of choosing the more convenient interpretation.
 | Other `packages/desktop/**`             | [`packages/desktop/AGENTS.md`](packages/desktop/AGENTS.md)                                                                                            |
 | `packages/plugin-api/**`                | [`packages/plugin-api/AGENTS.md`](packages/plugin-api/AGENTS.md)                                                                                      |
 | `packages/plugin-sdk/**`                | [`packages/plugin-sdk/AGENTS.md`](packages/plugin-sdk/AGENTS.md)                                                                                      |
+| `packages/plugin-ui/**`                 | [`packages/plugin-ui/AGENTS.md`](packages/plugin-ui/AGENTS.md)                                                                                        |
 | `packages/agent-runtime/**`             | [`packages/agent-runtime/AGENTS.md`](packages/agent-runtime/AGENTS.md)                                                                                |
 | `packages/canvas/**`                    | [`packages/canvas/AGENTS.md`](packages/canvas/AGENTS.md)                                                                                              |
 | `packages/project/**`                   | [`packages/project/AGENTS.md`](packages/project/AGENTS.md)                                                                                            |
@@ -64,6 +64,7 @@ the contract instead of choosing the more convenient interpretation.
 | `packages/ui/**`                        | [`packages/ui/AGENTS.md`](packages/ui/AGENTS.md)                                                                                                      |
 | `apps/web/**`                           | [`apps/web/AGENTS.md`](apps/web/AGENTS.md)                                                                                                            |
 | `apps/deploy-cloudflare/**`             | [`apps/deploy-cloudflare/AGENTS.md`](apps/deploy-cloudflare/AGENTS.md)                                                                                |
+| `apps/docs/**`                          | [`apps/docs/AGENTS.md`](apps/docs/AGENTS.md)                                                                                                          |
 
 ### Route by module name
 
@@ -73,6 +74,7 @@ the contract instead of choosing the more convenient interpretation.
 | Project, Project Files, Canvas, Workbench, active input, selection, document persistence | [`docs/architecture.md` §§2, 4–6](docs/architecture.md#2-terms) and the relevant domain contracts                                                                                                                                                                                    |
 | Host API, Catalog release, schema, API availability, generated Plugin API docs           | [`docs/plugin-host-change-governance.md`](docs/plugin-host-change-governance.md), [`packages/plugin-api/AGENTS.md`](packages/plugin-api/AGENTS.md), and [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md)                                                             |
 | Plugin manifest, contribution, inter-Plugin export/import, SDK authoring                 | [`packages/plugin-sdk/AGENTS.md`](packages/plugin-sdk/AGENTS.md), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`docs/plugin-canvas-capabilities.md`](docs/plugin-canvas-capabilities.md)                                                                   |
+| Plugin document styling, semantic tokens, sandbox-safe UI foundations                    | [`packages/plugin-ui/AGENTS.md`](packages/plugin-ui/AGENTS.md) and the Plugin SDK contract                                                                                                                                                                                           |
 | Agent, OpenCode, Skill, Hook, Agent tool, protected path                                 | [`docs/architecture.md` §§7–8](docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`packages/agent-runtime/AGENTS.md`](packages/agent-runtime/AGENTS.md)                                                          |
 | MCP, Agent MCP, remote server, OAuth, managed stdio                                      | [`docs/architecture.md` “MCP Server runtime boundary”](docs/architecture.md#mcp-server-runtime-boundary), §§7–8, and the Agent Runtime/Desktop Main contracts                                                                                                                        |
 | Marketplace, Registry, SourceKey, install, snapshot, ActiveSet, provisioning, recovery   | [`docs/architecture.md` §§5–6](docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and the Marketplace/Desktop Main contracts                                                                                                 |
@@ -122,26 +124,28 @@ the contract instead of choosing the more convenient interpretation.
 
 ## Package ownership
 
-| Package                     | Owns                                                                                                                        | Must not own                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
-| `@convax/project-files`     | Project-scoped file contracts, controller state, file operations, drag payloads                                             | Project registry, Canvas documents, Workbench, Electron                   |
-| `@convax/project`           | Project identity, bindings, private storage, capability composition; `/canvas` owns catalog and Project resource references | Active Canvas, Canvas semantics, Agent sessions                           |
-| `@convax/canvas`            | Canvas schema/core, application operations, view commands, editor/plugin contracts                                          | Project paths, Workbench selection, OpenCode, native persistence          |
-| `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface, and layout transitions                                                | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage      |
-| `@convax/plugin-api`        | Headless Host API catalog, SemVer/history, schemas, availability, generated validators/types/reference inputs               | Desktop state, Plugin identity policy, handlers, I/O                      |
-| `@convax/plugin-sdk`        | Headless v8 manifest/contribution ABI, inter-Plugin contracts, schemas, SemVer matching, generated authoring inputs         | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O |
-| `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, path protection                                        | Convax Project/Canvas/UI policy or other Convax packages                  |
-| `@convax/marketplace`       | Marketplace identities, schemas, validation, Catalog aggregation                                                            | I/O adapters, UI, installation, execution, concrete packages              |
-| `@convax/marketplace-kit`   | Deterministic authoring-time Registry, Showcase, bundle, and metadata generation                                            | Desktop runtime, credentials, executing package bytes                     |
-| `create-convax-marketplace` | Thin scaffold CLI over Marketplace Kit                                                                                      | Runtime Marketplace state, credentials, a second validator                |
-| `@convax/ui`                | Product-agnostic visual primitives and theme                                                                                | Product domains, persistence, Electron behavior                           |
-| `@convax/desktop`           | Electron composition, native adapters, IPC/preload, renderer shell, user preferences, installed Plugin authority            | Reusable domain semantics or public Plugin contract ownership             |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                   | Desktop/domain state, deployment, API behavior                            |
-| `@convax/deploy-cloudflare` | Cloudflare deployment composition, static Web assets, custom-domain routing, future `/api` service-binding edge             | Marketing presentation, API domain logic, credentials, Desktop behavior   |
+| Package                     | Owns                                                                                                                                                                                                   | Must not own                                                                                |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| `@convax/project-files`     | Project-scoped file contracts, tree/controller state, file CRUD/import/open/reveal, drag payloads                                                                                                      | Project registry, Canvas catalog/documents, Workbench state, Electron APIs                  |
+| `@convax/project`           | Durable Project identity, registry/bindings, private storage, capability composition; `@convax/project/canvas` owns the Project Canvas catalog, relationships and concrete Project resource references | Active Canvas selection, Canvas document semantics, Agent sessions                          |
+| `@convax/canvas`            | Canvas schema/core, primitives, application commands and queries, business operations, view commands, editor/plugin contracts                                                                          | Project paths/registry, Workbench selection, OpenCode implementation, native persistence    |
+| `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                        |
+| `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters       |
+| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded value schemas, SemVer matching, and deterministic Plugin/Skill reference generation inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                        | React, Desktop appearance state, Host transport, or concrete Plugin composition             |
+| `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                       |
+| `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution      |
+| `@convax/marketplace-kit`   | Deterministic authoring-time package, Registry, Showcase, bundle and companion metadata generation                                                                                                     | Desktop runtime, concrete marketplace content, credentials, or executing package bytes      |
+| `create-convax-marketplace` | Authoring-time scaffold CLI backed by `@convax/marketplace-kit`                                                                                                                                        | Runtime Marketplace state, publishing credentials, or a second validator                    |
+| `@convax/ui`                | Product-agnostic visual primitives and theme                                                                                                                                                           | Project, Canvas, Workbench, Agent, persistence, or Electron behavior                        |
+| `@convax/desktop`           | Electron composition root, native adapters, IPC/preload, renderer shell, user preferences, concrete cross-package wiring                                                                               | New reusable domain semantics that belong in a published package                            |
+| `@convax/web`               | Public Convax marketing site, product storytelling, responsive presentation, and public conversion links                                                                                               | Desktop runtime, product domain state, Cloudflare deployment, or API behavior               |
+| `@convax/deploy-cloudflare` | Cloudflare deployment composition, custom-domain routing, static Web assets, and the future `/api` service-binding edge                                                                                | Marketing presentation, API domain logic, credentials, or Desktop behavior                  |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                              | Product runtime state, canonical architecture semantics, Desktop behavior, or API logic     |
 
-`Workspace` is not a current aggregate. Reserve the name for a future window/session
-that genuinely coordinates multiple Projects; do not recreate it to hold
-Project–Canvas relationships.
+`Workspace` is intentionally not a current aggregate. Reserve that name for a
+future window/session that coordinates multiple Projects. Do not recreate a
+`workspace` package merely to hold Project–Canvas relationships.
 
 ## Dependency direction
 
@@ -152,10 +156,12 @@ desktop ──> agent-runtime, canvas, marketplace, plugin-api, plugin-sdk, proj
 create-convax-marketplace ──> marketplace-kit
 marketplace-kit ──> marketplace, plugin-api, plugin-sdk
 plugin-sdk ──> plugin-api
+plugin-ui ──> no Convax package
 project ──> canvas, project-files, ui
 canvas ──> ui
-agent-runtime, marketplace, plugin-api, project-files, ui, workbench ──> no Convax package
+agent-runtime, marketplace, plugin-api, plugin-ui, project-files, ui, workbench ──> no Convax package
 deploy-cloudflare ──> web; later api through an explicit Cloudflare Service Binding
+docs ──> no Convax package
 ```
 
 - Import another package only through an exported package subpath.
@@ -166,12 +172,15 @@ deploy-cloudflare ──> web; later api through an explicit Cloudflare Service 
 - A graph change is an architecture decision. Update this file, canonical
   architecture, local contracts, automated policy, and tests together.
 
-New library packages are independently publishable by default. They require one
-coherent owner/invariant, explicit minimal dependencies, compiled public exports,
-package-local `build`, `clean`, `typecheck`, `test`, `prepack`, and
-`prepublishOnly` scripts, a real version, and a local `AGENTS.md`. Tests use injected
-fakes and must not depend on Desktop, ambient monorepo state, global registration,
-or a real user directory.
+Independent means a library can be built, type-checked, tested, packed, and consumed
+from a clean external project using only declared public APIs and dependencies. New
+library packages require one coherent owner, compiled `dist` exports, a real
+version, explicit minimal dependencies, a local `AGENTS.md`, and package-local
+`build`, `clean`, `typecheck`, `test`, `prepack`, and `prepublishOnly` scripts.
+`@convax/desktop` is the only private product runtime package under `packages/*`;
+private applications under `apps/*` are delivery surfaces. Tests use injected fakes
+and never depend on Desktop, ambient monorepo state, global registration, or a real
+user directory.
 
 ## Repository-wide hard rules
 
@@ -222,8 +231,7 @@ or a real user directory.
 - Affected package or app: run its local `typecheck` and `test`; run `build` when its
   local contract requires it.
 - Public exports or dependency changes: run root `bun run pack:check`.
-- Package ownership or dependency changes: run root
-  `bun run package:boundaries`.
+- Package ownership or dependency changes: run root `bun run package:boundaries`.
 - Desktop Main/Preload/Renderer changes: run Desktop `bun run build`.
 - Project open, persistence, IPC, migration, or breaking cutover: run Desktop
   `bun run smoke:open-project`.

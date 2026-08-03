@@ -2,7 +2,6 @@ import { PLUGIN_API_CATALOG_MAJOR, type PluginApiId, pluginApiCatalog } from "./
 import type { PluginApiDefinition } from "./contracts"
 import { parsePluginApiDeclaration } from "./declaration"
 import { pluginApiMethodContracts, type PluginApiObjectShape } from "./method-contracts"
-import { pluginApiWireSchemaDialect } from "./method-schemas"
 
 /**
  * A concrete Plugin-owned tool description included beside Host APIs in a Skill reference.
@@ -123,13 +122,13 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
     lines.push(
       "## Host APIs",
       "",
-      "| API | Requirement | Since | Grant | Scope | Side effect | Completion |",
-      "| --- | --- | --- | --- | --- | --- | --- |",
+      "| API | Requirement | Introduced | Current contract | Grant | Scope | Side effect | Completion |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
     )
     for (const entry of selected) {
       const definition: PluginApiDefinition<PluginApiId> = definitionsById.get(entry.id)!
       lines.push(
-        `| \`${definition.id}\` | ${entry.requirement} | ${definition.since} | ${
+        `| \`${definition.id}\` | ${entry.requirement} | ${definition.since} | ${definition.contractSince} | ${
           definition.grant ? `\`${definition.grant}\`` : "none"
         } | ${definition.scope} | ${definition.sideEffect} | ${definition.completion} |`,
       )
@@ -145,7 +144,8 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
         definition.docs.description,
         "",
         `- Requirement: ${entry.requirement}`,
-        `- Available since: Host API ${definition.since}`,
+        `- API introduced: Host API ${definition.since}`,
+        `- Current contract available since: Host API ${definition.contractSince}`,
         `- Required grant: ${definition.grant ? `\`${definition.grant}\`` : "none"}`,
         `- Scope: ${definition.scope}`,
         `- Side effect: ${definition.sideEffect}`,
@@ -156,7 +156,7 @@ export function renderPluginApiReference(input: PluginApiReferenceInput): string
         `- Response schema: ${renderMethodShape(pluginApiMethodContracts[definition.id].result)}`,
         `- Request byte limit: ${pluginApiMethodContracts[definition.id].request.maxBytes}`,
         `- Response byte limit: ${pluginApiMethodContracts[definition.id].response.maxBytes}`,
-        `- Contract dialect: \`${pluginApiWireSchemaDialect}\``,
+        `- Contract dialect: \`${pluginApiMethodContracts[definition.id].dialect}\``,
       )
       if (definition.docs.remarks) lines.push(`- Remarks: ${definition.docs.remarks}`)
       lines.push(

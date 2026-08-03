@@ -13,6 +13,10 @@ const nimbusConfig = defineNimbusConfig({
   locale: "zh-CN",
   github: "https://github.com/microvoid/convax",
   socialImageAlt: "Convax 文档预览",
+  // Nimbus 0.8.2 invokes the Windows `pagefind.cmd` shim through execFile,
+  // which Node rejects with EINVAL. Production docs deploy on Linux and keep
+  // Pagefind enabled; Windows validation still builds the complete static site.
+  ...(process.platform === "win32" ? { search: false } : {}),
 })
 
 export default defineConfig({

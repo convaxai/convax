@@ -46,6 +46,7 @@ describe("ApplicationMenu", () => {
     expect(markup).toContain("Services")
     expect(markup).toContain(">CX</span>")
     expect(markup).toContain('data-ui-menu-surface=""')
+    expect(markup).toContain('data-application-menu-item="capabilities"')
     expect(markup).not.toContain("Log out")
     expect(markup).not.toContain("Account")
   })
@@ -55,6 +56,7 @@ describe("ApplicationMenu", () => {
 
     expect(markup).toContain("打开应用菜单")
     expect(markup).toContain("本地工作区")
+    expect(markup).toContain('data-application-menu-trigger="true"')
   })
 
   test("places the compact workspace menu below top chrome and above bottom chrome", () => {

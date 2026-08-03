@@ -39,6 +39,102 @@ Registry/Release artifacts or mechanically generated and verified bootstrap byte
 it does not duplicate hand-maintained Plugin source. No runtime semantic may depend
 on a concrete package id merely because a package was historically bundled here.
 
+### Architecture map
+
+This diagram is part of the canonical architecture, not a generated illustration.
+Keep it and the corresponding prose, tables, state map, persistence map, and flows
+up to date in the same change whenever package ownership, dependencies, runtime
+routing, trust boundaries, persistence targets, or delivery surfaces change. Keep
+the reviewable Mermaid source in this document; do not commit duplicate PNG, SVG, or
+JSON renderings.
+
+```mermaid
+flowchart TB
+  subgraph Authoring["Authoring and immutable release"]
+    PluginSource["convax-plugins<br/>Plugin, Skill, companion source"]
+    MarketplaceCli["create-convax-marketplace"]
+    MarketplaceKit["@convax/marketplace-kit"]
+    Release["Registry / immutable Release artifacts"]
+    PluginSource --> MarketplaceKit
+    MarketplaceCli --> MarketplaceKit
+    MarketplaceKit --> Release
+  end
+
+  subgraph Desktop["@convax/desktop · Electron composition root"]
+    subgraph Entry["Runtime entry surfaces"]
+      Renderer["Renderer UI<br/>React and controllers"]
+      Preload["Preload<br/>typed window.convax bridge"]
+      Agent["Agent / OpenCode"]
+      PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
+      Main["Main authority<br/>I/O, execution, persistence"]
+      Composition["Desktop composition<br/>adapters and package wiring"]
+      Renderer --> Preload --> Main
+      Agent --> Main
+      PluginRuntime --> Main
+      Composition --> Renderer
+      Composition --> Main
+    end
+
+    subgraph Packages["Headless and publishable packages"]
+      Workbench["@convax/workbench"]
+      Project["@convax/project"]
+      Canvas["@convax/canvas"]
+      ProjectFiles["@convax/project-files"]
+      UI["@convax/ui"]
+      AgentRuntime["@convax/agent-runtime"]
+      Marketplace["@convax/marketplace"]
+      PluginSdk["@convax/plugin-sdk"]
+      PluginApi["@convax/plugin-api"]
+
+      Project --> Canvas --> UI
+      Project --> ProjectFiles
+      Project --> UI
+      PluginSdk --> PluginApi
+    end
+
+    MarketplaceKit --> Marketplace
+    MarketplaceKit --> PluginSdk
+    MarketplaceKit --> PluginApi
+    Composition --> Workbench
+    Composition --> Project
+    Composition --> Canvas
+    Composition --> ProjectFiles
+    Composition --> UI
+    Composition --> AgentRuntime
+    Composition --> Marketplace
+    Composition --> PluginSdk
+    Composition --> PluginApi
+  end
+
+  Release --> Main
+
+  subgraph State["State and persistence"]
+    UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
+    ProjectRoot["Project root / .convax<br/>identity, Canvas catalog/documents, managed assets"]
+    LocalStorage["Browser localStorage<br/>Workbench and renderer preferences only"]
+  end
+
+  Main --> UserData
+  Main --> ProjectRoot
+  Renderer -. preferences only .-> LocalStorage
+
+  subgraph Delivery["Independent delivery surfaces"]
+    Web["@convax/web<br/>public marketing site"]
+    Cloudflare["@convax/deploy-cloudflare<br/>public origin and API routing edge"]
+    Docs["@convax/docs<br/>independently deployed documentation site"]
+    FutureApi["future @convax/api"]
+    Web --> Cloudflare
+    Cloudflare -. explicit Service Binding .-> FutureApi
+  end
+
+  classDef authority fill:#123047,stroke:#46c7e8,color:#ffffff,stroke-width:2px;
+  classDef store fill:#15382e,stroke:#63d4a5,color:#ffffff;
+  classDef external fill:#312a1a,stroke:#e8b44e,color:#ffffff;
+  class Main authority;
+  class UserData,ProjectRoot,LocalStorage store;
+  class PluginSource,Release external;
+```
+
 ## 2. Terms
 
 ### Project
@@ -62,11 +158,29 @@ into `ProjectController`.
 A Canvas is an independent document with its own schema, revision, commands,
 business operations, queries, view commands, and editor. Project owns the catalog
 relationship and persistence adapter, but it does not own Canvas document semantics.
-Every connectable card has exactly one left-side input and one right-side output.
-Canvas edges are directed from `source` (right/output) to `target` (left/input);
-moving cards never changes those port roles. Structural groups are containers rather
-than connectable cards, and new primitive or resource-relation commands reject a
-group endpoint.
+Every Canvas card has exactly one left-side input and one right-side output. Canvas
+edges are directed from `source` (right/output) to `target` (left/input); moving
+cards never changes those port roles. A structural Group is connectable as one
+whole-Group endpoint. Its edges attach to the Group identity, never fan out to
+descendants, and disappear from the focused projection when they cross that scope
+without being rewritten. A resource created while a Group is focused is placed and
+parented by one Main-owned Canvas command; the renderer never follows a successful
+root insertion with a second reparent save. Group is the expanded structural
+container by default. Fold is a persisted presentation state that projects the same
+Group as a compact folder; Unfold restores the expanded container without moving
+children or rewriting relationships. Camera, placement, snapping, and layout use
+the active presentation geometry while durable expanded bounds continue to describe
+the child coordinate container. File-input inference remains direct and file-only, so a
+Group relation does not implicitly contribute child resources.
+
+A Project-directory folder is different from a structural Group/Fold: it remains
+one connectable Canvas file node backed by a `project-directory` reference. Its
+double-click focus is a transient read-only projection of the current directory
+listing through an injected Canvas service. Desktop resolves the authoritative
+owning node, delegates to the existing scoped Project Files capability, bounds the
+result, and rechecks active Project/Canvas scope after asynchronous work. Canvas may
+pan, zoom, and navigate those opaque projected entries, but it never persists them,
+selects them into Workbench, connects or moves them, or adds them to history.
 
 ### Workbench
 
@@ -105,13 +219,20 @@ A Plugin has two orthogonal surfaces:
    whose audience, grant, scope, side effect, availability version and stable errors
    come from the generated API Catalog. One schema-first
    `@convax/plugin-api` descriptor owns every complete nested request/result
-   contract, refinement, byte budget and schema dialect. TypeScript types, the
-   strict runtime interpreter, generated JSON/Markdown/Skill references and
-   immutable history digests all derive from that descriptor; the SDK derives
+   contract, refinement, byte budget, cross-field numeric constraint and schema
+   dialect. Cross-field constraints serialize their field names and bounds into the
+   contract; API-specific interpreter constants are forbidden because they can
+   change runtime meaning without changing the digest. TypeScript types, the strict
+   runtime interpreter, generated JSON/Markdown/Skill references and immutable
+   history digests all derive from that descriptor; the SDK derives
    `callHostApi` parameters and results by API id instead of accepting `unknown`.
    Generated-Catalog consumers import the canonical artifact schema constant and
    strict `parsePluginApiCatalogArtifact` entry from `@convax/plugin-api`; they do
    not copy a `convax.plugin-api-catalog/*` token or validator.
+   API SemVer, Catalog artifact schema and wire-schema dialect are independent
+   version axes. The current runtime admits one exact artifact/dialect pair. A
+   retired major remains only as digest-bound opaque history and is never routed
+   through the current Host or SDK interpreter.
    Cancellation delivery is explicit Catalog metadata (`cancelable` or
    `commit-preserving`) and is never inferred from side-effect class.
 
@@ -157,7 +278,10 @@ selection are forbidden. Required dependency cycles reject activation; optional
 runtime calls have bounded depth and re-entrancy.
 
 `@convax/plugin-sdk/client` is the sole authoring owner for the portable
-`convax.plugin-host/8` MessagePort envelopes and Web client. Host API Catalog calls
+`convax.plugin-host/8` MessagePort envelopes and Web client. The sibling
+`@convax/plugin-sdk/pet-client` entry owns the contribution-scoped
+`convax.pet-host/1` client and derives Plugin identity from the immutable Plugin
+origin rather than author input. Host API Catalog calls
 remain separate from inter-Plugin availability and invocation. The client accepts
 only manifest-declared imports, validates their closed request and response schemas,
 bounds bytes and in-flight correlation, and emits sender-scoped cancellation.
@@ -179,12 +303,21 @@ only bounded in-flight duplicate state; completed/billable replay safety belongs
 the provider's durable `operationId`/LRO contract.
 
 Plugin ABI releases roll out in dependency order: publish
-`@convax/plugin-api@1.0.0`, then `@convax/plugin-sdk@0.1.0`, then the breaking
-Marketplace authoring line (`@convax/marketplace`,
-`@convax/marketplace-kit`, and `create-convax-marketplace` at `0.2.0`), and only
+`@convax/plugin-api@2.0.0`, then `@convax/plugin-sdk@0.1.1` and
+`@convax/plugin-ui@0.1.0`, then the breaking
+Marketplace authoring line (`@convax/marketplace` at `0.2.1`, and
+`@convax/marketplace-kit` plus `create-convax-marketplace` at `0.2.2`), and only
 then publish Host/Desktop consumers. The sibling `convax-plugins` repository raises
 its authoring dependencies and republishes `convax.plugin/8` artifacts after those
 Host packages exist; it never publishes v8 artifacts against an unavailable SDK.
+The SDK's immutable Host package Release binds its exact npm tarball to the exact
+Plugin API package/Catalog identity tested at release time, using
+`convax.host-package-release/1`; it is not a Host capability receipt. A concrete
+Plugin release separately attests the actual frozen SDK/API dependency closure and
+bundle bytes. Capability decisions remain bound to the Plugin API Catalog contract
+and Host runtime-conformance evidence, so neither an SDK version nor its package
+Release grants Host authority. See
+[`plugin-sdk-release.md`](plugin-sdk-release.md).
 
 Capability Center reads a renderer-safe connection projection keyed only by the
 installed Plugin id. It never receives OpenCode server keys, URLs, headers, OAuth
@@ -220,6 +353,7 @@ the Desktop-owned managed-stdio profile.
 | Package                     | Responsibility                                                                                                               |
 | --------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                   |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                              |
 | `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                           |
 | `@convax/canvas`            | Canvas core, application/business layer, view layer, editor and plugins                                                      |
 | `@convax/project`           | Project lifecycle/registry/private storage and Project capability composition                                                |
@@ -228,18 +362,20 @@ the Desktop-owned managed-stdio profile.
 | `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                            |
 | `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                          |
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                               |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation                                              |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs |
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs    |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                      |
 | `@convax/desktop`           | Electron composition root, IPC, adapters, coordinators and product shell                                                     |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                   |
+| `@convax/web`               | Public marketing site and responsive product storytelling                                                                    |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                    |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                    |
 
 Allowed internal runtime dependencies:
 
 ```text
 @convax/ui             -> none
+@convax/plugin-ui      -> none
 @convax/project-files  -> none
 @convax/workbench      -> none
 @convax/agent-runtime  -> none
@@ -254,14 +390,18 @@ create-convax-marketplace -> @convax/marketplace-kit
                           project, project-files, ui and workbench
 @convax/deploy-cloudflare -> @convax/web build output; future @convax/api through
                              a Cloudflare Service Binding
+@convax/docs           -> no Convax package
 ```
 
 The private applications under `apps/*` are delivery surfaces rather than
-publishable domain libraries. `@convax/web` owns no product state and
-`@convax/deploy-cloudflare` owns no API business logic. The latter is the single
-public origin for `convax.microvoid.io`: static Web assets own normal navigation,
-while the exact `/api` and `/api/**` path family is reserved for a separately
-deployed API service.
+publishable domain libraries. `@convax/web` owns no product state,
+`@convax/docs` owns no product or architecture runtime state, and
+`@convax/deploy-cloudflare` owns no API business logic. The deployment package is
+the single public origin for `convax.microvoid.io`: static Web assets own normal
+navigation, while the exact `/api` and `/api/**` path family is reserved for a
+separately deployed API service. The Docs application is built and deployed through
+its own Astro and Cloudflare configuration; it is not routed through the product Web
+deployment package.
 
 The three Marketplace packages target the supported Node/Bun authoring and Desktop
 main runtimes. `@convax/marketplace` stays headless but may use Node cryptography for
@@ -311,6 +451,7 @@ boundary checker fails closed until those admissions are complete.
 | Active Canvas/file                                       | `WorkbenchController.activeInput/surface`    | Sole source for the displayed primary content                                |
 | Canvas node selection                                    | Workbench selection plus mounted Canvas view | Always scoped to the corresponding Input/view                                |
 | Canvas document and revision                             | Main Canvas application service/repository   | Sole persistent writer; renderer is an optimistic projection                 |
+| Focused Project-directory listing                        | Transient Canvas view + Project Files port   | Read-only bounded projection; never Canvas document state                    |
 | Node generation preference and latest run                | Owning Canvas `file` node                    | Separate bounded Canvas-owned namespaces; Main coordinates live work         |
 | Plugin node instance state                               | Owning Canvas `file` node                    | Bounded namespaced JSON inside the Canvas document; never iframe storage     |
 | Top-level sidebar size/visibility/resize transaction     | `WorkbenchLayoutController`                  | Desktop supplies pixels, events, animation and persistence                   |
@@ -405,6 +546,17 @@ Managed assets are the explicit exception: scoped Project resource capabilities 
 only files admitted from outside the Project into deterministic content-addressed
 paths below `.convax/assets`. Files already inside the Project are referenced
 directly. The rest of `.convax` remains hidden and protected.
+
+`convax-asset:` is the trusted-renderer projection of a Project-owned resource,
+not a filesystem capability. Its URL carries a typed Project reference and, for a
+mutable Project file, the exact SHA-256 content revision. `@convax/project/node`
+resolves and opens the resource, rejects path replacement and final symbolic
+links, validates the revision or managed-asset digest on that opened handle, and
+serves HEAD or one byte range from the same handle. Desktop receives only the
+bounded response body and metadata; it never receives a native path or reopens the
+resource through `file:`. Failure and cancellation close the handle. This
+Project-specific authority remains separate from session-bearing resource
+protocols and does not introduce a global URI broker.
 
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
 non-authoritative. Builtin and Official are
@@ -534,8 +686,8 @@ Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
   -> @convax/marketplace display groups by {kind,id}
   -> explicit exact-source confirmation and sender-scoped SelectionToken
-  -> Desktop install transition publishes static bytes and InstallRecord
-  -> optional independent setup transition publishes ExecutionGrant
+  -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
+  -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
   -> InstalledCapability projects setup-required, ready, disabled or attention
 ```
 
@@ -562,6 +714,51 @@ dependent recovery envelope. MCP metadata has its own canonical transition. Runt
 revalidates immutable installed bytes, `InstallRecord`, `ExecutionGrant`, and
 `RuntimePreference` without consulting the active source graph, so removing or
 disconnecting a Marketplace disables updates but not a still-safe installed runtime.
+A user-confirmed Plugin install/update, or an explicit Local Plugin import, is the
+execution-consent event and publishes its exact snapshot authorization and
+Marketplace grant in that same durable transition. It never projects a second
+Marketplace setup step. Independent setup remains for MCP endpoint/local-executable
+configuration and the narrowly admitted automatic product-lock preinstall. An
+integrity/authorization mismatch is not setup-required: the Installed projection
+routes it to an exact-source update/reinstall and never offers setup as a repair for
+missing or changed immutable Plugin bytes.
+
+Registry `ownerPluginId` provenance survives every source-qualified projection.
+Plugin-owned Skills are dependency artifacts of the immutable Plugin closure and are
+removed from standalone catalog and update choices before a transition is created.
+Legacy standalone records remain visible only for diagnosis and explicit removal;
+they are never updated into Plugin ownership independently. Managed-Skill startup
+recovery does not infer `next` from a matching directory name. An explicit retry may
+republish only the exact standalone candidate bound by the pending transition,
+using the managed store's reversible replacement publication. A first-install
+publication orphan is projected in Installed inventory and remains explicitly
+retryable when the exact source candidate remains available. Explicit abandonment
+without Catalog evidence clears only the recovery envelope and never deletes
+ambiguous same-name bytes. The Skill owner reports an explicit recovery-required
+error when publication rollback cannot be proven; the Marketplace coordinator then
+retains the transition instead of inferring either side. Otherwise the transition
+remains recovery-required.
+
+For Plugins, an `InstallRecord` is inventory rather than execution truth.
+`InstalledCapability` may report ready only when the validated ActiveSet contains
+the exact `{id, sourceKey, version, artifact.sha256, artifact.size}` binding.
+Desktop binds a legacy record without artifact identity to the immutable active or
+retired-recovery snapshot before publishing an update. Same-version replacements
+therefore recover by artifact identity, never by version. Records deliberately
+preserved while retired-major Plugins are deactivated remain attention state until
+their verified update is selected into a later ActiveSet.
+
+A static Web Plugin has an exact installation authorization even when it contains no
+companion or Hook. That identity binds the normalized capability contract, package
+artifact, source identity and version. On startup, Desktop may repair an older
+missing Marketplace grant only when an existing source-bound InstallRecord matches
+the current ActiveSet Plugin id, version and source exactly. This reconciliation
+cannot claim an unbound Plugin, change source provenance or authorize an incomplete
+companion/Hook snapshot. Any mismatch remains non-executable and routes to
+update/reinstall; Plugin setup is never a user action. The architecture map is
+unchanged because this tightens the existing Desktop Main lifecycle and existing
+Marketplace/ActiveSet stores without adding an owner, dependency, route or trust
+boundary.
 
 ### MCP Server runtime boundary
 
@@ -675,6 +872,24 @@ tree. Scope, revision, placement, native Project paths, Canvas persistence and
 generated-node creation remain host-owned. Sandboxed Plugin callers receive only
 the `generation.execute` methods in the host protocol matching their manifest; the host derives their
 scope and references from the live owning node and its direct incoming edges.
+Web Plugin generation references carry only opaque `inputKey` values issued by the
+Host. Each key is process-ephemeral and cryptographically bound to the exact Plugin
+snapshot, Project/Canvas/owning node, source node, direct edge identity and resource
+revision. It is intentionally not bound to the whole Canvas revision, so unrelated
+node edits and geometry changes do not revoke an otherwise unchanged input. Main
+resolves the key to an internal node reference, and the shared generation service
+then reloads and revalidates the owner, direct edge, resource snapshot and staged
+bytes immediately before a potentially billable external call. Plugins never
+receive or submit that internal node id through the connected-input generation
+reference path; separately granted document projections remain an orthogonal
+capability and cannot substitute a node id for `inputKey`.
+
+Project publication may retain a bounded `.convax/staging` hard-link alias while the
+user-visible `Notes/` or `Generated/` entry is already authoritative. Generation
+input staging therefore accepts an already validated Project resource only when its
+positive link count, native identity, size, timestamps and real path remain unchanged
+through the copy. The generic default remains single-link: verified executable
+snapshots, sidecar outputs and every non-Project caller do not inherit this exception.
 
 A return-delivery operation reuses the same verified executable, input staging,
 revision/source rechecks, cancellation, and at-most-once execution boundary, but
@@ -739,9 +954,11 @@ request. Project or capability changes and a bounded age timer revalidate that
 projection through Main's single-flight catalog refresh. Ready values remain visible
 while revalidation runs, and the committed result notifies both pickers; the
 renderer snapshot never authorizes execution or persists model authority.
-Without an owning node override, a file card inherits that preference only when its
-output matches the card's intrinsic text/image/video/audio kind and accepts the
-current media references.
+Without an owning node override, an image/video replacement card inherits that
+preference only when its output matches the card's intrinsic kind and accepts the
+current media references. A text owner may instead choose image or video output; its
+mounted composer keeps model and tool-option state isolated by output and never
+persists one owner override across those result kinds.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
 catalog only when the owning Plugin contributes the same model through a service and
@@ -754,9 +971,9 @@ and card composers offer the Services route instead of synthesizing an `auto`
 choice. The available catalog is never pruned by current `@` inputs: when no model
 accepts all inputs, the card still shows a concrete matching Agent default or first
 available model and blocks execution until the user removes incompatible inputs or
-chooses a compatible model. A manual card choice stores only the opaque host tool id
-in versioned, namespaced Canvas node metadata; clearing it restores host-default
-resolution. The node override is portable
+chooses a compatible model. A manual image/video replacement-card choice stores only
+the opaque host tool id in versioned, namespaced Canvas node metadata; clearing it
+restores host-default resolution. The node override is portable
 and undoable with the Canvas document, never updates the Agent preference in reverse,
 and requires an exact available output match. Input incompatibility keeps that exact
 model visible but fails closed at submission; missing or output-mismatched ids remain
@@ -779,13 +996,19 @@ Known file-card modalities also constrain the direct model catalog and result: a
 image card accepts only image tools, a video card only video tools, and a mismatched
 Agent default or persisted card override fails closed. This output constraint is
 independent from Agent-mode references, where an explicitly mentioned image may
-still be a valid input to a video tool.
+still be a valid input to a video tool. A text card is the deliberate non-replacement
+case: it may choose image or video, always requests exactly one host-owned pending
+result, and connects that result from the constrained text owner. The owner remains
+unchanged relation context; its body is not implicitly appended to the prompt.
 
 A direct file-card generation persists a Canvas-owned, versioned run on the target
 node, separate from its next-run tool preference and from Plugin-owned state. The run
 retains the normalized user-editable prompt draft, host operation id, resolved
 host-opaque tool id, bounded status, and an optional host-safe opaque sidecar task
-receipt. The draft may be empty when direct incoming text supplies the whole prompt;
+receipt. A terminal run may additionally retain one bounded host-authored failure
+message derived only from a validated service display name; raw sidecar text, native
+diagnostics, paths, credentials, and provider state never enter portable Canvas
+state. The draft may be empty when direct incoming text supplies the whole prompt;
 Main composes the effective model prompt transiently and, for admitted recoverable
 operations, retains it only in the private digest-bound execution snapshot. Main writes
 `submitting` before the external call, updates lifecycle state through Canvas
@@ -798,16 +1021,11 @@ running, task-receipt, guarded replacement, terminal and restart-reconciliation
 state machine as an existing card; a restart cannot leave a placeholder permanently
 pending.
 
-A terminal run whose external result is `unknown` remains attached to and locks its
-original card. The UI may restore that run's normalized prompt only through an
-explicit “new task” action. Submitting that composer uses a fresh `operationId` and
-`create-pending-node`, so Main creates a separate host-owned target while retaining
-the original card and unresolved operation unchanged. Its prompt context and media
-references remain constrained to the original card's live direct incoming edges.
-Main may connect the new target from that owner to preserve visible lineage, but it
-must never replace or clear the old unknown owner.
-This is not an in-place retry and must never bypass Canvas's unknown-retry guard.
-Only a run explicitly marked retry-safe may reuse its card through `replace-node`.
+A failed run remains attached to its original card and retains its normalized
+prompt. The card renders one simple icon-and-message error surface. Selecting the
+card opens the normal composer with that prompt; pressing Send creates a fresh
+`operationId` and may reuse the guarded card through the ordinary replacement
+boundary. No recovery phase automatically submits a new operation.
 
 The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
 Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is
@@ -827,10 +1045,12 @@ selection changes, and panel switches do not cancel accepted work; explicit canc
 crosses queue, preparation and sidecar boundaries. Hydration derives active and
 terminal presentation from the persisted run. If startup finds `submitting` or
 `running` without either a matching live Main execution or a complete admitted LRO
-binding, it marks the run `interrupted` and never repeats a potentially billable
-call. A persisted task id alone is not restart recovery. A recovery-capable v8 tool
-must provide the complete generic LRO contract and pinned immutable runtime binding;
-partial or legacy implementations remain fail-closed.
+binding, it marks the run `failed` and never repeats a potentially billable call.
+A persisted task id alone is not restart recovery. A recovery-capable v8 tool must
+provide the complete generic LRO contract and pinned immutable runtime binding;
+partial or legacy implementations remain fail-closed. Canvas exposes one terminal
+failure state; detailed recovery phases stay private to Main and the sidecar
+journal.
 
 The executable manifest and capability contracts are owned by
 `@convax/plugin-sdk`; Host API availability and errors are generated by
@@ -1029,9 +1249,29 @@ Neither Project nor Workbench imports the other to implement this flow.
 - Same-id Plugin install, update and uninstall remain serialized. Unsupported old
   manifests are rejected without migration; no legacy top-level Plugin Skill is
   adopted or materialized.
+- A startup-invalid ActiveSet quarantines every Plugin consumer for that process.
+  Quarantine may expose an update-only recovery path solely when the pointer,
+  snapshots, complete closure inventories, authorization digests and persisted
+  capability topology all validate, and every rejected manifest differs from a
+  currently valid projection only by a lower retired Host API major. An explicit
+  source-bound Marketplace update may then CAS one current candidate while
+  deactivating the remaining retired-major references. Their immutable snapshots
+  and Marketplace install records remain intact for later updates. Install,
+  import, setup, enable, disable and uninstall stay blocked; corrupt bytes,
+  topology drift, future majors and other manifest failures never enter this path.
+  The quarantined process never begins executing repaired bytes and requires a
+  restart after updates.
 - Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
   typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
   never receives Plugin ids or ownership policy.
+- Registry-owned Skill provenance is preserved in `@convax/marketplace`
+  `SourceQualifiedItem` and filtered before standalone selection. Recovery never
+  guesses an owned or standalone Skill publication from directory-name existence;
+  only an explicit exact-candidate standalone retry may resume its pending publish.
+- Marketplace inventory is not runtime authority. A Plugin is projected ready only
+  when its exact id, SourceKey, version and immutable artifact identity occur in the
+  validated ActiveSet. Same-version transition recovery compares the exact artifact,
+  never just the version string.
 - Official and user-added Marketplace v2 sources are consumed only by Desktop main.
   Renderer requests carry stable source/package ids, never URLs, paths or digests.
   Main verifies the accepted source identity, monotonic sequence, compatibility,
@@ -1120,6 +1360,18 @@ declaration, manifest grant, live scope, sender and cancellation state before
 using the same application service as UI and Agent. Plugin instance-state writes
 may update only that node's namespaced portable state.
 
+The same protocol has one payload-free `disconnect` control envelope. It is
+lifecycle, not a Catalog Host API or Plugin capability: `client.close()` first
+settles local in-flight calls, posts that envelope best-effort, and then closes its
+MessagePort synchronously. The renderer may close only the exact connection already
+bound to that port; the envelope cannot name a frame, Plugin, Project, Canvas, node,
+or renderer/Main connection id. It marks that connection closed immediately and
+awaits the existing fixed renderer/Main disconnect before finishing envelope
+dispatch; Main's handler closes the connection, aborts its work, and revokes all
+sender/frame-owned media sessions before it resolves. Teardown never waits for an
+asynchronous `beforeunload` handler, and malformed or replayed disconnect-shaped
+messages cannot select or widen authority.
+
 Verified Tool sidecars use a separate fixed reverse-MCP adapter with the same exact
 principal rules. Runtime disposal closes the connection and all subscriptions.
 No built-in, default-catalog, vendor, or concrete Plugin id receives a different
@@ -1145,11 +1397,57 @@ synchronization cannot block or reverse a Main commit. Agent and Tool signals ar
 rechecked before durable Canvas saves.
 
 `canvas.inputs.list` returns only pathless, bounded metadata for direct incoming
-file nodes in edge order. `canvas.inputs.open` may open only the exact media stream
-admitted by the generated catalog and manifest grant; it never widens into a
-generic image-byte or Project-file read. The Host currently exposes no generic
-connected-image byte API. A Plugin that needs one must submit a Host capability
-request for human review rather than edit Host code or infer a path.
+file nodes in edge order. `canvas.inputs.open` may open only the exact audio/video
+stream admitted by the generated Catalog and manifest grant; it never widens into
+a generic image-byte or Project-file read. `canvas.inputs.image.open` and
+`canvas.inputs.image.close` are the separate connected-image session lifecycle.
+Open accepts only an opaque `inputKey` from the current node's input listing,
+requires `canvas.connectedImages.read`, and returns a sender/frame-bound opaque
+Host session handle plus a connection-issued, revocable opaque Host URL, bounded
+JPEG/PNG/WebP metadata and an actual-content revision. It never serializes image
+bytes through renderer IPC or exposes a native path.
+
+Main binds issuance, close and revocation to the exact frame principal and direct
+incoming edge, uses the Project-owned stable image reader, performs a bounded
+decode check at the native edge, and revalidates Plugin identity, Canvas revision,
+edge and resource identity after asynchronous work. Electron protocol requests do
+not expose a trustworthy sender/frame principal, so GET/HEAD uses an unguessable
+128-bit bearer URL and revalidates the live Plugin principal and direct edge on
+every fetch; it must not be described as fetch-time frame authentication.
+Cancellation or frame disposal terminates validation and revokes the session;
+close is idempotent and may affect only a session issued to the same sender/frame.
+Neither input API authorizes upload, generation or persistence.
+Every issued session owns its abort lifecycle. For audio/video, Main binds every
+active protocol response stream to that lifecycle; explicit close, frame/sender or
+Plugin revocation, Canvas invalidation, expiry cleanup, and service disposal abort
+further file reads and close the stream-owned file descriptor. Bytes already
+delivered or buffered by the protocol stack cannot be recalled. Connected images
+are instead bounded immutable in-memory snapshots: revocation blocks new fetches
+and cancels validation, but a `Response` already constructed from the snapshot
+remains readable.
+The Plugin document CSP admits `convax-connected-media:` in `img-src` only for
+an exact installed v8 declaration of `canvas.inputs.image.open` with its grant;
+the existing audio/video API controls `media-src` independently. Neither
+declaration widens `connect-src`.
+
+Custom URI schemes are Host composition adapters, not Plugin contributions.
+Convax intentionally has no global URI handler registry or arbitrary resource
+resolver: verified Plugin package assets, trusted-renderer Project resources,
+connected-media bearer sessions and Pet assets have different authorities and
+lifecycles and must not be collapsed behind a service locator. Audio, video and
+image input sessions already share the bounded `connected-media` owner. If a
+second independent short-lived bearer resource protocol is admitted, extract
+only a headless `opaque-resource-session` kernel for URL codec, constant-time
+token checks, TTL, range, capacity and revocation. Resource authorization,
+validation and domain revalidation remain with their owning service.
+
+`convax-pet-asset:` remains owned by the Pet platform and is projected into
+`img-src` only for the exact declared Pet overlay or settings document of a
+validated `convax.plugin/8` snapshot that contributes `convax.pet-host/1` and
+holds `pet.custom.manage`. The Plugin document's meta policy and the Host response
+header must both admit the source. Missing contribution, missing grant, legacy
+schema, and unrelated Plugin documents keep the scheme closed; it never widens
+`media-src` or `connect-src`.
 
 Input-change commands are invalidation signals only; they do not authorize
 transfer or trigger Tool/Agent calls. Here and in document projections, an input
@@ -1214,7 +1512,7 @@ short-lived opaque ticket. Before publication, Main derives a bounded native pre
 from the first staged material; multi-selection adds a count badge, while video and
 audio may use the operating-system thumbnail or associated file icon. Electron's
 native `webContents.startDrag` publishes those copies and the prepared preview to the
-operating system, so Finder, JianYing and other file-drop consumers
+operating system, so Finder and other file-drop consumers
 share the same path without destination-specific UI automation. Expired, canceled,
 consumed and crash-left stages are bounded and removed by Main. Windows remains an
 explicit native-drag WIP until its behavior is verified; no automation fallback is
@@ -1242,6 +1540,14 @@ window coordination; keep the product's visual implementation in the host.
 - Preload: the narrow typed `window.convax` bridge; no business state.
 - Renderer: React shell, controllers, coordinators, view adapters, and preferences;
   no Node/Electron imports.
+
+Packaged Main and preload outputs are complete JavaScript dependency bundles. The
+build disables package dependency externalization and admits only Electron and Node
+built-ins as host-provided imports; a generated-bundle guard rejects every other
+bare static or dynamic import. Main emits one CommonJS entry so Electron Vite does
+not run its ESM compatibility shim over dependency-bundled source strings. Electron
+Builder excludes `node_modules` entirely, so the application archive never relies
+on a staged dependency tree or monorepo workspace layout.
 
 The public bridge keeps separate namespaces for Project lifecycle, Project Files,
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin

@@ -3,6 +3,8 @@ import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 
+import { PLUGIN_API_CATALOG_MAJOR } from "@convax/plugin-api"
+
 import {
   parseWebPluginManifest,
   requireWebPluginId,
@@ -53,6 +55,17 @@ function requireDigest(value: unknown, label: string) {
 
 function bytesFor(value: string | Uint8Array) {
   return typeof value === "string" ? Buffer.from(value, "utf8") : Buffer.from(value)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw runtimeError(`${label} must be an object`)
+  }
+  return value
 }
 
 function normalizeCandidateFiles(files: Readonly<Record<string, string | Uint8Array>>) {
@@ -646,7 +659,7 @@ export class PluginInstallationClosureStore {
     return Object.freeze(plugin)
   }
 
-  async validate(snapshot: InstalledPluginSnapshot) {
+  async #validateInventory(snapshot: InstalledPluginSnapshot) {
     const root = await requireRealDirectory(this.#closureRoot(snapshot.digest), "Plugin installation closure", 0o700)
     const rootEntries = await fs.readdir(root, { withFileTypes: true })
     const expectedRootEntries = snapshot.descriptor.companion ? ["companion", "package"] : ["package"]
@@ -679,7 +692,6 @@ export class PluginInstallationClosureStore {
     } else if (await exists(path.join(root, "companion"))) {
       throw runtimeError("Plugin closure contains an undeclared companion tree")
     }
-    const plugin = await this.readManifest(snapshot)
     const expectedPaths = new Set(snapshot.descriptor.package.files.map((identity) => identity.path))
     const actualPaths = await immutableInventory(packageRoot, "Plugin package closure")
     if (
@@ -688,6 +700,65 @@ export class PluginInstallationClosureStore {
     ) {
       throw runtimeError("Plugin closure package inventory does not match its snapshot")
     }
+  }
+
+  /**
+   * Admits only closures whose immutable bytes still match their snapshot and
+   * whose sole manifest incompatibility is a retired Host API major. The
+   * returned manifest is a validation projection only; persisted bytes and
+   * authorization bindings remain unchanged.
+   */
+  async validateRetiredHostApiMajor(snapshot: InstalledPluginSnapshot) {
+    await this.#validateInventory(snapshot)
+    const manifest = await verifyFile(
+      path.join(this.#closureRoot(snapshot.digest), "package"),
+      "manifest.json",
+      snapshot.descriptor.package.manifest,
+      "Plugin manifest",
+    )
+    let current: InstalledWebPluginSummary
+    let retiredMajor: number
+    try {
+      const raw = record(
+        JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifest.bytes)),
+        "Immutable Plugin manifest",
+      )
+      const hostApi = record(raw.hostApi, "Immutable Plugin Host API declaration")
+      if (typeof hostApi.major !== "number") {
+        throw new TypeError("Immutable Plugin Host API major must be a number")
+      }
+      retiredMajor = hostApi.major
+      if (!Number.isSafeInteger(retiredMajor) || retiredMajor < 1 || retiredMajor >= PLUGIN_API_CATALOG_MAJOR) {
+        throw new TypeError("Immutable Plugin does not target a retired Host API major")
+      }
+      current = toInstalledWebPluginSummary(
+        parseWebPluginManifest({
+          ...raw,
+          hostApi: { ...hostApi, major: PLUGIN_API_CATALOG_MAJOR },
+        }),
+      )
+      const normalizedRetiredManifest = {
+        ...current,
+        hostApi: { ...current.hostApi, major: retiredMajor },
+      }
+      if (
+        pluginSnapshotCanonicalDigest(normalizedRetiredManifest) !==
+        snapshot.descriptor.authorizations.capabilityContractDigest
+      ) {
+        throw new TypeError("Immutable Plugin capability contract does not match its retired authorization binding")
+      }
+    } catch (error) {
+      throw runtimeError("Immutable Plugin is not eligible for retired Host API update recovery", error)
+    }
+    if (current.id !== snapshot.descriptor.pluginId || current.version !== snapshot.descriptor.version) {
+      throw runtimeError("Immutable Plugin manifest identity does not match its snapshot")
+    }
+    return Object.freeze({ current, retiredMajor })
+  }
+
+  async validate(snapshot: InstalledPluginSnapshot) {
+    await this.#validateInventory(snapshot)
+    const plugin = await this.readManifest(snapshot)
     return plugin
   }
 

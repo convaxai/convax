@@ -1,6 +1,10 @@
 import path from "node:path"
 
-import { requireWebPluginId, type ActiveInstalledWebPluginSummary } from "../plugin-contracts"
+import {
+  requireWebPluginId,
+  type ActiveInstalledWebPluginSummary,
+  type InstalledWebPluginSummary,
+} from "../plugin-contracts"
 import {
   PluginInstallationClosureStore,
   pluginExecutionBindingDigest,
@@ -59,6 +63,18 @@ export function pluginExecutionAuthorizationIdentity(
   descriptor: InstalledPluginSnapshot["descriptor"],
 ): PluginSnapshotDigest | null {
   const { companionExecutionDigest, hookExecutionDigest } = descriptor.authorizations
+  if (descriptor.companion && !companionExecutionDigest) return null
+  if (descriptor.hook && !hookExecutionDigest) return null
+  if (!descriptor.companion && !descriptor.hook) {
+    return pluginSnapshotCanonicalDigest({
+      artifact: descriptor.package.artifact,
+      capabilityContractDigest: descriptor.authorizations.capabilityContractDigest,
+      pluginId: descriptor.pluginId,
+      schema: "convax.plugin-static-authorization/1",
+      sourceIdentity: descriptor.sourceIdentity,
+      version: descriptor.version,
+    })
+  }
   return companionExecutionDigest || hookExecutionDigest
     ? pluginSnapshotCanonicalDigest({
         companionExecutionDigest: companionExecutionDigest ?? null,
@@ -79,6 +95,22 @@ function pinIdentity(identity: ActivePluginRuntimeIdentity): Omit<PluginSnapshot
 
 function compareText(left: string, right: string) {
   return left === right ? 0 : left < right ? -1 : 1
+}
+
+export interface RetiredHostApiPluginRecovery {
+  readonly artifact: {
+    readonly sha256: PluginSnapshotDigest
+    readonly size: number
+  }
+  readonly pluginId: string
+  readonly snapshotDigest: PluginSnapshotDigest
+  readonly sourceIdentity: PluginSnapshotDigest
+  readonly version: string
+}
+
+export interface RetiredHostApiRecoveryInspection {
+  readonly plugins: readonly RetiredHostApiPluginRecovery[]
+  readonly revision: number
 }
 
 export class PluginInstallationRuntime {
@@ -133,6 +165,71 @@ export class PluginInstallationRuntime {
       const capabilityTopology = await this.#planCapabilityTopology(plugins)
       await this.#snapshots.compareAndSwapActiveSet(expectedRevision, { capabilityTopology, plugins })
       return this.#readActive()
+    })
+  }
+
+  /**
+   * Replaces one explicitly selected retired-Host-API Plugin and deactivates
+   * the other incompatible references in the same CAS. Their immutable
+   * snapshots and Marketplace install records are preserved for later update.
+   */
+  async publishRetiredHostApiRecovery(
+    expectedRevision: number,
+    candidate: PluginInstallationCandidate,
+    expectedRecovery: RetiredHostApiPluginRecovery,
+  ): Promise<ActivePluginRuntimeSelection> {
+    const prepared = this.#closures.prepare(candidate)
+    return this.#exclusive(async () => {
+      await this.#closures.ensureLayout()
+      const current = await this.#snapshots.readActive()
+      if (current.revision !== expectedRevision) {
+        await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
+          capabilityTopology: current.activeSet?.descriptor.capabilityTopology ?? emptyCapabilityTopology,
+          plugins: current.activeSet?.descriptor.plugins ?? [],
+        })
+        throw runtimeError("Unreachable Active Plugin recovery revision branch")
+      }
+      const recovery = await this.#inspectRetiredHostApiRecovery(current)
+      const currentRecovery = recovery.plugins.find((entry) => entry.pluginId === prepared.manifest.id)
+      if (
+        !currentRecovery ||
+        pluginSnapshotCanonicalDigest(currentRecovery) !== pluginSnapshotCanonicalDigest(expectedRecovery) ||
+        candidate.sourceIdentity !== currentRecovery.sourceIdentity
+      ) {
+        throw runtimeError(`Plugin is not eligible for retired Host API update recovery: ${prepared.manifest.id}`)
+      }
+
+      const snapshot = await this.#snapshots.putInstalledSnapshot(prepared.input)
+      await this.#closures.publish(snapshot, prepared.files, prepared.companionBytes)
+      await this.#closures.validate(snapshot)
+      await this.#faultHook?.("closure.validated-before-pointer", {
+        pluginId: snapshot.descriptor.pluginId,
+        snapshotDigest: snapshot.digest,
+      })
+
+      const incompatibleIds = new Set(recovery.plugins.map((entry) => entry.pluginId))
+      const references = (current.activeSet?.descriptor.plugins ?? []).filter(
+        (reference) => !incompatibleIds.has(reference.pluginId),
+      )
+      references.push({
+        pluginId: snapshot.descriptor.pluginId,
+        snapshotDigest: snapshot.digest,
+      })
+      references.sort((left, right) => compareText(left.pluginId, right.pluginId))
+      await this.#assertSkillNamesUnique(references)
+      const capabilityTopology = await this.#planCapabilityTopology(references)
+      await this.#snapshots.compareAndSwapActiveSet(expectedRevision, {
+        capabilityTopology,
+        plugins: references,
+      })
+      return this.#readActive()
+    })
+  }
+
+  async inspectRetiredHostApiRecovery(): Promise<RetiredHostApiRecoveryInspection> {
+    return this.#exclusive(async () => {
+      await this.#closures.ensureLayout()
+      return this.#inspectRetiredHostApiRecovery(await this.#snapshots.readActive())
     })
   }
 
@@ -612,6 +709,58 @@ export class PluginInstallationRuntime {
     const active = await this.#snapshots.readActive()
     if (active.activeSet) await this.#verifyActiveCapabilityTopology(active)
     return this.#selection(active)
+  }
+
+  async #inspectRetiredHostApiRecovery(
+    active: Awaited<ReturnType<PluginInstallationSnapshotStore["readActive"]>>,
+  ): Promise<RetiredHostApiRecoveryInspection> {
+    if (!active.activeSet) throw runtimeError("Retired Host API update recovery requires an ActiveSet")
+    const contracts: PublishedPluginCapabilityContract[] = []
+    const plugins: RetiredHostApiPluginRecovery[] = []
+    for (const reference of active.activeSet.descriptor.plugins) {
+      const snapshot = await this.#snapshots.readInstalledSnapshot(reference.snapshotDigest)
+      let plugin: InstalledWebPluginSummary
+      try {
+        plugin = await this.#closures.validate(snapshot)
+      } catch (currentError) {
+        try {
+          const recovery = await this.#closures.validateRetiredHostApiMajor(snapshot)
+          plugin = recovery.current
+          plugins.push(
+            Object.freeze({
+              artifact: Object.freeze({ ...snapshot.descriptor.package.artifact }),
+              pluginId: plugin.id,
+              snapshotDigest: snapshot.digest,
+              sourceIdentity: snapshot.descriptor.sourceIdentity,
+              version: plugin.version,
+            }),
+          )
+        } catch (recoveryError) {
+          throw runtimeError(
+            `Active Plugin snapshot is not eligible for retired Host API update recovery: ${reference.pluginId}`,
+            new AggregateError([currentError, recoveryError]),
+          )
+        }
+      }
+      contracts.push(
+        Object.freeze({
+          capabilities: plugin.contributes.capabilities ?? emptyPluginCapabilityDeclaration,
+          identity: Object.freeze({
+            pluginId: plugin.id,
+            pluginVersion: plugin.version,
+            snapshotDigest: snapshot.digest,
+          }),
+        }),
+      )
+    }
+    if (plugins.length === 0) throw runtimeError("ActiveSet has no retired Host API Plugin to recover")
+    if (!verifyPluginCapabilityTopology(active.activeSet.descriptor.capabilityTopology, contracts)) {
+      throw runtimeError("Retired Host API ActiveSet capability topology does not match its immutable snapshots")
+    }
+    return Object.freeze({
+      plugins: Object.freeze(plugins),
+      revision: active.revision,
+    })
   }
 
   async #selection(active: Awaited<ReturnType<PluginInstallationSnapshotStore["readActive"]>>) {

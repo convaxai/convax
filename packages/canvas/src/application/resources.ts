@@ -92,6 +92,7 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
    */
   conflictPolicy?: "reject" | "retry"
   expectedRevision: number
+  parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
   signal?: AbortSignal
   sources: readonly CanvasResourceSource[]
@@ -118,6 +119,7 @@ export interface CanvasCreatePendingResourceRequest extends CanvasDocumentRef {
   expectedRevision: number
   kind: CanvasPendingResourceKind
   label?: string
+  parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
   signal?: AbortSignal
 }
@@ -132,6 +134,7 @@ export interface CanvasCreatePendingGenerationResourceRequest extends CanvasDocu
   kind: CanvasPendingResourceKind
   label?: string
   operationId: string
+  parentId?: string
   prompt: string
   relation?: CanvasAddResourcesCommand["relation"]
   signal?: AbortSignal
@@ -200,6 +203,7 @@ export class CanvasResourceBusinessService {
       expectedRevision: request.expectedRevision,
       kind: request.kind,
       label: request.label,
+      ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
     })
     const existing = this.executions.get(key)
@@ -227,6 +231,7 @@ export class CanvasResourceBusinessService {
       kind: request.kind,
       label: request.label,
       operationId: request.operationId,
+      ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       prompt: request.prompt,
       relation: request.relation,
       toolId: request.toolId,
@@ -325,6 +330,7 @@ export class CanvasResourceBusinessService {
       anchor: request.anchor,
       conflictPolicy: request.conflictPolicy ?? "retry",
       expectedRevision: request.expectedRevision,
+      ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
       sources: request.sources,
       ...(hostPrepared === undefined ? {} : { hostPrepared }),
@@ -438,6 +444,7 @@ export class CanvasResourceBusinessService {
       anchor: request.anchor,
       kind: request.kind,
       label: request.label ?? pendingResourceLabel(request.kind),
+      ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
     })
     return this.executeWithConflictPolicy(request, command, [])
@@ -463,6 +470,7 @@ export class CanvasResourceBusinessService {
       },
       kind: request.kind,
       label: request.label ?? pendingResourceLabel(request.kind),
+      ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
     })
     return this.executeWithConflictPolicy(request, command, [])
@@ -535,6 +543,7 @@ export class CanvasResourceBusinessService {
       command = createAddCanvasResourcesCommand({
         anchor: request.anchor,
         items: prepared.items,
+        ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
         relation: request.relation,
       })
     } catch (error) {

@@ -19,11 +19,19 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
+      - name: Test Plugin API release evidence and workflow policy
+        run: bun test scripts/plugin-api-release-evidence.test.ts scripts/plugin-api-release-workflows.test.ts
+      - name: Enforce append-only Plugin API history
+        if: github.event_name == 'pull_request'
+        run: bun run plugin-api:history-policy --base "${{ github.event.pull_request.base.sha }}"
       - run: bun run package:boundaries
+      - name: Test Plugin SDK release evidence and workflow policy
+        run: bun test scripts/plugin-sdk-release-evidence.test.ts scripts/plugin-sdk-release-workflows.test.ts
 
   quality:
     name: quality (linux)
@@ -50,15 +58,20 @@ jobs:
     name: test (${{ matrix.platform }})
     needs: package-boundaries
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             platform: linux
+            desktop_shard: 1/1
           - os: windows-latest
-            platform: windows
+            platform: windows shard 1/2
+            desktop_shard: 1/2
+          - os: windows-latest
+            platform: windows shard 2/2
+            desktop_shard: 2/2
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -70,6 +83,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Test
         run: bun run test
+        env:
+          CONVAX_DESKTOP_TEST_SHARD: ${{ matrix.desktop_shard }}
 
   desktop-package:
     name: packaged smoke (${{ matrix.platform }})
@@ -95,10 +110,6 @@ jobs:
           bun-version: 1.3.14
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Test macOS native path boundaries
-        if: runner.os == 'macOS'
-        working-directory: packages/desktop
-        run: bun test --isolate src/main/jianying-service.test.ts
       - name: Package and smoke final executable
         if: runner.os != 'Linux'
         run: bun --cwd packages/desktop smoke:packaged

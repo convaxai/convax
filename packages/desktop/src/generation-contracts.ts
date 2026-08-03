@@ -135,6 +135,8 @@ export interface GenerationCanvasRequest {
   expectedRevision: number
   /** Trusted host-only output cardinality guard; this never enters the Tool Plugin input. */
   expectedOutputCount?: number
+  /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
+  parentId?: string
   prompt: string
   /**
    * Canvas text nodes whose authoritative content Main appends to `prompt`.
@@ -175,7 +177,7 @@ export interface GenerationCanvasReconcileRequest {
 }
 
 export interface GenerationCanvasReconcileResult {
-  interruptedNodeIds: readonly string[]
+  failedNodeIds: readonly string[]
   revision: number
 }
 

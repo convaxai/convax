@@ -55,6 +55,10 @@ contract and its routed references.
 - Public Plugin Host APIs and manifest/contribution contracts belong to
   `@convax/plugin-api` and `@convax/plugin-sdk`; Desktop implements and binds them
   but never forks their schemas or generated documentation.
+- Packaged Main and Preload outputs are self-contained JavaScript bundles. Only
+  Electron and Node built-ins may remain external, the ASAR must not contain or
+  depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
+  its ESM compatibility shim into dependency-bundled source strings.
 
 ## Shared composition rules
 
@@ -75,6 +79,14 @@ contract and its routed references.
   failure.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
+- Card conversations infer only direct incoming file nodes. Image/video replacement
+  cards may persist one opaque output-tool override. Text cards isolate model and
+  options by output for the mounted composer and create a separate pending media
+  node; the text owner is only the constrained relation anchor unless separately
+  admitted as input.
+- Project-directory browsing reuses the Project Files listing capability as a
+  transient, bounded, read-only Canvas projection. It never creates persisted Canvas
+  entries or a second filesystem bridge.
 - Treat standalone Skills, Plugin-owned Skills, Web entries, OpenCode Hooks, Agent
   MCP contributions, Tool companions, Host API calls, and inter-Plugin capabilities
   as distinct surfaces. One never grants another's authority.
@@ -85,6 +97,10 @@ contract and its routed references.
 - Bind `convax.plugin/8` contributions and `hostApi` declarations independently.
   Plugin-to-Plugin imports/exports resolve through the typed Host broker and exact
   leased caller/provider snapshots, never direct calls or a service locator.
+- Explicit Plugin install/update/import consent publishes exact execution
+  authorization with the immutable snapshot. Integrity or byte mismatch routes to
+  exact-source reinstall/update, never a second Plugin setup action. Static Web
+  Plugins receive the same exact source/version/artifact-bound authorization.
 - Native paths, credentials, cookies, authorization URLs, SourceKeys, snapshot
   digests, executable bindings, transport choices, and raw diagnostics stay in Main.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender

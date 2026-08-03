@@ -6,6 +6,7 @@ import {
   groupCanvasNodes,
   layoutCanvasNodes,
   moveCanvasNodes,
+  reparentCanvasNodes,
   removeCanvasElements,
   setCanvasNodeGeometry,
   ungroupCanvasNode,
@@ -19,10 +20,10 @@ import {
   createFolderNode,
   createMediaNode,
   createTextNode,
+  getCanvasNodePresentationSize,
   getCanvasNodeSize,
   parseCanvasDocument,
 } from "../document"
-import { isCanvasConnectableNode } from "../connections"
 import { sameCanvasJson } from "../json-equality"
 import type {
   CanvasDocument,
@@ -68,6 +69,8 @@ export interface CanvasAddResourcesCommand {
   items: readonly CanvasAddResourceItem[]
   placement: {
     anchor: CanvasPoint
+    /** When present, `anchor` is expressed in this structural Group's local coordinate space. */
+    parentId?: string
     strategy?: "avoid-overlap-cascade"
   }
   relation?: {
@@ -135,10 +138,9 @@ export type CanvasNodeGenerationRunCommand =
     }
   | {
       type: "generation.run.finish"
+      failureMessage?: string
       nodeId: string
       operationId: string
-      retrySafety: "safe" | "unknown"
-      status: "failed" | "cancelled" | "interrupted"
     }
   | {
       type: "generation.runs.interrupt-inactive"
@@ -236,6 +238,12 @@ export type CanvasPrimitiveCommand =
   | { type: "nodes.group"; label?: string; nodeIds: readonly string[] }
   | { type: "nodes.layout"; gap?: number; layout?: CanvasLayout; nodeIds: readonly string[] }
   | { type: "nodes.move"; delta: CanvasPoint; nodeIds: readonly string[] }
+  | {
+      type: "nodes.reparent"
+      nodeIds: readonly string[]
+      parentId?: string
+      preserveWorldPosition?: boolean
+    }
   | { type: "nodes.setGeometry"; updates: readonly CanvasNodeGeometryUpdate[] }
   | { type: "nodes.ungroup"; nodeId: string }
 
@@ -285,12 +293,17 @@ export class CanvasCommandValidationError extends Error {
 export function createAddCanvasResourcesCommand(input: {
   anchor: CanvasPoint
   items: readonly CanvasUploadItem[]
+  parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
 }): CanvasAddResourcesCommand {
   return {
     type: "resources.add",
     items: input.items.map((item) => ({ item, nodeId: createCanvasId("node") })),
-    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    placement: {
+      anchor: input.anchor,
+      ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+      strategy: "avoid-overlap-cascade",
+    },
     relation: input.relation,
   }
 }
@@ -299,6 +312,7 @@ export function createCanvasPendingResourceCommand(input: {
   anchor: CanvasPoint
   kind: CanvasPendingResourceKind
   label: string
+  parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
 }): CanvasCreatePendingResourceCommand {
   return {
@@ -306,7 +320,11 @@ export function createCanvasPendingResourceCommand(input: {
     kind: input.kind,
     label: input.label,
     nodeId: createCanvasId("node"),
-    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    placement: {
+      anchor: input.anchor,
+      ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+      strategy: "avoid-overlap-cascade",
+    },
     relation: input.relation,
   }
 }
@@ -320,6 +338,7 @@ export function createCanvasPendingGenerationResourceCommand(input: {
   }
   kind: CanvasPendingResourceKind
   label: string
+  parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
 }): CanvasCreatePendingGenerationResourceCommand {
   return {
@@ -328,7 +347,11 @@ export function createCanvasPendingGenerationResourceCommand(input: {
     kind: input.kind,
     label: input.label,
     nodeId: createCanvasId("node"),
-    placement: { anchor: input.anchor, strategy: "avoid-overlap-cascade" },
+    placement: {
+      anchor: input.anchor,
+      ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+      strategy: "avoid-overlap-cascade",
+    },
     relation: input.relation,
   }
 }
@@ -400,11 +423,12 @@ export function findOpenCanvasPoint(
   preferred: CanvasPoint,
   size: CanvasSize = { height: 200, width: 320 },
   bounds?: { bottom: number; left: number; right: number; top: number },
+  parentId?: string,
 ): CanvasPoint {
   requireFinitePoint(preferred, "Placement anchor")
   const gap = 24
   const occupied = document.nodes
-    .filter((node) => !node.parentId)
+    .filter((node) => node.parentId === parentId)
     .sort(
       (left, right) =>
         Math.hypot(left.position.x - preferred.x, left.position.y - preferred.y) -
@@ -414,7 +438,7 @@ export function findOpenCanvasPoint(
   const candidates = [
     preferred,
     ...occupied.flatMap((node) => {
-      const nodeSize = getCanvasNodeSize(node)
+      const nodeSize = getCanvasNodePresentationSize(node)
       return [
         { x: node.position.x + nodeSize.width + gap, y: preferred.y },
         { x: preferred.x, y: node.position.y + nodeSize.height + gap },
@@ -432,8 +456,7 @@ export function findOpenCanvasPoint(
   const open = candidates.find(
     (candidate) =>
       !occupied.some((node) => {
-        if (node.parentId) return false
-        const nodeSize = getCanvasNodeSize(node)
+        const nodeSize = getCanvasNodePresentationSize(node)
         return (
           candidate.x < node.position.x + nodeSize.width + gap &&
           candidate.x + size.width + gap > node.position.x &&
@@ -443,7 +466,7 @@ export function findOpenCanvasPoint(
       }),
   )
   if (open) return open
-  return bounds ? findOpenCanvasPoint(document, preferred, size) : preferred
+  return bounds ? findOpenCanvasPoint(document, preferred, size, undefined, parentId) : preferred
 }
 
 function createBoundedCanvasPlacementCandidates(
@@ -520,7 +543,12 @@ export function applyCanvasApplicationCommand(
   }
   if (command.type === "generation.run.finish") {
     return applyGenerationRunMutation(document, command.nodeId, () =>
-      finishCanvasNodeGenerationRun(document, command.nodeId, command.operationId, command.status, command.retrySafety),
+      finishCanvasNodeGenerationRun(
+        document,
+        command.nodeId,
+        command.operationId,
+        command.failureMessage,
+      ),
     )
   }
   if (command.type === "generation.runs.interrupt-inactive") {
@@ -571,7 +599,7 @@ export function applyCanvasApplicationCommand(
     return result(document, next, affectedNodeIds)
   }
   if (command.type === "nodes.connect") {
-    requireConnectableNodeIds(document, [command.connection.source, command.connection.target])
+    requireNodeIds(document, [command.connection.source, command.connection.target])
     const next = connectCanvasNodes(document, command.connection)
     return result(document, next, [command.connection.source, command.connection.target])
   }
@@ -579,6 +607,33 @@ export function applyCanvasApplicationCommand(
     requireFinitePoint(command.delta, "Move delta")
     requireNodeIds(document, command.nodeIds)
     return result(document, moveCanvasNodes(document, command.nodeIds, command.delta), [...command.nodeIds])
+  }
+  if (command.type === "nodes.reparent") {
+    requireNodeIds(document, command.nodeIds)
+    const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
+    if (command.parentId !== undefined) {
+      requireNonEmptyBoundedString(command.parentId, "Canvas reparent target id", 256)
+      requireNodeIds(document, [command.parentId])
+      const parent = nodeById.get(command.parentId)
+      if (parent?.data.kind !== "group") {
+        throw new CanvasCommandValidationError(`Canvas reparent target is not a structural group: ${command.parentId}`)
+      }
+      for (const nodeId of command.nodeIds) {
+        let ancestor: CanvasNode | undefined = parent
+        const visited = new Set<string>()
+        while (ancestor && !visited.has(ancestor.id)) {
+          if (ancestor.id === nodeId) {
+            throw new CanvasCommandValidationError(`Canvas reparent would create a group cycle: ${nodeId}`)
+          }
+          visited.add(ancestor.id)
+          ancestor = ancestor.parentId ? nodeById.get(ancestor.parentId) : undefined
+        }
+      }
+    }
+    const reparented = reparentCanvasNodes(document, command.nodeIds, command.parentId, {
+      preserveWorldPosition: command.preserveWorldPosition,
+    })
+    return result(document, reparented.document, reparented.selectedNodeIds)
   }
   if (command.type === "nodes.setGeometry") {
     const seen = new Set<string>()
@@ -797,7 +852,7 @@ function applyDocumentPatch(
   const parsed = parseCanvasDocument(candidate, document.id)
   if (!parsed) throw new CanvasCommandValidationError("Canvas patch produced an invalid document")
   for (const edge of [...command.addedEdges, ...command.updatedEdges]) {
-    requireConnectableNodeIds(parsed, [edge.source, edge.target])
+    requireNodeIds(parsed, [edge.source, edge.target])
   }
   if (sameCanvasJson(document, parsed)) return result(document, document)
 
@@ -818,6 +873,7 @@ function applyDocumentPatch(
 
 function addResources(document: CanvasDocument, command: CanvasAddResourcesCommand): CanvasBusinessCommandResult {
   requireFinitePoint(command.placement.anchor, "Placement anchor")
+  requireResourcePlacementParent(document, command.placement.parentId)
   const nodeIds = command.items.map((entry) => entry.nodeId)
   if (new Set(nodeIds).size !== nodeIds.length)
     throw new CanvasCommandValidationError("Resource node ids must be unique")
@@ -827,11 +883,17 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
 
   const relation = command.relation
   const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
-  requireConnectableNodeIds(document, anchorNodeIds)
+  requireNodeIds(document, anchorNodeIds)
   if (command.items.length === 0) return result(document, document)
 
   const nodes = command.items.map(({ item, nodeId }) => createNodeFromResource(item, nodeId, command.placement.anchor))
-  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(nodes[0]))
+  const openPoint = findOpenCanvasPoint(
+    document,
+    command.placement.anchor,
+    getCanvasNodeSize(nodes[0]),
+    undefined,
+    command.placement.parentId,
+  )
   let next = addCanvasNodes(
     document,
     nodes.map((node, index) => ({
@@ -839,6 +901,11 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
       position: { x: openPoint.x + index * 36, y: openPoint.y + index * 36 },
     })),
   ).document
+  if (command.placement.parentId) {
+    next = reparentCanvasNodes(next, nodeIds, command.placement.parentId, {
+      preserveWorldPosition: false,
+    }).document
+  }
   if (relation?.mode === "connect") {
     const direction = relation.direction ?? "from-anchor"
     for (const anchorNodeId of anchorNodeIds) {
@@ -926,6 +993,7 @@ function createPendingResource(
   command: CanvasCreatePendingGenerationResourceCommand | CanvasCreatePendingResourceCommand,
 ): CanvasBusinessCommandResult {
   requireFinitePoint(command.placement.anchor, "Placement anchor")
+  requireResourcePlacementParent(document, command.placement.parentId)
   requirePendingResourceKind(command.kind)
   requireNonEmptyBoundedString(command.nodeId, "Pending resource node id", 256)
   requireNonEmptyBoundedString(command.label, "Pending resource label", 200)
@@ -935,11 +1003,22 @@ function createPendingResource(
 
   const relation = command.relation
   const anchorNodeIds = relation?.mode === "connect" ? [...relation.anchorNodeIds] : []
-  requireConnectableNodeIds(document, anchorNodeIds)
+  requireNodeIds(document, anchorNodeIds)
 
   const node = createPendingResourceNode(command)
-  const openPoint = findOpenCanvasPoint(document, command.placement.anchor, getCanvasNodeSize(node))
+  const openPoint = findOpenCanvasPoint(
+    document,
+    command.placement.anchor,
+    getCanvasNodeSize(node),
+    undefined,
+    command.placement.parentId,
+  )
   let next = addCanvasNodes(document, [{ ...node, position: openPoint }]).document
+  if (command.placement.parentId) {
+    next = reparentCanvasNodes(next, [command.nodeId], command.placement.parentId, {
+      preserveWorldPosition: false,
+    }).document
+  }
   if (relation?.mode === "connect") {
     const direction = relation.direction ?? "from-anchor"
     for (const anchorNodeId of anchorNodeIds) {
@@ -959,6 +1038,16 @@ function createPendingResource(
     }
   }
   return result(document, next, [...new Set([...anchorNodeIds, command.nodeId])], [command.nodeId])
+}
+
+function requireResourcePlacementParent(document: CanvasDocument, parentId: string | undefined) {
+  if (parentId === undefined) return
+  requireNonEmptyBoundedString(parentId, "Resource placement parent id", 256)
+  const parent = document.nodes.find((node) => node.id === parentId)
+  if (!parent) throw new CanvasCommandValidationError(`Canvas node was not found: ${parentId}`)
+  if (parent.data.kind !== "group") {
+    throw new CanvasCommandValidationError(`Canvas resource parent is not a structural group: ${parentId}`)
+  }
 }
 
 function failPendingResource(
@@ -1207,13 +1296,6 @@ function requireNodeIds(document: CanvasDocument, nodeIds: readonly string[]) {
   const existing = new Set(document.nodes.map((node) => node.id))
   const missing = nodeIds.find((nodeId) => !existing.has(nodeId))
   if (missing) throw new CanvasCommandValidationError(`Canvas node was not found: ${missing}`)
-}
-
-function requireConnectableNodeIds(document: CanvasDocument, nodeIds: readonly string[]) {
-  requireNodeIds(document, nodeIds)
-  const nodes = new Map(document.nodes.map((node) => [node.id, node]))
-  const structural = nodeIds.find((nodeId) => !isCanvasConnectableNode(nodes.get(nodeId)!))
-  if (structural) throw new CanvasCommandValidationError(`Canvas structural group is not connectable: ${structural}`)
 }
 
 function requireFinitePoint(point: CanvasPoint, label: string) {

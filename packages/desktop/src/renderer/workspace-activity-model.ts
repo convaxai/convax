@@ -20,7 +20,7 @@ export function summarizeWorkspaceCanvasActivity(
     const run = getCanvasNodeGenerationRun(node)
     if (!run) continue
     if (isCanvasNodeGenerationRunActive(run)) active += 1
-    else if (run.status === "failed" || run.status === "interrupted") attention += 1
+    else if (run.status === "failed") attention += 1
   }
   return { active, attention, total: active + attention }
 }

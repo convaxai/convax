@@ -11,10 +11,18 @@ import type { MarketplaceArtifactInstaller } from "./marketplace-artifact-instal
 export interface DesktopMarketplaceCapabilityInstallerOptions {
   installLocalPlugin(
     directory: string,
-    options: { authorizeExecution: boolean },
+    options: {
+      authorizeExecution: boolean
+      previousVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    },
     item: LocalMarketplacePackage,
   ): Promise<void>
-  installLocalSkill(directory: string): Promise<void>
+  installLocalSkill(
+    directory: string,
+    options: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean },
+  ): Promise<void>
   resolveInstalledTransition(transition: CapabilityTransition): Promise<"next" | "previous" | "unknown">
   mcp: MarketplaceMcpMetadataStore
   authorizePlugin(id: string, mode: MarketplacePluginSetupMode): Promise<string | null>
@@ -54,7 +62,12 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
   async installArtifact(
     item: SourceQualifiedItem,
     prepared: { artifactBytes: Uint8Array; companionBytes: Readonly<Record<string, Uint8Array>> },
-    options: { authorizeExecution: boolean },
+    options: {
+      authorizeExecution: boolean
+      previousVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    },
   ) {
     const registryItem = await this.#options.resolvePackage(item)
     await this.#options.remote.installVerifiedMarketplaceCandidate(
@@ -66,6 +79,9 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
       },
       {
         deferExecutionAuthorization: !options.authorizeExecution,
+        ...(options.previousVersion ? { expectedInstalledVersion: options.previousVersion } : {}),
+        ...(options.replaceExistingSkill ? { replaceExistingSkill: true } : {}),
+        ...(options.recoverExistingSkillOnly ? { recoverExistingSkillOnly: true } : {}),
       },
     )
     const authorizationContractDigest = options.authorizeExecution
@@ -74,33 +90,48 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
     return authorizationContractDigest ? { authorizationContractDigest } : {}
   }
 
-  async installBuiltin(item: SourceQualifiedItem, bytes: Uint8Array) {
+  async installBuiltin(
+    item: SourceQualifiedItem,
+    bytes: Uint8Array,
+    options: { recoverExistingSkillOnly?: boolean; replaceExistingSkill?: boolean } = {},
+  ) {
     if (item.kind !== "skill" || item.delivery.kind !== "builtin-artifact") {
       throw new Error("The first Builtin Marketplace bundle admits standalone Skills only")
     }
-    await this.#options.remote.installVerifiedMarketplaceCandidate({
-      artifactBytes: bytes,
-      sourceIdentity: item.sourceKey,
-      item: {
-        compatibility: item.compatibility,
-        delivery: {
-          kind: "artifact",
-          sha256: sha256Hex(bytes),
-          size: bytes.byteLength,
-          url: "https://github.com/microvoid/convax-plugins/releases/download/builtin/internal",
+    await this.#options.remote.installVerifiedMarketplaceCandidate(
+      {
+        artifactBytes: bytes,
+        sourceIdentity: item.sourceKey,
+        item: {
+          compatibility: item.compatibility,
+          delivery: {
+            kind: "artifact",
+            sha256: sha256Hex(bytes),
+            size: bytes.byteLength,
+            url: "https://github.com/microvoid/convax-plugins/releases/download/builtin/internal",
+          },
+          id: item.id,
+          kind: "skill",
+          presentation: item.presentation,
+          version: item.version,
         },
-        id: item.id,
-        kind: "skill",
-        presentation: item.presentation,
-        version: item.version,
       },
-    })
+      {
+        ...(options.replaceExistingSkill ? { replaceExistingSkill: true } : {}),
+        ...(options.recoverExistingSkillOnly ? { recoverExistingSkillOnly: true } : {}),
+      },
+    )
   }
 
   async installLocal(
     item: LocalMarketplacePackage,
     snapshotDirectory: string,
-    options: { authorizeExecution: boolean },
+    options: {
+      authorizeExecution: boolean
+      previousVersion?: string
+      recoverExistingSkillOnly?: boolean
+      replaceExistingSkill?: boolean
+    },
   ) {
     const realSnapshot = await fs.realpath(snapshotDirectory)
     if (item.kind === "plugin") {
@@ -111,7 +142,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
       return authorizationContractDigest ? { authorizationContractDigest } : {}
     }
     if (item.kind === "skill") {
-      await this.#options.installLocalSkill(realSnapshot)
+      await this.#options.installLocalSkill(realSnapshot, options)
       return {}
     }
     throw new Error("Local MCP metadata uses its dedicated canonical owner")

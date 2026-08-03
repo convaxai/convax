@@ -1,5 +1,6 @@
 import dns from "node:dns/promises"
-import https from "node:https"
+import type { ClientRequest, IncomingMessage } from "node:http"
+import https, { type RequestOptions } from "node:https"
 import { BlockList, isIP } from "node:net"
 
 export type MarketplaceFetchPurpose = "descriptor" | "registry" | "release" | "showcase"
@@ -10,7 +11,6 @@ export interface MarketplaceRepositoryIdentity {
 }
 
 export interface PinnedHttpsFetchOptions {
-  ca?: string | Buffer
   declaredUrl?: string
   maxBytes?: number
   redirectLimit?: number
@@ -20,13 +20,18 @@ export interface PinnedHttpsFetchOptions {
   timeoutMs?: number
 }
 
+type RequestTransport = (
+  options: RequestOptions,
+  onResponse: (response: IncomingMessage) => void,
+) => ClientRequest
+
 export interface PinnedHttpsFetcherOptions {
   /** Test-only seams; production composition must use the defaults. */
   testing?: {
     connectPort?: number
     isPublicAddress?: (address: string, family: 4 | 6) => boolean
+    request?: RequestTransport
     resolve?: typeof dns.lookup
-    tlsServername?: string
   }
 }
 
@@ -177,14 +182,16 @@ function validatePurposeUrl(
 export class PinnedHttpsFetcher {
   readonly #connectPort?: number
   readonly #isPublicAddress: (address: string, family: 4 | 6) => boolean
+  readonly #request: RequestTransport
   readonly #resolve: typeof dns.lookup
-  readonly #tlsServername?: string
 
   constructor(options: PinnedHttpsFetcherOptions = {}) {
     this.#connectPort = options.testing?.connectPort
     this.#isPublicAddress = options.testing?.isPublicAddress ?? isPublicMarketplaceAddress
+    this.#request =
+      options.testing?.request ??
+      ((requestOptions, onResponse) => https.request(requestOptions, onResponse))
     this.#resolve = options.testing?.resolve ?? dns.lookup
-    this.#tlsServername = options.testing?.tlsServername
   }
 
   async fetch(
@@ -242,10 +249,9 @@ export class PinnedHttpsFetcher {
         clearRequestTimeout()
         reject(error)
       }
-      const request = https.request(
+      const request = this.#request(
         {
           agent: false,
-          ca: options.ca,
           headers: { accept: "application/json", "accept-encoding": "identity" },
           hostname: url.hostname,
           lookup: (_hostname, lookupOptions, callback) => {
@@ -261,7 +267,7 @@ export class PinnedHttpsFetcher {
           method: "GET",
           path: `${url.pathname}${url.search}`,
           port: this.#connectPort ?? 443,
-          servername: this.#tlsServername ?? url.hostname,
+          servername: url.hostname,
         },
         (incoming) => {
           destroyIncoming = (error) => incoming.destroy(error)
@@ -314,7 +320,10 @@ export class PinnedHttpsFetcher {
         },
       )
       request.once("socket", (socket) => {
-        socket.once("secureConnect", () => {
+        let verified = false
+        const verifyPinnedAddress = () => {
+          if (verified) return
+          verified = true
           const pinned = new BlockList()
           pinned.addAddress(selected.address, selected.family === 4 ? "ipv4" : "ipv6")
           if (
@@ -325,7 +334,9 @@ export class PinnedHttpsFetcher {
           } else {
             resetTimeout()
           }
-        })
+        }
+        socket.once("connect", verifyPinnedAddress)
+        socket.once("secureConnect", verifyPinnedAddress)
       })
       resetTimeout = () => {
         clearRequestTimeout()

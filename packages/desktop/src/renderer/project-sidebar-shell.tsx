@@ -120,7 +120,7 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
             props.open ||
             (event.relatedTarget instanceof Node &&
               (panelRef.current?.contains(event.relatedTarget) || triggerRef.current?.contains(event.relatedTarget)))
-            )
+          )
             return
           cancelHoverClose()
           dispatchHover("dismiss")
@@ -131,17 +131,13 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
         style={{ "--project-sidebar-size": `${props.size}px` } as React.CSSProperties}
       >
         <div className="project-sidebar-shell__panel">{props.children}</div>
-        {props.open ? props.resizeHandle : null}
+        {props.resizeHandle}
       </div>
       {props.entryPortal
         ? createPortal(
             <ProjectSidebarEntry
               entryLabel={props.entryLabel}
               hoverOpen={hoverReveal}
-              onClose={() => {
-                dispatchHover("dismiss")
-                props.onOpenChange(false)
-              }}
               onHoverClose={() => {
                 entryPointerInsideRef.current = false
                 dispatchHover("entry-leave")
@@ -166,10 +162,6 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
         <ProjectSidebarEntry
           entryLabel={props.entryLabel}
           hoverOpen={hoverReveal}
-          onClose={() => {
-            dispatchHover("dismiss")
-            props.onOpenChange(false)
-          }}
           onHoverClose={() => {
             entryPointerInsideRef.current = false
             dispatchHover("entry-leave")
@@ -195,7 +187,6 @@ export function ProjectSidebarShell(props: ProjectSidebarShellProps) {
 function ProjectSidebarEntry({
   entryLabel,
   hoverOpen,
-  onClose,
   onHoverClose,
   onHoverOpen,
   onOpen,
@@ -204,7 +195,6 @@ function ProjectSidebarEntry({
 }: {
   entryLabel: string
   hoverOpen: boolean
-  onClose(): void
   onHoverClose(): void
   onHoverOpen(): void
   onOpen(): void
@@ -222,7 +212,7 @@ function ProjectSidebarEntry({
       }}
       onPointerLeave={onHoverClose}
     >
-      <ProjectSidebarTrigger label={entryLabel} onClose={onClose} onOpen={onOpen} open={open} ref={triggerRef} />
+      <ProjectSidebarTrigger hidden={open} label={entryLabel} onOpen={onOpen} ref={triggerRef} />
     </aside>
   )
 }

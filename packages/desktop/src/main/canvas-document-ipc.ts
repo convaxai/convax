@@ -349,6 +349,7 @@ interface CanvasResourceMainRequest {
     sourceId: string
     sourcePath: string
   }[]
+  parentId?: string
   projectId: string
   relation?: {
     anchorNodeIds: readonly string[]
@@ -415,6 +416,7 @@ export function registerCanvasResourceIpc(
           canvasId: active.canvasId,
           commandId: input.commandId,
           expectedRevision: input.expectedRevision,
+          ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
           relation: input.relation,
           scopeId: active.projectId,
           sources: input.sources,
@@ -469,7 +471,7 @@ export function registerCanvasResourceIpc(
   ipcMain.handle(canvasResourceRelinkIpcChannel, async (event, value: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     const input = requireCanvasResourceRelinkMainRequest(value)
-    const relinkPreparedResource = resources.relinkPreparedResource
+    const relinkPreparedResource = resources.relinkPreparedResource?.bind(resources)
     if (!relinkPreparedResource) throw new Error("Canvas resource relink service is unavailable")
     const active = await requireActiveRelinkScope(event, input, options)
     return executeCanvasResourceMutation(
@@ -542,7 +544,7 @@ export function registerCanvasResourceIpc(
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     const input = requireCanvasResourceEditableCopyRequest(value)
     const prepareManagedTextEditableCopy = preparation.prepareManagedTextEditableCopy
-    const relinkPreparedResource = resources.relinkPreparedResource
+    const relinkPreparedResource = resources.relinkPreparedResource?.bind(resources)
     if (!prepareManagedTextEditableCopy || !relinkPreparedResource) {
       throw new Error("Canvas editable-copy service is unavailable")
     }
@@ -1008,6 +1010,9 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
     commandId,
     expectedRevision: value.expectedRevision as number,
     externalFiles,
+    ...(value.parentId === undefined
+      ? {}
+      : { parentId: requireNonEmptyString(value.parentId, "Canvas resource parent id") }),
     projectId,
     relation: requireCanvasResourceRelation(value.relation),
     sources: value.sources as CanvasResourceSource[],

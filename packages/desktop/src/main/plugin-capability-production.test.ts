@@ -115,7 +115,7 @@ function candidate(
     description: `${id} capability integration fixture`,
     ...(options.headless ? {} : { entry: "index.html" }),
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: options.headless
         ? options.canvasRead
@@ -385,11 +385,13 @@ async function runtimeFixture(
         operations: {
           closeConnection() {},
           closeInput: unexpectedHostOperation,
+          closeImageInput: unexpectedHostOperation,
           createCanvasImage: unexpectedHostOperation,
           executeGeneration: unexpectedHostOperation,
           listGenerationTools: unexpectedHostOperation,
           listInputs: unexpectedHostOperation,
           openInput: unexpectedHostOperation,
+          openImageInput: unexpectedHostOperation,
           promptAgent: unexpectedHostOperation,
           readProjectText: unexpectedHostOperation,
           replaceNodeState: unexpectedHostOperation,

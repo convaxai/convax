@@ -162,11 +162,17 @@ export function createCanvasCardGenerationRequest(input: {
     throw new Error("The selected generation model configuration is stale")
   }
   const ownerOutput = canvasCardGenerationOutput(input.request)
-  if (!ownerOutput || node.data.kind !== ownerOutput) {
-    throw new Error("Direct card generation is available only for image and video cards")
+  const replacesOwner = node.data.kind === "image" || node.data.kind === "video"
+  const createsRelatedNode = node.data.kind === "text"
+  if (!ownerOutput || (!createsRelatedNode && (!replacesOwner || node.data.kind !== ownerOutput))) {
+    throw new Error("Direct card generation is available only for text, image, and video cards")
   }
   if (input.tool.output !== ownerOutput) {
-    throw new Error(`The selected generation model cannot replace this ${ownerOutput} card`)
+    throw new Error(
+      createsRelatedNode
+        ? `The selected generation model cannot create a ${ownerOutput} result`
+        : `The selected generation model cannot replace this ${ownerOutput} card`,
+    )
   }
   const prompt = input.prompt.trim()
   const generationInputs = inferCanvasGenerationInputs(input.request.document.nodes, input.request.mentionedNodeIds)
@@ -174,7 +180,7 @@ export function createCanvasCardGenerationRequest(input: {
     throw new Error("Card generation requires a prompt or text context")
   }
   const toolInput = validateCanvasCardGenerationToolInput(input.description, input.toolInput)
-  const createsNewTask = input.request.generation?.submissionMode === "create-pending-node"
+  const createsNewTask = createsRelatedNode || input.request.generation?.submissionMode === "create-pending-node"
   return {
     anchor: canvasCardGenerationAnchor(node, input.request.document.nodes),
     context: {
@@ -183,6 +189,7 @@ export function createCanvasCardGenerationRequest(input: {
       source: "canvas-card",
     },
     expectedRevision: input.request.document.revision,
+    expectedOutputCount: 1,
     operationId: input.operationId ?? globalThis.crypto.randomUUID(),
     output: ownerOutput,
     prompt,
@@ -222,10 +229,17 @@ function abortError(message: string) {
 
 export function generationErrorMessage(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
-  return message.replace(
-    /^Error invoking remote method ['"]generation:generate['"]:\s*GenerationToolReportedError:\s*/,
-    "",
-  )
+  const wrapper = /^Error invoking remote method ['"]generation:generate['"]:\s*/
+  if (!wrapper.test(message)) return message
+  const normalized = message.replace(wrapper, "").replace(/^[A-Za-z][A-Za-z0-9]*Error:\s*/, "")
+  if (
+    /(?:service|runtime|provider|server).*(?:unavailable|disconnected|offline|not connected|refused|closed|exited|terminated)/i.test(
+      normalized,
+    )
+  ) {
+    return "生成服务不可用，请在“服务”中检查连接后再试。"
+  }
+  return normalized
 }
 
 export async function executeCanvasCardGeneration(input: {
@@ -256,16 +270,32 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const agentDefault = useAgentGenerationDefault()
   const [prompt, setPrompt] = useState(props.generation.initialPrompt ?? "")
   const [dismissedMentionedNodeIds, setDismissedMentionedNodeIds] = useState<ReadonlySet<string>>(() => new Set())
-  const ownerOutput = props.generation.output
+  const ownerNode = props.request.document.nodes.find((node) => node.id === props.request.ownerNodeId)
+  const persistsOwnerToolId = Boolean(
+    props.generation.onOwnerToolIdChange && (ownerNode?.data.kind === "image" || ownerNode?.data.kind === "video"),
+  )
+  const availableOutputs = useMemo<readonly ("image" | "video")[]>(
+    () => [...new Set(props.generation.availableOutputs ?? [props.generation.output])],
+    [props.generation.availableOutputs, props.generation.output],
+  )
+  const availableOutputKey = availableOutputs.join("\0")
+  const initialOutput = availableOutputs.includes(props.generation.output)
+    ? props.generation.output
+    : (availableOutputs[0] ?? props.generation.output)
+  const [selectedOutput, setSelectedOutput] = useState(initialOutput)
+  const ownerOutput = availableOutputs.includes(selectedOutput) ? selectedOutput : initialOutput
   const catalogVersion = props.catalogVersion ?? props.service.catalogVersion ?? ""
   const operationScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId])
+  const modelScope = JSON.stringify([props.request.document.id, props.request.ownerNodeId, ownerOutput])
   const catalogScope = JSON.stringify([
     props.request.document.id,
     props.request.ownerNodeId,
-    ownerOutput ?? null,
+    ownerOutput,
     catalogVersion,
   ])
-  const initialCachedTools = props.service.getCachedTools?.(ownerOutput ? { output: ownerOutput } : {})
+  const initialCachedTools = props.service
+    .getCachedTools?.({ output: ownerOutput })
+    ?.filter((tool) => tool.output === ownerOutput)
   const [catalog, setCatalog] = useState<ScopedLoad<readonly CanvasGenerationToolSummary[]>>(
     initialCachedTools
       ? { scope: catalogScope, status: "ready", value: initialCachedTools }
@@ -275,7 +305,10 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     scope: "",
     status: "loading",
   })
-  const [toolInput, setToolInput] = useState<Record<string, ToolInputValue>>({})
+  const [toolInputsByOwner, setToolInputsByOwner] = useState<Record<string, Readonly<Record<string, ToolInputValue>>>>(
+    {},
+  )
+  const [localToolIds, setLocalToolIds] = useState<Partial<Record<"image" | "video", string>>>({})
   const [operationError, setOperationError] = useState<string>()
   const [operationMessage, setOperationMessage] = useState<string>()
   const [generating, setGenerating] = useState(false)
@@ -319,11 +352,16 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   const currentTools = currentCatalog?.status === "ready" ? currentCatalog.value : []
   const compatibleTools = compatibleCanvasCardGenerationTools(currentTools, ownerOutput, references)
   const optimisticOwnerToolIsCurrent = Boolean(
-    optimisticOwnerTool?.scope === operationScope &&
+    persistsOwnerToolId &&
+      optimisticOwnerTool?.scope === modelScope &&
       (optimisticOwnerTool.toolId === props.generation.ownerToolId ||
         optimisticOwnerTool.pendingOwnerToolIds.includes(props.generation.ownerToolId)),
   )
-  const ownerToolId = optimisticOwnerToolIsCurrent ? optimisticOwnerTool?.toolId : props.generation.ownerToolId
+  const ownerToolId = persistsOwnerToolId
+    ? optimisticOwnerToolIsCurrent
+      ? optimisticOwnerTool?.toolId
+      : props.generation.ownerToolId
+    : localToolIds[ownerOutput]
   const selectedOwnerTool = ownerToolId
     ? currentTools.find((tool) => tool.id === ownerToolId && (!ownerOutput || tool.output === ownerOutput))
     : undefined
@@ -352,7 +390,8 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     [mentionedNodes, promptContextNodeIdSet, referenceByNodeId, resolvedTool],
   )
   const descriptionScope = resolvedToolId ? JSON.stringify([catalogScope, resolvedToolId]) : ""
-  const toolInputOwner = resolvedToolId ? JSON.stringify([operationScope, resolvedToolId]) : ""
+  const toolInputOwner = resolvedToolId ? JSON.stringify([modelScope, resolvedToolId]) : ""
+  const toolInput = toolInputOwner ? (toolInputsByOwner[toolInputOwner] ?? {}) : {}
   const currentDescription = descriptionScope && description.scope === descriptionScope ? description : undefined
   const inputValidation =
     currentDescription?.status === "ready"
@@ -378,29 +417,37 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
 
   useEffect(() => {
     setDismissedMentionedNodeIds(new Set())
-    setToolInput({})
+    setLocalToolIds({})
+    setToolInputsByOwner({})
     setOperationError(undefined)
     setOperationMessage(undefined)
   }, [operationScope])
 
   useEffect(() => {
+    setSelectedOutput(initialOutput)
+  }, [availableOutputKey, initialOutput, operationScope])
+
+  useEffect(() => {
     if (
       optimisticOwnerTool &&
-      (optimisticOwnerTool.scope !== operationScope ||
+      (!persistsOwnerToolId ||
+        optimisticOwnerTool.scope !== modelScope ||
         props.generation.ownerToolId === optimisticOwnerTool.toolId ||
         !optimisticOwnerTool.pendingOwnerToolIds.includes(props.generation.ownerToolId))
     ) {
       setOptimisticOwnerTool(undefined)
     }
-  }, [operationScope, optimisticOwnerTool, props.generation.ownerToolId])
+  }, [modelScope, optimisticOwnerTool, persistsOwnerToolId, props.generation.ownerToolId])
 
   useEffect(() => {
     const isLatest = catalogRequestRef.current.begin(catalogScope)
     const controller = new AbortController()
-    const cachedTools = props.service.getCachedTools?.(ownerOutput ? { output: ownerOutput } : {})
+    const cachedTools = props.service
+      .getCachedTools?.({ output: ownerOutput })
+      ?.filter((tool) => tool.output === ownerOutput)
     if (cachedTools) setCatalog({ scope: catalogScope, status: "ready", value: cachedTools })
     else setCatalog({ scope: catalogScope, status: "loading" })
-    void props.service.listTools(ownerOutput ? { output: ownerOutput } : {}, controller.signal).then(
+    void props.service.listTools({ output: ownerOutput }, controller.signal).then(
       (listed) => {
         if (!mountedRef.current || controller.signal.aborted || !isLatest()) return
         const listedForOutput = ownerOutput ? listed.filter((tool) => tool.output === ownerOutput) : listed
@@ -421,7 +468,9 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
   useEffect(() => {
     if (!props.service.subscribeCatalog || !props.service.getCachedTools) return undefined
     return props.service.subscribeCatalog(() => {
-      const cachedTools = props.service.getCachedTools?.(ownerOutput ? { output: ownerOutput } : {})
+      const cachedTools = props.service
+        .getCachedTools?.({ output: ownerOutput })
+        ?.filter((tool) => tool.output === ownerOutput)
       if (!cachedTools) return
       setCatalog({ scope: catalogScope, status: "ready", value: cachedTools })
     })
@@ -431,7 +480,6 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     const ownerChanged = toolInputOwnerRef.current !== toolInputOwner
     toolInputOwnerRef.current = toolInputOwner
     if (ownerChanged) {
-      setToolInput({})
       setOperationError(undefined)
       setOperationMessage(undefined)
     }
@@ -445,11 +493,16 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
     const controller = new AbortController()
     const cachedDescription = props.service.getCachedDescription?.(describedToolId)
     if (cachedDescription?.toolId === describedToolId) {
-      setToolInput((current) =>
-        ownerChanged
-          ? createToolInputDefaultValues(cachedDescription.fields)
-          : reconcileToolInputValues(cachedDescription.fields, current),
-      )
+      setToolInputsByOwner((current) => {
+        const existing = current[toolInputOwner]
+        return {
+          ...current,
+          [toolInputOwner]:
+            existing === undefined
+              ? createToolInputDefaultValues(cachedDescription.fields)
+              : reconcileToolInputValues(cachedDescription.fields, existing),
+        }
+      })
       setDescription({ scope: descriptionScope, status: "ready", value: cachedDescription })
     } else {
       setDescription({ scope: descriptionScope, status: "loading" })
@@ -465,9 +518,13 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
           })
           return
         }
-        setToolInput((current) =>
-          reconcileToolInputValues(result.fields, current, cachedDescription?.toolId !== describedToolId),
-        )
+        setToolInputsByOwner((current) => {
+          const existing = current[toolInputOwner]
+          return {
+            ...current,
+            [toolInputOwner]: reconcileToolInputValues(result.fields, existing ?? {}, existing === undefined),
+          }
+        })
         setDescription({ scope: descriptionScope, status: "ready", value: result })
       },
       (error) => {
@@ -492,7 +549,11 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
         description: currentDescription.value,
         operationId: globalThis.crypto.randomUUID(),
         prompt,
-        request: { ...props.request, mentionedNodeIds },
+        request: {
+          ...props.request,
+          generation: { ...props.generation, output: ownerOutput },
+          mentionedNodeIds,
+        },
         signal: controller.signal,
         tool: resolvedTool,
         toolInput,
@@ -557,7 +618,7 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
 
   return (
     <form
-      className="flex min-h-[152px] flex-col px-3 pb-3 pt-1"
+      className="flex min-h-[96px] flex-col px-3 pb-2 pt-1"
       data-canvas-card-generation-panel
       onSubmit={runGeneration}
     >
@@ -579,12 +640,13 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
         ) : null}
         <textarea
           aria-label="Generation prompt"
-          className="min-h-16 max-h-32 flex-1 resize-none bg-transparent px-1 pb-2 pt-2 text-[15px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
+          className="min-h-10 max-h-20 flex-none resize-none [field-sizing:content] bg-transparent px-1 pb-2 pt-2 text-[15px] leading-6 text-foreground outline-none placeholder:text-muted-foreground disabled:pointer-events-none disabled:opacity-50"
           data-canvas-shortcuts="ignore"
           disabled={generating}
           onChange={(event) => setPrompt(event.currentTarget.value)}
           placeholder="描述要生成的内容…"
           ref={promptRef}
+          rows={1}
           value={prompt}
         />
         {modelHint ? (
@@ -613,20 +675,42 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
         ) : null}
         <div className="flex min-w-0 shrink-0 items-center gap-1 pt-1">
           <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {availableOutputs.length > 1 ? (
+              <SegmentedTabs
+                aria-label="生成类型"
+                className="shrink-0"
+                items={availableOutputs.map((output) => ({
+                  disabled: generating,
+                  label: output === "image" ? "图片" : "视频",
+                  value: output,
+                }))}
+                onValueChange={(output) => {
+                  setSelectedOutput(output)
+                  setOptimisticOwnerTool(undefined)
+                  setOperationError(undefined)
+                  setOperationMessage(undefined)
+                }}
+                tabClassName="px-2 py-1 text-[11px]"
+                value={ownerOutput}
+              />
+            ) : null}
             {currentCatalog?.status === "ready" && currentTools.length > 0 ? (
               <ModelSelect
                 disabled={generating}
                 onValueChange={(toolId) => {
-                  setOptimisticOwnerTool((current) => {
-                    const pendingOwnerToolIds = [
-                      ...(current?.scope === operationScope ? current.pendingOwnerToolIds : []),
-                      ...(current?.scope === operationScope ? [current.toolId] : []),
-                      props.generation.ownerToolId,
-                    ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index)
-                    return { pendingOwnerToolIds, scope: operationScope, toolId }
-                  })
-                  props.generation.onOwnerToolIdChange?.(toolId)
-                  setToolInput({})
+                  if (persistsOwnerToolId && props.generation.onOwnerToolIdChange) {
+                    setOptimisticOwnerTool((current) => {
+                      const pendingOwnerToolIds = [
+                        ...(current?.scope === modelScope ? current.pendingOwnerToolIds : []),
+                        ...(current?.scope === modelScope ? [current.toolId] : []),
+                        props.generation.ownerToolId,
+                      ].filter((candidate, index, candidates) => candidates.indexOf(candidate) === index)
+                      return { pendingOwnerToolIds, scope: modelScope, toolId }
+                    })
+                    props.generation.onOwnerToolIdChange(toolId)
+                  } else {
+                    setLocalToolIds((current) => ({ ...current, [ownerOutput]: toolId }))
+                  }
                   setOperationError(undefined)
                   setOperationMessage(undefined)
                 }}
@@ -652,7 +736,10 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
                 disabled={generating}
                 fields={currentDescription.value.fields}
                 layout="inline"
-                onValuesChange={setToolInput}
+                onValuesChange={(values) => {
+                  if (!toolInputOwner) return
+                  setToolInputsByOwner((current) => ({ ...current, [toolInputOwner]: values }))
+                }}
                 values={toolInput}
               />
             ) : null}

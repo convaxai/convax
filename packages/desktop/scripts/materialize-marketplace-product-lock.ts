@@ -122,6 +122,10 @@ async function readLocalRelease(root: string, artifact: MarketplaceArtifactLock)
 }
 
 async function syncDirectory(directory: string) {
+  // Windows does not expose a synchronizable directory handle. File bytes are
+  // still fsynced before publication, so skip only this unsupported durability
+  // barrier instead of swallowing write or verification failures.
+  if (process.platform === "win32") return
   const handle = await fs.open(directory, "r")
   try {
     await handle.sync()

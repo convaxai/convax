@@ -1,6 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
+import { createRequire } from "node:module"
 import type { DevEnvironment, HotUpdateOptions } from "vite"
 import desktopViteConfig, {
+  assertPackagedRuntimeBundle,
   assertSandboxedPreloadBundle,
   desktopPreloadInputs,
   desktopRendererInputs,
@@ -8,10 +10,101 @@ import desktopViteConfig, {
   workspaceDistFullReloadPlugin,
 } from "./electron.vite.config"
 
+const require = createRequire(import.meta.url)
+
 describe("Desktop Main dependency packaging", () => {
-  test("bundles the Hook module parser because packaged apps omit node_modules", () => {
+  test("bundles every Main and preload dependency because packaged apps omit node_modules", () => {
     if (typeof desktopViteConfig === "function") throw new Error("Expected a static Electron Vite config")
-    expect(desktopViteConfig.main?.build?.externalizeDeps?.exclude).toContain("acorn")
+    expect(desktopViteConfig.main?.build?.externalizeDeps).toBe(false)
+    expect(desktopViteConfig.preload?.build?.externalizeDeps).toBe(false)
+  })
+
+  test("keeps the CommonJS Main output and package entry aligned", () => {
+    if (typeof desktopViteConfig === "function") throw new Error("Expected a static Electron Vite config")
+    const output = desktopViteConfig.main?.build?.rollupOptions?.output
+    if (!output || Array.isArray(output)) throw new Error("Expected one Desktop Main output")
+    const manifest = require("./package.json") as { main?: string }
+
+    expect(output).toMatchObject({ entryFileNames: "[name].cjs", format: "cjs" })
+    expect(manifest.main).toBe("./out/main/index.cjs")
+  })
+
+  test("rejects static or dynamic package imports left in packaged output", () => {
+    expect(() =>
+      assertPackagedRuntimeBundle(
+        {
+          "index.js": {
+            dynamicImports: ["@convax/plugin-sdk/client"],
+            imports: ["@convax/marketplace"],
+            isEntry: true,
+            type: "chunk",
+          },
+        },
+        "Main",
+      ),
+    ).toThrow("@convax/marketplace, @convax/plugin-sdk/client")
+  })
+
+  test("rejects a real package require but ignores require-shaped generated-code strings", () => {
+    expect(() =>
+      assertPackagedRuntimeBundle(
+        {
+          "index.cjs": {
+            code: 'const generated = \'require("ajv/dist/runtime/uri").default\'; require("@convax/marketplace")',
+            imports: [],
+            isEntry: true,
+            type: "chunk",
+          },
+        },
+        "Main",
+      ),
+    ).toThrow("@convax/marketplace")
+    expect(() =>
+      assertPackagedRuntimeBundle(
+        {
+          "index.cjs": {
+            code: 'const generated = \'require("ajv/dist/runtime/uri").default\'; require("node:path")',
+            imports: [],
+            isEntry: true,
+            type: "chunk",
+          },
+        },
+        "Main",
+      ),
+    ).not.toThrow()
+  })
+
+  test("rejects unresolved require.resolve and computed dynamic imports", () => {
+    expect(() =>
+      assertPackagedRuntimeBundle(
+        {
+          "index.cjs": {
+            code: 'const entry = require.resolve("@convax/marketplace"); import(entry)',
+            imports: [],
+            isEntry: true,
+            type: "chunk",
+          },
+        },
+        "Main",
+      ),
+    ).toThrow("@convax/marketplace, <dynamic import>")
+  })
+
+  test("allows only emitted chunks plus Electron and Node host modules", () => {
+    expect(() =>
+      assertPackagedRuntimeBundle(
+        {
+          "chunks/shared.js": { imports: [], isEntry: false, type: "chunk" },
+          "index.js": {
+            dynamicImports: ["./chunks/lazy.js", "node:fs/promises"],
+            imports: ["chunks/shared.js", "electron", "electron/main", "fs", "node:path"],
+            isEntry: true,
+            type: "chunk",
+          },
+        },
+        "Main",
+      ),
+    ).not.toThrow()
   })
 })
 

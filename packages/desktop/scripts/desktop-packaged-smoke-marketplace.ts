@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 
@@ -25,13 +24,9 @@ export function assertAutomaticPreinstalledCapability(capability: unknown, ident
   }
 }
 
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex")
-}
-
 export async function assertAutomaticPreinstalledAuthorization(
   userDataRoot: string,
-  identity: { id: string; version: string },
+  identity: { authorizationContractDigest: string; id: string; version: string },
 ) {
   const state = JSON.parse(
     await fs.readFile(path.join(userDataRoot, "marketplaces", "state-v1.json"), "utf8"),
@@ -55,31 +50,9 @@ export async function assertAutomaticPreinstalledAuthorization(
     throw new Error("Packaged automatic preinstall installation is missing")
   }
 
-  const authorizationDirectory = path.join(userDataRoot, "plugin-authorizations", identity.id)
-  const entries = await fs.readdir(authorizationDirectory, { withFileTypes: true })
-  if (
-    entries.length !== 1 ||
-    !entries[0]?.isFile() ||
-    entries[0].isSymbolicLink() ||
-    !entries[0].name.endsWith(".json")
-  ) {
-    throw new Error(`Packaged automatic preinstall Tool authorization is invalid: ${JSON.stringify(entries)}`)
+  if (!sha256Pattern.test(identity.authorizationContractDigest)) {
+    throw new Error("Packaged automatic preinstall authorization digest is invalid")
   }
-  const receipt = JSON.parse(
-    await fs.readFile(path.join(authorizationDirectory, entries[0].name), "utf8"),
-  ) as unknown
-  if (
-    !isRecord(receipt) ||
-    receipt.schema !== "convax.tool-plugin-authorization/1" ||
-    receipt.bindingKind !== "managed" ||
-    receipt.pluginId !== identity.id ||
-    receipt.pluginVersion !== identity.version ||
-    typeof receipt.key !== "string" ||
-    !sha256Pattern.test(receipt.key)
-  ) {
-    throw new Error("Packaged automatic preinstall Tool authorization receipt is invalid")
-  }
-  const expectedContractDigest = sha256(JSON.stringify({ hook: null, tool: receipt.key }))
   const grant = executionGrants.find(
     (candidate) =>
       isRecord(candidate) &&
@@ -90,10 +63,10 @@ export async function assertAutomaticPreinstalledAuthorization(
   )
   if (
     !isRecord(grant) ||
-    grant.authorizationContractDigest !== expectedContractDigest ||
+    grant.authorizationContractDigest !== identity.authorizationContractDigest ||
     !Number.isSafeInteger(grant.revision)
   ) {
-    throw new Error("Packaged automatic preinstall ExecutionGrant is missing or does not match its managed receipt")
+    throw new Error("Packaged automatic preinstall ExecutionGrant does not match its immutable Plugin authorization")
   }
 }
 
@@ -107,7 +80,10 @@ export async function assertNoLegacyDefaultCapabilityReceipt(userDataRoot: strin
   throw new Error("Packaged Marketplace recreated the legacy default capability receipt")
 }
 
-export function assertMarketplaceSmokeSnapshot(snapshot: unknown) {
+export function assertMarketplaceSmokeSnapshot(
+  snapshot: unknown,
+  automaticPreinstall?: { id: string; version: string },
+) {
   if (!isRecord(snapshot)) throw new Error("Packaged Marketplace smoke snapshot is invalid")
   if (snapshot.marketplaceSurfaceVisible !== true) {
     throw new Error("Packaged Desktop did not expose the Marketplace Settings surface")
@@ -162,13 +138,20 @@ export function assertMarketplaceSmokeSnapshot(snapshot: unknown) {
   ) {
     throw new Error("Packaged Marketplace did not install the Builtin canvas-storyboard Skill")
   }
-  if (!isRecord(snapshot.ffmpegInstalled) || snapshot.ffmpegInstalled.sourceLabel !== "convax-official") {
-    throw new Error("Packaged Marketplace did not retain the Official ffmpeg-tools source")
+  if (automaticPreinstall === undefined) {
+    if (snapshot.ffmpegInstalled !== undefined) {
+      throw new Error("Packaged Marketplace installed a target-specific Plugin on an unsupported target")
+    }
+    return
   }
-  assertAutomaticPreinstalledCapability(snapshot.ffmpegInstalled, {
-    id: "ffmpeg-tools",
-    version: String(snapshot.ffmpegInstalled.version),
-  })
+  if (
+    !isRecord(snapshot.ffmpegInstalled) ||
+    snapshot.ffmpegInstalled.id !== automaticPreinstall.id ||
+    snapshot.ffmpegInstalled.sourceLabel !== "convax-official"
+  ) {
+    throw new Error("Packaged Marketplace did not retain the declared Official automatic preinstall")
+  }
+  assertAutomaticPreinstalledCapability(snapshot.ffmpegInstalled, automaticPreinstall)
 }
 
 export async function assertLocalMarketplaceIdentity(userDataRoot: string) {

@@ -85,6 +85,7 @@ export async function addCanvasUploadResources(
     commandId: host.createCommandId(),
     expectedRevision: authoritativeDocument.revision,
     localFiles,
+    ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
     projectId: request.projectId,
     ...(request.relation === undefined ? {} : { relation: request.relation }),
     sources: [...request.sources, ...transport.sources],

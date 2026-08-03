@@ -3,16 +3,15 @@ import { pluginApiCatalog, pluginApiMethodContracts } from "@convax/plugin-api"
 import {
   isPluginHostCancel,
   isPluginHostCapabilityInvokeRequest,
+  isPluginHostDisconnect,
   pluginHostProtocolV8,
 } from "@convax/plugin-sdk/client"
-import {
-  PluginHostApiError,
-  PluginHostApiResourceUnavailableError,
-} from "./plugin-host-errors"
+import { PluginHostApiError, PluginHostApiResourceUnavailableError } from "./plugin-host-errors"
 import {
   desktopPluginHostProtocolV8,
   isDesktopPluginCapabilityAvailabilityRequest,
   isDesktopPluginCapabilityInvokeRequest,
+  isDesktopPluginHostDisconnect,
   isDesktopPluginHostRequest,
   isPluginCapabilityRequest,
   pluginCapabilityApiFailure,
@@ -123,6 +122,18 @@ describe("desktop Plugin protocols", () => {
     expect(pluginCapabilityProtocolFailure("capability-failure", new Error("denied"))).toMatchObject({
       protocol: pluginCapabilityProtocolV3,
     })
+  })
+
+  test("admits only the closed sender-scoped disconnect control envelope", () => {
+    const disconnect = {
+      protocol: desktopPluginHostProtocolV8,
+      type: "disconnect",
+    }
+    expect(isPluginHostDisconnect(disconnect)).toBeTrue()
+    expect(isDesktopPluginHostDisconnect(disconnect)).toBeTrue()
+    expect(isDesktopPluginHostDisconnect({ ...disconnect, frameId: "forbidden" })).toBeFalse()
+    expect(isDesktopPluginHostDisconnect({ ...disconnect, pluginId: "forbidden" })).toBeFalse()
+    expect(isDesktopPluginHostDisconnect({ ...disconnect, protocol: pluginCapabilityProtocolV3 })).toBeFalse()
   })
 
   test("projects admitted Host API failures without leaking diagnostics", () => {

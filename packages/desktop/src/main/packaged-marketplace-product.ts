@@ -28,9 +28,7 @@ import {
   projectRegistryPackageRuntimeSurface,
   type MarketplaceRuntimeSurface,
 } from "./marketplace-runtime-surface"
-import type {
-  VerifiedMarketplaceCandidate,
-} from "./marketplace-artifact-installer"
+import type { VerifiedMarketplaceCandidate } from "./marketplace-artifact-installer"
 import { unpackSafeZip } from "./safe-zip"
 
 const maxManifestBytes = 4 * 1024 * 1024
@@ -219,24 +217,21 @@ export class PackagedMarketplaceProduct {
     }
     const builtinArchive = await read(manifest.lock.resolved.builtinBundle)
     const builtin = parseBuiltinBundleArchive(builtinArchive)
-    const builtinRuntimeSurfaces = projectPackagedBuiltinRuntimeSurfaces(
-      builtin,
-      builtinArchive,
-    )
+    const builtinRuntimeSurfaces = projectPackagedBuiltinRuntimeSurfaces(builtin, builtinArchive)
     const descriptor = parseMarketplaceDescriptor(
-      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
-        await read(manifest.lock.resolved.official.descriptor),
-      )),
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.descriptor)),
+      ),
     )
     const registry = parseRegistryV2(
-      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
-        await read(manifest.lock.resolved.official.registry),
-      )),
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.registry)),
+      ),
     )
     const showcase = parseShowcaseV2(
-      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(
-        await read(manifest.lock.resolved.official.showcase),
-      )),
+      JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(await read(manifest.lock.resolved.official.showcase)),
+      ),
       registry,
       descriptor,
     )
@@ -245,9 +240,7 @@ export class PackagedMarketplaceProduct {
       builtin.members.length !== manifest.reservation.members.length ||
       builtin.members.some(
         (member) =>
-          !manifest.reservation.members.some(
-            (expected) => expected.id === member.id && expected.kind === member.kind,
-          ),
+          !manifest.reservation.members.some((expected) => expected.id === member.id && expected.kind === member.kind),
       )
     ) {
       throw new Error("Packaged Marketplace product metadata is not closed by its lock")
@@ -336,35 +329,34 @@ export class PackagedMarketplaceProduct {
           runtimeSurface:
             member.kind === "skill"
               ? "none"
-              : requireBuiltinRuntimeSurface(
-                  this.#builtinRuntimeSurfaces,
-                  member.id,
-                  member.version,
-                ),
+              : requireBuiltinRuntimeSurface(this.#builtinRuntimeSurfaces, member.id, member.version),
           sourceKey: builtinKey,
           sourceKind: "builtin",
           sourceOrder: 0,
           version: member.version,
         }),
       ),
-      ...this.registry.packages.filter((item) => !item.yanked).map(
-        (item): SourceQualifiedItem => ({
-          catalogRevision: this.registry.revision,
-          catalogSequence: this.registry.sequence,
-          compatibility: item.compatibility,
-          delivery: item.delivery,
-          id: item.id,
-          kind: item.kind,
-          marketplaceId: this.descriptor.id,
-          official: true,
-          presentation: item.presentation,
-          runtimeSurface: projectRegistryPackageRuntimeSurface(item),
-          sourceKey: officialSourceKey,
-          sourceKind: "network",
-          sourceOrder: 0,
-          version: item.version,
-        }),
-      ),
+      ...this.registry.packages
+        .filter((item) => !item.yanked)
+        .map(
+          (item): SourceQualifiedItem => ({
+            catalogRevision: this.registry.revision,
+            catalogSequence: this.registry.sequence,
+            compatibility: item.compatibility,
+            delivery: item.delivery,
+            id: item.id,
+            kind: item.kind,
+            marketplaceId: this.descriptor.id,
+            official: true,
+            ...(item.ownerPluginId === undefined ? {} : { ownerPluginId: item.ownerPluginId }),
+            presentation: item.presentation,
+            runtimeSurface: projectRegistryPackageRuntimeSurface(item),
+            sourceKey: officialSourceKey,
+            sourceKind: "network",
+            sourceOrder: 0,
+            version: item.version,
+          }),
+        ),
     ]
   }
 
@@ -406,29 +398,21 @@ export function projectPackagedBuiltinRuntimeSurfaces(
   const surfaces = new Map<string, MarketplaceRuntimeSurface>()
   for (const member of bundle.members) {
     if (member.kind !== "plugin") continue
-    const artifact = readBuiltinBundleMember(
-      archive,
-      projectBuiltinMemberDelivery(bundle, member),
-    )
+    const artifact = readBuiltinBundleMember(archive, projectBuiltinMemberDelivery(bundle, member))
     const manifestBytes = unpackSafeZip(artifact)["manifest.json"]
     if (manifestBytes === undefined) {
       throw new Error("Packaged Builtin Plugin is missing manifest.json")
     }
     let value: unknown
     try {
-      value = JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes),
-      )
+      value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes))
     } catch (error) {
       throw new Error("Packaged Builtin Plugin manifest is invalid", {
         cause: error,
       })
     }
     const projected = parsePluginRuntimeSurface(value, member)
-    surfaces.set(
-      builtinIdentity(member.id, member.version),
-      projected.runtimeSurface,
-    )
+    surfaces.set(builtinIdentity(member.id, member.version), projected.runtimeSurface)
   }
   return surfaces
 }

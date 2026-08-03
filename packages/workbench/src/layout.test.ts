@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from "bun:test"
-import { WorkbenchLayoutController, WorkbenchLayoutParts } from "./layout"
+import {
+  getWorkbenchLayoutPartSnapshot,
+  WorkbenchLayoutController,
+  WorkbenchLayoutParts,
+} from "./layout"
 
 function options(overrides: Record<string, object> = {}) {
   return {
@@ -53,12 +57,21 @@ describe("WorkbenchLayoutController", () => {
   test("resizes from one baseline and clamps to host constraints", () => {
     const controller = new WorkbenchLayoutController(options())
     expect(controller.beginResize(WorkbenchLayoutParts.PrimarySidebar)).toBe(true)
-    expect(controller.getSnapshot().resize).toEqual({ partId: WorkbenchLayoutParts.PrimarySidebar })
+    expect(controller.getSnapshot().resize).toEqual({
+      partId: WorkbenchLayoutParts.PrimarySidebar,
+      preview: { size: 280, visible: true },
+    })
 
     expect(controller.updateResize(-1_000)).toBe(true)
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.PrimarySidebar]?.size).toBe(180)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.PrimarySidebar,
+    )?.size).toBe(180)
     expect(controller.updateResize(1_000)).toBe(true)
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.PrimarySidebar]?.size).toBe(520)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.PrimarySidebar,
+    )?.size).toBe(520)
     expect(controller.endResize()).toBe(true)
     expect(controller.getSnapshot().resize).toBeNull()
   })
@@ -68,7 +81,10 @@ describe("WorkbenchLayoutController", () => {
     controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
     controller.updateResize(-240)
 
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]).toEqual({
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )).toEqual({
       size: 360,
       visible: false,
     })
@@ -76,6 +92,48 @@ describe("WorkbenchLayoutController", () => {
     controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
     expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]).toEqual({
       size: 360,
+      visible: true,
+    })
+  })
+
+  test("tracks both collapsible sidebars through the gap between minimum size and collapse threshold", () => {
+    const controller = new WorkbenchLayoutController(
+      options({
+        [WorkbenchLayoutParts.PrimarySidebar]: { collapseThreshold: 140 },
+      }),
+    )
+
+    controller.beginResize(WorkbenchLayoutParts.PrimarySidebar)
+    controller.updateResize(-120)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.PrimarySidebar,
+    )).toEqual({
+      size: 160,
+      visible: true,
+    })
+    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.PrimarySidebar]).toEqual({
+      size: 280,
+      visible: true,
+    })
+    controller.endResize()
+    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.PrimarySidebar]).toEqual({
+      size: 180,
+      visible: true,
+    })
+
+    controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
+    controller.updateResize(-180)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )).toEqual({
+      size: 180,
+      visible: true,
+    })
+    controller.endResize()
+    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]).toEqual({
+      size: 200,
       visible: true,
     })
   })
@@ -98,14 +156,94 @@ describe("WorkbenchLayoutController", () => {
     const controller = new WorkbenchLayoutController(options())
     controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
     controller.updateResize(-300)
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]?.visible).toBe(false)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )?.visible).toBe(false)
 
     controller.updateResize(-100)
-    expect(controller.getSnapshot().parts[WorkbenchLayoutParts.SecondarySidebar]).toEqual({
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )).toEqual({
       size: 260,
       visible: true,
     })
     controller.endResize()
+  })
+
+  test("keeps a threshold collapse stable across a small pointer-release rebound", () => {
+    const controller = new WorkbenchLayoutController(options())
+    controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
+    controller.updateResize(-250)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )?.visible).toBe(false)
+
+    controller.updateResize(-230)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )).toEqual({
+      size: 360,
+      visible: false,
+    })
+    controller.endResize()
+  })
+
+  test("blocks reopening a drag-collapsed part until its cooldown expires", () => {
+    let now = 10_000
+    const controller = new WorkbenchLayoutController({
+      ...options({
+        [WorkbenchLayoutParts.SecondarySidebar]: { collapseReopenDelayMs: 1_000 },
+      }),
+      now: () => now,
+    })
+
+    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, false)).toBe(true)
+    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(true)
+    controller.beginResize(WorkbenchLayoutParts.SecondarySidebar)
+    controller.updateResize(-300)
+    controller.updateResize(-150)
+    expect(getWorkbenchLayoutPartSnapshot(
+      controller.getSnapshot(),
+      WorkbenchLayoutParts.SecondarySidebar,
+    )?.visible).toBe(false)
+    controller.endResize()
+
+    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(false)
+    now += 999
+    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(false)
+    now += 1
+    expect(controller.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)).toBe(true)
+  })
+
+  test("starts either sidebar's reopen cooldown when a drag collapse commits, not while held", () => {
+    for (const partId of Object.values(WorkbenchLayoutParts)) {
+      let now = 10_000
+      const controller = new WorkbenchLayoutController({
+        ...options({
+          [WorkbenchLayoutParts.PrimarySidebar]: { collapseReopenDelayMs: 1_000, collapseThreshold: 140 },
+          [WorkbenchLayoutParts.SecondarySidebar]: { collapseReopenDelayMs: 1_000 },
+        }),
+        now: () => now,
+      })
+
+      controller.beginResize(partId)
+      controller.updateResize(-300)
+      now += 1_000
+      controller.updateResize(-150)
+
+      expect(getWorkbenchLayoutPartSnapshot(controller.getSnapshot(), partId)?.visible).toBe(false)
+      controller.endResize()
+      expect(controller.getSnapshot().parts[partId]?.visible).toBe(false)
+      expect(controller.setPartVisible(partId, true)).toBe(false)
+      now += 999
+      expect(controller.setPartVisible(partId, true)).toBe(false)
+      now += 1
+      expect(controller.setPartVisible(partId, true)).toBe(true)
+    }
   })
 
   test("cancelResize restores both size and visibility", () => {
@@ -175,5 +313,11 @@ describe("WorkbenchLayoutController", () => {
     expect(() => new WorkbenchLayoutController(options({
       [WorkbenchLayoutParts.SecondarySidebar]: { collapseThreshold: Number.NaN },
     }))).toThrow("must be finite")
+    expect(() => new WorkbenchLayoutController(options({
+      [WorkbenchLayoutParts.PrimarySidebar]: { collapseReopenDelayMs: 1_000 },
+    }))).toThrow("collapse reopen delay")
+    expect(() => new WorkbenchLayoutController(options({
+      [WorkbenchLayoutParts.SecondarySidebar]: { collapseReopenDelayMs: -1 },
+    }))).toThrow("collapse reopen delay")
   })
 })

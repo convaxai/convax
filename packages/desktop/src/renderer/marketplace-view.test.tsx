@@ -104,7 +104,7 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
       ],
       revision: 1,
     })),
-    listInstalled: mock(async () => ({ capabilities: [], revision: 1 })),
+    listInstalled: mock(async () => ({ capabilities: [], pluginRuntimeState: "available" as const, revision: 1 })),
     listMarketplaces: mock(async () => [
       {
         health: "available" as const,
@@ -160,6 +160,14 @@ function button(label: string) {
   )
   if (!match) throw new Error(`Button not found: ${label}`)
   return match
+}
+
+function deferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => undefined
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve
+  })
+  return { promise, resolve }
 }
 
 test("renders one aggregated card and requires an explicit source choice", async () => {
@@ -347,6 +355,64 @@ test("ignores an older catalog refresh after a newer refresh has completed", asy
   expect(document.body.textContent).not.toContain("Stale")
 })
 
+test("keeps a capability busy until the newest superseding refresh commits", async () => {
+  type Inventory = Awaited<ReturnType<MarketplaceClient["listInstalled"]>>
+  const second = deferred<Inventory>()
+  const third = deferred<Inventory>()
+  let inventoryRequest = 0
+  let notify = () => undefined
+  const installed = (version: string, updateAvailable: boolean): Inventory => ({
+    capabilities: [
+      {
+        id: "example",
+        kind: "plugin",
+        name: "Example",
+        sourceLabel: "Convax Official",
+        state: "ready",
+        updateAvailable,
+        version,
+      },
+    ],
+    pluginRuntimeState: "available",
+    revision: Number(version.split(".")[0]),
+  })
+  const marketplace = client({
+    listInstalled: mock(() => {
+      inventoryRequest += 1
+      if (inventoryRequest === 2) return second.promise
+      if (inventoryRequest === 3) return third.promise
+      return Promise.resolve(installed("1.0.0", true))
+    }),
+    onDidChange: mock((listener) => {
+      notify = listener
+      return () => undefined
+    }),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+  await act(async () => button("Update Example").click())
+  await act(async () => button("Confirm and update").click())
+  await act(async () => {
+    notify()
+    await Promise.resolve()
+  })
+
+  await act(async () => {
+    second.resolve(installed("2.0.0", false))
+    await second.promise
+  })
+  expect(button("Update Example").disabled).toBe(true)
+  expect(document.querySelector('[data-capability-progress="plugin:example"]')).not.toBeNull()
+
+  await act(async () => {
+    third.resolve(installed("2.0.0", false))
+    await third.promise
+    await Promise.resolve()
+  })
+  expect(document.body.textContent).toContain("2.0.0")
+  expect(document.querySelector('[data-capability-progress="plugin:example"]')).toBeNull()
+})
+
 test("discards one-time source tokens after a failed install and begins a fresh retry", async () => {
   let attempt = 0
   const marketplace = client({
@@ -411,6 +477,7 @@ test("uses localized product states and exposes an available update", async () =
           version: "1.0.0",
         },
       ],
+      pluginRuntimeState: "available" as const,
       revision: 1,
     })),
   })
@@ -422,6 +489,325 @@ test("uses localized product states and exposes an available update", async () =
   expect(marketplace.beginUpdate).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
   await act(async () => button("Confirm and update").click())
   expect(marketplace.update).toHaveBeenCalledWith({ selectionToken: "u".repeat(24) })
+})
+
+test("routes Plugin integrity failures to reinstall instead of offering setup as a false repair", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          attention: "integrity-or-authorization",
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent-and-convax" as const,
+          sourceLabel: "Convax Official",
+          state: "attention" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+
+  expect(document.body.textContent).toContain("Reinstall required")
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(button("Update")).toBeDefined()
+  expect(marketplace.setup).not.toHaveBeenCalled()
+})
+
+test("keeps setup available only for a capability that actually lacks setup", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "mcp-server" as const,
+          name: "Example",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Example",
+          state: "setup-required" as const,
+          updateAvailable: false,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+  await act(async () => button("Complete setup").click())
+
+  expect(marketplace.setup).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
+})
+
+test("never offers Complete setup for a Plugin even when an older main projects setup-required", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent-and-convax" as const,
+          sourceLabel: "Example",
+          state: "setup-required" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(marketplace.setup).not.toHaveBeenCalled()
+})
+
+test("shows card-local progress while preparing an update and rejects duplicate clicks", async () => {
+  type Choices = Awaited<ReturnType<MarketplaceClient["beginUpdate"]>>
+  const pendingChoices = deferred<Choices>()
+  const beginUpdate = mock(() => pendingChoices.promise)
+  const marketplace = client({
+    beginUpdate,
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "mcp-server" as const,
+          name: "Example",
+          sourceLabel: "Convax Official",
+          state: "ready" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+
+  const update = button("Update Example")
+  await act(async () => {
+    update.click()
+    update.click()
+    await Promise.resolve()
+  })
+
+  expect(beginUpdate).toHaveBeenCalledTimes(1)
+  expect(button("Update Example").disabled).toBe(true)
+  expect(button("Update Example").getAttribute("aria-busy")).toBe("true")
+  expect(button("Update Example").querySelector('[data-ui-loading-spinner=""]')).not.toBeNull()
+  expect(document.querySelector('[data-capability-progress="mcp-server:example"]')?.textContent).toBe(
+    "Preparing update…",
+  )
+
+  await act(async () => {
+    pendingChoices.resolve([
+      {
+        description: "Exact installed source",
+        marketplaceLabel: "Convax Official",
+        name: "Example",
+        permissionSummary: [],
+        confirmationToken: "u".repeat(24),
+        setup: "none",
+        version: "2.0.0",
+      },
+    ])
+    await pendingChoices.promise
+  })
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+})
+
+test("keeps the installed card busy during update execution and rejects duplicate confirmation", async () => {
+  type UpdateResult = Awaited<ReturnType<MarketplaceClient["update"]>>
+  const pendingUpdate = deferred<UpdateResult>()
+  const update = mock(() => pendingUpdate.promise)
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "mcp-server" as const,
+          name: "Example",
+          sourceLabel: "Convax Official",
+          state: "ready" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+    update,
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+  await act(async () => button("Update Example").click())
+
+  const confirm = button("Confirm and update")
+  await act(async () => {
+    confirm.click()
+    confirm.click()
+    await Promise.resolve()
+  })
+
+  expect(marketplace.confirmUpdate).toHaveBeenCalledTimes(1)
+  expect(update).toHaveBeenCalledTimes(1)
+  expect(button("Update Example").disabled).toBe(true)
+  expect(button("Update Example").getAttribute("aria-busy")).toBe("true")
+  expect(button("Update Example").textContent).toContain("Updating…")
+  expect(document.querySelector('[data-capability-progress="mcp-server:example"]')?.textContent).toBe("Updating…")
+
+  await act(async () => {
+    pendingUpdate.resolve({
+      id: "example",
+      kind: "mcp-server",
+      name: "Example",
+      sourceLabel: "Convax Official",
+      state: "ready",
+      updateAvailable: false,
+      version: "2.0.0",
+    })
+    await pendingUpdate.promise
+  })
+})
+
+test("reveals a safe inline update error on its card and starts retries from a fresh source token", async () => {
+  const scrollIntoView = mock(() => undefined)
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scrollIntoView,
+  })
+  let attempt = 0
+  const marketplace = client({
+    beginUpdate: mock(async () => {
+      attempt += 1
+      return [
+        {
+          description: "Exact installed source",
+          marketplaceLabel: "Convax Official",
+          name: "Example",
+          permissionSummary: [],
+          confirmationToken: String(attempt).repeat(24),
+          setup: "none" as const,
+          version: "2.0.0",
+        },
+      ]
+    }),
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          id: "example",
+          kind: "mcp-server" as const,
+          name: "Example",
+          sourceLabel: "Convax Official",
+          state: "ready" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "available" as const,
+      revision: 1,
+    })),
+    update: mock(async () => {
+      throw new Error("failed /Users/private/tool https://secret.example/?token=x")
+    }),
+  })
+  await render(marketplace)
+  await act(async () => button("Installed").click())
+  await act(async () => button("Update Example").click())
+  await act(async () => button("Confirm and update").click())
+
+  const inlineError = document.querySelector<HTMLElement>('[data-capability-error="mcp-server:example"]')
+  expect(inlineError).not.toBeNull()
+  expect(inlineError?.closest("article")?.textContent).toContain("Example")
+  expect(inlineError?.textContent).toContain("The operation could not be completed")
+  expect(inlineError?.textContent).not.toContain("/Users/")
+  expect(inlineError?.textContent).not.toContain("https://")
+  expect(document.activeElement).toBe(inlineError)
+  expect(scrollIntoView).toHaveBeenCalledTimes(1)
+
+  await act(async () => button("Update Example").click())
+  expect(marketplace.beginUpdate).toHaveBeenCalledTimes(2)
+  expect(document.querySelector('[data-capability-error="mcp-server:example"]')).toBeNull()
+  await act(async () => button("Cancel").click())
+})
+
+test("shows a session-wide Plugin outage and does not offer unusable Plugin setup", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          attention: "plugin-runtime-unavailable-for-session",
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Convax Official",
+          state: "attention" as const,
+          updateAvailable: true,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "unavailable-for-session" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+
+  expect(document.body.textContent).toContain("The Plugin subsystem is unavailable for this session")
+  expect(button("Import…").disabled).toBe(true)
+  expect(button("Install Example").disabled).toBe(true)
+  await act(async () => button("Installed").click())
+  expect(document.body.textContent).toContain("Unavailable for this session")
+  expect(document.body.textContent).not.toContain("Complete setup")
+  expect(button("Update").disabled).toBe(true)
+  expect(button("Disable").disabled).toBe(true)
+  expect(button("Uninstall Example").disabled).toBe(true)
+  expect(marketplace.setup).not.toHaveBeenCalled()
+})
+
+test("keeps Update available only for a byte-verified retired Host API recovery", async () => {
+  const marketplace = client({
+    listInstalled: mock(async () => ({
+      capabilities: [
+        {
+          attention: "plugin-runtime-unavailable-for-session",
+          id: "example",
+          kind: "plugin" as const,
+          name: "Example",
+          runtimeScope: "agent" as const,
+          sourceLabel: "Convax Official",
+          state: "attention" as const,
+          updateAvailable: true,
+          updateRecoveryAvailable: true as const,
+          version: "1.0.0",
+        },
+      ],
+      pluginRuntimeState: "unavailable-for-session" as const,
+      revision: 1,
+    })),
+  })
+  await render(marketplace)
+
+  expect(document.body.textContent).toContain("retired Host API")
+  await act(async () => button("Installed").click())
+  expect(document.body.textContent).toContain("Protocol update available")
+  expect(button("Update").disabled).toBe(false)
+  expect(button("Disable").disabled).toBe(true)
+  await act(async () => button("Update").click())
+  expect(marketplace.beginUpdate).toHaveBeenCalledWith({ id: "example", kind: "plugin" })
 })
 
 test("previews a Marketplace URL before confirming add", async () => {

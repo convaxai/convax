@@ -23,8 +23,15 @@ import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
   ProjectCanvasController,
+  type ProjectCanvasSidebarNode,
+  type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
-import { WorkbenchController, WorkbenchLayoutController, WorkbenchLayoutParts } from "@convax/workbench"
+import {
+  getWorkbenchLayoutPartSnapshot,
+  WorkbenchController,
+  WorkbenchLayoutController,
+  WorkbenchLayoutParts,
+} from "@convax/workbench"
 import {
   CheckCircle2,
   FileOutput,
@@ -126,6 +133,7 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
+import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import { ProjectHome } from "./project-home"
 import {
@@ -172,6 +180,11 @@ const primarySidebarBounds = workspaceShellMetrics.primarySidebar
 const secondarySidebarBounds = workspaceShellMetrics.utilitySidebar
 const primarySidebarCollapseThreshold = 180
 const secondarySidebarCollapseThreshold = 260
+const sidebarCollapseReopenDelayMs = 1_000
+
+function ensureWorkbenchPartVisible(controller: WorkbenchLayoutController, partId: string) {
+  return controller.getSnapshot().parts[partId]?.visible === true || controller.setPartVisible(partId, true)
+}
 
 function App() {
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
@@ -185,6 +198,12 @@ function App() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
+  const [activeCanvasNodes, setActiveCanvasNodes] = useState<ProjectCanvasSidebarNodeProjection | null>(null)
+  const [sidebarNodeReveal, setSidebarNodeReveal] = useState<{
+    canvasId: string
+    nodeId: string
+    projectId: string
+  } | null>(null)
   const [agentCompactStatus, setAgentCompactStatus] = useState<AgentCompactStatus>(() => resolveAgentCompactStatus({}))
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
@@ -300,6 +319,7 @@ function App() {
     return new WorkbenchLayoutController({
       parts: {
         [WorkbenchLayoutParts.PrimarySidebar]: {
+          collapseReopenDelayMs: sidebarCollapseReopenDelayMs,
           collapseThreshold: primarySidebarCollapseThreshold,
           initialSize: initialLayoutPreferences.primarySidebar.size,
           initialVisible: initialLayoutPreferences.primarySidebar.visible,
@@ -307,6 +327,7 @@ function App() {
           minSize: primarySidebarBounds.minSize,
         },
         [WorkbenchLayoutParts.SecondarySidebar]: {
+          collapseReopenDelayMs: sidebarCollapseReopenDelayMs,
           collapseThreshold: secondarySidebarCollapseThreshold,
           initialSize: initialLayoutPreferences.secondarySidebar.size,
           initialVisible: initialLayoutPreferences.secondarySidebar.visible,
@@ -653,6 +674,7 @@ function App() {
       ) {
         return
       }
+      if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
       setCanvasInspector(projection)
       setWorkspaceUtilityDrawer(
         openInspectorUtility(
@@ -660,7 +682,6 @@ function App() {
           `${projection.nodeId}:${projection.revision}`,
         ),
       )
-      workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
     },
     [activeCanvasId, activeProjectId, workbenchLayoutController],
   )
@@ -766,6 +787,67 @@ function App() {
   useEffect(() => {
     if (activeProjectId && activeCanvas) writeLastCanvasPreference(localStorage, activeProjectId, activeCanvas.id)
   }, [activeCanvas, activeProjectId])
+  useEffect(() => {
+    setActiveCanvasNodes((current) =>
+      current && current.projectId === activeProjectId && current.canvasId === activeCanvasId ? current : null,
+    )
+  }, [activeCanvasId, activeProjectId])
+  const publishActiveCanvasNodes = useCallback((document: CanvasDocument) => {
+    const current = pluginHostContextRef.current
+    if (!current.activeProject || current.activeCanvas?.id !== document.id) return
+    const next = {
+      canvasId: document.id,
+      nodes: projectCanvasSidebarNodes(document),
+      projectId: current.activeProject.id,
+    } satisfies ProjectCanvasSidebarNodeProjection
+    setActiveCanvasNodes((previous) => (sameProjectCanvasNodeProjection(previous, next) ? previous : next))
+  }, [])
+  const loadProjectCanvasNodes = useCallback(
+    async ({ canvasId, projectId }: { canvasId: string; projectId: string }) => {
+      const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId: projectId })
+      return snapshot.document ? projectCanvasSidebarNodes(snapshot.document) : []
+    },
+    [],
+  )
+  const activateProjectCanvasNode = useCallback(
+    async ({ canvasId, nodeId }: { canvasId: string; nodeId: string }) => {
+      const projectId = activeProjectId
+      if (!projectId || !(await projectCanvasWorkbench.openCanvas(projectId, canvasId))) return
+      setSidebarNodeReveal({ canvasId, nodeId, projectId })
+    },
+    [activeProjectId, projectCanvasWorkbench],
+  )
+  useEffect(() => {
+    const pending = sidebarNodeReveal
+    if (!pending) return
+    if (pending.projectId !== activeProjectId) {
+      setSidebarNodeReveal(null)
+      return
+    }
+    const mounted = canvasEditorScopeRef.current
+    if (
+      pending.canvasId !== activeCanvasId ||
+      mounted?.projectId !== pending.projectId ||
+      mounted.canvasId !== pending.canvasId
+    ) {
+      return
+    }
+    setSidebarNodeReveal(null)
+    void canvasViewRegistry
+      .execute({
+        command: {
+          animation: appearancePreferences.reducedMotion ? "instant" : "smooth",
+          fit: "center",
+          nodeIds: [pending.nodeId],
+          select: true,
+          type: "nodes.reveal",
+        },
+        expectedDocumentId: pending.canvasId,
+        expectedScopeId: pending.projectId,
+        viewId: "desktop-main",
+      })
+      .catch((error) => console.warn("Could not reveal the Canvas node from the Project sidebar", error))
+  }, [activeCanvasId, activeProjectId, appearancePreferences.reducedMotion, canvasViewRegistry, sidebarNodeReveal])
   const openSkillDetails = useCallback(
     async (name: string) => {
       if (!activeProjectId) return false
@@ -911,6 +993,7 @@ function App() {
           ),
           operationId,
           ...(request.output ? { output: request.output } : {}),
+          ...(request.parentId ? { parentId: request.parentId } : {}),
           prompt: request.prompt,
           ...(request.promptContextNodeIds?.length ? { promptContextNodeIds: request.promptContextNodeIds } : {}),
           ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
@@ -926,6 +1009,16 @@ function App() {
       },
     }
     return createCanvasServices({
+      folderBrowse: createProjectFolderBrowseService({
+        currentScope: () => {
+          const current = pluginHostContextRef.current
+          return current.activeProject && current.activeCanvas
+            ? { canvasId: current.activeCanvas.id, projectId: current.activeProject.id }
+            : null
+        },
+        flush: flushAuthoritativeCanvas,
+        projectFiles: window.convax.projectFiles,
+      }),
       draftDecision: {
         decide({ count }) {
           if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
@@ -1017,7 +1110,7 @@ function App() {
             activeCanvasId,
             activeProjectId,
             createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-            flush: flushCanvasForAgent,
+            flush: flushAuthoritativeCanvas,
             projectFiles: projectFilesController,
             request,
             resources: window.convax.canvas.resources,
@@ -1359,8 +1452,7 @@ function App() {
       client,
       flush: flushCanvasForAgent,
       icon: <FileOutput />,
-      label:
-        locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder、剪映或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+      label: locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder 或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
       mode: {
         description:
           locale === "zh-CN"
@@ -1410,8 +1502,8 @@ function App() {
 
       const update = (clientX: number) => {
         const layout = workbenchLayoutController.getSnapshot()
-        const primary = layout.parts[WorkbenchLayoutParts.PrimarySidebar]!
-        const secondary = layout.parts[WorkbenchLayoutParts.SecondarySidebar]!
+        const primary = getWorkbenchLayoutPartSnapshot(layout, WorkbenchLayoutParts.PrimarySidebar)!
+        const secondary = getWorkbenchLayoutPartSnapshot(layout, WorkbenchLayoutParts.SecondarySidebar)!
         const presentation = resolveWorkspaceLayout({
           agentVisible: secondary.visible,
           projectSidebarVisible: primary.visible,
@@ -1422,7 +1514,7 @@ function App() {
         const available =
           partId === WorkbenchLayoutParts.PrimarySidebar
             ? window.innerWidth - occupiedBySecondary - workspaceShellMetrics.minimumCanvasPeekSize
-            : presentation.agent === "dock"
+            : presentation.utilityPresentation === "dock"
               ? window.innerWidth - occupiedByPrimary - workspaceShellMetrics.minimumCanvasPeekSize
               : presentation.utilityPresentation === "overlay"
                 ? window.innerWidth - workspaceShellMetrics.utilityOverlayInset * 2
@@ -1430,6 +1522,8 @@ function App() {
         const requested = startSize + (clientX - startX) * direction
         const constrained = Math.min(requested, Math.max(0, available))
         workbenchLayoutController.updateResize(constrained - startSize)
+        const resizedPart = getWorkbenchLayoutPartSnapshot(workbenchLayoutController.getSnapshot(), partId)!
+        return resizedPart.visible ? undefined : "commit"
       }
 
       let session: CapturedPointerDragSession | null = null
@@ -1445,6 +1539,7 @@ function App() {
           if (workbenchResizeSessionRef.current === session) workbenchResizeSessionRef.current = null
         },
         pointerId: event.pointerId,
+        suppressClickAfterCommit: true,
         update,
       })
       if (session) workbenchResizeSessionRef.current = session
@@ -1452,8 +1547,11 @@ function App() {
     [workbenchLayoutController],
   )
 
-  const primarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.PrimarySidebar]!
-  const secondarySidebar = workbenchLayoutSnapshot.parts[WorkbenchLayoutParts.SecondarySidebar]!
+  const primarySidebar = getWorkbenchLayoutPartSnapshot(workbenchLayoutSnapshot, WorkbenchLayoutParts.PrimarySidebar)!
+  const secondarySidebar = getWorkbenchLayoutPartSnapshot(
+    workbenchLayoutSnapshot,
+    WorkbenchLayoutParts.SecondarySidebar,
+  )!
   useEffect(() => {
     setWorkspaceUtilityDrawer((current) => {
       if (!secondarySidebar.visible) return closedWorkspaceUtilityDrawer
@@ -1498,9 +1596,9 @@ function App() {
   const openAgentDrawer = useCallback(
     (returnFocusTarget?: HTMLElement | null) => {
       if (!activeProjectId) return
+      if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
       utilityReturnFocusTargetRef.current = returnFocusTarget ?? null
       setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-      workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
     },
     [activeProjectId, workbenchLayoutController],
   )
@@ -1526,8 +1624,10 @@ function App() {
           if (!activeProjectId) throw new Error("Open a Project before using this Plugin in Agent")
           const lease = await workspaceEntryCoordinator.acquire({ projectId: activeProjectId })
           if (!lease) throw new Error("The active Project changed before Agent was ready")
+          if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) {
+            throw new Error("The Agent panel is temporarily locked after resizing")
+          }
           setWorkspaceUtilityDrawer(openAgentUtility(lease.projectId))
-          workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
           const panel = await waitForMountedWorkspaceTarget({
             read: () => {
               const mounted = agentPanelScopeRef.current
@@ -1675,8 +1775,10 @@ function App() {
           try {
             const lease = await workspaceEntryCoordinator.acquire({ projectId: target.projectId })
             if (!lease) throw new Error("The activity Project is no longer available")
+            if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) {
+              throw new Error("The Agent panel is temporarily locked after resizing")
+            }
             setWorkspaceUtilityDrawer(openAgentUtility(lease.projectId))
-            workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)
             const panel = await waitForMountedWorkspaceTarget({
               read: () => {
                 const mounted = agentPanelScopeRef.current
@@ -1772,13 +1874,16 @@ function App() {
         content: ({ query }) => (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
+            activeNodes={activeCanvasNodes}
             controller={projectCanvasController}
+            loadNodes={loadProjectCanvasNodes}
             navigationBusy={workbenchSnapshot.changingInput}
             navigationError={workbenchSnapshot.error}
             onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
             onClearNavigationError={() => workbenchController.clearError()}
             onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
             onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+            onNodeActivate={activateProjectCanvasNode}
             query={query}
           />
         ),
@@ -1932,9 +2037,7 @@ function App() {
             leadingActionHostRef={setProjectTitlebarEntryHost}
             onBackToProjects={handleTitlebarBrand}
             platform={window.convax.platform}
-            productLabel={
-              effectivePrimaryDesktopSurface === "workspace" && activeProject ? activeProject.name : "Convax"
-            }
+            productLabel={effectivePrimaryDesktopSurface === "workspace" ? "" : "Convax"}
             rightAction={
               effectivePrimaryDesktopSurface === "workspace" && activeProjectId ? (
                 <AgentDrawerTrigger
@@ -2095,6 +2198,7 @@ function App() {
                         fileRendererRegistry={canvasFileRendererRegistry}
                         initialDocument={initialDocument}
                         nodeRegistry={canvasNodeRegistry}
+                        onDocumentChange={publishActiveCanvasNodes}
                         onInspectorRequest={openCanvasInspector}
                         onSelectionProjectionChange={publishCanvasSelection}
                         readOnly={
@@ -2257,6 +2361,45 @@ function App() {
       </AgentModelCatalogProvider>
     </AgentGenerationPreferenceProvider>
   )
+}
+
+function projectCanvasSidebarNodes(document: CanvasDocument): ProjectCanvasSidebarNode[] {
+  return document.nodes.map((node) => {
+    const name = typeof node.data.name === "string" ? node.data.name.trim() : ""
+    const label = node.data.label.trim() || name || "Untitled node"
+    const preview = projectCanvasSidebarNodePreview(node)
+    return { id: node.id, kind: node.data.kind, label, ...preview }
+  })
+}
+
+function projectCanvasSidebarNodePreview(node: CanvasDocument["nodes"][number]) {
+  const resourceState = node.data.resourceState
+  if (!resourceState || typeof resourceState !== "object") return {}
+  const state = resourceState as { posterUrl?: unknown; url?: unknown }
+  if (node.data.kind === "image" && typeof state.url === "string" && state.url.trim()) {
+    return { previewType: "image" as const, previewUrl: state.url.trim() }
+  }
+  if (node.data.kind === "video") {
+    if (typeof state.posterUrl === "string" && state.posterUrl.trim()) {
+      return { previewType: "image" as const, previewUrl: state.posterUrl.trim() }
+    }
+    if (typeof state.url === "string" && state.url.trim()) {
+      return { previewType: "video" as const, previewUrl: state.url.trim() }
+    }
+  }
+  return {}
+}
+
+function sameProjectCanvasNodeProjection(
+  left: ProjectCanvasSidebarNodeProjection | null,
+  right: ProjectCanvasSidebarNodeProjection,
+) {
+  if (!left || left.canvasId !== right.canvasId || left.projectId !== right.projectId) return false
+  if (left.nodes.length !== right.nodes.length) return false
+  return left.nodes.every((node, index) => {
+    const other = right.nodes[index]
+    return other?.id === node.id && other.kind === node.kind && other.label === node.label
+  })
 }
 
 function Toast({ notification }: { notification: CanvasNotification }) {

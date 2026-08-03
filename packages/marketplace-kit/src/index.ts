@@ -62,6 +62,12 @@ export interface MarketplacePublishSelection {
   releaseTag: string
 }
 
+export interface MarketplaceRemovalSelection {
+  kind: StarterKind
+  id: string
+  version: string
+}
+
 export interface BuildMarketplaceOptions {
   root: string
   outDir: string
@@ -73,6 +79,7 @@ export interface BuildMarketplaceOptions {
   initialOfficial?: boolean
   publishIdentities?: readonly string[]
   publishSelections?: readonly MarketplacePublishSelection[]
+  removeSelections?: readonly MarketplaceRemovalSelection[]
   fetchArtifact?: (artifact: { url: string; size: number; sha256: string }) => Promise<Uint8Array>
 }
 
@@ -236,6 +243,64 @@ function parsePackageMetadata(value: unknown, label = "convax-package.json"): Re
     }
   }
   if (metadata.yanked !== undefined && typeof metadata.yanked !== "boolean") {
+    throw new TypeError(`${label}.yanked must be a boolean`)
+  }
+  return metadata
+}
+
+function parseBasePackageMetadata(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return parsePackageMetadata(value, label)
+  }
+  const metadata: Record<string, unknown> = {}
+  for (const key of Object.keys(value)) metadata[key] = Reflect.get(value, key)
+  if (metadata.schema !== "convax.package/1") return parsePackageMetadata(value, label)
+  const allowed = [
+    "schema",
+    "kind",
+    "id",
+    "name",
+    "description",
+    "version",
+    "compatibility",
+    "license",
+    "showcase",
+    "yanked",
+  ]
+  if (metadata.kind === "plugin") allowed.push("companions")
+  if (metadata.kind === "skill") allowed.push("ownerPluginId")
+  for (const key of Object.keys(metadata)) {
+    if (!allowed.includes(key)) throw new TypeError(`${label} has unknown property ${key}`)
+  }
+  for (const key of [
+    "schema",
+    "kind",
+    "id",
+    "name",
+    "description",
+    "version",
+    "compatibility",
+    "license",
+    "yanked",
+  ]) {
+    if (!(key in metadata)) throw new TypeError(`${label} is missing ${key}`)
+  }
+  if (metadata.kind !== "plugin" && metadata.kind !== "skill") {
+    throw new TypeError(`${label} has an unsupported historical kind`)
+  }
+  for (const key of ["id", "name", "description", "version", "license"] as const) {
+    if (typeof metadata[key] !== "string" || metadata[key].length === 0) {
+      throw new TypeError(`${label}.${key} must be a non-empty string`)
+    }
+  }
+  if (
+    !metadata.compatibility ||
+    typeof metadata.compatibility !== "object" ||
+    Array.isArray(metadata.compatibility)
+  ) {
+    throw new TypeError(`${label}.compatibility must be an object`)
+  }
+  if (typeof metadata.yanked !== "boolean") {
     throw new TypeError(`${label}.yanked must be a boolean`)
   }
   return metadata
@@ -508,7 +573,10 @@ export async function changedMarketplaceVersions(
     if (authoringText === undefined) {
       throw new TypeError(`base package ${packageRoot} does not use convax.package/2`)
     }
-    const authoring = parsePackageMetadata(JSON.parse(authoringText), `base package ${packageRoot}`)
+    const authoring = parseBasePackageMetadata(
+      JSON.parse(authoringText),
+      `base package ${packageRoot}`,
+    )
     const kind = authoring.kind as StarterKind
     const id = authoring.id as string
     const version = authoring.version as string
@@ -1133,9 +1201,37 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
         return { ...selection }
       })
     : undefined
-  const selectedIdentities = parsePublishIdentities(
-    publishSelections?.map(packageIdentity) ?? options.publishIdentities,
-  )
+  const removeSelections = options.removeSelections
+    ? options.removeSelections.map((selection) => {
+        if (
+          !selection ||
+          typeof selection !== "object" ||
+          (selection.kind !== "plugin" && selection.kind !== "skill" && selection.kind !== "mcp-server") ||
+          typeof selection.id !== "string" ||
+          typeof selection.version !== "string"
+        ) {
+          throw new TypeError("remove selection is invalid")
+        }
+        return { ...selection }
+      })
+    : undefined
+  const selectedIdentityInput = publishSelections?.map(packageIdentity) ?? options.publishIdentities
+  const selectedIdentities = selectedIdentityInput?.length === 0 && removeSelections?.length
+    ? []
+    : parsePublishIdentities(selectedIdentityInput)
+  const removedIdentities = removeSelections === undefined
+    ? undefined
+    : parsePublishIdentities(removeSelections.map(packageIdentity))
+  const hasSelectiveSelection = selectedIdentities !== undefined || removedIdentities !== undefined
+  if (hasSelectiveSelection && (selectedIdentities?.length ?? 0) + (removedIdentities?.length ?? 0) === 0) {
+    throw new TypeError("selective build must select or remove at least one package")
+  }
+  const selectedIdentitySet = new Set(selectedIdentities ?? [])
+  for (const identity of removedIdentities ?? []) {
+    if (selectedIdentitySet.has(identity)) {
+      throw new TypeError(`package ${identity.replace("\0", "/")} cannot be selected and removed`)
+    }
+  }
   const previousDescriptor = options.previousDescriptorPath
     ? parseMarketplaceDescriptor(await readJson(options.previousDescriptorPath, "previous Marketplace descriptor"))
     : undefined
@@ -1158,7 +1254,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   if (options.initialOfficial && (previousDescriptor || previousRegistryV2 || previousShowcaseV2)) {
     throw new TypeError("initial Official build cannot consume a previous publication")
   }
-  if (selectedIdentities) {
+  if (hasSelectiveSelection) {
     if (!previousDescriptor) {
       throw new TypeError("selective build requires a trusted previous Marketplace descriptor")
     }
@@ -1330,7 +1426,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     revision: candidateRevision,
     packages: registryPackages,
   })
-  const selectionContext: MarketplaceSelectionContext | undefined = selectedIdentities
+  const selectionContext: MarketplaceSelectionContext | undefined = hasSelectiveSelection
     ? (() => {
         const baseline = { mode: "v2" as const, registry: previousRegistryV2!, showcase: previousShowcaseV2! }
         const baselineRegistry = selectionBaselineRegistry(
@@ -1354,7 +1450,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
         return {
           schema: MARKETPLACE_SELECTION_CONTEXT_SCHEMA,
           descriptor: previousDescriptor!,
-          selectedPackages: selectedIdentities.map((identity) => {
+          selectedPackages: (selectedIdentities ?? []).map((identity) => {
             const entry = candidateByIdentity.get(identity)
             if (!entry) throw new TypeError(`selected package ${identity.replace("\0", "/")} is absent from source`)
             const requested = requestedByIdentity.get(identity)
@@ -1374,6 +1470,27 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
               releaseTag: releaseTagForPackage(entry),
             }
           }),
+          ...((removedIdentities?.length ?? 0) === 0
+            ? {}
+            : {
+                removedPackages: removedIdentities!.map((identity) => {
+                  const previous = baselineByIdentity.get(identity)
+                  const requested = removeSelections!.find((selection) => packageIdentity(selection) === identity)!
+                  if (!previous || previous.version !== requested.version) {
+                    throw new TypeError(
+                      `removed package ${identity.replace("\0", "/")} does not match production baseline`,
+                    )
+                  }
+                  if (candidateByIdentity.has(identity)) {
+                    throw new TypeError(`removed package ${identity.replace("\0", "/")} is still present in source`)
+                  }
+                  return {
+                    kind: previous.kind,
+                    id: previous.id,
+                    productionVersion: previous.version,
+                  }
+                }),
+              }),
           baseline,
         }
       })()
@@ -1382,7 +1499,8 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     ? mergeSelectedRegistry(
         selectionBaselineRegistry(selectionContext, descriptor),
         candidateRegistry,
-        selectedIdentities!,
+        selectedIdentities ?? [],
+        removedIdentities ?? [],
       )
     : candidateRegistry
   if (options.official) {
@@ -1405,7 +1523,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   const showcasePackages: ShowcaseV2["packages"] = []
   for (const entry of packages) {
     if (entry.kind === "mcp-server" && entry.catalogSupported === false) continue
-    if (selectionContext && !selectedIdentities!.includes(packageIdentity(entry))) continue
+    if (selectionContext && !(selectedIdentities ?? []).includes(packageIdentity(entry))) continue
     const showcaseValue = entry.authoring?.showcase
     if (showcaseValue === undefined) continue
     if (!showcaseValue || typeof showcaseValue !== "object" || Array.isArray(showcaseValue)) {
@@ -1576,7 +1694,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   await atomicWrite(sitePathForPagesUrl(descriptor.showcase.v2.url), showcaseBytes)
   const releases = new Map<string, MarketplaceBuildResult["releasePlan"]["releases"][number]>()
   for (const artifact of artifacts) {
-    if (selectedIdentities && !selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`)) {
+    if (selectionContext && !(selectedIdentities ?? []).includes(`${artifact.kind}\0${artifact.id}`)) {
       await unlink(artifact.path)
       continue
     }
@@ -1629,7 +1747,7 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
   const metadataByName = new Map(metadataRelease.assets.map((asset) => [asset.name, asset]))
   const lockedArtifactByUrl = new Map(
     artifacts.flatMap((artifact) =>
-      selectedIdentities && !selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`)
+      selectionContext && !(selectedIdentities ?? []).includes(`${artifact.kind}\0${artifact.id}`)
         ? []
         : [[artifact.url, { path: relative(outDir, artifact.path).split(sep).join("/"), url: artifact.url }] as const],
     ),
@@ -1781,8 +1899,8 @@ export async function buildMarketplace(options: BuildMarketplaceOptions): Promis
     registry,
     registrySha256: sha256Hex(registryBytes),
     showcase,
-    artifacts: selectedIdentities
-      ? artifacts.filter((artifact) => selectedIdentities.includes(`${artifact.kind}\0${artifact.id}`))
+    artifacts: selectionContext
+      ? artifacts.filter((artifact) => (selectedIdentities ?? []).includes(`${artifact.kind}\0${artifact.id}`))
       : artifacts,
     releasePlan,
     productLockInput,
@@ -2063,7 +2181,7 @@ export async function createMarketplaceTemplate(root: string, kind: StarterKind,
           version,
           name: id,
           description: `${id} plugin`,
-          hostApi: { major: 1, required: ["host.context.get"], optional: [] },
+          hostApi: { major: 2, required: ["host.context.get"], optional: [] },
           capabilities: [],
           contributes: { canvas: { renderer: { create: true } } },
           entry: "index.html",
@@ -2137,7 +2255,7 @@ export async function createMarketplaceStarter(root: string, options: StarterOpt
           "build-index": "convax-marketplace build-index . --out dist",
         },
         devDependencies: {
-          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.0",
+          "@convax/marketplace-kit": process.env.CONVAX_MARKETPLACE_KIT_SPEC ?? "^0.2.2",
         },
       },
       null,

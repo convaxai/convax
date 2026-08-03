@@ -1,10 +1,9 @@
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import {
   createProjectResourceUrl,
   createProjectResourceProtocolResponse,
   parseProjectResourceUrl,
   projectResourceAccessControlAllowOrigin,
-  resolveProjectResourceProtocolPath,
 } from "./project-resource-protocol"
 
 describe("Project resource protocol", () => {
@@ -45,9 +44,7 @@ describe("Project resource protocol", () => {
       reference: { kind: "project-file", path: "Media/hero.png" },
     })
 
-    expect(url).toBe(
-      `convax-asset://project-one/project-file?path=Media%2Fhero.png&revision=${"a".repeat(64)}`,
-    )
+    expect(url).toBe(`convax-asset://project-one/project-file?path=Media%2Fhero.png&revision=${"a".repeat(64)}`)
     expect(parseProjectResourceUrl(url)).toEqual({
       contentRevision: "a".repeat(64),
       projectId: "project-one",
@@ -83,38 +80,6 @@ describe("Project resource protocol", () => {
     }
   })
 
-  test("revalidates each typed reference through its owning Node capability", async () => {
-    const resolveEntryPath = mock(async () => "/native/project/Media/hero.png")
-    const resolve = mock(async () => "/native/project/.convax/assets/blobs/digest")
-
-    await expect(
-      resolveProjectResourceProtocolPath(
-        createProjectResourceUrl({
-          contentRevision: "a".repeat(64),
-          projectId: "project-one",
-          reference: { kind: "project-file", path: "Media/hero.png" },
-        }),
-        { resolveEntryPath },
-        { resolve },
-      ),
-    ).resolves.toMatchObject({ kind: "project-file" })
-    expect(resolveEntryPath).toHaveBeenCalledWith({ path: "Media/hero.png", projectId: "project-one" })
-
-    const managed = {
-      kind: "managed-asset" as const,
-      name: "hero.png",
-      sha256: "b".repeat(64),
-    }
-    await expect(
-      resolveProjectResourceProtocolPath(
-        createProjectResourceUrl({ projectId: "project-one", reference: managed }),
-        { resolveEntryPath },
-        { resolve },
-      ),
-    ).resolves.toMatchObject({ kind: "managed-asset" })
-    expect(resolve).toHaveBeenCalledWith({ projectId: "project-one", reference: managed })
-  })
-
   test("reports byte-range responses honestly so media elements can seek", async () => {
     const ranged = createProjectResourceProtocolResponse({
       accessControlAllowOrigin: "https://convax.example",
@@ -122,11 +87,15 @@ describe("Project resource protocol", () => {
       request: new Request("convax-asset://project-one/project-file", {
         headers: { Range: "bytes=1000-1999" },
       }),
-      response: new Response(new Uint8Array(1_000), {
-        headers: { "Content-Type": "video/mp4" },
-        status: 200,
-      }),
-      size: 10_000,
+      resource: {
+        body: new Response(new Uint8Array(1_000)).body!,
+        contentLength: 1_000,
+        contentRange: { end: 1_999, start: 1_000 },
+        kind: "project-file",
+        mediaType: "video/mp4",
+        size: 10_000,
+        status: "ready",
+      },
     })
 
     expect(ranged.status).toBe(206)
@@ -145,8 +114,12 @@ describe("Project resource protocol", () => {
       request: new Request("convax-asset://project-one/project-file", {
         headers: { Range: "bytes=10000-10001" },
       }),
-      response: new Response(null, { status: 200 }),
-      size: 10_000,
+      resource: {
+        kind: "project-file",
+        mediaType: "video/mp4",
+        size: 10_000,
+        status: "range-not-satisfiable",
+      },
     })
     expect(unsatisfiable.status).toBe(416)
     expect(unsatisfiable.headers.get("content-range")).toBe("bytes */10000")
@@ -154,11 +127,14 @@ describe("Project resource protocol", () => {
     const head = createProjectResourceProtocolResponse({
       cacheControl: "private, max-age=31536000, immutable",
       request: new Request("convax-asset://project-one/managed-asset", { method: "HEAD" }),
-      response: new Response(new Uint8Array([1, 2, 3]), {
-        headers: { "Content-Type": "image/png" },
-        status: 200,
-      }),
-      size: 3,
+      resource: {
+        body: new Response(new Uint8Array([1, 2, 3])).body!,
+        contentLength: 3,
+        kind: "managed-asset",
+        mediaType: "image/png",
+        size: 3,
+        status: "ready",
+      },
     })
     expect(head.status).toBe(200)
     expect(head.headers.get("content-length")).toBe("3")

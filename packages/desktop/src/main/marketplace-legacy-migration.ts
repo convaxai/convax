@@ -10,9 +10,16 @@ import {
   type InstallRecord,
 } from "./marketplace-state"
 
-interface ProvenLegacyInstallation {
+export interface MarketplaceInstallationProof {
   authorizationContractDigest?: string
   record: InstallRecord
+}
+
+export interface ActivePluginAuthorizationIdentity {
+  authorizationContractDigest: string | null
+  id: string
+  sourceIdentity: string
+  version: string
 }
 
 interface PreinstalledLegacyPolicy {
@@ -26,12 +33,36 @@ interface PreinstalledLegacyPolicy {
 export interface MarketplaceLegacyMigrationOptions {
   defaultCapabilitiesFile: string
   preinstalledPolicies: readonly PreinstalledLegacyPolicy[]
-  proveInstallations(): Promise<readonly ProvenLegacyInstallation[]>
+  proveInstallations(): Promise<readonly MarketplaceInstallationProof[]>
   state: FileMarketplaceStateStore
 }
 
 function identityKey(value: { id: string; kind: string }) {
   return `${value.kind}\0${value.id}`
+}
+
+/**
+ * Proves only already source-bound Plugin records against the exact active
+ * immutable snapshot. This repairs old missing grants without inventing
+ * Marketplace provenance or accepting a stale Plugin generation.
+ */
+export function proveCurrentPluginExecutionAuthorizations(
+  state: { installations: readonly InstallRecord[] },
+  active: readonly ActivePluginAuthorizationIdentity[],
+): MarketplaceInstallationProof[] {
+  const byId = new Map(active.map((plugin) => [plugin.id, plugin]))
+  return state.installations.flatMap((record) => {
+    if (record.kind !== "plugin") return []
+    const plugin = byId.get(record.id)
+    if (
+      !plugin?.authorizationContractDigest ||
+      plugin.version !== record.version ||
+      plugin.sourceIdentity !== record.sourceKey
+    ) {
+      return []
+    }
+    return [{ authorizationContractDigest: plugin.authorizationContractDigest, record }]
+  })
 }
 
 function parseLegacyDefaults(value: unknown) {
@@ -101,8 +132,7 @@ export class MarketplaceLegacyMigration {
         const decided = draft.provisioningDecisions.some(
           (decision) =>
             identityKey(decision.identity) === identityKey(policy.identity) &&
-            decision.sourceKey === policy.sourceKey &&
-            decision.policyEntryDigest === policy.policyEntryDigest,
+            decision.marketplaceId === policy.marketplaceId,
         )
         if (installed || decided) continue
         draft.provisioningDecisions.push({
@@ -118,7 +148,7 @@ export class MarketplaceLegacyMigration {
     })
   }
 
-  async #claim(proof: ProvenLegacyInstallation) {
+  async #claim(proof: MarketplaceInstallationProof) {
     const before = await this.#options.state.read()
     const existing = before.installations.find((record) => identityKey(record) === identityKey(proof.record))
     if (existing) {

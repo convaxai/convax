@@ -30,6 +30,8 @@ export const maximumPluginHostResponseBytes = maximumPluginApiResultBytes
 /** P2P capabilities deliberately retain a smaller independent attack surface. */
 export const maximumPluginCapabilityRequestBytes = 1024 * 1024
 export const maximumPluginCapabilityResponseBytes = 4 * 1024 * 1024
+/** Fixed control envelopes contain no caller-selected identifiers or payloads. */
+export const maximumPluginHostControlBytes = 128
 export const maximumPluginHostInFlightRequests = 16
 export const maximumPluginHostRequestIdLength = 128
 export const maximumPluginHostIngressDepth = 64
@@ -75,6 +77,17 @@ export interface PluginHostCancel {
   readonly id: string
   readonly protocol: PluginHostProtocol
   readonly type: "cancel"
+}
+
+/**
+ * Closes only the exact sender-scoped MessagePort connection.
+ *
+ * This is protocol lifecycle control, not a Host API or Plugin capability. It
+ * deliberately carries no caller-selected identity, scope, or payload.
+ */
+export interface PluginHostDisconnect {
+  readonly protocol: PluginHostProtocol
+  readonly type: "disconnect"
 }
 
 export type PluginCapabilityRemoteErrorCode =
@@ -437,6 +450,16 @@ export function isPluginHostCancel(value: unknown): value is PluginHostCancel {
       input.protocol === pluginHostProtocolV8 &&
       input.type === "cancel" &&
       isPluginHostRequestId(input.id),
+  )
+}
+
+export function isPluginHostDisconnect(value: unknown): value is PluginHostDisconnect {
+  const input = record(value)
+  return Boolean(
+    input &&
+      exactKeys(input, ["protocol", "type"]) &&
+      input.protocol === pluginHostProtocolV8 &&
+      input.type === "disconnect",
   )
 }
 

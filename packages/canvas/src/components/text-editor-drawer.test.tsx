@@ -9,6 +9,11 @@ function Passthrough(props: { children?: ReactNode }) {
 
 mock.module("@convax/ui", () => ({
   Button: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => <button {...props} />,
+  Dialog: Passthrough,
+  DialogClose: Passthrough,
+  DialogContent: Passthrough,
+  DialogDescription: Passthrough,
+  DialogTitle: Passthrough,
   LoadingSpinner: (props: { className?: string }) => (
     <span aria-hidden="true" className={props.className} data-slot="loading-spinner" data-ui-loading-spinner="" />
   ),

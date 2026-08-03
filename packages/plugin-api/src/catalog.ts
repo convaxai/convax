@@ -1,4 +1,9 @@
-import { definePluginApi, definePluginApiCatalog, definePluginApiRelease } from "./contracts"
+import {
+  definePluginApi,
+  definePluginApiCatalog,
+  definePluginApiRelease,
+  type PluginApiDefinitionInput,
+} from "./contracts"
 import { pluginApiContractIds, type PluginApiContractId } from "./method-contracts"
 
 const contextErrors = [
@@ -34,9 +39,17 @@ const partialSuccessErrors = [
   },
 ] as const
 
+const defineV2Contract = <const Definition extends Omit<PluginApiDefinitionInput, "contractSince">>(
+  definition: Definition,
+) =>
+  definePluginApi({
+    ...definition,
+    contractSince: "2.0.0",
+  })
+
 export const pluginApiCatalog = definePluginApiCatalog(
   definePluginApiRelease("1.0.0", [
-    definePluginApi({
+    defineV2Contract({
       id: "host.context.get",
       completion: "cancelable",
       grant: null,
@@ -51,7 +64,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The current Plugin, Project, Canvas, node, and negotiated Host API context when present.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.inputs.list",
       completion: "cancelable",
       grant: "canvas.connectedInputs.read",
@@ -66,7 +79,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of direct incoming input descriptors and opaque input keys.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.inputs.open",
       completion: "cancelable",
       grant: "canvas.connectedMedia.stream",
@@ -82,7 +95,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         remarks: "Call canvas.inputs.close when the stream is no longer needed.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.inputs.close",
       completion: "cancelable",
       grant: "canvas.connectedMedia.stream",
@@ -96,7 +109,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "An acknowledgement; closing an already closed handle is idempotent.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.node.get",
       completion: "cancelable",
       grant: "canvas.node.read",
@@ -110,7 +123,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The owning node identity, revision, geometry, and Plugin state projection.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.node.state.replace",
       completion: "commit-preserving",
       grant: "canvas.node.write",
@@ -125,7 +138,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "`{ updated: true }` after the authoritative state replacement commits.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.resource.image.create",
       completion: "commit-preserving",
       grant: "canvas.image.write",
@@ -140,7 +153,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The created renderer-safe image result after Project publication and Canvas commit.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "project.file.text.read",
       completion: "cancelable",
       grant: "project.files.read",
@@ -155,7 +168,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The bounded UTF-8 file text.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "agent.prompt",
       completion: "commit-preserving",
       grant: "agent.prompt",
@@ -170,7 +183,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "`{ text }`, containing the bounded host acknowledgement.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "generation.tools.list",
       completion: "cancelable",
       grant: "generation.execute",
@@ -185,7 +198,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of available generation tools and their public input contracts.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "generation.execute",
       completion: "commit-preserving",
       grant: "generation.execute",
@@ -196,11 +209,12 @@ export const pluginApiCatalog = definePluginApiCatalog(
         summary: "Execute one selected generation tool through the shared host executor.",
         description:
           "Revalidates the active Plugin, authorized executable, inputs, cancellation, and live resource guards immediately before execution.",
-        request: "`{ output?, prompt, references?, resultMode?, toolId? }`, validated against the selected tool.",
+        request:
+          "`{ output?, prompt, references?: Array<{ inputKey, role }>, resultMode?, toolId? }`; every opaque input key must come from the current owning node's canvas.inputs.list result.",
         response: "The bounded selected tool result, created node ids, authoritative revision, and warnings.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "projects.list",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -216,7 +230,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of renderer-safe Project summaries.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.catalog.list",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -231,7 +245,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of portable Canvas catalog entries.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.document.get",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -247,7 +261,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The requested pathless document projection and authoritative revision.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.nodes.query",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -262,7 +276,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "Matching node projections and the authoritative Canvas revision.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.transaction.execute",
       completion: "commit-preserving",
       audience: ["web-plugin", "companion"],
@@ -278,7 +292,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "The committed authoritative revision and bounded command results.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.events.subscribe",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -294,7 +308,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A connection-bound subscription identifier.",
       },
     }),
-    definePluginApi({
+    defineV2Contract({
       id: "canvas.events.unsubscribe",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -307,6 +321,41 @@ export const pluginApiCatalog = definePluginApiCatalog(
         description: "Releases a subscription created by canvas.events.subscribe without changing Canvas state.",
         request: "The subscription identifier returned by canvas.events.subscribe.",
         response: "An acknowledgement; closing an already closed subscription is idempotent.",
+      },
+    }),
+  ]),
+  definePluginApiRelease("2.0.0", [
+    defineV2Contract({
+      id: "canvas.inputs.image.open",
+      completion: "cancelable",
+      grant: "canvas.connectedImages.read",
+      scope: "own-node",
+      sideEffect: "read",
+      errors: [...contextErrors, ...permissionErrors, ...resourceErrors],
+      docs: {
+        summary: "Open one directly connected image through the owning Plugin node.",
+        description:
+          "Issues a revocable Host-owned session for signature-validated JPEG, PNG, or WebP content after validating the Plugin principal, owning node, direct edge, resource identity, and image limits. Every protocol read revalidates the issued principal and direct edge against current Host state.",
+        request: "`{ inputKey }`, using an opaque image key returned by canvas.inputs.list.",
+        response:
+          "A connection-issued, revocable session with an opaque 128-bit bearer URL, bounded image probe, and lowercase SHA-256 content revision.",
+        remarks:
+          "Electron protocol GET/HEAD requests have no trusted sender or frame principal. Possession of the convax-connected-media URL therefore carries bearer authority until the Host revokes the session or its principal/edge revalidation fails; the URL must be kept secret and closed promptly. The response contains no image bytes, native path, or unrestricted URL. The Host rejects images above 16 MiB, dimensions above 8192 pixels, or more than 33,554,432 pixels.",
+      },
+    }),
+    defineV2Contract({
+      id: "canvas.inputs.image.close",
+      completion: "cancelable",
+      grant: "canvas.connectedImages.read",
+      scope: "own-node",
+      sideEffect: "write",
+      errors: [...contextErrors, ...permissionErrors],
+      docs: {
+        summary: "Close one revocable connected-image bearer session.",
+        description:
+          "Revokes a session and bearer URL created by canvas.inputs.image.open after validating the calling Plugin principal, without changing Canvas or Project state.",
+        request: "`{ sessionId }`, using the opaque handle returned by canvas.inputs.image.open.",
+        response: "An acknowledgement that the caller's image session is closed; repeated close calls are idempotent.",
       },
     }),
   ]),

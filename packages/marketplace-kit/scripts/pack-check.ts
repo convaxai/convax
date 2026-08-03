@@ -77,9 +77,9 @@ try {
   const pluginApiTarball = await pack(pluginApiRoot, tarballRoot)
   const pluginSdkTarball = await pack(pluginSdkRoot, tarballRoot)
   const kitTarball = await pack(packageRoot, tarballRoot)
-  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.0")
-  await assertPackedDependency(kitTarball, "@convax/plugin-api", "^1.0.0")
-  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.1.0")
+  await assertPackedDependency(kitTarball, "@convax/marketplace", "^0.2.1")
+  await assertPackedDependency(kitTarball, "@convax/plugin-api", "^2.0.0")
+  await assertPackedDependency(kitTarball, "@convax/plugin-sdk", "^0.1.1")
   await writeFile(
     join(consumerRoot, "package.json"),
     `${JSON.stringify(
@@ -128,6 +128,11 @@ const options: BuildMarketplaceOptions = {
     version: "1.1.0",
     previousVersion: "1.0.0",
     releaseTag: "plugin-example-v1.1.0",
+  }],
+  removeSelections: [{
+    kind: "skill",
+    id: "retired-example",
+    version: "1.0.0",
   }],
   fetchArtifact: async () => new Uint8Array([1]),
 }

@@ -177,6 +177,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       "expectedRevision",
       "operationId",
       "output",
+      "parentId",
       "prompt",
       "promptContextNodeIds",
       "ref",
@@ -296,6 +297,9 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     expectedRevision,
     operationId,
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
+    ...(value.parentId === undefined
+      ? {}
+      : { parentId: requireOpaqueId(value.parentId, "Generation parent node id") }),
     prompt,
     ...(promptContextNodeIds === undefined ? {} : { promptContextNodeIds }),
     ref: {

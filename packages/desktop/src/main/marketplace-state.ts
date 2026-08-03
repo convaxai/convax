@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path"
 
 import { canonicalJson, sha256Hex, type SourceKey } from "@convax/marketplace"
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
+import { syncDirectoryEntry, syncFileBytes } from "./filesystem-durability"
 
 export type MarketplaceItemKind = "plugin" | "skill" | "mcp-server"
 export type InstalledCapabilityState = "attention" | "disabled" | "ready" | "setup-required"
@@ -15,6 +16,10 @@ export interface InstalledIdentity {
 }
 
 export interface InstallRecord extends InstalledIdentity {
+  artifact?: {
+    sha256: string
+    size: number
+  }
   artifactDigest: string
   revision: number
   runtimeSurface: RuntimeSurface
@@ -94,11 +99,13 @@ export interface MarketplaceState {
 export function capabilityTransitionParticipantDigest(
   participant: Pick<CapabilityTransition["participants"][number], "next" | "participant" | "previous">,
 ) {
-  return sha256Hex(canonicalJson({
-    next: participant.next,
-    participant: participant.participant,
-    previous: participant.previous,
-  }))
+  return sha256Hex(
+    canonicalJson({
+      next: participant.next,
+      participant: participant.participant,
+      previous: participant.previous,
+    }),
+  )
 }
 
 export interface InstalledCapability {
@@ -166,10 +173,20 @@ function isIdentity(value: unknown): value is InstalledIdentity {
 }
 
 function isInstallRecord(value: unknown): value is InstallRecord {
+  const keys =
+    value && typeof value === "object" && "artifact" in value
+      ? ["artifact", "artifactDigest", "id", "kind", "revision", "runtimeSurface", "sourceKey", "version"]
+      : ["artifactDigest", "id", "kind", "revision", "runtimeSurface", "sourceKey", "version"]
   return (
     isRecord(value) &&
-    exactKeys(value, ["artifactDigest", "id", "kind", "revision", "runtimeSurface", "sourceKey", "version"]) &&
+    exactKeys(value, keys) &&
     isIdentity({ id: value.id, kind: value.kind }) &&
+    (value.artifact === undefined ||
+      (isRecord(value.artifact) &&
+        exactKeys(value.artifact, ["sha256", "size"]) &&
+        typeof value.artifact.sha256 === "string" &&
+        digestPattern.test(value.artifact.sha256) &&
+        isPositiveInteger(value.artifact.size))) &&
     typeof value.artifactDigest === "string" &&
     digestPattern.test(value.artifactDigest) &&
     isPositiveInteger(value.revision) &&
@@ -275,10 +292,10 @@ function isTransition(value: unknown): value is CapabilityTransition {
         !(["converged", "pending", "published"] as const).includes(
           participant.state as CapabilityTransition["participants"][number]["state"],
         ) ||
-        capabilityTransitionParticipantDigest(
-          participant as CapabilityTransition["participants"][number],
-        ) !== participant.digest
-      ) return false
+        capabilityTransitionParticipantDigest(participant as CapabilityTransition["participants"][number]) !==
+          participant.digest
+      )
+        return false
       if (participant.participant === "install-record") {
         return (
           (participant.previous === null || isInstallRecord(participant.previous)) &&
@@ -313,7 +330,8 @@ function isTransition(value: unknown): value is CapabilityTransition {
     (transition.mutation === "update" && (!transition.previous || !transition.next)) ||
     (transition.mutation === "uninstall" && transition.next !== null) ||
     (transition.mutation === "setup" && (!transition.previous || !transition.next))
-  ) return false
+  )
+    return false
   return true
 }
 
@@ -483,18 +501,13 @@ export class FileMarketplaceStateStore {
       const handle = await fs.open(temporary, "wx", 0o600)
       try {
         await handle.writeFile(serialized, "utf8")
-        await handle.sync()
+        await syncFileBytes(handle)
       } finally {
         await handle.close()
       }
       await fs.rename(temporary, this.#file)
       published = true
-      const directoryHandle = await fs.open(directory, "r")
-      try {
-        await directoryHandle.sync()
-      } finally {
-        await directoryHandle.close()
-      }
+      await syncDirectoryEntry(directory)
     } finally {
       if (!published) await fs.rm(temporary, { force: true })
     }
@@ -522,11 +535,22 @@ export function projectInstalledCapability(input: {
   if (input.runtimePreference?.desired === "disabled") {
     return {
       ...base,
-      ...(!grantMatches || input.grantValid === false ? { attention: "setup-required-before-enable" as const } : {}),
+      ...(!grantMatches || input.grantValid === false
+        ? {
+            attention:
+              installRecord.kind === "plugin"
+                ? ("integrity-or-authorization" as const)
+                : ("setup-required-before-enable" as const),
+          }
+        : {}),
       state: "disabled",
     }
   }
-  if (!grantMatches) return { ...base, state: "setup-required" }
+  if (!grantMatches) {
+    return installRecord.kind === "plugin"
+      ? { ...base, attention: "integrity-or-authorization", state: "attention" }
+      : { ...base, state: "setup-required" }
+  }
   if (input.grantValid === false) return { ...base, attention: "integrity-or-authorization", state: "attention" }
   return { ...base, state: "ready" }
 }

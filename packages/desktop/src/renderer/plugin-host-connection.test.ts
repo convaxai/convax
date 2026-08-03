@@ -22,6 +22,106 @@ const connectInput = {
 }
 
 describe("RendererPluginHostConnection", () => {
+  test("disconnects only the exact live frame, cancels its in-flight work, and ignores replay", async () => {
+    const firstResult = deferred<Awaited<ReturnType<PluginCapabilityRendererClient["call"]>>>()
+    const firstCall = mock(() => firstResult.promise)
+    const firstCancel = mock(async () => true)
+    const firstDisconnectResult = deferred<boolean>()
+    const firstDisconnect = mock(() => firstDisconnectResult.promise)
+    const secondCall = mock(async () => ({
+      id: "other-frame",
+      ok: true as const,
+      protocol: pluginCapabilityProtocolV3,
+      result: { frame: "second" },
+      type: "response" as const,
+    }))
+    const secondDisconnect = mock(async () => true)
+    const first = new RendererPluginHostConnection(
+      rendererClient({ call: firstCall, cancel: firstCancel, disconnect: firstDisconnect }),
+      connectInput,
+      () => undefined,
+    )
+    const second = new RendererPluginHostConnection(
+      rendererClient({ call: secondCall, disconnect: secondDisconnect }),
+      { ...connectInput, nodeId: "node-b" },
+      () => undefined,
+    )
+    const request = {
+      id: "in-flight",
+      method: "projects.list" as const,
+      protocol: desktopPluginHostProtocolV8,
+      type: "request" as const,
+    }
+    const pending = first.dispatch(request)
+    await waitForCall(firstCall)
+
+    const disconnect = {
+      protocol: desktopPluginHostProtocolV8,
+      type: "disconnect" as const,
+    }
+    const closing = first.dispatch(disconnect)
+    await waitForCall(firstDisconnect)
+    expect(firstDisconnect).toHaveBeenCalledTimes(1)
+    expect(firstDisconnect).toHaveBeenCalledWith({ connectionId: "opaque-1" })
+    expect(firstCancel).toHaveBeenCalledTimes(1)
+    expect(secondDisconnect).not.toHaveBeenCalled()
+    firstDisconnectResult.resolve(true)
+    expect(await closing).toBeNull()
+
+    firstResult.reject(new Error("Main observed exact-frame disconnect"))
+    expect(await pending).toBeNull()
+    await expect(second.dispatch({ ...request, id: "other-frame" })).resolves.toMatchObject({
+      ok: true,
+      result: { frame: "second" },
+    })
+
+    expect(await first.dispatch(disconnect)).toBeNull()
+    expect(firstDisconnect).toHaveBeenCalledTimes(1)
+    expect(
+      await first.dispatch({
+        ...request,
+        id: "after-close",
+      }),
+    ).toMatchObject({
+      error: { code: "transport-closed", kind: "protocol" },
+      ok: false,
+    })
+    expect(secondDisconnect).not.toHaveBeenCalled()
+    second.close()
+  })
+
+  test("fails closed for malformed or oversized disconnect-shaped envelopes", async () => {
+    for (const envelope of [
+      {
+        frameId: "forbidden-routing-target",
+        protocol: desktopPluginHostProtocolV8,
+        type: "disconnect",
+      },
+      {
+        payload: "x".repeat(512),
+        protocol: desktopPluginHostProtocolV8,
+        type: "disconnect",
+      },
+      {
+        protocol: pluginCapabilityProtocolV3,
+        type: "disconnect",
+      },
+    ]) {
+      const disconnect = mock(async () => true)
+      const call = mock(async () => null)
+      const connection = new RendererPluginHostConnection(
+        rendererClient({ call, disconnect }),
+        connectInput,
+        () => undefined,
+      )
+      expect(await connection.dispatch(envelope)).toBeNull()
+      expect(disconnect).toHaveBeenCalledTimes(1)
+      expect(call).not.toHaveBeenCalled()
+      expect(await connection.dispatch(envelope)).toBeNull()
+      expect(disconnect).toHaveBeenCalledTimes(1)
+    }
+  })
+
   test("translates host/8 calls and capability/3 responses and events", async () => {
     let listener: ((event: PluginCapabilityEvent) => void) | undefined
     const disconnect = mock(async () => true)

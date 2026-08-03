@@ -8,6 +8,8 @@ import {
   requireProjectResourceReference,
   type ProjectResourceReference,
 } from "../../canvas/project-resources"
+import type { ProjectResourceReadHandle } from "../project-resource-reader"
+import { openStableProjectFile } from "../stable-project-file"
 
 export interface ProjectRootResolver {
   resolveProjectRoot(input: { projectId: string }): Promise<string>
@@ -96,6 +98,17 @@ export class ProjectManagedAssetStore {
     return this.runExclusive(input.projectId, async () => {
       const layout = await this.#resolveLayout(input.projectId)
       return this.#verifyReferenceUnlocked(layout, input.reference)
+    })
+  }
+
+  openForRead(input: {
+    projectId: string
+    reference: ManagedAssetReference
+    signal?: AbortSignal
+  }): Promise<ProjectResourceReadHandle> {
+    return this.runExclusive(input.projectId, async () => {
+      const layout = await this.#resolveLayout(input.projectId)
+      return (await this.#openVerifiedReferenceUnlocked(layout, input.reference, input.signal)).handle
     })
   }
 
@@ -350,12 +363,31 @@ export class ProjectManagedAssetStore {
   }
 
   async #verifyReferenceUnlocked(layout: ManagedAssetLayout, reference: ManagedAssetReference) {
+    const opened = await this.#openVerifiedReferenceUnlocked(layout, reference)
+    await opened.handle.close()
+    return opened.targetPath
+  }
+
+  async #openVerifiedReferenceUnlocked(
+    layout: ManagedAssetLayout,
+    reference: ManagedAssetReference,
+    signal?: AbortSignal,
+  ) {
     const normalized = requireManagedAssetReference(reference)
     const targetPath = path.join(layout.projectRoot, managedAssetPath(normalized.sha256))
     await assertManagedDirectories(layout)
-    await this.#verifyFile(targetPath, normalized.sha256, "Managed asset blob")
-    await assertManagedDirectories(layout)
-    return targetPath
+    const handle = await openStableProjectFile(targetPath, `managed:${normalized.sha256}`, this.#maximumBytes, signal)
+    try {
+      const actualDigest = await handle.digest(signal)
+      if (actualDigest !== normalized.sha256) {
+        throw new Error(`Managed asset blob digest mismatch: expected ${normalized.sha256}, received ${actualDigest}`)
+      }
+      await assertManagedDirectories(layout)
+      return { handle, targetPath }
+    } catch (error) {
+      await handle.close()
+      throw error
+    }
   }
 
   async #verifyFile(targetPath: string, expectedDigest: string, label: string) {

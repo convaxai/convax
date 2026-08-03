@@ -51,7 +51,7 @@ test("compares the canonical validated Plugin projection with parser-added defau
       },
     },
     description: "Runs reviewed local FFmpeg transforms.",
-    hostApi: { major: 1, optional: [], required: [] },
+    hostApi: { major: 2, optional: [], required: [] },
     id: "ffmpeg-tools",
     name: "FFmpeg Tools",
     runtime: { command: "convax-ffmpeg-mcp", type: "mcp-stdio" },

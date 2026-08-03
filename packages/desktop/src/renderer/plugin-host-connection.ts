@@ -2,7 +2,9 @@ import { getPluginApiWireContract, isPluginApiId } from "@convax/plugin-api"
 import {
   assertPluginHostMessageByteLength,
   isPluginHostCancel,
+  isPluginHostDisconnect,
   isPluginHostRequestId,
+  maximumPluginHostControlBytes,
   maximumPluginCapabilityRequestBytes,
   maximumPluginHostInFlightRequests,
   maximumPluginHostRequestBytes,
@@ -33,17 +35,27 @@ interface ActivePluginHostRequest {
  */
 export class RendererPluginHostConnection {
   private closed = false
+  private closePromise: Promise<boolean> | undefined
   private readonly activeRequests = new Map<string, ActivePluginHostRequest>()
   private connectionId: string | undefined
   private readonly connectPromise: Promise<string>
   private readonly requestOperationIds = new Map<string, string>()
-  private readonly unsubscribe: () => void
+  private unsubscribe: () => void = () => undefined
 
   constructor(
     private readonly client: PluginCapabilityRendererClient,
     input: PluginCapabilityConnectInput,
     private readonly onCommand: (command: DesktopPluginHostCommand) => void,
   ) {
+    this.connectPromise = client.connect(input).then(({ connectionId, protocol }) => {
+      if (protocol !== pluginCapabilityProtocolV3) {
+        void client.disconnect({ connectionId }).catch(() => undefined)
+        throw new PluginHostProtocolError("transport-closed", "Plugin capability protocol mismatch")
+      }
+      this.connectionId = connectionId
+      return connectionId
+    })
+    void this.connectPromise.catch(() => undefined)
     this.unsubscribe = client.onEvent((event) => {
       if (this.closed || event.connectionId !== this.connectionId) return
       if (event.command.protocol !== pluginCapabilityProtocolV3) {
@@ -55,25 +67,25 @@ export class RendererPluginHostConnection {
         protocol: desktopPluginHostProtocolV8,
       })
     })
-    this.connectPromise = client.connect(input).then(({ connectionId, protocol }) => {
-      if (protocol !== pluginCapabilityProtocolV3) {
-        throw new PluginHostProtocolError("transport-closed", "Plugin capability protocol mismatch")
-      }
-      if (this.closed) {
-        void client.disconnect({ connectionId }).catch(() => undefined)
-        throw new PluginHostProtocolError("transport-closed", "Plugin capability connection was closed")
-      }
-      this.connectionId = connectionId
-      return connectionId
-    })
-    void this.connectPromise.catch(() => undefined)
   }
 
   async dispatch(request: unknown, signal?: AbortSignal): Promise<DesktopPluginHostResponse | null> {
     const id = requestId(request)
+    const disconnectIntent = hasDisconnectType(request)
     try {
       const requestBytes = preflightWebRequest(request)
       assertMaximumBytes(requestBytes, maximumRequestBytesForEnvelope(request))
+      if (disconnectIntent) {
+        // A malformed lifecycle envelope cannot fall through into a callable
+        // surface. Both valid and hostile forms fail closed on this exact
+        // sender-scoped connection and carry no routing identity.
+        if (!isPluginHostDisconnect(request)) {
+          await this.closeAndWait().catch(() => undefined)
+          return null
+        }
+        await this.closeAndWait().catch(() => undefined)
+        return null
+      }
       if (isPluginHostCancel(request)) {
         if (this.closed) return null
         const active = this.activeRequests.get(request.id)
@@ -161,13 +173,21 @@ export class RendererPluginHostConnection {
         }
       }
     } catch (error) {
+      if (disconnectIntent) {
+        await this.closeAndWait().catch(() => undefined)
+        return null
+      }
       if (!id) return null
       return pluginHostFailure(id, error)
     }
   }
 
   close() {
-    if (this.closed) return
+    void this.closeAndWait().catch(() => undefined)
+  }
+
+  private closeAndWait() {
+    if (this.closePromise) return this.closePromise
     this.closed = true
     this.unsubscribe()
     for (const request of this.activeRequests.values()) {
@@ -176,10 +196,20 @@ export class RendererPluginHostConnection {
       }
     }
     this.activeRequests.clear()
-    const connectionId = this.connectionId
-    if (connectionId) {
-      void this.client.disconnect({ connectionId }).catch(() => undefined)
+    this.closePromise = this.disconnectExactConnection()
+    return this.closePromise
+  }
+
+  private async disconnectExactConnection() {
+    let connectionId = this.connectionId
+    if (!connectionId) {
+      try {
+        connectionId = await this.connectPromise
+      } catch {
+        return false
+      }
     }
+    return this.client.disconnect({ connectionId })
   }
 
   private operationId(requestId: string) {
@@ -228,9 +258,20 @@ function maximumRequestBytesForEnvelope(value: unknown) {
   }
   const type = Reflect.get(value, "type")
   const method = Reflect.get(value, "method")
+  if (type === "disconnect") return maximumPluginHostControlBytes
   return type === "request" && isPluginApiId(method)
     ? getPluginApiWireContract(method).request.maxBytes
     : maximumPluginCapabilityRequestBytes
+}
+
+function hasDisconnectType(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, "type")
+    return Boolean(descriptor && "value" in descriptor && descriptor.value === "disconnect")
+  } catch {
+    return false
+  }
 }
 
 function throwIfAborted(signal?: AbortSignal) {

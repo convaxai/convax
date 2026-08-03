@@ -21,6 +21,21 @@ const evaluationTimeoutMs = timeoutMs * 4 + 30_000
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
 
+async function resolveDesktopMainEntry() {
+  const manifestPath = path.join(desktopRoot, "package.json")
+  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as { main?: unknown }
+  if (typeof manifest.main !== "string" || !manifest.main.trim()) {
+    throw new Error("Desktop package.json must declare a non-empty main entry")
+  }
+  const mainRoot = path.join(desktopRoot, "out", "main")
+  const mainEntry = path.resolve(desktopRoot, manifest.main)
+  const relativeEntry = path.relative(mainRoot, mainEntry)
+  if (!relativeEntry || relativeEntry.startsWith(`..${path.sep}`) || path.isAbsolute(relativeEntry)) {
+    throw new Error("Desktop package.json main must resolve below out/main")
+  }
+  return mainEntry
+}
+
 async function resolveElectronBinary() {
   const pathFile = path.join(electronPackageRoot, "path.txt")
   const relativeBinary = await fs
@@ -184,7 +199,7 @@ async function collectOutput(stream: ReadableStream<Uint8Array>) {
 }
 
 const electronBinary = await resolveElectronBinary()
-await fs.access(path.join(desktopRoot, "out", "main", "index.js")).catch(() => {
+await fs.access(await resolveDesktopMainEntry()).catch(() => {
   throw new Error("Desktop output is missing; run `bun --cwd packages/desktop build` before the smoke")
 })
 const builtRendererUrl = pathToFileURL(path.join(desktopRoot, "out", "renderer", "index.html")).href
@@ -743,16 +758,16 @@ try {
       (node) => node.id === restartFallbackOwner.id,
     )?.data.metadata?.convaxGenerationRun
     if (
-      !reconciledFallback.interruptedNodeIds.includes(restartFallbackOwner.id)
-      || fallbackRun?.status !== "interrupted"
-      || fallbackRun.retrySafety !== "unknown"
+      !reconciledFallback.failedNodeIds.includes(restartFallbackOwner.id)
+      || fallbackRun?.status !== "failed"
+      || "retrySafety" in fallbackRun
     ) {
       throw new Error("Restart reconciliation did not fail closed for an active run without an admitted LRO")
     }
       sessionStorage.setItem("convax.smoke.generation-race.v1", JSON.stringify({
         concurrentConflict: true,
         lateCallbackRejected: lateReplacement.rejected,
-        restartFallbackInterrupted: fallbackRun.status === "interrupted",
+        restartFallbackFailed: fallbackRun.status === "failed",
         status: succeededRun.status,
       }))
       // Direct document commands intentionally do not turn the Renderer into a
@@ -876,7 +891,7 @@ try {
     generationRace?: {
       concurrentConflict?: boolean
       lateCallbackRejected?: boolean
-      restartFallbackInterrupted?: boolean
+      restartFallbackFailed?: boolean
       status?: string
     }
   }
@@ -887,7 +902,7 @@ try {
     summary.language !== "zh-CN" ||
     summary.generationRace?.concurrentConflict !== true ||
     summary.generationRace.lateCallbackRejected !== true ||
-    summary.generationRace.restartFallbackInterrupted !== true ||
+    summary.generationRace.restartFallbackFailed !== true ||
     summary.generationRace.status !== "succeeded"
   ) {
     throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)

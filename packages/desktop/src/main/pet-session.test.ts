@@ -25,7 +25,19 @@ describe("pet Plugin Session", () => {
             ...identity,
             version: identity.pluginVersion,
           },
-          plugin: { capabilities: [], id: "soft-companion", schema: "convax.plugin/8" },
+          plugin: {
+            capabilities: ["pet.activity.read", "pet.activity.open", "pet.preferences.write", "pet.custom.manage"],
+            contributes: {
+              pet: {
+                library: "pet-library.json",
+                overlay: "pet/index.html",
+                protocol: "convax.pet-host/1" as const,
+                settings: "settings/index.html",
+              },
+            },
+            id: "soft-companion",
+            schema: "convax.plugin/8",
+          },
           release() {},
           resolveAsset,
         }
@@ -60,6 +72,8 @@ describe("pet Plugin Session", () => {
     expect(response.status).toBe(200)
     expect(resolveAsset).toHaveBeenCalledWith("pet/index.html")
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'none'")
+    expect(response.headers.get("content-security-policy")).toContain("img-src 'self' data: blob: convax-pet-asset:")
+    expect(response.headers.get("content-security-policy")).toContain("connect-src 'none'")
 
     const assetHandler = handle.mock.calls[1]?.[1] as (request: Request) => Promise<Response>
     expect((await assetHandler(new Request("convax-pet-asset://pet/custom-nova"))).status).toBe(200)

@@ -116,7 +116,7 @@ describe("@convax/marketplace strict contracts", () => {
     ).toThrow("GitHub Pages")
   })
 
-  test("rejects duplicate registry identities and admits only plugin/8 projections", () => {
+  test("rejects duplicate registry identities and admits current or historical Plugin projections", () => {
     const mcpServer = {
       name: "io.example/m",
       description: "Example MCP",
@@ -131,7 +131,7 @@ describe("@convax/marketplace strict contracts", () => {
         schema: "convax.plugin/8",
         id: "p",
         version: "1.0.0",
-        hostApi: { major: 1, required: [], optional: [] },
+        hostApi: { major: 2, required: [], optional: [] },
       },
       delivery: {
         ...artifact,
@@ -171,7 +171,7 @@ describe("@convax/marketplace strict contracts", () => {
     const parsed = parseRegistryV2(registry)
     expect(parsed.packages[0]?.manifest).toMatchObject({
       schema: "convax.plugin/8",
-      hostApi: { major: 1, required: [], optional: [] },
+      hostApi: { major: 2, required: [], optional: [] },
     })
     const futureMinorPackages = registry.packages.map((entry) =>
       "manifest" in entry
@@ -179,7 +179,7 @@ describe("@convax/marketplace strict contracts", () => {
             ...entry,
             manifest: {
               ...entry.manifest,
-              hostApi: { major: 1, required: ["future.capability.invoke"], optional: [] },
+              hostApi: { major: 2, required: ["future.capability.invoke"], optional: [] },
             },
           }
         : entry,
@@ -190,7 +190,25 @@ describe("@convax/marketplace strict contracts", () => {
         revision: sha256Hex(canonicalJson(futureMinorPackages)),
         packages: futureMinorPackages,
       }).packages[0]?.manifest?.hostApi,
-    ).toEqual({ major: 1, required: ["future.capability.invoke"], optional: [] })
+    ).toEqual({ major: 2, required: ["future.capability.invoke"], optional: [] })
+    const legacyMajorPackages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
+            manifest: {
+              ...entry.manifest,
+              hostApi: { major: 1, required: [], optional: [] },
+            },
+          }
+        : entry,
+    )
+    expect(() =>
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(legacyMajorPackages)),
+        packages: legacyMajorPackages,
+      }),
+    ).toThrow("major must be 2")
     expect(() => parseRegistryV2({ ...registry, packages: [registry.packages[0], registry.packages[0]] })).toThrow(
       "duplicate",
     )
@@ -225,34 +243,29 @@ describe("@convax/marketplace strict contracts", () => {
         ],
       }),
     ).toThrow("manifest schema")
-    expect(() =>
-      parseRegistryV2({
-        ...registry,
-        packages: registry.packages.map((entry) =>
-          "manifest" in entry
-            ? {
-                ...entry,
-                manifest: { ...entry.manifest, hostApi: { major: 2, required: [], optional: [] } },
-              }
-            : entry,
-        ),
-      }),
-    ).toThrow("hostApi")
-    expect(() =>
-      parseRegistryV2({
-        ...registry,
-        packages: [
-          {
-            ...registry.packages[0],
+    const historicalPackages = registry.packages.map((entry) =>
+      "manifest" in entry
+        ? {
+            ...entry,
             manifest: {
               schema: "convax.plugin/7",
               id: "p",
               version: "1.0.0",
             },
-          },
-        ],
-      }),
-    ).toThrow("manifest schema")
+          }
+        : entry,
+    )
+    expect(
+      parseRegistryV2({
+        ...registry,
+        revision: sha256Hex(canonicalJson(historicalPackages)),
+        packages: historicalPackages,
+      }).packages[0]?.manifest,
+    ).toEqual({
+      schema: "convax.plugin/7",
+      id: "p",
+      version: "1.0.0",
+    })
     expect(() =>
       parseRegistryV2({
         ...registry,

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Govern Convax Architecture"
+  short_description: "Audit ownership and keep architecture docs current"
+  default_prompt: "Use $govern-convax-architecture to assign the owning package, update architecture documentation, and define falsifiable gates for this change."

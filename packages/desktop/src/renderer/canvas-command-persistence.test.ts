@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { applyCanvasApplicationCommand } from "@convax/canvas/application"
-import { createCanvasDocument, createTextNode, type CanvasDocument } from "@convax/canvas/core"
+import { createCanvasDocument, createMediaNode, createTextNode, type CanvasDocument } from "@convax/canvas/core"
+import { dehydrateProjectCanvasDocument, projectResourceReferenceKey } from "@convax/project/canvas"
 import type { CanvasRendererCommandRequest, CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import { createRendererCanvasPersistence } from "./canvas-command-persistence"
 
@@ -129,5 +130,139 @@ describe("Renderer Canvas command persistence", () => {
 
     await expect(persistence.save(optimisticProjection, signal)).resolves.toEqual(authoritative)
     expect(execute).not.toHaveBeenCalled()
+  })
+
+  test("preserves renderer runtime resources when collapsing an empty durable patch", async () => {
+    const hydrated = {
+      ...createCanvasDocument({
+        id: "canvas-one",
+        nodes: [
+          {
+            id: "plugin-one",
+            type: "file",
+            position: { x: -320, y: 0 },
+            data: {
+              kind: "plugin.surface",
+              label: "Plugin",
+              metadata: { camera: "front" },
+            },
+          },
+          createMediaNode({
+            id: "image-one",
+            position: { x: 0, y: 0 },
+            resource: {
+              id: "image-resource",
+              kind: "image",
+              metadata: {
+                [projectResourceReferenceKey]: {
+                  kind: "managed-asset",
+                  mediaType: "image/png",
+                  name: "image-one.png",
+                  sha256: "a".repeat(64),
+                },
+              },
+              mimeType: "image/png",
+              name: "image-one.png",
+              state: {
+                contentRevision: "image-revision",
+                status: "ready",
+                url: "convax-resource://image-one",
+              },
+            },
+          }),
+          createMediaNode({
+            id: "video-one",
+            position: { x: 320, y: 0 },
+            resource: {
+              id: "video-resource",
+              kind: "video",
+              metadata: {
+                [projectResourceReferenceKey]: {
+                  kind: "managed-asset",
+                  mediaType: "video/mp4",
+                  name: "video-one.mp4",
+                  sha256: "b".repeat(64),
+                },
+              },
+              mimeType: "video/mp4",
+              name: "video-one.mp4",
+              state: {
+                contentRevision: "video-revision",
+                posterUrl: "convax-resource://video-one-poster",
+                status: "ready",
+                url: "convax-resource://video-one",
+              },
+            },
+          }),
+        ],
+      }),
+      revision: 4,
+    }
+    let mainResult: CanvasDocument | undefined
+    const execute = mock(async () => {
+      if (!mainResult) throw new Error("Main result was not prepared")
+      return {
+        affectedNodeIds: ["plugin-one"],
+        changed: true,
+        createdNodeIds: [],
+        document: structuredClone(mainResult),
+        storageVersion: "storage-5",
+        warnings: [],
+      }
+    })
+    const persistence = createRendererCanvasPersistence({
+      client: {
+        execute,
+        async load() {
+          return { document: structuredClone(hydrated), storageVersion: "storage-4" }
+        },
+      },
+      commandId: () => "renderer-command",
+      dehydrate: dehydrateProjectCanvasDocument,
+      hydrate: structuredClone,
+      ref: { canvasId: "canvas-one", scopeId: "project-one" },
+    })
+    const signal = new AbortController().signal
+    const loaded = await persistence.load("canvas-one", signal)
+    const firstProjection = {
+      ...loaded!,
+      nodes: loaded!.nodes.map((node) =>
+        node.id === "plugin-one"
+          ? {
+              ...node,
+              data: {
+                ...node.data,
+                metadata: { camera: "profile" },
+              },
+            }
+          : node,
+      ),
+      revision: 5,
+    }
+    mainResult = structuredClone(firstProjection)
+
+    const committed = await persistence.save(firstProjection, signal)
+    const saved = await persistence.save(
+      { ...committed, nodes: [...committed.nodes].reverse(), revision: 6 },
+      signal,
+    )
+
+    expect(saved.revision).toBe(5)
+    expect(saved.nodes.map((node) => node.id)).toEqual(["plugin-one", "image-one", "video-one"])
+    expect(saved.nodes[0]?.data.metadata).toEqual({ camera: "profile" })
+    expect(saved.nodes.slice(1).map((node) => node.data.resourceState)).toEqual([
+      {
+        contentRevision: "image-revision",
+        status: "ready",
+        url: "convax-resource://image-one",
+      },
+      {
+        contentRevision: "video-revision",
+        posterUrl: "convax-resource://video-one-poster",
+        status: "ready",
+        url: "convax-resource://video-one",
+      },
+    ])
+    expect(execute).toHaveBeenCalledTimes(1)
   })
 })

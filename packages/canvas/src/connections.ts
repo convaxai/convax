@@ -4,10 +4,6 @@ import type { CanvasDocument, CanvasNode } from "./types"
 export const CANVAS_NODE_INPUT_HANDLE_ID = "target-left"
 export const CANVAS_NODE_OUTPUT_HANDLE_ID = "source-right"
 
-/** Structural groups organize cards but never participate in Canvas data flow. */
-export function isCanvasConnectableNode(node: CanvasNode) {
-  return node.data.kind !== "group"
-}
 export function isCanvasFileNode(node: CanvasNode) {
   return node.type === "file" && node.data.kind !== "agent" && node.data.kind !== "group"
 }

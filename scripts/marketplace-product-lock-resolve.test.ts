@@ -143,7 +143,7 @@ describe("Marketplace product lock resolution", () => {
         kind: "plugin",
         manifest: {
           contributes: { skills: [{ name: "ffmpeg-canvas", path: "skills/ffmpeg-canvas" }] },
-          hostApi: { major: 1, optional: [], required: [] },
+          hostApi: { major: 2, optional: [], required: [] },
           id: "ffmpeg-tools",
           schema: "convax.plugin/8",
           version: "1.0.0",

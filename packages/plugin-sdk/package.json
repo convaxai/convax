@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/package.json",
   "name": "@convax/plugin-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -29,6 +29,16 @@
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js",
       "default": "./dist/client.js"
+    },
+    "./pet": {
+      "types": "./dist/pet.d.ts",
+      "import": "./dist/pet.js",
+      "default": "./dist/pet.js"
+    },
+    "./pet-client": {
+      "types": "./dist/pet-client.d.ts",
+      "import": "./dist/pet-client.js",
+      "default": "./dist/pet-client.js"
     }
   },
   "scripts": {

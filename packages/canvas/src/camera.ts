@@ -1,4 +1,4 @@
-import { getCanvasNodeSize } from "./document"
+import { getCanvasNodePresentationSize } from "./document"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 import type { CanvasViewport } from "./view"
 
@@ -191,7 +191,7 @@ export function resolveCanvasNodeWorldRects(
   for (const node of document.nodes) {
     const position = resolveWorldPosition(node, nodeById, positionCache)
     if (!position) continue
-    const size = getCanvasNodeSize(node)
+    const size = getCanvasNodePresentationSize(node)
     if (size.width <= 0 || size.height <= 0) continue
     result.set(node.id, {
       bottom: position.y + size.height,

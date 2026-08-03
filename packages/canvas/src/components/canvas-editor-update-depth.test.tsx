@@ -13,17 +13,23 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { CanvasEditorController } from "../editor-context"
-import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
+import type { CanvasSelectionProjection } from "../inspector"
+import type { CanvasSelectionAction } from "../selection-actions"
+import type { CanvasFolderBrowseListing } from "../services"
+import type { CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let EditorProbe: ComponentType | undefined
 let feedbackCommits = 0
 let observedEditor: CanvasEditorController | undefined
+let observedMutationSurface: { disabled: boolean; visible: boolean } | undefined
 let observedReactFlowProps:
   | {
       elementsSelectable?: boolean
       nodesConnectable?: boolean
       nodesDraggable?: boolean
+      nodes?: CanvasNode[]
+      onNodeDoubleClick?: (event: unknown, node: CanvasNode) => void
       onNodesChange?: (
         changes: Array<{
           dimensions?: { height: number; width: number }
@@ -66,13 +72,13 @@ mock.module("@convax/ui", () => ({
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
+  Dialog: Passthrough,
+  DialogClose: Passthrough,
+  DialogContent: Passthrough,
+  DialogDescription: Passthrough,
+  DialogTitle: Passthrough,
   Input: () => <input />,
-  Loading: (props: {
-    className?: string
-    description?: ReactNode
-    label?: ReactNode
-    reducedMotion?: boolean
-  }) => (
+  Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
       aria-live="polite"
       className={props.className}
@@ -135,6 +141,8 @@ mock.module("@xyflow/react", () => ({
     elementsSelectable?: boolean
     nodesConnectable?: boolean
     nodesDraggable?: boolean
+    nodes?: CanvasNode[]
+    onNodeDoubleClick?: (event: unknown, node: CanvasNode) => void
     onNodesChange?: (
       changes: Array<{
         dimensions?: { height: number; width: number }
@@ -204,9 +212,12 @@ mock.module("@xyflow/react", () => ({
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
-const { createCanvasDocument, createTextNode } = await import("../document")
+const { createCanvasDocument, createFolderNode, createGroupNode, createTextNode } = await import("../document")
+const { getCanvasFolderFocusEntry } = await import("../directory-focus")
+const { setCanvasGroupFolded } = await import("../group-fold")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
 const { useCanvasEditor } = await import("../editor-context")
+const { useCanvasMutationSurface } = await import("./canvas-mutation-surface")
 const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
 
@@ -294,11 +305,16 @@ function IdentityFeedbackProbe() {
 
 function EditorStateProbe() {
   observedEditor = useCanvasEditor()
+  observedMutationSurface = useCanvasMutationSurface(observedEditor.readOnly)
   return null
 }
 
 function getObservedEditor() {
   return observedEditor
+}
+
+function getObservedMutationSurface() {
+  return observedMutationSurface
 }
 
 test("does not feed a selection-action refresh back into Canvas document updates", async () => {
@@ -458,6 +474,277 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(canvas?.dataset.canvasTool).toBe("hand")
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("accepts expanded Group resize dimensions while protecting folded presentation measurements", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const expanded = createGroupNode({
+      height: 360,
+      id: "expanded-group",
+      position: { x: 40, y: 60 },
+      width: 520,
+    })
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "expanded-group-resize", nodes: [expanded] })}
+          key="expanded-group"
+          services={createCanvasServices()}
+        />,
+      )
+    })
+    await act(async () => {
+      getObservedEditor()?.beginGesture()
+      observedReactFlowProps?.onNodesChange?.([
+        { dimensions: { height: 420, width: 640 }, id: expanded.id, type: "dimensions" },
+      ])
+      getObservedEditor()?.endGesture()
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.measured).toEqual({ height: 420, width: 640 })
+    expect(getObservedEditor()?.document.revision).toBe(1)
+
+    const foldedDocument = setCanvasGroupFolded(
+      createCanvasDocument({ id: "folded-group-measurement", nodes: [expanded] }),
+      expanded.id,
+      true,
+    )
+    await act(async () => {
+      root?.render(
+        <CanvasEditor initialDocument={foldedDocument} key="folded-group" services={createCanvasServices()} />,
+      )
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([
+        { dimensions: { height: 160, width: 200 }, id: expanded.id, type: "dimensions" },
+      ])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
+  } finally {
+    EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("double-clicks a Project folder into a read-only transient Canvas focus", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  fitView.mockClear()
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const folder = createFolderNode({
+      id: "project-folder",
+      position: { x: 40, y: 60 },
+      resource: {
+        id: "project-folder",
+        kind: "folder",
+        metadata: {},
+        name: "Design",
+        state: { status: "ready" },
+      },
+    })
+    const listings = new Map<string | undefined, CanvasFolderBrowseListing>([
+      [
+        undefined,
+        {
+          entries: [
+            { id: "Design/References", kind: "folder", label: "References" },
+            { id: "Design/brief.pdf", kind: "file", label: "brief.pdf" },
+          ],
+          path: [{ id: "Design", label: "Design" }],
+          totalCount: 2,
+          truncated: false,
+        },
+      ],
+      [
+        "Design",
+        {
+          entries: [
+            { id: "Design/References", kind: "folder", label: "References" },
+            { id: "Design/brief.pdf", kind: "file", label: "brief.pdf" },
+          ],
+          path: [{ id: "Design", label: "Design" }],
+          totalCount: 2,
+          truncated: false,
+        },
+      ],
+      [
+        "Design/References",
+        {
+          entries: [],
+          path: [
+            { id: "Design", label: "Design" },
+            { id: "Design/References", label: "References" },
+          ],
+          totalCount: 0,
+          truncated: false,
+        },
+      ],
+    ])
+    const list = mock(async ({ directoryId }: { directoryId?: string }) => listings.get(directoryId)!)
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "folder-focus", nodes: [folder] })}
+          services={createCanvasServices({ folderBrowse: { list } })}
+        />,
+      )
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDoubleClick?.({}, folder)
+      await Promise.resolve()
+    })
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ ownerNodeId: folder.id }))
+    expect(observedReactFlowProps?.nodes).toHaveLength(2)
+    expect(observedReactFlowProps?.nodes?.every((node) => getCanvasFolderFocusEntry(node))).toBe(true)
+    expect(observedReactFlowProps).toMatchObject({
+      elementsSelectable: false,
+      nodesConnectable: false,
+      nodesDraggable: false,
+    })
+    expect(getObservedEditor()?.document.nodes).toEqual([folder])
+    expect(getObservedEditor()?.document.revision).toBe(0)
+    expect(container.querySelector('[aria-label="Canvas path"]')?.textContent).toContain("CanvasDesign")
+
+    const nestedFolder = observedReactFlowProps?.nodes?.find(
+      (node) => getCanvasFolderFocusEntry(node)?.kind === "folder",
+    )
+    await act(async () => {
+      if (nestedFolder) observedReactFlowProps?.onNodeDoubleClick?.({}, nestedFolder)
+      await Promise.resolve()
+    })
+    expect(list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ directoryId: "Design/References", ownerNodeId: folder.id }),
+    )
+    expect(observedReactFlowProps?.nodes).toEqual([])
+    expect(container.querySelector('[aria-label="Canvas path"]')?.textContent).toContain("CanvasDesignReferences")
+    expect(container.querySelector('[data-canvas-folder-focus-state="empty"]')).not.toBeNull()
+
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(observedReactFlowProps?.nodes).toHaveLength(2)
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(observedReactFlowProps?.nodes?.map((node) => node.id)).toEqual([folder.id])
+    expect(container.querySelector('[aria-label="Canvas path"]')).toBeNull()
+    expect(fitView).toHaveBeenCalled()
+  } finally {
+    EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("ignores a stale folder listing when a later subdirectory wins", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const folder = createFolderNode({
+      id: "project-folder",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "project-folder",
+        kind: "folder",
+        metadata: {},
+        name: "Design",
+        state: { status: "ready" },
+      },
+    })
+    const rootListing: CanvasFolderBrowseListing = {
+      entries: [
+        { id: "Design/A", kind: "folder", label: "A" },
+        { id: "Design/B", kind: "folder", label: "B" },
+      ],
+      path: [{ id: "Design", label: "Design" }],
+      totalCount: 2,
+      truncated: false,
+    }
+    let resolveA!: (listing: CanvasFolderBrowseListing) => void
+    const pendingA = new Promise<CanvasFolderBrowseListing>((resolve) => {
+      resolveA = resolve
+    })
+    const list = mock(async ({ directoryId }: { directoryId?: string }) => {
+      if (!directoryId) return rootListing
+      if (directoryId === "Design/A") return pendingA
+      return {
+        entries: [{ id: "Design/B/winner.txt", kind: "file" as const, label: "winner.txt" }],
+        path: [
+          { id: "Design", label: "Design" },
+          { id: "Design/B", label: "B" },
+        ],
+        totalCount: 1,
+        truncated: false,
+      }
+    })
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "stale-folder-focus", nodes: [folder] })}
+          services={createCanvasServices({ folderBrowse: { list } })}
+        />,
+      )
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodeDoubleClick?.({}, folder)
+      await Promise.resolve()
+    })
+    const projected = observedReactFlowProps?.nodes ?? []
+    const folderA = projected.find((node) => node.data.label === "A")
+    const folderB = projected.find((node) => node.data.label === "B")
+    expect(folderA).toBeDefined()
+    expect(folderB).toBeDefined()
+
+    await act(async () => {
+      if (folderA) observedReactFlowProps?.onNodeDoubleClick?.({}, folderA)
+      if (folderB) observedReactFlowProps?.onNodeDoubleClick?.({}, folderB)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(observedReactFlowProps?.nodes?.map((node) => node.data.label)).toEqual(["winner.txt"])
+
+    await act(async () => {
+      resolveA({
+        entries: [{ id: "Design/A/stale.txt", kind: "file", label: "stale.txt" }],
+        path: [
+          { id: "Design", label: "Design" },
+          { id: "Design/A", label: "A" },
+        ],
+        totalCount: 1,
+        truncated: false,
+      })
+      await Promise.resolve()
+    })
+    expect(observedReactFlowProps?.nodes?.map((node) => node.data.label)).toEqual(["winner.txt"])
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -687,6 +974,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
   let root: Root | undefined
   EditorProbe = EditorStateProbe
   observedEditor = undefined
+  observedMutationSurface = undefined
 
   try {
     const container = document.createElement("div")
@@ -726,6 +1014,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
       )
     })
     expect(container.textContent).not.toContain("Loading canvas…")
+    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
 
     let reload: Promise<void> | undefined
     await act(async () => {
@@ -734,6 +1023,7 @@ test("keeps an existing Canvas visible while an authoritative document reload is
     })
 
     expect(observedEditor).toMatchObject({ hydrating: true, readOnly: true })
+    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
     expect(container.textContent).not.toContain("Loading canvas…")
 
     await act(async () => {
@@ -748,11 +1038,113 @@ test("keeps an existing Canvas visible while an authoritative document reload is
       readOnly: false,
     })
     expect(container.textContent).not.toContain("Loading canvas…")
+    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
     expect(save).not.toHaveBeenCalled()
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
     observedEditor = undefined
+    observedMutationSurface = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps a running selection action pending across its own authoritative document refresh", async () => {
+  const restoreWindow = installTestWindow()
+  const errors: Error[] = []
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedMutationSurface = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container, {
+      onCaughtError: () => undefined,
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    const node = createTextNode({
+      id: "selection-source",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const initialDocument = createCanvasDocument({ id: "selection-action-refresh", nodes: [node] })
+    const authoritativeDocument = { ...initialDocument, revision: 1 }
+    let resolveReload!: (document: typeof authoritativeDocument) => void
+    const pendingReload = new Promise<typeof authoritativeDocument>((resolve) => {
+      resolveReload = resolve
+    })
+    let loadAttempt = 0
+    const load = mock(async () => {
+      loadAttempt += 1
+      return loadAttempt === 1 ? initialDocument : pendingReload
+    })
+    let resolveAction!: () => void
+    const pendingAction = new Promise<void>((resolve) => {
+      resolveAction = resolve
+    })
+    let actionSignal: AbortSignal | undefined
+    const action: CanvasSelectionAction = {
+      async execute(context) {
+        actionSignal = context.signal
+        await pendingAction
+      },
+      id: "selection.long-running",
+      label: "Long-running action",
+    }
+    const editorRef = createRef<CanvasEditorHandle>()
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          ref={editorRef}
+          selectionActions={[action]}
+          services={createCanvasServices({ persistence: { load, save: async (document) => document } })}
+        />,
+      )
+    })
+    await act(async () => getObservedEditor()?.selectNodes([node.id]))
+    const visibleAction = getObservedEditor()?.visibleSelectionActions.find((candidate) => candidate.id === action.id)
+    expect(visibleAction).toBeDefined()
+
+    await act(async () => {
+      if (visibleAction) getObservedEditor()?.executeSelectionAction(visibleAction)
+      await Promise.resolve()
+    })
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+
+    let reload: Promise<void> | undefined
+    await act(async () => {
+      reload = editorRef.current?.reloadAuthoritative()
+      await Promise.resolve()
+    })
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
+
+    await act(async () => {
+      resolveReload(authoritativeDocument)
+      await Promise.resolve()
+    })
+    await reload
+    expect(actionSignal?.aborted).toBeFalse()
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
+
+    await act(async () => {
+      resolveAction()
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeFalse()
+    expect(errors).toEqual([])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedMutationSurface = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -972,9 +1364,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
       await Promise.resolve()
     })
     expect(
-      container
-        .querySelector('[data-canvas-composer-overlay="generation"]')
-        ?.closest('[data-canvas-presence="exit"]'),
+      container.querySelector('[data-canvas-composer-overlay="generation"]')?.closest('[data-canvas-presence="exit"]'),
     ).not.toBeNull()
     expect(document.activeElement).toBe(canvasRoot)
     await act(async () => {
@@ -988,7 +1378,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
   }
 })
 
-test("publishes scope-safe selection and requests the read-only Inspector without a document commit", async () => {
+test("publishes scope-safe selection without injecting built-in selection actions", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
@@ -1010,14 +1400,11 @@ test("publishes scope-safe selection and requests the read-only Inspector withou
     })
     const initialDocument = { ...createCanvasDocument({ id: "projection", nodes: [node] }), revision: 5 }
     const projections: CanvasSelectionProjection[] = []
-    const inspectorRequests: CanvasInspectorProjection[] = []
-
     await act(async () => {
       root?.render(
         <TestErrorBoundary onError={(error) => errors.push(error)}>
           <CanvasEditor
             initialDocument={initialDocument}
-            onInspectorRequest={(projection) => inspectorRequests.push(projection)}
             onSelectionProjectionChange={(projection) => projections.push(projection)}
             services={createCanvasServices()}
             viewId="primary"
@@ -1043,25 +1430,10 @@ test("publishes scope-safe selection and requests the read-only Inspector withou
       nodeIds: [node.id],
       scopeId: "project-a/projection",
     })
-    const inspectorAction = getObservedEditor()?.visibleSelectionActions.find(
-      (action) => action.id === "canvas.inspector.open",
-    )
-    expect(inspectorAction).toBeDefined()
-
-    await act(async () => {
-      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
-      await Promise.resolve()
-    })
-    expect(inspectorRequests).toHaveLength(1)
-    expect(inspectorRequests[0]).toMatchObject({ nodeId: node.id, revision: 5 })
+    expect(getObservedEditor()?.visibleSelectionActions).toEqual([])
 
     await act(async () => getObservedEditor()?.selectNodes([]))
     expect(projections.at(-1)).toMatchObject({ inspector: null, kind: "none", nodeIds: [] })
-    await act(async () => {
-      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
-      await Promise.resolve()
-    })
-    expect(inspectorRequests).toHaveLength(1)
     expect(getObservedEditor()?.document.revision).toBe(5)
     expect(errors).toEqual([])
   } finally {
@@ -1214,6 +1586,65 @@ test("navigates the top creation menu by keyboard and restores its trigger on Es
     expect(menu?.hidden).toBeTrue()
     expect(document.activeElement).toBe(trigger)
   } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("opens filtered pickers from top media actions without creating empty nodes", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const add = mock(async () => ({ createdNodeIds: [], revision: 0, warnings: [] }))
+
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={createCanvasDocument({ id: "top-media-picker" })}
+          services={createCanvasServices({ mutation: { add } })}
+        />,
+      )
+    })
+
+    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
+    const imageInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="image"]')
+    const videoInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="video"]')
+    const imageClick = mock(() => undefined)
+    const videoClick = mock(() => undefined)
+    Object.defineProperty(imageInput, "click", { configurable: true, value: imageClick })
+    Object.defineProperty(videoInput, "click", { configurable: true, value: videoClick })
+
+    await act(async () => {
+      trigger?.click()
+    })
+    const imageAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Image"]')
+    await act(async () => {
+      imageAction?.click()
+    })
+
+    expect(imageClick).toHaveBeenCalledTimes(1)
+    expect(add).not.toHaveBeenCalled()
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+
+    await act(async () => {
+      trigger?.click()
+    })
+    const videoAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Video"]')
+    await act(async () => {
+      videoAction?.click()
+    })
+
+    expect(videoClick).toHaveBeenCalledTimes(1)
+    expect(add).not.toHaveBeenCalled()
+    expect(getObservedEditor()?.document.nodes).toEqual([])
+  } finally {
+    EditorProbe = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

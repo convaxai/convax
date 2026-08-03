@@ -46,6 +46,14 @@ or durable domain authority.
 - Card-scoped Agent and Generate conversations preload direct incoming file nodes
   only as removable references. The owning card remains separate context/target;
   never infer it or outgoing neighbors as inputs.
+- Image/video replacement cards may persist one opaque output-tool override. A text
+  card keeps image/video model and options isolated by output for the mounted
+  composer, creates exactly one separate pending result node, and uses the text
+  owner only as the relation anchor unless its content is separately admitted as an
+  incoming input.
+- Project-directory browsing is a transient read-only projection over the existing
+  Project Files capability. Projected entries are not persisted, selected,
+  connected, moved, or added to Canvas history.
 - Selection actions render only host-projected actions for an immutable selection
   snapshot. Abort their live Canvas signal when the snapshot or surface is replaced
   and forward cancellation through the explicit Preload protocol.
@@ -59,6 +67,13 @@ or durable domain authority.
 - Web Plugin MessagePorts, Host API calls, capability imports, commands, and
   node-scoped calls remain bound to their exact frame lease and scope.
   Renderer-provided ids and state do not create Project/Canvas authority.
+- Closing a Web Plugin client may send only the payload-free lifecycle disconnect
+  for its existing MessagePort. It must not select a Main connection or frame
+  identity, and teardown must not depend on asynchronous `beforeunload` work.
+- Project connected-media CSP from exact declarations and grants only. Image input
+  may widen `img-src`, audio/video input may widen `media-src`, and neither widens
+  `connect-src`. Pet assets widen only `img-src` for the exact admitted Pet document;
+  unrelated Plugin documents and legacy schemas stay closed.
 - Native media drag-out starts only from an explicit held export gesture. Renderer
   publishes a complete immutable selection and may hold a short-lived opaque ticket;
   it never stages files or sees the native drag payload.
@@ -75,6 +90,9 @@ or durable domain authority.
   selection changes, scope changes, focus loss, and disposal.
 - Keep user-visible errors bounded and safe. Raw sidecar, filesystem, network,
   authorization, and recovery diagnostics remain in Main.
+- Plugin readiness and setup UI is a display projection. Integrity, authorization,
+  source, version, or artifact mismatch routes to exact-source reinstall/update;
+  never invent a `Complete setup` action for a Plugin.
 
 ## Mandatory references
 

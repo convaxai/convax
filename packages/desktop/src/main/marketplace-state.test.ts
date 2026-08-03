@@ -78,6 +78,17 @@ describe("InstalledCapability projection", () => {
   test("requires setup for every runtime surface, including anonymous HTTP", () => {
     expect(projectInstalledCapability({ installRecord: install() })).toMatchObject({ state: "setup-required" })
   })
+
+  test("never projects a second setup action for an installed Plugin", () => {
+    expect(
+      projectInstalledCapability({
+        installRecord: install({ kind: "plugin", runtimeSurface: "agent-and-convax" }),
+      }),
+    ).toMatchObject({
+      attention: "integrity-or-authorization",
+      state: "attention",
+    })
+  })
 })
 
 describe("FileMarketplaceStateStore", () => {
@@ -107,17 +118,19 @@ describe("FileMarketplaceStateStore", () => {
         mutation: "setup",
         next: record,
         owner: "execution-grant",
-        participants: [{
-          digest: capabilityTransitionParticipantDigest({
+        participants: [
+          {
+            digest: capabilityTransitionParticipantDigest({
+              next: null,
+              participant: "execution-grant",
+              previous: null,
+            }),
             next: null,
             participant: "execution-grant",
             previous: null,
-          }),
-          next: null,
-          participant: "execution-grant",
-          previous: null,
-          state: "published",
-        }],
+            state: "published",
+          },
+        ],
         phase: "decide",
         previous: record,
         revision: 1,
@@ -137,9 +150,9 @@ describe("FileMarketplaceStateStore", () => {
   test("fails closed on corrupt authority instead of resetting it", async () => {
     const root = await temporaryRoot()
     const file = join(root, "index-v1.json")
-    await writeFile(file, "{\"schema\":\"wrong\"}", { mode: 0o600 })
+    await writeFile(file, '{"schema":"wrong"}', { mode: 0o600 })
     await expect(new FileMarketplaceStateStore(file).read()).rejects.toThrow("Marketplace state is invalid")
-    expect(await readFile(file, "utf8")).toBe("{\"schema\":\"wrong\"}")
+    expect(await readFile(file, "utf8")).toBe('{"schema":"wrong"}')
   })
 
   test("rejects cross-source replacement for the same installed identity", async () => {
@@ -192,17 +205,19 @@ describe("FileMarketplaceStateStore", () => {
           mutation: "install" as const,
           next: install({ id: `item-${index}`, kind: "skill" }),
           owner: "managed-skill" as const,
-          participants: [{
-            digest: capabilityTransitionParticipantDigest({
+          participants: [
+            {
+              digest: capabilityTransitionParticipantDigest({
+                next: install({ id: `item-${index}`, kind: "skill" }),
+                participant: "install-record",
+                previous: null,
+              }),
               next: install({ id: `item-${index}`, kind: "skill" }),
-              participant: "install-record",
+              participant: "install-record" as const,
               previous: null,
-            }),
-            next: install({ id: `item-${index}`, kind: "skill" }),
-            participant: "install-record" as const,
-            previous: null,
-            state: "pending" as const,
-          }],
+              state: "pending" as const,
+            },
+          ],
           phase: "prepare" as const,
           previous: null,
           revision: 1,
@@ -252,17 +267,19 @@ describe("FileMarketplaceStateStore", () => {
         mutation: "install",
         next,
         owner: "managed-skill",
-        participants: [{
-          digest: capabilityTransitionParticipantDigest({
+        participants: [
+          {
+            digest: capabilityTransitionParticipantDigest({
+              next,
+              participant: "install-record",
+              previous: null,
+            }),
             next,
             participant: "install-record",
             previous: null,
-          }),
-          next,
-          participant: "install-record",
-          previous: null,
-          state: "pending",
-        }],
+            state: "pending",
+          },
+        ],
         phase: "prepare",
         previous: null,
         revision: 1,

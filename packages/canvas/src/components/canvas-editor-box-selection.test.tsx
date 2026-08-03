@@ -87,6 +87,11 @@ mock.module("@convax/ui", () => ({
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
+  Dialog: Passthrough,
+  DialogClose: Passthrough,
+  DialogContent: Passthrough,
+  DialogDescription: Passthrough,
+  DialogTitle: Passthrough,
   Input: () => <input />,
   Loading: (props: { label?: ReactNode }) => <div role="status">{props.label}</div>,
   LoadingSpinner: () => <span aria-hidden="true" data-ui-loading-spinner="" />,
@@ -433,23 +438,16 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
   }
 
   const errors: Error[] = []
-  const imageNode: CanvasNode = {
-    data: {
-      kind: "image",
-      label: "Image",
-      metadata: {},
-      resourceState: { status: "ready", url: "" },
-    },
-    id: "image",
-    measured: { height: 160, width: 240 },
+  const textNode = createTextNode({
+    id: "text",
+    metadata: {},
     position: { x: 80, y: 80 },
-    style: { height: 160, width: 240 },
-    type: "file",
-  }
+    resourceState: { status: "ready" },
+  })
   const container = document.createElement("div")
   document.body.append(container)
   let root: Root | undefined
-  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [imageNode] })
+  const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [textNode] })
   const servicesWithAssistant = createCanvasServices({
     assistant: {
       render: () => <textarea aria-label="Card assistant input" />,
@@ -468,7 +466,7 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
       root?.render(renderEditor())
     })
 
-    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="image"]')
+    const nodeElement = container.querySelector<HTMLElement>('.react-flow__node[data-id="text"]')
     expect(nodeElement).not.toBeNull()
     await act(async () => {
       nodeElement?.dispatchEvent(new MouseEvent("click", { bubbles: true }))
@@ -513,7 +511,7 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
   }
 })
 
-test("drags a generating card from its overlay while generation controls keep the node fixed", async () => {
+test("keeps active controls interactive and lets a failed card reopen its persisted prompt", async () => {
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
   }
@@ -581,8 +579,6 @@ test("drags a generating card from its overlay while generation controls keep th
     initialDocument,
     blockedNode.id,
     "blocked-operation",
-    "interrupted",
-    "unknown",
   )
 
   const container = document.createElement("div")
@@ -674,14 +670,12 @@ test("drags a generating card from its overlay while generation controls keep th
     const cancelButton = [...(activeOverlay?.querySelectorAll("button") ?? [])].find(
       (button) => button.textContent === "取消",
     )
-    const blockedWrapper = container.querySelector<HTMLElement>('[data-canvas-generation-new-task="true"]')
-    const continueButton = blockedWrapper?.querySelector<HTMLButtonElement>("button")
+    const failedOverlay = container.querySelector<HTMLElement>('[data-canvas-file-generation-activity="failed"]')
     expect(activeOverlay).not.toBeNull()
     expect(cancelButton).toBeDefined()
-    expect(blockedWrapper).not.toBeNull()
-    expect(blockedWrapper?.classList.contains("nodrag")).toBe(true)
-    expect(continueButton?.disabled).toBe(false)
-    expect(continueButton?.textContent).toBe("使用原提示词新建任务")
+    expect(failedOverlay).not.toBeNull()
+    expect(failedOverlay?.classList.contains("pointer-events-none")).toBe(true)
+    expect(failedOverlay?.querySelector("button")).toBeNull()
     const generatingNodeElement = activeOverlay?.closest<HTMLElement>(".react-flow__node")
     expect(generatingNodeElement?.classList.contains("draggable")).toBe(true)
 
@@ -696,26 +690,24 @@ test("drags a generating card from its overlay while generation controls keep th
     )
 
     const blockedPosition = latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position
-    await dragWithMouse(blockedWrapper!, { x: 440, y: 120 }, { x: 504, y: 168 })
-    expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).toEqual(blockedPosition)
+    await dragWithMouse(failedOverlay!, { x: 440, y: 120 }, { x: 504, y: 168 })
+    expect(latestDocument.nodes.find((node) => node.id === blockedNode.id)?.position).not.toEqual(blockedPosition)
 
     await act(async () => {
-      continueButton?.click()
+      failedOverlay?.closest<HTMLElement>(".react-flow__node")?.click()
       await Promise.resolve()
     })
     expect(assistantRequest?.ownerNodeId).toBe(blockedNode.id)
     expect(assistantRequest?.generation).toMatchObject({
       initialPrompt: "Generate",
       output: "image",
-      submissionMode: "create-pending-node",
     })
     expect(
       container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Recovered generation prompt"]')?.value,
     ).toBe("Generate")
     expect(getCanvasNodeGenerationRun(latestDocument.nodes.find((node) => node.id === blockedNode.id)!)).toMatchObject({
       operationId: "blocked-operation",
-      retrySafety: "unknown",
-      status: "interrupted",
+      status: "failed",
     })
     expect(errors).toEqual([])
   } finally {

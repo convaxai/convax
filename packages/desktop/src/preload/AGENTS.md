@@ -6,6 +6,9 @@ between trusted Main and untrusted Renderer code. It owns no business state.
 
 ## Rules
 
+- Keep packaged Preload as a self-contained JavaScript dependency bundle. Only
+  Electron and Node built-ins may remain external; never rely on packaged
+  `node_modules` or a monorepo workspace layout.
 - Expose explicit typed methods and subscriptions under the existing
   `window.convax` namespaces. Never expose generic `invoke`, arbitrary channel
   names, caller-selected MCP/tool methods, or raw `ipcRenderer`.

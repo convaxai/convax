@@ -13,6 +13,12 @@ the current Convax Plugin package contract.
   cached/refreshable Host API availability helpers, declaration checks, schema
   validation, discriminated API/capability/protocol failures, per-contract byte
   limits, cancellation, and bounded request correlation.
+- Its payload-free sender-scoped disconnect control envelope is protocol lifecycle,
+  not a Host API or Plugin capability. `client.close()` settles local work, posts
+  it best-effort, then closes the MessagePort; teardown never awaits `beforeunload`.
+- The portable contribution-scoped `convax.pet-host/1` contract and Pet surface
+  client. The client derives Plugin identity from the immutable Plugin origin;
+  callers never supply a concrete Plugin id.
 - The rule that an exported operation is one exact verified sidecar MCP tool,
   including the pure `tools/list` input/output schema matcher used by Desktop
   readiness.
@@ -31,6 +37,15 @@ The package may depend only on `@convax/plugin-api`. Keep portable contracts fre
 Electron, Node, browser globals, native paths, credentials, and concrete Plugin ids.
 `convax.plugin-capability/3` is Host-internal and must never be exported as an
 authoring transport or accepted from an iframe.
+
+SDK publication owns authoring-package provenance, not Host capability approval.
+Protected publication must emit the independent
+`convax.host-package-release/1` manifest described in
+[`../../docs/plugin-sdk-release.md`](../../docs/plugin-sdk-release.md), binding the
+exact SDK npm tarball and release-time Plugin API tarball/Catalog identity. It must
+not absorb, replace, or reinterpret a Plugin API runtime-conformance or capability
+decision receipt. Concrete Plugin bundle provenance remains a frozen-lock and
+attestation responsibility in `convax-plugins`.
 
 A concrete Plugin task may propose a missing contribution or inter-Plugin contract
 but must not edit this package. Only a separate human-approved Host task may change

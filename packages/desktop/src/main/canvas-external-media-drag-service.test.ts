@@ -26,6 +26,20 @@ async function temporaryRoot() {
   return root
 }
 
+async function waitForMissing(target: string, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs
+  while (true) {
+    try {
+      await fs.stat(target)
+    } catch (error) {
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT") return
+      throw error
+    }
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${target} to be removed`)
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
 async function resolvedMedia(
   source: string,
   input: Partial<Pick<ResolvedManagedCanvasMedia, "kind" | "mimeType" | "name" | "resourcePath">> = {},
@@ -91,8 +105,7 @@ describe("CanvasExternalMediaDragService", () => {
     expect(await Promise.all(lease.files.map((file) => fs.readFile(file, "utf8")))).toEqual(["first", "second"])
     expect(() => service.consume(7, prepared.ticket)).toThrow("unavailable")
     lease.release()
-    await new Promise((resolve) => setTimeout(resolve, 10))
-    await expect(fs.stat(lease.files[0]!)).rejects.toMatchObject({ code: "ENOENT" })
+    await waitForMissing(lease.files[0]!)
     await service.dispose()
   })
 

@@ -181,7 +181,7 @@ describe("AgentLocalToolServer", () => {
         })
         expect(JSON.stringify(message)).not.toContain("private prompt")
         expect(JSON.stringify(message)).not.toContain("workspace-a")
-        if (Date.now() - startedAt > timeoutWindowMs) markProgressPastTimeout?.()
+        if (progressCount > 1 && Date.now() - startedAt > timeoutWindowMs) markProgressPastTimeout?.()
       })
 
       await callStarted

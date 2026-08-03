@@ -15,6 +15,7 @@ describe("canvas command capability catalog", () => {
       "nodes.group",
       "nodes.layout",
       "nodes.move",
+      "nodes.reparent",
       "nodes.setGeometry",
       "nodes.ungroup",
     ])

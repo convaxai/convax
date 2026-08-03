@@ -23,7 +23,7 @@ const plugin = {
   },
   entry: "dist/index.html",
   description: "Fixture",
-  hostApi: { major: 1, optional: [], required: [] },
+  hostApi: { major: 2, optional: [], required: [] },
   id: "fixture",
   name: "Fixture",
   snapshotDigest: "b".repeat(64),

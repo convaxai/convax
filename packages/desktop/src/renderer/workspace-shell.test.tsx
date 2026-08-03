@@ -101,6 +101,25 @@ describe("WorkspaceShell", () => {
     expect(source).toContain("viewportInsets={canvasViewportInsets}")
   })
 
+  test("disables width easing for both sidebars during direct resize gestures", async () => {
+    const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
+
+    expect(styles).toMatch(
+      /\[data-workbench-resizing\] \.project-sidebar-shell[\s\S]*?\[data-workbench-resizing\] \.workspace-utility-drawer\[data-workspace-utility-state\][\s\S]*?transition: none;/,
+    )
+  })
+
+  test("locks both drag-collapsed sidebars against reopening for one second", async () => {
+    const source = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+
+    expect(source).toContain("const sidebarCollapseReopenDelayMs = 1_000")
+    expect(source.match(/collapseReopenDelayMs: sidebarCollapseReopenDelayMs/g)).toHaveLength(2)
+    expect(source).not.toContain("setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)")
+    expect(
+      source.match(/ensureWorkbenchPartVisible\(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar\)/g),
+    ).toHaveLength(4)
+  })
+
   test("composes one Project entry, keeps the account menu in the sidebar, and removes titlebar search chrome", async () => {
     const indexSource = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
     const titlebarSource = await Bun.file(new URL("./application-titlebar.tsx", import.meta.url)).text()
@@ -122,6 +141,13 @@ describe("WorkspaceShell", () => {
     expect(indexSource.match(/collapsedEntry=/g)).toHaveLength(1)
     expect(indexSource).toContain("collapsedEntry={false}")
     expect(indexSource).toContain("<CanvasTitlebarTitle")
+    expect(indexSource).toContain('productLabel={effectivePrimaryDesktopSurface === "workspace" ? "" : "Convax"}')
+    expect(indexSource).toContain("onDocumentChange={publishActiveCanvasNodes}")
+    expect(indexSource).toContain("onNodeActivate={activateProjectCanvasNode}")
+    expect(indexSource).toContain("projectCanvasSidebarNodePreview(node)")
+    expect(indexSource).toContain('node.data.kind === "image"')
+    expect(indexSource).toContain('previewType: "video" as const')
+    expect(indexSource).toContain('type: "nodes.reveal"')
     expect(titlebarSource).toContain('data-application-titlebar-leading=""')
     expect(titlebarSource).toContain('data-application-titlebar-center=""')
     expect(titlebarSource).toContain('data-application-titlebar-right=""')

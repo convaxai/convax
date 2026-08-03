@@ -6,7 +6,13 @@ import os from "node:os"
 import path from "node:path"
 import { parsePluginCapabilityDeclaration, type PluginCapabilityDeclaration } from "@convax/plugin-sdk"
 
-import { ActivePluginSetRevisionConflictError, pluginSnapshotCanonicalDigest } from "./plugin-installation-snapshots"
+import { PluginInstallationClosureStore } from "./plugin-installation-closure-store"
+import { planPluginCapabilityTopology } from "./plugin-capability-binding-plan"
+import {
+  ActivePluginSetRevisionConflictError,
+  PluginInstallationSnapshotStore,
+  pluginSnapshotCanonicalDigest,
+} from "./plugin-installation-snapshots"
 import {
   PluginExecutionSetupRequiredError,
   PluginInstallationRuntime,
@@ -101,7 +107,7 @@ function manifest(
     description: `${id} test Plugin`,
     entry: "index.html",
     hostApi: {
-      major: 1,
+      major: 2,
       optional: [],
       required: ["host.context.get"],
     },
@@ -255,6 +261,20 @@ describe("PluginInstallationRuntime", () => {
     authorizedHandle.release()
   })
 
+  test("derives static Plugin authorization from the exact capability contract and package bytes", async () => {
+    const { runtime } = await fixture()
+    const first = await runtime.publish(0, candidate("alpha", { assetContent: "first" }))
+    const firstAuthorization = await runtime.executionAuthorizationIdentity("alpha")
+
+    expect(firstAuthorization).toMatch(/^[a-f0-9]{64}$/)
+
+    await runtime.publish(first.revision, candidate("alpha", { assetContent: "second" }))
+    const secondAuthorization = await runtime.executionAuthorizationIdentity("alpha")
+
+    expect(secondAuthorization).toMatch(/^[a-f0-9]{64}$/)
+    expect(secondAuthorization).not.toBe(firstAuthorization)
+  })
+
   test("a partial closure never changes the previous active generation", async () => {
     const { root, runtime } = await fixture()
     const first = await runtime.publish(0, candidate("alpha"))
@@ -304,18 +324,131 @@ describe("PluginInstallationRuntime", () => {
     const active = await runtime.publish(0, candidate("alpha"))
     const snapshotDigest = active.plugins[0].identity.snapshotDigest
     const indexPath = path.join(root, "closures", snapshotDigest, "package", "index.html")
-    if (process.platform !== "win32") await fs.chmod(indexPath, 0o600)
+    await fs.chmod(indexPath, 0o600)
     await fs.writeFile(indexPath, "<h1>tampered</h1>", { mode: 0o400 })
-    if (process.platform !== "win32") await fs.chmod(indexPath, 0o400)
+    await fs.chmod(indexPath, 0o400)
 
     await expect(new PluginInstallationRuntime(root).readActive()).rejects.toBeInstanceOf(
       PluginInstallationRuntimeError,
+    )
+    await expect(new PluginInstallationRuntime(root).inspectRetiredHostApiRecovery()).rejects.toThrow(
+      "not eligible for retired Host API update recovery",
     )
     const legacy = path.join(root, "legacy-plugins")
     await fs.mkdir(legacy)
     await expect(new PluginInstallationRuntime(root).assertNoLegacyState([legacy])).rejects.toThrow(
       "Unsupported legacy Plugin installation state",
     )
+  })
+
+  test("repairs only a byte-valid retired-major ActiveSet through an explicit current-major update", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-installation-runtime-"))
+    roots.push(root)
+    const snapshots = new PluginInstallationSnapshotStore(path.join(root, "state"))
+    const closures = new PluginInstallationClosureStore(path.join(root, "closures"))
+    await closures.ensureLayout()
+    const installLegacy = async (id: string) => {
+      const legacyManifest = JSON.stringify({
+        ...manifest(id),
+        hostApi: { major: 1, optional: [], required: ["host.context.get"] },
+      })
+      const packageFiles = [
+        { bytes: Buffer.from(`<h1>${id}</h1>`), path: "index.html" },
+        { bytes: Buffer.from(legacyManifest), path: "manifest.json" },
+      ]
+      const fileIdentities = packageFiles.map((file) => ({
+        path: file.path,
+        sha256: sha256(file.bytes),
+        size: file.bytes.byteLength,
+      }))
+      const legacyManifestIdentity = fileIdentities.find((file) => file.path === "manifest.json")
+      if (!legacyManifestIdentity) throw new Error("Expected a legacy manifest identity")
+      const { path: _manifestPath, ...legacyManifestBytes } = legacyManifestIdentity
+      const snapshot = await snapshots.putInstalledSnapshot({
+        authorizations: { capabilityContractDigest: sha256(legacyManifest) },
+        ownedSkills: [],
+        package: {
+          artifact: { sha256: sha256(`${id} archive`), size: 2_048 },
+          files: fileIdentities,
+          manifest: legacyManifestBytes,
+        },
+        pluginId: id,
+        sourceIdentity: sha256(`${id}:source`),
+        version: "1.0.0",
+      })
+      await closures.publish(snapshot, packageFiles, undefined)
+      return { legacyManifest, snapshot }
+    }
+    const legacy = await installLegacy("legacy")
+    const other = await installLegacy("legacy-other")
+    const topologyResult = planPluginCapabilityTopology([])
+    if (!topologyResult.ok) throw new Error("Expected an empty Plugin capability topology")
+    const published = await snapshots.compareAndSwapActiveSet(0, {
+      capabilityTopology: topologyResult.topology,
+      plugins: [
+        { pluginId: "legacy", snapshotDigest: legacy.snapshot.digest },
+        { pluginId: "legacy-other", snapshotDigest: other.snapshot.digest },
+      ],
+    })
+
+    await expect(new PluginInstallationRuntime(root).readActive()).rejects.toThrow(
+      "Immutable Plugin manifest is invalid",
+    )
+
+    expect(await snapshots.readActive()).toEqual(published)
+    expect(
+      await fs.readFile(path.join(root, "closures", legacy.snapshot.digest, "package", "manifest.json"), "utf8"),
+    ).toBe(legacy.legacyManifest)
+
+    const runtime = new PluginInstallationRuntime(root)
+    const recovery = await runtime.inspectRetiredHostApiRecovery()
+    expect(recovery).toEqual({
+      plugins: [
+        {
+          artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+          pluginId: "legacy",
+          snapshotDigest: legacy.snapshot.digest,
+          sourceIdentity: sha256("legacy:source"),
+          version: "1.0.0",
+        },
+        {
+          artifact: { sha256: sha256("legacy-other archive"), size: 2_048 },
+          pluginId: "legacy-other",
+          snapshotDigest: other.snapshot.digest,
+          sourceIdentity: sha256("legacy-other:source"),
+          version: "1.0.0",
+        },
+      ],
+      revision: 1,
+    })
+    await expect(
+      runtime.publishRetiredHostApiRecovery(
+        1,
+        { ...candidate("legacy", { version: "2.0.0" }), sourceIdentity: sha256("wrong source") },
+        recovery.plugins[0]!,
+      ),
+    ).rejects.toThrow("not eligible for retired Host API update recovery")
+    await expect(
+      runtime.publishRetiredHostApiRecovery(1, candidate("legacy", { version: "2.0.0" }), {
+        ...recovery.plugins[0]!,
+        artifact: { ...recovery.plugins[0]!.artifact, size: 2_049 },
+      }),
+    ).rejects.toThrow("not eligible for retired Host API update recovery")
+    const repaired = await runtime.publishRetiredHostApiRecovery(
+      1,
+      candidate("legacy", { version: "2.0.0" }),
+      recovery.plugins[0]!,
+    )
+    expect(repaired.revision).toBe(2)
+    expect(repaired.plugins.map(({ plugin }) => ({ id: plugin.id, version: plugin.version }))).toEqual([
+      { id: "legacy", version: "2.0.0" },
+    ])
+    expect(
+      await fs.readFile(path.join(root, "closures", legacy.snapshot.digest, "package", "manifest.json"), "utf8"),
+    ).toBe(legacy.legacyManifest)
+    expect(
+      await fs.readFile(path.join(root, "closures", other.snapshot.digest, "package", "manifest.json"), "utf8"),
+    ).toBe(other.legacyManifest)
   })
 
   test("requires exact CAS revisions and uninstall never exposes a mixed set", async () => {

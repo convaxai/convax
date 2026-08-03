@@ -66,11 +66,24 @@ describe("pet feature ownership boundary", () => {
       ["main/pet-asset-protocol.ts", 'export const petAssetScheme = "convax-pet-asset"'],
       ["main/pet-provider-controller.ts", "export class PetProviderController"],
       ["main/pet-window.ts", "export class PetWindow"],
-      ["pet-contracts.ts", 'export const petHostProtocol = "convax.pet-host/1"'],
+      ["pet-contracts.ts", 'from "@convax/plugin-sdk/pet"'],
     ])
 
     for (const [relativePath, expected] of expectedExports) {
       expect(await fs.readFile(path.join(sourceRoot, relativePath), "utf8")).toContain(expected)
+    }
+  })
+
+  test("uses the public SDK Pet protocol at every renderer boundary", async () => {
+    const [contracts, preload, settings] = await Promise.all([
+      fs.readFile(path.join(sourceRoot, "pet-contracts.ts"), "utf8"),
+      fs.readFile(path.join(sourceRoot, "preload/pet.ts"), "utf8"),
+      fs.readFile(path.join(sourceRoot, "renderer/pet-settings-host.tsx"), "utf8"),
+    ])
+
+    for (const source of [contracts, preload, settings]) {
+      expect(source).toContain("@convax/plugin-sdk/pet")
+      expect(source).not.toContain('const petHostProtocol = "convax.pet-host/1"')
     }
   })
 })

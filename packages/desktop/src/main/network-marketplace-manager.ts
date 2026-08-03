@@ -15,14 +15,8 @@ import {
 } from "@convax/marketplace"
 
 import { readBoundedAuthorityFile } from "./bounded-authority-file"
-import {
-  FileMarketplaceSourceStore,
-  type AcceptedMarketplaceCatalog,
-} from "./marketplace-source-store"
-import {
-  marketplaceRepositoryFromDescriptorUrl,
-  PinnedHttpsFetcher,
-} from "./pinned-https-fetch"
+import { FileMarketplaceSourceStore, type AcceptedMarketplaceCatalog } from "./marketplace-source-store"
+import { marketplaceRepositoryFromDescriptorUrl, PinnedHttpsFetcher } from "./pinned-https-fetch"
 import { projectRegistryPackageRuntimeSurface } from "./marketplace-runtime-surface"
 
 interface PersistedNetworkSource {
@@ -200,17 +194,12 @@ export class NetworkMarketplaceManager {
   readonly #reservedMarketplaceIds: ReadonlySet<string>
   #tail = Promise.resolve()
 
-  constructor(options: {
-    fetcher: PinnedHttpsFetcher
-    reservedMarketplaceIds?: ReadonlySet<string>
-    root: string
-  }) {
+  constructor(options: { fetcher: PinnedHttpsFetcher; reservedMarketplaceIds?: ReadonlySet<string>; root: string }) {
     this.#fetcher = options.fetcher
     this.#root = path.resolve(options.root)
     this.#file = path.join(this.#root, "sources-v1.json")
     this.#reservedMarketplaceIds =
-      options.reservedMarketplaceIds ??
-      new Set(["convax-builtin", "convax-local", "convax-official"])
+      options.reservedMarketplaceIds ?? new Set(["convax-builtin", "convax-local", "convax-official"])
   }
 
   subscribe(listener: () => void) {
@@ -347,7 +336,7 @@ export class NetworkMarketplaceManager {
           const accepted = await this.#sourceStore(source.sourceKey).readAccepted()
           return {
             ...source,
-            health: accepted?.catalog.registry ? "available" as const : "offline" as const,
+            health: accepted?.catalog.registry ? ("available" as const) : ("offline" as const),
             packageCount: accepted?.catalog.registry?.packages.filter((entry) => !entry.yanked).length ?? 0,
           }
         } catch {
@@ -379,6 +368,7 @@ export class NetworkMarketplaceManager {
           kind: item.kind,
           marketplaceId: source.descriptor.id,
           official: false,
+          ...(item.ownerPluginId === undefined ? {} : { ownerPluginId: item.ownerPluginId }),
           presentation: item.presentation,
           runtimeSurface: projectRegistryPackageRuntimeSurface(item),
           sourceKey: source.sourceKey,

@@ -18,6 +18,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 
 ## Baseline rules
 
+- Keep packaged Main as one self-contained CommonJS dependency bundle. Only Electron
+  and Node built-ins may remain external; a bare package import or packaged
+  `node_modules` dependency is a build failure.
 - Call domain packages through exported typed ports. Do not implement Canvas,
   Project, Workbench, Marketplace-schema, or Agent-runtime invariants in Main.
 - Main's Canvas application service/repository is the sole authoritative document
@@ -57,6 +60,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Do not impose an absolute deadline on accepted long-running generation work.
   Bound control-plane requests and inactivity, propagate progress/cancellation, and
   leave terminal execution state to the admitted LRO contract.
+- Host-authored portable failures may use only bounded validated display data. Raw
+  sidecar, native, filesystem, network, credential, and recovery diagnostics never
+  enter Canvas state or renderer-safe projections.
 
 ## Mandatory module routes
 
@@ -78,12 +84,17 @@ For any matching change, read the full routed reference before planning or editi
 | Browser-cookie or external service authorization                              | [`docs/architecture.md` generation and Plugin host boundaries](../../../../docs/architecture.md#generation-tool-boundary) and [`docs/generation-tool-plugins.md`](../../../../docs/generation-tool-plugins.md)                                                 |
 | External editor, retired built-in, native media drag                          | [`docs/architecture.md` “Retired built-ins” and “Native Canvas media drag-out”](../../../../docs/architecture.md#retired-built-ins)                                                                                                                            |
 | Any `*-ipc` or protocol handler                                               | [`docs/architecture.md` §10](../../../../docs/architecture.md#10-electron-boundary) plus the Preload and Renderer contracts                                                                                                                                    |
+| Electron Vite, packaged entry, dependency externalization                     | [`docs/architecture.md` §10](../../../../docs/architecture.md#10-electron-boundary) and the Desktop build/packaging tests                                                                                                                                      |
 
 ## Capability invariants
 
 - Agent tools are thin adapters. Host Project scope is authoritative; document tools
   may name only a Canvas in that Project's live catalog, while view tools remain
   bound to the mounted active Canvas.
+- Project-directory focus resolves its root from the authoritative Canvas node,
+  delegates bounded descendant listing to the existing scoped Project Files port,
+  and rechecks Project/Canvas/node scope after awaits. Never persist projected
+  directory entries or add a second native listing surface.
 - Connected inputs are direct incoming Canvas edges only. Return pathless bounded
   metadata until explicit user intent reaches the verified Main-owned staging
   boundary; invalidation alone never triggers upload, prompting, or execution.
@@ -98,11 +109,29 @@ For any matching change, read the full routed reference before planning or editi
   never arbitrary URLs, paths, digests, SourceKeys, or transport configuration.
   Network access and immutable artifacts follow the accepted source identity and
   security high-water decisions.
+- Preserve Registry `ownerPluginId` through source qualification and remove
+  Plugin-owned Skills from standalone choices before creating a transition. Managed
+  Skill recovery never infers publication from a directory name: retry only the
+  exact pending source-qualified candidate, preserve ambiguous bytes, and retain
+  recovery state until rollback is proven.
+- Treat `InstallRecord` as inventory, not execution authority. A Plugin is ready only
+  when its exact source, version, artifact identity, and immutable snapshot occur in
+  the validated ActiveSet. Legacy records must first bind to an exact active or
+  recovery snapshot; deactivated records remain attention state.
+- A startup-invalid ActiveSet quarantines the Plugin subsystem for the process. The
+  only update path requires a dedicated inspection proving intact pointer, closure,
+  authorization, topology, and retired-major-only incompatibility. All other
+  mutations stay blocked and repaired bytes remain inert until restart.
 - Tool Plugin installation/update consent is part of the exact immutable closure and
   snapshot descriptor. Background refresh never expands execution authority.
   Builtin/preinstalled are provisioning sources, not runtime privilege classes; the
   product-lock automatic-setup exception remains exact, managed, credential-free,
   and fail-closed.
+- A user-confirmed install/update or explicit Local import publishes its exact
+  execution authorization in the same transition. Static Web Plugins bind that
+  authorization to the capability contract, source, version, and artifact even
+  without a companion or Hook. Missing or changed bytes require exact-source
+  reinstall/update; Plugin setup never repairs them.
 - Contributions and `hostApi` calls are orthogonal. Bind Host API availability and
   Plugin-to-Plugin imports/exports from the exact ActiveSet through the typed broker;
   validate caller/provider principals and schemas, propagate cancellation, bound
@@ -115,12 +144,31 @@ For any matching change, read the full routed reference before planning or editi
   Preserve files on partial success. Pending nodes, node run state, target guards,
   and legal transitions go through Canvas business services.
 - Keep host `operationId` and downstream `taskId` distinct. Without the complete
-  admitted recovery contract, restart marks orphaned active runs interrupted and
+  admitted recovery contract, restart marks orphaned active runs failed and
   never repeats a potentially billable call.
 - Browser-cookie authorization uses a fresh non-persistent sandboxed session, exact
   HTTPS origin and allowlisted cookies, one fixed completion action, and a bounded
   Main-only recovery checkpoint bound to the exact Plugin snapshot. No browser
   profile, URL, request, or cookie crosses IPC.
+- Treat the payload-free v8 `disconnect` envelope as lifecycle control for only the
+  exact MessagePort connection. Close that existing renderer/Main connection and
+  await its fixed disconnect so frame-owned work and media sessions are revoked;
+  never accept caller-selected connection or scope identity.
+- Give every connected-media session one owner-scoped abort lifecycle. Revocation,
+  close, Canvas invalidation, expiry, or disposal stops later audio/video reads and
+  releases stream-owned descriptors. Connected images are bounded immutable memory
+  snapshots; revocation blocks later fetches but cannot retract an already built
+  response body.
+- Connected image open/close remains separate from audio/video stream open. Require
+  the generated declarations and grant, resolve only opaque direct-input keys, use
+  the Project-owned stable reader and bounded decode validation, and return only a
+  revocable high-entropy bearer URL plus safe metadata. Revalidate the live Plugin,
+  edge, resource, frame, and Canvas around asynchronous work.
+- Custom URI schemes are fixed Host adapters, not a Plugin registration surface.
+  `convax-connected-media:` widens only the exact declared `img-src` or `media-src`
+  capability and never `connect-src`; `convax-pet-asset:` widens only `img-src` for
+  a validated Pet contribution with `pet.custom.manage`. Keep Plugin assets,
+  Project resources, connected media, and Pet assets under distinct authorities.
 - Vendor-specific native behavior belongs to verified generic companion
   contributions in `convax-plugins`, not Desktop product branches. Native media
   drag-out remains destination-neutral; never substitute Accessibility/UI automation

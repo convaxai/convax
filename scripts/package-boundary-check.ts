@@ -23,6 +23,7 @@ type WorkspacePackage = {
 const repositoryRoot = join(import.meta.dir, "..")
 const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
+const desktopProcessInstructionPaths = ["src/main/AGENTS.md", "src/preload/AGENTS.md", "src/renderer/AGENTS.md"]
 const retiredRegistryPaths = [
   "packages/desktop/src/main/remote-capability-registry.ts",
   "packages/desktop/src/main/remote-capability-installer.ts",
@@ -51,6 +52,7 @@ const publishablePackageNames = new Set([
   "@convax/marketplace-kit",
   "@convax/plugin-api",
   "@convax/plugin-sdk",
+  "@convax/plugin-ui",
   "@convax/project",
   "@convax/project-files",
   "@convax/ui",
@@ -64,6 +66,7 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
   ["@convax/marketplace", new Set()],
   ["@convax/plugin-api", new Set()],
   ["@convax/plugin-sdk", new Set(["@convax/plugin-api"])],
+  ["@convax/plugin-ui", new Set()],
   ["@convax/marketplace-kit", new Set(["@convax/marketplace", "@convax/plugin-api", "@convax/plugin-sdk"])],
   ["create-convax-marketplace", new Set(["@convax/marketplace-kit"])],
   [
@@ -216,6 +219,35 @@ for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(re
   packages.push({ directory, manifest, name: manifest.name })
 }
 
+for (const workspacePackage of packages) {
+  const instructionPath = normalizedSourcePath(relative(repositoryRoot, join(workspacePackage.directory, "AGENTS.md")))
+  if (!(await Bun.file(join(repositoryRoot, instructionPath)).exists())) {
+    throw new Error(`${workspacePackage.name}: every package needs a local AGENTS.md ownership contract`)
+  }
+  if (!rootContract.includes(`(${instructionPath})`)) {
+    throw new Error(`${workspacePackage.name}: root AGENTS.md must route to ${instructionPath}`)
+  }
+}
+for await (const manifestPath of new Bun.Glob("apps/*/package.json").scan(repositoryRoot)) {
+  const instructionPath = normalizedSourcePath(join(dirname(manifestPath), "AGENTS.md"))
+  if (!(await Bun.file(join(repositoryRoot, instructionPath)).exists())) {
+    throw new Error(`${instructionPath}: application delivery surface needs a local AGENTS.md contract`)
+  }
+  if (!rootContract.includes(`(${instructionPath})`)) {
+    throw new Error(`root AGENTS.md must route to ${instructionPath}`)
+  }
+}
+const desktopContract = await Bun.file(join(repositoryRoot, "packages", "desktop", "AGENTS.md")).text()
+for (const instructionPath of desktopProcessInstructionPaths) {
+  const absoluteInstructionPath = join(repositoryRoot, "packages", "desktop", instructionPath)
+  if (!(await Bun.file(absoluteInstructionPath).exists())) {
+    throw new Error(`packages/desktop/${instructionPath}: Desktop process needs a local AGENTS.md contract`)
+  }
+  if (!desktopContract.includes(`(${instructionPath})`)) {
+    throw new Error(`packages/desktop/AGENTS.md must route to ${instructionPath}`)
+  }
+}
+
 const packagesByName = new Map(packages.map((workspacePackage) => [workspacePackage.name, workspacePackage]))
 for (const workspacePackage of packages) {
   if (!workspacePackage.name.startsWith("@convax/") && workspacePackage.name !== "create-convax-marketplace") {
@@ -225,9 +257,6 @@ for (const workspacePackage of packages) {
     throw new Error(
       `${workspacePackage.name}: package ownership is not registered; update AGENTS.md, docs/architecture.md, and package-boundary-check.ts`,
     )
-  }
-  if (!await Bun.file(join(workspacePackage.directory, "AGENTS.md")).exists()) {
-    throw new Error(`${workspacePackage.name}: every package needs a local AGENTS.md ownership contract`)
   }
   if (!applicationPackageNames.has(workspacePackage.name) && !publishablePackageNames.has(workspacePackage.name)) {
     throw new Error(`${workspacePackage.name}: new library packages must be registered as independently publishable`)

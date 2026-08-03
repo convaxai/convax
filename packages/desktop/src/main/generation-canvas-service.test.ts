@@ -567,8 +567,7 @@ async function setupPendingGeneration(
           currentDocument,
           input.nodeId,
           input.operationId,
-          input.status,
-          input.retrySafety,
+          input.failureMessage,
         )
         currentDocument = { ...currentDocument, revision: currentDocument.revision + 1 }
         return persistedCommandResult(currentDocument, [], [input.nodeId])
@@ -671,7 +670,9 @@ describe("GenerationCanvasService", () => {
   test("commits text output without changing the caller's selection or viewport", async () => {
     const { calls, published, resourceRequests, service, viewRequests } = setup({})
 
-    await expect(service.generate(request(), { id: "renderer:1", kind: "ui" })).resolves.toEqual({
+    await expect(
+      service.generate(request({ parentId: "focused-group" }), { id: "renderer:1", kind: "ui" }),
+    ).resolves.toEqual({
       createdNodeIds: ["generated-one"],
       revision: 1,
       toolId: "creative-tools/write",
@@ -708,6 +709,7 @@ describe("GenerationCanvasService", () => {
       canvasId: "canvas-one",
       commandId: "generation:operation-one",
       expectedRevision: 0,
+      parentId: "focused-group",
       scopeId: "project-one",
       sources: [{ kind: "host-file", path: "Generated/generated-1.md" }],
     })
@@ -1411,6 +1413,7 @@ describe("GenerationCanvasService", () => {
     const generation = harness.service.generate(
       request({
         output: "image",
+        parentId: "focused-group",
         references: [{ nodeId: harness.reference.id, role: "text" }],
         resultMode: { type: "create-pending-node" },
         toolId: "creative-tools/draw",
@@ -1429,6 +1432,7 @@ describe("GenerationCanvasService", () => {
       expectedRevision: 0,
       kind: "image",
       operationId: "operation-one",
+      parentId: "focused-group",
       prompt: "Draw a small fox",
       relation: {
         anchorNodeIds: [harness.reference.id],
@@ -1534,7 +1538,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests).toHaveLength(1)
   })
 
-  test("connects a constrained Plugin owner to its pending generation node", async () => {
+  test("keeps a constrained text-card owner as relation-only context for one pending visual result", async () => {
     let markStarted!: () => void
     let release!: () => void
     const started = new Promise<void>((resolve) => {
@@ -1551,6 +1555,7 @@ describe("GenerationCanvasService", () => {
     })
     const generation = harness.service.generate(
       request({
+        expectedOutputCount: 1,
         output: "image",
         referenceConstraint: { ownerNodeId: harness.owner.id, type: "direct-incoming" },
         references: [{ nodeId: harness.reference.id, role: "text" }],
@@ -1569,9 +1574,18 @@ describe("GenerationCanvasService", () => {
     expect(harness.getDocument().edges.filter((edge) => edge.target === harness.pendingNodeId)).toEqual([
       expect.objectContaining({ source: harness.owner.id, target: harness.pendingNodeId }),
     ])
+    expect(harness.calls[0]?.references).toEqual([
+      expect.objectContaining({ node_id: harness.reference.id, role: "text", text: "Stable brief" }),
+    ])
+    expect(harness.calls[0]?.references).not.toContainEqual(expect.objectContaining({ node_id: harness.owner.id }))
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)?.data).toEqual(harness.owner.data)
+    expect(getCanvasNodeGenerationRun(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)!)).toBe(
+      undefined,
+    )
 
     release()
     await expect(generation).resolves.toMatchObject({ createdNodeIds: [harness.pendingNodeId] })
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.owner.id)?.data).toEqual(harness.owner.data)
   })
 
   test("persists a structured task receipt on a host-created pending owner", async () => {
@@ -1881,7 +1895,7 @@ describe("GenerationCanvasService", () => {
     releaseLedgerList()
 
     try {
-      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
       expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
       expect(harness.runRequests.finish).toEqual([])
       expect(harness.calls).toEqual([])
@@ -1966,7 +1980,7 @@ describe("GenerationCanvasService", () => {
     releaseLedgerList()
 
     try {
-      await expect(reconciliation).resolves.toMatchObject({ interruptedNodeIds: [] })
+      await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
       expect(harness.runRequests.interruptInactive).toHaveLength(1)
       expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
         nodeId: owner.id,
@@ -2089,13 +2103,41 @@ describe("GenerationCanvasService", () => {
       expectedRevision: 2,
       nodeId: harness.pendingNodeId,
       operationId: "operation-one",
-      status: "failed",
     })
+    expect(harness.runRequests.finish[0]).not.toHaveProperty("failureMessage")
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
       error: "Generation could not be completed",
       status: "error",
     })
     expect(harness.reloadRevisions).toEqual([1, 3])
+  })
+
+  test("does not derive portable service presentation from sidecar-reported text", async () => {
+    const harness = await setupPendingGeneration({
+      content: [{ text: "Generation model service unavailable", type: "text" }],
+      isError: true,
+    })
+
+    await expect(
+      harness.service.generate(
+        request({
+          output: "image",
+          references: [{ nodeId: harness.reference.id, role: "text" }],
+          resultMode: { type: "create-pending-node" },
+          toolId: "creative-tools/draw",
+        }),
+        { id: "renderer:1", kind: "ui" },
+      ),
+    ).rejects.toMatchObject({
+      message: "Generation tool failed: Generation model service unavailable",
+      name: "GenerationToolReportedError",
+    })
+
+    expect(harness.runRequests.finish).toHaveLength(1)
+    expect(harness.runRequests.finish[0]).not.toHaveProperty("failureMessage")
+    const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
+    expect(pending.data).toMatchObject({ error: "Generation could not be completed", status: "error" })
+    expect(getCanvasNodeGenerationRun(pending)).not.toHaveProperty("failureMessage")
   })
 
   test("does not let a delayed Renderer projection block pending creation or replacement", async () => {
@@ -2197,7 +2239,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("error")
   })
 
-  test("treats a final dispatch guard rejection as safely not dispatched", async () => {
+  test("fails the card when the final dispatch guard rejects before the tool call", async () => {
     const harness = await setupPendingGeneration(
       { content: [{ text: "Unused output", type: "text" }] },
       {
@@ -2222,11 +2264,17 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
     expect(harness.runRequests.markRunning).toEqual([])
     expect(harness.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({
+        failureMessage: "Creative Tools 服务不可用",
+        operationId: "operation-one",
+      }),
     ])
     const pending = harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!
-    expect(pending.data).toMatchObject({ error: "Generation could not be completed", status: "error" })
-    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({ retrySafety: "safe", status: "failed" })
+    expect(pending.data).toMatchObject({ error: "Creative Tools 服务不可用", status: "error" })
+    expect(getCanvasNodeGenerationRun(pending)).toMatchObject({
+      failureMessage: "Creative Tools 服务不可用",
+      status: "failed",
+    })
   })
 
   test("rechecks the replacement target after bounded runtime and service guards", async () => {
@@ -2264,7 +2312,7 @@ describe("GenerationCanvasService", () => {
     expect(calls).toEqual([])
     expect(runRequests.markRunning).toEqual([])
     expect(runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
   })
 
@@ -2323,7 +2371,7 @@ describe("GenerationCanvasService", () => {
     expect(harness.calls).toEqual([])
     expect(harness.runRequests.markRunning).toEqual([])
     expect(harness.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", retrySafety: "safe", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
     expect(await operations.list()).toEqual([])
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
@@ -2364,12 +2412,9 @@ describe("GenerationCanvasService", () => {
     await expect(generation).rejects.toMatchObject({ name: "AbortError" })
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(harness.runRequests.finish).toHaveLength(1)
-    expect(harness.runRequests.finish[0]).toMatchObject({
-      retrySafety: "unknown",
-      status: "interrupted",
-    })
+    expect(harness.runRequests.finish[0]).toMatchObject({ operationId: "operation-one" })
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data).toMatchObject({
-      error: "Generation was interrupted",
+      error: "Generation could not be completed",
       status: "error",
     })
     expect(harness.replacementRequests).toEqual([])
@@ -2690,7 +2735,7 @@ describe("GenerationCanvasService", () => {
       { operationId: "operation-one", taskId: undefined },
     ])
     expect(legacy.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one", status: "failed" }),
+      expect.objectContaining({ operationId: "operation-one" }),
     ])
     expect(legacy.replacementRequests).toEqual([])
   })
@@ -2758,13 +2803,11 @@ describe("GenerationCanvasService", () => {
     for (let index = 0; index < 10 && canceled.runRequests.finish.length === 0; index += 1) {
       await Bun.sleep(0)
     }
-    expect(canceled.runRequests.finish.map(({ operationId, status }) => ({ operationId, status }))).toEqual([
-      { operationId: "operation-one", status: "interrupted" },
-    ])
+    expect(canceled.runRequests.finish.map(({ operationId }) => operationId)).toEqual(["operation-one"])
     expect(canceled.replacementRequests).toEqual([])
   })
 
-  test("reconciles restart-left active runs to interrupted without invoking a tool", async () => {
+  test("reconciles restart-left active runs to failed without invoking a tool", async () => {
     const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
     const active = startCanvasNodeGenerationRun(
       createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" }),
@@ -2782,7 +2825,7 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:renderer", kind: "ui" },
       ),
-    ).resolves.toEqual({ interruptedNodeIds: [owner.id], revision: 1 })
+    ).resolves.toEqual({ failedNodeIds: [owner.id], revision: 1 })
     expect(runRequests.interruptInactive).toEqual([expect.objectContaining({ expectedRevision: 0, liveRuns: [] })])
     expect(calls).toEqual([])
   })
@@ -2960,7 +3003,7 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:startup", kind: "system" },
       ),
-    ).resolves.toMatchObject({ interruptedNodeIds: [] })
+    ).resolves.toMatchObject({ failedNodeIds: [] })
     for (let index = 0; index < 2_000; index += 1) {
       if ((await operations.list()).length === 0) break
       await Bun.sleep(1)
@@ -3087,8 +3130,6 @@ describe("GenerationCanvasService", () => {
     expect(harness.runRequests.finish).toEqual([
       expect.objectContaining({
         operationId: "operation-never-dispatched",
-        retrySafety: "safe",
-        status: "failed",
       }),
     ])
     expect(await operations.list()).toEqual([])
@@ -3585,8 +3626,6 @@ describe("GenerationCanvasService", () => {
     expect(harness.runRequests.finish).toEqual([
       expect.objectContaining({
         operationId: "operation-cancel-after-restart",
-        retrySafety: "safe",
-        status: "cancelled",
       }),
     ])
     expect(acknowledgements).toEqual([
@@ -3797,7 +3836,9 @@ describe("GenerationCanvasService", () => {
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([storedInput.id])
     expect(harness.calls).toEqual([])
     expect(harness.replacementRequests).toEqual([])
-    expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", { errorType: "Error" })
+    expect(report).toHaveBeenCalledWith("Canvas generation supervise failed", {
+      diagnostics: [{ message: "Generation recovery runtime binding changed", name: "Error" }],
+    })
     report.mockRestore()
   })
 
@@ -3880,9 +3921,9 @@ describe("GenerationCanvasService", () => {
         { canvasId: "canvas-one", scopeId: "project-one" },
         { id: "desktop:renderer", kind: "ui" },
       ),
-    ).resolves.toEqual({ interruptedNodeIds: [staleOwner.id], revision: 2 })
+    ).resolves.toEqual({ failedNodeIds: [staleOwner.id], revision: 2 })
     expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === staleOwner.id)!)).toMatchObject({
-      status: "interrupted",
+      status: "failed",
     })
     expect(getCanvasNodeGenerationRun(currentDocument.nodes.find((node) => node.id === liveOwner.id)!)).toMatchObject({
       operationId: "operation-after-restart",
@@ -4462,13 +4503,16 @@ describe("GenerationCanvasService", () => {
     ])
   })
 
-  test("stages project-file media through the Project containment port", async () => {
+  test("stages multiply-linked project-file media through the Project containment port", async () => {
     const root = await temporaryDirectory()
     const mediaDirectory = path.join(root, "Media")
     const referencePath = path.join(mediaDirectory, "reference.png")
+    const publicationStagingDirectory = path.join(root, ".convax", "staging")
     const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
     await fs.mkdir(mediaDirectory)
+    await fs.mkdir(publicationStagingDirectory, { recursive: true })
     await fs.writeFile(referencePath, png)
+    await fs.link(referencePath, path.join(publicationStagingDirectory, "retained-publication-alias"))
     const image = createMediaNode({
       id: "project-image",
       position: { x: 0, y: 0 },

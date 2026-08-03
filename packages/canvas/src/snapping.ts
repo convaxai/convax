@@ -1,4 +1,4 @@
-import { getCanvasNodeSize } from "./document"
+import { getCanvasNodePresentationSize } from "./document"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 type CanvasSnapAnchor = "max" | "mid" | "min"
@@ -31,9 +31,30 @@ export interface CanvasNodeSnapResult {
   offset: CanvasPoint
 }
 
+export function resolveCanvasNodeSnapScopeNodeIds(
+  document: Readonly<CanvasDocument>,
+  draggingIds: readonly string[],
+): ReadonlySet<string> {
+  const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
+  const parentIds = new Set<string | null>()
+  for (const id of draggingIds) {
+    const node = nodeById.get(id)
+    if (!node) return new Set()
+    parentIds.add(node.parentId ?? null)
+  }
+  if (parentIds.size !== 1) return new Set()
+  const [parentId] = parentIds
+  return new Set(
+    document.nodes
+      .filter((node) => (node.parentId ?? null) === parentId)
+      .map((node) => node.id),
+  )
+}
+
 export function createCanvasNodeSnapSession(
   document: Readonly<CanvasDocument>,
   draggingIds: readonly string[],
+  scopeNodeIds?: ReadonlySet<string>,
 ): CanvasNodeSnapSession {
   const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
   const worldPositionById = new Map<string, CanvasPoint>()
@@ -42,7 +63,7 @@ export function createCanvasNodeSnapSession(
 
   return {
     candidates: document.nodes.flatMap((node) => {
-      if (excluded.has(node.id) || node.hidden) return []
+      if (excluded.has(node.id) || node.hidden || (scopeNodeIds && !scopeNodeIds.has(node.id))) return []
       const bounds = getCanvasSnapBounds(node, nodeById, worldPositionById)
       return bounds ? [bounds] : []
     }),
@@ -129,7 +150,7 @@ function getCanvasSnapBounds(
   worldPositionById: Map<string, CanvasPoint>,
 ): CanvasSnapBounds | undefined {
   const position = getCanvasSnapWorldPosition(node, nodeById, worldPositionById)
-  const size = getCanvasNodeSize(node)
+  const size = getCanvasNodePresentationSize(node)
   if (
     !position ||
     !Number.isFinite(size.width) ||

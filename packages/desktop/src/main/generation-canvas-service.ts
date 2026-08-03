@@ -342,6 +342,18 @@ function normalizedGenerationFailureDiagnostic(content: readonly McpToolContent[
   return undefined
 }
 
+function safeGenerationLogMessage(value: string) {
+  if (unsafeGenerationFailureDiagnosticCharacters.test(value)) return undefined
+  const normalized = value.replace(/\s+/g, " ").trim()
+  if (
+    !normalized ||
+    unsafeGenerationFailureDiagnosticPatterns.some((pattern) => pattern.test(normalized))
+  ) {
+    return undefined
+  }
+  return normalized.length <= 1_000 ? normalized : `${normalized.slice(0, 999).trimEnd()}…`
+}
+
 /**
  * A caller-visible failure created only from bounded, normalized MCP text.
  * Arbitrary native/process errors must never be wrapped in this type.
@@ -352,6 +364,58 @@ export class GenerationToolReportedError extends Error {
     super(diagnostic ? `Generation tool failed: ${diagnostic}` : "Generation tool reported a failure")
     this.name = "GenerationToolReportedError"
   }
+}
+
+const generationServiceUnavailableCodes = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENETDOWN",
+  "ENETUNREACH",
+  "ENOTFOUND",
+  "EPIPE",
+])
+
+function isGenerationServiceUnavailableFailure(error: unknown) {
+  let current = error
+  for (let depth = 0; depth < 4 && current !== undefined; depth += 1) {
+    try {
+      if (!isRecord(current)) return false
+      // Sidecar result text is untrusted diagnostic input. It may be surfaced by
+      // the thrown error, but must not select portable Canvas presentation.
+      if (current instanceof GenerationToolReportedError) return false
+      if (current instanceof GenerationResourceUnavailableError) return true
+      if (typeof current.code === "string" && generationServiceUnavailableCodes.has(current.code.toUpperCase())) {
+        return true
+      }
+      const message = typeof current.message === "string" ? current.message : ""
+      if (
+        /\b(?:generation model )?service (?:is )?(?:unavailable|disconnected|offline|not connected)\b/i.test(message) ||
+        /\b(?:runtime|server|provider|process|connection|executable)\b.{0,80}\b(?:unavailable|disconnected|offline|refused|closed|exited|terminated)\b/i.test(
+          message,
+        ) ||
+        /\b(?:connection refused|socket hang up|broken pipe)\b/i.test(message)
+      ) {
+        return true
+      }
+      current = current.cause
+    } catch {
+      return false
+    }
+  }
+  return false
+}
+
+function generationFailureMessage(
+  error: unknown,
+  tool: GenerationToolSummary,
+) {
+  if (!isGenerationServiceUnavailableFailure(error)) return undefined
+  const rawServiceName = tool.pluginName
+  if (!rawServiceName || rawServiceName.length > 160 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(rawServiceName)) {
+    return "生成服务不可用"
+  }
+  const serviceName = rawServiceName.replace(/\s+/g, " ").trim()
+  return serviceName ? `${serviceName} 服务不可用` : "生成服务不可用"
 }
 
 export class GenerationResourceUnavailableError extends Error {
@@ -783,6 +847,7 @@ function validateRequest(request: GenerationCanvasRequest) {
   if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
     throw new Error("Generation anchor must contain finite coordinates")
   }
+  if (request.parentId !== undefined) requireIdentifier(request.parentId, "Generation parent node id")
   if (!Array.isArray(request.references) || request.references.length > 32) {
     throw new Error("Generation accepts at most 32 Canvas references")
   }
@@ -1291,7 +1356,7 @@ export class GenerationCanvasService {
       projectId: ledger.projectId,
     }
     if (ledger.phase === "prepared") {
-      await this.#persistRecoveredTerminal(ledger, "cancelled", "safe", actor)
+      await this.#persistRecoveredTerminal(ledger, actor)
       await this.#finalizeNeverDispatchedOperation(ledger, "cancelled")
       return
     }
@@ -1318,7 +1383,7 @@ export class GenerationCanvasService {
       ledger = await this.#operations.transition(identity, {
         phase: "indeterminate",
       })
-      await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor)
+      await this.#persistRecoveredTerminal(ledger, actor)
       return
     }
     const terminalStatus = state.status === "failed" ? "failed" : "cancelled"
@@ -1326,7 +1391,7 @@ export class GenerationCanvasService {
       phase: terminalStatus,
       ...("taskId" in state && state.taskId ? { taskId: state.taskId } : {}),
     })
-    await this.#persistRecoveredTerminal(ledger, terminalStatus, "safe", actor)
+    await this.#persistRecoveredTerminal(ledger, actor)
     await this.#acknowledgeAndCleanup(ledger, () =>
       recovery.acknowledge({
         operationId: ledger.operationId,
@@ -1354,7 +1419,7 @@ export class GenerationCanvasService {
       })
       await this.#startStoredSupervisions(ref, actor, snapshot.document.nodes)
       if (!activeNodes.length) {
-        return { interruptedNodeIds: [], revision: snapshot.document.revision }
+        return { failedNodeIds: [], revision: snapshot.document.revision }
       }
       const liveRuns = [...this.#executions.values()].flatMap((execution) => {
         const target = execution.state.target
@@ -1380,7 +1445,7 @@ export class GenerationCanvasService {
           scopeId: ref.scopeId,
         })
         return {
-          interruptedNodeIds: result.affectedNodeIds,
+          failedNodeIds: result.affectedNodeIds,
           revision: result.document.revision,
         }
       } catch (error) {
@@ -1456,7 +1521,7 @@ export class GenerationCanvasService {
           : ledger.phase === "failed"
             ? ownerRun.status !== "failed"
             : ledger.phase === "cancelled"
-              ? ownerRun.status !== "cancelled"
+              ? ownerRun.status !== "failed"
               : !isCanvasNodeGenerationRunActive(ownerRun)
       ) {
         continue
@@ -1568,7 +1633,7 @@ export class GenerationCanvasService {
       // external-started callback and strictly before the stdio write. A
       // surviving prepared record therefore proves that no external request
       // was authorized; fail it safely without starting or querying a sidecar.
-      await this.#persistRecoveredTerminal(initial, "failed", "safe", actor)
+      await this.#persistRecoveredTerminal(initial, actor)
       await this.#finalizeNeverDispatchedOperation(initial, "failed")
       return
     }
@@ -1598,12 +1663,7 @@ export class GenerationCanvasService {
         return
       }
       if (ledger.phase === "cancelled" || ledger.phase === "failed" || ledger.phase === "indeterminate") {
-        await this.#persistRecoveredTerminal(
-          ledger,
-          ledger.phase === "indeterminate" ? "interrupted" : ledger.phase,
-          ledger.phase === "indeterminate" ? "unknown" : "safe",
-          actor,
-        )
+        await this.#persistRecoveredTerminal(ledger, actor)
         if (ledger.phase !== "indeterminate") {
           const { execution } = await this.#prepareStoredRecoveryRuntime(ledger)
           await this.#acknowledgeAndCleanup(ledger, () =>
@@ -1704,7 +1764,7 @@ export class GenerationCanvasService {
           }
         }
         if (state.status === "failed" || state.status === "cancelled") {
-          await this.#persistRecoveredTerminal(ledger, state.status, "safe", actor)
+          await this.#persistRecoveredTerminal(ledger, actor)
           ledger = await this.#operations.transition(identity, {
             phase: state.status,
             ...(state.taskId === undefined ? {} : { taskId: state.taskId }),
@@ -1715,13 +1775,13 @@ export class GenerationCanvasService {
           return
         }
         await this.#operations.transition(identity, { phase: "indeterminate" })
-        await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor)
+        await this.#persistRecoveredTerminal(ledger, actor)
         return
       }
     } catch (error) {
       if (ledger.phase === "committed" || ledger.phase === "acknowledged") throw error
       await this.#operations.transition(identity, { phase: "indeterminate" }).catch(() => undefined)
-      await this.#persistRecoveredTerminal(ledger, "interrupted", "unknown", actor).catch(() => undefined)
+      await this.#persistRecoveredTerminal(ledger, actor).catch(() => undefined)
       throw error
     }
   }
@@ -1874,8 +1934,6 @@ export class GenerationCanvasService {
 
   async #persistRecoveredTerminal(
     ledger: GenerationOperationLedger,
-    status: "failed" | "cancelled" | "interrupted",
-    retrySafety: "safe" | "unknown",
     actor: CanvasCommandActor,
   ) {
     const document = (
@@ -1888,14 +1946,12 @@ export class GenerationCanvasService {
     await this.#runs.finish({
       actor,
       canvasId: ledger.canvasId,
-      commandId: `generation:${ledger.operationId}:recover-terminal:${status}`,
+      commandId: `generation:${ledger.operationId}:recover-terminal:failed`,
       conflictPolicy: "retry",
       expectedRevision: document.revision,
       nodeId: ledger.nodeId,
       operationId: ledger.operationId,
-      retrySafety,
       scopeId: ledger.projectId,
-      status,
     })
   }
 
@@ -2152,6 +2208,7 @@ export class GenerationCanvasService {
       expectedOutputCount: request.expectedOutputCount,
       expectedRevision: request.expectedRevision,
       output: request.output,
+      parentId: request.parentId,
       prompt: request.prompt,
       promptContextNodeIds: request.promptContextNodeIds ?? [],
       ref: request.ref,
@@ -2305,6 +2362,7 @@ export class GenerationCanvasService {
           expectedRevision: request.expectedRevision,
           kind: tool.output,
           operationId: request.operationId,
+          ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
           prompt: workingRequest.prompt.trim(),
           relation: generationResultRelation(request),
           scopeId: request.ref.scopeId,
@@ -2761,6 +2819,7 @@ export class GenerationCanvasService {
                 commandId: `generation:${workingRequest.operationId}`,
                 conflictPolicy: "retry",
                 expectedRevision: workingRequest.expectedRevision,
+                ...(workingRequest.parentId === undefined ? {} : { parentId: workingRequest.parentId }),
                 relation: generationResultRelation(workingRequest),
                 scopeId: workingRequest.ref.scopeId,
                 ...(signal ? { signal } : {}),
@@ -2799,15 +2858,16 @@ export class GenerationCanvasService {
         warnings,
       }
     } catch (error) {
+      this.#logGenerationFailure("tool execution", error)
       if (!operationLedger && operationInputSnapshotId && this.#inputSnapshots) {
         await this.#inputSnapshots.remove(operationInputSnapshotId).catch(() => undefined)
       }
       if (runStarted && resultMode.type === "replace-node") {
         try {
-          let terminalStatus: "failed" | "cancelled" | "interrupted" = isAbortFailure(error, signal)
+          let terminalIsProven = !externalStarted
+          let terminalPhase: "cancelled" | "failed" | "indeterminate" = isAbortFailure(error, signal)
             ? "cancelled"
             : "failed"
-          let retrySafety: "safe" | "unknown" = externalStarted ? "unknown" : "safe"
           const recovery = preparedTool?.recovery
           const definitelyNotDispatched =
             !externalStarted && operationLedger !== undefined && operationLedger.phase === "prepared"
@@ -2850,43 +2910,38 @@ export class GenerationCanvasService {
               recoveryTerminal.status === "failed" ||
               recoveryTerminal.status === "cancelled"
             ) {
-              retrySafety = "safe"
-              terminalStatus =
-                recoveryTerminal.status === "cancelled"
-                  ? "cancelled"
-                  : isAbortFailure(error, signal)
-                    ? "cancelled"
-                    : "failed"
+              terminalIsProven = true
+              terminalPhase =
+                recoveryTerminal.status === "cancelled" || isAbortFailure(error, signal) ? "cancelled" : "failed"
             } else {
-              retrySafety = "unknown"
-              terminalStatus = "interrupted"
+              terminalIsProven = false
+              terminalPhase = "indeterminate"
             }
             operationLedger = await this.#operations.transition(operationLedger, {
-              phase:
-                retrySafety === "unknown" ? "indeterminate" : terminalStatus === "cancelled" ? "cancelled" : "failed",
+              phase: terminalPhase,
               ...("taskId" in recoveryTerminal && recoveryTerminal.taskId ? { taskId: recoveryTerminal.taskId } : {}),
             })
           } else if (externalStarted && isAbortFailure(error, signal)) {
-            terminalStatus = "interrupted"
-            retrySafety = "unknown"
+            terminalIsProven = false
+            terminalPhase = "indeterminate"
           }
+          const failureMessage = generationFailureMessage(error, tool)
           const terminal = await this.#runs.finish({
             actor,
             canvasId: request.ref.canvasId,
             commandId: `generation:${request.operationId}:terminal`,
             conflictPolicy: "retry",
             expectedRevision: runRevision,
+            ...(failureMessage === undefined ? {} : { failureMessage }),
             nodeId: resultMode.nodeId,
             operationId: request.operationId,
-            retrySafety,
             scopeId: request.ref.scopeId,
-            status: terminalStatus,
           })
           this.#refreshRendererProjection(request.ref, terminal.document.revision, [])
           if (
             operationLedger &&
             recovery &&
-            retrySafety === "safe" &&
+            terminalIsProven &&
             recoveryTerminal &&
             (recoveryTerminal.status === "absent" ||
               recoveryTerminal.status === "prepared" ||
@@ -2896,7 +2951,7 @@ export class GenerationCanvasService {
             if (definitelyNotDispatched) {
               await this.#finalizeNeverDispatchedOperation(
                 operationLedger,
-                terminalStatus === "cancelled" ? "cancelled" : "failed",
+                terminalPhase === "cancelled" ? "cancelled" : "failed",
               )
             } else {
               await this.#acknowledgeAndCleanup(operationLedger, () =>
@@ -2944,9 +2999,22 @@ export class GenerationCanvasService {
   }
 
   #logGenerationFailure(stage: string, error: unknown) {
-    const errorType =
-      error instanceof Error && /^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(error.name) ? error.name : typeof error
-    console.warn(`Canvas generation ${stage} failed`, { errorType })
+    const diagnostics: Array<{ message?: string; name: string }> = []
+    let current: unknown = error
+    for (let depth = 0; depth < 4 && current !== undefined; depth += 1) {
+      if (!(current instanceof Error)) {
+        const message = safeGenerationLogMessage(String(current))
+        diagnostics.push({ ...(message === undefined ? {} : { message }), name: typeof current })
+        break
+      }
+      const message = safeGenerationLogMessage(current.message)
+      diagnostics.push({
+        ...(message === undefined ? {} : { message }),
+        name: /^[A-Za-z][A-Za-z0-9._-]{0,63}$/.test(current.name) ? current.name : "Error",
+      })
+      current = current.cause
+    }
+    console.warn(`Canvas generation ${stage} failed`, { diagnostics })
   }
 
   async #assertStableReplacementTarget(request: GenerationCanvasRequest, expected: GenerationReplacementGuard) {
@@ -3158,6 +3226,7 @@ export class GenerationCanvasService {
         description: `Generation reference file ${reference.nodeId}`,
         expectedRealPath: resolved.sourceSnapshot.realPath,
         expectedSize: size,
+        linkPolicy: "stable-count",
         maximumBytes: this.#maxInputFileBytes,
         prepareTarget: () => target,
         signal,

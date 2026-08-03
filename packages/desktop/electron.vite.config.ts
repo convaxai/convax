@@ -1,6 +1,8 @@
 import tailwindcss from "@tailwindcss/vite"
 import react from "@vitejs/plugin-react"
+import { parse } from "acorn"
 import { defineConfig } from "electron-vite"
+import { builtinModules } from "node:module"
 import type { Plugin } from "vite"
 import { resolveDesktopBuildFeatureFlags } from "./build-feature-flags"
 
@@ -9,13 +11,11 @@ const desktopBuildFeatureFlags = resolveDesktopBuildFeatureFlags(process.env)
 const dependencyPathPattern = /[\\/]node_modules[\\/]/
 const workspaceDistPathPattern = /[\\/]packages[\\/][^\\/]+[\\/]dist(?:[\\/]|$)/
 
-const desktopMainBundledDependencies = [
-  "@convax/agent-runtime",
-  "@convax/canvas",
-  "@convax/project",
-  "@opencode-ai/sdk",
-  "acorn",
-] as const
+const desktopHostExternalImports = new Set([
+  "electron",
+  ...builtinModules,
+  ...builtinModules.map((name) => `node:${name}`),
+])
 
 export function isWorkspaceDistPath(file: string) {
   return workspaceDistPathPattern.test(file)
@@ -36,9 +36,95 @@ export function workspaceDistFullReloadPlugin(): Plugin {
 }
 
 interface SandboxedPreloadOutput {
+  code?: string
+  dynamicImports?: readonly string[]
   imports?: readonly string[]
   isEntry?: boolean
   type: "asset" | "chunk"
+}
+
+function isDesktopHostExternalImport(specifier: string) {
+  return desktopHostExternalImports.has(specifier) || specifier.startsWith("electron/")
+}
+
+function runtimeModuleLoads(code: string) {
+  const moduleLoads: string[] = []
+  const root = parse(code, {
+    allowAwaitOutsideFunction: true,
+    ecmaVersion: "latest",
+    sourceType: "module",
+  })
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object") return
+    if (Array.isArray(value)) {
+      value.forEach(visit)
+      return
+    }
+    const node = value as Record<string, unknown>
+    if (node.type === "CallExpression") {
+      const callee = node.callee as Record<string, unknown> | undefined
+      const args = node.arguments as unknown[] | undefined
+      const argument = args?.[0] as Record<string, unknown> | undefined
+      const literalSpecifier =
+        argument?.type === "Literal" && typeof argument.value === "string" ? argument.value : undefined
+      if (callee?.type === "Identifier" && callee.name === "require") {
+        moduleLoads.push(literalSpecifier ?? "<dynamic require>")
+      } else if (callee?.type === "MemberExpression") {
+        const object = callee.object as Record<string, unknown> | undefined
+        const property = callee.property as Record<string, unknown> | undefined
+        const isRequireResolve =
+          object?.type === "Identifier" &&
+          object.name === "require" &&
+          ((callee.computed === false && property?.type === "Identifier" && property.name === "resolve") ||
+            (callee.computed === true && property?.type === "Literal" && property.value === "resolve"))
+        if (isRequireResolve) moduleLoads.push(literalSpecifier ?? "<dynamic require.resolve>")
+      }
+    } else if (node.type === "ImportExpression") {
+      const source = node.source as Record<string, unknown> | undefined
+      moduleLoads.push(
+        source?.type === "Literal" && typeof source.value === "string" ? source.value : "<dynamic import>",
+      )
+    }
+    Object.values(node).forEach(visit)
+  }
+  visit(root)
+  return moduleLoads
+}
+
+/** Packaged Desktop ships no node_modules, so only Electron and Node host modules may remain external. */
+export function assertPackagedRuntimeBundle(
+  bundle: Record<string, SandboxedPreloadOutput>,
+  surface: "Main" | "Preload",
+) {
+  const emittedFiles = new Set(Object.keys(bundle))
+  for (const [fileName, output] of Object.entries(bundle)) {
+    if (output.type !== "chunk") continue
+    const unresolvedImports = [
+      ...(output.imports ?? []),
+      ...(output.dynamicImports ?? []),
+      ...(output.code ? runtimeModuleLoads(output.code) : []),
+    ].filter(
+      (specifier) =>
+        !emittedFiles.has(specifier) &&
+        !specifier.startsWith(".") &&
+        !isDesktopHostExternalImport(specifier),
+    )
+    if (unresolvedImports.length) {
+      throw new Error(
+        `Packaged Desktop ${surface} ${fileName} must bundle runtime dependencies; external imports: ${unresolvedImports.join(", ")}`,
+      )
+    }
+  }
+}
+
+export function packagedRuntimeBoundaryPlugin(surface: "Main" | "Preload"): Plugin {
+  return {
+    name: `convax-packaged-${surface.toLowerCase()}-runtime-boundary`,
+    apply: "build",
+    generateBundle(_options, bundle) {
+      assertPackagedRuntimeBundle(bundle, surface)
+    },
+  }
 }
 
 /** Sandboxed Electron preloads cannot require another emitted CommonJS file. */
@@ -77,21 +163,22 @@ export const desktopRendererInputs = {
 
 export default defineConfig({
   main: {
+    plugins: [packagedRuntimeBoundaryPlugin("Main")],
     build: {
-      externalizeDeps: {
-        exclude: [...desktopMainBundledDependencies],
-      },
+      externalizeDeps: false,
       rollupOptions: {
         input: "src/main/index.ts",
+        output: {
+          entryFileNames: "[name].cjs",
+          format: "cjs",
+        },
       },
     },
   },
   preload: {
-    plugins: [sandboxedPreloadBoundaryPlugin()],
+    plugins: [sandboxedPreloadBoundaryPlugin(), packagedRuntimeBoundaryPlugin("Preload")],
     build: {
-      externalizeDeps: {
-        exclude: ["@convax/canvas"],
-      },
+      externalizeDeps: false,
       rollupOptions: {
         input: desktopPreloadInputs,
         output: {

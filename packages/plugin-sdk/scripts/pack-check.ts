@@ -26,6 +26,10 @@ try {
     "package/dist/client.js",
     "package/dist/index.d.ts",
     "package/dist/index.js",
+    "package/dist/pet-client.d.ts",
+    "package/dist/pet-client.js",
+    "package/dist/pet.d.ts",
+    "package/dist/pet.js",
   ]) {
     if (!entries.includes(required)) throw new Error(`packed artifact is missing ${required}`)
   }
@@ -63,17 +67,23 @@ try {
     [
       'import { parsePluginCapabilityDeclaration, parsePluginManifestV8, parsePortablePluginCanvasUiContribution, renderPluginCapabilityReference, type PortablePluginManifestV8 } from "@convax/plugin-sdk"',
       'import { createPluginHostClient, pluginHostProtocolV8, type PluginHostMessagePort } from "@convax/plugin-sdk/client"',
+      'import { connectPetHost, petHostProtocol, type PetHostClient } from "@convax/plugin-sdk/pet-client"',
       "const declaration = parsePluginCapabilityDeclaration({ exports: [], imports: { required: [], optional: [] } })",
       "void renderPluginCapabilityReference(declaration)",
       "void parsePortablePluginCanvasUiContribution({ commands: [], menus: [], toolbar: [] })",
-      'const manifest: PortablePluginManifestV8 = parsePluginManifestV8({ capabilities: [], contributes: { canvas: { renderer: { create: true } } }, description: "External consumer", entry: "index.html", hostApi: { major: 1, optional: [], required: ["host.context.get"] }, id: "external-consumer", name: "External Consumer", schema: "convax.plugin/8", version: "1.0.0" })',
+      'const manifest: PortablePluginManifestV8 = parsePluginManifestV8({ capabilities: [], contributes: { canvas: { renderer: { create: true } } }, description: "External consumer", entry: "index.html", hostApi: { major: 2, optional: [], required: ["host.context.get"] }, id: "external-consumer", name: "External Consumer", schema: "convax.plugin/8", version: "1.0.0" })',
       "void manifest",
       "declare const port: PluginHostMessagePort",
       "const client = createPluginHostClient({ manifest, port })",
       "void client.closed",
+      "client.close()",
       'void client.getHostApiAvailability("host.context.get")',
       'void client.requireHostApi("host.context.get")',
       "void pluginHostProtocolV8",
+      'declare const pet: PetHostClient<"overlay">',
+      'void pet.request("activity.getSnapshot", {})',
+      'void connectPetHost({ surface: "overlay" })',
+      "void petHostProtocol",
       "",
     ].join("\n"),
   )

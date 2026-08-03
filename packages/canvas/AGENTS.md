@@ -56,10 +56,14 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.
+  Only an image/video replacement owner persists this override. A text owner may
+  offer image/video output choices, but remains a relation anchor and never stores
+  one cross-output model choice or becomes an implicit generation input.
 - Canvas owns the separate versioned node-generation run namespace, its bounded
   parser and legal transitions. Keep the next-run preference separate from the
-  resolved historical tool, never persist raw diagnostics or vendor state, and mark
-  generated resource replacement plus `succeeded` in one guarded Canvas command.
+  resolved historical tool, admit only bounded host-authored terminal failure text,
+  never persist raw diagnostics or vendor state, and mark generated resource
+  replacement plus `succeeded` in one guarded Canvas command.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.
@@ -73,10 +77,20 @@ Canvas owns document and editor semantics independently of Project and Agent.
   media selections alone participate in `acceptedInputs` compatibility.
 - Public node roles remain `file` and `agent`; structural grouping is an internal file
   rendering kind. A new Canvas document is empty.
-- Every connectable card has one fixed left input and one fixed right output.
-  `edge.source` is the right/output card and `edge.target` is the left/input card;
-  moving cards must never adapt ports to top/bottom or reverse their roles. Structural
-  groups remain non-connectable containers.
+- Folder-resource browsing enters a transient read-only focus projection supplied
+  through a host-neutral service. Opaque folder-entry ids may be passed back only to
+  that service; projected entries never enter the Canvas document, selection,
+  relationships, history, persistence, or Agent capabilities.
+- Every card has one fixed left input and one fixed right output. `edge.source` is
+  the right/output card and `edge.target` is the left/input card; moving cards must
+  never adapt ports to top/bottom or reverse their roles. Structural Groups are
+  connectable whole-Group endpoints. Their edges never fan out to descendants, and
+  focus projection hides cross-scope Group edges without rewriting them. Focused
+  resource creation and parentage are one application command/CAS. Groups remain
+  expanded unless an explicit persisted Fold state projects them as compact folders;
+  Unfold restores the durable child-container presentation without moving children
+  or rewriting relationships. File-input
+  inference remains direct and file-only.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web
   packages, permissions, iframe transport, Project/Agent calls and package storage

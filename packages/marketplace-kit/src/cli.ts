@@ -9,6 +9,7 @@ import {
   createMarketplaceTemplate,
   composeProductLockInput,
   type MarketplacePublishSelection,
+  type MarketplaceRemovalSelection,
   type StarterKind,
 } from "./index"
 
@@ -74,6 +75,8 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
   if (command === "build-index") {
     const changedPath = option(rest, "--changed")
     const changed = changedPath ? ((await Bun.file(changedPath).json()) as MarketplacePublishSelection[]) : undefined
+    const removedPath = option(rest, "--removed")
+    const removed = removedPath ? ((await Bun.file(removedPath).json()) as MarketplaceRemovalSelection[]) : undefined
     await buildMarketplace({
       root: rootArgument ?? ".",
       outDir: option(rest, "--out") ?? "dist",
@@ -84,7 +87,8 @@ export async function runMarketplaceCli(args = process.argv.slice(2)): Promise<v
       previousShowcasePath: option(rest, "--previous-showcase"),
       initialOfficial: rest.includes("--initial"),
       publishSelections: changed,
-      fetchArtifact: changed ? fetchReleaseArtifact : undefined,
+      removeSelections: removed,
+      fetchArtifact: changed || removed ? fetchReleaseArtifact : undefined,
     })
     return
   }

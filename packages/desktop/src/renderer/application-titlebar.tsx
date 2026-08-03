@@ -100,13 +100,15 @@ export function ApplicationTitlebar({
           data-application-titlebar-leading=""
           ref={leadingActionHostRef}
         />
-        <span
-          className="max-w-[min(18rem,32vw)] truncate px-1 text-sm font-semibold tracking-[-0.01em] text-text-primary"
-          data-application-product-name=""
-          title={productLabel}
-        >
-          {productLabel}
-        </span>
+        {productLabel ? (
+          <span
+            className="max-w-[min(18rem,32vw)] truncate px-1 text-sm font-semibold tracking-[-0.01em] text-text-primary"
+            data-application-product-name=""
+            title={productLabel}
+          >
+            {productLabel}
+          </span>
+        ) : null}
         {surface === "settings" ? (
           <button
             aria-label={homeLabel}

@@ -22,6 +22,7 @@ export interface PluginApiNoParamsShape {
 }
 
 export interface PluginApiMethodContract {
+  readonly dialect: PluginApiWireContract["dialect"]
   readonly request: PluginApiWireContract["request"]
   readonly params: PluginApiNoParamsShape | PluginApiObjectShape
   readonly result: PluginApiObjectShape
@@ -67,6 +68,7 @@ function satisfiesStringRefinement(
   refinement: Extract<PluginApiWireSchema, { type: "string" }>["refinement"],
 ) {
   if (refinement === undefined) return true
+  if (refinement === "lowercase-sha256") return /^[a-f0-9]{64}$/u.test(value)
   if (refinement === "trimmed") return value === value.trim()
   if (refinement === "safe-png-file-name") {
     return value === value.trim() && value.toLowerCase().endsWith(".png") && isPortableNameSegment(value)
@@ -135,6 +137,30 @@ function json(value: unknown, schema: Extract<PluginApiWireSchema, { type: "json
   return result
 }
 
+function enforceProductConstraints(
+  value: Record<string, unknown>,
+  products: Extract<PluginApiWireSchema, { type: "object" }>["products"],
+  label: string,
+) {
+  for (const constraint of products ?? []) {
+    let product = 1
+    for (const field of constraint.fields) {
+      const factor = value[field]
+      if (typeof factor !== "number" || !Number.isFinite(factor) || factor < 0) {
+        throw new TypeError(`${label}.${field} must be a non-negative finite product factor`)
+      }
+      if (factor !== 0 && product > constraint.maximum / factor) {
+        throw new TypeError(`${label} must satisfy its numeric product limits`)
+      }
+      product *= factor
+    }
+    if (product > constraint.maximum) {
+      throw new TypeError(`${label} must satisfy its numeric product limits`)
+    }
+  }
+  return value
+}
+
 /**
  * Interprets the exact portable schema descriptor used by TypeScript, docs,
  * compatibility history, byte limits, and runtime Host boundaries.
@@ -177,7 +203,8 @@ export function parsePluginApiSchema<Schema extends PluginApiWireSchema>(
       typeof value !== "number" ||
       !Number.isFinite(value) ||
       (schema.type === "integer" && !Number.isSafeInteger(value)) ||
-      (schema.minimum !== undefined && value < schema.minimum)
+      (schema.minimum !== undefined && value < schema.minimum) ||
+      (schema.maximum !== undefined && value > schema.maximum)
     ) {
       throw new TypeError(`${label} must be a valid ${schema.type}`)
     }
@@ -227,12 +254,13 @@ export function parsePluginApiSchema<Schema extends PluginApiWireSchema>(
   ) {
     throw new TypeError(`${label} contains unsupported or missing fields`)
   }
-  return Object.fromEntries(
+  const parsed = Object.fromEntries(
     Object.entries(input).map(([key, entry]) => [
       key,
       parsePluginApiSchema(schema.properties[key], entry, `${label}.${key}`),
     ]),
   )
+  return enforceProductConstraints(parsed, schema.products, label)
 }
 
 function objectShape(schema: PluginApiWireSchema, label: string): PluginApiObjectShape | PluginApiNoParamsShape {
@@ -275,6 +303,7 @@ export const pluginApiMethodContracts = Object.freeze(
       return [
         id,
         {
+          dialect: wire.dialect,
           params: objectShape(wire.request.schema, `Plugin API ${id} params`),
           request: wire.request,
           response: wire.result,

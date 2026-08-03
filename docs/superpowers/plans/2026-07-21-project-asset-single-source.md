@@ -46,7 +46,7 @@
 - Modify `packages/desktop/resources/skills/canvas-storyboard/SKILL.md`: replace `inline-text` instructions with file-backed `new-text` sources.
 - Modify `packages/desktop/src/main/generation-canvas-service.ts`: publish validated results below `Generated/` and retain published files on Canvas failure.
 - Modify `packages/desktop/src/main/project-ipc.ts`: forward every Project filesystem event to mounted Canvas resource invalidation without trusting the path as completeness evidence.
-- Update `packages/desktop/src/main/canvas-agent-tools.test.ts`, `packages/desktop/src/main/generation-canvas-service.test.ts`, `packages/desktop/src/main/jianying-canvas-service.test.ts`, `packages/desktop/src/main/agent-resource-preparation.test.ts`, `packages/desktop/src/renderer/canvas-upload.test.ts`, `packages/desktop/src/renderer/web-plugin-canvas.test.tsx`, `packages/desktop/src/renderer/jianying-selection-action.test.ts`, `packages/desktop/src/renderer/ffmpeg-selection-action.test.ts`, and `scripts/desktop-open-project-built-smoke.ts`.
+- Update `packages/desktop/src/main/canvas-agent-tools.test.ts`, `packages/desktop/src/main/generation-canvas-service.test.ts`, `packages/desktop/src/main/agent-resource-preparation.test.ts`, `packages/desktop/src/renderer/canvas-upload.test.ts`, `packages/desktop/src/renderer/web-plugin-canvas.test.tsx`, `packages/desktop/src/renderer/ffmpeg-selection-action.test.ts`, and `scripts/desktop-open-project-built-smoke.ts`.
 
 ## Task 1: Cut over the Canvas persisted envelope
 
@@ -1692,8 +1692,6 @@ git commit -m "feat(project): garbage collect unreferenced assets"
 - Modify: `packages/desktop/src/renderer/index.tsx`
 - Modify: `packages/desktop/src/renderer/web-plugin-canvas.tsx`
 - Modify: `packages/desktop/src/main/generation-canvas-service.ts`
-- Modify: `packages/desktop/src/main/jianying-canvas-service.ts`
-- Modify: `packages/desktop/src/renderer/jianying-selection-action.ts`
 - Modify: `packages/desktop/src/renderer/ffmpeg-selection-action.ts`
 - Modify: `packages/desktop/src/main/agent-resource-preparation.ts`
 - Modify: `packages/project/src/canvas/project-resources.test.ts`
@@ -1705,11 +1703,9 @@ git commit -m "feat(project): garbage collect unreferenced assets"
 - Modify: `packages/canvas/src/application/resources.test.ts`
 - Modify: `packages/desktop/src/main/canvas-agent-tools.test.ts`
 - Modify: `packages/desktop/src/main/generation-canvas-service.test.ts`
-- Modify: `packages/desktop/src/main/jianying-canvas-service.test.ts`
 - Modify: `packages/desktop/src/main/agent-resource-preparation.test.ts`
 - Modify: `packages/desktop/src/renderer/canvas-upload.test.ts`
 - Modify: `packages/desktop/src/renderer/web-plugin-canvas.test.tsx`
-- Modify: `packages/desktop/src/renderer/jianying-selection-action.test.ts`
 - Modify: `packages/desktop/src/renderer/ffmpeg-selection-action.test.ts`
 - Modify: `scripts/desktop-open-project-built-smoke.ts`
 - Modify: `AGENTS.md`
@@ -1761,7 +1757,7 @@ remote-url
 convaxProjectFile
 ```
 
-Update JianYing, FFmpeg, Web Plugin connected-image reads, generation staging, and Agent snapshots to branch on `ProjectResourceReference.kind`. `project-file` resolves with Project containment; `managed-asset` resolves by digest; `project-directory` is never eligible as file/media input.
+Update external-editor, FFmpeg, Web Plugin connected-image reads, generation staging, and Agent snapshots to branch on `ProjectResourceReference.kind`. `project-file` resolves with Project containment; `managed-asset` resolves by digest; `project-directory` is never eligible as file/media input.
 
 - [x] **Step 4: Search for forbidden persisted forms**
 

@@ -127,6 +127,11 @@ mock.module("@convax/ui", () => ({
     }
     return <>{props.children}</>
   },
+  Dialog: Passthrough,
+  DialogClose: Passthrough,
+  DialogContent: Passthrough,
+  DialogDescription: Passthrough,
+  DialogTitle: Passthrough,
   Input: (props: { className?: string }) => <input className={props.className} />,
   Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
@@ -208,7 +213,8 @@ mock.module("@xyflow/react", () => ({
   useViewport: () => ({ x: 17, y: 29, zoom: 1.35 }),
 }))
 
-const { createCanvasDocument, createTextNode } = await import("../document")
+const { createCanvasDocument, createGroupNode, createTextNode } = await import("../document")
+const { setCanvasGroupFolded } = await import("../group-fold")
 const { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } = await import("../connections")
 const { canvasHistoryReducer, createCanvasHistory } = await import("../history")
 const {
@@ -222,6 +228,8 @@ const {
   handleCanvasResourceUploadSelection,
   linkCanvasReloadAbortSignal,
   replaceCanvasNodeResourceState,
+  resolveCanvasGroupFolderDropTarget,
+  resolveCanvasGroupMenuCapabilities,
   runCanvasReloadScopeEffect,
   settleCanvasReloadFailure,
 } = await import("./canvas-editor")
@@ -347,6 +355,151 @@ describe("CanvasEditor edge port projection", () => {
   })
 })
 
+describe("CanvasEditor group folder projection", () => {
+  test("keeps Group, Fold, Ungroup, and Unfold menu capabilities mutually explicit", () => {
+    expect(
+      resolveCanvasGroupMenuCapabilities({
+        canGroupSelection: true,
+        hasSingleGroupSelection: false,
+        singleGroupFolded: false,
+        singleGroupFoldUnsupported: false,
+      }),
+    ).toEqual({ canFold: true, canGroup: true, canUngroup: false, canUnfold: false })
+    expect(
+      resolveCanvasGroupMenuCapabilities({
+        canGroupSelection: false,
+        hasSingleGroupSelection: true,
+        singleGroupFolded: false,
+        singleGroupFoldUnsupported: false,
+      }),
+    ).toEqual({ canFold: true, canGroup: false, canUngroup: true, canUnfold: false })
+    expect(
+      resolveCanvasGroupMenuCapabilities({
+        canGroupSelection: false,
+        hasSingleGroupSelection: true,
+        singleGroupFolded: true,
+        singleGroupFoldUnsupported: false,
+      }),
+    ).toEqual({ canFold: false, canGroup: false, canUngroup: false, canUnfold: true })
+    expect(
+      resolveCanvasGroupMenuCapabilities({
+        canGroupSelection: false,
+        hasSingleGroupSelection: false,
+        singleGroupFolded: false,
+        singleGroupFoldUnsupported: false,
+      }),
+    ).toEqual({ canFold: false, canGroup: false, canUngroup: false, canUnfold: false })
+  })
+
+  test("renders root groups as fixed folders while hiding descendants and cross-scope edges", () => {
+    const group = createGroupNode({
+      height: 520,
+      id: "group",
+      label: "References",
+      position: { x: 300, y: 120 },
+      width: 760,
+    })
+    const child = {
+      ...createTextNode({
+        id: "child",
+        metadata: {},
+        position: { x: 40, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const outside = createTextNode({
+      id: "outside",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const initialDocument = setCanvasGroupFolded(
+      createCanvasDocument({
+        edges: [
+          { id: "cross-scope", source: outside.id, target: child.id },
+          { id: "group-relation", source: group.id, target: outside.id },
+        ],
+        id: "group-projection",
+        nodes: [group, child, outside],
+      }),
+      group.id,
+      true,
+    )
+
+    renderEditor(createCanvasServices(), { initialDocument, readOnly: true })
+
+    expect(renderedCanvasNodes.map((node) => node.id)).toEqual(["group", "outside"])
+    expect(renderedCanvasNodes.find((node) => node.id === group.id)).toMatchObject({
+      initialHeight: 160,
+      initialWidth: 200,
+      style: { height: 160, width: 200 },
+      zIndex: 0,
+    })
+    expect(renderedCanvasEdges).toEqual([
+      expect.objectContaining({ id: "group-relation", source: group.id, target: outside.id }),
+    ])
+    expect(initialDocument.nodes.find((node) => node.id === group.id)?.style).toEqual({ height: 520, width: 760 })
+  })
+
+  test("renders expanded Groups with their descendants and original container geometry", () => {
+    const group = createGroupNode({
+      height: 520,
+      id: "group",
+      label: "References",
+      position: { x: 300, y: 120 },
+      width: 760,
+    })
+    const child = {
+      ...createTextNode({
+        id: "child",
+        metadata: {},
+        position: { x: 40, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const outside = createTextNode({
+      id: "outside",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const initialDocument = createCanvasDocument({
+      edges: [{ id: "cross-scope", source: outside.id, target: child.id }],
+      id: "expanded-group-projection",
+      nodes: [group, child, outside],
+    })
+
+    renderEditor(createCanvasServices(), { initialDocument, readOnly: true })
+
+    expect(renderedCanvasNodes.map((node) => node.id)).toEqual(["group", "outside", "child"])
+    expect(renderedCanvasNodes.find((node) => node.id === group.id)).toMatchObject({
+      initialHeight: 520,
+      initialWidth: 760,
+      style: { height: 520, width: 760 },
+      zIndex: -1,
+    })
+    expect(renderedCanvasEdges).toEqual([
+      expect.objectContaining({ id: "cross-scope", source: outside.id, target: child.id }),
+    ])
+  })
+
+  test("does not drop into a group hidden behind a topmost card", () => {
+    const group = createGroupNode({ height: 400, id: "group", position: { x: 0, y: 0 }, width: 600 })
+    const card = createTextNode({
+      id: "card",
+      metadata: {},
+      position: { x: 20, y: 20 },
+      resourceState: { status: "ready" },
+    })
+    const document = setCanvasGroupFolded(createCanvasDocument({ nodes: [group, card] }), group.id, true)
+
+    expect(resolveCanvasGroupFolderDropTarget(document, [card.id, group.id], new Set())).toBeNull()
+    expect(resolveCanvasGroupFolderDropTarget(document, [card.id, group.id], new Set([card.id]))).toBe(group.id)
+  })
+})
+
 describe("CanvasEditor node dimension projection", () => {
   test("projects persisted numeric style dimensions without mutating the Canvas document", () => {
     const styleOnly = createTextNode({
@@ -463,6 +616,10 @@ describe("CanvasEditor resource mutation", () => {
     expect(relinked).toEqual([{ file: first, nodeId: "missing-image" }])
 
     const markup = renderEditor()
+    expect(markup).toMatch(/accept="image\/\*"[^>]*data-canvas-resource-picker="image"/)
+    expect(markup).toMatch(/accept="video\/\*"[^>]*data-canvas-resource-picker="video"/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="image"[^>]*multiple/)
+    expect(markup).not.toMatch(/data-canvas-resource-picker="video"[^>]*multiple/)
     expect(markup).toContain('data-canvas-resource-picker="upload"')
     expect(markup).toContain('data-canvas-resource-picker="relink"')
     expect(markup).toMatch(/data-canvas-resource-picker="upload"[^>]*multiple=""/)
@@ -816,6 +973,50 @@ describe("CanvasEditor resource mutation", () => {
     expect(calls).toEqual(["reload", "present:one", "select:one", "show"])
   })
 
+  test("organizes newly authoritative nodes only after reload makes them available", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const calls: string[] = []
+    await completeCanvasResourceMutation({
+      afterReload: (nodeIds) => {
+        calls.push(`organize:${nodeIds.join(",")}`)
+      },
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => {
+        calls.push("reload")
+      },
+      result: { createdNodeIds: ["one"], revision: 1, warnings: [] },
+      selectNodes: (nodeIds) => calls.push(`select:${nodeIds.join(",")}`),
+      show: () => calls.push("show"),
+      signal: new AbortController().signal,
+    })
+
+    expect(calls).toEqual(["reload", "organize:one", "select:one", "show"])
+  })
+
+  test("reports organization as a partial warning without hiding admitted resources", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const show = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      afterReload: () => {
+        throw new Error("group was removed")
+      },
+      currentScope: () => scope,
+      operationScope: scope,
+      reload: async () => undefined,
+      result: { createdNodeIds: ["one"], revision: 1, warnings: [] },
+      selectNodes: () => undefined,
+      show,
+      signal: new AbortController().signal,
+    })
+
+    expect(show).toHaveBeenCalledWith({
+      description: "Items were added, but follow-up organization failed.",
+      kind: "warning",
+      title: "1 item added",
+    })
+  })
+
   test("ignores an aborted success in the same scope before and during refresh completion", async () => {
     const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     const abortedBefore = new AbortController()
@@ -1103,17 +1304,39 @@ describe("CanvasEditor resource mutation", () => {
       ease: expect.any(Function),
       interpolate: "smooth",
       maxZoom: 1,
+      nodes: [{ id: "first" }, { id: "second" }],
       padding: 0.18,
     })
   })
 
-  test("lets the explicit Fit view use the Canvas zoom ceiling", () => {
+  test("lets the explicit Fit view use the Canvas zoom ceiling without fitting hidden group children", () => {
+    const group = createGroupNode({ height: 500, id: "group", position: { x: 300, y: 0 }, width: 500 })
     renderEditor(createCanvasServices(), {
-      initialDocument: createCanvasDocument({
-        nodes: [
-          createTextNode({ id: "small", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
-        ],
-      }),
+      initialDocument: setCanvasGroupFolded(
+        createCanvasDocument({
+          nodes: [
+            group,
+            {
+              ...createTextNode({
+                id: "hidden-child",
+                metadata: {},
+                position: { x: 10_000, y: 10_000 },
+                resourceState: { status: "ready" },
+              }),
+              extent: "parent",
+              parentId: "group",
+            },
+            createTextNode({
+              id: "small",
+              metadata: {},
+              position: { x: 0, y: 0 },
+              resourceState: { status: "ready" },
+            }),
+          ],
+        }),
+        group.id,
+        true,
+      ),
     })
 
     buttonActions.get("Fit view")?.()
@@ -1123,6 +1346,7 @@ describe("CanvasEditor resource mutation", () => {
       ease: expect.any(Function),
       interpolate: "smooth",
       maxZoom: 2.5,
+      nodes: [{ id: "group" }, { id: "small" }],
       padding: 0.18,
     })
   })
@@ -1212,13 +1436,16 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).not.toContain("Add Audio")
   })
 
-  test("publishes registered node creation through the safe top toolbar without duplicating Search", () => {
+  test("publishes only navigation and creation controls through the evenly spaced top toolbar", () => {
     const markup = renderEditor(
       createCanvasServices({
         generate: {
           describeTool: async (toolId) => ({ fields: [], toolId }),
           generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
           listTools: async () => [],
+        },
+        mutation: {
+          add: async () => ({ createdNodeIds: [], revision: 0, warnings: [] }),
         },
       }),
     )
@@ -1229,15 +1456,17 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(markup).toContain('aria-label="Add Text"')
     expect(markup).toContain('aria-label="Add Image"')
     expect(markup).toContain('aria-label="Add Video"')
+    expect(markup).toContain('aria-label="Upload files"')
     expect(markup).not.toContain('aria-label="Add Audio"')
     expect(markup).not.toContain('aria-label="Add Agent"')
     expect(buttonActions.get("Add node")).toBeFunction()
     expect(buttonActions.get("Upload")).toBeUndefined()
-    expect(buttonActions.get("Generate")).toBeFunction()
+    expect(buttonActions.get("Generate")).toBeUndefined()
+    expect(buttonActions.get("More canvas actions")).toBeUndefined()
     expect(buttonActions.get("Search")).toBeFunction()
   })
 
-  test("routes top-toolbar Generate presentation to the host without opening Canvas's legacy overlay", () => {
+  test("keeps Generate in the Canvas context menu after removing it from the top toolbar", () => {
     const onGenerateRequest = mock(() => undefined)
     renderEditor(
       createCanvasServices({
@@ -1250,9 +1479,10 @@ describe("CanvasEditor insertion surfaces", () => {
       { onGenerateRequest },
     )
 
-    buttonActions.get("Generate")?.()
+    contextMenuActions.get("Generate⌘↵")?.()
 
     expect(onGenerateRequest).toHaveBeenCalledTimes(1)
+    expect(buttonActions.get("Generate")).toBeUndefined()
   })
 
   test("rejects generation re-entry instead of implicitly cancelling accepted work", async () => {
@@ -1282,7 +1512,7 @@ describe("CanvasEditor insertion surfaces", () => {
     expect(buttonActions.get("Search")).toBeFunction()
     expect(buttonActions.get("Fit view")).toBeFunction()
     expect(buttonActions.get("Snap and alignment guides")).toBeFunction()
-    expect(buttonActions.get("More canvas actions")).toBeFunction()
+    expect(buttonActions.get("More canvas actions")).toBeUndefined()
   })
 
   test("renders host appearance without producing an editor command", () => {
@@ -1351,6 +1581,7 @@ describe("CanvasEditor external drag mode", () => {
     })
 
     expect(contextMenuActions.get("Drag to Other Apps")).toBeFunction()
+    expect(buttonActions.get("Drag to Other Apps")).toBeUndefined()
   })
 
   test("does not prepare until command-shift is held for a visible drag source", () => {

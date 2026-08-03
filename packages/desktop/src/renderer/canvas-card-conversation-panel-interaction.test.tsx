@@ -189,6 +189,182 @@ test("removes a default generation @ input from the submitted references", async
   }
 })
 
+test("isolates a text card's model and tool options while switching image and video output", async () => {
+  const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
+  let root: Root | undefined
+  let submitted: CanvasGenerateRequest | undefined
+  const onOwnerToolIdChange = mock(() => undefined)
+  const owner = createTextNode({
+    id: "text-owner",
+    label: "Storyboard",
+    metadata: {},
+    position: { x: 0, y: 0 },
+    resourceState: { status: "ready", text: "Opening scene" },
+  })
+  const request: CanvasAssistantRequest = {
+    document: createCanvasDocument({ id: "canvas", nodes: [owner] }),
+    generation: {
+      availableOutputs: ["image", "video"],
+      initialPrompt: "Animate this scene",
+      onOwnerToolIdChange,
+      output: "image",
+    },
+    mentionedNodeIds: [],
+    mode: "file",
+    ownerNodeId: owner.id,
+  }
+  const tools = {
+    image: [
+      {
+        acceptedInputs: [] as const,
+        description: "First image model",
+        id: "tools/image-first",
+        output: "image" as const,
+        title: "Image first",
+      },
+      {
+        acceptedInputs: [] as const,
+        description: "Second image model",
+        id: "tools/image-second",
+        output: "image" as const,
+        title: "Image second",
+      },
+    ],
+    video: [
+      {
+        acceptedInputs: [] as const,
+        description: "First video model",
+        id: "tools/video-first",
+        output: "video" as const,
+        title: "Video first",
+      },
+      {
+        acceptedInputs: [] as const,
+        description: "Second video model",
+        id: "tools/video-second",
+        output: "video" as const,
+        title: "Video second",
+      },
+    ],
+  }
+  const fields: CanvasGenerationToolDescription["fields"] = [
+    {
+      choices: [
+        { label: "Draft", value: "draft" },
+        { label: "Final", value: "final" },
+      ],
+      defaultValue: "draft",
+      id: "quality",
+      kind: "select",
+      label: "Quality",
+      required: true,
+    },
+  ]
+  const service: CanvasGenerateService = {
+    describeTool: mock(async (toolId) => ({ fields, toolId })),
+    generate: mock(async (generationRequest) => {
+      submitted = generationRequest
+      return {
+        createdNodeIds: ["generated-video"],
+        revision: 1,
+        toolId: generationRequest.toolId!,
+        warnings: [],
+      }
+    }),
+    listTools: mock(async (query) => (query.output === "video" ? tools.video : tools.image)),
+  }
+  const tab = (label: string) =>
+    [...document.querySelectorAll<HTMLButtonElement>('[aria-label="生成类型"] [role="tab"]')].find(
+      (candidate) => candidate.textContent?.trim() === label,
+    )
+  const modelButton = () => document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')
+  const qualityButton = () => {
+    const label = [...document.querySelectorAll("label")].find((candidate) =>
+      candidate.textContent?.includes("Quality"),
+    )
+    return label?.htmlFor ? document.getElementById(label.htmlFor) : undefined
+  }
+  const chooseOption = async (trigger: HTMLElement | null | undefined, label: string) => {
+    await act(async () => {
+      trigger?.click()
+      await settle()
+    })
+    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
+      candidate.textContent?.includes(label),
+    )
+    if (!option) {
+      throw new Error(
+        `Missing option ${label}: ${[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+          .map((candidate) => candidate.textContent)
+          .join(" | ")}`,
+      )
+    }
+    await act(async () => {
+      option?.click()
+      await settle()
+    })
+  }
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(<CanvasCardGenerationPanel generation={request.generation!} request={request} service={service} />)
+      await settle()
+    })
+
+    expect(modelButton()?.textContent).toContain("Image first")
+    await chooseOption(modelButton(), "Image second")
+    await chooseOption(qualityButton(), "Final")
+    expect(modelButton()?.textContent).toContain("Image second")
+    expect(qualityButton()?.textContent).toContain("Final")
+
+    await act(async () => {
+      tab("视频")?.click()
+      await settle()
+    })
+    expect(modelButton()?.textContent).toContain("Video first")
+    expect(qualityButton()?.textContent).toContain("Draft")
+    await chooseOption(modelButton(), "Video second")
+    expect(modelButton()?.textContent).toContain("Video second")
+
+    await act(async () => {
+      tab("图片")?.click()
+      await settle()
+    })
+    expect(modelButton()?.textContent).toContain("Image second")
+    expect(qualityButton()?.textContent).toContain("Final")
+
+    await act(async () => {
+      tab("视频")?.click()
+      await settle()
+    })
+    expect(modelButton()?.textContent).toContain("Video second")
+    expect(qualityButton()?.textContent).toContain("Draft")
+
+    const generate = document.querySelector<HTMLButtonElement>('button[aria-label="Generate"]')
+    expect(generate?.disabled).toBeFalse()
+    await act(async () => {
+      generate?.click()
+      await settle()
+    })
+    expect(submitted).toMatchObject({
+      expectedOutputCount: 1,
+      output: "video",
+      referenceConstraint: { ownerNodeId: owner.id, type: "direct-incoming" },
+      resultMode: { type: "create-pending-node" },
+      toolId: "tools/video-second",
+      toolInput: { quality: "draft" },
+    })
+    expect(submitted?.promptContextNodeIds).toBeUndefined()
+    expect(onOwnerToolIdChange).not.toHaveBeenCalled()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("shows the first real compatible model without writing a node override", async () => {
   const { CanvasCardGenerationPanel, restoreWindow } = await installTestWindow()
   const onOwnerToolIdChange = mock(() => undefined)
