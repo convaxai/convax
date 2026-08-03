@@ -29,8 +29,8 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
   const channel = resolveConvaxChannel(environment.CONVAX_CHANNEL)
   const identity = CHANNELS[channel]
   // Developer and pull-request artifacts intentionally remain buildable without
-  // credentials. Release jobs opt in and fail closed instead of publishing an
-  // accidentally unsigned macOS or Windows artifact.
+  // credentials. Signed macOS jobs opt in and fail closed; the temporary unsigned
+  // Windows workflow deliberately leaves this flag unset.
   const release = environment.CONVAX_RELEASE === "true"
 
   return {
