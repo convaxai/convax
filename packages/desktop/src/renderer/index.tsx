@@ -22,6 +22,8 @@ import {
   dehydrateProjectCanvasDocument,
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
+  ProjectCanvasSidebarTools,
+  ProjectCanvasSwitcher,
   ProjectCanvasController,
   type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
@@ -133,10 +135,7 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
-import {
-  projectCanvasSidebarNodes,
-  sameProjectCanvasNodeProjection,
-} from "./project-canvas-sidebar-projection"
+import { projectCanvasSidebarNodes, sameProjectCanvasNodeProjection } from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
 import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 import { ProjectHome } from "./project-home"
@@ -203,6 +202,7 @@ function App() {
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
   const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
   const [activeCanvasNodes, setActiveCanvasNodes] = useState<ProjectCanvasSidebarNodeProjection | null>(null)
+  const [projectCanvasFilteredKinds, setProjectCanvasFilteredKinds] = useState<ReadonlySet<string>>(() => new Set())
   const [sidebarNodeReveal, setSidebarNodeReveal] = useState<{
     canvasId: string
     nodeId: string
@@ -646,6 +646,9 @@ function App() {
     activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
       ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
       : undefined
+  useEffect(() => {
+    setProjectCanvasFilteredKinds(new Set())
+  }, [activeProjectId])
   const publishCanvasSelection = useCallback(
     (projection: CanvasSelectionProjection) => {
       if (
@@ -806,6 +809,23 @@ function App() {
     } satisfies ProjectCanvasSidebarNodeProjection
     setActiveCanvasNodes((previous) => (sameProjectCanvasNodeProjection(previous, next) ? previous : next))
   }, [])
+  const publishResolvedCanvasSidebarNodes = useCallback(
+    (next: ProjectCanvasSidebarNodeProjection) => {
+      const live = workbenchController.getSnapshot()
+      if (
+        live.projectId !== next.projectId ||
+        live.surface.kind !== "canvas" ||
+        live.surface.input.projectId !== next.projectId ||
+        live.surface.input.canvasId !== next.canvasId
+      ) {
+        return
+      }
+      setActiveCanvasNodes((previous) =>
+        previous?.projectId === next.projectId && previous.canvasId === next.canvasId ? previous : next,
+      )
+    },
+    [workbenchController],
+  )
   const loadProjectCanvasNodes = useCallback(
     async ({ canvasId, projectId }: { canvasId: string; projectId: string }) => {
       const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId: projectId })
@@ -1869,30 +1889,51 @@ function App() {
     [canvasViewRegistry],
   )
 
+  const activeProjectCanvasNodes =
+    activeCanvasId &&
+    activeCanvasNodes &&
+    activeCanvasNodes.projectId === activeProjectId &&
+    activeCanvasNodes.canvasId === activeCanvasId
+      ? activeCanvasNodes.nodes
+      : []
   const projectSidebar = activeProject ? (
     <ProjectSidebar
       className="w-full"
       controller={projectController}
       extension={{
+        actions: (
+          <ProjectCanvasSidebarTools
+            filteredKinds={projectCanvasFilteredKinds}
+            nodes={activeProjectCanvasNodes}
+            onFilteredKindsChange={setProjectCanvasFilteredKinds}
+          />
+        ),
         busy: projectCanvasSnapshot.busy || workbenchSnapshot.changingInput,
         content: ({ query }) => (
           <ProjectCanvasSidebar
             activeCanvasId={activeCanvasId ?? null}
             activeNodes={activeCanvasNodes}
             controller={projectCanvasController}
+            filteredKinds={projectCanvasFilteredKinds}
             loadNodes={loadProjectCanvasNodes}
             navigationBusy={workbenchSnapshot.changingInput}
             navigationError={workbenchSnapshot.error}
-            onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
             onClearNavigationError={() => workbenchController.clearError()}
-            onCreate={() => projectCanvasWorkbench.createCanvas(activeProject.id)}
-            onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
             onNodeActivate={activateProjectCanvasNode}
+            onNodesResolved={publishResolvedCanvasSidebarNodes}
             query={query}
           />
         ),
-        count: projectCanvasSnapshot.canvases.length,
         createLabel: "New canvas",
+        header: (
+          <ProjectCanvasSwitcher
+            activeCanvasId={activeCanvasId ?? null}
+            controller={projectCanvasController}
+            disabled={workbenchSnapshot.changingInput}
+            onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
+            onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
+          />
+        ),
         label: "Canvases",
         onCreate: () => void projectCanvasWorkbench.createCanvas(activeProject.id),
       }}

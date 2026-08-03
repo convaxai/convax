@@ -248,6 +248,17 @@ describe("Project Canvas Workbench coordination", () => {
     expect(workbench.getSnapshot().activeInput).toBeNull()
   })
 
+  test("creates a Canvas and immediately makes it the Workbench input", async () => {
+    const catalog = catalogHarness()
+    const workbench = new WorkbenchController()
+    workbench.setProject("project-one", projectCanvasInput("project-one", "canvas-one"))
+    const coordinator = new ProjectCanvasWorkbenchCoordinator(catalog.controller, workbench)
+
+    expect(await coordinator.createCanvas("project-one")).toEqual(canvas("canvas-created"))
+    expect(catalog.events).toEqual(["create:canvas-created"])
+    expect(workbench.getSnapshot().activeInput).toEqual(projectCanvasInput("project-one", "canvas-created"))
+  })
+
   test("rolls a created Canvas back when the Workbench cannot leave its current input", async () => {
     const catalog = catalogHarness()
     const workbench = new WorkbenchController({

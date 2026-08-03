@@ -50,10 +50,12 @@ export interface ProjectSidebarProps {
   className?: string
   controller: ProjectController
   extension?: {
+    actions?: ReactNode
     busy?: boolean
     content: ReactNode | ((context: { query: string }) => ReactNode)
     count?: number
     createLabel?: string
+    header?: ReactNode
     label: string
     onCreate?: () => void
   }
@@ -309,7 +311,7 @@ export function ProjectSidebar({
   }
 
   const sectionSplitBounds = getSectionSplitBounds(sectionsRef.current?.clientHeight ?? 0)
-  const bothSectionsExpanded = Boolean(displayedExtension) && filesExpanded && extensionExpanded
+  const bothSectionsExpanded = Boolean(displayedExtension) && filesExpanded && (workspaceTabs || extensionExpanded)
   const expandedSectionMinHeight = `min(${minimumExpandedSectionSize}px, calc((100% - ${sectionSplitterSize}px) / 2))`
 
   if ((hideWhenNoProject || embeddedFiles) && !activeProject) return null
@@ -692,31 +694,24 @@ export function ProjectSidebar({
                   }}
                 >
                   <div className="flex h-9 shrink-0 items-center gap-1 px-2.5">
-                    <button
-                      aria-expanded={extensionExpanded}
-                      className="flex min-w-0 flex-1 items-center gap-1 rounded-md px-1 py-1 text-left outline-none hover:bg-interactive-hover focus-visible:ring-2 focus-visible:ring-focus-ring/40"
-                      onClick={() => setExtensionExpanded((expanded) => !expanded)}
-                      type="button"
-                    >
-                      <ChevronRight
-                        className={cn(
-                          "size-4 shrink-0 text-text-tertiary transition-transform duration-150 motion-reduce:transition-none",
-                          extensionExpanded && "rotate-90",
+                    {displayedExtension.header ? (
+                      <div className="flex min-w-0 flex-1 items-center">{displayedExtension.header}</div>
+                    ) : (
+                      <div className="flex min-w-0 flex-1 items-center gap-1 px-1 py-1">
+                        <span className="truncate text-xs font-semibold text-text-secondary">Canvas</span>
+                        {displayedExtension.count === undefined ? null : (
+                          <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
+                            {displayedExtension.count}
+                          </span>
                         )}
-                      />
-                      <span className="truncate text-xs font-semibold text-text-secondary">Canvas</span>
-                      {displayedExtension.count === undefined ? null : (
-                        <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
-                          {displayedExtension.count}
-                        </span>
-                      )}
-                    </button>
+                      </div>
+                    )}
+                    {displayedExtension.actions}
                     <Tooltip content={searchLabel}>
                       <Button
                         aria-label={searchLabel}
                         aria-pressed={searchOpen}
                         onClick={() => {
-                          setExtensionExpanded(true)
                           if (searchOpen) setSearchQuery("")
                           setSearchOpen(!searchOpen)
                         }}
@@ -733,7 +728,6 @@ export function ProjectSidebar({
                           aria-label={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}
                           disabled={displayedExtension.busy}
                           onClick={() => {
-                            setExtensionExpanded(true)
                             displayedExtension.onCreate?.()
                           }}
                           size="icon-sm"
@@ -744,7 +738,7 @@ export function ProjectSidebar({
                       </Tooltip>
                     ) : null}
                   </div>
-                  {extensionExpanded && searchOpen ? (
+                  {searchOpen ? (
                     <div className="flex h-9 shrink-0 items-center px-2.5 pb-1">
                       <Input
                         aria-label={searchLabel}
@@ -765,7 +759,7 @@ export function ProjectSidebar({
                       />
                     </div>
                   ) : null}
-                  {extensionExpanded ? renderedExtensionContent : null}
+                  {renderedExtensionContent}
                 </section>
               ) : null}
 
@@ -850,7 +844,8 @@ export function ProjectSidebar({
                     <div className="flex h-9 shrink-0 items-center gap-1 px-2">
                       <button
                         aria-expanded={extensionExpanded}
-                        className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
+                        aria-label={`${extensionExpanded ? "Collapse" : "Expand"} ${displayedExtension.label}`}
+                        className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
                         onClick={() => setExtensionExpanded((expanded) => !expanded)}
                         type="button"
                       >
@@ -860,15 +855,26 @@ export function ProjectSidebar({
                             extensionExpanded && "rotate-90",
                           )}
                         />
-                        <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-                          {displayedExtension.label}
-                        </span>
-                        {displayedExtension.count === undefined ? null : (
-                          <span className="text-[10px] tabular-nums text-muted-foreground/70">
-                            {displayedExtension.count}
-                          </span>
-                        )}
                       </button>
+                      {displayedExtension.header ? (
+                        <div className="flex min-w-0 flex-1 items-center">{displayedExtension.header}</div>
+                      ) : (
+                        <button
+                          className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1 text-left outline-none hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-ring/30"
+                          onClick={() => setExtensionExpanded((expanded) => !expanded)}
+                          type="button"
+                        >
+                          <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                            {displayedExtension.label}
+                          </span>
+                          {displayedExtension.count === undefined ? null : (
+                            <span className="text-[10px] tabular-nums text-muted-foreground/70">
+                              {displayedExtension.count}
+                            </span>
+                          )}
+                        </button>
+                      )}
+                      {displayedExtension.actions}
                       {displayedExtension.onCreate ? (
                         <Tooltip content={displayedExtension.createLabel ?? `New ${displayedExtension.label}`}>
                           <Button

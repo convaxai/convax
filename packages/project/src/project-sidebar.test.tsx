@@ -235,7 +235,7 @@ describe("ProjectSidebar", () => {
     expect(markup).not.toContain("stale.md")
   })
 
-  test("offers the compact Project-over-Canvas hierarchy with independently collapsible sections", () => {
+  test("offers the compact Project-over-Canvas hierarchy without a redundant Canvas collapse control", () => {
     const markup = renderToStaticMarkup(
       <ProjectSidebar
         controller={
@@ -269,6 +269,8 @@ describe("ProjectSidebar", () => {
     expect(markup.indexOf(">Project<")).toBeLessThan(markup.indexOf(">Canvas<"))
     expect(markup).toContain('aria-expanded="true"')
     expect(markup).toContain('aria-label="Resize Project and Canvas sections"')
+    expect(markup).not.toContain('aria-label="Collapse Canvases"')
+    expect(markup).not.toContain('aria-label="Expand Canvases"')
     expect(markup).toContain('aria-valuenow="50"')
     expect(markup).toContain('aria-label="Open project folder"')
     expect(markup).toContain('aria-label="Add file or folder"')
@@ -279,7 +281,7 @@ describe("ProjectSidebar", () => {
     expect(markup).toContain('data-canvas-query=""')
   })
 
-  test("keeps the splitter and its half-and-half allocation across collapsed section states", async () => {
+  test("keeps the splitter allocation when the Project section is collapsed", async () => {
     const restoreWindow = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
@@ -327,11 +329,6 @@ describe("ProjectSidebar", () => {
         ),
       )
 
-      await act(async () =>
-        container
-          .querySelector<HTMLButtonElement>('[data-project-sidebar-section="canvas"] button[aria-expanded="true"]')
-          ?.click(),
-      )
       const projectRow = container.querySelector<HTMLElement>('[data-project-entry-path="Media"]')
       expect(projectRow?.className).toContain("h-7")
       expect(projectRow?.className).not.toContain("pl-4")
