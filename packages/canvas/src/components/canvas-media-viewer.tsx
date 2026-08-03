@@ -29,9 +29,9 @@ export function CanvasMediaViewer({
   const descriptionId = useId()
 
   useLayoutEffect(() => {
-    if (!open) return
+    if (!open) return undefined
     const dialog = dialogRef.current
-    if (!dialog) return
+    if (!dialog) return undefined
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
     if (!dialog.open) dialog.showModal()
     closeButtonRef.current?.focus({ preventScroll: true })
@@ -47,19 +47,24 @@ export function CanvasMediaViewer({
       aria-describedby={descriptionId}
       aria-labelledby={titleId}
       aria-modal="true"
-      className="fixed inset-0 m-0 size-full max-h-none max-w-none overflow-hidden bg-transparent p-4 text-white backdrop:bg-black/75"
+      className="fixed inset-0 m-0 flex size-full max-h-none max-w-none items-center justify-center overflow-hidden bg-black/55 p-6 text-white backdrop-blur-sm backdrop:bg-transparent"
       data-canvas-media-viewer-dialog=""
       onCancel={(event) => {
         event.preventDefault()
         onOpenChange(false)
       }}
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onOpenChange(false)
-      }}
       ref={dialogRef}
       role="dialog"
     >
-      <div className="relative flex size-full items-center justify-center overflow-hidden rounded-xl bg-black shadow-2xl">
+      <button
+        aria-label="Close full-screen viewer backdrop"
+        className="absolute inset-0 size-full cursor-default bg-transparent"
+        data-canvas-media-viewer-backdrop=""
+        onClick={() => onOpenChange(false)}
+        tabIndex={-1}
+        type="button"
+      />
+      <div className="relative z-10 flex max-h-full max-w-full items-center justify-center overflow-hidden rounded-xl bg-black/90 shadow-2xl">
         <h2 className="sr-only" id={titleId}>
           {label}
         </h2>
@@ -67,13 +72,13 @@ export function CanvasMediaViewer({
           Full-screen {kind} viewer. Press Escape or use the close button to return to the Canvas.
         </p>
         <div
-          className="relative flex size-full items-center justify-center overflow-hidden bg-black"
+          className="relative flex max-h-[calc(100vh-3rem)] max-w-[calc(100vw-3rem)] items-center justify-center overflow-hidden"
           data-canvas-media-viewer={kind}
         >
           {kind === "image" ? (
             <img
               alt={label}
-              className="max-h-full max-w-full object-contain"
+              className="block max-h-[calc(100vh-3rem)] max-w-[calc(100vw-3rem)] object-contain"
               decoding="async"
               draggable={false}
               height={height}
@@ -83,7 +88,7 @@ export function CanvasMediaViewer({
           ) : (
             <video
               aria-label={label}
-              className="size-full object-contain"
+              className="block max-h-[calc(100vh-3rem)] max-w-[calc(100vw-3rem)] object-contain"
               controls
               playsInline
               poster={posterUrl}
