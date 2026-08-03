@@ -3,6 +3,14 @@
 
 @source "./**/*.{ts,tsx}";
 
+@media (forced-colors: active) {
+  [data-ui-folder-glyph] > span {
+    border: 1px solid CanvasText;
+    background: Canvas !important;
+    box-shadow: none !important;
+  }
+}
+
 @layer base {
   *,
   *::before,

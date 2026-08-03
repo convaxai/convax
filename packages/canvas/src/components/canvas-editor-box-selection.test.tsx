@@ -81,6 +81,9 @@ mock.module("@convax/ui", () => ({
       {props.children}
     </button>
   ),
+  FolderGlyph: (props: { size?: string }) => (
+    <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: Passthrough,

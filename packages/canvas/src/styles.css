@@ -84,44 +84,40 @@
     transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="gray"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="gray"] {
   --canvas-group-color: oklch(0.69 0.018 255);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="brown"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="brown"] {
   --canvas-group-color: oklch(0.67 0.075 58);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="orange"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="orange"] {
   --canvas-group-color: oklch(0.78 0.13 60);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="yellow"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="yellow"] {
   --canvas-group-color: oklch(0.87 0.12 92);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="green"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="green"] {
   --canvas-group-color: oklch(0.74 0.115 146);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="blue"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="blue"] {
   --canvas-group-color: oklch(0.73 0.105 245);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="purple"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="purple"] {
   --canvas-group-color: oklch(0.72 0.11 305);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="pink"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="pink"] {
   --canvas-group-color: oklch(0.78 0.105 350);
 }
 
-.convax-canvas :where(.convax-group-folder, .convax-group-appearance-picker__color)[data-canvas-group-color="red"] {
+.convax-canvas .convax-group-folder[data-canvas-group-color="red"] {
   --canvas-group-color: oklch(0.71 0.135 27);
-}
-
-.convax-canvas .convax-group-appearance-picker__color[data-canvas-group-color="default"] {
-  --canvas-group-color: oklch(0.74 0.035 82);
 }
 
 .convax-canvas .convax-group-folder__back {
@@ -452,29 +448,6 @@
     transform var(--canvas-motion-press) var(--canvas-motion-ease-standard);
 }
 
-.convax-canvas .convax-group-appearance-picker__color > span {
-  position: relative;
-  display: block;
-  width: 26px;
-  height: 19px;
-  border-radius: 5px;
-  background: color-mix(in oklab, var(--canvas-group-color) 64%, var(--canvas-surface));
-  box-shadow:
-    inset 0 1px 0 rgb(255 255 255 / 34%),
-    0 3px 7px -5px rgb(0 0 0 / 65%);
-}
-
-.convax-canvas .convax-group-appearance-picker__color > span::before {
-  position: absolute;
-  top: -4px;
-  left: 3px;
-  width: 10px;
-  height: 6px;
-  border-radius: 3px 3px 0 0;
-  background: inherit;
-  content: "";
-}
-
 .convax-canvas .convax-group-appearance-picker__color.is-selected {
   background: var(--canvas-accent-soft);
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--canvas-accent) 38%, transparent);
@@ -576,8 +549,7 @@
   .convax-canvas .convax-group-folder__front,
   .convax-canvas .convax-group-folder__paper,
   .convax-canvas .convax-group-folder__emoji,
-  .convax-canvas .convax-group-appearance-picker,
-  .convax-canvas .convax-group-appearance-picker__color > span {
+  .convax-canvas .convax-group-appearance-picker {
     border: 1px solid CanvasText;
     background: Canvas;
     color: CanvasText;

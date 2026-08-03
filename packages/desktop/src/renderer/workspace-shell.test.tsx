@@ -122,6 +122,9 @@ describe("WorkspaceShell", () => {
 
   test("composes one Project entry, keeps the account menu in the sidebar, and removes titlebar search chrome", async () => {
     const indexSource = await Bun.file(new URL("./index.tsx", import.meta.url)).text()
+    const sidebarProjectionSource = await Bun.file(
+      new URL("./project-canvas-sidebar-projection.ts", import.meta.url),
+    ).text()
     const titlebarSource = await Bun.file(new URL("./application-titlebar.tsx", import.meta.url)).text()
 
     expect(indexSource.match(/<ProjectSidebarShell/g)?.length).toBe(1)
@@ -144,9 +147,10 @@ describe("WorkspaceShell", () => {
     expect(indexSource).toContain('productLabel={effectivePrimaryDesktopSurface === "workspace" ? "" : "Convax"}')
     expect(indexSource).toContain("onDocumentChange={publishActiveCanvasNodes}")
     expect(indexSource).toContain("onNodeActivate={activateProjectCanvasNode}")
-    expect(indexSource).toContain("projectCanvasSidebarNodePreview(node)")
-    expect(indexSource).toContain('node.data.kind === "image"')
-    expect(indexSource).toContain('previewType: "video" as const')
+    expect(indexSource).toContain("projectCanvasSidebarNodes(document)")
+    expect(sidebarProjectionSource).toContain("projectCanvasSidebarNodePreview(node)")
+    expect(sidebarProjectionSource).toContain('node.data.kind === "image"')
+    expect(sidebarProjectionSource).toContain('previewType: "video" as const')
     expect(indexSource).toContain('type: "nodes.reveal"')
     expect(titlebarSource).toContain('data-application-titlebar-leading=""')
     expect(titlebarSource).toContain('data-application-titlebar-center=""')

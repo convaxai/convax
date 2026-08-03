@@ -1,4 +1,4 @@
-import { cn } from "@convax/ui"
+import { cn, FolderGlyph } from "@convax/ui"
 import {
   type CSSProperties,
   type KeyboardEvent,
@@ -14,6 +14,7 @@ import {
   canvasGroupColorOptions,
   canvasGroupEmojiOptions,
   getCanvasGroupEmoji,
+  getCanvasGroupColorValue,
   type CanvasGroupAppearance,
 } from "../group-appearance"
 import { useCanvasOverlayRoot } from "../editor-context"
@@ -173,7 +174,7 @@ export function CanvasGroupAppearancePicker(props: {
               title={option.label}
               type="button"
             >
-              <span aria-hidden="true" />
+              <FolderGlyph color={getCanvasGroupColorValue(option.id)} />
             </button>
           ))}
         </div>

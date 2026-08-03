@@ -108,6 +108,23 @@ export const canvasGroupEmojiOptions = [
 export type CanvasGroupColor = (typeof canvasGroupColorOptions)[number]["id"]
 export type CanvasGroupEmoji = (typeof canvasGroupEmojiOptions)[number]["id"]
 
+const canvasGroupColorValues = {
+  blue: "oklch(0.73 0.105 245)",
+  brown: "oklch(0.67 0.075 58)",
+  default: "oklch(0.74 0.035 82)",
+  gray: "oklch(0.69 0.018 255)",
+  green: "oklch(0.74 0.115 146)",
+  orange: "oklch(0.78 0.13 60)",
+  pink: "oklch(0.78 0.105 350)",
+  purple: "oklch(0.72 0.11 305)",
+  red: "oklch(0.71 0.135 27)",
+  yellow: "oklch(0.87 0.12 92)",
+} as const satisfies Record<CanvasGroupColor, string>
+
+export function getCanvasGroupColorValue(color: CanvasGroupColor) {
+  return canvasGroupColorValues[color]
+}
+
 export interface CanvasGroupAppearance {
   color: CanvasGroupColor
   emoji: CanvasGroupEmoji

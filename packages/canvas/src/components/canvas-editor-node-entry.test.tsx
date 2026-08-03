@@ -39,6 +39,9 @@ void mock.module("@convax/ui", () => ({
     size?: string
     variant?: string
   }) => <button {...props}>{children}</button>,
+  FolderGlyph: (props: { size?: string }) => (
+    <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: ({ children, onSelect }: { children?: ReactNode; onSelect?: () => void }) => (

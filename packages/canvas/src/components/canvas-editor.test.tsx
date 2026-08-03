@@ -103,6 +103,9 @@ mock.module("@convax/ui", () => ({
     }
     return <button>{props.children}</button>
   },
+  FolderGlyph: (props: { size?: string }) => (
+    <span data-ui-folder-glyph="" data-ui-folder-glyph-size={props.size ?? "picker"} />
+  ),
   ContextMenu: Passthrough,
   ContextMenuContent: Passthrough,
   ContextMenuItem: (props: { children?: ReactNode; onSelect?: () => void }) => {
@@ -364,7 +367,7 @@ describe("CanvasEditor group folder projection", () => {
         singleGroupFolded: false,
         singleGroupFoldUnsupported: false,
       }),
-    ).toEqual({ canFold: true, canGroup: true, canUngroup: false, canUnfold: false })
+    ).toEqual({ canArrangeChildren: false, canFold: true, canGroup: true, canUngroup: false, canUnfold: false })
     expect(
       resolveCanvasGroupMenuCapabilities({
         canGroupSelection: false,
@@ -372,7 +375,7 @@ describe("CanvasEditor group folder projection", () => {
         singleGroupFolded: false,
         singleGroupFoldUnsupported: false,
       }),
-    ).toEqual({ canFold: true, canGroup: false, canUngroup: true, canUnfold: false })
+    ).toEqual({ canArrangeChildren: true, canFold: true, canGroup: false, canUngroup: true, canUnfold: false })
     expect(
       resolveCanvasGroupMenuCapabilities({
         canGroupSelection: false,
@@ -380,7 +383,7 @@ describe("CanvasEditor group folder projection", () => {
         singleGroupFolded: true,
         singleGroupFoldUnsupported: false,
       }),
-    ).toEqual({ canFold: false, canGroup: false, canUngroup: false, canUnfold: true })
+    ).toEqual({ canArrangeChildren: false, canFold: false, canGroup: false, canUngroup: false, canUnfold: true })
     expect(
       resolveCanvasGroupMenuCapabilities({
         canGroupSelection: false,
@@ -388,7 +391,7 @@ describe("CanvasEditor group folder projection", () => {
         singleGroupFolded: false,
         singleGroupFoldUnsupported: false,
       }),
-    ).toEqual({ canFold: false, canGroup: false, canUngroup: false, canUnfold: false })
+    ).toEqual({ canArrangeChildren: false, canFold: false, canGroup: false, canUngroup: false, canUnfold: false })
   })
 
   test("renders root groups as fixed folders while hiding descendants and cross-scope edges", () => {
