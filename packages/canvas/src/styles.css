@@ -752,7 +752,7 @@
 .convax-canvas .convax-node__surface--media {
   border-width: 0;
   border-radius: var(--canvas-media-radius);
-  background: transparent;
+  background: var(--canvas-node-background);
 }
 
 .convax-canvas .convax-node__surface--video {
