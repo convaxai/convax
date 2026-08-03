@@ -87,6 +87,9 @@ contract and its routed references.
 - Project-directory browsing reuses the Project Files listing capability as a
   transient, bounded, read-only Canvas projection. It never creates persisted Canvas
   entries or a second filesystem bridge.
+- Only typed Project resources staged as generation inputs may retain a bounded,
+  stable `.convax/staging` hard-link alias. Plugin outputs, executable snapshots,
+  and every other native copy retain the single-link requirement.
 - Treat standalone Skills, Plugin-owned Skills, Web entries, OpenCode Hooks, Agent
   MCP contributions, Tool companions, Host API calls, and inter-Plugin capabilities
   as distinct surfaces. One never grants another's authority.

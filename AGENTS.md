@@ -199,6 +199,10 @@ user directory.
 - File publication and Canvas mutation are not one transaction. Publish without
   clobbering first; if Canvas commit fails, retain the file and report partial
   success rather than inventing a cross-file WAL.
+- Generation input staging may accept an already validated Project resource while
+  `.convax/staging` retains an unchanged positive hard-link count. Executable
+  snapshots, sidecar outputs, and every other native copy remain single-link; any
+  identity, count, size, timestamp, or real-path drift fails closed.
 - `convax.plugin/8`, `convax.package/2`, and `convax.plugin-capability/3` are the only
   admitted runtime formats. Additive Host APIs evolve through the independent
   `@convax/plugin-api` SemVer Catalog, not another manifest or transport version.

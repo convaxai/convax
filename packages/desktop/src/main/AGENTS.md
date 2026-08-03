@@ -143,6 +143,10 @@ For any matching change, read the full routed reference before planning or editi
 - Generated files publish without clobbering under the Project before Canvas commit.
   Preserve files on partial success. Pending nodes, node run state, target guards,
   and legal transitions go through Canvas business services.
+- Generation input staging may accept a multiply-linked source only after the typed
+  Project resource port validates it and only while its positive link count and
+  complete native snapshot stay unchanged. Every other stable-copy caller remains
+  single-link.
 - Keep host `operationId` and downstream `taskId` distinct. Without the complete
   admitted recovery contract, restart marks orphaned active runs failed and
   never repeats a potentially billable call.
