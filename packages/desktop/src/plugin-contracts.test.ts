@@ -10,7 +10,7 @@ function manifest(overrides: Record<string, unknown> = {}) {
     },
     description: "Desktop adapter fixture",
     entry: "web/index.html",
-    hostApi: { major: 2, optional: [], required: ["host.context.get"] },
+    hostApi: { major: 3, optional: [], required: ["host.context.get"] },
     id: "desktop-adapter",
     name: "Desktop Adapter",
     schema: "convax.plugin/8",
@@ -24,7 +24,7 @@ describe("Desktop Plugin contract adapter", () => {
     const parsed = parseWebPluginManifest(
       manifest({
         hostApi: {
-          major: 2,
+          major: 3,
           optional: ["future.timeline.inspect"],
           required: ["host.context.get"],
         },
@@ -52,7 +52,7 @@ describe("Desktop Plugin contract adapter", () => {
     expect(() =>
       parseWebPluginManifest({
         ...manifest(),
-        hostApi: { major: 2, optional: [], required: [] },
+        hostApi: { major: 3, optional: [], required: [] },
       }),
     ).toThrow("must require host.context.get")
   })
@@ -91,7 +91,7 @@ describe("Desktop Plugin contract adapter", () => {
         },
       },
       description: "Generic immediate image operation",
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
       id: "image-operation-fixture",
       name: "Image Operation Fixture",
       runtime: { command: "image-operation-mcp", type: "mcp-stdio" },

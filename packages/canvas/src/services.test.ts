@@ -16,13 +16,13 @@ import {
 } from "./services"
 
 describe("Canvas text draft services", () => {
-  test("keeps typed conflict revisions host-neutral", () => {
+  test("keeps typed file-content conflict tokens host-neutral", () => {
     const error = new CanvasTextResourceConflictError("before", "after")
 
     expect(error.name).toBe("CanvasTextResourceConflictError")
     expect(error.message).toMatch(/changed outside Convax/i)
-    expect(error.expectedRevision).toBe("before")
-    expect(error.actualRevision).toBe("after")
+    expect(error.expectedContentRevision).toBe("before")
+    expect(error.actualContentRevision).toBe("after")
   })
 
   test("awaits every pending draft save before allowing departure", async () => {
@@ -194,7 +194,7 @@ describe("Canvas generation services", () => {
         ],
         toolId,
       }),
-      generate: async () => ({ createdNodeIds: [], revision: 1, toolId: "tools/image", warnings: [] }),
+      generate: async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }),
       listTools: async () => [],
     }
 

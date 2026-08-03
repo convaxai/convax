@@ -1,324 +1,86 @@
-import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createTextNode as createCanvasTextNode } from "../document"
-import type { CanvasDocumentRepository, CanvasDocumentSaveRequest, CanvasDocumentSnapshot } from "./persistence"
+import { describe, expect, mock, test } from "bun:test"
+import { createCanvasDocument } from "../document"
+import { parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
+import type { BoundedOperationReceiptV2 } from "../collaboration"
 import {
   CanvasApplicationService,
-  CanvasCommandIdConflictError,
-  CanvasTransactionIdConflictError,
   type CanvasApplicationCommandRequest,
+  type CanvasCollaborationApplicationPort,
 } from "./service"
 
-function createTextNode(
-  input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
-    text?: string
-  },
-) {
-  const { text, ...nodeInput } = input
-  return createCanvasTextNode({
-    ...nodeInput,
-    metadata: {},
-    resourceState: { status: "ready", ...(text === undefined ? {} : { text }) },
-  })
+const receipt: BoundedOperationReceiptV2 = {
+  format: "convax.canvas-operation-receipt/2",
+  actorId: parseActorIdV2("A".repeat(43)),
+  operationId: parseId128V2("A".repeat(22)),
+  intentDigest: parseDigestV2("d".repeat(64)),
+  baseFrontierDigest: parseDigestV2("e".repeat(64)),
+  intentKind: "canvas.nodes.set-geometry/2",
+  resultEntities: [],
+  semanticRoot: true,
+  historyMaterialDigest: parseDigestV2("f".repeat(64)),
 }
 
-describe("canvas application service", () => {
-  test("loads, executes, and compare-and-swap saves one business command", async () => {
-    let snapshot: CanvasDocumentSnapshot = {
-      document: createCanvasDocument({
-        id: "canvas-main",
-        nodes: [
-          createTextNode({
-            id: "first",
-            position: { x: 0, y: 0 },
-            text: "Launch brief",
-          }),
-        ],
-      }),
-      storageVersion: "v1",
-    }
-    const saves: CanvasDocumentSaveRequest[] = []
-    const repository: CanvasDocumentRepository = {
-      async load() {
-        return snapshot
-      },
-      async save(request) {
-        saves.push(request)
-        snapshot = { document: request.document, storageVersion: "v2" }
-        return { storageVersion: "v2" }
-      },
-    }
+function request(signal?: AbortSignal): CanvasApplicationCommandRequest {
+  return {
+    canvasId: "canvas",
+    scopeId: "project",
+    envelope: {
+      actor: { id: "agent", kind: "agent" },
+      command: { type: "nodes.setGeometry", updates: [{ nodeId: "node", position: { x: 1, y: 2 } }] },
+      commandId: "correlation-only",
+    },
+    ...(signal ? { signal } : {}),
+  }
+}
+
+describe("Canvas application collaboration facade", () => {
+  test("delegates mutation/query to the sole collaboration application and emits a receipt", async () => {
+    const document = createCanvasDocument({ id: "canvas" })
+    const submit = mock(async () => ({
+      affectedNodeIds: [],
+      changed: true,
+      createdNodeIds: [],
+      document,
+      operationReceipt: receipt,
+      warnings: [],
+    }))
+    const query = mock(async () => ({ nodes: [], projection: document }))
     const commits: unknown[] = []
-    const service = new CanvasApplicationService(repository, {
+    const port: CanvasCollaborationApplicationPort = { query, submit }
+    const service = new CanvasApplicationService(port, {
       onDidCommit(event) {
         commits.push(event)
-        throw new Error("observer failure must not change persistence")
+        throw new Error("observer failure is isolated")
       },
     })
-    const request: CanvasApplicationCommandRequest = {
-      canvasId: "canvas-main",
-      scopeId: "project_one",
-      envelope: {
-        actor: { id: "agent_one", kind: "agent" },
-        command: { type: "nodes.move", delta: { x: 20, y: 10 }, nodeIds: ["first"] },
-        commandId: "move_first",
-        expectedRevision: 0,
-      },
-    }
-    const result = await service.execute(request)
+    const command = request()
 
-    expect(result.document).toMatchObject({ revision: 1, nodes: [{ id: "first", position: { x: 20, y: 10 } }] })
-    expect(result.storageVersion).toBe("v2")
-    expect(commits).toEqual([
-      {
-        actor: { id: "agent_one", kind: "agent" },
-        canvasId: "canvas-main",
-        revision: 1,
-        scopeId: "project_one",
-        storageVersion: "v2",
-      },
-    ])
-    expect(saves[0]?.expectedStorageVersion).toBe("v1")
-    expect(await service.execute(request)).toBe(result)
-    expect(saves).toHaveLength(1)
-    await expect(
-      service.execute({
-        ...request,
-        envelope: {
-          ...request.envelope,
-          command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["first"] },
-        },
-      }),
-    ).rejects.toBeInstanceOf(CanvasCommandIdConflictError)
-    expect(
-      (await service.query({ canvasId: "canvas-main", scopeId: "project_one" }, { text: "launch" })).nodes.map(
-        (node) => node.id,
-      ),
-    ).toEqual(["first"])
+    await expect(service.execute(command)).resolves.toMatchObject({ operationReceipt: receipt })
+    expect(submit).toHaveBeenCalledWith(command)
+    expect(commits).toEqual([{
+      actor: { id: "agent", kind: "agent" },
+      canvasId: "canvas",
+      operationReceipt: receipt,
+      scopeId: "project",
+    }])
+    await expect(service.query({ canvasId: "canvas", scopeId: "project" })).resolves.toEqual({
+      nodes: [],
+      projection: document,
+    })
+    expect(query).toHaveBeenCalledTimes(1)
   })
 
-  test("runs a host-neutral final guard immediately before persistence", async () => {
-    const order: string[] = []
-    const document = createCanvasDocument({
-      id: "canvas-guarded",
-      nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 } })],
-    })
-    const service = new CanvasApplicationService({
-      async load() {
-        order.push("load")
-        return { document, storageVersion: "v1" }
-      },
-      async save() {
-        order.push("save")
-        return { storageVersion: "v2" }
-      },
-    })
-
-    await service.execute({
-      beforeCommit: async () => {
-        order.push("guard")
-      },
-      canvasId: document.id,
-      envelope: {
-        actor: { id: "plugin-one", kind: "plugin" },
-        command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["first"] },
-        commandId: "guarded-move",
-        expectedRevision: document.revision,
-      },
-      scopeId: "project-one",
-    })
-
-    expect(order).toEqual(["load", "guard", "save"])
-  })
-
-  test("applies a transaction in order with one revision, one CAS save, and transaction idempotency", async () => {
-    let loads = 0
-    let snapshot: CanvasDocumentSnapshot = {
-      document: createCanvasDocument({
-        id: "canvas-transaction",
-        nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 } })],
+  test("does not call Main after caller cancellation", async () => {
+    const port: CanvasCollaborationApplicationPort = {
+      query: mock(async () => ({ nodes: [], projection: createCanvasDocument({ id: "canvas" }) })),
+      submit: mock(async () => {
+        throw new Error("must not run")
       }),
-      storageVersion: "v1",
     }
-    const saves: CanvasDocumentSaveRequest[] = []
-    const repository: CanvasDocumentRepository = {
-      async load() {
-        loads += 1
-        return snapshot
-      },
-      async save(request) {
-        saves.push(request)
-        snapshot = { document: request.document, storageVersion: "v2" }
-        return { storageVersion: "v2" }
-      },
-    }
-    const service = new CanvasApplicationService(repository)
-    const request = {
-      canvasId: "canvas-transaction",
-      scopeId: "project_one",
-      envelope: {
-        actor: { id: "plugin_one", kind: "plugin" },
-        commands: [
-          { type: "nodes.move" as const, delta: { x: 20, y: 10 }, nodeIds: ["first"] },
-          { type: "nodes.move" as const, delta: { x: 5, y: -2 }, nodeIds: ["first"] },
-          {
-            type: "nodes.setGeometry" as const,
-            updates: [{ nodeId: "first", position: { x: 80, y: 90 }, size: { height: 240, width: 360 } }],
-          },
-        ],
-        expectedRevision: 0,
-        transactionId: "transaction_one",
-      },
-    }
-
-    const result = await service.executeTransaction(request)
-
-    expect(result.document).toMatchObject({
-      revision: 1,
-      nodes: [{ id: "first", position: { x: 80, y: 90 }, style: { height: 240, width: 360 } }],
-    })
-    expect(saves).toHaveLength(1)
-    expect(saves[0]?.expectedStorageVersion).toBe("v1")
-    expect(await service.executeTransaction(request)).toBe(result)
-    expect(loads).toBe(1)
-    await expect(
-      service.executeTransaction({
-        ...request,
-        envelope: {
-          ...request.envelope,
-          commands: [{ type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["first"] }],
-        },
-      }),
-    ).rejects.toBeInstanceOf(CanvasTransactionIdConflictError)
-    expect(saves).toHaveLength(1)
-  })
-
-  test("does not save a partially applied transaction when a later command fails", async () => {
-    const document = createCanvasDocument({
-      id: "canvas-atomic",
-      nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 } })],
-    })
-    let saves = 0
-    const service = new CanvasApplicationService({
-      async load() {
-        return { document, storageVersion: "v1" }
-      },
-      async save() {
-        saves += 1
-        return { storageVersion: "v2" }
-      },
-    })
-
-    await expect(
-      service.executeTransaction({
-        canvasId: document.id,
-        scopeId: "project_one",
-        envelope: {
-          actor: { id: "plugin_one", kind: "plugin" },
-          commands: [
-            { type: "nodes.move", delta: { x: 20, y: 10 }, nodeIds: ["first"] },
-            { type: "nodes.setGeometry", updates: [{ nodeId: "missing", position: { x: 0, y: 0 } }] },
-          ],
-          expectedRevision: 0,
-          transactionId: "transaction_failure",
-        },
-      }),
-    ).rejects.toThrow("was not found")
-    expect(saves).toBe(0)
-    expect(document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
-  })
-
-  test.each(["command", "transaction"] as const)(
-    "does not save a %s canceled while its document is loading",
-    async (kind) => {
-      const document = createCanvasDocument({
-        id: `canvas-canceled-${kind}`,
-        nodes: [createTextNode({ id: "first", position: { x: 0, y: 0 } })],
-      })
-      let releaseLoad!: (snapshot: CanvasDocumentSnapshot) => void
-      const loadStarted = Promise.withResolvers<void>()
-      const loadResult = new Promise<CanvasDocumentSnapshot>((resolve) => {
-        releaseLoad = resolve
-      })
-      let saves = 0
-      const service = new CanvasApplicationService({
-        async load() {
-          loadStarted.resolve()
-          return loadResult
-        },
-        async save() {
-          saves += 1
-          return { storageVersion: "v2" }
-        },
-      })
-      const controller = new AbortController()
-      const cancellation = new DOMException("Caller stopped", "AbortError")
-      const operation =
-        kind === "command"
-          ? service.execute({
-              canvasId: document.id,
-              envelope: {
-                actor: { id: "agent_one", kind: "agent" },
-                command: { type: "nodes.move", delta: { x: 20, y: 10 }, nodeIds: ["first"] },
-                commandId: "canceled_command",
-                expectedRevision: 0,
-              },
-              scopeId: "project_one",
-              signal: controller.signal,
-            })
-          : service.executeTransaction({
-              canvasId: document.id,
-              envelope: {
-                actor: { id: "plugin_one", kind: "plugin" },
-                commands: [{ type: "nodes.move", delta: { x: 20, y: 10 }, nodeIds: ["first"] }],
-                expectedRevision: 0,
-                transactionId: "canceled_transaction",
-              },
-              scopeId: "project_one",
-              signal: controller.signal,
-            })
-
-      await loadStarted.promise
-      controller.abort(cancellation)
-      releaseLoad({ document, storageVersion: "v1" })
-
-      await expect(operation).rejects.toBe(cancellation)
-      expect(saves).toBe(0)
-      expect(document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
-    },
-  )
-
-  test("bounds retained idempotency documents by serialized size", async () => {
-    let loads = 0
-    const document = createCanvasDocument({
-      id: "canvas-large-replay",
-      nodes: [createTextNode({ id: "large", position: { x: 0, y: 0 }, text: "x".repeat(1024 * 1024) })],
-    })
-    const service = new CanvasApplicationService({
-      async load() {
-        loads += 1
-        return { document: structuredClone(document), storageVersion: "v1" }
-      },
-      async save() {
-        throw new Error("A no-op transaction must not save")
-      },
-    })
-    const transaction = (transactionId: string) =>
-      service.executeTransaction({
-        canvasId: document.id,
-        scopeId: "project_one",
-        envelope: {
-          actor: { id: "plugin_one", kind: "plugin" },
-          commands: [],
-          expectedRevision: 0,
-          transactionId,
-        },
-      })
-
-    for (let index = 0; index < 6; index += 1) await transaction(`transaction_${index}`)
-    expect(loads).toBe(6)
-    await transaction("transaction_5")
-    expect(loads).toBe(6)
-    await transaction("transaction_0")
-    expect(loads).toBe(7)
+    const controller = new AbortController()
+    const reason = new DOMException("cancelled", "AbortError")
+    controller.abort(reason)
+    await expect(new CanvasApplicationService(port).execute(request(controller.signal))).rejects.toBe(reason)
+    expect(port.submit).not.toHaveBeenCalled()
   })
 })

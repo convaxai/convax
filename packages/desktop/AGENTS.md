@@ -59,6 +59,10 @@ contract and its routed references.
   Electron and Node built-ins may remain external, the ASAR must not contain or
   depend on `node_modules`, and Main stays CommonJS so Electron Vite cannot inject
   its ESM compatibility shim into dependency-bundled source strings.
+- Main also composes the PeerJS data plane, its independently bound channels,
+  OS-vault identity keys, Project-scoped writer coordination, and typed ports to
+  collaboration, Project, Canvas, and control-plane owners. Peer or service arrival
+  order never becomes edit order.
 
 ## Shared composition rules
 
@@ -76,10 +80,28 @@ contract and its routed references.
   Preload never receive or choose the default native creation path.
 - Workbench owns generic resize/collapse transactions. Desktop owns concrete pixels,
   viewport constraints, pointer/keyboard wiring, animation, and browser persistence.
-- Main's Canvas application service is authoritative. Renderer submits
-  revision-bound commands and reloads after invalidation; it never saves a whole
-  document, arbitrates Main mutations, or turns projection failure into domain
-  failure.
+- Main's Canvas application service is authoritative. Renderer submits closed
+  typed intents and reloads after invalidation; it never saves a complete snapshot,
+  sends raw Yjs updates, arbitrates Main mutations, or turns projection failure into
+  domain failure.
+- Each Main mutation uses an isolated candidate Y.Doc against the latest replica
+  state and crosses the collaboration object's outbox/journal/head durability
+  barrier exactly once before publication. Each offline/local commit is the final long-lived-replica-signed causal frame.
+  Reconnect transmits the same bytes and never replays, renumbers, or re-signs the
+  business intent.
+- Checkpoint pruning requires both content certification and exact all-active-editor causal-floor
+  ACK coverage for the bound membership snapshot. Missing either gate retains
+  history without blocking ordinary edits or replication.
+- ProjectIndexYDoc is the sole Canvas route, tombstone, shardEpoch, and current
+  Project-entry authority. Per-Canvas Y.Docs own Canvas state. Desktop must not
+  reconstruct a JSON catalog, global revision counter, or renderer document store
+  as a parallel authority.
+- React Flow projection, measurements, selection, viewport, and gesture previews
+  remain transient Canvas-owned view state. Desktop supplies shell and adapters,
+  not a competing document store.
+- Collaboration v10 composition must load the selected frozen R5 authority and fail
+  closed on missing or mismatched identity-chain members. Older drafts, receipts,
+  code, or portable JSON bytes are evidence only and never runtime fallback.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
 - Card conversations infer only direct incoming file nodes. Image/video replacement

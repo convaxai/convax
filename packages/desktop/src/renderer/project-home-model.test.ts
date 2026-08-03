@@ -26,6 +26,7 @@ function snapshot(input: Partial<ProjectControllerSnapshot> = {}): ProjectContro
     initialized: true,
     projects: [],
     ...input,
+    pendingRecoveryProjectId: input.pendingRecoveryProjectId ?? null,
   }
 }
 
@@ -78,6 +79,21 @@ describe("Project startup routing", () => {
       resolveProjectStartup(
         snapshot({ projects: [project("missing", { missing: true })] }),
       ),
+    ).toEqual({ kind: "recovery", reason: "projects-unavailable" })
+  })
+
+  test("keeps an explicit reset candidate out of automatic workspace restore", () => {
+    const legacy = project("legacy", {
+      recovery: {
+        legacyPaths: [".convax/canvases/catalog.json"],
+        status: "unsupported-portable-project-version",
+      },
+    })
+    expect(
+      resolveProjectStartup(snapshot({
+        pendingRecoveryProjectId: legacy.id,
+        projects: [legacy],
+      })),
     ).toEqual({ kind: "recovery", reason: "projects-unavailable" })
   })
 

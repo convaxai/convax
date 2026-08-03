@@ -15,7 +15,6 @@ afterEach(async () => {
 })
 
 const request: CanvasExternalMediaDragRequest = {
-  expectedRevision: 4,
   nodeIds: ["one", "two"],
   ref: { canvasId: "canvas-1", scopeId: "project-1" },
 }

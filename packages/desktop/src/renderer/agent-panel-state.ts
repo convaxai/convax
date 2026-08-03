@@ -23,7 +23,7 @@ export interface AgentCompactStatusInput {
   failed?: boolean
   interaction?: "permission" | "question"
   /**
-   * Reserved for a revision-safe review capability. A completed response alone
+   * Reserved for a provenance-safe review capability. A completed response alone
    * must never be presented as pending changes.
    */
   pendingChanges?: boolean

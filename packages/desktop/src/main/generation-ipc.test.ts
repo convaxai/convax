@@ -73,7 +73,6 @@ afterEach(() => {
 
 const request: GenerationCanvasRequest = {
   anchor: { x: 40, y: -20 },
-  expectedRevision: 4,
   operationId: "generation-1",
   output: "image",
   prompt: "Draw a quiet harbor at dawn",
@@ -84,10 +83,16 @@ const request: GenerationCanvasRequest = {
 
 const result: GenerationCanvasResult = {
   createdNodeIds: ["generated_1"],
-  revision: 5,
+  operationReceipt: null,
+  projection: { id: "canvas_1", metadata: { title: "Main" }, nodes: [], edges: [] },
   toolId: "example-plugin/generate_image",
   warnings: [],
 }
+
+const replacementGuard = Object.freeze({
+  data: Object.freeze({ kind: "image", label: "Owner", metadata: Object.freeze({}) }),
+  type: "file" as const,
+})
 
 const tool: GenerationToolSummary = {
   acceptedInputs: ["reference_image"],
@@ -144,7 +149,12 @@ async function rejectionMessage(value: unknown) {
 describe("generation IPC", () => {
   test("reconciles one exact Canvas reference without exposing paths or resume controls", async () => {
     const { generationIpcChannels, registerGenerationIpc } = await import("./generation-ipc")
-    const reconcileCanvas = mock(async () => ({ failedNodeIds: ["node-one"], revision: 8 }))
+    const reconcileResult = {
+      failedNodeIds: ["node-one"],
+      operationReceipt: null,
+      projection: { id: "canvas-one", metadata: { title: "Main" }, nodes: [], edges: [] },
+    }
+    const reconcileCanvas = mock(async () => reconcileResult)
     const dispose = registerGenerationIpc(
       {
         describeTool: async () => description,
@@ -161,7 +171,7 @@ describe("generation IPC", () => {
           ref: { canvasId: "canvas-one", scopeId: "project-one" },
         }),
       ),
-    ).resolves.toEqual({ failedNodeIds: ["node-one"], revision: 8 })
+    ).resolves.toEqual(reconcileResult)
     expect(reconcileCanvas).toHaveBeenCalledWith({ ref: { canvasId: "canvas-one", scopeId: "project-one" } })
     await expect(
       rejectionMessage(
@@ -330,7 +340,7 @@ describe("generation IPC", () => {
     )
     const configured = {
       ...request,
-      resultMode: { nodeId: "owner-card", type: "replace-node" as const },
+      resultMode: { expectedTarget: replacementGuard, nodeId: "owner-card", type: "replace-node" as const },
       toolInput: { enabled: true, quality: "high", seed: 42 },
     }
 
@@ -478,12 +488,12 @@ describe("generation IPC", () => {
         "duplicate node and role",
       ],
       [{ ...request, anchor: { x: Number.POSITIVE_INFINITY, y: 0 } }, "anchor is invalid"],
-      [{ ...request, expectedRevision: -1 }, "expected revision is invalid"],
       [{ ...request, expectedOutputCount: 0 }, "expected output count is invalid"],
       [{ ...request, expectedOutputCount: 17 }, "expected output count is invalid"],
       [{ ...request, expectedOutputCount: 1.5 }, "expected output count is invalid"],
       [{ ...request, resultMode: { type: "replace-node" } }, "result mode is invalid"],
-      [{ ...request, resultMode: { nodeId: "/native/path", type: "replace-node" } }, "replacement node id is invalid"],
+      [{ ...request, resultMode: { expectedTarget: replacementGuard, nodeId: "/native/path", type: "replace-node" } }, "replacement node id is invalid"],
+      [{ ...request, resultMode: { expectedTarget: { type: "file", data: { kind: "image" } }, nodeId: "owner", type: "replace-node" } }, "replacement target data is invalid"],
       [{ ...request, resultMode: { nodeId: "extra", type: "add" } }, "result mode is invalid"],
       [
         { ...request, resultMode: { nodeId: "caller-selected", type: "create-pending-node" } },

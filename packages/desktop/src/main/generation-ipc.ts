@@ -1,4 +1,5 @@
 import { ipcMain, type IpcMainEvent, type IpcMainInvokeEvent, type WebContents } from "electron"
+import type { CanvasGenerationTargetGuard } from "@convax/canvas/application"
 
 import {
   generationIpcChannels,
@@ -123,13 +124,65 @@ function requireResultMode(value: unknown): GenerationResultMode {
     return { type: "return" }
   }
   if (mode.type === "replace-node") {
-    requireExactKeys(mode, ["nodeId", "type"], ["nodeId", "type"], "Generation result mode")
+    requireExactKeys(mode, ["expectedTarget", "nodeId", "type"], ["expectedTarget", "nodeId", "type"], "Generation result mode")
     return {
+      expectedTarget: requireGenerationTargetGuard(mode.expectedTarget),
       nodeId: requireOpaqueId(mode.nodeId, "Generation replacement node id"),
       type: "replace-node",
     }
   }
   throw new Error("Generation result mode is invalid")
+}
+
+function requireGenerationTargetGuard(value: unknown): CanvasGenerationTargetGuard {
+  const guard = requireRecord(value, "Generation replacement target guard")
+  requireExactKeys(guard, ["data", "type"], ["data", "type"], "Generation replacement target guard")
+  if (guard.type !== "file" && guard.type !== "agent") {
+    throw new Error("Generation replacement target type is invalid")
+  }
+  const budget = { nodes: 0 }
+  const data = cloneBoundedJson(guard.data, 1, budget, "Generation replacement target data")
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    throw new Error("Generation replacement target data is invalid")
+  }
+  const dataRecord = data as Record<string, unknown>
+  if (
+    typeof dataRecord.kind !== "string" || !dataRecord.kind || dataRecord.kind.length > 256 ||
+    typeof dataRecord.label !== "string" || dataRecord.label.length > 4_096
+  ) throw new Error("Generation replacement target data is invalid")
+  if (new TextEncoder().encode(JSON.stringify(data)).byteLength > 256 * 1024) {
+    throw new Error("Generation replacement target data is invalid")
+  }
+  return { data: dataRecord as CanvasGenerationTargetGuard["data"], type: guard.type }
+}
+
+function cloneBoundedJson(
+  value: unknown,
+  depth: number,
+  budget: { nodes: number },
+  label: string,
+): null | boolean | number | string | readonly unknown[] | Record<string, unknown> {
+  if (depth > 32 || ++budget.nodes > 4_096) throw new Error(`${label} is invalid`)
+  if (value === null || typeof value === "boolean") return value
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) throw new Error(`${label} is invalid`)
+    return value
+  }
+  if (typeof value === "string") {
+    if (new TextEncoder().encode(value).byteLength > 64 * 1024) throw new Error(`${label} is invalid`)
+    return value
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 1_024) throw new Error(`${label} is invalid`)
+    return value.map((item) => cloneBoundedJson(item, depth + 1, budget, label))
+  }
+  const input = requireRecord(value, label)
+  const entries = Object.entries(input)
+  if (entries.length > 256) throw new Error(`${label} is invalid`)
+  return Object.fromEntries(entries.map(([key, item]) => {
+    if (!key || new TextEncoder().encode(key).byteLength > 1_024) throw new Error(`${label} is invalid`)
+    return [key, cloneBoundedJson(item, depth + 1, budget, label)]
+  }))
 }
 
 export function parseGenerationListToolsRequest(input: unknown): GenerationListToolsRequest {
@@ -174,7 +227,6 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     [
       "anchor",
       "expectedOutputCount",
-      "expectedRevision",
       "operationId",
       "output",
       "parentId",
@@ -188,17 +240,13 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
       "toolId",
       "toolInput",
     ],
-    ["anchor", "expectedRevision", "operationId", "prompt", "ref", "references"],
+    ["anchor", "operationId", "prompt", "ref", "references"],
     "Generation request",
   )
 
   const operationId = requireOperationId({ operationId: value.operationId })
   const ref = requireRecord(value.ref, "Generation Canvas reference")
   requireExactKeys(ref, ["canvasId", "scopeId"], ["canvasId", "scopeId"], "Generation Canvas reference")
-  const expectedRevision = value.expectedRevision
-  if (typeof expectedRevision !== "number" || !Number.isSafeInteger(expectedRevision) || expectedRevision < 0) {
-    throw new Error("Generation expected revision is invalid")
-  }
   const expectedOutputCount = value.expectedOutputCount
   if (
     expectedOutputCount !== undefined &&
@@ -294,7 +342,6 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
   return {
     anchor: { x: anchor.x, y: anchor.y },
     ...(expectedOutputCount === undefined ? {} : { expectedOutputCount }),
-    expectedRevision,
     operationId,
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
     ...(value.parentId === undefined

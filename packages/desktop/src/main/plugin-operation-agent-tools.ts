@@ -15,7 +15,6 @@ import { validateGenerationToolInputShape } from "./generation-tool-input-schema
 
 export interface PluginOperationAgentActiveCanvas {
   canvasId: string
-  revision: number
   scopeId: string
 }
 
@@ -72,7 +71,6 @@ export function createPluginOperationAgentToolProvider(
       const request: GenerationCanvasRequest = {
         anchor: parsed.anchor,
         expectedOutputCount: 1,
-        expectedRevision: active.revision,
         operationId: `plugin-operation-${randomUUID()}`,
         output: operation.tool.output,
         prompt: `Run installed Plugin operation ${operation.tool.id}.`,
@@ -119,7 +117,7 @@ export function createPluginOperationAgentToolProvider(
         changed: result.createdNodeIds.length > 0,
         createdNodeIds: result.createdNodeIds,
         ...(returnsToAgent ? { outputText: result.outputText } : {}),
-        revision: result.revision,
+        operationReceipt: result.operationReceipt,
         toolId: result.toolId,
         warnings: result.warnings,
       }
@@ -322,9 +320,6 @@ async function requireActiveCanvas(scope: AgentToolScope, options: PluginOperati
   }
   requiredIdentifier(active.canvasId, "Active Canvas id")
   requiredIdentifier(active.scopeId, "Active Canvas scope id")
-  if (!Number.isSafeInteger(active.revision) || active.revision < 0) {
-    throw new Error("Active Canvas revision is invalid")
-  }
   return active
 }
 

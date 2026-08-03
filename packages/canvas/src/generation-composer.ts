@@ -21,7 +21,6 @@ export type CanvasGenerationCatalogStatus = "idle" | "loading" | "ready" | "erro
 export interface CanvasGenerationComposerProjection {
   compatibleTools: readonly CanvasGenerationToolSummary[]
   documentId: string
-  expectedRevision: number
   inferredReferences: readonly CanvasGenerationReference[]
   inputError?: string
   promptContextNodeIds: readonly string[]
@@ -33,7 +32,6 @@ export interface CanvasGenerationComposerProjection {
 
 export interface CanvasGenerationComposerSubmission {
   documentId: string
-  expectedRevision: number
   prompt: string
   promptContextNodeIds: readonly string[]
   references: readonly CanvasGenerationReference[]
@@ -101,7 +99,6 @@ export function projectCanvasGenerationComposer(input: {
   return {
     compatibleTools,
     documentId: input.document.id,
-    expectedRevision: input.document.revision,
     inferredReferences,
     ...(inputError ? { inputError } : {}),
     promptContextNodeIds: [...inferredInputs.promptContextNodeIds],
@@ -134,13 +131,11 @@ export function createCanvasGenerationComposerSubmission(input: {
     (!prompt && input.projection.promptContextNodeIds.length === 0) ||
     !input.projection.selectedTool ||
     input.projection.documentId !== input.document.id ||
-    input.projection.expectedRevision !== input.document.revision ||
     !equalStrings(input.projection.selectedNodeIds, input.selectedNodeIds)
   )
     return undefined
   return {
     documentId: input.document.id,
-    expectedRevision: input.document.revision,
     prompt,
     promptContextNodeIds: [...input.projection.promptContextNodeIds],
     references: input.projection.references,
@@ -153,13 +148,9 @@ export function createCanvasGenerationComposerSubmission(input: {
 
 export function isCanvasGenerationComposerSubmissionCurrent(
   submission: CanvasGenerationComposerSubmission,
-  current: { documentId: string; revision: number; scopeId: string },
+  current: { documentId: string; scopeId: string },
 ) {
-  return (
-    submission.documentId === current.documentId &&
-    submission.expectedRevision === current.revision &&
-    submission.scopeId === current.scopeId
-  )
+  return submission.documentId === current.documentId && submission.scopeId === current.scopeId
 }
 
 /**

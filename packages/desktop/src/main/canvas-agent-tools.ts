@@ -17,12 +17,17 @@ import {
   type CanvasViewCommand,
   type CanvasViewCommandRequest,
 } from "@convax/canvas/view"
-import { requireProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
+import {
+  requireProjectResourceReference,
+  type ProjectCanvasCatalogProjectionV2,
+} from "@convax/project/canvas"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 
 type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addResources">
-type ProjectCanvasPort = Pick<ProjectCanvasClient, "getCanvasCatalog">
+interface ProjectCanvasPort {
+  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+}
 
 function commandSchema(type: string, properties: Record<string, unknown>, required: readonly string[] = []) {
   return {
@@ -194,7 +199,6 @@ const viewCommandSchema = {
 }
 const canvasFields = {
   canvasId: { description: "Canvas id returned by canvas_list for the current Project", minLength: 1, type: "string" },
-  expectedRevision: { description: "Revision returned by the latest Canvas query", minimum: 0, type: "integer" },
 }
 
 const tools = [
@@ -237,7 +241,6 @@ const tools = [
       properties: {
         canvasId: canvasFields.canvasId,
         commandId: { minLength: 1, type: "string" },
-        expectedRevision: canvasFields.expectedRevision,
         nodeIds: stringArraySchema,
         options: {
           additionalProperties: false,
@@ -257,7 +260,7 @@ const tools = [
           type: "object",
         },
       },
-      required: ["canvasId", "commandId", "expectedRevision"],
+      required: ["canvasId", "commandId"],
       type: "object",
     },
   },
@@ -273,7 +276,6 @@ const tools = [
         },
         canvasId: canvasFields.canvasId,
         commandId: { minLength: 1, type: "string" },
-        expectedRevision: canvasFields.expectedRevision,
         relation: {
           additionalProperties: false,
           properties: {
@@ -302,7 +304,7 @@ const tools = [
           type: "object",
         },
       },
-      required: ["anchor", "canvasId", "commandId", "expectedRevision", "sources"],
+      required: ["anchor", "canvasId", "commandId", "sources"],
       type: "object",
     },
   },
@@ -320,9 +322,8 @@ const tools = [
           ...primitiveCommandSchema,
         },
         commandId: { minLength: 1, type: "string" },
-        expectedRevision: canvasFields.expectedRevision,
       },
-      required: ["canvasId", "command", "commandId", "expectedRevision"],
+      required: ["canvasId", "command", "commandId"],
       type: "object",
     },
   },
@@ -338,10 +339,9 @@ const tools = [
           description: "A nodes.reveal, selection.set/clear, viewport.fit/center/zoom, or notification.show command.",
           ...viewCommandSchema,
         },
-        expectedRevision: canvasFields.expectedRevision,
         viewId: { default: "desktop-main", type: "string" },
       },
-      required: ["canvasId", "command", "expectedRevision"],
+      required: ["canvasId", "command"],
       type: "object",
     },
   },
@@ -382,7 +382,7 @@ async function listCanvases(
   if (Object.keys(request).length > 0) throw new Error("canvas_list does not accept Project selection arguments")
   const catalog = await loadProjectCanvasCatalog(canvases, scope, signal)
   return {
-    canvases: catalog.canvases.map((canvas) => ({ ...canvas })),
+    canvases: catalog.visibleCanvases.map((canvas) => ({ id: canvas.canvasId, name: canvas.title })),
     projectId: scope.scopeId,
   }
 }
@@ -421,14 +421,12 @@ async function addResources(
   signal?: AbortSignal,
 ) {
   const canvasId = requiredString(input.canvasId, "canvasId")
-  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
   const reveal = resourceRevealOptions(input.view)
   const request: CanvasAddResourceSourcesRequest = {
     actor: actor(scope),
     anchor: point(input.anchor, "anchor"),
     canvasId,
     commandId: requiredString(input.commandId, "commandId"),
-    expectedRevision,
     scopeId: scope.scopeId,
     relation: relation(input.relation),
     ...(signal ? { signal } : {}),
@@ -443,7 +441,7 @@ async function addResources(
   } catch (error) {
     throw canvasAgentResourceError(error)
   }
-  const sync = await documentMutationSync(renderer, documentRef, result.document.revision)
+  const sync = await documentMutationSync(renderer, documentRef)
   const warnings = [...result.warnings]
   let view
   if (sync.reloaded && reveal) {
@@ -457,7 +455,6 @@ async function addResources(
           type: "nodes.reveal",
         },
         expectedDocumentId: canvasId,
-        expectedRevision: result.document.revision,
         expectedScopeId: scope.scopeId,
         viewId: reveal.viewId,
       })
@@ -488,7 +485,6 @@ async function autoLayout(
         options: autoLayoutOptions(input.options),
       },
       commandId: requiredString(input.commandId, "commandId"),
-      expectedRevision: requiredInteger(input.expectedRevision, "expectedRevision", 0),
     },
     ...(signal ? { signal } : {}),
     scopeId: scope.scopeId,
@@ -498,7 +494,7 @@ async function autoLayout(
   const result = await application.execute(request)
   return {
     ...mutationSummary(result),
-    sync: result.changed ? await documentMutationSync(renderer, documentRef, result.document.revision) : undefined,
+    sync: result.changed ? await documentMutationSync(renderer, documentRef) : undefined,
   }
 }
 
@@ -522,14 +518,12 @@ async function applyPrimitive(
   signal?: AbortSignal,
 ) {
   const canvasId = requiredString(input.canvasId, "canvasId")
-  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
   const request = {
     canvasId,
     envelope: {
       actor: actor(scope),
       command: primitive(input.command),
       commandId: requiredString(input.commandId, "commandId"),
-      expectedRevision,
     },
     ...(signal ? { signal } : {}),
     scopeId: scope.scopeId,
@@ -540,7 +534,7 @@ async function applyPrimitive(
   const result = await application.execute(request)
   return {
     ...mutationSummary(result),
-    sync: result.changed ? await documentMutationSync(renderer, documentRef, result.document.revision) : undefined,
+    sync: result.changed ? await documentMutationSync(renderer, documentRef) : undefined,
   }
 }
 
@@ -552,16 +546,14 @@ async function executeView(
   signal?: AbortSignal,
 ) {
   const canvasId = requiredString(input.canvasId, "canvasId")
-  const expectedRevision = requiredInteger(input.expectedRevision, "expectedRevision", 0)
   const request: CanvasViewCommandRequest = {
     command: viewCommand(input.command),
     expectedDocumentId: canvasId,
-    expectedRevision,
     expectedScopeId: scope.scopeId,
     viewId: optionalString(input.viewId, "viewId") ?? "desktop-main",
   }
   await assertCanvasExists(canvases, scope, canvasId, signal)
-  await assertLiveActiveCanvas(renderer, scope, canvasId, expectedRevision, signal)
+  await assertLiveActiveCanvas(renderer, scope, canvasId, signal)
   throwIfAborted(signal)
   return renderer.executeView(request)
 }
@@ -573,7 +565,7 @@ async function assertCanvasExists(
   signal?: AbortSignal,
 ) {
   const catalog = await loadProjectCanvasCatalog(canvases, scope, signal)
-  if (!catalog.canvases.some((canvas) => canvas.id === canvasId)) {
+  if (!catalog.visibleCanvases.some((canvas) => canvas.canvasId === canvasId)) {
     throw new Error("canvasId is not present in the current Agent Project catalog")
   }
 }
@@ -592,7 +584,6 @@ async function assertLiveActiveCanvas(
   renderer: CanvasRendererBridge,
   scope: AgentToolScope,
   canvasId: string,
-  expectedRevision?: number,
   signal?: AbortSignal,
 ) {
   throwIfAborted(signal)
@@ -604,9 +595,6 @@ async function assertLiveActiveCanvas(
   }
   if (snapshot.documentId !== canvasId) {
     throw new Error("canvasId must match the live active Canvas")
-  }
-  if (expectedRevision !== undefined && snapshot.revision !== expectedRevision) {
-    throw new Error("expectedRevision does not match the live active Canvas revision")
   }
 }
 
@@ -744,19 +732,14 @@ function mutationSummary(result: CanvasApplicationCommandResult) {
     affectedNodeIds: result.affectedNodeIds,
     changed: result.changed,
     createdNodeIds: result.createdNodeIds,
-    revision: result.document.revision,
-    storageVersion: result.storageVersion,
+    operationReceipt: result.operationReceipt,
     warnings: result.warnings,
   }
 }
 
-async function documentMutationSync(renderer: CanvasRendererBridge, value: CanvasDocumentRef, revision: number) {
+async function documentMutationSync(renderer: CanvasRendererBridge, value: CanvasDocumentRef) {
   try {
-    const snapshot = await renderer.getViewSnapshot("desktop-main")
-    return {
-      reloaded:
-        snapshot?.scopeId === value.scopeId && snapshot.documentId === value.canvasId && snapshot.revision === revision,
-    }
+    return { reloaded: await renderer.reloadDocument(value) }
   } catch (error) {
     return { reloaded: false, warning: error instanceof Error ? error.message : String(error) }
   }

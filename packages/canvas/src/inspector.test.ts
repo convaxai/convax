@@ -31,7 +31,7 @@ describe("Canvas Inspector projection", () => {
         width: 1920,
       },
     })
-    const document = { ...createCanvasDocument({ id: "canvas-a", nodes: [node] }), revision: 7 }
+    const document = createCanvasDocument({ id: "canvas-a", nodes: [node] })
     const projection = resolveCanvasInspectorProjection({
       document,
       renderers: createDefaultCanvasFileRendererRegistry(),
@@ -44,7 +44,6 @@ describe("Canvas Inspector projection", () => {
       documentId: document.id,
       nodeId: node.id,
       rendererId: "image",
-      revision: 7,
       scopeId: "project-a/canvas-a",
       viewId: "main",
     })
@@ -60,7 +59,6 @@ describe("Canvas Inspector projection", () => {
     const serialized = JSON.stringify(projection)
     expect(serialized).not.toContain("asset://private-image")
     expect(serialized).not.toContain("must-not-leak")
-    expect(document.revision).toBe(7)
   })
 
   test("fails closed for edge, mixed, unsupported and non-opted-in renderers", () => {
@@ -165,7 +163,7 @@ describe("Canvas Inspector projection", () => {
 })
 
 describe("Canvas selection projection", () => {
-  test("projects single, multi and clear selection without mutating the document revision", () => {
+  test("projects single, multi and clear selection without mutating the document", () => {
     const first = createTextNode({
       id: "first",
       metadata: {},
@@ -178,7 +176,8 @@ describe("Canvas selection projection", () => {
       position: { x: 300, y: 0 },
       resourceState: { status: "ready" },
     })
-    const document = { ...createCanvasDocument({ id: "canvas", nodes: [first, second] }), revision: 9 }
+    const document = createCanvasDocument({ id: "canvas", nodes: [first, second] })
+    const before = structuredClone(document)
     const renderers = createDefaultCanvasFileRendererRegistry()
     const common = { document, renderers, scopeId: "scope", viewId: "view" }
 
@@ -202,7 +201,7 @@ describe("Canvas selection projection", () => {
       kind: "mixed",
       nodeIds: [],
     })
-    expect(document.revision).toBe(9)
+    expect(document).toEqual(before)
   })
 
   test("lets the host reject a stale callback after scope or view replacement", () => {

@@ -39,17 +39,36 @@ const minimalDefinition = {
 } as const
 
 describe("Plugin API catalog", () => {
-  test("publishes the wire-schema/3 cutover as API 2.0.0 without rewriting API lineage", () => {
-    expect(PLUGIN_API_CATALOG_VERSION).toBe("2.0.0")
-    expect(PLUGIN_API_CATALOG_MAJOR).toBe(2)
+  test("publishes the collaboration command cutover as API 3.0.0 without rewriting API lineage", () => {
+    expect(PLUGIN_API_CATALOG_VERSION).toBe("3.0.0")
+    expect(PLUGIN_API_CATALOG_MAJOR).toBe(3)
     expect(Object.keys(pluginApiCatalog).sort()).toEqual(["apis", "version"])
     expect(pluginApiCatalog.apis).toHaveLength(20)
     expect(new Set(pluginApiCatalog.apis.map((definition) => definition.id)).size).toBe(20)
     expect(pluginApiCatalog.apis.filter((definition) => definition.since === "1.0.0")).toHaveLength(18)
-    expect(pluginApiCatalog.apis.every((definition) => definition.contractSince === "2.0.0")).toBe(true)
+    expect<string[]>(
+      pluginApiCatalog.apis
+        .filter((definition) => definition.contractSince === "3.0.0")
+        .map(({ id }) => id as string)
+        .sort(),
+    ).toEqual(
+      (
+        [
+          "canvas.catalog.list",
+          "canvas.document.get",
+          "canvas.node.get",
+          "canvas.node.state.replace",
+          "canvas.nodes.query",
+          "canvas.resource.image.create",
+          "canvas.transaction.execute",
+          "generation.execute",
+          "host.context.get",
+        ] as string[]
+      ).sort(),
+    )
     expect(getPluginApiDefinition("generation.execute")).toMatchObject({
       since: "1.0.0",
-      contractSince: "2.0.0",
+      contractSince: "3.0.0",
     })
     expect(getPluginApiDefinition("canvas.inputs.image.open").since).toBe("2.0.0")
     expect(getPluginApiDefinition("canvas.inputs.image.close").since).toBe("2.0.0")
@@ -110,14 +129,10 @@ describe("Plugin API catalog", () => {
     expect(patchCatalog.version).toBe("2.3.1")
     expect(patchCatalog.apis[0].since).toBe("2.3.0")
     expect(() =>
-      definePluginApiCatalog(
-        definePluginApiRelease("2.3.0", [{ ...definition, contractSince: "2.2.0" }]),
-      ),
+      definePluginApiCatalog(definePluginApiRelease("2.3.0", [{ ...definition, contractSince: "2.2.0" }])),
     ).toThrow("must not precede since")
     expect(() =>
-      definePluginApiCatalog(
-        definePluginApiRelease("2.3.0", [{ ...definition, contractSince: "2.3.1" }]),
-      ),
+      definePluginApiCatalog(definePluginApiRelease("2.3.0", [{ ...definition, contractSince: "2.3.1" }])),
     ).toThrow("must identify a Catalog release block")
     expect(() => definePluginApiCatalog(definePluginApiRelease("2.3.1", []))).toThrow("at least one API")
   })
@@ -126,7 +141,7 @@ describe("Plugin API catalog", () => {
 describe("Plugin API declarations", () => {
   test("validates required and optional sets", () => {
     const declaration = definePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["host.context.get"],
       optional: ["canvas.inputs.list"],
     })
@@ -138,43 +153,43 @@ describe("Plugin API declarations", () => {
   })
 
   test("fails closed for unknown, duplicate, overlapping, or wrong-major ids", () => {
-    expect(() => parsePluginApiDeclaration({ major: 1, required: [], optional: [] })).toThrow("major must be 2")
-    expect(() => parsePluginApiDeclaration({ major: 2, required: ["unknown.api"], optional: [] })).toThrow(
+    expect(() => parsePluginApiDeclaration({ major: 2, required: [], optional: [] })).toThrow("major must be 3")
+    expect(() => parsePluginApiDeclaration({ major: 3, required: ["unknown.api"], optional: [] })).toThrow(
       "unknown Plugin API id",
     )
     expect(() =>
       parsePluginApiDeclaration({
-        major: 2,
+        major: 3,
         required: ["host.context.get", "host.context.get"],
         optional: [],
       }),
     ).toThrow("duplicate")
     expect(() =>
       parsePluginApiDeclaration({
-        major: 2,
+        major: 3,
         required: ["host.context.get"],
         optional: ["host.context.get"],
       }),
     ).toThrow("both required and optional")
-    expect(() => parsePluginApiDeclaration({ major: 2, required: [], optional: [], extra: true })).toThrow(
+    expect(() => parsePluginApiDeclaration({ major: 3, required: [], optional: [], extra: true })).toThrow(
       "unknown field",
     )
   })
 
   test("runtime parsing preserves valid future ids for negotiation and activation checks", () => {
     const declaration = parseRuntimePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["future.required"],
       optional: ["future.optional"],
     })
     expect(declaration).toEqual({
-      major: 2,
+      major: 3,
       required: ["future.required"],
       optional: ["future.optional"],
     })
     expect(() =>
       parseRuntimePluginApiDeclaration({
-        major: 2,
+        major: 3,
         required: ["Invalid API"],
         optional: [],
       }),
@@ -185,13 +200,13 @@ describe("Plugin API declarations", () => {
 describe("Plugin API availability", () => {
   test("reports the image-input API as available only in the 2.0.0 release", () => {
     const declaration = definePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["canvas.inputs.image.open"],
       optional: [],
     })
     const context: PluginApiLiveContext = {
-      catalogVersion: "2.0.0",
-      catalogMajor: 2,
+      catalogVersion: "3.0.0",
+      catalogMajor: 3,
       audience: "web-plugin",
       grants: ["canvas.connectedImages.read"],
       hasContext: true,
@@ -201,7 +216,7 @@ describe("Plugin API availability", () => {
     }
     expect(evaluatePluginApiAvailability("canvas.inputs.image.open", declaration, context)).toEqual({
       available: true,
-      catalogVersion: "2.0.0",
+      catalogVersion: "3.0.0",
       contractSince: "2.0.0",
       id: "canvas.inputs.image.open",
       since: "2.0.0",
@@ -210,13 +225,13 @@ describe("Plugin API availability", () => {
 
   test("uses the current contract release rather than API introduction as the version floor", () => {
     const declaration = definePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["generation.execute"],
       optional: [],
     })
     const availability = evaluatePluginApiAvailability("generation.execute", declaration, {
       catalogVersion: "1.9.9",
-      catalogMajor: 2,
+      catalogMajor: 3,
       audience: "web-plugin",
       grants: ["generation.execute"],
       hasContext: true,
@@ -226,7 +241,7 @@ describe("Plugin API availability", () => {
     })
     expect(availability).toEqual({
       available: false,
-      contractSince: "2.0.0",
+      contractSince: "3.0.0",
       id: "generation.execute",
       reason: "unsupported-host",
       recoverable: false,
@@ -239,8 +254,8 @@ describe("Plugin API availability", () => {
       available: true,
       id: "host.context.get",
       since: "1.0.0",
-      contractSince: "2.0.0",
-      catalogVersion: "2.0.0",
+      contractSince: "3.0.0",
+      catalogVersion: "3.0.0",
     } as const
     expect(isPluginApiAvailable(available)).toBe(true)
     expect(requirePluginApi(available)).toBe(available)
@@ -266,13 +281,13 @@ describe("Plugin API availability", () => {
 
   test("uses a stable fail-closed reason priority", () => {
     const declaration = definePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["canvas.inputs.open"],
       optional: [],
     })
     const base: PluginApiLiveContext = {
-      catalogVersion: "2.0.0",
-      catalogMajor: 2,
+      catalogVersion: "3.0.0",
+      catalogMajor: 3,
       audience: "web-plugin",
       grants: ["canvas.connectedMedia.stream"],
       hasContext: true,
@@ -288,7 +303,7 @@ describe("Plugin API availability", () => {
     expect(reason({ ...base, catalogMajor: 1, audience: "agent-skill", grants: [], hasContext: false })).toBe(
       "unsupported-host",
     )
-    const undeclared = definePluginApiDeclaration({ major: 2, required: [], optional: [] })
+    const undeclared = definePluginApiDeclaration({ major: 3, required: [], optional: [] })
     expect(
       evaluatePluginApiAvailability("canvas.inputs.open", undeclared, {
         ...base,
@@ -312,13 +327,13 @@ describe("Plugin API availability", () => {
 
   test("returns unsupported-host for unknown future optional and required ids", () => {
     const declaration = parseRuntimePluginApiDeclaration({
-      major: 2,
+      major: 3,
       required: ["future.required"],
       optional: ["future.optional"],
     })
     const context: PluginApiLiveContext = {
-      catalogVersion: "2.0.0",
-      catalogMajor: 2,
+      catalogVersion: "3.0.0",
+      catalogMajor: 3,
       audience: "web-plugin",
       grants: [],
       hasContext: true,

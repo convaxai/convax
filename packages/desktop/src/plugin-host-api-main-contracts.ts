@@ -48,7 +48,6 @@ export interface PluginHostTransportContext {
  */
 export interface PluginHostNodeContext {
   canvas: { id: string; name?: string }
-  documentRevision: number
   node: PluginHostContextNode
   project: { id: string; name?: string }
 }
@@ -199,7 +198,11 @@ export interface PluginHostNodeOperationsPort {
     principal: PluginPrincipal
     signal?: AbortSignal
     state: Record<string, unknown>
-  }): Promise<void>
+  }): Promise<{
+    operationReceipt: import("@convax/plugin-api").PluginApiResult<"canvas.node.state.replace">["operationReceipt"]
+    projection: PluginHostContextNode
+    updated: true
+  }>
 }
 
 export interface PluginHostApiConnectionRequest {

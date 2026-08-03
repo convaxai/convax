@@ -19,6 +19,7 @@ const snapshot: ProjectCanvasControllerSnapshot = {
     { createdAt: 2, id: "canvas-2", name: "Canvas 2", updatedAt: 2 },
   ],
   error: null,
+  creationAvailability: "available",
   projectId: "project-1",
 }
 

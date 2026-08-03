@@ -1,6 +1,8 @@
 import { builtinModules } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 
+import { verifyCurrentCollaborationAuthorityReleaseV1 } from "./collaboration-authority-release"
+
 type PackageManifest = {
   dependencies?: Record<string, string>
   devDependencies?: Record<string, string>
@@ -22,8 +24,17 @@ type WorkspacePackage = {
 
 const repositoryRoot = join(import.meta.dir, "..")
 const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
+const architectureContractPath = join(repositoryRoot, "docs", "architecture.md")
+const collaborationV10ActivePointerRelativePath = "docs/superpowers/specs/collaboration-v10-active-authority.json"
+const collaborationV10ReleaseDirectoryRelativePath = "docs/superpowers/specs/authorities/collaboration-v10/r5/"
+const collaborationV10ManifestDigest = "2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed"
+const collaborationV10EvidenceDigest = "9a781faaa3ed28963066ba3ef28eb4367611568042bb14929feab5c2c884d678"
+const collaborationV10BundleDigest = "163cabcd8ab5f45acd1fdf7309c747185a6132c9765585a310515f3c968ca786"
+const collaborationV10ProtocolDigest = "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
 const desktopProcessInstructionPaths = ["src/main/AGENTS.md", "src/preload/AGENTS.md", "src/renderer/AGENTS.md"]
+const apiDirectory = join(repositoryRoot, "apps", "api")
+const apiManifestPath = join(apiDirectory, "package.json")
 const retiredRegistryPaths = [
   "packages/desktop/src/main/remote-capability-registry.ts",
   "packages/desktop/src/main/remote-capability-installer.ts",
@@ -47,7 +58,9 @@ const retiredRegistryTokens = [
 const applicationPackageNames = new Set(["@convax/desktop"])
 const publishablePackageNames = new Set([
   "@convax/agent-runtime",
+  "@convax/bounded-value",
   "@convax/canvas",
+  "@convax/collaboration",
   "@convax/marketplace",
   "@convax/marketplace-kit",
   "@convax/plugin-api",
@@ -55,17 +68,22 @@ const publishablePackageNames = new Set([
   "@convax/plugin-ui",
   "@convax/project",
   "@convax/project-files",
+  "@convax/uri",
   "@convax/ui",
   "@convax/workbench",
   "create-convax-marketplace",
 ])
+const apiAllowedInternalRuntimeDependencies = new Set(["@convax/collaboration", "@convax/project"])
+const apiAllowedProjectSubpaths = new Set(["./collaboration-protocol"])
 const reservedWorkspacePackageName = "@convax/workspace"
 const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>([
   ["@convax/agent-runtime", new Set()],
-  ["@convax/canvas", new Set(["@convax/ui"])],
+  ["@convax/bounded-value", new Set()],
+  ["@convax/canvas", new Set(["@convax/bounded-value", "@convax/collaboration", "@convax/uri", "@convax/ui"])],
+  ["@convax/collaboration", new Set()],
   ["@convax/marketplace", new Set()],
   ["@convax/plugin-api", new Set()],
-  ["@convax/plugin-sdk", new Set(["@convax/plugin-api"])],
+  ["@convax/plugin-sdk", new Set(["@convax/bounded-value", "@convax/plugin-api"])],
   ["@convax/plugin-ui", new Set()],
   ["@convax/marketplace-kit", new Set(["@convax/marketplace", "@convax/plugin-api", "@convax/plugin-sdk"])],
   ["create-convax-marketplace", new Set(["@convax/marketplace-kit"])],
@@ -74,30 +92,52 @@ const allowedInternalRuntimeDependencies = new Map<string, ReadonlySet<string>>(
     new Set([
       "@convax/agent-runtime",
       "@convax/canvas",
+      "@convax/collaboration",
       "@convax/marketplace",
       "@convax/plugin-api",
       "@convax/plugin-sdk",
       "@convax/project",
       "@convax/project-files",
+      "@convax/uri",
       "@convax/ui",
       "@convax/workbench",
     ]),
   ],
-  ["@convax/project", new Set(["@convax/canvas", "@convax/project-files", "@convax/ui"])],
-  ["@convax/project-files", new Set()],
+  [
+    "@convax/project",
+    new Set(["@convax/canvas", "@convax/collaboration", "@convax/project-files", "@convax/uri", "@convax/ui"]),
+  ],
+  ["@convax/project-files", new Set(["@convax/uri"])],
+  ["@convax/uri", new Set()],
   ["@convax/ui", new Set()],
   ["@convax/workbench", new Set()],
 ])
 const allowedInternalSubpaths = new Map<string, ReadonlySet<string>>([
+  ["@convax/canvas -> @convax/bounded-value", new Set(["."])],
+  ["@convax/canvas -> @convax/collaboration", new Set(["."])],
+  ["@convax/canvas -> @convax/uri", new Set(["."])],
   ["@convax/canvas -> @convax/ui", new Set([".", "./theme.css"])],
-  ["@convax/project -> @convax/canvas", new Set(["./application", "./core"])],
-  ["@convax/project -> @convax/project-files", new Set([".", "./contracts", "./drag"])],
+  ["@convax/project -> @convax/canvas", new Set(["./application", "./collaboration", "./core"])],
+  ["@convax/project -> @convax/collaboration", new Set(["."])],
+  ["@convax/project -> @convax/project-files", new Set([".", "./contracts", "./drag", "./identity", "./project-uri"])],
+  ["@convax/project -> @convax/uri", new Set(["."])],
   ["@convax/project -> @convax/ui", new Set([".", "./theme.css"])],
+  ["@convax/project-files -> @convax/uri", new Set(["."])],
+  ["@convax/plugin-sdk -> @convax/bounded-value", new Set(["."])],
+  ["@convax/desktop -> @convax/collaboration", new Set(["."])],
+  ["@convax/desktop -> @convax/uri", new Set(["."])],
 ])
 const nodeBuiltinSpecifiers = new Set(builtinModules.flatMap((name) => [name, `node:${name}`]))
 
 function normalizedSourcePath(sourcePath: string): string {
   return sourcePath.replaceAll("\\", "/")
+}
+
+function requireContractMarkers(path: string, source: string, markers: readonly string[]): void {
+  const missing = markers.filter((marker) => !source.includes(marker))
+  if (missing.length > 0) {
+    throw new Error(`${path}: frozen collaboration v10 governance markers are missing: ${missing.join(", ")}`)
+  }
 }
 
 function isTestSource(sourcePath: string): boolean {
@@ -112,12 +152,13 @@ function canImportNodeBuiltins(packageName: string, sourcePath: string): boolean
   if (packageName === "@convax/project") return normalized.startsWith("src/node/")
   if (packageName === "@convax/desktop") return normalized.startsWith("src/main/")
   if (
-    packageName === "@convax/marketplace"
-    || packageName === "@convax/marketplace-kit"
-    || packageName === "@convax/plugin-api"
-    || packageName === "@convax/plugin-sdk"
-    || packageName === "create-convax-marketplace"
-  ) return true
+    packageName === "@convax/marketplace" ||
+    packageName === "@convax/marketplace-kit" ||
+    packageName === "@convax/plugin-api" ||
+    packageName === "@convax/plugin-sdk" ||
+    packageName === "create-convax-marketplace"
+  )
+    return true
   return false
 }
 
@@ -178,6 +219,7 @@ function findCycle(graph: Map<string, Set<string>>): string[] | undefined {
 
 const packages: WorkspacePackage[] = []
 const rootContract = await Bun.file(join(repositoryRoot, "AGENTS.md")).text()
+const architectureContract = await Bun.file(architectureContractPath).text()
 const hostChangeGovernance = await Bun.file(hostChangeGovernancePath).text()
 const desktopComposition = await Bun.file(desktopCompositionPath).text()
 if (
@@ -192,6 +234,103 @@ if (
 ) {
   throw new Error("Plugin-to-Host human review gate is missing from the architecture contract")
 }
+verifyCurrentCollaborationAuthorityReleaseV1({ repositoryRoot })
+requireContractMarkers("AGENTS.md", rootContract, [
+  "## Frozen collaboration v10 authority",
+  collaborationV10ActivePointerRelativePath,
+  collaborationV10ReleaseDirectoryRelativePath,
+  "exact fifteen-file snapshot",
+  collaborationV10ManifestDigest,
+  collaborationV10EvidenceDigest,
+  collaborationV10BundleDigest,
+  collaborationV10ProtocolDigest,
+  "activated-authority-mutation",
+  "never a selector or runtime fallback",
+  "`replicaDoc`/isolated `candidateDoc` kernel",
+  "ProjectIndexYDoc is the only Project route/tombstone and current `shardEpoch`",
+  "Checkpoint pruning requires both a service content certificate",
+  "React Flow document projection",
+])
+requireContractMarkers("docs/architecture.md", architectureContract, [
+  "collaboration cutover uses Route F",
+  collaborationV10ActivePointerRelativePath.replace("docs/", ""),
+  collaborationV10ReleaseDirectoryRelativePath.replace("docs/", ""),
+  "exact fifteen-file snapshot",
+  collaborationV10ManifestDigest,
+  collaborationV10EvidenceDigest,
+  collaborationV10BundleDigest,
+  collaborationV10ProtocolDigest,
+  "activated-authority-mutation",
+  "never fallback protocol authority",
+  "Main-owned `replicaDoc`",
+  "Isolated `candidateDoc`",
+  "Final offline/online edit object",
+  "Content certificate plus all-active-editor causal floors",
+  "Transient `@convax/canvas` projection",
+  "service registry is advisory only",
+  "@convax/api",
+])
+const collaborationV10GovernanceContracts = [
+  ["AGENTS.md", rootContract],
+  ["docs/architecture.md", architectureContract],
+  ["packages/collaboration/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/collaboration/AGENTS.md")).text()],
+  ["packages/canvas/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/canvas/AGENTS.md")).text()],
+  ["packages/project/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/project/AGENTS.md")).text()],
+  ["packages/project-files/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/project-files/AGENTS.md")).text()],
+  ["packages/desktop/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/desktop/AGENTS.md")).text()],
+  ["apps/api/AGENTS.md", await Bun.file(join(repositoryRoot, "apps/api/AGENTS.md")).text()],
+] as const
+const retiredCollaborationTokens = [
+  ["certified", "TeamDoc"].join(""),
+  ["working", "Doc"].join(""),
+  ["local", "ForkJournal"].join(""),
+  ["local", "Fork"].join(""),
+  ["Admission", "Certificate"].join(""),
+  ["expected", "Version"].join(""),
+  ["M", "MR"].join(""),
+  ["certified", "-team/"].join(""),
+  ["local", "-fork"].join(""),
+  ["admission", "-outbox"].join(""),
+  ["abandonment", "-outbox"].join(""),
+  ["document", "-wide"].join(""),
+  ["whole", "-document"].join(""),
+  ["whole", " document"].join(""),
+  ["central", " per-edit admission"].join(""),
+  ["2026-07-31-", "collaboration-architecture-review.sha256"].join(""),
+]
+for (const [path, source] of collaborationV10GovernanceContracts) {
+  const retiredToken = retiredCollaborationTokens.find((token) => source.includes(token))
+  if (retiredToken) throw new Error(`${path}: retired collaboration state/order token remains: ${retiredToken}`)
+}
+requireContractMarkers("packages/collaboration/AGENTS.md", collaborationV10GovernanceContracts[2][1], [
+  "One Main-owned `replicaDoc` per shard",
+  "one isolated `candidateDoc` per command",
+  "Offline work uses the same final frame bytes",
+  "Reconnect requests and validates",
+])
+requireContractMarkers("packages/canvas/AGENTS.md", collaborationV10GovernanceContracts[3][1], [
+  "Main's `replicaDoc` is the sole local durable Canvas authority",
+  "React Flow selection, hover, measured size, camera, drag preview",
+  "Project-owned route `shardEpoch`",
+])
+requireContractMarkers("packages/project/AGENTS.md", collaborationV10GovernanceContracts[4][1], [
+  "ProjectIndexYDoc is the sole Project catalog",
+  "current `shardEpoch` authority",
+  "`ProjectIndexLiveScopeManifestV2`",
+  "state is advisory anti-rollback/discovery metadata",
+])
+requireContractMarkers("packages/desktop/AGENTS.md", collaborationV10GovernanceContracts[6][1], [
+  "Each offline/local commit is the final long-lived-replica-signed causal frame",
+  "Reconnect transmits the same bytes",
+  "both content certification and exact all-active-editor causal-floor",
+])
+requireContractMarkers("apps/api/AGENTS.md", collaborationV10GovernanceContracts[7][1], [
+  "The service never orders ordinary edits",
+  "registered-scope service registry is bounded advisory anti-rollback/discovery",
+  "both a content certificate",
+])
+if (!(await Bun.file(apiManifestPath).exists()))
+  throw new Error("apps/api/package.json is required by collaboration v10")
 if (
   desktopComposition.includes("RemoteCapabilityRegistryClient") ||
   desktopComposition.includes("registry/v1/index.json") ||
@@ -249,6 +388,28 @@ for (const instructionPath of desktopProcessInstructionPaths) {
 }
 
 const packagesByName = new Map(packages.map((workspacePackage) => [workspacePackage.name, workspacePackage]))
+const apiManifest = (await Bun.file(apiManifestPath).json()) as PackageManifest
+if (apiManifest.name !== "@convax/api" || !apiManifest.private) {
+  throw new Error("apps/api must be the private @convax/api delivery application")
+}
+if (!(await Bun.file(join(apiDirectory, "AGENTS.md")).exists())) {
+  throw new Error("@convax/api needs a local AGENTS.md ownership contract")
+}
+for (const script of ["build", "test", "typecheck"]) {
+  if (!apiManifest.scripts?.[script]) throw new Error(`@convax/api needs a package-local ${script} script`)
+}
+const apiRuntimeDependencies = {
+  ...apiManifest.dependencies,
+  ...apiManifest.optionalDependencies,
+  ...apiManifest.peerDependencies,
+}
+for (const dependency of Object.keys(apiRuntimeDependencies)) {
+  if (!apiAllowedInternalRuntimeDependencies.has(dependency)) {
+    throw new Error(
+      `@convax/api runtime dependency ${dependency} is forbidden; only ${[...apiAllowedInternalRuntimeDependencies].join(", ")} are admitted`,
+    )
+  }
+}
 for (const workspacePackage of packages) {
   if (!workspacePackage.name.startsWith("@convax/") && workspacePackage.name !== "create-convax-marketplace") {
     throw new Error(`${workspacePackage.name}: workspace packages must use the @convax scope except the create CLI`)
@@ -274,12 +435,12 @@ for (const name of publishablePackageNames) {
   }
   const { exports, files, scripts, version } = workspacePackage.manifest
   if (
-    !version
-    || version === "0.0.0"
-    || !files?.includes("dist")
-    || !exports
-    || typeof exports === "string"
-    || !matchesExport(exports, ".")
+    !version ||
+    version === "0.0.0" ||
+    !files?.includes("dist") ||
+    !exports ||
+    typeof exports === "string" ||
+    !matchesExport(exports, ".")
   ) {
     throw new Error(`${name}: publishable packages need a real version, dist files, and a public root export`)
   }
@@ -295,6 +456,64 @@ for (const name of applicationPackageNames) {
 }
 
 const graph = new Map<string, Set<string>>()
+graph.set("@convax/api", new Set(Object.keys(apiRuntimeDependencies)))
+
+for (const sourceRoot of ["src", "test"]) {
+  for await (const sourcePath of new Bun.Glob(`${sourceRoot}/**/*.{ts,tsx,js,jsx,mjs,cjs}`).scan(apiDirectory)) {
+    const absoluteSourcePath = join(apiDirectory, sourcePath)
+    const source = await Bun.file(absoluteSourcePath).text()
+    const specifiers = [
+      ...source.matchAll(/(?:from\s*|import\s*\(\s*|require(?:\.resolve)?\s*\(\s*)["']([^"']+)["']/g),
+      ...source.matchAll(/(?:^|[;\n])\s*import\s*["']([^"']+)["']/g),
+    ].map((match) => match[1])
+    for (const specifier of specifiers) {
+      if (specifier.startsWith("/") || /^[A-Za-z]:[\\/]/.test(specifier) || specifier.startsWith("file:")) {
+        throw new Error(`apps/api/${sourcePath}: absolute file imports are not portable: ${specifier}`)
+      }
+      if ((specifier.startsWith(".") || specifier.startsWith("@convax/")) && specifier.includes("\\")) {
+        throw new Error(`apps/api/${sourcePath}: module specifiers must use forward slashes: ${specifier}`)
+      }
+      if (specifier.startsWith(".") && leavesPackage(absoluteSourcePath, specifier, apiDirectory)) {
+        throw new Error(`apps/api/${sourcePath}: relative import escapes @convax/api: ${specifier}`)
+      }
+      if (specifier.startsWith("bun:")) {
+        if (!isTestSource(sourcePath)) {
+          throw new Error(`apps/api/${sourcePath}: Bun runtime imports are forbidden outside tests`)
+        }
+        continue
+      }
+      if (nodeBuiltinSpecifiers.has(specifier) || specifier.startsWith("node:") || specifier.startsWith("electron")) {
+        throw new Error(`apps/api/${sourcePath}: API runtime must stay Web-standard: ${specifier}`)
+      }
+      const dependencyPackage = packages.find(
+        (candidate) => specifier === candidate.name || specifier.startsWith(`${candidate.name}/`),
+      )
+      if (!dependencyPackage) {
+        if (!specifier.startsWith(".") && !isTestSource(sourcePath)) {
+          throw new Error(`apps/api/${sourcePath}: undeclared/non-Web runtime import is forbidden: ${specifier}`)
+        }
+        continue
+      }
+      if (!apiAllowedInternalRuntimeDependencies.has(dependencyPackage.name)) {
+        throw new Error(`apps/api/${sourcePath}: @convax/api cannot import ${dependencyPackage.name}`)
+      }
+      if (!(dependencyPackage.name in apiRuntimeDependencies)) {
+        throw new Error(`apps/api/${sourcePath}: ${dependencyPackage.name} must be a declared runtime dependency`)
+      }
+      const suffix = specifier.slice(dependencyPackage.name.length)
+      const subpath = suffix ? `.${suffix}` : "."
+      if (!matchesExport(dependencyPackage.manifest.exports, subpath)) {
+        throw new Error(`apps/api/${sourcePath}: ${specifier} is not a public package export`)
+      }
+      if (dependencyPackage.name === "@convax/project" && !apiAllowedProjectSubpaths.has(subpath)) {
+        throw new Error(`apps/api/${sourcePath}: @convax/api may import only @convax/project/collaboration-protocol`)
+      }
+      if (dependencyPackage.name === "@convax/collaboration" && subpath !== ".") {
+        throw new Error(`apps/api/${sourcePath}: @convax/api may import only the public @convax/collaboration root`)
+      }
+    }
+  }
+}
 for (const workspacePackage of packages) {
   const runtimeDependencies = {
     ...workspacePackage.manifest.dependencies,
@@ -310,7 +529,9 @@ for (const workspacePackage of packages) {
       `${workspacePackage.name}: ${reservedWorkspacePackageName} is reserved for a future multi-project window model`,
     )
   }
-  const internalRuntimeDependencies = Object.keys(runtimeDependencies).filter((dependency) => packagesByName.has(dependency))
+  const internalRuntimeDependencies = Object.keys(runtimeDependencies).filter((dependency) =>
+    packagesByName.has(dependency),
+  )
   const allowedDependencies = allowedInternalRuntimeDependencies.get(workspacePackage.name)!
   for (const dependency of internalRuntimeDependencies) {
     if (!allowedDependencies.has(dependency)) {
@@ -319,18 +540,11 @@ for (const workspacePackage of packages) {
       )
     }
   }
-  graph.set(
-    workspacePackage.name,
-    new Set(internalRuntimeDependencies),
-  )
+  graph.set(workspacePackage.name, new Set(internalRuntimeDependencies))
 
   const validateSpecifier = (sourcePath: string, specifier: string) => {
     const absoluteSourcePath = join(workspacePackage.directory, sourcePath)
-    if (
-      specifier.startsWith("/")
-      || /^[A-Za-z]:[\\/]/.test(specifier)
-      || specifier.startsWith("file:")
-    ) {
+    if (specifier.startsWith("/") || /^[A-Za-z]:[\\/]/.test(specifier) || specifier.startsWith("file:")) {
       throw new Error(`${sourcePath}: absolute file imports are not portable: ${specifier}`)
     }
     if ((specifier.startsWith(".") || specifier.startsWith("@convax/")) && specifier.includes("\\")) {
@@ -353,7 +567,10 @@ for (const workspacePackage of packages) {
     if (nodeBuiltinSpecifiers.has(specifier) && !canImportNodeBuiltins(workspacePackage.name, sourcePath)) {
       throw new Error(`${sourcePath}: Node built-in ${specifier} is outside an approved Node adapter directory`)
     }
-    if ((specifier === "electron" || specifier.startsWith("electron/")) && !canImportElectron(workspacePackage.name, sourcePath)) {
+    if (
+      (specifier === "electron" || specifier.startsWith("electron/")) &&
+      !canImportElectron(workspacePackage.name, sourcePath)
+    ) {
       throw new Error(`${sourcePath}: Electron imports are limited to @convax/desktop main and preload`)
     }
 
@@ -362,7 +579,9 @@ for (const workspacePackage of packages) {
     )
     if (!dependencyPackage) return
     if (dependencyPackage.name !== workspacePackage.name && !(dependencyPackage.name in runtimeDependencies)) {
-      throw new Error(`${sourcePath}: ${dependencyPackage.name} must be a runtime dependency of ${workspacePackage.name}`)
+      throw new Error(
+        `${sourcePath}: ${dependencyPackage.name} must be a runtime dependency of ${workspacePackage.name}`,
+      )
     }
 
     const suffix = specifier.slice(dependencyPackage.name.length)
@@ -370,7 +589,10 @@ for (const workspacePackage of packages) {
     if (!matchesExport(dependencyPackage.manifest.exports, subpath)) {
       throw new Error(`${sourcePath}: ${specifier} is not a public export of ${dependencyPackage.name}`)
     }
-    if ((subpath === "./node" || subpath.startsWith("./node/")) && !canImportNodeEntry(workspacePackage.name, sourcePath)) {
+    if (
+      (subpath === "./node" || subpath.startsWith("./node/")) &&
+      !canImportNodeEntry(workspacePackage.name, sourcePath)
+    ) {
       throw new Error(`${sourcePath}: ${specifier} is a Node-only entry and may only be composed by Desktop main`)
     }
     if (dependencyPackage.name !== workspacePackage.name) {
@@ -390,9 +612,9 @@ for (const workspacePackage of packages) {
     )) {
       const source = await Bun.file(join(workspacePackage.directory, sourcePath)).text()
       if (
-        workspacePackage.name !== "@convax/project"
-        && !isTestSource(sourcePath)
-        && /\.convax\/(?:project\.json|canvas\.json|canvases(?:\/|\b))/i.test(source.replaceAll("\\", "/"))
+        workspacePackage.name !== "@convax/project" &&
+        !isTestSource(sourcePath) &&
+        /\.convax\/(?:project\.json|canvas\.json|canvases(?:\/|\b))/i.test(source.replaceAll("\\", "/"))
       ) {
         throw new Error(
           `${sourcePath}: private Project metadata must be accessed through @convax/project ports, never by path`,
@@ -405,14 +627,14 @@ for (const workspacePackage of packages) {
       for (const specifier of specifiers) {
         validateSpecifier(sourcePath, specifier)
         if (
-          publishablePackageNames.has(workspacePackage.name)
-          && !isTestSource(sourcePath)
-          && !specifier.startsWith(".")
-          && !specifier.startsWith("/")
-          && !specifier.startsWith("file:")
-          && !specifier.startsWith("bun:")
-          && !nodeBuiltinSpecifiers.has(specifier)
-          && !packages.some((candidate) => specifier === candidate.name || specifier.startsWith(`${candidate.name}/`))
+          publishablePackageNames.has(workspacePackage.name) &&
+          !isTestSource(sourcePath) &&
+          !specifier.startsWith(".") &&
+          !specifier.startsWith("/") &&
+          !specifier.startsWith("file:") &&
+          !specifier.startsWith("bun:") &&
+          !nodeBuiltinSpecifiers.has(specifier) &&
+          !packages.some((candidate) => specifier === candidate.name || specifier.startsWith(`${candidate.name}/`))
         ) {
           const [first, second] = specifier.split("/")
           const dependencyName = first?.startsWith("@") ? `${first}/${second}` : first

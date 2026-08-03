@@ -28,6 +28,7 @@ function controllerHarness(
     initialized: true,
     projects: [],
     ...input,
+    pendingRecoveryProjectId: input.pendingRecoveryProjectId ?? null,
   }
   const controller = {
     activate: mock(async (projectId: string) => {

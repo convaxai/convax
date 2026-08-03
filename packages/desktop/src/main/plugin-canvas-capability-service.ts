@@ -1,11 +1,5 @@
-import type {
-  CanvasApplicationService,
-  CanvasDocumentClient,
-  CanvasDocumentRef,
-  CanvasNodeQuery,
-} from "@convax/canvas/application"
-import { getCanvasNodeSize } from "@convax/canvas/core"
-import { getProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
+import type { CanvasApplicationService, CanvasDocumentRef, CanvasNodeQuery } from "@convax/canvas/application"
+import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
 
 import type {
@@ -26,9 +20,12 @@ import type {
 import type { PluginCapability } from "../plugin-api"
 import type { PluginHostInvocationLease } from "../plugin-host-api-main-contracts"
 import { PluginHostApiError } from "../plugin-host-errors"
+import { projectPluginCanvasDocument } from "./plugin-canvas-projection"
 
-type CanvasApplicationPort = Pick<CanvasApplicationService, "executeTransaction" | "query">
-type ProjectCanvasPort = Pick<ProjectCanvasClient, "getCanvasCatalog">
+type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
+interface ProjectCanvasPort {
+  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+}
 
 export interface PluginPrincipalResolver {
   resolve(principal: PluginPrincipal): Promise<ResolvedPluginPrincipal | null>
@@ -50,17 +47,14 @@ export interface PluginCanvasCapabilityServiceOptions {
   application: CanvasApplicationPort
   canvases: ProjectCanvasPort
   changes: PluginCanvasChangeBus
-  documents: CanvasDocumentClient
   maximumDocumentBytes?: number
   maximumRequestBytes?: number
-  maximumTransactionCommands?: number
   plugins: PluginPrincipalResolver
   projects: PluginProjectCatalogPort
 }
 
 const defaultMaximumDocumentBytes = 8 * 1024 * 1024
 const defaultMaximumRequestBytes = 1024 * 1024
-const defaultMaximumTransactionCommands = 256
 
 export class PluginConnectionInvalidError extends PluginHostApiError {
   constructor(pluginId: string) {
@@ -91,7 +85,6 @@ export class PluginProjectScopeError extends PluginHostApiError {
 export class PluginCanvasCapabilityService {
   private readonly maximumDocumentBytes: number
   private readonly maximumRequestBytes: number
-  private readonly maximumTransactionCommands: number
 
   constructor(private readonly options: PluginCanvasCapabilityServiceOptions) {
     this.maximumDocumentBytes = positiveLimit(
@@ -103,11 +96,6 @@ export class PluginCanvasCapabilityService {
       options.maximumRequestBytes,
       defaultMaximumRequestBytes,
       "Plugin Canvas request byte limit",
-    )
-    this.maximumTransactionCommands = positiveLimit(
-      options.maximumTransactionCommands,
-      defaultMaximumTransactionCommands,
-      "Plugin Canvas transaction command limit",
     )
   }
 
@@ -160,7 +148,10 @@ export class PluginCanvasCapabilityService {
     const catalog = await this.options.canvases.getCanvasCatalog({ projectId })
     throwIfAborted(signal)
     return {
-      canvases: catalog.canvases.map((canvas) => ({ ...canvas })),
+      canvases: catalog.visibleCanvases.map((canvas) => ({
+        id: canvas.canvasId,
+        name: canvas.title ?? "Untitled canvas",
+      })),
       projectId,
     }
   }
@@ -179,87 +170,16 @@ export class PluginCanvasCapabilityService {
     if (projection !== "geometry" && projection !== "structure") {
       throw new Error("Unsupported Canvas document projection")
     }
-    {
-      throwIfAborted(signal)
-      await this.requirePrincipal(principal, signal, invocationLease)
-      const currentRef = await this.requireCanvas(scope, inputRef, signal)
-      throwIfAborted(signal)
-      const snapshot = await this.options.documents.load(currentRef)
-      throwIfAborted(signal)
-      if (!snapshot.document) {
-        throw new PluginHostApiError(
-          "stale-context",
-          `Canvas document was not found: ${currentRef.canvasId}`,
-        )
-      }
-      const publicRef = { ...inputRef }
-      const geometryNodes = snapshot.document.nodes.map((node) => ({
-        id: node.id,
-        kind: node.data.kind,
-        label: node.data.label,
-        ...(node.parentId === undefined ? {} : { parentId: node.parentId }),
-        position: { ...node.position },
-        size: getCanvasNodeSize(node),
-        ...(node.type === undefined ? {} : { type: node.type }),
-      }))
-      const result: PluginCanvasDocumentResult =
-        projection === "structure"
-          ? {
-              document: {
-                ...(snapshot.document.metadata.description === undefined
-                  ? {}
-                  : { description: snapshot.document.metadata.description }),
-                edges: snapshot.document.edges.map(({ id, source, target }) => ({ id, source, target })),
-                id: snapshot.document.id,
-                nodes: snapshot.document.nodes.map((node, index) => {
-                  const reference = getProjectResourceReference(node.data.metadata)
-                  const resourceState =
-                    node.data.resourceState &&
-                    typeof node.data.resourceState === "object" &&
-                    !Array.isArray(node.data.resourceState)
-                      ? (node.data.resourceState as Record<string, unknown>)
-                      : undefined
-                  return {
-                    ...geometryNodes[index]!,
-                    ...(typeof node.data.description === "string" ? { description: node.data.description } : {}),
-                    ...(typeof node.data.durationMs === "number" ? { durationMs: node.data.durationMs } : {}),
-                    ...(typeof node.data.mimeType === "string" ? { mimeType: node.data.mimeType } : {}),
-                    ...(typeof node.data.name === "string" ? { name: node.data.name } : {}),
-                    ...(reference?.kind === "project-file"
-                      ? { resource: { kind: "project-file" as const, path: reference.path } }
-                      : {}),
-                    ...(resourceState && typeof resourceState.status === "string"
-                      ? { status: resourceState.status }
-                      : {}),
-                    ...(resourceState && typeof resourceState.text === "string" ? { text: resourceState.text } : {}),
-                  }
-                }),
-                revision: snapshot.document.revision,
-                ...(snapshot.document.metadata.tags === undefined
-                  ? {}
-                  : { tags: [...snapshot.document.metadata.tags] }),
-                title: snapshot.document.metadata.title,
-              },
-              projection,
-              ref: publicRef,
-              storageVersion: snapshot.storageVersion,
-            }
-          : {
-              document: {
-                edges: snapshot.document.edges.map(({ id, source, target }) => ({ id, source, target })),
-                id: snapshot.document.id,
-                nodes: geometryNodes,
-                revision: snapshot.document.revision,
-                title: snapshot.document.metadata.title,
-              },
-              projection,
-              ref: publicRef,
-              storageVersion: snapshot.storageVersion,
-            }
-      assertSerializedSize(result, this.maximumDocumentBytes, "Plugin Canvas document response")
-      throwIfAborted(signal)
-      return result
-    }
+    throwIfAborted(signal)
+    await this.requirePrincipal(principal, signal, invocationLease)
+    const currentRef = await this.requireCanvas(scope, inputRef, signal)
+    throwIfAborted(signal)
+    const snapshot = await this.options.application.query(currentRef)
+    throwIfAborted(signal)
+    const result = projectPluginCanvasDocument(snapshot.projection, projection, inputRef)
+    assertSerializedSize(result, this.maximumDocumentBytes, "Plugin Canvas document response")
+    throwIfAborted(signal)
+    return result
   }
 
   private async queryNodes(
@@ -274,17 +194,16 @@ export class PluginCanvasCapabilityService {
     requireCapability(installed, "canvas.document.read")
     assertSerializedSize(query, this.maximumRequestBytes, "Plugin Canvas node query")
     await this.requireCanvas(scope, inputRef, signal)
-    {
-      throwIfAborted(signal)
-      await this.requirePrincipal(principal, signal, invocationLease)
-      const currentRef = await this.requireCanvas(scope, inputRef, signal)
-      throwIfAborted(signal)
-      const result = await this.options.application.query(currentRef, query)
-      throwIfAborted(signal)
-      const response = { ...result, ref: { ...inputRef } }
-      assertSerializedSize(response, this.maximumDocumentBytes, "Plugin Canvas node query response")
-      return response
-    }
+    throwIfAborted(signal)
+    await this.requirePrincipal(principal, signal, invocationLease)
+    const currentRef = await this.requireCanvas(scope, inputRef, signal)
+    throwIfAborted(signal)
+    const result = await this.options.application.query(currentRef, query)
+    throwIfAborted(signal)
+    const structure = projectPluginCanvasDocument(result.projection, "structure", inputRef).document
+    const response = { nodes: result.nodes, projection: structure, ref: { ...inputRef } }
+    assertSerializedSize(response, this.maximumDocumentBytes, "Plugin Canvas node query response")
+    return response
   }
 
   private async transact(
@@ -297,66 +216,52 @@ export class PluginCanvasCapabilityService {
     const installed = await this.requirePrincipal(principal, signal, invocationLease)
     requireCapability(installed, "canvas.document.write")
     assertSerializedSize(request, this.maximumRequestBytes, "Plugin Canvas transaction")
-    if (!request.transactionId.trim() || request.transactionId.length > 128) {
-      throw new Error("Plugin Canvas transaction id must contain 1-128 characters")
+    if (!request.commandId.trim() || request.commandId.length > 128) {
+      throw new Error("Plugin Canvas command id must contain 1-128 characters")
     }
-    if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-      throw new Error("Plugin Canvas expected revision must be a non-negative integer")
-    }
-    if (request.commands.length > this.maximumTransactionCommands) {
-      throw new Error(`Plugin Canvas transaction exceeds ${this.maximumTransactionCommands} commands`)
-    }
-    if (request.commands.length === 0) {
-      throw new Error("Plugin Canvas transaction must contain at least one command")
-    }
-    for (const command of request.commands) {
-      const commandType = (command as { type?: unknown }).type
-      if (commandType === "document.patch" || commandType === "resources.add" || commandType === "resources.replace") {
-        throw new Error("Plugin Canvas document transactions cannot mutate resource references")
-      }
+    const commandType = (request.command as { type?: unknown }).type
+    if (commandType === "document.patch" || commandType === "resources.add" || commandType === "resources.replace") {
+      throw new Error("Plugin Canvas document commands cannot mutate resource references")
     }
     await this.requireCanvas(scope, request.ref, signal)
-    {
-      throwIfAborted(signal)
-      // Revalidate immediately before applying anything durable.
-      await this.requirePrincipal(principal, signal, invocationLease)
-      const currentRef = await this.requireCanvas(scope, request.ref, signal)
-      throwIfAborted(signal)
-      const result = await this.options.application.executeTransaction({
-        ...currentRef,
-        envelope: {
-          actor: { id: principal.pluginId, kind: "plugin" },
-          commands: structuredClone(request.commands),
-          expectedRevision: request.expectedRevision,
-          transactionId: request.transactionId,
-        },
-        ...(signal === undefined ? {} : { signal }),
-      })
-      // Canvas owns the irreversible boundary and checks the signal before
-      // persistence. Once it resolves, keep the durable commit authoritative
-      // even if transport cancellation races with the completed save.
-      const event = {
-        ref: { ...request.ref },
-        revision: result.document.revision,
-        source: "plugin" as const,
+    throwIfAborted(signal)
+    // Revalidate immediately before applying anything durable.
+    await this.requirePrincipal(principal, signal, invocationLease)
+    const currentRef = await this.requireCanvas(scope, request.ref, signal)
+    throwIfAborted(signal)
+    const result = await this.options.application.execute({
+      ...currentRef,
+      envelope: {
+        actor: { id: principal.pluginId, kind: "plugin" },
+        command: structuredClone(request.command),
+        commandId: request.commandId,
+      },
+      ...(signal === undefined ? {} : { signal }),
+    })
+    // Canvas owns the irreversible boundary and checks the signal before
+    // persistence. Once it resolves, keep the durable commit authoritative
+    // even if transport cancellation races with the completed save.
+    const event = {
+      operationReceipt: result.operationReceipt,
+      ref: { ...request.ref },
+      source: "plugin" as const,
+    }
+    if (result.changed) {
+      try {
+        this.options.changes.publish(event)
+      } catch {
+        // Projection invalidation is advisory and cannot turn a committed
+        // Canvas transaction into a failed mutation.
       }
-      if (result.changed) {
-        try {
-          this.options.changes.publish(event)
-        } catch {
-          // Revision invalidation is advisory and cannot turn a committed
-          // Canvas transaction into a failed mutation.
-        }
-      }
-      return {
-        affectedNodeIds: [...result.affectedNodeIds],
-        changed: result.changed,
-        createdNodeIds: [...result.createdNodeIds],
-        ref: { ...request.ref },
-        revision: result.document.revision,
-        storageVersion: result.storageVersion,
-        warnings: [...result.warnings],
-      }
+    }
+    return {
+      affectedNodeIds: [...result.affectedNodeIds],
+      changed: result.changed,
+      createdNodeIds: [...result.createdNodeIds],
+      operationReceipt: structuredClone(result.operationReceipt),
+      projection: projectPluginCanvasDocument(result.document, "structure", request.ref).document,
+      ref: { ...request.ref },
+      warnings: [...result.warnings],
     }
   }
 
@@ -376,7 +281,7 @@ export class PluginCanvasCapabilityService {
     let closed = false
     let underlying: PluginCanvasEventSubscription
     let deliveryTail = Promise.resolve()
-    const lastRevisionByCanvas = new Map<string, number>()
+    const seenOperations = new Set<string>()
     const closeForLease = () => subscription.close()
     const subscription: PluginCanvasEventSubscription = {
       close() {
@@ -393,10 +298,14 @@ export class PluginCanvasCapabilityService {
           if (closed) return
           await this.requirePrincipal(principal, undefined, invocationLease)
           await this.requireCanvas(scope, event.ref)
-          const key = JSON.stringify([event.ref.projectId, event.ref.canvasId])
-          const lastRevision = lastRevisionByCanvas.get(key)
-          if (lastRevision !== undefined && lastRevision >= event.revision) return
-          lastRevisionByCanvas.set(key, event.revision)
+          const key = JSON.stringify([
+            event.ref.projectId,
+            event.ref.canvasId,
+            event.operationReceipt.actorId,
+            event.operationReceipt.operationId,
+          ])
+          if (seenOperations.has(key)) return
+          seenOperations.add(key)
           if (!closed) listener(structuredClone(event))
         })
         .catch(() => subscription.close())
@@ -465,11 +374,8 @@ export class PluginCanvasCapabilityService {
     throwIfAborted(signal)
     const catalog = await this.options.canvases.getCanvasCatalog({ projectId: ref.projectId })
     throwIfAborted(signal)
-    if (!catalog.canvases.some((canvas) => canvas.id === ref.canvasId)) {
-      throw new PluginHostApiError(
-        "stale-context",
-        `Canvas was not found in Project ${ref.projectId}: ${ref.canvasId}`,
-      )
+    if (!catalog.visibleCanvases.some((canvas) => canvas.canvasId === ref.canvasId)) {
+      throw new PluginHostApiError("stale-context", `Canvas was not found in Project ${ref.projectId}: ${ref.canvasId}`)
     }
     return { canvasId: ref.canvasId, scopeId: ref.projectId }
   }

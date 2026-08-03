@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { CanvasGenerateRequest, CanvasGenerateResult } from "@convax/canvas"
-import {
-  generationCanvasRevisionConflictCode,
-  type GenerationCanvasRequest,
-  type GenerationCanvasResult,
-} from "../generation-contracts"
+import { createCanvasDocument, type CanvasGenerateRequest, type CanvasGenerateResult } from "@convax/canvas"
+import type { GenerationCanvasRequest, GenerationCanvasResult } from "../generation-contracts"
 import {
   mediaOperationCancellationNotice,
   MediaOperationPartialError,
@@ -19,7 +15,6 @@ function request(output: "audio" | "video"): CanvasGenerateRequest {
   return {
     anchor: { x: 0, y: 0 },
     context: { documentId: "canvas", selectedNodeIds: ["source"], source: "test" },
-    expectedRevision: 3,
     output,
     prompt: output,
     references: [{ nodeId: "source", role: "reference_video" }],
@@ -29,11 +24,11 @@ function request(output: "audio" | "video"): CanvasGenerateRequest {
 }
 
 function initialProgress(): MediaOperationProgress {
-  return { createdNodeIds: [], nextRequestIndex: 0, revision: 3, warnings: [] }
+  return { createdNodeIds: [], nextRequestIndex: 0, warnings: [] }
 }
 
-function result(nodeId: string, revision: number): CanvasGenerateResult {
-  return { createdNodeIds: [nodeId], revision, toolId: "media", warnings: [] }
+function result(nodeId: string): CanvasGenerateResult {
+  return { createdNodeIds: [nodeId], toolId: "media", warnings: [] }
 }
 
 describe("runMediaOperationSequence", () => {
@@ -46,19 +41,18 @@ describe("runMediaOperationSequence", () => {
       mediaOperationCancellationNotice("en", {
         createdNodeIds: ["silent-video"],
         nextRequestIndex: 1,
-        revision: 4,
         warnings: [],
       }).title,
     ).toBe("Media operation partially completed")
   })
 
-  test("runs video then audio and carries revision and relation anchors forward", async () => {
+  test("runs video then audio and carries semantic relation anchors forward", async () => {
     const calls: CanvasGenerateRequest[] = []
     const snapshots: MediaOperationProgress[] = []
     const progress = await runMediaOperationSequence({
       generate: async (current) => {
         calls.push(current)
-        return calls.length === 1 ? result("silent-video", 4) : result("audio", 5)
+        return calls.length === 1 ? result("silent-video") : result("audio")
       },
       initialProgress: initialProgress(),
       onProgress: (current) => snapshots.push(current),
@@ -68,32 +62,30 @@ describe("runMediaOperationSequence", () => {
     })
 
     expect(calls).toHaveLength(2)
-    expect(calls[0]).toMatchObject({ expectedRevision: 3 })
     expect(calls[0].relationAnchorNodeIds).toBeUndefined()
-    expect(calls[1]).toMatchObject({ expectedRevision: 4, relationAnchorNodeIds: ["silent-video"] })
+    expect(calls[1]).toMatchObject({ relationAnchorNodeIds: ["silent-video"] })
     expect(snapshots.map((current) => current.nextRequestIndex)).toEqual([1, 2])
     expect(progress).toEqual({
       createdNodeIds: ["silent-video", "audio"],
       nextRequestIndex: 2,
-      revision: 5,
       warnings: [],
     })
   })
 
-  test("refreshes the authoritative Canvas revision before each later step", async () => {
+  test("revalidates semantic Canvas inputs before each later step", async () => {
     const calls: CanvasGenerateRequest[] = []
     const refreshed: MediaOperationProgress[] = []
     const progress = await runMediaOperationSequence({
       generate: async (current) => {
         calls.push(current)
-        return calls.length === 1 ? result("silent-video", 4) : result("audio", 6)
+        return calls.length === 1 ? result("silent-video") : result("audio")
       },
       initialProgress: initialProgress(),
       onProgress: () => undefined,
       partialFailureMessage: () => "partial",
       refreshProgress: async (current) => {
         refreshed.push(current)
-        return { ...current, revision: 5 }
+        return current
       },
       requests: [request("video"), request("audio")],
       signal,
@@ -103,46 +95,13 @@ describe("runMediaOperationSequence", () => {
       {
         createdNodeIds: ["silent-video"],
         nextRequestIndex: 1,
-        revision: 4,
         warnings: [],
       },
     ])
     expect(calls[1]).toMatchObject({
-      expectedRevision: 5,
       relationAnchorNodeIds: ["silent-video"],
     })
-    expect(progress.revision).toBe(6)
-  })
-
-  test("safely retries a later step when Main rejects its revision before execution", async () => {
-    const calls: CanvasGenerateRequest[] = []
-    let refreshes = 0
-    const progress = await runMediaOperationSequence({
-      generate: async (current) => {
-        calls.push(current)
-        if (calls.length === 1) return result("silent-video", 4)
-        if (calls.length === 2) {
-          throw new Error(`${generationCanvasRevisionConflictCode}: expected 4, received 5`)
-        }
-        return result("audio", 6)
-      },
-      initialProgress: initialProgress(),
-      onProgress: () => undefined,
-      partialFailureMessage: () => "partial",
-      refreshProgress: async (current) => {
-        refreshes += 1
-        return { ...current, revision: refreshes === 1 ? 4 : 5 }
-      },
-      requests: [request("video"), request("audio")],
-      signal,
-    })
-
-    expect(calls.map((call) => call.expectedRevision)).toEqual([3, 4, 5])
-    expect(progress).toMatchObject({
-      createdNodeIds: ["silent-video", "audio"],
-      nextRequestIndex: 2,
-      revision: 6,
-    })
+    expect(progress.createdNodeIds).toEqual(["silent-video", "audio"])
   })
 
   test("does not run audio or report partial progress when video fails", async () => {
@@ -172,7 +131,7 @@ describe("runMediaOperationSequence", () => {
     const firstAttempt = runMediaOperationSequence({
       generate: async () => {
         calls += 1
-        if (calls === 1) return result("silent-video", 4)
+        if (calls === 1) return result("silent-video")
         throw new Error("audio failed")
       },
       initialProgress: initialProgress(),
@@ -192,9 +151,9 @@ describe("runMediaOperationSequence", () => {
     const retried = await runMediaOperationSequence({
       generate: async (current) => {
         retryCalls.push(current)
-        return result("audio", 10)
+        return result("audio")
       },
-      initialProgress: { ...saved.at(-1)!, revision: 9 },
+      initialProgress: saved.at(-1)!,
       onProgress: (current) => saved.push(current),
       partialFailureMessage: () => "partial",
       requests,
@@ -203,12 +162,10 @@ describe("runMediaOperationSequence", () => {
 
     expect(retryCalls).toHaveLength(1)
     expect(retryCalls[0]).toMatchObject({
-      expectedRevision: 9,
       output: "audio",
       relationAnchorNodeIds: ["silent-video"],
     })
     expect(retried.createdNodeIds).toEqual(["silent-video", "audio"])
-    expect(retried.revision).toBe(10)
   })
 
   test("preserves completed progress when cancellation happens before audio", async () => {
@@ -219,7 +176,7 @@ describe("runMediaOperationSequence", () => {
       generate: async () => {
         calls += 1
         controller.abort(new DOMException("Canceled", "AbortError"))
-        return result("silent-video", 4)
+        return result("silent-video")
       },
       initialProgress: initialProgress(),
       onProgress: (current) => saved.push(current),
@@ -231,7 +188,7 @@ describe("runMediaOperationSequence", () => {
     expect(operation).rejects.toBeInstanceOf(DOMException)
     await operation.catch(() => undefined)
     expect(calls).toBe(1)
-    expect(saved.at(-1)).toMatchObject({ createdNodeIds: ["silent-video"], nextRequestIndex: 1, revision: 4 })
+    expect(saved.at(-1)).toMatchObject({ createdNodeIds: ["silent-video"], nextRequestIndex: 1 })
   })
 })
 
@@ -239,7 +196,6 @@ describe("runMediaOperationReturn", () => {
   const returnRequest = {
     anchor: { x: 0, y: 0 },
     expectedOutputCount: 1,
-    expectedRevision: 3,
     operationId: "return-operation",
     output: "text",
     prompt: "Import selected media",
@@ -255,8 +211,9 @@ describe("runMediaOperationReturn", () => {
       generate: async () =>
         ({
           createdNodeIds: [],
+          operationReceipt: null,
           outputText: "Imported 1 media file.",
-          revision: 3,
+          projection: createCanvasDocument({ id: "canvas" }),
           toolId: "media/import-selected",
           warnings: [],
         }) satisfies GenerationCanvasResult,
@@ -286,8 +243,9 @@ describe("runMediaOperationReturn", () => {
     controller.abort(new DOMException("Canceled", "AbortError"))
     resolve({
       createdNodeIds: [],
+      operationReceipt: null,
       outputText: "stale success",
-      revision: 3,
+      projection: createCanvasDocument({ id: "canvas" }),
       toolId: "media/import-selected",
       warnings: [],
     })

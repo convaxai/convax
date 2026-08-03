@@ -280,27 +280,23 @@ describe("ProjectCanvasResourceHydrator", () => {
     ).rejects.toMatchObject({ name: "AbortError" })
   })
 
-  test("hydrates a full document while preserving the typed reference and revision", async () => {
+  test("hydrates a full document while preserving the typed reference", async () => {
     await fs.writeFile(path.join(projectRoot, "brief.txt"), "hello")
     const reference = { kind: "project-file", path: "brief.txt" } as const
-    const document = {
-      ...createCanvasDocument({
-        id: "canvas-main",
-        nodes: [
-          createTextNode({
-            id: "brief",
-            metadata: { [projectResourceReferenceKey]: reference },
-            position: { x: 0, y: 0 },
-            resourceState: { status: "stale" },
-          }),
-        ],
-      }),
-      revision: 9,
-    }
+    const document = createCanvasDocument({
+      id: "canvas-main",
+      nodes: [
+        createTextNode({
+          id: "brief",
+          metadata: { [projectResourceReferenceKey]: reference },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+      ],
+    })
 
     const hydrated = await hydrator.hydrate({ document, projectId })
 
-    expect(hydrated.revision).toBe(9)
     expect(hydrated.nodes[0]!.data.metadata).toEqual({ [projectResourceReferenceKey]: reference })
     expect(hydrated.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "hello" })
   })
@@ -309,26 +305,23 @@ describe("ProjectCanvasResourceHydrator", () => {
     const target = path.join(projectRoot, "brief.txt")
     await fs.writeFile(target, "before")
     const reference = { kind: "project-file", path: "brief.txt" } as const
-    const document = {
-      ...createCanvasDocument({
-        id: "canvas-refresh",
-        nodes: [
-          createTextNode({
-            id: "brief",
-            metadata: { [projectResourceReferenceKey]: reference },
-            position: { x: 0, y: 0 },
-            resourceState: { status: "stale" },
-          }),
-          createTextNode({
-            id: "already-ready",
-            metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "untouched.txt" } },
-            position: { x: 20, y: 0 },
-            resourceState: { status: "ready", text: "keep" },
-          }),
-        ],
-      }),
-      revision: 11,
-    }
+    const document = createCanvasDocument({
+      id: "canvas-refresh",
+      nodes: [
+        createTextNode({
+          id: "brief",
+          metadata: { [projectResourceReferenceKey]: reference },
+          position: { x: 0, y: 0 },
+          resourceState: { status: "stale" },
+        }),
+        createTextNode({
+          id: "already-ready",
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "untouched.txt" } },
+          position: { x: 20, y: 0 },
+          resourceState: { status: "ready", text: "keep" },
+        }),
+      ],
+    })
 
     const first = await hydrator.hydrateStale({ document, projectId })
     expect(first.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "before" })
@@ -356,7 +349,6 @@ describe("ProjectCanvasResourceHydrator", () => {
       },
       projectId,
     })
-    expect(recreated.revision).toBe(11)
     expect(recreated.nodes[0]!.data.resourceState).toMatchObject({ status: "ready", text: "after" })
   })
 })

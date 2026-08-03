@@ -7,8 +7,6 @@ import {
   ReactFlow,
   ReactFlowProvider,
   SelectionMode,
-  applyEdgeChanges,
-  applyNodeChanges,
   useReactFlow,
   useViewport,
   type Connection,
@@ -126,6 +124,7 @@ import {
   addCanvasNodes,
   alignCanvasNodes,
   canGroupCanvasNodes,
+  type CanvasNodeGeometryUpdate,
   type CanvasAlign,
   type CanvasDistribute,
   type CanvasLayout,
@@ -153,7 +152,7 @@ import {
   CANVAS_GROUP_FOLDER_SIZE,
   createCanvasId,
   getCanvasNodePresentationSize,
-  parseCanvasDocument,
+  getCanvasNodeSize,
 } from "../document"
 import { createCanvasFolderFocusNodes, getCanvasFolderFocusEntry } from "../directory-focus"
 import { CanvasOverlayRootProvider } from "../editor-context"
@@ -199,7 +198,13 @@ import {
 import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges } from "./canvas-selection-sync"
 import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
-import { canvasHistoryReducer, createCanvasHistory, type CanvasHistoryAction } from "../history"
+import {
+  canvasGeometryCommandV2,
+  createReadonlyCanvasProjectionBootstrapV2,
+  type CanvasEntityRefV2,
+  type CanvasRendererCollaborationClientV2,
+  type CanvasRendererProjectionStoreV2,
+} from "../collaboration"
 import type { CanvasNodeRegistry } from "../node-registry"
 import { CanvasReloadQueue } from "../reload-queue"
 import {
@@ -233,6 +238,7 @@ import type {
   CanvasPoint,
   CanvasResourceRuntimeState,
   CanvasSelection,
+  CanvasSize,
 } from "../types"
 import {
   createCanvasShortcutHandler,
@@ -318,13 +324,6 @@ interface CanvasLoadBarrier {
   resolve(): void
 }
 
-interface CanvasAuthoritativeRenderWaiter {
-  documentId: string
-  reject(error: unknown): void
-  resolve(): void
-  revision: number
-}
-
 function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
   if (resolved) return { promise: Promise.resolve(), reject: () => undefined, resolve: () => undefined }
   let rejectPromise: (error: unknown) => void = () => undefined
@@ -337,37 +336,8 @@ function createCanvasLoadBarrier(resolved = false): CanvasLoadBarrier {
   return { promise, reject: rejectPromise, resolve: resolvePromise }
 }
 
-function createInitialCanvasHistory(document: CanvasDocument) {
-  const normalized = parseCanvasDocument(document, document.id)
-  if (!normalized) throw new Error("CanvasEditor received an invalid initial document")
-  return createCanvasHistory(normalized)
-}
-
 function equalIds(left: ReadonlySet<string>, right: ReadonlySet<string>) {
   return left.size === right.size && [...left].every((id) => right.has(id))
-}
-
-function equalCanvasNodes(left: readonly CanvasNode[], right: readonly CanvasNode[]) {
-  if (left.length !== right.length) return false
-  return left.every((node, index) => {
-    const next = right[index]
-    if (node === next) return true
-    return (
-      node.id === next.id &&
-      node.position.x === next.position.x &&
-      node.position.y === next.position.y &&
-      node.measured?.width === next.measured?.width &&
-      node.measured?.height === next.measured?.height &&
-      node.width === next.width &&
-      node.height === next.height &&
-      node.dragging === next.dragging &&
-      node.resizing === next.resizing &&
-      node.hidden === next.hidden &&
-      node.parentId === next.parentId &&
-      node.data === next.data &&
-      node.style === next.style
-    )
-  })
 }
 
 function isPositiveFiniteDimension(value: unknown): value is number {
@@ -379,24 +349,25 @@ function isPositiveFiniteDimension(value: unknown): value is number {
  * Project persisted Canvas dimensions into its renderer-only initial fields so
  * an authoritative reload does not hide a freshly generated node.
  */
-function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
+function projectCanvasNodeInitialDimensions(node: CanvasNode, measured?: CanvasSize): CanvasNode {
+  const {
+    dragging: _dragging,
+    height: _height,
+    initialHeight: _initialHeight,
+    initialWidth: _initialWidth,
+    measured: _measured,
+    resizing: _resizing,
+    selected: _selected,
+    width: _width,
+    ...projection
+  } = node
   const initialWidth =
-    node.measured?.width === undefined &&
-    node.width === undefined &&
-    node.initialWidth === undefined &&
-    isPositiveFiniteDimension(node.style?.width)
-      ? node.style.width
-      : undefined
+    measured === undefined && isPositiveFiniteDimension(node.style?.width) ? node.style.width : undefined
   const initialHeight =
-    node.measured?.height === undefined &&
-    node.height === undefined &&
-    node.initialHeight === undefined &&
-    isPositiveFiniteDimension(node.style?.height)
-      ? node.style.height
-      : undefined
-  if (initialWidth === undefined && initialHeight === undefined) return node
+    measured === undefined && isPositiveFiniteDimension(node.style?.height) ? node.style.height : undefined
   return {
-    ...node,
+    ...projection,
+    ...(measured === undefined ? {} : { measured: { ...measured } }),
     ...(initialWidth === undefined ? {} : { initialWidth }),
     ...(initialHeight === undefined ? {} : { initialHeight }),
   }
@@ -410,6 +381,65 @@ function projectCanvasNodeInitialDimensions(node: CanvasNode): CanvasNode {
 export function projectCanvasFocusedNode(node: CanvasNode, focusedGroupId: string | null): CanvasNode {
   if (!focusedGroupId || node.parentId !== focusedGroupId || node.extent === undefined) return node
   return { ...node, extent: undefined }
+}
+
+interface CanvasTransientGeometry {
+  position?: CanvasPoint
+  size?: CanvasSize
+}
+
+interface CanvasTransientMeasurement {
+  canonicalSize: CanvasSize
+  entity?: CanvasEntityRefV2
+  rendererId: string
+  size: CanvasSize
+}
+
+interface CanvasTransientResourceState {
+  entity?: CanvasEntityRefV2
+  rendererId: string
+  state: CanvasResourceRuntimeState
+}
+
+function sameCanvasEntity(left: CanvasEntityRefV2 | undefined, right: CanvasEntityRefV2 | undefined) {
+  return left?.id === right?.id && left?.incarnation === right?.incarnation
+}
+
+function sameCanvasSize(left: CanvasSize, right: CanvasSize) {
+  return left.width === right.width && left.height === right.height
+}
+
+function canvasFileRendererIdentity(node: CanvasNode, registry: CanvasFileRendererRegistry) {
+  const definition = registry.resolve(node.data)
+  return definition ? `renderer:${definition.id}` : `missing:${node.data.kind}`
+}
+
+function submitCanvasTransientGeometry(
+  session: CanvasRendererCollaborationClientV2,
+  start: CanvasDocument,
+  geometry: ReadonlyMap<string, CanvasTransientGeometry>,
+  entities: ReadonlyMap<string, CanvasEntityRefV2>,
+): Promise<boolean> {
+  const updates: CanvasNodeGeometryUpdate[] = []
+  for (const node of start.nodes) {
+    const transient = geometry.get(node.id)
+    const capturedEntity = entities.get(node.id)
+    if (!transient || !capturedEntity || !sameCanvasEntity(capturedEntity, session.resolveNodeEntity(node.id))) continue
+    const position = transient.position ?? node.position
+    const startSize = getCanvasNodeSize(node)
+    const positionChanged = position.x !== node.position.x || position.y !== node.position.y
+    const sizeChanged =
+      transient.size !== undefined &&
+      (transient.size.width !== startSize.width || transient.size.height !== startSize.height)
+    if (!positionChanged && !sizeChanged) continue
+    updates.push({
+      nodeId: node.id,
+      position: { ...position },
+      ...(sizeChanged ? { size: { ...transient.size! } } : {}),
+    })
+  }
+  if (updates.length === 0) return Promise.resolve(false)
+  return session.submit(canvasGeometryCommandV2(updates, (nodeId) => entities.get(nodeId))).then(() => true)
 }
 
 interface PendingConnection {
@@ -516,7 +546,10 @@ export interface CanvasEditorProps {
   appearance?: CanvasAppearanceInput
   className?: string
   clipboardScope?: string
-  initialDocument: CanvasDocument
+  /** Immutable, read-only, no-persistence preview used only when `session` is absent. */
+  initialDocument?: CanvasDocument
+  /** Required for editing. Host-owned Yjs projection, typed-intent, undo, and flush boundary. */
+  session?: CanvasRendererCollaborationClientV2
   fileRendererRegistry?: CanvasFileRendererRegistry
   nodeRegistry?: CanvasNodeRegistry
   onlyRenderVisibleElements?: boolean
@@ -541,6 +574,10 @@ export interface CanvasEditorProps {
   viewId?: string
   viewRegistry?: CanvasViewRegistry
   viewScopeId?: string
+}
+
+type CanvasEditorTransientAction = {
+  type: "begin-gesture" | "cancel-gesture" | "end-gesture" | "redo" | "undo"
 }
 
 export interface CanvasEditorHandle {
@@ -695,11 +732,7 @@ function mergeCanvasResourceRefresh(
   current: CanvasResourceRefreshSnapshot,
   hydrated: CanvasDocument,
 ): CanvasDocument | null {
-  if (
-    !isCanvasResourceRefreshTargetCurrent(requested, current) ||
-    hydrated.id !== requested.document.id ||
-    hydrated.revision !== requested.document.revision
-  ) {
+  if (!isCanvasResourceRefreshTargetCurrent(requested, current) || hydrated.id !== requested.document.id) {
     return null
   }
 
@@ -748,8 +781,7 @@ function isCanvasResourceRefreshTargetCurrent(
 ) {
   if (
     !isCanvasResourceMutationScopeCurrent(() => current.scope, requested.scope) ||
-    current.document.id !== requested.document.id ||
-    current.document.revision !== requested.document.revision
+    current.document.id !== requested.document.id
   )
     return false
   const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
@@ -767,6 +799,21 @@ function isCanvasResourceRefreshTargetCurrent(
 
 function canvasNodeResourceState(node: CanvasNode): unknown {
   return node.data.resourceState
+}
+
+function parseCanvasResourceRuntimeState(value: unknown): CanvasResourceRuntimeState | null {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return null
+  const state = value as Record<string, unknown>
+  if (!["stale", "ready", "missing", "corrupt", "unsupported", "conflict"].includes(String(state.status))) {
+    return null
+  }
+  for (const key of ["contentRevision", "error", "mediaType", "name", "posterUrl", "text", "url"] as const) {
+    if (state[key] !== undefined && typeof state[key] !== "string") return null
+  }
+  for (const key of ["canSaveEditableCopy", "editableText"] as const) {
+    if (state[key] !== undefined && typeof state[key] !== "boolean") return null
+  }
+  return structuredClone(value) as CanvasResourceRuntimeState
 }
 
 function isStaleCanvasResourceState(value: unknown) {
@@ -800,13 +847,6 @@ export async function abortCanvasReloadBeforeWait(
 ) {
   abortCanvasReload(controller)
   await waitForStableLoad()
-}
-
-function canvasReloadAbortError(signal: AbortSignal) {
-  if (signal.reason instanceof Error) return signal.reason
-  const error = new Error("Canvas reload was aborted")
-  error.name = "AbortError"
-  return error
 }
 
 export function settleCanvasReloadFailure(input: {
@@ -847,7 +887,7 @@ export async function completeCanvasResourceMutation(input: {
   presentCreatedNodes?: (createdNodeIds: readonly string[]) => void
   prepareCreatedNodes?: (createdNodeIds: readonly string[]) => void
   reload: (signal: AbortSignal) => Promise<void>
-  result: { createdNodeIds: readonly string[]; revision: number; warnings: readonly string[] }
+  result: { createdNodeIds: readonly string[]; warnings: readonly string[] }
   runViewEffect?: (createdNodeIds: readonly string[]) => Promise<void>
   selectNodes: (nodeIds: readonly string[]) => void
   show: (notification: CanvasNotification) => void
@@ -999,7 +1039,72 @@ function CanvasEditorContent(
   },
 ) {
   const appearance = useMemo(() => resolveCanvasAppearance(props.appearance), [props.appearance])
-  const [history, reduce] = useReducer(canvasHistoryReducer, props.initialDocument, createInitialCanvasHistory)
+  const [bootstrapProjection] = useState<CanvasRendererProjectionStoreV2 | undefined>(() =>
+    props.initialDocument ? createReadonlyCanvasProjectionBootstrapV2(props.initialDocument) : undefined,
+  )
+  const collaborationSession = props.session
+  const projectionStore = collaborationSession ?? bootstrapProjection
+  if (!projectionStore)
+    throw new Error("CanvasEditor requires a host collaboration session or read-only initialDocument")
+  if (props.session && props.initialDocument) {
+    throw new Error("CanvasEditor initialDocument cannot coexist with a host collaboration session")
+  }
+  if (
+    props.session &&
+    (props.session.authority !== "project-collaboration-application" ||
+      props.session.undoModel !== "project-yjs-semantic-history")
+  ) {
+    throw new Error("CanvasEditor requires a Main-owned Yjs collaboration projection client")
+  }
+  const canonicalDocument = useSyncExternalStore(
+    projectionStore.subscribe.bind(projectionStore),
+    projectionStore.getProjection.bind(projectionStore),
+    projectionStore.getProjection.bind(projectionStore),
+  )
+  const [gestureStart, setGestureStart] = useState<CanvasDocument | undefined>()
+  const gestureStartRef = useRef<CanvasDocument | undefined>(undefined)
+  const gestureEntitiesRef = useRef(new Map<string, CanvasEntityRefV2>())
+  const gestureGeometryRef = useRef(new Map<string, CanvasTransientGeometry>())
+  const [gestureGeometry, setGestureGeometry] = useState(() => new Map<string, CanvasTransientGeometry>())
+  const [reactFlowMeasurements, setReactFlowMeasurements] = useState(
+    () => new Map<string, CanvasTransientMeasurement>(),
+  )
+  const [resourceStates, setResourceStates] = useState(() => new Map<string, CanvasTransientResourceState>())
+  const renderedDocument = useMemo(() => {
+    let document =
+      gestureGeometry.size === 0
+        ? canonicalDocument
+        : {
+            ...canonicalDocument,
+            nodes: canonicalDocument.nodes.map((node) => {
+              const geometry = gestureGeometry.get(node.id)
+              if (!geometry) return node
+              return {
+                ...node,
+                ...(geometry.position === undefined ? {} : { position: geometry.position }),
+                ...(geometry.size === undefined
+                  ? {}
+                  : { style: { ...node.style, height: geometry.size.height, width: geometry.size.width } }),
+              }
+            }),
+          }
+    for (const [nodeId, transient] of resourceStates) {
+      const currentEntity = projectionStore.resolveNodeEntity(nodeId)
+      if (transient.entity && !sameCanvasEntity(transient.entity, currentEntity)) continue
+      if (!document.nodes.some((node) => node.id === nodeId)) continue
+      document = replaceCanvasNodeResourceState(document, nodeId, transient.state)
+    }
+    return document
+  }, [canonicalDocument, gestureGeometry, projectionStore, resourceStates])
+  const history = useMemo(
+    () => ({
+      document: renderedDocument,
+      future: collaborationSession?.canRedo() ? [true] : [],
+      gestureStart,
+      past: collaborationSession?.canUndo() ? [true] : [],
+    }),
+    [collaborationSession, gestureStart, renderedDocument],
+  )
   const [selection, setSelection] = useState<CanvasSelection>(() => ({ nodeIds: new Set(), edgeIds: new Set() }))
   const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const [generateOpen, setGenerateOpen] = useState(false)
@@ -1014,9 +1119,7 @@ function CanvasEditorContent(
   const [query, setQuery] = useState("")
   const [generating, setGenerating] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [saveAttempt, setSaveAttempt] = useState(0)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [loadAttempt, setLoadAttempt] = useState(0)
+  const [loadError] = useState<string | null>(null)
   const [leaving, setLeaving] = useState(false)
   const [interactionTool, setInteractionTool] = useState<CanvasInteractionTool>("select")
   const [selectionDragModeActive, setSelectionDragModeActive] = useState(false)
@@ -1067,6 +1170,7 @@ function CanvasEditorContent(
   const boxSelectionActiveRef = useRef(false)
   const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
   const selectionRef = useRef(selection)
+  const selectedNodeEntitiesRef = useRef(new Map<string, CanvasEntityRefV2>())
   const selectionDragAutoSelectedNodeRef = useRef<string | null>(null)
   const selectionDragCandidateNodeRef = useRef<string | null>(null)
   const selectionDragModeActiveRef = useRef(false)
@@ -1108,19 +1212,12 @@ function CanvasEditorContent(
     }
   }
   const historyRef = useRef(history)
-  const hasLocalEditsRef = useRef(false)
   const saveErrorRef = useRef<string | null>(null)
   const leavingRef = useRef(false)
   const saveControllerRef = useRef<AbortController | undefined>(undefined)
-  const savePromiseRef = useRef<Promise<CanvasDocument> | undefined>(undefined)
-  const saveRevisionRef = useRef<number | undefined>(undefined)
-  const savedRevisionRef = useRef(history.document.revision)
   const reloadQueueRef = useRef(new CanvasReloadQueue())
-  const authoritativeRenderWaitersRef = useRef(new Set<CanvasAuthoritativeRenderWaiter>())
   const reloadControllerRef = useRef<AbortController | undefined>(undefined)
   const operationControllersRef = useRef(new Set<AbortController>())
-  const authoritativeLoadRequestedRef = useRef(false)
-  const presentedDocumentScopeRef = useRef<CanvasResourceMutationScopeToken | null>(null)
   const selectionActionControllerRef = useRef<AbortController | undefined>(undefined)
   const generationControllerRef = useRef<{ controller: AbortController; documentId: string } | null>(null)
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
@@ -1132,7 +1229,6 @@ function CanvasEditorContent(
   const folderBrowseService = useCanvasService("folderBrowse")
   const hydrationService = useCanvasService("hydration")
   const generateService = useCanvasService("generate")
-  const persistenceService = useCanvasService("persistence")
   const exportService = useCanvasService("export")
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
@@ -1149,10 +1245,10 @@ function CanvasEditorContent(
     setGenerateOpen(false)
     rootRef.current?.focus({ preventScroll: true })
   }, [])
-  const [hydrating, setHydrating] = useState(Boolean(persistenceService))
-  const [blockingLoad, setBlockingLoad] = useState(Boolean(persistenceService))
-  const hydratingRef = useRef(Boolean(persistenceService))
-  const loadBarrierRef = useRef(createCanvasLoadBarrier(!persistenceService))
+  const [hydrating] = useState(false)
+  const [blockingLoad] = useState(false)
+  const hydratingRef = useRef(false)
+  const loadBarrierRef = useRef(createCanvasLoadBarrier(true))
   documentRef.current = history.document
   focusedGroupIdRef.current = focusedGroupId
   folderFocusRef.current = folderFocus
@@ -1160,34 +1256,6 @@ function CanvasEditorContent(
   saveErrorRef.current = saveError
   selectionRef.current = selection
   snapEnabledRef.current = snapEnabled
-  const waitForAuthoritativeRender = useCallback(
-    (document: CanvasDocument) =>
-      new Promise<void>((resolve, reject) => {
-        authoritativeRenderWaitersRef.current.add({
-          documentId: document.id,
-          reject,
-          resolve,
-          revision: document.revision,
-        })
-      }),
-    [],
-  )
-  useLayoutEffect(() => {
-    if (hydrating || loadError) return
-    for (const waiter of authoritativeRenderWaitersRef.current) {
-      if (history.document.id !== waiter.documentId || history.document.revision < waiter.revision) continue
-      authoritativeRenderWaitersRef.current.delete(waiter)
-      waiter.resolve()
-    }
-  }, [history.document.id, history.document.revision, hydrating, loadError])
-  useEffect(
-    () => () => {
-      const error = new Error("Canvas editor was closed before the authoritative document rendered")
-      for (const waiter of authoritativeRenderWaitersRef.current) waiter.reject(error)
-      authoritativeRenderWaitersRef.current.clear()
-    },
-    [],
-  )
   const updateConnectionTargetNode = useCallback((nodeId: string | null) => {
     if (connectionTargetNodeIdRef.current === nodeId) return
     connectionTargetNodeIdRef.current = nodeId
@@ -1202,6 +1270,17 @@ function CanvasEditorContent(
     for (const controller of operationControllersRef.current) controller.abort()
     operationControllersRef.current.clear()
     abortCanvasReload(reloadControllerRef.current)
+    const emptySelection = { edgeIds: new Set<string>(), nodeIds: new Set<string>() }
+    selectionRef.current = emptySelection
+    selectedNodeEntitiesRef.current = new Map()
+    setSelection(emptySelection)
+    boxSelectionActiveRef.current = false
+    boxSelectionBaselineRef.current = null
+    connectionStartRef.current = null
+    updateConnectionTargetNode(null)
+    ignoreConnectionPaneClickRef.current = false
+    altDragRef.current = null
+    pointerRef.current = null
     snapSessionRef.current = null
     setSnapLines([])
     folderFocusRequestRef.current?.abort()
@@ -1209,31 +1288,134 @@ function CanvasEditorContent(
     setFolderFocus(null)
     setFocusedGroupId(null)
     updateGroupDropTarget(null)
+    gestureStartRef.current = undefined
+    gestureEntitiesRef.current = new Map()
+    gestureGeometryRef.current = new Map()
+    setGestureGeometry(new Map())
+    setGestureStart(undefined)
+    setReactFlowMeasurements(new Map())
+    setResourceStates(new Map())
+    setPendingConnection(null)
+    setPendingNodeFocus(null)
+    setInsertPoint(null)
+    setNodeMenuOpen(false)
+    setGenerateOpen(false)
+    setSearchOpen(false)
     cameraMotionGenerationRef.current += 1
     try {
       void reactFlowRef.current.setViewport(reactFlowRef.current.getViewport(), { duration: 0 })
     } catch {
       // React Flow may not be mounted for the previous scope yet.
     }
-  }, [currentViewScopeId, history.document.id, updateGroupDropTarget])
+  }, [currentViewScopeId, history.document.id, updateConnectionTargetNode, updateGroupDropTarget])
   useEffect(() => {
     if (history.gestureStart) return
     snapSessionRef.current = null
     setSnapLines([])
   }, [history.gestureStart])
-  const dispatch = useCallback((action: CanvasHistoryAction) => {
-    if (leavingRef.current || hydratingRef.current) return
-    if (action.type !== "hydrate" && action.type !== "replace" && action.type !== "replace-update") {
-      hasLocalEditsRef.current = true
+  const clearTransientGeometry = useCallback(() => {
+    gestureStartRef.current = undefined
+    gestureEntitiesRef.current = new Map()
+    gestureGeometryRef.current = new Map()
+    setGestureGeometry(new Map())
+    setGestureStart(undefined)
+  }, [])
+  useLayoutEffect(() => {
+    if (!gestureStartRef.current || gestureGeometryRef.current.size === 0) return
+    for (const nodeId of gestureGeometryRef.current.keys()) {
+      const captured = gestureEntitiesRef.current.get(nodeId)
+      if (captured && sameCanvasEntity(captured, projectionStore.resolveNodeEntity(nodeId))) continue
+      clearTransientGeometry()
+      snapSessionRef.current = null
+      setSnapLines([])
+      break
     }
-    reduce(action)
+  }, [canonicalDocument, clearTransientGeometry, projectionStore])
+  const dispatch = useCallback(
+    (action: CanvasEditorTransientAction) => {
+      if (leavingRef.current || hydratingRef.current) return
+      if (action.type === "begin-gesture") {
+        if (!gestureStartRef.current) {
+          gestureStartRef.current = canonicalDocument
+          gestureEntitiesRef.current = new Map(
+            canonicalDocument.nodes.flatMap((node) => {
+              const entity = projectionStore.resolveNodeEntity(node.id)
+              return entity ? [[node.id, entity] as const] : []
+            }),
+          )
+          gestureGeometryRef.current = new Map()
+          setGestureGeometry(new Map())
+          setGestureStart(canonicalDocument)
+        }
+        return
+      }
+      if (action.type === "cancel-gesture") {
+        clearTransientGeometry()
+        return
+      }
+      if (action.type === "end-gesture") {
+        const start = gestureStartRef.current
+        const geometry = gestureGeometryRef.current
+        const entities = gestureEntitiesRef.current
+        clearTransientGeometry()
+        if (!start) return
+        if (collaborationSession) {
+          const onSubmissionError = (error: unknown) => {
+            setSaveError(error instanceof Error ? error.message : "Canvas geometry submission failed")
+          }
+          try {
+            void submitCanvasTransientGeometry(collaborationSession, start, geometry, entities).catch(onSubmissionError)
+          } catch (error) {
+            onSubmissionError(error)
+          }
+        }
+        return
+      }
+      if (action.type === "undo") {
+        if (collaborationSession) void collaborationSession.undo()
+        return
+      }
+      if (action.type === "redo") {
+        if (collaborationSession) void collaborationSession.redo()
+      }
+    },
+    [canonicalDocument, clearTransientGeometry, collaborationSession, projectionStore],
+  )
+  const rejectUnmappedCanvasMutation = useCallback(() => {
+    setSaveError(
+      "This Canvas operation has no frozen typed-intent mapping and was rejected before reaching collaboration state.",
+    )
   }, [])
-  const replaceRuntimeDocument = useCallback((document: CanvasDocument) => {
-    const replaced = canvasHistoryReducer(historyRef.current, { document, type: "replace" })
-    historyRef.current = replaced
-    documentRef.current = replaced.document
-    reduce({ document, type: "replace" })
-  }, [])
+  const replaceRuntimeResourceStates = useCallback(
+    (document: CanvasDocument) => {
+      if (document.id !== canonicalDocument.id) return
+      const canonicalNodes = new Map(canonicalDocument.nodes.map((node) => [node.id, node]))
+      setResourceStates((current) => {
+        const next = new Map(current)
+        let changed = false
+        for (const node of document.nodes) {
+          const canonicalNode = canonicalNodes.get(node.id)
+          const state = parseCanvasResourceRuntimeState(canvasNodeResourceState(node))
+          if (!canonicalNode || !state) continue
+          const entity = projectionStore.resolveNodeEntity(node.id)
+          const rendererId = canvasFileRendererIdentity(canonicalNode, props.fileRendererRegistry)
+          const previous = next.get(node.id)
+          if (
+            previous &&
+            sameCanvasEntity(previous.entity, entity) &&
+            previous.rendererId === rendererId &&
+            sameCanvasRuntimeValue(previous.state, state)
+          ) {
+            continue
+          }
+          next.set(node.id, { entity, rendererId, state })
+          changed = true
+        }
+        return changed ? next : current
+      })
+    },
+    [canonicalDocument, projectionStore, props.fileRendererRegistry],
+  )
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
     props.nodeRegistry.getVersion,
@@ -1244,8 +1426,43 @@ function CanvasEditorContent(
     props.fileRendererRegistry.getVersion,
     props.fileRendererRegistry.getVersion,
   )
+  useEffect(() => {
+    const liveNodes = new Map(canonicalDocument.nodes.map((node) => [node.id, node]))
+    setReactFlowMeasurements((current) => {
+      const next = new Map<string, CanvasTransientMeasurement>()
+      for (const [nodeId, transient] of current) {
+        const node = liveNodes.get(nodeId)
+        if (!node) continue
+        const entity = projectionStore.resolveNodeEntity(nodeId)
+        if (transient.entity && !sameCanvasEntity(transient.entity, entity)) continue
+        if (!sameCanvasSize(transient.canonicalSize, getCanvasNodeSize(node))) continue
+        if (transient.rendererId !== canvasFileRendererIdentity(node, props.fileRendererRegistry)) continue
+        next.set(nodeId, transient)
+      }
+      if (next.size === current.size && [...next].every(([nodeId, value]) => current.get(nodeId) === value)) {
+        return current
+      }
+      return next
+    })
+    setResourceStates((current) => {
+      const next = new Map<string, CanvasTransientResourceState>()
+      for (const [nodeId, transient] of current) {
+        if (!liveNodes.has(nodeId)) continue
+        const node = liveNodes.get(nodeId)!
+        const entity = projectionStore.resolveNodeEntity(nodeId)
+        if (transient.entity && !sameCanvasEntity(transient.entity, entity)) continue
+        if (transient.rendererId !== canvasFileRendererIdentity(node, props.fileRendererRegistry)) continue
+        next.set(nodeId, transient)
+      }
+      if (next.size === current.size && [...next].every(([nodeId, value]) => current.get(nodeId) === value)) {
+        return current
+      }
+      return next
+    })
+  }, [canonicalDocument, fileRendererRegistryVersion, projectionStore, props.fileRendererRegistry])
 
   const readOnly =
+    !collaborationSession ||
     (props.readOnly ?? false) ||
     leaving ||
     hydrating ||
@@ -1359,6 +1576,17 @@ function CanvasEditorContent(
       .map((node) => {
         const isFocusRoot = node.id === groupFocus.focusedGroupId
         const isFolder = node.data.kind === "group" && !isFocusRoot && isCanvasGroupFolded(node)
+        const measurement = reactFlowMeasurements.get(node.id)
+        const currentEntity = projectionStore.resolveNodeEntity(node.id)
+        const measured =
+          !isFocusRoot &&
+          !isFolder &&
+          measurement &&
+          (!measurement.entity || sameCanvasEntity(measurement.entity, currentEntity)) &&
+          sameCanvasSize(measurement.canonicalSize, getCanvasNodeSize(node)) &&
+          measurement.rendererId === canvasFileRendererIdentity(node, props.fileRendererRegistry)
+            ? measurement.size
+            : undefined
         const projected = projectCanvasNodeInitialDimensions(
           projectCanvasFocusedNode(
             isFocusRoot
@@ -1391,11 +1619,12 @@ function CanvasEditorContent(
                 : node,
             groupFocus.focusedGroupId,
           ),
+          measured,
         )
         const selected = selection.nodeIds.has(node.id)
         const isConnectionTarget = node.id === connectionTargetNodeId
         if (isFocusRoot) return projected
-        if (node.selected === selected && !isConnectionTarget) return projected
+        if (!selected && !isConnectionTarget) return projected
         return {
           ...projected,
           className: cn(node.className, isConnectionTarget && "is-connection-target"),
@@ -1411,6 +1640,9 @@ function CanvasEditorContent(
     groupFocus.visibleNodeIds,
     history.document.nodes,
     nodeById,
+    projectionStore,
+    props.fileRendererRegistry,
+    reactFlowMeasurements,
     selection.nodeIds,
   ])
   const edges = useMemo(() => {
@@ -1450,13 +1682,22 @@ function CanvasEditorContent(
 
   useEffect(() => () => generationControllerRef.current?.controller.abort(), [generateService])
 
-  const replaceSelection = useCallback((next: CanvasSelection) => {
-    selectionRef.current = next
-    setSelection((current) => {
-      if (equalIds(current.nodeIds, next.nodeIds) && equalIds(current.edgeIds, next.edgeIds)) return current
-      return next
-    })
-  }, [])
+  const replaceSelection = useCallback(
+    (next: CanvasSelection) => {
+      selectionRef.current = next
+      selectedNodeEntitiesRef.current = new Map(
+        [...next.nodeIds].flatMap((nodeId) => {
+          const entity = projectionStore.resolveNodeEntity(nodeId)
+          return entity ? [[nodeId, entity] as const] : []
+        }),
+      )
+      setSelection((current) => {
+        if (equalIds(current.nodeIds, next.nodeIds) && equalIds(current.edgeIds, next.edgeIds)) return current
+        return next
+      })
+    },
+    [projectionStore],
+  )
   const updateSelection = useCallback(
     (nodeIds: readonly string[], edgeIds: readonly string[] = []) => {
       replaceSelection({ nodeIds: new Set(nodeIds), edgeIds: new Set(edgeIds) })
@@ -1570,7 +1811,6 @@ function CanvasEditorContent(
     (): CanvasViewSnapshot => ({
       documentId: documentRef.current.id,
       focusedGroupId: focusedGroupIdRef.current,
-      revision: documentRef.current.revision,
       scopeId: props.viewScopeId ?? "",
       selectedEdgeIds: [...selectionRef.current.edgeIds],
       selectedNodeIds: [...selectionRef.current.nodeIds],
@@ -2239,11 +2479,11 @@ function CanvasEditorContent(
   }, [props.viewRegistry, viewSession])
   const selectNodes = useCallback((nodeIds: readonly string[]) => updateSelection(nodeIds), [updateSelection])
   const commit = useCallback(
-    (update: (document: CanvasDocument) => CanvasDocument) => {
+    (_update: (document: CanvasDocument) => CanvasDocument) => {
       if (readOnly) return
-      dispatch({ type: "commit-update", update })
+      rejectUnmappedCanvasMutation()
     },
-    [dispatch, readOnly],
+    [readOnly, rejectUnmappedCanvasMutation],
   )
   const pointAtCenter = useCallback(() => {
     const bounds = rootRef.current?.getBoundingClientRect()
@@ -2318,11 +2558,11 @@ function CanvasEditorContent(
             }),
             onError: (error) => notifyError("Could not refresh canvas resources", error),
             queue: reloadQueueRef.current,
-            replace: replaceRuntimeDocument,
+            replace: replaceRuntimeResourceStates,
             service: hydrationService,
           })
         : undefined,
-    [hydrationService, notifyError, replaceRuntimeDocument],
+    [hydrationService, notifyError, replaceRuntimeResourceStates],
   )
   useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
@@ -2657,58 +2897,11 @@ function CanvasEditorContent(
     selectionDragGesture,
   ])
   const startSave = useCallback(
-    (document: CanvasDocument) => {
-      if (!persistenceService || loadError || document.revision === 0) {
-        savedRevisionRef.current = document.revision
-        return Promise.resolve(document)
-      }
-      if (!saveErrorRef.current && savedRevisionRef.current === document.revision) return Promise.resolve(document)
-      if (saveRevisionRef.current === document.revision && savePromiseRef.current) return savePromiseRef.current
-
-      saveControllerRef.current?.abort()
-      const controller = new AbortController()
-      saveControllerRef.current = controller
-      saveRevisionRef.current = document.revision
-      const pending = persistenceService.save(document, controller.signal).then(
-        (persisted) => {
-          if (controller.signal.aborted) return document
-          if (documentRef.current.revision === document.revision) {
-            const action = {
-              document: persisted,
-              expectedRevision: document.revision,
-              type: "acknowledge" as const,
-            }
-            const acknowledged = canvasHistoryReducer(historyRef.current, action)
-            historyRef.current = acknowledged
-            documentRef.current = acknowledged.document
-            reduce(action)
-            savedRevisionRef.current = persisted.revision
-          }
-          saveErrorRef.current = null
-          setSaveError(null)
-          return persisted
-        },
-        (error) => {
-          if (controller.signal.aborted) return document
-          const message = error instanceof Error ? error.message : String(error)
-          saveErrorRef.current = message
-          setSaveError(message)
-          notifyError("Could not save canvas", error)
-          throw error
-        },
-      )
-      savePromiseRef.current = pending
-      const clearPending = () => {
-        if (savePromiseRef.current === pending) {
-          savePromiseRef.current = undefined
-          saveRevisionRef.current = undefined
-        }
-        if (saveControllerRef.current === controller) saveControllerRef.current = undefined
-      }
-      void pending.then(clearPending, clearPending)
-      return pending
+    async (_document: CanvasDocument) => {
+      await collaborationSession?.flush()
+      return projectionStore.getProjection()
     },
-    [loadError, notifyError, persistenceService],
+    [collaborationSession, projectionStore],
   )
   const abortPendingOperations = useCallback(() => {
     for (const controller of operationControllersRef.current) controller.abort()
@@ -2716,274 +2909,42 @@ function CanvasEditorContent(
     abortCanvasReload(reloadControllerRef.current)
   }, [])
   const finalizeGestureAndSave = useCallback(async () => {
-    const current = historyRef.current
-    const finalized = current.gestureStart ? canvasHistoryReducer(current, { type: "end-gesture" }) : current
-    if (finalized !== current) {
-      historyRef.current = finalized
-      documentRef.current = finalized.document
-      reduce({ type: "end-gesture" })
-    }
-    await startSave(finalized.document)
+    if (historyRef.current.gestureStart) dispatch({ type: "end-gesture" })
+    await startSave(documentRef.current)
   }, [startSave])
-  const acceptHydratedDocument = useCallback((document: CanvasDocument) => {
-    hasLocalEditsRef.current = false
-    savedRevisionRef.current = document.revision
-    const hydrated = canvasHistoryReducer(historyRef.current, { type: "hydrate", document })
-    historyRef.current = hydrated
-    documentRef.current = hydrated.document
-    reduce({ type: "hydrate", document })
-  }, [])
   const reloadDocument = useCallback(
-    (signal?: AbortSignal) => {
-      if (!persistenceService) return Promise.resolve()
-      const reloadScope = resourceMutationScopeRef.current
-      return reloadQueueRef.current.request(async () => {
-        if (signal?.aborted) return
-        await waitForStableLoad()
-        if (
-          signal?.aborted ||
-          !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
-        )
-          return
-        if (loadError) throw new Error(loadError)
-        const loadBarrier = createCanvasLoadBarrier()
-        loadBarrierRef.current = loadBarrier
-        hydratingRef.current = true
-        setHydrating(true)
-        setLoadError(null)
-        const controller = new AbortController()
-        abortCanvasReload(reloadControllerRef.current)
-        reloadControllerRef.current = controller
-        const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
-        try {
-          await startSave(historyRef.current.document)
-          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-          const documentId = documentRef.current.id
-          const document = await persistenceService.load(documentId, controller.signal)
-          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-          if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
-          if (
-            document.id !== documentId ||
-            documentRef.current.id !== documentId ||
-            !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
-          ) {
-            throw new Error("Canvas changed while reloading")
-          }
-          acceptHydratedDocument(document)
-          loadBarrier.resolve()
-        } catch (error) {
-          const outcome = settleCanvasReloadFailure({
-            currentScope: () => resourceMutationScopeRef.current,
-            error,
-            notifyError: (title, failure) => {
-              if (loadBarrierRef.current === loadBarrier) notifyError(title, failure)
-            },
-            rejectBarrier: loadBarrier.reject,
-            reloadScope,
-            resolveBarrier: loadBarrier.resolve,
-            setLoadError: (message) => {
-              if (loadBarrierRef.current !== loadBarrier) return
-              setLoadError(message)
-            },
-            signal: controller.signal,
-          })
-          if (outcome === "failed") throw error
-        } finally {
-          unlinkAbortSignal()
-          if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
-          runCanvasReloadScopeEffect({
-            currentScope: () => resourceMutationScopeRef.current,
-            effect: () => {
-              if (loadBarrierRef.current !== loadBarrier) return
-              hydratingRef.current = false
-              setHydrating(false)
-            },
-            reloadScope,
-          })
-        }
-      })
-    },
-    [acceptHydratedDocument, loadError, notifyError, persistenceService, startSave, waitForStableLoad],
+    async (signal?: AbortSignal) => collaborationSession?.flush(signal),
+    [collaborationSession],
   )
-  const reloadAuthoritativeDocument = useCallback(
-    (signal?: AbortSignal) => {
-      if (!persistenceService) {
-        return Promise.reject(new Error("Canvas persistence is required to load the authoritative document"))
-      }
-      return reloadQueueRef.current.request(async () => {
-        if (signal?.aborted) return
-        const reloadScope = resourceMutationScopeRef.current
-        const presentedScope = presentedDocumentScopeRef.current
-        const blockWhileRecovering =
-          Boolean(loadError) ||
-          !presentedScope ||
-          !isCanvasResourceMutationScopeCurrent(() => presentedScope, reloadScope)
-        const loadBarrier = createCanvasLoadBarrier()
-        loadBarrierRef.current = loadBarrier
-        hydratingRef.current = true
-        setHydrating(true)
-        if (blockWhileRecovering) setBlockingLoad(true)
-        setLoadError(null)
-        const controller = new AbortController()
-        abortCanvasReload(reloadControllerRef.current)
-        reloadControllerRef.current = controller
-        const unlinkAbortSignal = linkCanvasReloadAbortSignal(signal, controller)
-        operationControllersRef.current.add(controller)
-        let rendered: Promise<void> | undefined
-        try {
-          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-          const documentId = documentRef.current.id
-          // Main has already committed the authoritative document. Never persist the stale renderer projection here.
-          const document = await persistenceService.load(documentId, controller.signal)
-          if (controller.signal.aborted) throw canvasReloadAbortError(controller.signal)
-          if (!document) throw new Error(`Canvas document was not found: ${documentId}`)
-          if (
-            document.id !== documentId ||
-            documentRef.current.id !== documentId ||
-            !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, reloadScope)
-          ) {
-            throw new Error("Canvas changed while loading the authoritative document")
-          }
-          rendered = waitForAuthoritativeRender(document)
-          acceptHydratedDocument(document)
-          presentedDocumentScopeRef.current = reloadScope
-          loadBarrier.resolve()
-        } catch (error) {
-          if (controller.signal.aborted || (error instanceof Error && error.name === "AbortError")) {
-            loadBarrier.resolve()
-            return
-          }
-          loadBarrier.reject(error)
-          runCanvasReloadScopeEffect({
-            currentScope: () => resourceMutationScopeRef.current,
-            effect: () => {
-              setLoadError(error instanceof Error ? error.message : String(error))
-              notifyError("Could not load authoritative canvas", error)
-            },
-            reloadScope,
-          })
-          throw error
-        } finally {
-          unlinkAbortSignal()
-          if (reloadControllerRef.current === controller) reloadControllerRef.current = undefined
-          if (loadBarrierRef.current === loadBarrier && hydratingRef.current) {
-            loadBarrierRef.current = createCanvasLoadBarrier(true)
-          }
-          runCanvasReloadScopeEffect({
-            currentScope: () => resourceMutationScopeRef.current,
-            effect: () => {
-              hydratingRef.current = false
-              setHydrating(false)
-              if (blockWhileRecovering) setBlockingLoad(false)
-            },
-            reloadScope,
-          })
-          operationControllersRef.current.delete(controller)
-        }
-        await rendered
-      })
-    },
-    [acceptHydratedDocument, loadError, notifyError, persistenceService, waitForAuthoritativeRender],
-  )
-  useEffect(() => props.onDocumentChange?.(history.document), [history.document, props.onDocumentChange])
+  const reloadAuthoritativeDocument = reloadDocument
+  // Host observers receive only the authoritative projection. React Flow
+  // gesture/resource overlays are renderer state and must never look like a
+  // persistable document update to a legacy observer.
+  useEffect(() => props.onDocumentChange?.(canonicalDocument), [canonicalDocument, props.onDocumentChange])
+
   useEffect(() => {
     const nodeIds = new Set(history.document.nodes.map((node) => node.id))
     const edgeIds = new Set(history.document.edges.map((edge) => edge.id))
     const current = selectionRef.current
     const next = {
-      nodeIds: new Set([...current.nodeIds].filter((id) => nodeIds.has(id))),
+      nodeIds: new Set(
+        [...current.nodeIds].filter((id) => {
+          if (!nodeIds.has(id)) return false
+          const selectedEntity = selectedNodeEntitiesRef.current.get(id)
+          return !selectedEntity || sameCanvasEntity(selectedEntity, projectionStore.resolveNodeEntity(id))
+        }),
+      ),
       edgeIds: new Set([...current.edgeIds].filter((id) => edgeIds.has(id))),
     }
     replaceSelection(next)
-  }, [history.document.edges, history.document.nodes, replaceSelection])
-  useEffect(() => {
-    if (!persistenceService) {
-      hydratingRef.current = false
-      presentedDocumentScopeRef.current = null
-      setHydrating(false)
-      setBlockingLoad(false)
-      setLoadError(null)
-      loadBarrierRef.current.resolve()
-      return
-    }
-    setHydrating(true)
-    hydratingRef.current = true
-    setLoadError(null)
-    const controller = new AbortController()
-    const previousLoadBarrier = loadBarrierRef.current
-    const loadBarrier = createCanvasLoadBarrier()
-    loadBarrierRef.current = loadBarrier
-    previousLoadBarrier.resolve()
-    const loadScope = resourceMutationScopeRef.current
-    const presentedScope = presentedDocumentScopeRef.current
-    if (!presentedScope || !isCanvasResourceMutationScopeCurrent(() => presentedScope, loadScope)) {
-      setBlockingLoad(true)
-    }
-    const documentId = history.document.id
-    const isCurrentLoad = () =>
-      !controller.signal.aborted &&
-      loadBarrierRef.current === loadBarrier &&
-      isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, loadScope)
-    void persistenceService.load(documentId, controller.signal).then(
-      (document) => {
-        const authoritativeRetry = authoritativeLoadRequestedRef.current
-        if (isCurrentLoad() && authoritativeRetry && !document) {
-          const error = new Error(`Canvas document was not found: ${documentId}`)
-          setHydrating(false)
-          setBlockingLoad(false)
-          hydratingRef.current = false
-          setLoadError(error.message)
-          loadBarrier.reject(error)
-          notifyError("Could not load canvas", error)
-          return
-        }
-        if (
-          isCurrentLoad() &&
-          document &&
-          documentRef.current.id === documentId &&
-          (authoritativeRetry || (documentRef.current.revision === 0 && !hasLocalEditsRef.current))
-        ) {
-          if (!leavingRef.current) {
-            acceptHydratedDocument(document)
-            authoritativeLoadRequestedRef.current = false
-          }
-        }
-        if (isCurrentLoad()) {
-          presentedDocumentScopeRef.current = loadScope
-          setHydrating(false)
-          setBlockingLoad(false)
-          hydratingRef.current = false
-          loadBarrier.resolve()
-        }
-      },
-      (error) => {
-        if (isCurrentLoad()) {
-          setHydrating(false)
-          setBlockingLoad(false)
-          hydratingRef.current = false
-          setLoadError(error instanceof Error ? error.message : String(error))
-          loadBarrier.reject(error)
-          notifyError("Could not load canvas", error)
-        }
-      },
-    )
-    return () => {
-      controller.abort()
-      loadBarrier.reject(new Error("Canvas load was canceled"))
-    }
-  }, [acceptHydratedDocument, history.document.id, loadAttempt, notifyError, persistenceService, props.viewScopeId])
-  useLayoutEffect(() => {
-    void startSave(history.document).catch(() => undefined)
-  }, [history.document.revision, saveAttempt, startSave])
+  }, [history.document.edges, history.document.nodes, projectionStore, replaceSelection])
   useEffect(() => {
     const preventUnsavedClose = (event: BeforeUnloadEvent) => {
-      const hasUnsavedRevision = documentRef.current.revision !== savedRevisionRef.current
       if (
         !pendingDraftsRef.current.hasPending() &&
         !saveErrorRef.current &&
         !saveControllerRef.current &&
-        !historyRef.current.gestureStart &&
-        !hasUnsavedRevision
+        !historyRef.current.gestureStart
       )
         return
       event.preventDefault()
@@ -3029,7 +2990,7 @@ function CanvasEditorContent(
   }, [history.document.nodes, pendingConnection])
   const runResourceMutation = useCallback(
     (
-      input: Omit<CanvasResourceMutationRequest, "expectedRevision" | "signal">,
+      input: Omit<CanvasResourceMutationRequest, "signal">,
       options: { focusCreatedNodes?: boolean; parentGroupId?: string | null; revealCreatedNodes?: boolean } = {},
     ) => {
       if (!mutationService || readOnly) return
@@ -3040,10 +3001,8 @@ function CanvasEditorContent(
       void (async () => {
         const operationScope = resourceMutationScopeRef.current
         try {
-          const document = documentRef.current
           const result = await mutationService.add({
             ...input,
-            expectedRevision: document.revision,
             ...(options.parentGroupId ? { parentId: options.parentGroupId } : {}),
             signal: controller.signal,
           })
@@ -3125,10 +3084,7 @@ function CanvasEditorContent(
   )
   const runResourceRelink = useCallback(
     async (
-      operation: (input: { expectedRevision: number; signal: AbortSignal }) => Promise<{
-        revision: number
-        warnings: readonly string[]
-      }>,
+      operation: (input: { signal: AbortSignal }) => Promise<{ warnings: readonly string[] }>,
       successTitle: string,
     ) => {
       if (readOnly) return
@@ -3136,10 +3092,7 @@ function CanvasEditorContent(
       operationControllersRef.current.add(controller)
       const operationScope = resourceMutationScopeRef.current
       try {
-        const result = await operation({
-          expectedRevision: documentRef.current.revision,
-          signal: controller.signal,
-        })
+        const result = await operation({ signal: controller.signal })
         if (
           controller.signal.aborted ||
           !isCanvasResourceMutationScopeCurrent(() => resourceMutationScopeRef.current, operationScope)
@@ -3193,10 +3146,7 @@ function CanvasEditorContent(
   const requestSelectedResourceRelink = useCallback(
     (nodeId: string) => {
       if (!mutationService?.relink || readOnly) return
-      void runResourceRelink(
-        ({ expectedRevision, signal }) => mutationService.relink!({ expectedRevision, nodeId, signal }),
-        "Resource relinked",
-      )
+      void runResourceRelink(({ signal }) => mutationService.relink!({ nodeId, signal }), "Resource relinked")
     },
     [mutationService, readOnly, runResourceRelink],
   )
@@ -3204,7 +3154,7 @@ function CanvasEditorContent(
     (nodeId: string) => {
       if (!mutationService?.saveEditableCopy || readOnly) return Promise.resolve()
       return runResourceRelink(
-        ({ expectedRevision, signal }) => mutationService.saveEditableCopy!({ expectedRevision, nodeId, signal }),
+        ({ signal }) => mutationService.saveEditableCopy!({ nodeId, signal }),
         "Editable copy saved",
       )
     },
@@ -3269,7 +3219,7 @@ function CanvasEditorContent(
       const result = addCanvasNodes(history.document, [node])
       if (focusAfterCreate) prepareFocusedNodeEntries([node.id])
       else presentNodeEntries([node.id])
-      dispatch({ type: "commit", document: result.document })
+      rejectUnmappedCanvasMutation()
       selectNodes(result.selectedNodeIds)
       if (focusAfterCreate && !parentId) {
         setPendingNodeFocus({ guard: getPostMutationRevealGuard(), nodeIds: [node.id] })
@@ -3303,6 +3253,7 @@ function CanvasEditorContent(
       prepareFocusedNodeEntries,
       prefersReducedMotion,
       readOnly,
+      rejectUnmappedCanvasMutation,
       selectNodes,
       telemetryService,
     ],
@@ -3374,18 +3325,18 @@ function CanvasEditorContent(
     if (!hasNodeOnlySelection) return
     const result = duplicateCanvasSelection(history.document, selectedNodeIds)
     presentNodeEntries(result.selectedNodeIds)
-    dispatch({ type: "commit", document: result.document })
+    rejectUnmappedCanvasMutation()
     selectNodes(result.selectedNodeIds)
-  }, [hasNodeOnlySelection, history.document, presentNodeEntries, selectedNodeIds, selectNodes])
+  }, [hasNodeOnlySelection, history.document, presentNodeEntries, rejectUnmappedCanvasMutation, selectedNodeIds, selectNodes])
   const duplicateNode = useCallback(
     (nodeId: string) => {
       const result = duplicateCanvasSelection(documentRef.current, [nodeId])
       if (result.selectedNodeIds.length === 0) return
       presentNodeEntries(result.selectedNodeIds)
-      dispatch({ type: "commit", document: result.document })
+      rejectUnmappedCanvasMutation()
       selectNodes(result.selectedNodeIds)
     },
-    [presentNodeEntries, selectNodes],
+    [presentNodeEntries, rejectUnmappedCanvasMutation, selectNodes],
   )
   const quickConnect = useCallback(
     (nodeId: string, side: "left" | "right", nodeType: string, targetPosition?: CanvasPoint) => {
@@ -3519,12 +3470,13 @@ function CanvasEditorContent(
     if (!groupMenuCapabilities.canGroup || selectionContext.kind !== "multi-node") return
     const result = groupCanvasNodes(history.document, selectedNodeIds)
     presentNodeEntries(result.selectedNodeIds)
-    dispatch({ type: "commit", document: result.document })
+    rejectUnmappedCanvasMutation()
     selectNodes(result.selectedNodeIds)
   }, [
     groupMenuCapabilities.canGroup,
     history.document,
     presentNodeEntries,
+    rejectUnmappedCanvasMutation,
     selectedNodeIds,
     selectNodes,
     selectionContext.kind,
@@ -3534,38 +3486,35 @@ function CanvasEditorContent(
       if (!groupMenuCapabilities.canFold) return
       const result = foldCanvasNodes(history.document, selectedNodeIds)
       presentNodeEntries(result.selectedNodeIds)
-      dispatch({ type: "commit", document: result.document })
+      rejectUnmappedCanvasMutation()
       selectNodes(result.selectedNodeIds)
       return
     }
     if (!groupMenuCapabilities.canFold || selectionContext.kind !== "single-node") return
-    dispatch({
-      type: "commit",
-      document: setCanvasGroupFolded(history.document, selectionContext.nodeId, true),
-    })
+    setCanvasGroupFolded(history.document, selectionContext.nodeId, true)
+    rejectUnmappedCanvasMutation()
   }, [
     groupMenuCapabilities.canFold,
     history.document,
     presentNodeEntries,
+    rejectUnmappedCanvasMutation,
     selectedNodeIds,
     selectNodes,
     selectionContext,
   ])
   const unfold = useCallback(() => {
     if (!groupMenuCapabilities.canUnfold || selectionContext.kind !== "single-node") return
-    dispatch({
-      type: "commit",
-      document: setCanvasGroupFolded(history.document, selectionContext.nodeId, false),
-    })
-  }, [groupMenuCapabilities.canUnfold, history.document, selectionContext])
+    setCanvasGroupFolded(history.document, selectionContext.nodeId, false)
+    rejectUnmappedCanvasMutation()
+  }, [groupMenuCapabilities.canUnfold, history.document, rejectUnmappedCanvasMutation, selectionContext])
   const ungroup = useCallback(() => {
     if (!groupMenuCapabilities.canUngroup || selectionContext.kind !== "single-node") return
     const groupId = selectionContext.nodeId
     if (!groupId) return
     const result = ungroupCanvasNode(history.document, groupId)
-    dispatch({ type: "commit", document: result.document })
+    rejectUnmappedCanvasMutation()
     selectNodes(result.selectedNodeIds)
-  }, [groupMenuCapabilities.canUngroup, history.document, selectNodes, selectionContext])
+  }, [groupMenuCapabilities.canUngroup, history.document, rejectUnmappedCanvasMutation, selectNodes, selectionContext])
   const align = useCallback(
     (direction: CanvasAlign) => {
       if (!hasNodeOnlySelection || !canArrangeSelection) return
@@ -3606,27 +3555,14 @@ function CanvasEditorContent(
         options: { strategy },
         type: "canvas.auto-layout",
       })
-      dispatch({ document: result.document, type: "commit" })
-      if (groupFocus.focusedGroupId) {
-        window.requestAnimationFrame(() => {
-          void reactFlowRef.current.fitView({
-            duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.fit, prefersReducedMotion),
-            ease: canvasViewportEase,
-            interpolate: "smooth",
-            maxZoom: CANVAS_FIT_MAX_ZOOM,
-            nodes: canvasNodeIds.map((id) => ({ id })),
-            padding: CANVAS_FIT_PADDING,
-          })
-        })
-      } else {
-        void fitDocumentViewport(result.document, {
-          maxZoom: CANVAS_FIT_MAX_ZOOM,
-          nodeIds: canvasNodeIds,
-          padding: CANVAS_FIT_PADDING,
-        })
-      }
+      rejectUnmappedCanvasMutation()
+      void fitDocumentViewport(result.document, {
+        maxZoom: CANVAS_FIT_MAX_ZOOM,
+        nodeIds: canvasNodeIds,
+        padding: CANVAS_FIT_PADDING,
+      })
     },
-    [canLayoutCanvas, canvasNodeIds, dispatch, fitDocumentViewport, groupFocus.focusedGroupId, prefersReducedMotion],
+    [canLayoutCanvas, canvasNodeIds, fitDocumentViewport, rejectUnmappedCanvasMutation],
   )
   const layoutCanvas = useCallback(() => runCanvasLayout(autoLayoutStrategy), [autoLayoutStrategy, runCanvasLayout])
   const changeAutoLayoutStrategy = useCallback(
@@ -3660,34 +3596,12 @@ function CanvasEditorContent(
             }
           : undefined
       const prepared = prepareCanvasClipboardPaste(payload, offset)
-      const parentGroupId = groupFocus.focusedGroupId ?? undefined
-      const selectedIds = new Set(prepared.selectedNodeIds)
-      const pastedNodes = parentGroupId
-        ? prepared.nodes.map((node) =>
-            selectedIds.has(node.id) ? { ...node, extent: "parent" as const, parentId: parentGroupId } : node,
-          )
-        : prepared.nodes
       presentNodeEntries(prepared.selectedNodeIds)
-      dispatch({
-        type: "commit-update",
-        update: (document) => ({
-          ...document,
-          edges: [...document.edges, ...prepared.edges],
-          nodes: [...document.nodes, ...pastedNodes],
-        }),
-      })
+      rejectUnmappedCanvasMutation()
       selectNodes(prepared.selectedNodeIds)
       return true
     },
-    [
-      dispatch,
-      groupFocus.focusedGroupId,
-      insertPoint,
-      notificationService,
-      presentNodeEntries,
-      props.clipboardScope,
-      selectNodes,
-    ],
+    [insertPoint, notificationService, presentNodeEntries, props.clipboardScope, rejectUnmappedCanvasMutation, selectNodes],
   )
   const copy = useCallback(() => {
     const payload = getClipboardPayload()
@@ -3776,7 +3690,6 @@ function CanvasEditorContent(
       if (
         !isCanvasGenerationComposerSubmissionCurrent(submission, {
           documentId: currentDocument.id,
-          revision: currentDocument.revision,
           scopeId: props.viewScopeId ?? "",
         })
       )
@@ -3787,23 +3700,16 @@ function CanvasEditorContent(
       operationControllersRef.current.add(controller)
       const document = currentDocument
       const documentId = document.id
-      const expectedRevision = document.revision
       const revealGuard = getPostMutationRevealGuard()
       const anchor = insertPoint ?? pointerRef.current ?? pointAtCenter()
       const parentGroupId = groupFocus.focusedGroupId
       generationControllerRef.current = { controller, documentId }
       void (async () => {
         await startSave(document)
-        if (
-          controller.signal.aborted ||
-          documentRef.current.id !== documentId ||
-          documentRef.current.revision !== expectedRevision
-        )
-          return undefined
+        if (controller.signal.aborted || documentRef.current.id !== documentId) return undefined
         return generateService.generate({
           anchor,
           context: { documentId, selectedNodeIds: submission.selectedNodeIds, source: "canvas" },
-          expectedRevision,
           output: submission.tool.output,
           ...(parentGroupId ? { parentId: parentGroupId } : {}),
           prompt: submission.prompt,
@@ -4065,9 +3971,16 @@ function CanvasEditorContent(
       relinkSelectedResource: requestSelectedResourceRelink,
       reloadAuthoritative: reloadAuthoritativeDocument,
       replaceResourceState: (nodeId: string, state: CanvasResourceRuntimeState) =>
-        dispatch({
-          type: "replace-update",
-          update: (document) => replaceCanvasNodeResourceState(document, nodeId, state),
+        setResourceStates((current) => {
+          const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+          if (!node) return current
+          const next = new Map(current)
+          next.set(nodeId, {
+            entity: projectionStore.resolveNodeEntity(nodeId),
+            rendererId: canvasFileRendererIdentity(node, props.fileRendererRegistry),
+            state,
+          })
+          return next
         }),
       registerPendingDraft: (draft: CanvasPendingDraft) => pendingDraftsRef.current.register(draft),
       removeNode,
@@ -4075,6 +3988,7 @@ function CanvasEditorContent(
       selectNodes,
     }),
     [
+      canonicalDocument.nodes,
       commit,
       connectionNodeTypes,
       duplicateNode,
@@ -4106,6 +4020,7 @@ function CanvasEditorContent(
       setSelectionDragCandidateNode,
       mutationService,
       prefersReducedMotion,
+      projectionStore,
       visibleSelectionActions,
       visibleSelectionDragSource,
     ],
@@ -4125,11 +4040,8 @@ function CanvasEditorContent(
       if (canvasPointerSelectionEnabled && selectionChanges.length > 0 && !boxSelectionActiveRef.current) {
         replaceSelection(applyReactFlowEdgeSelectionChanges(selectionRef.current, selectionChanges))
       }
-      const documentChanges = changes.filter((change) => change.type !== "select")
-      if (!canvasPointerMutationEnabled || documentChanges.length === 0) return
-      commit((document) => ({ ...document, edges: applyEdgeChanges(documentChanges, document.edges) }))
     },
-    [canvasPointerMutationEnabled, canvasPointerSelectionEnabled, commit, replaceSelection],
+    [canvasPointerSelectionEnabled, replaceSelection],
   )
   const handleNodesChange = useCallback(
     (changes: NodeChange<CanvasNode>[]) => {
@@ -4157,39 +4069,86 @@ function CanvasEditorContent(
       const measurementChanges = canvasPointerNavigationOnly
         ? []
         : documentChanges.filter((change) => {
-            if (change.type !== "dimensions") return false
+            if (
+              change.type !== "dimensions" ||
+              change.dimensions === undefined ||
+              !isPositiveFiniteDimension(change.dimensions.width) ||
+              !isPositiveFiniteDimension(change.dimensions.height)
+            ) return false
             const node = nodeById.get(change.id)
             return (
               node?.data.kind !== "group" || (!isCanvasGroupFolded(node) && change.id !== groupFocus.focusedGroupId)
             )
           })
-      const committedChanges = documentChanges.filter((change) => change.type !== "dimensions")
       if (measurementChanges.length > 0) {
-        dispatch({
-          type: "replace-update",
-          update: (document) => {
-            const nextNodes = applyNodeChanges(measurementChanges, document.nodes)
-            return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
-          },
+        setReactFlowMeasurements((current) => {
+          const next = new Map(current)
+          let changed = false
+          for (const change of measurementChanges) {
+            if (change.type !== "dimensions" || !change.dimensions) continue
+            const node = canonicalDocument.nodes.find((candidate) => candidate.id === change.id)
+            if (!node) continue
+            const canonicalSize = getCanvasNodeSize(node)
+            const entity = projectionStore.resolveNodeEntity(change.id)
+            const rendererId = canvasFileRendererIdentity(node, props.fileRendererRegistry)
+            const previous = next.get(change.id)
+            if (
+              previous &&
+              sameCanvasSize(previous.canonicalSize, canonicalSize) &&
+              sameCanvasEntity(previous.entity, entity) &&
+              previous.rendererId === rendererId &&
+              previous.size.width === change.dimensions.width &&
+              previous.size.height === change.dimensions.height
+            ) {
+              continue
+            }
+            next.set(change.id, {
+              canonicalSize,
+              entity,
+              rendererId,
+              size: { ...change.dimensions },
+            })
+            changed = true
+          }
+          return changed ? next : current
         })
       }
-      if (canvasPointerMutationEnabled && committedChanges.length > 0) {
-        dispatch({
-          type: "preview-or-commit-update",
-          update: (document) => {
-            const nextNodes = applyNodeChanges(committedChanges, document.nodes)
-            return equalCanvasNodes(document.nodes, nextNodes) ? document : { ...document, nodes: nextNodes }
-          },
-        })
+      if (canvasPointerMutationEnabled && gestureStartRef.current) {
+        const next = new Map(gestureGeometryRef.current)
+        let changed = false
+        for (const change of documentChanges) {
+          if (change.type === "position" && change.position) {
+            const current = next.get(change.id) ?? {}
+            next.set(change.id, { ...current, position: { ...change.position } })
+            changed = true
+          }
+          if (
+            change.type === "dimensions" &&
+            change.resizing === true &&
+            change.dimensions &&
+            isPositiveFiniteDimension(change.dimensions.width) &&
+            isPositiveFiniteDimension(change.dimensions.height)
+          ) {
+            const current = next.get(change.id) ?? {}
+            next.set(change.id, { ...current, size: { ...change.dimensions } })
+            changed = true
+          }
+        }
+        if (changed) {
+          gestureGeometryRef.current = next
+          setGestureGeometry(next)
+        }
       }
     },
     [
-      canvasPointerMutationEnabled,
+      canonicalDocument.nodes,
       canvasPointerNavigationOnly,
+      canvasPointerMutationEnabled,
       canvasPointerSelectionEnabled,
-      dispatch,
       groupFocus.focusedGroupId,
       nodeById,
+      projectionStore,
+      props.fileRendererRegistry,
       replaceSelection,
     ],
   )
@@ -4289,7 +4248,7 @@ function CanvasEditorContent(
           snapDocument = plan.document
           draggingIds = draggingIds.map((id) => plan.duplicatedNodeIdBySourceId.get(id) ?? id)
           presentNodeEntries(plan.selectedNodeIds)
-          dispatch({ type: "commit", document: plan.document })
+          rejectUnmappedCanvasMutation()
           selectNodes(plan.selectedNodeIds)
         }
       }
@@ -4301,7 +4260,14 @@ function CanvasEditorContent(
           )
         : null
     },
-    [canvasPointerMutationEnabled, dispatch, presentNodeEntries, selectNodes, updateGroupDropTarget],
+    [
+      canvasPointerMutationEnabled,
+      dispatch,
+      presentNodeEntries,
+      rejectUnmappedCanvasMutation,
+      selectNodes,
+      updateGroupDropTarget,
+    ],
   )
   const handleNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
@@ -4324,23 +4290,19 @@ function CanvasEditorContent(
     [canvasPointerMutationEnabled, updateGroupDropTarget],
   )
   const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
-    (_, node, draggedNodes) => {
-      const duplicatedIds = altDragRef.current?.duplicatedNodeIdBySourceId
-      const draggedIds = (draggedNodes.length > 0 ? draggedNodes : [node]).map(
-        (draggedNode) => duplicatedIds?.get(draggedNode.id) ?? draggedNode.id,
-      )
+    () => {
       const targetGroupId = groupDropTargetIdRef.current
       if (canvasPointerMutationEnabled && targetGroupId) {
-        dispatch({
-          type: "replace-update",
-          update: (document) =>
-            applyCanvasBusinessCommand(document, {
-              nodeIds: draggedIds,
-              parentId: targetGroupId,
-              type: "nodes.reparent",
-            }).document,
-        })
-        selectNodes(draggedIds)
+        // Reparent is canonical Yjs state. Until the renderer command proxy
+        // admits the closed structural-parent intent, cancel the preview
+        // instead of committing root-relative geometry under the wrong parent.
+        rejectUnmappedCanvasMutation()
+        altDragRef.current = null
+        snapSessionRef.current = null
+        setSnapLines([])
+        updateGroupDropTarget(null)
+        dispatch({ type: "cancel-gesture" })
+        return
       }
       altDragRef.current = null
       snapSessionRef.current = null
@@ -4348,7 +4310,7 @@ function CanvasEditorContent(
       updateGroupDropTarget(null)
       dispatch({ type: "end-gesture" })
     },
-    [canvasPointerMutationEnabled, dispatch, selectNodes, updateGroupDropTarget],
+    [canvasPointerMutationEnabled, dispatch, rejectUnmappedCanvasMutation, updateGroupDropTarget],
   )
   const handleBoxSelectionStart = useCallback(() => {
     if (!canvasPointerSelectionEnabled) {
@@ -4458,6 +4420,7 @@ function CanvasEditorContent(
                       {
                         data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
                         types,
+
                       },
                     )
                   }}
@@ -4740,17 +4703,6 @@ function CanvasEditorContent(
                             <div className="font-medium text-foreground">Canvas could not be loaded</div>
                             <div className="mt-1 text-xs">{loadError}</div>
                           </div>
-                          <Button
-                            onClick={() => {
-                              authoritativeLoadRequestedRef.current = true
-                              loadBarrierRef.current = createCanvasLoadBarrier()
-                              setLoadAttempt((attempt) => attempt + 1)
-                            }}
-                            size="sm"
-                            variant="outline"
-                          >
-                            Retry
-                          </Button>
                         </div>
                       ) : (
                         <Loading
@@ -4771,9 +4723,6 @@ function CanvasEditorContent(
                           <div className="mt-1 text-xs text-muted-foreground">{saveError}</div>
                         </div>
                         <div className="flex gap-2">
-                          <Button onClick={() => setSaveAttempt((attempt) => attempt + 1)} size="sm">
-                            Retry save
-                          </Button>
                           <Button
                             disabled={!history.gestureStart && history.past.length === 0}
                             onClick={() => {
@@ -5014,8 +4963,7 @@ function CanvasEditorContent(
                         (nodeId, file) => {
                           if (!mutationService?.relink) return
                           void runResourceRelink(
-                            ({ expectedRevision, signal }) =>
-                              mutationService.relink!({ expectedRevision, file, nodeId, signal }),
+                            ({ signal }) => mutationService.relink!({ file, nodeId, signal }),
                             "Resource relinked",
                           )
                         },

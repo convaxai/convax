@@ -1,6 +1,9 @@
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+
+import type { PluginCanvasStructureDocument } from "./plugin-capability-contracts"
+
 export interface PluginCanvasImageCreateRequest {
   dataUrl: string
-  expectedRevision: number
   name: string
   operationId: string
   ownerNodeId: string
@@ -14,5 +17,6 @@ export interface PluginCanvasImageCreateRequest {
 
 export interface PluginCanvasImageCreateResult {
   createdNodeId: string
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2
+  projection: PluginCanvasStructureDocument
 }

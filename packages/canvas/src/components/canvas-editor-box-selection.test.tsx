@@ -2,6 +2,7 @@ import { afterAll, expect, mock, test } from "bun:test"
 import { Window as HappyDOMWindow } from "happy-dom"
 import { StrictMode, type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
 import type { CanvasAssistantRequest } from "../services"
 import type { CanvasDocument, CanvasNode } from "../types"
 
@@ -12,6 +13,7 @@ const globals = {
   Element: testWindow.Element,
   Event: testWindow.Event,
   HTMLElement: testWindow.HTMLElement,
+  KeyboardEvent: testWindow.KeyboardEvent,
   MouseEvent: testWindow.MouseEvent,
   Node: testWindow.Node,
   PointerEvent: testWindow.PointerEvent,
@@ -126,6 +128,91 @@ const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
 const { useStoreApi } = await import("@xyflow/react")
 
+class RealReactFlowCanvasSession implements CanvasRendererCollaborationClientV2 {
+  readonly authority = "project-collaboration-application" as const
+  readonly commands: CanvasRendererCommandV2[] = []
+  readonly undoModel = "project-yjs-semantic-history" as const
+  private readonly incarnations = new Map<string, string>()
+  private readonly listeners = new Set<() => void>()
+  canRedoValue = false
+  canUndoValue = false
+  redoRequest: () => Promise<void> = async () => undefined
+  undoRequest: () => Promise<void> = async () => undefined
+
+  constructor(private projection: CanvasDocument) {
+    for (const node of projection.nodes) this.incarnations.set(node.id, `incarnation-${node.id}`)
+  }
+
+  canRedo() {
+    return this.canRedoValue
+  }
+
+  canUndo() {
+    return this.canUndoValue
+  }
+
+  async flush() {}
+
+  getProjection() {
+    return this.projection
+  }
+
+  publish(projection: CanvasDocument, replacements: Readonly<Record<string, string>> = {}) {
+    this.projection = projection
+    for (const node of projection.nodes) {
+      this.incarnations.set(
+        node.id,
+        replacements[node.id] ?? this.incarnations.get(node.id) ?? `incarnation-${node.id}`,
+      )
+    }
+    for (const listener of this.listeners) listener()
+  }
+
+  redo() {
+    return this.redoRequest()
+  }
+
+  resolveNodeEntity(nodeId: string) {
+    const incarnation = this.incarnations.get(nodeId)
+    return incarnation && this.projection.nodes.some((node) => node.id === nodeId)
+      ? { kind: "node" as const, id: nodeId, incarnation }
+      : undefined
+  }
+
+  async submit(command: CanvasRendererCommandV2) {
+    this.commands.push(command)
+    const updates = new Map(command.body.updates.map((update) => [update.node.id, update]))
+    this.publish({
+      ...this.projection,
+      nodes: this.projection.nodes.map((node) => {
+        const update = updates.get(node.id)
+        if (
+          !update ||
+          !this.resolveNodeEntity(node.id) ||
+          this.resolveNodeEntity(node.id)?.incarnation !== update.node.incarnation
+        )
+          return node
+        return {
+          ...node,
+          position: { ...update.position },
+          ...(update.size === undefined
+            ? {}
+            : { style: { ...node.style, height: update.size?.height, width: update.size?.width } }),
+        }
+      }),
+    })
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  undo() {
+    return this.undoRequest()
+  }
+}
+
 afterAll(async () => {
   await testWindow.happyDOM.close()
   for (const [name, descriptor] of originalDescriptors) {
@@ -150,6 +237,18 @@ function rect(left: number, top: number, width: number, height: number) {
 
 let observedSelection = { edgeIds: [] as string[], nodeIds: [] as string[] }
 let emitConnectedEdgeSelection: (() => void) | undefined
+let emitNodeDimensions: ((nodeId: string, width: number, height: number) => void) | undefined
+let readReactFlowProjection:
+  | (() => {
+      edgeIds: string[]
+      nodes: Array<{
+        id: string
+        initialHeight?: number
+        initialWidth?: number
+        measured?: { height?: number; width?: number }
+      }>
+    })
+  | undefined
 
 function SelectionProbeNode() {
   const editor = useCanvasEditor()
@@ -161,6 +260,24 @@ function SelectionProbeNode() {
   emitConnectedEdgeSelection = () =>
     store.getState().triggerEdgeChanges([{ id: "connected", selected: true, type: "select" }])
   return <div />
+}
+
+function TransientStateProbeNode() {
+  const store = useStoreApi()
+  emitNodeDimensions = (nodeId, width, height) =>
+    store.getState().triggerNodeChanges([{ dimensions: { height, width }, id: nodeId, type: "dimensions" }])
+  readReactFlowProjection = () => ({
+    edgeIds: [...store.getState().edgeLookup.keys()].sort(),
+    nodes: [...store.getState().nodeLookup.values()]
+      .map((node) => ({
+        id: node.id,
+        initialHeight: node.internals.userNode.initialHeight,
+        initialWidth: node.internals.userNode.initialWidth,
+        measured: node.internals.userNode.measured,
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  })
+  return <div data-react-flow-transient-probe="" />
 }
 
 test("box-selects connected nodes without feeding controlled selection back into React Flow", async () => {
@@ -202,7 +319,7 @@ test("box-selects connected nodes without feeding controlled selection back into
         position: { x: 80, y: 80 },
         resourceState: { status: "ready" },
       }),
-      measured: { height: 80, width: 120 },
+      style: { height: 80, width: 120 },
     }
     const second = {
       ...createTextNode({
@@ -211,13 +328,14 @@ test("box-selects connected nodes without feeding controlled selection back into
         position: { x: 360, y: 80 },
         resourceState: { status: "ready" },
       }),
-      measured: { height: 80, width: 120 },
+      style: { height: 80, width: 120 },
     }
     const initialDocument = createCanvasDocument({
       edges: [{ id: "connected", source: first.id, target: second.id }],
       id: "box-selection",
       nodes: [first, second],
     })
+    const session = new RealReactFlowCanvasSession(initialDocument)
     const nodeRegistry = createCanvasNodeRegistry([
       {
         component: SelectionProbeNode,
@@ -239,10 +357,10 @@ test("box-selects connected nodes without feeding controlled selection back into
         <StrictMode>
           <CanvasEditor
             fileRendererRegistry={createCanvasFileRendererRegistry()}
-            initialDocument={initialDocument}
             nodeRegistry={nodeRegistry}
             onlyRenderVisibleElements={false}
             services={createCanvasServices()}
+            session={session}
           />
         </StrictMode>,
       )
@@ -358,6 +476,27 @@ test("box-selects connected nodes without feeding controlled selection back into
     expect(observedSelection).toEqual({ edgeIds: ["connected"], nodeIds: ["first", "second"] })
 
     await act(async () => {
+      session.publish(structuredClone(initialDocument), { first: "replacement-first-incarnation" })
+    })
+    expect(observedSelection).toEqual({ edgeIds: ["connected"], nodeIds: ["second"] })
+
+    await act(async () => {
+      root?.render(
+        <StrictMode>
+          <CanvasEditor
+            fileRendererRegistry={createCanvasFileRendererRegistry()}
+            nodeRegistry={nodeRegistry}
+            onlyRenderVisibleElements={false}
+            services={createCanvasServices()}
+            session={session}
+            viewScopeId="replacement-scope"
+          />
+        </StrictMode>,
+      )
+    })
+    expect(observedSelection).toEqual({ edgeIds: [], nodeIds: [] })
+
+    await act(async () => {
       pane?.dispatchEvent(
         new PointerEvent("pointerdown", {
           bubbles: true,
@@ -423,6 +562,298 @@ test("box-selects connected nodes without feeding controlled selection back into
   }
 })
 
+test("keeps adaptive measurements across an equivalent plugin refresh and resets them at exact cache boundaries", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+
+  emitNodeDimensions = undefined
+  readReactFlowProjection = undefined
+  const errors: Error[] = []
+  const pluginNode: CanvasNode = {
+    ...createTextNode({
+      id: "plugin-card",
+      metadata: { source: "plugin.example/card" },
+      position: { x: 80, y: 80 },
+      resourceState: { status: "ready" },
+    }),
+    data: {
+      kind: "plugin-card",
+      label: "Plugin card",
+      metadata: { source: "plugin.example/card" },
+      resourceState: { status: "ready" },
+    },
+    style: { height: 160, width: 280 },
+  }
+  const initialDocument = createCanvasDocument({ id: "plugin-measurement-cache", nodes: [pluginNode] })
+  const session = new RealReactFlowCanvasSession(initialDocument)
+  const nodeRegistry = createCanvasNodeRegistry([
+    {
+      component: TransientStateProbeNode,
+      create: ({ position }) => createTextNode({ metadata: {}, position, resourceState: { status: "ready" } }),
+      label: "File",
+      type: "file",
+    },
+  ])
+  const pluginDefinition = {
+    component: TransientStateProbeNode,
+    id: "plugin-card",
+    label: "Plugin card",
+    matches: (data: CanvasNode["data"]) => data.kind === "plugin-card",
+  }
+  const firstRegistry = createCanvasFileRendererRegistry()
+  firstRegistry.register(pluginDefinition)
+  const equivalentRegistry = createCanvasFileRendererRegistry()
+  const unregisterEquivalent = equivalentRegistry.register({ ...pluginDefinition })
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+  const renderEditor = (
+    fileRendererRegistry: ReturnType<typeof createCanvasFileRendererRegistry>,
+    viewScopeId = "scope-a",
+  ) => (
+    <CanvasEditor
+      fileRendererRegistry={fileRendererRegistry}
+      nodeRegistry={nodeRegistry}
+      onlyRenderVisibleElements={false}
+      services={createCanvasServices()}
+      session={session}
+      viewScopeId={viewScopeId}
+    />
+  )
+
+  try {
+    root = createRoot(container, {
+      onCaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
+    })
+    await act(async () => root?.render(renderEditor(firstRegistry)))
+    expect(emitNodeDimensions).toBeFunction()
+
+    await act(async () => emitNodeDimensions?.(pluginNode.id, 480, 270))
+    expect(readReactFlowProjection?.().nodes).toEqual([
+      { id: pluginNode.id, initialHeight: undefined, initialWidth: undefined, measured: { height: 270, width: 480 } },
+    ])
+    expect(session.getProjection().nodes[0]).not.toHaveProperty("measured")
+
+    await act(async () => root?.render(renderEditor(equivalentRegistry)))
+    expect(readReactFlowProjection?.().nodes[0]?.measured).toEqual({ height: 270, width: 480 })
+
+    await act(async () => root?.render(renderEditor(equivalentRegistry, "scope-b")))
+    expect(readReactFlowProjection?.().nodes).toEqual([
+      { id: pluginNode.id, initialHeight: 160, initialWidth: 280, measured: undefined },
+    ])
+
+    await act(async () => emitNodeDimensions?.(pluginNode.id, 480, 270))
+    expect(readReactFlowProjection?.().nodes[0]?.measured).toEqual({ height: 270, width: 480 })
+
+    const authoritativeResize = structuredClone(initialDocument)
+    authoritativeResize.nodes[0] = {
+      ...authoritativeResize.nodes[0]!,
+      style: { height: 200, width: 360 },
+    }
+    await act(async () => session.publish(authoritativeResize))
+    expect(readReactFlowProjection?.().nodes).toEqual([
+      { id: pluginNode.id, initialHeight: 200, initialWidth: 360, measured: undefined },
+    ])
+
+    await act(async () => emitNodeDimensions?.(pluginNode.id, 500, 300))
+    expect(readReactFlowProjection?.().nodes[0]?.measured).toEqual({ height: 300, width: 500 })
+
+    await act(async () => {
+      session.publish(structuredClone(initialDocument), { [pluginNode.id]: "replacement-incarnation" })
+    })
+    expect(readReactFlowProjection?.().nodes).toEqual([
+      { id: pluginNode.id, initialHeight: 160, initialWidth: 280, measured: undefined },
+    ])
+
+    await act(async () => emitNodeDimensions?.(pluginNode.id, 420, 240))
+    expect(readReactFlowProjection?.().nodes[0]?.measured).toEqual({ height: 240, width: 420 })
+    await act(async () => unregisterEquivalent())
+    expect(readReactFlowProjection?.().nodes).toEqual([
+      { id: pluginNode.id, initialHeight: 160, initialWidth: 280, measured: undefined },
+    ])
+    expect(errors).toEqual([])
+  } finally {
+    emitNodeDimensions = undefined
+    readReactFlowProjection = undefined
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
+test("projects host undo and redo of a plugin creation group without owning renderer history", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+
+  readReactFlowProjection = undefined
+  const source = createTextNode({
+    id: "creation-source",
+    metadata: {},
+    position: { x: 40, y: 40 },
+    resourceState: { status: "ready" },
+  })
+  const created = createTextNode({
+    id: "plugin-created",
+    metadata: {},
+    position: { x: 360, y: 40 },
+    resourceState: { status: "ready" },
+  })
+  const beforeCreation = createCanvasDocument({ id: "plugin-creation-undo", nodes: [source] })
+  const afterCreation = createCanvasDocument({
+    edges: [{ id: "plugin-created-edge", source: source.id, target: created.id }],
+    id: beforeCreation.id,
+    nodes: [source, created],
+  })
+  const session = new RealReactFlowCanvasSession(afterCreation)
+  session.canUndoValue = true
+  session.undoRequest = async () => {
+    session.canUndoValue = false
+    session.canRedoValue = true
+    session.publish(beforeCreation)
+  }
+  session.redoRequest = async () => {
+    session.canUndoValue = true
+    session.canRedoValue = false
+    session.publish(afterCreation)
+  }
+  const nodeRegistry = createCanvasNodeRegistry([
+    {
+      component: TransientStateProbeNode,
+      create: ({ position }) => createTextNode({ metadata: {}, position, resourceState: { status: "ready" } }),
+      label: "File",
+      type: "file",
+    },
+  ])
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+
+  try {
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={nodeRegistry}
+          onlyRenderVisibleElements={false}
+          services={createCanvasServices()}
+          session={session}
+        />,
+      )
+    })
+    expect(readReactFlowProjection?.()).toMatchObject({
+      edgeIds: ["plugin-created-edge"],
+      nodes: [{ id: source.id }, { id: created.id }],
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
+      await Promise.resolve()
+    })
+    expect(readReactFlowProjection?.()).toMatchObject({ edgeIds: [], nodes: [{ id: source.id }] })
+
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true, shiftKey: true }))
+      await Promise.resolve()
+    })
+    expect(readReactFlowProjection?.()).toMatchObject({
+      edgeIds: ["plugin-created-edge"],
+      nodes: [{ id: source.id }, { id: created.id }],
+    })
+  } finally {
+    readReactFlowProjection = undefined
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
+test("read-only initialDocument cannot synthesize plugin creation undo without a Main-owned session", async () => {
+  for (const [name, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
+  }
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", {
+    configurable: true,
+    value: true,
+    writable: true,
+  })
+
+  readReactFlowProjection = undefined
+  const source = createTextNode({
+    id: "desktop-source",
+    metadata: {},
+    position: { x: 40, y: 40 },
+    resourceState: { status: "ready" },
+  })
+  const created = createTextNode({
+    id: "desktop-plugin-created",
+    metadata: {},
+    position: { x: 360, y: 40 },
+    resourceState: { status: "ready" },
+  })
+  const initialDocument = createCanvasDocument({
+    edges: [{ id: "desktop-plugin-created-edge", source: source.id, target: created.id }],
+    id: "desktop-plugin-creation-undo",
+    nodes: [source, created],
+  })
+  const nodeRegistry = createCanvasNodeRegistry([
+    {
+      component: TransientStateProbeNode,
+      create: ({ position }) => createTextNode({ metadata: {}, position, resourceState: { status: "ready" } }),
+      label: "File",
+      type: "file",
+    },
+  ])
+  const container = document.createElement("div")
+  document.body.append(container)
+  let root: Root | undefined
+
+  try {
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          initialDocument={initialDocument}
+          nodeRegistry={nodeRegistry}
+          onlyRenderVisibleElements={false}
+          services={createCanvasServices()}
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+    await act(async () => {
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
+      await Promise.resolve()
+    })
+    expect(readReactFlowProjection?.()).toMatchObject({
+      edgeIds: ["desktop-plugin-created-edge"],
+      nodes: [{ id: created.id }, { id: source.id }],
+    })
+    expect(initialDocument).toEqual(
+      createCanvasDocument({
+        edges: [{ id: "desktop-plugin-created-edge", source: source.id, target: created.id }],
+        id: "desktop-plugin-creation-undo",
+        nodes: [source, created],
+      }),
+    )
+  } finally {
+    readReactFlowProjection = undefined
+    if (root) await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
 test("isolates card-assistant wheel gestures only while its input owns focus", async () => {
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
@@ -451,13 +882,14 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
   document.body.append(container)
   let root: Root | undefined
   const initialDocument = createCanvasDocument({ id: "card-assistant-focus", nodes: [textNode] })
+  const session = new RealReactFlowCanvasSession(initialDocument)
   const servicesWithAssistant = createCanvasServices({
     assistant: {
       render: () => <textarea aria-label="Card assistant input" />,
     },
   })
   const renderEditor = (services = servicesWithAssistant) => (
-    <CanvasEditor initialDocument={initialDocument} onlyRenderVisibleElements={false} services={services} />
+    <CanvasEditor onlyRenderVisibleElements={false} services={services} session={session} />
   )
 
   try {
@@ -543,15 +975,15 @@ test("keeps active controls interactive and lets a failed card reopen its persis
   const generatingNode: CanvasNode = {
     data: { kind: "image", label: "Generating image", metadata: {} },
     id: "generating",
-    measured: { height: 160, width: 240 },
     position: { x: 80, y: 80 },
+    style: { height: 160, width: 240 },
     type: "file",
   }
   const blockedNode: CanvasNode = {
     data: { kind: "image", label: "Interrupted image", metadata: {} },
     id: "blocked",
-    measured: { height: 160, width: 240 },
     position: { x: 400, y: 80 },
+    style: { height: 160, width: 240 },
     type: "file",
   }
   let initialDocument = createCanvasDocument({
@@ -578,15 +1010,12 @@ test("keeps active controls interactive and lets a failed card reopen its persis
     "blocked-operation",
     "blocked-task",
   )
-  initialDocument = finishCanvasNodeGenerationRun(
-    initialDocument,
-    blockedNode.id,
-    "blocked-operation",
-  )
+  initialDocument = finishCanvasNodeGenerationRun(initialDocument, blockedNode.id, "blocked-operation")
 
   const container = document.createElement("div")
   document.body.append(container)
   let latestDocument: CanvasDocument = initialDocument
+  const session = new RealReactFlowCanvasSession(initialDocument)
   let assistantRequest: CanvasAssistantRequest | undefined
   let root: Root | undefined
 
@@ -649,7 +1078,6 @@ test("keeps active controls interactive and lets a failed card reopen its persis
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initialDocument}
           onlyRenderVisibleElements={false}
           onDocumentChange={(document) => {
             latestDocument = document
@@ -664,6 +1092,7 @@ test("keeps active controls interactive and lets a failed card reopen its persis
               },
             },
           })}
+          session={session}
         />,
       )
     })
@@ -745,7 +1174,7 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
       position: { x: 80, y: 80 },
       resourceState: { status: "ready" },
     }),
-    measured: { height: 80, width: 120 },
+    style: { height: 80, width: 120 },
   }
   const target = {
     ...createTextNode({
@@ -754,7 +1183,7 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
       position: { x: 300, y: 200 },
       resourceState: { status: "ready" },
     }),
-    measured: { height: 80, width: 120 },
+    style: { height: 80, width: 120 },
   }
   const initialDocument = createCanvasDocument({
     id: "node-snap-guides",
@@ -768,8 +1197,8 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
       return rect(
         transform ? Number(transform[1]) : node.position.x,
         transform ? Number(transform[2]) : node.position.y,
-        node.measured.width,
-        node.measured.height,
+        120,
+        80,
       )
     }
     return rect(0, 0, 1000, 800)
@@ -778,6 +1207,7 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
   const container = document.createElement("div")
   document.body.append(container)
   let latestDocument: CanvasDocument = initialDocument
+  const session = new RealReactFlowCanvasSession(initialDocument)
   let root: Root | undefined
 
   try {
@@ -788,12 +1218,12 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initialDocument}
           onlyRenderVisibleElements={false}
           onDocumentChange={(document) => {
             latestDocument = document
           }}
           services={createCanvasServices()}
+          session={session}
         />,
       )
     })
@@ -835,10 +1265,8 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
       await Promise.resolve()
     })
 
-    expect(latestDocument.nodes.find((node) => node.id === source.id)?.position).toEqual({
-      x: 180,
-      y: 120,
-    })
+    expect(sourceElement?.getBoundingClientRect()).toMatchObject({ left: 180, top: 120 })
+    expect(latestDocument.nodes.find((node) => node.id === source.id)?.position).toEqual(source.position)
     expect(container.querySelector('[data-canvas-snap-guide="x"]')).not.toBeNull()
     expect(container.querySelector('[data-canvas-snap-guide="y"]')).not.toBeNull()
 
@@ -856,6 +1284,7 @@ test("renders alignment guides while a real React Flow node drag is snapped", as
       await Promise.resolve()
     })
 
+    expect(latestDocument.nodes.find((node) => node.id === source.id)?.position).toEqual({ x: 180, y: 120 })
     expect(container.querySelector("[data-canvas-snap-guide]")).toBeNull()
     expect(errors).toEqual([])
   } finally {

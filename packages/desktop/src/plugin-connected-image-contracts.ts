@@ -3,7 +3,6 @@ import type { PluginApiConnectedImageOpenResult } from "@convax/plugin-api"
 import type { PluginConnectedMediaFrameRef } from "./plugin-connected-media-contracts"
 
 export interface PluginConnectedImageOpenInput extends PluginConnectedMediaFrameRef {
-  expectedRevision: number
   sourceNodeId: string
 }
 

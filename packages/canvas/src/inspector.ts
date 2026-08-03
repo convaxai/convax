@@ -46,7 +46,6 @@ export interface CanvasInspectorProjection {
   readonly nodeId: string
   readonly nodeKind: string
   readonly rendererId: string
-  readonly revision: number
   readonly scopeId: string
   readonly sections: readonly CanvasInspectorSection[]
   readonly status?: string
@@ -58,7 +57,6 @@ export interface CanvasSelectionProjection {
   readonly inspector: CanvasInspectorProjection | null
   readonly kind: CanvasSelectionContext["kind"]
   readonly nodeIds: readonly string[]
-  readonly revision: number
   readonly scopeId: string
   readonly viewId: string
 }
@@ -165,7 +163,6 @@ export function resolveCanvasInspectorProjection(options: {
     nodeId: node.id,
     nodeKind: node.data.kind,
     rendererId: renderer.id,
-    revision: options.document.revision,
     scopeId: options.scopeId,
     sections,
     ...(boundedText(node.data.status) ? { status: boundedText(node.data.status) } : {}),
@@ -191,7 +188,6 @@ export function createCanvasSelectionProjection(options: {
     inspector: resolveCanvasInspectorProjection(options),
     kind: options.selection.kind,
     nodeIds: Object.freeze(nodeIds),
-    revision: options.document.revision,
     scopeId: options.scopeId,
     viewId: options.viewId,
   })

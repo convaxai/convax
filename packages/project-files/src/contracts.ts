@@ -23,7 +23,18 @@ export interface ProjectMutationResult {
   projectId: string
   sourcePaths?: string[]
   targetPaths?: string[]
+  /** Exact native operation correspondence; consumers must never recover it by basename. */
+  relocations?: readonly Readonly<{ sourcePath: string; targetPath: string }>[]
+  collaboration?: ProjectMutationCollaborationResult
 }
+
+export type ProjectMutationCollaborationResult =
+  | Readonly<{ status: "committed"; paths: readonly string[] }>
+  | Readonly<{
+      status: "partial-success"
+      paths: readonly string[]
+      failedPaths: readonly Readonly<{ path: string; code: string }>[]
+    }>
 
 export interface ProjectFileInfo {
   mimeType: string

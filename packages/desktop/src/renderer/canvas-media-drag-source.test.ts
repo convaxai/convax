@@ -169,7 +169,6 @@ describe("Canvas media external drag lifecycle", () => {
     expect(calls).toEqual(["flush", "prepare"])
     expect(adapter.prepared).toEqual([
       {
-        expectedRevision: 9,
         nodeIds: [audio.id, image.id],
         prepareId: "prepare_test_external_drag",
         ref: { canvasId: "canvas-1", scopeId: "project-1" },

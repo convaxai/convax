@@ -106,6 +106,11 @@ describe("Desktop Main dependency packaging", () => {
       ),
     ).not.toThrow()
   })
+
+  test("bundles collaboration with its Main consumers so Electron loads one Yjs instance", () => {
+    if (typeof desktopViteConfig === "function") throw new Error("Expected a static Electron Vite config")
+    expect(desktopViteConfig.main?.build?.externalizeDeps).toBe(false)
+  })
 })
 
 describe("Desktop workspace dependency hot updates", () => {
@@ -146,6 +151,14 @@ describe("Desktop workspace dependency hot updates", () => {
 })
 
 describe("sandboxed Desktop preload bundles", () => {
+  test("builds the dedicated PeerJS host as a self-contained sandbox preload", () => {
+    if (typeof desktopViteConfig === "function") throw new Error("Expected a static Electron Vite config")
+    expect(desktopPreloadInputs).toMatchObject({
+      "peerjs-transport-host": "src/preload/peerjs-transport-host.ts",
+    })
+    expect(desktopViteConfig.preload?.build?.externalizeDeps).toBe(false)
+  })
+
   test("rejects an emitted shared chunk required by a preload entry", () => {
     expect(() =>
       assertSandboxedPreloadBundle({
@@ -153,6 +166,14 @@ describe("sandboxed Desktop preload bundles", () => {
         "index.js": { imports: ["electron", "chunks/contracts.cjs"], isEntry: true, type: "chunk" },
       }),
     ).toThrow("must be self-contained")
+  })
+
+  test("rejects an external package require from a sandboxed preload", () => {
+    expect(() =>
+      assertSandboxedPreloadBundle({
+        "index.js": { imports: ["electron", "@convax/collaboration"], isEntry: true, type: "chunk" },
+      }),
+    ).toThrow("forbidden imports")
   })
 
   test("accepts self-contained preload entries and non-chunk assets", () => {

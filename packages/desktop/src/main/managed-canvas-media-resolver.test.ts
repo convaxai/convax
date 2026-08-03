@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 
 import { createCanvasDocument, createMediaNode } from "@convax/canvas"
+import type { CanvasApplicationService } from "@convax/canvas/application"
 import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 
 import { ManagedCanvasMediaResolver } from "./managed-canvas-media-resolver"
@@ -42,7 +43,11 @@ function audioDocument(reference: Extract<ProjectResourceReference, { kind: "man
       state: { status: "ready", url: "convax-asset://project/audio" },
     },
   })
-  return { ...createCanvasDocument({ id: "canvas-1", nodes: [audio], title: "Canvas" }), revision: 3 }
+  return createCanvasDocument({ id: "canvas-1", nodes: [audio], title: "Canvas" })
+}
+
+function applicationFor(document: ReturnType<typeof audioDocument>): Pick<CanvasApplicationService, "query"> {
+  return { query: mock(async () => ({ nodes: [], projection: document })) }
 }
 
 describe("ManagedCanvasMediaResolver", () => {
@@ -52,7 +57,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const document = audioDocument(reference)
     const resolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => asset) },
-      documents: { load: mock(async () => ({ document, storageVersion: "v1" })) },
+      application: applicationFor(document),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -66,7 +71,6 @@ describe("ManagedCanvasMediaResolver", () => {
     const [resolved] = await resolver.resolve(
       {
         canvasId: document.id,
-        expectedRevision: document.revision,
         nodeIds: ["audio-1"],
         scopeId: "project-1",
       },
@@ -97,7 +101,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const linkedDocument = audioDocument(linkedReference)
     const resolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => linked) },
-      documents: { load: mock(async () => ({ document: linkedDocument, storageVersion: "v1" })) },
+      application: applicationFor(linkedDocument),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -109,7 +113,7 @@ describe("ManagedCanvasMediaResolver", () => {
     })
     await expect(
       resolver.resolve(
-        { canvasId: "canvas-1", expectedRevision: 3, nodeIds: ["audio-1"], scopeId: "project-1" },
+        { canvasId: "canvas-1", nodeIds: ["audio-1"], scopeId: "project-1" },
         {
           allowedKinds: new Set(["audio"]),
           allowedKindsDescription: "audio",
@@ -123,7 +127,7 @@ describe("ManagedCanvasMediaResolver", () => {
     const forgedDocument = audioDocument(forgedReference)
     const forgedResolver = new ManagedCanvasMediaResolver({
       assets: { resolve: mock(async () => forged.asset) },
-      documents: { load: mock(async () => ({ document: forgedDocument, storageVersion: "v1" })) },
+      application: applicationFor(forgedDocument),
       projects: {
         readFileInfo: mock(async () => {
           throw new Error("Managed assets must not use Project file info")
@@ -135,7 +139,7 @@ describe("ManagedCanvasMediaResolver", () => {
     })
     await expect(
       forgedResolver.resolve(
-        { canvasId: "canvas-1", expectedRevision: 3, nodeIds: ["audio-1"], scopeId: "project-1" },
+        { canvasId: "canvas-1", nodeIds: ["audio-1"], scopeId: "project-1" },
         {
           allowedKinds: new Set(["audio"]),
           allowedKindsDescription: "audio",

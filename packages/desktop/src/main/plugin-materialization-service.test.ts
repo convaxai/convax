@@ -24,7 +24,7 @@ function materializationPlugin(version = "1.0.0") {
     description: "Timeline surface",
     entry: "index.html",
     hostApi: {
-      major: 2,
+      major: 3,
       optional: ["canvas.inputs.list", "canvas.inputs.open", "canvas.inputs.close"],
       required: ["host.context.get"],
     },
@@ -36,14 +36,18 @@ function materializationPlugin(version = "1.0.0") {
 }
 
 describe("PluginMaterializationService", () => {
-  test("derives its own renderer under one snapshot lease and sends one revision-bound business command", async () => {
+  const operationReceipt = (operationId: string) => ({ actorId: "timeline-surface", operationId }) as never
+  const commandResult = (canvasId: string, createdNodeIds: string[], operationId: string) => ({
+    createdNodeIds,
+    document: createCanvasDocument({ id: canvasId }),
+    operationReceipt: operationReceipt(operationId),
+  })
+
+  test("derives its own renderer under one snapshot lease and sends one business command", async () => {
     const plugin = materializationPlugin()
     const execute = mock(async (request: Parameters<PluginMaterializationService["materialize"]>[0] | any) => {
       const node = request.envelope.command.node
-      return {
-        createdNodeIds: [node.id],
-        document: { ...createCanvasDocument({ id: "canvas-1" }), revision: 8 },
-      }
+      return commandResult("canvas-1", [node.id], "materialize-1")
     })
     const release = mock(() => undefined)
     const assertCurrentActivePlugin = mock(async () => undefined)
@@ -66,14 +70,14 @@ describe("PluginMaterializationService", () => {
     const result = await service.materialize({
       actionId: "create-timeline",
       canvasId: "canvas-1",
-      expectedRevision: 7,
       pluginId: "timeline-surface",
       pluginVersion: "1.0.0",
       projectId: "project-1",
       sourceNodeId: "video-1",
     })
 
-    expect(result.revision).toBe(8)
+    expect(result.operationReceipt).toEqual(operationReceipt("materialize-1"))
+    expect(result.projection).toEqual(createCanvasDocument({ id: "canvas-1" }))
     expect(plugins.acquireActivePlugin).toHaveBeenCalledTimes(1)
     expect(assertCurrentActivePlugin).toHaveBeenCalledWith({
       activeRevision: 1,
@@ -94,7 +98,6 @@ describe("PluginMaterializationService", () => {
           sourceNodeId: "video-1",
           type: "nodes.materialize-connected",
         },
-        expectedRevision: 7,
       },
       scopeId: "project-1",
     })
@@ -134,7 +137,6 @@ describe("PluginMaterializationService", () => {
     const request = {
       actionId: "create-timeline",
       canvasId: "canvas-1",
-      expectedRevision: 1,
       pluginId: "timeline-surface",
       pluginVersion: "1.0.0",
       projectId: "project-1",
@@ -155,10 +157,7 @@ describe("PluginMaterializationService", () => {
     let released = false
     const execute = mock(async (request: any) => {
       expect(released).toBeFalse()
-      return {
-        createdNodeIds: [request.envelope.command.node.id],
-        document: { ...createCanvasDocument({ id: "canvas-1" }), revision: 2 },
-      }
+      return commandResult("canvas-1", [request.envelope.command.node.id], "materialize-2")
     })
     const plugins = {
       acquireActivePlugin: async () => ({
@@ -183,7 +182,6 @@ describe("PluginMaterializationService", () => {
     await service.materialize({
       actionId: "create-timeline",
       canvasId: "canvas-1",
-      expectedRevision: 1,
       pluginId: "timeline-surface",
       pluginVersion: "1.0.0",
       projectId: "project-1",
@@ -221,7 +219,6 @@ describe("PluginMaterializationService", () => {
       service.materialize({
         actionId: "create-timeline",
         canvasId: "canvas-1",
-        expectedRevision: 1,
         pluginId: plugin.id,
         pluginVersion: plugin.version,
         projectId: "project-1",

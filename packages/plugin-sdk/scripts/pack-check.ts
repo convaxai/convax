@@ -40,6 +40,7 @@ try {
   const consumerRoot = join(temporaryRoot, "consumer")
   const sdkRoot = join(consumerRoot, "node_modules", "@convax", "plugin-sdk")
   const apiRoot = join(consumerRoot, "node_modules", "@convax", "plugin-api")
+  const boundedValueRoot = join(consumerRoot, "node_modules", "@convax", "bounded-value")
   for (const [entry, file] of files) {
     if (!entry.startsWith("package/")) continue
     const relative = entry.slice("package/".length)
@@ -62,6 +63,20 @@ try {
       exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
     }),
   )
+  const boundedValueDist = resolve(packageRoot, "../bounded-value/dist")
+  for await (const entry of new Bun.Glob("**/*").scan({ cwd: boundedValueDist, onlyFiles: true })) {
+    const target = join(boundedValueRoot, "dist", entry)
+    mkdirSync(dirname(target), { recursive: true })
+    await Bun.write(target, await Bun.file(join(boundedValueDist, entry)).bytes())
+  }
+  await Bun.write(
+    join(boundedValueRoot, "package.json"),
+    JSON.stringify({
+      name: "@convax/bounded-value",
+      type: "module",
+      exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
+    }),
+  )
   await Bun.write(
     join(consumerRoot, "index.ts"),
     [
@@ -71,7 +86,7 @@ try {
       "const declaration = parsePluginCapabilityDeclaration({ exports: [], imports: { required: [], optional: [] } })",
       "void renderPluginCapabilityReference(declaration)",
       "void parsePortablePluginCanvasUiContribution({ commands: [], menus: [], toolbar: [] })",
-      'const manifest: PortablePluginManifestV8 = parsePluginManifestV8({ capabilities: [], contributes: { canvas: { renderer: { create: true } } }, description: "External consumer", entry: "index.html", hostApi: { major: 2, optional: [], required: ["host.context.get"] }, id: "external-consumer", name: "External Consumer", schema: "convax.plugin/8", version: "1.0.0" })',
+      'const manifest: PortablePluginManifestV8 = parsePluginManifestV8({ capabilities: [], contributes: { canvas: { renderer: { create: true } } }, description: "External consumer", entry: "index.html", hostApi: { major: 3, optional: [], required: ["host.context.get"] }, id: "external-consumer", name: "External Consumer", schema: "convax.plugin/8", version: "1.0.0" })',
       "void manifest",
       "declare const port: PluginHostMessagePort",
       "const client = createPluginHostClient({ manifest, port })",

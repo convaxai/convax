@@ -20,19 +20,18 @@ function host() {
 }
 
 describe("desktop Canvas resource transport", () => {
-  test("flushes renderer edits and binds upload to Main's authoritative revision", async () => {
+  test("flushes renderer edits before submitting one operation-identified upload", async () => {
     const order: string[] = []
     const file = new File(["image"], "frame.png", { type: "image/png" })
     const add = mock(async (input: unknown) => {
       order.push("add")
-      return { createdNodeIds: ["frame"], revision: 9, warnings: [], input }
+      return { createdNodeIds: ["frame"], warnings: [], input }
     })
 
     const result = await addCanvasUploadResources(
       {
         anchor: { x: 20, y: 40 },
         canvasId: "canvas-a",
-        expectedRevision: 9,
         files: [file],
         projectId: "project-a",
         relation: undefined,
@@ -40,7 +39,7 @@ describe("desktop Canvas resource transport", () => {
         sources: [],
       },
       {
-        add,
+        add: add as never,
         createCommandId: () => "renderer:add",
         createLocalFileToken(selected) {
           order.push("token")
@@ -50,7 +49,7 @@ describe("desktop Canvas resource transport", () => {
         createSourceId: () => "source-a",
         async flushAuthoritativeCanvas() {
           order.push("flush")
-          return { id: "canvas-a", revision: 8 }
+          return { id: "canvas-a" }
         },
       },
     )
@@ -60,7 +59,6 @@ describe("desktop Canvas resource transport", () => {
       anchor: { x: 20, y: 40 },
       canvasId: "canvas-a",
       commandId: "renderer:add",
-      expectedRevision: 8,
       localFiles: [
         {
           mediaType: "image/png",
@@ -72,13 +70,13 @@ describe("desktop Canvas resource transport", () => {
       projectId: "project-a",
       sources: [],
     })
-    expect(result).toMatchObject({ createdNodeIds: ["frame"], revision: 9 })
+    expect(result).toMatchObject({ createdNodeIds: ["frame"] })
   })
 
   test("does not mint file authority or invoke Main after cancellation during the flush", async () => {
     const controller = new AbortController()
     const createLocalFileToken = mock(() => "must-not-run")
-    const add = mock(async () => ({ createdNodeIds: [], revision: 0, warnings: [] }))
+    const add = mock(async () => ({ createdNodeIds: [], warnings: [] }))
 
     let rejected: unknown
     try {
@@ -86,7 +84,6 @@ describe("desktop Canvas resource transport", () => {
         {
           anchor: { x: 0, y: 0 },
           canvasId: "canvas-a",
-          expectedRevision: 1,
           files: [new File(["image"], "frame.png", { type: "image/png" })],
           projectId: "project-a",
           relation: undefined,
@@ -94,13 +91,13 @@ describe("desktop Canvas resource transport", () => {
           sources: [],
         },
         {
-          add,
+          add: add as never,
           createCommandId: () => "renderer:add",
           createLocalFileToken,
           createSourceId: () => "source-a",
           async flushAuthoritativeCanvas() {
             controller.abort(new Error("cancelled"))
-            return { id: "canvas-a", revision: 1 }
+            return { id: "canvas-a" }
           },
         },
       )

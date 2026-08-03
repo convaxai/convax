@@ -13,7 +13,7 @@ test("Desktop packaging verifies the one root Marketplace product lock before co
     "bun ../../scripts/marketplace-product-lock.ts ../../marketplaces.lock.json",
   )
   expect(manifest.scripts?.dev).toMatch(
-    /^bun run build:workspace-dependencies && bun run marketplace:prepare && /,
+    /^bun run build:workspace-dependencies && bun run collaboration:prepare && bun run marketplace:prepare && /,
   )
   expect(manifest.scripts?.["marketplace:prepare"]?.startsWith("bun run marketplace:verify && ")).toBe(true)
   expect(manifest.scripts?.["marketplace:prepare"]).toContain("stage-marketplace-product-lock.ts")
@@ -51,7 +51,7 @@ test("compares the canonical validated Plugin projection with parser-added defau
       },
     },
     description: "Runs reviewed local FFmpeg transforms.",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "ffmpeg-tools",
     name: "FFmpeg Tools",
     runtime: { command: "convax-ffmpeg-mcp", type: "mcp-stdio" },

@@ -1,5 +1,6 @@
 import { requireProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
 import type { ProjectResourceReadResult } from "@convax/project/node"
+import { canonicalize as canonicalizeConvaxUri, parse as parseConvaxUri, type QueryEntry } from "@convax/uri"
 
 type ProtocolReference = Exclude<ProjectResourceReference, { kind: "project-directory" }>
 
@@ -30,44 +31,44 @@ export function projectResourceAccessControlAllowOrigin(request: Request, truste
 export function createProjectResourceUrl(input: ProjectResourceProtocolInput) {
   const projectId = requireProjectId(input.projectId)
   const reference = requireProtocolReference(input.reference)
-  const url = new URL(`convax-asset://${projectId}/${reference.kind}`)
+  const query: Array<readonly [string, string]> = []
   if (reference.kind === "project-file") {
     if (!isSha256(input.contentRevision)) throw new Error("Project file content revision is invalid")
-    url.searchParams.set("path", reference.path)
-    url.searchParams.set("revision", input.contentRevision)
+    query.push(["path", reference.path], ["revision", input.contentRevision])
   } else {
     if (input.contentRevision !== undefined) throw new Error("Managed asset URLs use their content digest")
-    url.searchParams.set("sha256", reference.sha256)
-    url.searchParams.set("name", reference.name)
-    if (reference.mediaType) url.searchParams.set("mediaType", reference.mediaType)
+    query.push(["sha256", reference.sha256], ["name", reference.name])
+    if (reference.mediaType) query.push(["mediaType", reference.mediaType])
   }
-  return url.href
+  const encodedQuery = query.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join("&")
+  return canonicalizeConvaxUri(`convax-asset://${projectId}/${reference.kind}?${encodedQuery}`)
 }
 
 export function parseProjectResourceUrl(value: string): ProjectResourceProtocolInput {
-  const url = new URL(value)
-  if (url.protocol !== "convax-asset:" || url.username || url.password || url.port || url.hash || !url.hostname) {
+  const uri = parseConvaxUri(value)
+  if (uri.scheme !== "convax-asset" || uri.fragment || uri.pathSegments.length !== 1) {
     throw new Error("Project resource URL is invalid")
   }
-  const projectId = requireProjectId(url.hostname)
-  if (url.pathname === "/project-file") {
-    requireExactSearchParams(url, ["path", "revision"])
-    const contentRevision = url.searchParams.get("revision")
+  const projectId = requireProjectId(uri.authority)
+  const query = exactQuery(uri.queryEntries)
+  if (uri.pathSegments[0] === "project-file") {
+    requireExactSearchParams(query, ["path", "revision"])
+    const contentRevision = query.get("revision")
     if (!isSha256(contentRevision)) throw new Error("Project file content revision is invalid")
     const reference = requireProtocolReference({
       kind: "project-file",
-      path: url.searchParams.get("path"),
+      path: query.get("path"),
     })
     return { contentRevision, projectId, reference }
   }
-  if (url.pathname === "/managed-asset") {
-    requireExactSearchParams(url, ["sha256", "name"], ["mediaType"])
-    const mediaType = url.searchParams.get("mediaType")
+  if (uri.pathSegments[0] === "managed-asset") {
+    requireExactSearchParams(query, ["sha256", "name"], ["mediaType"])
+    const mediaType = query.get("mediaType")
     const reference = requireProtocolReference({
       kind: "managed-asset",
       ...(mediaType === null ? {} : { mediaType }),
-      name: url.searchParams.get("name"),
-      sha256: url.searchParams.get("sha256"),
+      name: query.get("name"),
+      sha256: query.get("sha256"),
     })
     return { projectId, reference }
   }
@@ -135,13 +136,26 @@ function requireProjectId(value: string) {
   return value
 }
 
-function requireExactSearchParams(url: URL, required: readonly string[], optional: readonly string[] = []) {
+function exactQuery(entries: readonly QueryEntry[]) {
+  const query = new Map<string, string>()
+  for (const entry of entries) {
+    if (query.has(entry.key)) throw new Error("Project resource URL query is invalid")
+    query.set(entry.key, entry.value)
+  }
+  return query
+}
+
+function requireExactSearchParams(
+  query: ReadonlyMap<string, string>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+) {
   const allowed = new Set([...required, ...optional])
-  const keys = [...url.searchParams.keys()]
-  if (keys.some((key) => !allowed.has(key)) || new Set(keys).size !== keys.length) {
+  const keys = [...query.keys()]
+  if (keys.some((key) => !allowed.has(key))) {
     throw new Error("Project resource URL query is invalid")
   }
-  if (required.some((key) => !url.searchParams.has(key))) throw new Error("Project resource URL query is incomplete")
+  if (required.some((key) => !query.has(key))) throw new Error("Project resource URL query is incomplete")
 }
 
 function isSha256(value: unknown): value is string {

@@ -12,7 +12,7 @@ import type {
  * No wire shape is independently declared in this module.
  */
 export type PluginApiHostContextResult = PluginApiResult<"host.context.get">
-export type PluginApiHostNode = Omit<PluginApiResult<"canvas.node.get">, "revision">
+export type PluginApiHostNode = PluginApiResult<"canvas.node.get">
 export type PluginApiConnectedInput = PluginApiResult<"canvas.inputs.list">["inputs"][number]
 /**
  * A revocable Host session whose URL is a bearer capability. Electron protocol
@@ -44,7 +44,7 @@ export type PluginApiCanvasNodeQuery = NonNullable<PluginApiParams<"canvas.nodes
 export type PluginApiCanvasNodeQueryResult = PluginApiResult<"canvas.nodes.query">
 export type PluginApiCanvasNodeSummary = PluginApiCanvasNodeQueryResult["nodes"][number]
 export type PluginApiCanvasTransactionRequest = PluginApiParams<"canvas.transaction.execute">
-export type PluginApiCanvasTransactionCommand = PluginApiCanvasTransactionRequest["commands"][number]
+export type PluginApiCanvasTransactionCommand = PluginApiCanvasTransactionRequest["command"]
 export type PluginApiCanvasTransactionResult = PluginApiResult<"canvas.transaction.execute">
 export type PluginApiCanvasRef = PluginApiParams<"canvas.document.get">["ref"]
 export type PluginApiPoint = PluginApiCanvasGeometryNode["position"]

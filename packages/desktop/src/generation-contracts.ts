@@ -1,3 +1,7 @@
+import type { CanvasGenerationTargetGuard } from "@convax/canvas/application"
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { CanvasDocument } from "@convax/canvas/core"
+
 export type GenerationOutputModality = "text" | "image" | "video" | "audio"
 export type GenerationToolKind = "model" | "operation"
 export type GenerationToolDelivery = "canvas" | "return"
@@ -10,12 +14,6 @@ export const generationIpcChannels = {
   listTools: "generation:list-tools",
   reconcileCanvas: "generation:reconcile-canvas",
 } as const
-
-export const generationCanvasRevisionConflictCode = "CONVAX_GENERATION_CANVAS_REVISION_CONFLICT"
-
-export function isGenerationCanvasRevisionConflictFailure(failure: unknown) {
-  return failure instanceof Error && failure.message.includes(generationCanvasRevisionConflictCode)
-}
 
 export type GenerationInputRole =
   | "text"
@@ -114,7 +112,7 @@ export interface GenerationCanvasReference {
 export type GenerationResultMode =
   | { type: "add" }
   | { type: "create-pending-node" }
-  | { nodeId: string; type: "replace-node" }
+  | { expectedTarget: CanvasGenerationTargetGuard; nodeId: string; type: "replace-node" }
   /** Trusted host-only mode for a text operation whose declared delivery is `return`. */
   | { type: "return" }
 
@@ -132,7 +130,6 @@ export interface GenerationCanvasRequest {
     scopeId: string
     canvasId: string
   }
-  expectedRevision: number
   /** Trusted host-only output cardinality guard; this never enters the Tool Plugin input. */
   expectedOutputCount?: number
   /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
@@ -164,7 +161,8 @@ export interface GenerationCanvasResult {
   createdNodeIds: readonly string[]
   /** Present only for a text operation whose declared delivery is `return`. */
   outputText?: string
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2 | null
+  projection: CanvasDocument
   toolId: string
   warnings: readonly string[]
 }
@@ -178,7 +176,8 @@ export interface GenerationCanvasReconcileRequest {
 
 export interface GenerationCanvasReconcileResult {
   failedNodeIds: readonly string[]
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2 | null
+  projection: CanvasDocument
 }
 
 export interface GenerationListToolsRequest {

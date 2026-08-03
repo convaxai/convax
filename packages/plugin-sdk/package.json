@@ -53,6 +53,7 @@
     "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
+    "@convax/bounded-value": "workspace:^",
     "@convax/plugin-api": "workspace:^"
   },
   "devDependencies": {

@@ -279,7 +279,6 @@ export function createMediaOperationGenerateRequests(
       source: `desktop:plugin-selection-action:${request.action.pluginId}/${request.action.id}`,
     },
     expectedOutputCount: 1,
-    expectedRevision: request.context.document.revision,
     output: step.output,
     prompt: request.action.description.default,
     references: [
@@ -314,7 +313,6 @@ export function createMediaOperationReturnRequest(
   return {
     anchor: mediaOperationResultAnchor(node, request.context.document.nodes),
     expectedOutputCount: 1,
-    expectedRevision: request.context.document.revision,
     operationId,
     output: "text",
     prompt: request.action.description.default,

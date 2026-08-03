@@ -8,10 +8,22 @@ import type {
   AgentRuntimeDirectoryInput,
   AgentRuntimeListSessionsInput,
 } from "@convax/agent-runtime"
+import {
+  CanvasApplicationService,
+  CanvasResourceBusinessService,
+  executeCanvasApplicationCommand,
+  type CanvasApplicationCommandRequest,
+} from "@convax/canvas/application"
+import { createCanvasDocument } from "@convax/canvas/core"
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import {
+  parseActorIdV2,
+  parseDigestV2,
+  parseId128V2,
+} from "@convax/collaboration"
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
-import { createTextNode } from "@convax/canvas/core"
 import type { ProjectLifecycleClient } from "@convax/project"
-import { projectResourceReferenceKey, type ProjectCanvasClient } from "@convax/project/canvas"
+import type { ProjectCanvas, ProjectCanvasCatalog, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { CanvasResourceClient } from "../desktop-protocol"
@@ -33,6 +45,17 @@ const handlers = new Map<string, InvokeHandler>()
 const rendererListeners = new Map<string, Set<(...args: unknown[]) => void>>()
 const rendererSends: Array<{ channel: string; input: unknown }> = []
 const trustedEvent = { sender: { id: 1 }, senderFrame: { url: "file:///convax/index.html" } }
+const operationReceipt: BoundedOperationReceiptV2 = {
+  format: "convax.canvas-operation-receipt/2",
+  actorId: parseActorIdV2("A".repeat(43)),
+  operationId: parseId128V2("A".repeat(22)),
+  intentDigest: parseDigestV2("d".repeat(64)),
+  baseFrontierDigest: parseDigestV2("e".repeat(64)),
+  intentKind: "canvas.nodes.set-geometry/2",
+  resultEntities: [],
+  semanticRoot: true,
+  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+}
 let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""
 let selectedLocalFilePath = ""
@@ -108,21 +131,17 @@ describe("desktop Project lifecycle IPC smoke", () => {
 
     const {
       NodeProjectManager,
-      NodeProjectCanvasManager,
-      ProjectCanvasDocumentRepository,
-      ProjectCanvasDocumentService,
+      ProjectCanvasResourceHydrator,
       ProjectCanvasResourcePreparation,
       ProjectFilePublisher,
       ProjectManagedAssetStore,
     } = await import("@convax/project/node")
     const [
-      { CanvasApplicationService, CanvasResourceBusinessService },
       { registerAgentIpc },
       { registerCanvasDocumentIpc, registerCanvasResourceIpc },
       { registerProjectIpc },
       { registerProjectCanvasIpc },
     ] = await Promise.all([
-      import("@convax/canvas/application"),
       import("./agent-ipc"),
       import("./canvas-document-ipc"),
       import("./project-ipc"),
@@ -132,17 +151,81 @@ describe("desktop Project lifecycle IPC smoke", () => {
     const projects = new NodeProjectManager({
       registryFile: path.join(temporaryRoot, "user-data", "projects.json"),
     })
-    const canvases = new NodeProjectCanvasManager(projects, projects)
     const assets = new ProjectManagedAssetStore(projects)
-    const canvasRepository = new ProjectCanvasDocumentRepository(projects, canvases, assets)
-    const canvasDocuments = new ProjectCanvasDocumentService(canvasRepository, canvases)
+    const canvasCatalogs = new Map<string, ProjectCanvasCatalog>()
+    const getCanvasCatalog = (projectId: string): ProjectCanvasCatalog => {
+      const existing = canvasCatalogs.get(projectId)
+      if (existing) return structuredClone(existing)
+      const canvas: ProjectCanvas = { createdAt: 1, id: "canvas-main", name: "Canvas 1", updatedAt: 1 }
+      const created: ProjectCanvasCatalog = { canvases: [canvas], creationAvailability: "available", projectId }
+      canvasCatalogs.set(projectId, created)
+      return structuredClone(created)
+    }
+    const canvases = {
+      async createCanvas(input: { name?: string; projectId: string }) {
+        const catalog = getCanvasCatalog(input.projectId)
+        const canvas: ProjectCanvas = {
+          createdAt: 2,
+          id: `canvas-${catalog.canvases.length + 1}`,
+          name: input.name ?? "Canvas",
+          updatedAt: 2,
+        }
+        catalog.canvases.push(canvas)
+        canvasCatalogs.set(input.projectId, catalog)
+        return { canvas: structuredClone(canvas), catalog: structuredClone(catalog) }
+      },
+      async deleteCanvas(input: { canvasId: string; projectId: string }) {
+        const catalog = getCanvasCatalog(input.projectId)
+        const next = catalog.canvases.filter((canvas) => canvas.id !== input.canvasId)
+        const deleted = next.length !== catalog.canvases.length
+        const updated = { ...catalog, canvases: next }
+        canvasCatalogs.set(input.projectId, updated)
+        return { deleted, catalog: structuredClone(updated) }
+      },
+      async getCanvasCatalog(input: { projectId: string }) {
+        return getCanvasCatalog(input.projectId)
+      },
+      async renameCanvas(input: { canvasId: string; name: string; projectId: string }) {
+        const catalog = getCanvasCatalog(input.projectId)
+        const canvas = catalog.canvases.find((candidate) => candidate.id === input.canvasId)
+        if (!canvas) throw new Error("Canvas was not found")
+        const renamed = { ...canvas, name: input.name, updatedAt: 3 }
+        const updated = {
+          ...catalog,
+          canvases: catalog.canvases.map((candidate) => (candidate.id === input.canvasId ? renamed : candidate)),
+        }
+        canvasCatalogs.set(input.projectId, updated)
+        return { canvas: structuredClone(renamed), catalog: structuredClone(updated) }
+      },
+    }
+    const canvasDocuments = new Map<string, ReturnType<typeof createCanvasDocument>>()
+    const collaboration = {
+      async query(ref: { canvasId: string; scopeId: string }) {
+        const key = `${ref.scopeId}:${ref.canvasId}`
+        const projection = canvasDocuments.get(key) ?? createCanvasDocument({ id: ref.canvasId })
+        canvasDocuments.set(key, projection)
+        return { nodes: [], projection: structuredClone(projection) }
+      },
+      async submit(request: CanvasApplicationCommandRequest) {
+        const key = `${request.scopeId}:${request.canvasId}`
+        const current = canvasDocuments.get(key) ?? createCanvasDocument({ id: request.canvasId })
+        const result = executeCanvasApplicationCommand(current, request.envelope)
+        canvasDocuments.set(key, structuredClone(result.document))
+        return { ...result, operationReceipt }
+      },
+    }
     const resourcePreparation = new ProjectCanvasResourcePreparation(
       projects,
       new ProjectFilePublisher(projects, assets),
       assets,
     )
-    const canvasApplication = new CanvasApplicationService(canvasDocuments)
+    const canvasApplication = new CanvasApplicationService(collaboration)
     const canvasResources = new CanvasResourceBusinessService(resourcePreparation, canvasApplication)
+    const canvasHydrator = new ProjectCanvasResourceHydrator(
+      projects,
+      assets,
+      ({ reference }) => `convax-resource://${reference.kind}`,
+    )
     let listSessionsInput: AgentRuntimeListSessionsInput | undefined
     let listModelsInput: AgentRuntimeDirectoryInput | undefined
     const activity = {
@@ -190,11 +273,12 @@ describe("desktop Project lifecycle IPC smoke", () => {
         projectCreationDirectory: path.join(temporaryRoot, "Documents", "Convax"),
       }),
       registerProjectCanvasIpc(canvases, trusted),
-      registerCanvasDocumentIpc(canvasDocuments, canvasApplication, trusted),
+      registerCanvasDocumentIpc(canvasApplication, canvasHydrator, trusted),
       registerCanvasResourceIpc(canvasResources, resourcePreparation, {
+        application: canvasApplication,
         ...trusted,
         resolveActiveCanvas: async () =>
-          activeProjectId ? { canvasId: "canvas-main", projectId: activeProjectId, revision: 0 } : null,
+          activeProjectId ? { canvasId: "canvas-main", projectId: activeProjectId } : null,
       }),
       registerAgentIpc(runtime, projects, { ...trusted, activity }),
     ]
@@ -208,7 +292,6 @@ describe("desktop Project lifecycle IPC smoke", () => {
     expect(exposedBridge.projects).not.toHaveProperty("listDirectory")
     expect(exposedBridge.projectFiles).toHaveProperty("listDirectory")
     const externalDragRequest = {
-      expectedRevision: 0,
       nodeIds: ["image-1", "audio-1"],
       prepareId: "prepare_open_project_test",
       ref: { canvasId: "canvas-main", scopeId: "project-1" },
@@ -251,40 +334,35 @@ describe("desktop Project lifecycle IPC smoke", () => {
       projectId,
     })
     const loaded = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
-    expect(loaded.document).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
+    expect(loaded.projection).toMatchObject({ edges: [], id: "canvas-main", nodes: [] })
     await exposedBridge.projectFiles.writeTextFile({
       content: "Command edit",
       createParents: true,
       path: "Notes/renderer-note.md",
       projectId,
     })
-    const rendererNode = createTextNode({
-      id: "renderer-note",
-      metadata: {
-        [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/renderer-note.md" },
-      },
-      mimeType: "text/markdown",
-      name: "renderer-note.md",
-      position: { x: 10, y: 20 },
-      resourceState: { status: "ready", text: "Command edit" },
+    const rendererResource = await exposedBridge.canvas.resources.add({
+      anchor: { x: 10, y: 20 },
+      canvasId: "canvas-main",
+      commandId: "renderer-resource-smoke",
+      projectId,
+      sources: [{ kind: "host-file", path: "Notes/renderer-note.md", sourceId: "renderer-note" }],
     })
+    const rendererNodeId = rendererResource.createdNodeIds[0]
+    if (!rendererNodeId) throw new Error("Renderer resource command did not create a node")
     const commandResult = await exposedBridge.canvas.documents.execute({
       command: {
-        addedEdges: [],
-        addedNodes: [rendererNode],
-        removedEdgeIds: [],
-        removedNodeIds: [],
-        type: "document.patch",
-        updatedEdges: [],
-        updatedNodes: [],
+        delta: { x: 5, y: 5 },
+        nodeIds: [rendererNodeId],
+        type: "nodes.move",
       },
       commandId: "renderer-command-smoke",
-      expectedRevision: loaded.document?.revision ?? 0,
       ref: { canvasId: "canvas-main", scopeId: projectId },
     })
     expect(commandResult).toMatchObject({
-      createdNodeIds: [rendererNode.id],
-      document: { nodes: [{ id: rendererNode.id }], revision: 1 },
+      affectedNodeIds: [rendererNodeId],
+      document: { nodes: [{ id: rendererNodeId }] },
+      operationReceipt,
     })
     expect(handlers.has("canvas:document-save")).toBeFalse()
 
@@ -297,16 +375,20 @@ describe("desktop Project lifecycle IPC smoke", () => {
       anchor: { x: 20, y: 40 },
       canvasId: "canvas-main",
       commandId: "smoke-add-external",
-      expectedRevision: 1,
       localFiles: [{ mediaType: "image/png", name: "outside.png", sourceId: "outside", sourceToken }],
       projectId,
       sources: [],
     })
-    expect(resourceResult).toMatchObject({ createdNodeIds: [expect.any(String)], revision: 2, warnings: [] })
+    expect(resourceResult).toMatchObject({
+      createdNodeIds: [expect.any(String)],
+      operationReceipt,
+      projection: { nodes: expect.any(Array) },
+      warnings: [],
+    })
     expect(JSON.stringify(resourceResult)).not.toContain(selectedLocalFilePath)
     const withResource = await exposedBridge.canvas.documents.load({ canvasId: "canvas-main", scopeId: projectId })
-    expect(withResource.document?.nodes).toHaveLength(2)
-    expect(JSON.stringify(withResource.document)).not.toContain(selectedLocalFilePath)
+    expect(withResource.projection.nodes).toHaveLength(2)
+    expect(JSON.stringify(withResource.projection)).not.toContain(selectedLocalFilePath)
 
     await exposedBridge.agent.listSessions({ limit: 60, scopeId: projectId })
     expect(listSessionsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), limit: 60 })
@@ -319,27 +401,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       providers: [{ providerId: "opencode" }],
     })
     expect(listModelsInput).toEqual({ directory: await fs.realpath(selectedProjectPath), scopeId: projectId })
-    const storedCatalog = JSON.parse(
-      await fs.readFile(path.join(selectedProjectPath, ".convax", "canvases", "catalog.json"), "utf8"),
-    )
-    expect(storedCatalog).toMatchObject({ schemaVersion: "convax.project-canvases/2" })
-    expect(storedCatalog).not.toHaveProperty("activeCanvasId")
-    const storedCanvasEnvelope = JSON.parse(
-      await fs.readFile(
-        path.join(selectedProjectPath, ".convax", "canvases", "canvas-main", "document.json"),
-        "utf8",
-      ),
-    )
-    expect(storedCanvasEnvelope.schemaVersion).toBe("convax.canvas/2")
-    expect(storedCanvasEnvelope.document).toMatchObject({
-      edges: [],
-      id: "canvas-main",
-      revision: 2,
-    })
-    expect(storedCanvasEnvelope.document.nodes).toHaveLength(2)
-    expect(storedCanvasEnvelope.document.nodes).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: rendererNode.id })]),
-    )
+    await expect(fs.stat(path.join(selectedProjectPath, ".convax", "canvases", "catalog.json"))).rejects.toThrow()
 
     const createdSelection = await exposedBridge.projects.createProject({ name: "Created project" })
     const createdProjectId = createdSelection.project?.id

@@ -1,13 +1,13 @@
 import {
   CanvasEditor,
   CanvasInspector,
-  type CanvasDocument,
   createDefaultCanvasFileRendererRegistry,
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
   createCanvasServices,
   matchesCanvasSelectionProjectionScope,
   type CanvasEditorHandle,
+  type CanvasDocument,
   type CanvasGenerateService,
   type CanvasInspectorProjection,
   type CanvasNotification,
@@ -19,7 +19,6 @@ import {
 import { ProjectController, ProjectSidebar } from "@convax/project"
 import { ProjectFilesController, type ProjectEntry } from "@convax/project-files"
 import {
-  dehydrateProjectCanvasDocument,
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
   ProjectCanvasSidebarTools,
@@ -47,6 +46,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createRoot } from "react-dom/client"
 import { I18nextProvider } from "react-i18next"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
+import { parseProjectTeamInvitationV2 } from "../project-team-collaboration-contracts"
 import {
   hasWebPluginCanvasSurface,
   type ActiveInstalledWebPluginSummary,
@@ -85,8 +85,6 @@ import {
   startCapturedPointerDrag,
   type CapturedPointerDragSession,
 } from "./captured-pointer-drag"
-import { createRendererCanvasPersistence } from "./canvas-command-persistence"
-import { createInitialCanvasDocument } from "./canvas-document"
 import {
   CanvasCardConversationPanel,
   canvasCardAgentContextNodeIds,
@@ -94,6 +92,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
+import { openDesktopCanvasRendererSessionV2, type DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
@@ -105,7 +104,6 @@ import {
   openDesktopWorkspace,
 } from "./desktop-surface-state"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
-import { reconcileGenerationExpectedRevision } from "./generation-expected-revision"
 import { MediaOperationActionIcon } from "./media-operation-action-icon"
 import {
   canResumeMediaOperation,
@@ -133,7 +131,12 @@ import {
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
-import { ProjectLoadingState, ProjectRecoveryState, ProjectRegistryLoadingState } from "./project-empty-state"
+import {
+  ProjectCollaborationPendingState,
+  ProjectLoadingState,
+  ProjectRecoveryState,
+  ProjectRegistryLoadingState,
+} from "./project-empty-state"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { projectCanvasSidebarNodes, sameProjectCanvasNodeProjection } from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
@@ -147,6 +150,7 @@ import {
   type ProjectHomeEntryResult,
 } from "./project-home-model"
 import { ProjectSidebarShell } from "./project-sidebar-shell"
+import { ProjectResetRecoveryState } from "./project-reset-recovery"
 import { RendererErrorBoundary } from "./renderer-error-boundary"
 import { GenerationModelCatalogController } from "./generation-model-catalog-controller"
 import {
@@ -269,25 +273,9 @@ function App() {
     activeCanvas?: { id: string; name: string }
     activeProject?: { id: string; name: string }
   }>({})
-  const latestCanvasSaveRef = useRef<Promise<CanvasDocument> | null>(null)
-  const drainCanvasSaves = useCallback(async (): Promise<CanvasDocument | undefined> => {
-    let authoritativeDocument: CanvasDocument | undefined
-    while (true) {
-      const pending = latestCanvasSaveRef.current
-      if (!pending) return authoritativeDocument
-      try {
-        authoritativeDocument = await pending
-      } catch (error) {
-        if (latestCanvasSaveRef.current !== pending) continue
-        throw error
-      }
-      if (latestCanvasSaveRef.current === pending) return authoritativeDocument
-    }
-  }, [])
   const flushAuthoritativeCanvas = useCallback(async () => {
-    const flushedDocument = await canvasEditorRef.current?.flush()
-    return (await drainCanvasSaves()) ?? flushedDocument
-  }, [drainCanvasSaves])
+    return canvasEditorRef.current?.flush()
+  }, [])
   const flushCanvasForAgent = useCallback(async () => {
     await flushAuthoritativeCanvas()
   }, [flushAuthoritativeCanvas])
@@ -297,12 +285,12 @@ function App() {
         beforeActiveProjectChange: async () => {
           const canLeave = await canvasEditorRef.current?.prepareToLeave()
           if (canLeave === false) return false
-          await drainCanvasSaves()
+          await canvasEditorRef.current?.flush()
           return true
         },
         onActiveProjectChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [drainCanvasSaves],
+    [],
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
@@ -349,13 +337,13 @@ function App() {
           if (currentInput?.kind === "canvas") {
             const canLeave = await canvasEditorRef.current?.prepareToLeave()
             if (canLeave === false) return false
-            await drainCanvasSaves()
+            await canvasEditorRef.current?.flush()
           }
           return true
         },
         onInputChangeCanceled: () => canvasEditorRef.current?.resumeAfterLeaveCanceled(),
       }),
-    [drainCanvasSaves],
+    [],
   )
   const projectCanvasWorkbench = useMemo(
     () => new ProjectCanvasWorkbenchCoordinator(projectCanvasController, workbenchController),
@@ -391,10 +379,24 @@ function App() {
   const effectivePrimaryDesktopSurface = projectBootstrapView.kind === "opening" ? primaryDesktopSurface : "home"
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const activeProjectId = activeProject?.id
+  const projectResetCandidate = projectSnapshot.pendingRecoveryProjectId
+    ? projectSnapshot.projects.find(
+        (project) =>
+          project.id === projectSnapshot.pendingRecoveryProjectId &&
+          project.recovery?.status === "unsupported-portable-project-version",
+      )
+    : undefined
   const projectCanvasSnapshot = useSyncExternalStore(
     projectCanvasController.subscribe,
     projectCanvasController.getSnapshot,
     projectCanvasController.getSnapshot,
+  )
+  const canvasAuthorityPending = Boolean(
+    activeProject &&
+      projectCanvasSnapshot.projectId === activeProject.id &&
+      !projectCanvasSnapshot.busy &&
+      !projectCanvasSnapshot.error &&
+      projectCanvasSnapshot.creationAvailability === "team-authority-pending",
   )
   const workbenchSnapshot = useSyncExternalStore(
     workbenchController.subscribe,
@@ -650,6 +652,47 @@ function App() {
   useEffect(() => {
     setProjectCanvasFilteredKinds(new Set())
   }, [activeProjectId])
+  const canvasSessionScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
+  const [mountedCanvasSession, setMountedCanvasSession] = useState<{
+    key: string
+    session: DesktopCanvasRendererSessionV2
+  } | null>(null)
+  const [canvasSessionFailure, setCanvasSessionFailure] = useState<{ key: string; message: string } | null>(null)
+  useEffect(() => {
+    setMountedCanvasSession(null)
+    setCanvasSessionFailure(null)
+    if (!activeProjectId || !activeCanvasId) return
+    const controller = new AbortController()
+    const key = `${activeProjectId}:${activeCanvasId}`
+    let opened: DesktopCanvasRendererSessionV2 | null = null
+    void openDesktopCanvasRendererSessionV2({
+      ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
+      signal: controller.signal,
+      transport: window.convax.canvas.sessions,
+    })
+      .then(async (session) => {
+        opened = session
+        await window.convax.generation.reconcileCanvas({
+          ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
+        })
+        await session.refresh(controller.signal)
+        if (controller.signal.aborted) return session.dispose()
+        setMountedCanvasSession({ key, session })
+      })
+      .catch((error) => {
+        opened?.dispose()
+        if (!controller.signal.aborted) {
+          setCanvasSessionFailure({ key, message: error instanceof Error ? error.message : String(error) })
+        }
+      })
+    return () => {
+      controller.abort(new DOMException("Canvas renderer scope changed", "AbortError"))
+      opened?.dispose()
+    }
+  }, [activeCanvasId, activeProjectId])
+  const activeCanvasSession = mountedCanvasSession?.key === canvasSessionScopeKey ? mountedCanvasSession.session : null
+  const activeCanvasSessionFailure =
+    canvasSessionFailure?.key === canvasSessionScopeKey ? canvasSessionFailure.message : null
   const publishCanvasSelection = useCallback(
     (projection: CanvasSelectionProjection) => {
       if (
@@ -685,10 +728,7 @@ function App() {
       if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
       setCanvasInspector(projection)
       setWorkspaceUtilityDrawer(
-        openInspectorUtility(
-          { canvasId: activeCanvasId, projectId: activeProjectId },
-          `${projection.nodeId}:${projection.revision}`,
-        ),
+        openInspectorUtility({ canvasId: activeCanvasId, projectId: activeProjectId }, projection.nodeId),
       )
     },
     [activeCanvasId, activeProjectId, workbenchLayoutController],
@@ -830,7 +870,7 @@ function App() {
   const loadProjectCanvasNodes = useCallback(
     async ({ canvasId, projectId }: { canvasId: string; projectId: string }) => {
       const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId: projectId })
-      return snapshot.document ? projectCanvasSidebarNodes(snapshot.document) : []
+      return projectCanvasSidebarNodes(snapshot.projection)
     },
     [],
   )
@@ -925,16 +965,6 @@ function App() {
     [canvasViewRegistry],
   )
   useEffect(() => window.convax.canvas.renderer.onRequest(canvasRendererRequestHandler), [canvasRendererRequestHandler])
-  const activeCanvasNameRef = useRef(activeCanvas?.name)
-  activeCanvasNameRef.current = activeCanvas?.name
-  const initialDocument = useMemo(() => {
-    if (!activeProject || !activeCanvas) return null
-    return createInitialCanvasDocument({
-      canvasId: activeCanvas.id,
-      canvasName: activeCanvas.name,
-      projectName: activeProject.name,
-    })
-  }, [activeCanvas, activeProject])
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
       cancel(operationId) {
@@ -1012,10 +1042,6 @@ function App() {
         const result = await window.convax.generation.generate({
           anchor: request.anchor,
           ...(request.expectedOutputCount ? { expectedOutputCount: request.expectedOutputCount } : {}),
-          expectedRevision: reconcileGenerationExpectedRevision(
-            request.expectedRevision,
-            authoritativeDocument.revision,
-          ),
           operationId,
           ...(request.output ? { output: request.output } : {}),
           ...(request.parentId ? { parentId: request.parentId } : {}),
@@ -1095,14 +1121,13 @@ function App() {
         },
       },
       hydration: {
-        async hydrateStale({ document, signal }) {
+        async hydrateStale({ signal }) {
           if (!activeProjectId || !activeCanvasId) {
             throw new Error("Open a Project Canvas before refreshing resources")
           }
           if (signal.aborted) throw signal.reason
           const hydrated = await window.convax.canvas.resources.hydrateStale({
             canvasId: activeCanvasId,
-            revision: document.revision,
           })
           if (signal.aborted) throw signal.reason
           return hydrated
@@ -1149,37 +1174,11 @@ function App() {
           return window.convax.canvas.resources.saveEditableCopy({
             canvasId: activeCanvasId,
             commandId: `renderer:${globalThis.crypto.randomUUID()}`,
-            expectedRevision: request.expectedRevision,
             nodeId: request.nodeId,
           })
         },
       },
       generate: generateService,
-      persistence:
-        activeProjectId && activeCanvasId
-          ? createRendererCanvasPersistence({
-              client: {
-                execute: (request) => window.convax.canvas.documents.execute(request),
-                async load(ref) {
-                  await window.convax.generation.reconcileCanvas({ ref })
-                  return window.convax.canvas.documents.load(ref)
-                },
-              },
-              commandId: () => `renderer-${globalThis.crypto.randomUUID()}`,
-              dehydrate: dehydrateProjectCanvasDocument,
-              hydrate: (document) => ({
-                ...document,
-                metadata: {
-                  ...document.metadata,
-                  title: activeCanvasNameRef.current ?? document.metadata.title,
-                },
-              }),
-              onSavePending: (pending) => {
-                latestCanvasSaveRef.current = pending
-              },
-              ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-            })
-          : undefined,
       export: {
         async export(request, signal) {
           if (signal.aborted) throw signal.reason
@@ -1222,7 +1221,6 @@ function App() {
       let initialProgress = mediaOperationProgressRef.current.get(request) ?? {
         createdNodeIds: [],
         nextRequestIndex: 0,
-        revision: request.context.document.revision,
         warnings: [],
       }
       if (initialProgress.nextRequestIndex > 0) {
@@ -1249,8 +1247,8 @@ function App() {
           throw new MediaOperationPartialError(message, initialProgress, { cause: failure })
         }
         if (
-          !snapshot.document ||
-          !canResumeMediaOperation(request, snapshot.document, initialProgress.createdNodeIds)
+          !snapshot.projection ||
+          !canResumeMediaOperation(request, snapshot.projection, initialProgress.createdNodeIds)
         ) {
           mediaOperationProgressRef.current.delete(request)
           setMediaOperationDialog((current) => (current === request ? null : current))
@@ -1264,7 +1262,6 @@ function App() {
           })
           throw new Error("The Plugin media operation cannot resume because its Canvas inputs changed")
         }
-        initialProgress = { ...initialProgress, revision: snapshot.document.revision }
         mediaOperationProgressRef.current.set(request, initialProgress)
       }
       let progress: MediaOperationProgress
@@ -1287,7 +1284,10 @@ function App() {
               scopeId: request.projectId,
             })
             if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
-            if (!snapshot.document || !canResumeMediaOperation(request, snapshot.document, current.createdNodeIds)) {
+            if (
+              !snapshot.projection ||
+              !canResumeMediaOperation(request, snapshot.projection, current.createdNodeIds)
+            ) {
               mediaOperationProgressRef.current.delete(request)
               setMediaOperationDialog((active) => (active === request ? null : active))
               setNotification({
@@ -1300,7 +1300,7 @@ function App() {
               })
               throw new Error("The Plugin media operation cannot continue because its Canvas inputs changed")
             }
-            return { ...current, revision: snapshot.document.revision }
+            return current
           },
           requests,
           signal,
@@ -1437,7 +1437,6 @@ function App() {
           const result = await window.convax.canvas.pluginMaterialization.materialize({
             actionId: action.id,
             canvasId: activeCanvasId,
-            expectedRevision: authoritative.revision,
             pluginId: action.pluginId,
             pluginVersion: action.pluginVersion,
             projectId: activeProjectId,
@@ -1729,6 +1728,30 @@ function App() {
     },
     [locale, workspaceEntryCoordinator],
   )
+  const cancelProjectReset = useCallback(() => {
+    if (projectSnapshot.pendingRecoveryProjectId) {
+      projectController.dismissPendingRecoveryProject(projectSnapshot.pendingRecoveryProjectId)
+    }
+  }, [projectController, projectSnapshot.pendingRecoveryProjectId])
+  const closeUnavailableProjectReset = useCallback(
+    (error?: string) => {
+      if (error) setStartupRecoveryError(error)
+      cancelProjectReset()
+    },
+    [cancelProjectReset],
+  )
+  const activateResetProject = useCallback(
+    async (projectId: string) => {
+      await projectController.activate(projectId)
+      const snapshot = projectController.getSnapshot()
+      if (snapshot.activeProjectId !== projectId || snapshot.error) {
+        throw new Error(snapshot.error ?? "The reset Project could not be activated.")
+      }
+      const entered = await enterHomeProject(projectId)
+      if (entered === false) throw new Error("The reset Project could not be opened.")
+    },
+    [enterHomeProject, projectController],
+  )
   const openProjectFromRecovery = useCallback(() => {
     if (startupRecoveryPendingRef.current) return
     const recoveryErrorBeforeOpen = startupRecoveryError ?? currentStartupEntryFailure ?? projectSnapshot.error
@@ -1917,6 +1940,13 @@ function App() {
             controller={projectCanvasController}
             filteredKinds={projectCanvasFilteredKinds}
             loadNodes={loadProjectCanvasNodes}
+            creationUnavailableReason={
+              canvasAuthorityPending
+                ? locale === "zh-CN"
+                  ? "需要团队协同授权后才能创建画布。"
+                  : "Team collaboration authority is required to create a Canvas."
+                : undefined
+            }
             navigationBusy={workbenchSnapshot.changingInput}
             navigationError={workbenchSnapshot.error}
             onClearNavigationError={() => workbenchController.clearError()}
@@ -1925,7 +1955,7 @@ function App() {
             query={query}
           />
         ),
-        createLabel: "New canvas",
+        createLabel: canvasAuthorityPending ? "Team setup required" : "New canvas",
         header: (
           <ProjectCanvasSwitcher
             activeCanvasId={activeCanvasId ?? null}
@@ -1936,7 +1966,7 @@ function App() {
           />
         ),
         label: "Canvases",
-        onCreate: () => void projectCanvasWorkbench.createCanvas(activeProject.id),
+        onCreate: canvasAuthorityPending ? undefined : () => void projectCanvasWorkbench.createCanvas(activeProject.id),
       }}
       filesController={projectFilesController}
       footerActions={
@@ -1990,10 +2020,7 @@ function App() {
     if (mode === "agent") setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
     else if (mode === "inspector" && activeCanvasId && canvasInspector) {
       setWorkspaceUtilityDrawer(
-        openInspectorUtility(
-          { canvasId: activeCanvasId, projectId: activeProjectId },
-          `${canvasInspector.nodeId}:${canvasInspector.revision}`,
-        ),
+        openInspectorUtility({ canvasId: activeCanvasId, projectId: activeProjectId }, canvasInspector.nodeId),
       )
     }
   }
@@ -2119,7 +2146,17 @@ function App() {
             placeholder={locale === "zh-CN" ? "搜索命令…" : "Search commands…"}
           />
           <div className="relative min-h-0 flex-1 overflow-hidden">
-            {effectivePrimaryDesktopSurface === "home" ? (
+            {projectResetCandidate ? (
+              <ProjectResetRecoveryState
+                client={window.convax.projects.recovery}
+                locale={locale}
+                onCancel={cancelProjectReset}
+                onPublished={activateResetProject}
+                onUnavailable={closeUnavailableProjectReset}
+                project={projectResetCandidate}
+                reducedMotion={appearancePreferences.reducedMotion}
+              />
+            ) : effectivePrimaryDesktopSurface === "home" ? (
               <div
                 aria-hidden={settingsSection ? true : undefined}
                 className="size-full"
@@ -2198,10 +2235,47 @@ function App() {
                     <div className="grid size-full place-items-center text-sm text-muted-foreground">
                       File surface is not available yet.
                     </div>
+                  ) : canvasAuthorityPending ? (
+                    <ProjectCollaborationPendingState
+                      locale={locale}
+                      onCreateTeam={async (projectId) => {
+                        const result = await window.convax.projects.collaboration.bootstrapTeam({ projectId })
+                        return {
+                          invitation: result.invitation === null ? null : JSON.stringify(result.invitation),
+                        }
+                      }}
+                      onJoinTeam={async ({ invitation, projectId }) => {
+                        let candidate: unknown
+                        try {
+                          candidate = JSON.parse(invitation)
+                        } catch {
+                          throw new Error("Team invitation is not valid JSON")
+                        }
+                        await window.convax.projects.collaboration.joinTeam({
+                          invitation: parseProjectTeamInvitationV2(candidate),
+                          projectId,
+                        })
+                      }}
+                      onReady={async (projectId) => {
+                        if (projectCanvasController.getSnapshot().projectId !== projectId) return
+                        await projectCanvasController.refresh()
+                      }}
+                      projectId={activeProject?.id}
+                      reducedMotion={appearancePreferences.reducedMotion}
+                    />
+                  ) : activeCanvasSessionFailure ? (
+                    <div className="grid size-full place-items-center bg-background p-8" role="alert">
+                      <div className="max-w-md rounded-lg border border-destructive/30 bg-card p-5 text-center shadow-sm">
+                        <h2 className="text-base font-semibold text-card-foreground">
+                          {rendererFailureCopy.canvasTitle}
+                        </h2>
+                        <p className="mt-2 text-sm text-muted-foreground">{activeCanvasSessionFailure}</p>
+                      </div>
+                    </div>
                   ) : workbenchSnapshot.surface.kind === "empty" ||
                     !activeProject ||
                     !activeCanvas ||
-                    !initialDocument ? (
+                    !activeCanvasSession ? (
                     <ProjectLoadingState
                       projectName={activeProject?.name ?? "Project"}
                       reducedMotion={appearancePreferences.reducedMotion}
@@ -2242,7 +2316,7 @@ function App() {
                         key={`${activeProject.id}:${activeCanvas.id}`}
                         clipboardScope={activeProject.id}
                         fileRendererRegistry={canvasFileRendererRegistry}
-                        initialDocument={initialDocument}
+                        session={activeCanvasSession}
                         nodeRegistry={canvasNodeRegistry}
                         onDocumentChange={publishActiveCanvasNodes}
                         onInspectorRequest={openCanvasInspector}
@@ -2370,7 +2444,7 @@ function App() {
             )}
             {activeMediaOperationDialog && !settingsSection ? (
               <MediaOperationDialog
-                key={`${activeMediaOperationDialog.context.document.id}:${activeMediaOperationDialog.context.document.revision}:${activeMediaOperationDialog.action.pluginId}:${activeMediaOperationDialog.action.id}`}
+                key={`${activeMediaOperationDialog.context.document.id}:${activeMediaOperationDialog.action.pluginId}:${activeMediaOperationDialog.action.id}`}
                 locale={locale}
                 onClose={closeMediaOperationDialog}
                 onConfirm={(input, signal) => runMediaOperation(activeMediaOperationDialog, input, signal)}

@@ -9,7 +9,6 @@ function projection(overrides: Partial<CanvasSelectionProjection> = {}): CanvasS
     inspector: null,
     kind: "single-node",
     nodeIds: ["node-1"],
-    revision: 1,
     scopeId: "project-1",
     viewId: "desktop-main",
     ...overrides,

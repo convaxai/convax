@@ -1,7 +1,6 @@
 import type { CanvasPendingResourceKind, CanvasPoint, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
-  CanvasRevisionConflictError,
   createAddCanvasResourcesCommand,
   createCanvasPendingGenerationResourceCommand,
   createCanvasPendingResourceCommand,
@@ -15,13 +14,19 @@ import {
   type CanvasReplaceGeneratedResourceCommand,
   type CanvasReplaceResourceCommand,
 } from "./commands"
-import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
+import type { CanvasDocumentRef } from "./persistence"
 import type {
   CanvasApplicationCommandRequest,
   CanvasApplicationCommandResult,
   CanvasApplicationService,
 } from "./service"
-import { CanvasCommandIdConflictError } from "./service"
+
+class CanvasResourceRequestConflictError extends Error {
+  constructor(commandId: string) {
+    super(`Canvas resource request id was reused with a different payload: ${commandId}`)
+    this.name = "CanvasResourceRequestConflictError"
+  }
+}
 
 interface CanvasResourceSourceBase {
   /** Caller-provided correlation id, stable across preparation retries. */
@@ -86,12 +91,6 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
   /** Host-neutral final guard invoked immediately before Canvas persistence. */
   beforeCommit?: () => Promise<void>
   commandId: string
-  /**
-   * Controls whether a concurrent Canvas change may replay this business
-   * operation on the latest document. Defaults to `retry`.
-   */
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
   signal?: AbortSignal
@@ -101,9 +100,6 @@ export interface CanvasAddResourceSourcesRequest extends CanvasDocumentRef {
 export interface CanvasReplaceResourceSourceRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   commandId: string
-  /** Defaults to retry, guarded by expectedTarget so unrelated edits survive. */
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   expectedTarget: CanvasNodeContentGuard
   source: CanvasResourceSource
   signal?: AbortSignal
@@ -114,9 +110,6 @@ export interface CanvasCreatePendingResourceRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   anchor: CanvasPoint
   commandId: string
-  /** Defaults to retry and reuses the same generated node id across replays. */
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   kind: CanvasPendingResourceKind
   label?: string
   parentId?: string
@@ -128,9 +121,6 @@ export interface CanvasCreatePendingGenerationResourceRequest extends CanvasDocu
   actor: CanvasCommandActor
   anchor: CanvasPoint
   commandId: string
-  /** Defaults to retry and reuses the same generated node id across replays. */
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   kind: CanvasPendingResourceKind
   label?: string
   operationId: string
@@ -144,9 +134,6 @@ export interface CanvasCreatePendingGenerationResourceRequest extends CanvasDocu
 export interface CanvasFailPendingResourceRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   commandId: string
-  /** Defaults to retry, guarded by expectedTarget so a removed node is never recreated. */
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   expectedTarget: CanvasNodeContentGuard
   message: string
   targetNodeId: string
@@ -155,7 +142,6 @@ export interface CanvasFailPendingResourceRequest extends CanvasDocumentRef {
 export interface CanvasRelinkPreparedResourceRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   commandId: string
-  expectedRevision: number
   metadataKeysToRemove?: readonly string[]
   nodeId: string
 }
@@ -163,8 +149,6 @@ export interface CanvasRelinkPreparedResourceRequest extends CanvasDocumentRef {
 export interface CanvasReplaceGeneratedResourceSourceRequest extends CanvasDocumentRef {
   actor: CanvasCommandActor
   commandId: string
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   expectedTarget: CanvasGenerationTargetGuard
   operationId: string
   signal?: AbortSignal
@@ -174,8 +158,6 @@ export interface CanvasReplaceGeneratedResourceSourceRequest extends CanvasDocum
 
 type CanvasCommandExecutor = Pick<CanvasApplicationService, "execute" | "query">
 
-const maxCanvasResourceConflictRetries = 2
-
 interface CanvasResourceExecution {
   fingerprint: string
   result: Promise<CanvasApplicationCommandResult>
@@ -184,7 +166,7 @@ interface CanvasResourceExecution {
 /**
  * Headless business orchestration shared by UI actions and Agent tools.
  * Preparation is environment-specific; sizing, placement, relations,
- * revision checks, and persistence stay in the Canvas application layer.
+ * semantic guards and persistence stay in the Canvas application layer.
  */
 export class CanvasResourceBusinessService {
   private readonly executions = new Map<string, CanvasResourceExecution>()
@@ -199,8 +181,6 @@ export class CanvasResourceBusinessService {
     const fingerprint = stableJson({
       operation: "pending-create",
       anchor: request.anchor,
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       kind: request.kind,
       label: request.label,
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
@@ -209,7 +189,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -226,8 +206,6 @@ export class CanvasResourceBusinessService {
     const fingerprint = stableJson({
       operation: "pending-generation-create",
       anchor: request.anchor,
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       kind: request.kind,
       label: request.label,
       operationId: request.operationId,
@@ -239,7 +217,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -253,8 +231,6 @@ export class CanvasResourceBusinessService {
     const key = resourceExecutionKey(request)
     const fingerprint = stableJson({
       operation: "pending-fail",
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       expectedTarget: request.expectedTarget,
       message: request.message,
       targetNodeId: request.targetNodeId,
@@ -262,7 +238,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -304,7 +280,6 @@ export class CanvasResourceBusinessService {
             nodeId: request.nodeId,
           }),
           commandId: request.commandId,
-          expectedRevision: request.expectedRevision,
         },
         scopeId: request.scopeId,
       })
@@ -328,8 +303,6 @@ export class CanvasResourceBusinessService {
     const fingerprint = stableJson({
       operation: "add",
       anchor: request.anchor,
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
       sources: request.sources,
@@ -338,7 +311,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -364,8 +337,6 @@ export class CanvasResourceBusinessService {
     ])
     const fingerprint = stableJson({
       operation: "replace",
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       expectedTarget: request.expectedTarget,
       source: request.source,
       targetNodeId: request.targetNodeId,
@@ -373,7 +344,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -401,8 +372,6 @@ export class CanvasResourceBusinessService {
     ])
     const fingerprint = stableJson({
       operation: "replace-generated",
-      conflictPolicy: request.conflictPolicy ?? "retry",
-      expectedRevision: request.expectedRevision,
       expectedTarget: request.expectedTarget,
       operationId: request.operationId,
       source: request.source,
@@ -411,7 +380,7 @@ export class CanvasResourceBusinessService {
     const existing = this.executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        return Promise.reject(new CanvasCommandIdConflictError(request.commandId))
+        return Promise.reject(new CanvasResourceRequestConflictError(request.commandId))
       }
       return existing.result
     }
@@ -447,7 +416,7 @@ export class CanvasResourceBusinessService {
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
     })
-    return this.executeWithConflictPolicy(request, command, [])
+    return this.executeGuarded(request, command, [])
   }
 
   private async createPendingGenerationResourceOnce(
@@ -473,7 +442,7 @@ export class CanvasResourceBusinessService {
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
     })
-    return this.executeWithConflictPolicy(request, command, [])
+    return this.executeGuarded(request, command, [])
   }
 
   private async failPendingResourceOnce(
@@ -490,7 +459,7 @@ export class CanvasResourceBusinessService {
       message: request.message,
       targetNodeId: request.targetNodeId,
     }
-    return this.executeWithConflictPolicy(request, command, [])
+    return this.executeGuarded(request, command, [])
   }
 
   private async addResourcesOnce(
@@ -499,13 +468,6 @@ export class CanvasResourceBusinessService {
   ): Promise<CanvasApplicationCommandResult> {
     throwIfAborted(request.signal)
     validateCanvasResourceCommandIdentity(request)
-    if (
-      request.conflictPolicy !== undefined &&
-      request.conflictPolicy !== "reject" &&
-      request.conflictPolicy !== "retry"
-    ) {
-      throw new CanvasCommandValidationError("Canvas resource conflict policy must be retry or reject")
-    }
     const sourceIds = validateCanvasResourceSources(request.sources)
     if (!Number.isFinite(request.anchor.x) || !Number.isFinite(request.anchor.y)) {
       throw new CanvasCommandValidationError("Placement anchor must contain finite coordinates")
@@ -549,64 +511,21 @@ export class CanvasResourceBusinessService {
     } catch (error) {
       throwPartialFailureIfRetained(error, retainedOnFailure)
     }
-    // Preparation and command creation stay outside the retry loop so one logical
-    // operation keeps the same materialized resources and generated node ids.
-    let expectedRevision = request.expectedRevision
-    let conflictRetries = 0
-
-    while (true) {
-      const applicationRequest: CanvasApplicationCommandRequest = {
-        canvasId: request.canvasId,
-        envelope: {
-          actor: request.actor,
-          command,
-          commandId: request.commandId,
-          expectedRevision,
-        },
-        scopeId: request.scopeId,
-      }
-      try {
-        throwIfAborted(request.signal)
-        const result = await this.application.execute({
-          ...applicationRequest,
-          ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
-          ...(request.signal ? { signal: request.signal } : {}),
-        })
-        const replayWarning =
-          conflictRetries > 0
-            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
-            : []
-        return {
-          ...result,
-          warnings: [...(prepared.warnings ?? []), ...result.warnings, ...replayWarning],
-        }
-      } catch (error) {
-        if (
-          !isCanvasResourceConflict(error) ||
-          request.conflictPolicy === "reject" ||
-          conflictRetries >= maxCanvasResourceConflictRetries
-        ) {
-          throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
-        }
-        conflictRetries += 1
-        // A storage conflict has no document revision, so both conflict types use
-        // one fresh query before reapplying the business command.
-        throwIfAborted(request.signal)
-        let latest: Awaited<ReturnType<CanvasCommandExecutor["query"]>>
-        try {
-          latest = await this.application.query(
-            {
-              canvasId: request.canvasId,
-              scopeId: request.scopeId,
-            },
-            { limit: 0 },
-          )
-        } catch (queryError) {
-          throwPartialFailureIfRetained(queryError, prepared.retainedOnFailure)
-        }
-        throwIfAborted(request.signal)
-        expectedRevision = latest.revision
-      }
+    const applicationRequest: CanvasApplicationCommandRequest = {
+      canvasId: request.canvasId,
+      envelope: { actor: request.actor, command, commandId: request.commandId },
+      scopeId: request.scopeId,
+    }
+    try {
+      throwIfAborted(request.signal)
+      const result = await this.application.execute({
+        ...applicationRequest,
+        ...(request.beforeCommit ? { beforeCommit: request.beforeCommit } : {}),
+        ...(request.signal ? { signal: request.signal } : {}),
+      })
+      return { ...result, warnings: [...(prepared.warnings ?? []), ...result.warnings] }
+    } catch (error) {
+      throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
     }
   }
 
@@ -646,7 +565,7 @@ export class CanvasResourceBusinessService {
         targetNodeId: request.targetNodeId,
       }
 
-      return await this.executeWithConflictPolicy(request, command, prepared.warnings ?? [])
+      return await this.executeGuarded(request, command, prepared.warnings ?? [])
     } catch (error) {
       return throwPartialFailureIfRetained(error, prepared.retainedOnFailure)
     }
@@ -688,111 +607,29 @@ export class CanvasResourceBusinessService {
       operationId: request.operationId,
       targetNodeId: request.targetNodeId,
     }
-    return this.executeGeneratedReplacementWithConflictPolicy(request, command, prepared.warnings ?? [])
+    return this.executeGuarded(request, command, prepared.warnings ?? [])
   }
 
-  private async executeGeneratedReplacementWithConflictPolicy(
-    request: CanvasReplaceGeneratedResourceSourceRequest,
-    command: CanvasReplaceGeneratedResourceCommand,
-    preparationWarnings: readonly string[],
-  ): Promise<CanvasApplicationCommandResult> {
-    let expectedRevision = request.expectedRevision
-    let conflictRetries = 0
-    while (true) {
-      try {
-        throwIfAborted(request.signal)
-        const result = await this.application.execute({
-          canvasId: request.canvasId,
-          envelope: {
-            actor: request.actor,
-            command,
-            commandId: request.commandId,
-            expectedRevision,
-          },
-          ...(request.signal ? { signal: request.signal } : {}),
-          scopeId: request.scopeId,
-        })
-        const replayWarning =
-          conflictRetries > 0
-            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
-            : []
-        return {
-          ...result,
-          warnings: [...preparationWarnings, ...result.warnings, ...replayWarning],
-        }
-      } catch (error) {
-        if (
-          !isCanvasResourceConflict(error) ||
-          request.conflictPolicy === "reject" ||
-          conflictRetries >= maxCanvasResourceConflictRetries
-        ) {
-          throw error
-        }
-        conflictRetries += 1
-        throwIfAborted(request.signal)
-        const latest = await this.application.query(
-          { canvasId: request.canvasId, scopeId: request.scopeId },
-          { limit: 0 },
-        )
-        throwIfAborted(request.signal)
-        expectedRevision = latest.revision
-      }
-    }
-  }
-
-  private async executeWithConflictPolicy(
+  private async executeGuarded(
     request: Pick<
       | CanvasReplaceResourceSourceRequest
+      | CanvasReplaceGeneratedResourceSourceRequest
       | CanvasCreatePendingGenerationResourceRequest
       | CanvasCreatePendingResourceRequest
       | CanvasFailPendingResourceRequest,
-      "actor" | "canvasId" | "commandId" | "conflictPolicy" | "expectedRevision" | "scopeId"
+      "actor" | "canvasId" | "commandId" | "scopeId"
     > & { signal?: AbortSignal },
     command: CanvasBusinessCommand,
     preparationWarnings: readonly string[],
   ): Promise<CanvasApplicationCommandResult> {
-    let expectedRevision = request.expectedRevision
-    let conflictRetries = 0
-    while (true) {
-      try {
-        throwIfAborted(request.signal)
-        const result = await this.application.execute({
-          canvasId: request.canvasId,
-          envelope: {
-            actor: request.actor,
-            command,
-            commandId: request.commandId,
-            expectedRevision,
-          },
-          ...(request.signal ? { signal: request.signal } : {}),
-          scopeId: request.scopeId,
-        })
-        const replayWarning =
-          conflictRetries > 0
-            ? [canvasResourceReplayWarning(request.expectedRevision, expectedRevision, conflictRetries)]
-            : []
-        return {
-          ...result,
-          warnings: [...preparationWarnings, ...result.warnings, ...replayWarning],
-        }
-      } catch (error) {
-        if (
-          !isCanvasResourceConflict(error) ||
-          request.conflictPolicy === "reject" ||
-          conflictRetries >= maxCanvasResourceConflictRetries
-        ) {
-          throw error
-        }
-        conflictRetries += 1
-        throwIfAborted(request.signal)
-        const latest = await this.application.query(
-          { canvasId: request.canvasId, scopeId: request.scopeId },
-          { limit: 0 },
-        )
-        throwIfAborted(request.signal)
-        expectedRevision = latest.revision
-      }
-    }
+    throwIfAborted(request.signal)
+    const result = await this.application.execute({
+      canvasId: request.canvasId,
+      envelope: { actor: request.actor, command, commandId: request.commandId },
+      ...(request.signal ? { signal: request.signal } : {}),
+      scopeId: request.scopeId,
+    })
+    return { ...result, warnings: [...preparationWarnings, ...result.warnings] }
   }
 }
 
@@ -805,42 +642,16 @@ function resourceExecutionKey(request: {
   return JSON.stringify([request.scopeId, request.canvasId, request.actor.kind, request.actor.id, request.commandId])
 }
 
-function validateResourceOperation(request: {
-  actor: CanvasCommandActor
-  commandId: string
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
-}) {
+function validateResourceOperation(request: { actor: CanvasCommandActor; commandId: string }) {
   if (!request.commandId.trim() || !request.actor.id.trim()) {
     throw new CanvasCommandValidationError("Canvas command and actor ids are required")
   }
-  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-    throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
-  }
-  if (
-    request.conflictPolicy !== undefined &&
-    request.conflictPolicy !== "reject" &&
-    request.conflictPolicy !== "retry"
-  ) {
-    throw new CanvasCommandValidationError("Canvas resource conflict policy must be retry or reject")
-  }
 }
 
-function validateCanvasResourceCommandIdentity(request: {
-  actor: CanvasCommandActor
-  commandId: string
-  expectedRevision: number
-}) {
+function validateCanvasResourceCommandIdentity(request: { actor: CanvasCommandActor; commandId: string }) {
   if (!request.commandId.trim() || !request.actor.id.trim() || !request.actor.kind.trim()) {
     throw new CanvasCommandValidationError("Canvas command and actor ids are required")
   }
-  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-    throw new CanvasCommandValidationError("Expected canvas revision must be a non-negative integer")
-  }
-}
-
-function isCanvasResourceConflict(error: unknown) {
-  return error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError
 }
 
 function throwPartialFailureIfRetained(
@@ -851,14 +662,6 @@ function throwPartialFailureIfRetained(
   const retained = validateRetainedOnFailure(retainedOnFailure)
   if (retained.length > 0) throw new CanvasResourcePartialFailureError(error, retained)
   throw error
-}
-
-function canvasResourceReplayWarning(fromRevision: number, latestRevision: number, retries: number) {
-  return [
-    "Canvas changed while resources were being added;",
-    `replayed from revision ${fromRevision} on revision ${latestRevision}`,
-    `after ${retries} conflict ${retries === 1 ? "retry" : "retries"}.`,
-  ].join(" ")
 }
 
 export function validateCanvasResourceSources(sources: readonly CanvasResourceSource[]) {

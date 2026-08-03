@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ProjectTextFileConflictError } from "@convax/project-files"
+import { UnsupportedPortableProjectVersion } from "./collaboration/portable-cutover"
 import { NodeProjectManager } from "./project-manager"
 import { copyPath } from "./project-manager-helpers"
 import { ProjectPrivateStorageConflictError } from "./project-private-storage"
@@ -47,6 +48,51 @@ describe("NodeProjectManager registry", () => {
 
     await expect(manager.addProject(unsafeRoot)).rejects.toThrow("symbolic link")
     expect(await fs.readdir(outsideRoot)).toEqual([])
+  })
+
+  test("registers an unsupported JSON Canvas Project only as an explicit recovery candidate", async () => {
+    const legacyRoot = path.join(temporaryRoot, "legacy-project")
+    const legacyCatalog = path.join(legacyRoot, ".convax", "canvases", "catalog.json")
+    const legacyDocument = path.join(legacyRoot, ".convax", "canvases", "canvas-main", "document.json")
+    await fs.mkdir(path.dirname(legacyDocument), { recursive: true })
+    await fs.writeFile(
+      path.join(legacyRoot, ".convax", "project.json"),
+      JSON.stringify({ projectId: "project_legacy", schemaVersion: "convax.project/1" }),
+    )
+    await fs.writeFile(legacyCatalog, "legacy-catalog")
+    await fs.writeFile(legacyDocument, "legacy-document")
+    await fs.writeFile(path.join(legacyRoot, "keep.md"), "ordinary")
+    const candidate = await manager.addProject(legacyRoot)
+    expect(candidate).toMatchObject({
+      id: "project_legacy",
+      recovery: {
+        legacyPaths: [".convax/canvases/canvas-main/document.json", ".convax/canvases/catalog.json"],
+        status: "unsupported-portable-project-version",
+      },
+    })
+
+    expect(await fs.readFile(legacyCatalog, "utf8")).toBe("legacy-catalog")
+    expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")
+    expect(await fs.readFile(path.join(legacyRoot, "keep.md"), "utf8")).toBe("ordinary")
+    expect((await manager.listProjects()).find((project) => project.id === "project_legacy")?.recovery?.status)
+      .toBe("unsupported-portable-project-version")
+  })
+
+  test("rejects an unsupported registered Project when it is opened again", async () => {
+    const legacyCatalog = path.join(projectRoot, ".convax", "canvases", "catalog.json")
+    const legacyDocument = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
+    await fs.mkdir(path.dirname(legacyDocument), { recursive: true })
+    await fs.writeFile(legacyCatalog, "legacy-catalog")
+    await fs.writeFile(legacyDocument, "legacy-document")
+    await fs.writeFile(path.join(projectRoot, "keep.md"), "ordinary")
+    const registryBefore = await fs.readFile(path.join(temporaryRoot, "state", "projects.json"))
+
+    await expect(manager.touchProject(projectId)).rejects.toBeInstanceOf(UnsupportedPortableProjectVersion)
+
+    expect(await fs.readFile(legacyCatalog, "utf8")).toBe("legacy-catalog")
+    expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")
+    expect(await fs.readFile(path.join(projectRoot, "keep.md"), "utf8")).toBe("ordinary")
+    expect(await fs.readFile(path.join(temporaryRoot, "state", "projects.json"))).toEqual(registryBefore)
   })
 
   test("persists, renames, and forgets projects without deleting their folders", async () => {
@@ -293,8 +339,10 @@ describe("NodeProjectManager files", () => {
 
     const renamed = await manager.renameEntry({ name: "notes.txt", path: "brief.txt", projectId })
     expect(renamed.targetPaths).toEqual(["notes.txt"])
+    expect(renamed.relocations).toEqual([{ sourcePath: "brief.txt", targetPath: "notes.txt" }])
     const moved = await manager.moveEntries({ destinationPath: "assets", paths: ["notes.txt"], projectId })
     expect(moved.targetPaths).toEqual(["assets/notes.txt"])
+    expect(moved.relocations).toEqual([{ sourcePath: "notes.txt", targetPath: "assets/notes.txt" }])
     expect(await manager.readTextFile({ path: "assets/notes.txt", projectId })).toMatchObject({
       content: "hello",
       contentRevision: createHash("sha256").update(Buffer.from("hello", "utf8")).digest("hex"),

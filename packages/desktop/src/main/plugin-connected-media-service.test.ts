@@ -14,6 +14,11 @@ import { PluginHostApiMainAdapter } from "./plugin-host-api-main-adapter"
 import { PluginHostApiService } from "./plugin-host-api-service"
 import { parseWebPluginManifest } from "../plugin-contracts"
 import { PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
+import {
+  canvasOperationReceipt,
+  canvasQueryApplication,
+  canvasReadOnlyApplication,
+} from "./canvas-application-test-fixtures"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
 import { ManagedCanvasMediaResourceUnavailableError } from "./managed-canvas-media-resolver"
 import { PluginConnectedMediaService } from "./plugin-connected-media-service"
@@ -57,7 +62,7 @@ function plugin(
     description: "Media preview",
     entry: "index.html",
     hostApi: {
-      major: 2,
+      major: 3,
       optional: optionalHostApis,
       required: ["host.context.get"],
     },
@@ -183,8 +188,7 @@ function deferred<T>() {
 }
 
 function canvas(): CanvasDocument {
-  return {
-    ...createCanvasDocument({
+  return createCanvasDocument({
       edges: [{ id: "edge-1", source: "video-1", target: "plugin-1" }],
       id: "canvas-1",
       nodes: [
@@ -213,9 +217,7 @@ function canvas(): CanvasDocument {
         },
         { data: { kind: "video", label: "Other" }, id: "other", position: { x: 0, y: 300 }, type: "file" },
       ],
-    }),
-    revision: 4,
-  }
+  })
 }
 
 describe("PluginConnectedMediaService", () => {
@@ -229,7 +231,7 @@ describe("PluginConnectedMediaService", () => {
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
       clock: { now: () => monotonicNow },
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: { resolve: async () => Promise.reject(new Error("Native media resolver must not read images")) },
       plugins: {
@@ -245,7 +247,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const frame = (frameId: string) => ({
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId,
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -309,7 +310,7 @@ describe("PluginConnectedMediaService", () => {
       let observedSignal: AbortSignal | undefined
       const service = new PluginConnectedMediaService({
         changes: new CanvasDocumentChangeBus(),
-        documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+        application: canvasQueryApplication(() => document),
         images: testImageInspector,
         media: { resolve: async () => Promise.reject(new Error("Native media resolver must not read images")) },
         plugins: {
@@ -335,7 +336,6 @@ describe("PluginConnectedMediaService", () => {
       const result = await service.openImage(
         {
           canvasId: "canvas-1",
-          expectedRevision: 4,
           frameId: "frame-1",
           nodeId: "plugin-1",
           pluginId: "media-surface",
@@ -448,7 +448,7 @@ describe("PluginConnectedMediaService", () => {
     const currentPlugin = plugin()
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -464,7 +464,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const request = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -487,7 +486,6 @@ describe("PluginConnectedMediaService", () => {
     const currentPlugin = plugin()
     const request = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -527,7 +525,7 @@ describe("PluginConnectedMediaService", () => {
     ]) {
       const service = new PluginConnectedMediaService({
         changes: new CanvasDocumentChangeBus(),
-        documents: { load: async () => ({ document: imageCanvas(), storageVersion: "stored-1" }) },
+        application: canvasQueryApplication(imageCanvas()),
         images: testCase.images,
         media: { resolve: async () => [] },
         plugins: {
@@ -548,7 +546,7 @@ describe("PluginConnectedMediaService", () => {
     let document = imageCanvas()
     const staleService = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -575,7 +573,7 @@ describe("PluginConnectedMediaService", () => {
     changedBytes[changedBytes.length - 1] = changedBytes[changedBytes.length - 1]! ^ 1
     const changedService = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document: imageCanvas(), storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(imageCanvas()),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -608,7 +606,7 @@ describe("PluginConnectedMediaService", () => {
     let observedSignal: AbortSignal | undefined
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -634,7 +632,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const request = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -664,7 +661,7 @@ describe("PluginConnectedMediaService", () => {
     let currentPlugin = plugin()
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -688,7 +685,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const request = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -711,7 +707,7 @@ describe("PluginConnectedMediaService", () => {
     const currentPlugin = plugin()
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: {
         async resolve() {
@@ -734,7 +730,6 @@ describe("PluginConnectedMediaService", () => {
       service.open(
         {
           canvasId: "canvas-1",
-          expectedRevision: 4,
           frameId: "frame-1",
           nodeId: "plugin-1",
           pluginId: "media-surface",
@@ -754,7 +749,7 @@ describe("PluginConnectedMediaService", () => {
     const bug = new TypeError("resolver invariant failed")
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: {
         async resolve() {
@@ -777,7 +772,6 @@ describe("PluginConnectedMediaService", () => {
       service.open(
         {
           canvasId: "canvas-1",
-          expectedRevision: 4,
           frameId: "frame-1",
           nodeId: "plugin-1",
           pluginId: "media-surface",
@@ -813,7 +807,7 @@ describe("PluginConnectedMediaService", () => {
     const changes = new CanvasDocumentChangeBus()
     const service = new PluginConnectedMediaService({
       changes,
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: {
         resolve: async () => [
@@ -841,7 +835,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const frame = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -911,8 +904,8 @@ describe("PluginConnectedMediaService", () => {
 
     const canvasChanged = await service.open(frame, 7)
     changes.publish({
+      operationReceipt: canvasOperationReceipt("canvas-changed-1"),
       ref: { canvasId: "canvas-1", projectId: "project-1" },
-      revision: 5,
       source: "renderer",
     })
     expect((await service.handle(new Request(canvasChanged.url))).status).toBe(404)
@@ -940,7 +933,7 @@ describe("PluginConnectedMediaService", () => {
       const changes = new CanvasDocumentChangeBus()
       const service = new PluginConnectedMediaService({
         changes,
-        documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+        application: canvasQueryApplication(() => document),
         images: testImageInspector,
         media: {
           resolve: async () => [
@@ -968,7 +961,6 @@ describe("PluginConnectedMediaService", () => {
       })
       const frame = {
         canvasId: "canvas-1",
-        expectedRevision: 4,
         frameId: "frame-1",
         nodeId: "plugin-1",
         pluginId: "media-surface",
@@ -1002,8 +994,8 @@ describe("PluginConnectedMediaService", () => {
         expect(service.revokePlugin("media-surface")).toBeGreaterThan(0)
       } else if (revoke === "canvas") {
         changes.publish({
+          operationReceipt: canvasOperationReceipt("canvas-changed-slow-consumer"),
           ref: { canvasId: "canvas-1", projectId: "project-1" },
-          revision: 5,
           source: "renderer",
         })
       } else {
@@ -1051,7 +1043,7 @@ describe("PluginConnectedMediaService", () => {
     let observedSignal: AbortSignal | undefined
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: {
         resolve: async (_request, _options, signal) => {
@@ -1073,7 +1065,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const frame = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -1123,7 +1114,7 @@ describe("PluginConnectedMediaService", () => {
     const allStarted = deferred<void>()
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document, storageVersion: "stored-1" }) },
+      application: canvasQueryApplication(() => document),
       images: testImageInspector,
       media: {
         resolve: async () => {
@@ -1156,7 +1147,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const frame = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",
@@ -1207,10 +1197,10 @@ describe("PluginConnectedMediaService", () => {
       runtime: "web",
       snapshotDigest: "b".repeat(64),
     }
-    const documents = { load: async () => ({ document, storageVersion: "stored-1" }) }
+    const application = canvasReadOnlyApplication(() => document)
     const media = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents,
+      application,
       images: testImageInspector,
       media: {
         resolve: async () => [
@@ -1238,16 +1228,26 @@ describe("PluginConnectedMediaService", () => {
     })
     const adapter = new PluginHostApiMainAdapter({
       agent: {} as never,
-      application: {} as never,
+      application,
       canvases: {
         async getCanvasCatalog({ projectId }: { projectId: string }) {
-          return {
-            canvases: [{ createdAt: 1, id: "canvas-1", name: "Canvas", updatedAt: 1 }],
-            projectId,
+          const route = {
+            activationDigest: "a".repeat(64),
+            canvasId: "canvas-1",
+            routeProjectionDigest: "b".repeat(64),
+            shardEpoch: "AAAAAAAAAAAAAAAAAAAAAA",
+            state: "live",
+            title: "Canvas",
           }
+          return {
+            format: "convax.project-canvas-catalog-projection/2",
+            projectId,
+            projectEpoch: "BBBBBBBBBBBBBBBBBBBBBB",
+            routes: [route],
+            visibleCanvases: [route],
+          } as never
         },
-      } as never,
-      documents,
+      },
       generation: {} as never,
       images: {} as never,
       media,
@@ -1270,6 +1270,7 @@ describe("PluginConnectedMediaService", () => {
           throw new Error("unused")
         },
       },
+      states: {} as never,
     })
     const host = new PluginHostApiService({
       createId: () => "connection-1",
@@ -1419,7 +1420,7 @@ describe("PluginConnectedMediaService", () => {
     let active = true
     const service = new PluginConnectedMediaService({
       changes: new CanvasDocumentChangeBus(),
-      documents: { load: async () => ({ document: canvas(), storageVersion: "stored" }) },
+      application: canvasQueryApplication(canvas()),
       images: testImageInspector,
       media: { resolve: async () => [] },
       plugins: {
@@ -1439,7 +1440,6 @@ describe("PluginConnectedMediaService", () => {
     })
     const request = {
       canvasId: "canvas-1",
-      expectedRevision: 4,
       frameId: "frame-1",
       nodeId: "plugin-1",
       pluginId: "media-surface",

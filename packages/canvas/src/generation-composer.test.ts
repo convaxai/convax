@@ -65,7 +65,6 @@ describe("Canvas generation composer", () => {
       }),
     ).toEqual({
       documentId: "canvas-a",
-      expectedRevision: document.revision,
       prompt: "Animate this frame",
       promptContextNodeIds: [],
       references: [{ nodeId: "source", role: "first_frame" }],
@@ -107,7 +106,6 @@ describe("Canvas generation composer", () => {
       }),
     ).toEqual({
       documentId: document.id,
-      expectedRevision: document.revision,
       prompt: "",
       promptContextNodeIds: [brief.id],
       references: [],
@@ -141,7 +139,7 @@ describe("Canvas generation composer", () => {
     ).toBeUndefined()
   })
 
-  test("rejects a projection from an older Canvas revision", () => {
+  test("rejects a projection from another Canvas document", () => {
     const document = createCanvasDocument({ id: "canvas-a" })
     const projection = projectCanvasGenerationComposer({
       document,
@@ -154,7 +152,7 @@ describe("Canvas generation composer", () => {
     expect(
       createCanvasGenerationComposerSubmission({
         catalogStatus: "ready",
-        document: { ...document, revision: document.revision + 1 },
+        document: createCanvasDocument({ id: "canvas-b" }),
         projection,
         prompt: "Create",
         scopeId: "scope",
@@ -163,10 +161,9 @@ describe("Canvas generation composer", () => {
     ).toBeUndefined()
   })
 
-  test("fails closed when a host submits a draft from another Canvas scope or revision", () => {
+  test("fails closed when a host submits a draft from another Canvas scope or document", () => {
     const submission = {
       documentId: "canvas-a",
-      expectedRevision: 2,
       prompt: "Create",
       promptContextNodeIds: [],
       references: [],
@@ -178,21 +175,18 @@ describe("Canvas generation composer", () => {
     expect(
       isCanvasGenerationComposerSubmissionCurrent(submission, {
         documentId: "canvas-a",
-        revision: 2,
         scopeId: "project-a",
       }),
     ).toBe(true)
     expect(
       isCanvasGenerationComposerSubmissionCurrent(submission, {
-        documentId: "canvas-a",
-        revision: 3,
+        documentId: "canvas-b",
         scopeId: "project-a",
       }),
     ).toBe(false)
     expect(
       isCanvasGenerationComposerSubmissionCurrent(submission, {
         documentId: "canvas-a",
-        revision: 2,
         scopeId: "project-b",
       }),
     ).toBe(false)

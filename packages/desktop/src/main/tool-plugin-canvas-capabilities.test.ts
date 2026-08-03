@@ -32,7 +32,7 @@ function plugin(
     capabilities,
     contributes: { service: { actions: [] } },
     description: "Host API sidecar",
-    hostApi: { major: 2, optional: [], required: hostApis },
+    hostApi: { major: 3, optional: [], required: hostApis },
     id: "host-api-sidecar",
     name: "Host API Sidecar",
     runtime: { command: "host-api-sidecar-mcp", type: "mcp-stdio" },
@@ -235,16 +235,16 @@ describe("Tool Plugin reverse Host API MCP adapter", () => {
     )
     emit({
       event: {
+        operationReceipt: {} as never,
         ref: { canvasId: "main", projectId: "project-one" },
-        revision: 2,
         source: "host",
       },
       subscriptionId: "subscription-one",
     })
     expect(sendNotification).toHaveBeenCalledWith(toolPluginCanvasMcpNotifications.documentChanged, {
       event: {
+        operationReceipt: {},
         ref: { canvasId: "main", projectId: "project-one" },
-        revision: 2,
         source: "host",
       },
       subscriptionId: "subscription-one",

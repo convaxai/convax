@@ -12,7 +12,7 @@ function webManifest(overrides: Record<string, unknown> = {}) {
     },
     description: "A sandboxed timeline surface",
     entry: "web/index.html",
-    hostApi: { major: 2, optional: [], required: ["host.context.get"] },
+    hostApi: { major: 3, optional: [], required: ["host.context.get"] },
     id: "timeline-tools",
     name: "Timeline Tools",
     schema: "convax.plugin/8",
@@ -121,7 +121,7 @@ function toolManifest(overrides: Record<string, unknown> = {}) {
     entry: "web/index.html",
     hooks: "agent/hooks.mjs",
     hostApi: {
-      major: 2,
+      major: 3,
       optional: [],
       required: ["agent.prompt", "host.context.get"],
     },
@@ -165,7 +165,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
   test("keeps Host API authoring and runtime negotiation modes distinct", () => {
     const candidate = webManifest({
       hostApi: {
-        major: 2,
+        major: 3,
         optional: ["future.timeline.inspect"],
         required: ["host.context.get"],
       },
@@ -175,7 +175,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
     expect(() =>
       parsePortablePluginManifestV8(
         webManifest({
-          hostApi: { major: 2, optional: ["Future.timeline.inspect"], required: ["host.context.get"] },
+          hostApi: { major: 3, optional: ["Future.timeline.inspect"], required: ["host.context.get"] },
         }),
       ),
     ).toThrow("invalid Plugin API id")
@@ -186,8 +186,8 @@ describe("complete convax.plugin/8 portable ABI", () => {
       hostApi: { major: 1, optional: [], required: ["host.context.get"] },
     })
 
-    expect(() => parsePortablePluginManifestV8(legacy)).toThrow("major must be 2")
-    expect(() => parsePortablePluginManifestV8(legacy, { hostApiMode: "authoring" })).toThrow("major must be 2")
+    expect(() => parsePortablePluginManifestV8(legacy)).toThrow("major must be 3")
+    expect(() => parsePortablePluginManifestV8(legacy, { hostApiMode: "authoring" })).toThrow("major must be 3")
   })
 
   test("rejects every retired manifest schema and unknown portable fields", () => {
@@ -254,7 +254,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
     expect(() =>
       parsePortablePluginManifestV8({
         ...webManifest(),
-        hostApi: { major: 2, optional: [], required: [] },
+        hostApi: { major: 3, optional: [], required: [] },
       }),
     ).toThrow("must require host.context.get")
     expect(() =>
@@ -285,7 +285,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
       contributes: { capabilities: toolManifest().contributes.capabilities },
       entry: undefined,
       hooks: undefined,
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
     })
     expect(parsePortablePluginManifestV8(capabilityOnly).contributes.capabilities?.exports[0]?.operation).toBe(
       "timeline.inspect",
@@ -352,7 +352,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
         },
       },
       description: "Pet provider",
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
       id: "pet-provider",
       name: "Pet Provider",
       schema: "convax.plugin/8",
@@ -372,7 +372,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
       capabilities: [],
       contributes: {},
       description: "Empty",
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
       id: "empty-plugin",
       name: "Empty Plugin",
       schema: "convax.plugin/8",

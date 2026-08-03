@@ -63,17 +63,18 @@ export function parseCanvasClipboard(value: string): CanvasClipboardPayload | nu
     if ("scope" in input && input.scope !== undefined && typeof input.scope !== "string") return null
     const document = parseCanvasDocument({
       id: "clipboard",
-      revision: 0,
       metadata: { title: "Clipboard" },
       nodes: input.nodes,
       edges: input.edges,
     })
-    return document ? {
-      version: 1,
-      scope: "scope" in input && typeof input.scope === "string" ? input.scope : undefined,
-      nodes: document.nodes,
-      edges: document.edges,
-    } : null
+    return document
+      ? {
+          version: 1,
+          scope: "scope" in input && typeof input.scope === "string" ? input.scope : undefined,
+          nodes: document.nodes,
+          edges: document.edges,
+        }
+      : null
   } catch {
     return null
   }
@@ -109,13 +110,9 @@ export function pasteCanvasClipboard(
   }
 }
 
-export function prepareCanvasClipboardPaste(
-  payload: CanvasClipboardPayload,
-  offset = { x: 32, y: 32 },
-) {
+export function prepareCanvasClipboardPaste(payload: CanvasClipboardPayload, offset = { x: 32, y: 32 }) {
   const source: CanvasDocument = {
     id: "clipboard",
-    revision: 0,
     metadata: { title: "Clipboard" },
     nodes: payload.nodes,
     edges: payload.edges,

@@ -107,7 +107,7 @@ function manifest(
     description: `${id} test Plugin`,
     entry: "index.html",
     hostApi: {
-      major: 2,
+      major: 3,
       optional: [],
       required: ["host.context.get"],
     },

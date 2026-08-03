@@ -1,4 +1,4 @@
-import { expect, mock, test } from "bun:test"
+import { afterAll, expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
 import {
   Component,
@@ -12,37 +12,45 @@ import {
   useRef,
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
+import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
 import type { CanvasEditorController } from "../editor-context"
-import type { CanvasSelectionProjection } from "../inspector"
-import type { CanvasSelectionAction } from "../selection-actions"
+import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
 import type { CanvasFolderBrowseListing } from "../services"
-import type { CanvasNode } from "../types"
+import type { CanvasDocument, CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
+
+interface TestNodeDragEvent {
+  altKey: boolean
+  ctrlKey: boolean
+  metaKey: boolean
+}
+
+interface ObservedReactFlowProps {
+  elementsSelectable?: boolean
+  nodes?: CanvasNode[]
+  nodesConnectable?: boolean
+  nodesDraggable?: boolean
+  onNodeDoubleClick?: (event: unknown, node: CanvasNode) => void
+  onNodeDragStart?: (event: TestNodeDragEvent, node: CanvasNode, draggedNodes: CanvasNode[]) => void
+  onNodeDragStop?: () => void
+  onNodesChange?: (
+    changes: Array<{
+      dimensions?: { height: number; width: number }
+      id: string
+      position?: { x: number; y: number }
+      resizing?: boolean
+      selected?: boolean
+      type: string
+    }>,
+  ) => void
+  panOnDrag?: boolean | number[]
+  selectionOnDrag?: boolean
+}
 
 let EditorProbe: ComponentType | undefined
 let feedbackCommits = 0
 let observedEditor: CanvasEditorController | undefined
-let observedMutationSurface: { disabled: boolean; visible: boolean } | undefined
-let observedReactFlowProps:
-  | {
-      elementsSelectable?: boolean
-      nodesConnectable?: boolean
-      nodesDraggable?: boolean
-      nodes?: CanvasNode[]
-      onNodeDoubleClick?: (event: unknown, node: CanvasNode) => void
-      onNodesChange?: (
-        changes: Array<{
-          dimensions?: { height: number; width: number }
-          id: string
-          position?: { x: number; y: number }
-          selected?: boolean
-          type: string
-        }>,
-      ) => void
-      panOnDrag?: boolean | number[]
-      selectionOnDrag?: boolean
-    }
-  | undefined
+let observedReactFlowProps: ObservedReactFlowProps | undefined
 const fitView = mock(async () => undefined)
 const getViewport = mock(() => ({ x: 0, y: 0, zoom: 1 }))
 const setViewport = mock(async () => undefined)
@@ -75,11 +83,6 @@ mock.module("@convax/ui", () => ({
   ContextMenuLabel: Passthrough,
   ContextMenuSeparator: () => null,
   ContextMenuTrigger: Passthrough,
-  Dialog: Passthrough,
-  DialogClose: Passthrough,
-  DialogContent: Passthrough,
-  DialogDescription: Passthrough,
-  DialogTitle: Passthrough,
   Input: () => <input />,
   Loading: (props: { className?: string; description?: ReactNode; label?: ReactNode; reducedMotion?: boolean }) => (
     <div
@@ -139,26 +142,23 @@ mock.module("@xyflow/react", () => ({
     </div>
   ),
   Position: { Bottom: "bottom", Left: "left", Right: "right", Top: "top" },
-  ReactFlow: (props: {
-    children?: ReactNode
-    elementsSelectable?: boolean
-    nodesConnectable?: boolean
-    nodesDraggable?: boolean
-    nodes?: CanvasNode[]
-    onNodeDoubleClick?: (event: unknown, node: CanvasNode) => void
-    onNodesChange?: (
-      changes: Array<{
-        dimensions?: { height: number; width: number }
-        id: string
-        position?: { x: number; y: number }
-        selected?: boolean
-        type: string
-      }>,
-    ) => void
-    panOnDrag?: boolean | number[]
-    selectionOnDrag?: boolean
-  }) => {
-    observedReactFlowProps = props
+  ReactFlow: (
+    props: ObservedReactFlowProps & {
+      children?: ReactNode
+    },
+  ) => {
+    observedReactFlowProps = {
+      elementsSelectable: props.elementsSelectable,
+      nodes: props.nodes,
+      nodesConnectable: props.nodesConnectable,
+      nodesDraggable: props.nodesDraggable,
+      onNodeDoubleClick: props.onNodeDoubleClick,
+      onNodeDragStart: props.onNodeDragStart,
+      onNodeDragStop: props.onNodeDragStop,
+      onNodesChange: props.onNodesChange,
+      panOnDrag: props.panOnDrag,
+      selectionOnDrag: props.selectionOnDrag,
+    }
     return (
       <>
         {props.children}
@@ -220,9 +220,73 @@ const { getCanvasFolderFocusEntry } = await import("../directory-focus")
 const { setCanvasGroupFolded } = await import("../group-fold")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
 const { useCanvasEditor } = await import("../editor-context")
-const { useCanvasMutationSurface } = await import("./canvas-mutation-surface")
 const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
+
+afterAll(() => {
+  mock.restore()
+})
+
+class TestCanvasSession implements CanvasRendererCollaborationClientV2 {
+  readonly authority = "project-collaboration-application" as const
+  readonly commands: CanvasRendererCommandV2[] = []
+  readonly undoModel = "project-yjs-semantic-history" as const
+  flushRequest: (signal?: AbortSignal) => Promise<void> = async () => undefined
+  private readonly listeners = new Set<() => void>()
+  private readonly nodeIncarnations = new Map<string, string>()
+
+  constructor(private projection: CanvasDocument) {
+    for (const node of projection.nodes) this.nodeIncarnations.set(node.id, `incarnation-${node.id}`)
+  }
+
+  canRedo() {
+    return false
+  }
+
+  canUndo() {
+    return false
+  }
+
+  flush(signal?: AbortSignal) {
+    return this.flushRequest(signal)
+  }
+
+  getProjection() {
+    return this.projection
+  }
+
+  publish(projection: CanvasDocument) {
+    this.projection = projection
+    for (const node of projection.nodes) {
+      if (!this.nodeIncarnations.has(node.id)) this.nodeIncarnations.set(node.id, `incarnation-${node.id}`)
+    }
+    for (const listener of this.listeners) listener()
+  }
+
+  replaceNodeIncarnation(nodeId: string, incarnation: string) {
+    this.nodeIncarnations.set(nodeId, incarnation)
+  }
+
+  async redo() {}
+
+  resolveNodeEntity(nodeId: string) {
+    const incarnation = this.nodeIncarnations.get(nodeId)
+    return incarnation && this.projection.nodes.some((node) => node.id === nodeId)
+      ? { kind: "node" as const, id: nodeId, incarnation }
+      : undefined
+  }
+
+  async submit(command: CanvasRendererCommandV2) {
+    this.commands.push(command)
+  }
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  async undo() {}
+}
 
 function installTestWindow() {
   const testWindow = new Window({ url: "https://convax.test/" })
@@ -308,16 +372,11 @@ function IdentityFeedbackProbe() {
 
 function EditorStateProbe() {
   observedEditor = useCanvasEditor()
-  observedMutationSurface = useCanvasMutationSurface(observedEditor.readOnly)
   return null
 }
 
 function getObservedEditor() {
   return observedEditor
-}
-
-function getObservedMutationSurface() {
-  return observedMutationSurface
 }
 
 test("does not feed a selection-action refresh back into Canvas document updates", async () => {
@@ -371,14 +430,9 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
       position: { x: 0, y: 0 },
       resourceState: { status: "ready" },
     })
-
+    const session = new TestCanvasSession(createCanvasDocument({ id: "interaction-tools", nodes: [interactionNode] }))
     await act(async () => {
-      root?.render(
-        <CanvasEditor
-          initialDocument={createCanvasDocument({ id: "interaction-tools", nodes: [interactionNode] })}
-          services={createCanvasServices()}
-        />,
-      )
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
     })
 
     const canvas = container.querySelector<HTMLElement>(".convax-canvas")
@@ -391,11 +445,45 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
       selectionOnDrag: true,
     })
     await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, interactionNode, [
+        interactionNode,
+      ])
       observedReactFlowProps?.onNodesChange?.([
         { id: interactionNode.id, position: { x: 16, y: 24 }, type: "position" },
+        { dimensions: { height: 300, width: 400 }, id: interactionNode.id, type: "dimensions" },
+        { id: interactionNode.id, selected: true, type: "select" },
       ])
     })
     expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
+    expect(observedReactFlowProps?.nodes?.[0]?.measured).toEqual({ height: 300, width: 400 })
+    expect([...(getObservedEditor()?.selection.nodeIds ?? [])]).toEqual([interactionNode.id])
+    expect(session.getProjection().nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(session.getProjection().nodes[0]?.measured).toBeUndefined()
+    expect(session.getProjection().nodes[0]?.selected).toBeUndefined()
+    expect(session.commands).toEqual([])
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(session.commands).toEqual([
+      {
+        body: {
+          updates: [
+            {
+              node: { kind: "node", id: interactionNode.id, incarnation: `incarnation-${interactionNode.id}` },
+              position: { x: 16, y: 24 },
+            },
+          ],
+        },
+        format: "convax.canvas-renderer-command/2",
+        kind: "canvas.nodes.set-geometry/2",
+      },
+    ])
+    expect(session.commands[0]).not.toHaveProperty("expectedRevision")
+    expect(session.getProjection().nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    await act(async () => getObservedEditor()?.selectNodes([]))
 
     await act(async () => {
       canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
@@ -415,9 +503,10 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
         { id: interactionNode.id, selected: true, type: "select" },
       ])
     })
-    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
     expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
+    expect(session.commands).toHaveLength(1)
 
     await act(async () => {
       canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "v" }))
@@ -441,9 +530,10 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
         { id: interactionNode.id, selected: true, type: "select" },
       ])
     })
-    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
     expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
+    expect(session.commands).toHaveLength(1)
     await act(async () => {
       window.dispatchEvent(new Event("blur"))
     })
@@ -482,10 +572,12 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
   }
 })
 
-test("accepts expanded Group resize dimensions while protecting folded presentation measurements", async () => {
+test("keeps expanded Group measurements transient and protects folded presentation measurements", async () => {
   const restoreWindow = installTestWindow()
   let root: Root | undefined
   EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
 
   try {
     const container = document.createElement("div")
@@ -497,34 +589,38 @@ test("accepts expanded Group resize dimensions while protecting folded presentat
       position: { x: 40, y: 60 },
       width: 520,
     })
+    const expandedSession = new TestCanvasSession(
+      createCanvasDocument({ id: "expanded-group-measurement", nodes: [expanded] }),
+    )
 
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={createCanvasDocument({ id: "expanded-group-resize", nodes: [expanded] })}
           key="expanded-group"
           services={createCanvasServices()}
+          session={expandedSession}
         />,
       )
     })
     await act(async () => {
-      getObservedEditor()?.beginGesture()
       observedReactFlowProps?.onNodesChange?.([
         { dimensions: { height: 420, width: 640 }, id: expanded.id, type: "dimensions" },
       ])
-      getObservedEditor()?.endGesture()
     })
-    expect(getObservedEditor()?.document.nodes[0]?.measured).toEqual({ height: 420, width: 640 })
-    expect(getObservedEditor()?.document.revision).toBe(1)
+    expect(observedReactFlowProps?.nodes?.[0]?.measured).toEqual({ height: 420, width: 640 })
+    expect(getObservedEditor()?.document.nodes[0]).not.toHaveProperty("measured")
+    expect(expandedSession.getProjection().nodes[0]).not.toHaveProperty("measured")
+    expect(expandedSession.commands).toEqual([])
 
     const foldedDocument = setCanvasGroupFolded(
       createCanvasDocument({ id: "folded-group-measurement", nodes: [expanded] }),
       expanded.id,
       true,
     )
+    const foldedSession = new TestCanvasSession(foldedDocument)
     await act(async () => {
       root?.render(
-        <CanvasEditor initialDocument={foldedDocument} key="folded-group" services={createCanvasServices()} />,
+        <CanvasEditor key="folded-group" services={createCanvasServices()} session={foldedSession} />,
       )
     })
     await act(async () => {
@@ -532,9 +628,14 @@ test("accepts expanded Group resize dimensions while protecting folded presentat
         { dimensions: { height: 160, width: 200 }, id: expanded.id, type: "dimensions" },
       ])
     })
-    expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
+    expect(observedReactFlowProps?.nodes?.[0]).not.toHaveProperty("measured")
+    expect(getObservedEditor()?.document.nodes[0]).not.toHaveProperty("measured")
+    expect(foldedSession.getProjection().nodes[0]).not.toHaveProperty("measured")
+    expect(foldedSession.commands).toEqual([])
   } finally {
     EditorProbe = undefined
+    observedEditor = undefined
+    observedReactFlowProps = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -577,9 +678,10 @@ test("treats a folded Group as one node and hides child arrangement controls", a
       group.id,
       true,
     )
+    const session = new TestCanvasSession(foldedDocument)
 
     await act(async () => {
-      root?.render(<CanvasEditor initialDocument={foldedDocument} services={createCanvasServices()} />)
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
     })
     await act(async () => {
       observedReactFlowProps?.onNodesChange?.([{ id: group.id, selected: true, type: "select" }])
@@ -677,7 +779,7 @@ test("double-clicks a Project folder into a read-only transient Canvas focus", a
       nodesDraggable: false,
     })
     expect(getObservedEditor()?.document.nodes).toEqual([folder])
-    expect(getObservedEditor()?.document.revision).toBe(0)
+    expect(getObservedEditor()?.document).toEqual(createCanvasDocument({ id: "folder-focus", nodes: [folder] }))
     expect(container.querySelector('[aria-label="Canvas path"]')?.textContent).toContain("CanvasDesign")
 
     const nestedFolder = observedReactFlowProps?.nodes?.find(
@@ -802,6 +904,120 @@ test("ignores a stale folder listing when a later subdirectory wins", async () =
     })
     expect(observedReactFlowProps?.nodes?.map((node) => node.data.label)).toEqual(["winner.txt"])
   } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps measured and resize preview state in React Flow and submits one closed size intent", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const node = createTextNode({
+      id: "resize-node",
+      metadata: {},
+      position: { x: 10, y: 20 },
+      resourceState: { status: "ready" },
+    })
+    const session = new TestCanvasSession(createCanvasDocument({ id: "resize-preview", nodes: [node] }))
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([
+        { dimensions: { height: 220, width: 350 }, id: node.id, type: "dimensions" },
+      ])
+    })
+    expect(observedReactFlowProps?.nodes?.[0]?.measured).toEqual({ height: 220, width: 350 })
+    expect(getObservedEditor()?.document.nodes[0]).not.toHaveProperty("measured")
+    expect(session.getProjection().nodes[0]).not.toHaveProperty("measured")
+    expect(session.commands).toEqual([])
+
+    await act(async () => {
+      getObservedEditor()?.beginGesture()
+      observedReactFlowProps?.onNodesChange?.([
+        { dimensions: { height: 300, width: 400 }, id: node.id, resizing: true, type: "dimensions" },
+      ])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.style).toMatchObject({ height: 300, width: 400 })
+    expect(getObservedEditor()?.document.nodes[0]).not.toHaveProperty("measured")
+    expect(session.commands).toEqual([])
+
+    await act(async () => {
+      getObservedEditor()?.endGesture()
+      await Promise.resolve()
+    })
+    expect(session.commands).toEqual([
+      {
+        body: {
+          updates: [
+            {
+              node: { kind: "node", id: node.id, incarnation: `incarnation-${node.id}` },
+              position: { x: 10, y: 20 },
+              size: { height: 300, width: 400 },
+            },
+          ],
+        },
+        format: "convax.canvas-renderer-command/2",
+        kind: "canvas.nodes.set-geometry/2",
+      },
+    ])
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedReactFlowProps = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("drops a drag preview instead of submitting it to a replacement node incarnation", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const node = createTextNode({
+      id: "recreated-node",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready" },
+    })
+    const session = new TestCanvasSession(createCanvasDocument({ id: "incarnation-guard", nodes: [node] }))
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, node, [node])
+      observedReactFlowProps?.onNodesChange?.([{ id: node.id, position: { x: 50, y: 60 }, type: "position" }])
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 50, y: 60 })
+
+    session.replaceNodeIncarnation(node.id, "replacement-incarnation")
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(session.commands).toEqual([])
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedReactFlowProps = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
@@ -944,7 +1160,7 @@ test("animates zoom presets around the visible viewport center", async () => {
   }
 })
 
-test("authoritative reload clears a prior load error and resolves after the writable controller renders", async () => {
+test("authoritative reload retries a failed collaboration flush without replacing the current projection", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
@@ -959,29 +1175,21 @@ test("authoritative reload clears a prior load error and resolves after the writ
       onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
     })
     const initialDocument = createCanvasDocument({ id: "authoritative-retry", title: "Initial" })
-    const authoritativeDocument = {
-      ...createCanvasDocument({ id: initialDocument.id, title: "Authoritative" }),
-      revision: 1,
-    }
+    const authoritativeDocument = createCanvasDocument({ id: initialDocument.id, title: "Authoritative" })
     const failure = new Error("First authoritative load failed")
-    let loadAttempt = 0
-    const load = mock(async () => {
-      loadAttempt += 1
-      if (loadAttempt === 1) return initialDocument
-      if (loadAttempt === 2) throw failure
-      return authoritativeDocument
-    })
-    const save = mock(async (document) => document)
+    const session = new TestCanvasSession(initialDocument)
+    let flushAttempt = 0
+    session.flushRequest = async () => {
+      flushAttempt += 1
+      if (flushAttempt === 1) throw failure
+      session.publish(authoritativeDocument)
+    }
     const editorRef = createRef<CanvasEditorHandle>()
 
     await act(async () => {
       root?.render(
         <TestErrorBoundary onError={(error) => errors.push(error)}>
-          <CanvasEditor
-            initialDocument={initialDocument}
-            ref={editorRef}
-            services={createCanvasServices({ persistence: { load, save } })}
-          />
+          <CanvasEditor ref={editorRef} services={createCanvasServices()} session={session} />
         </TestErrorBoundary>,
       )
     })
@@ -996,26 +1204,24 @@ test("authoritative reload clears a prior load error and resolves after the writ
       }
     })
     expect(rejected).toBe(failure)
-    expect(observedEditor).toMatchObject({ hydrating: false, readOnly: true })
-    expect(container.textContent).toContain(failure.message)
-
-    let revisionAtResolution = -1
-    let retry: Promise<void> | undefined
-    await act(async () => {
-      retry = editorRef.current?.reloadAuthoritative()
-      await Promise.resolve()
-    })
-    await retry
-    revisionAtResolution = (observedEditor as CanvasEditorController | undefined)?.document.revision ?? -1
-
-    expect(revisionAtResolution).toBe(1)
     expect(observedEditor).toMatchObject({
-      document: { metadata: { title: "Authoritative" }, revision: 1 },
+      document: { metadata: { title: "Initial" } },
       hydrating: false,
       readOnly: false,
     })
     expect(container.textContent).not.toContain(failure.message)
-    expect(save).not.toHaveBeenCalled()
+
+    await act(async () => {
+      await editorRef.current?.reloadAuthoritative()
+    })
+
+    expect(observedEditor).toMatchObject({
+      document: { metadata: { title: "Authoritative" } },
+      hydrating: false,
+      readOnly: false,
+    })
+    expect(container.textContent).not.toContain(failure.message)
+    expect(flushAttempt).toBe(2)
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
@@ -1025,13 +1231,12 @@ test("authoritative reload clears a prior load error and resolves after the writ
   }
 })
 
-test("keeps an existing Canvas visible while an authoritative document reload is pending", async () => {
+test("keeps the current projection visible while an authoritative collaboration flush is pending", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
   EditorProbe = EditorStateProbe
   observedEditor = undefined
-  observedMutationSurface = undefined
 
   try {
     const container = document.createElement("div")
@@ -1044,34 +1249,23 @@ test("keeps an existing Canvas visible while an authoritative document reload is
     const authoritativeDocument = {
       ...initialDocument,
       metadata: { ...initialDocument.metadata, title: "Authoritative" },
-      revision: 1,
     }
-    let loadAttempt = 0
     let resolveReload!: (document: typeof authoritativeDocument) => void
     const pendingReload = new Promise<typeof authoritativeDocument>((resolve) => {
       resolveReload = resolve
     })
-    const load = mock(async () => {
-      loadAttempt += 1
-      if (loadAttempt === 1) return initialDocument
-      return pendingReload
-    })
-    const save = mock(async (document) => document)
+    const session = new TestCanvasSession(initialDocument)
+    session.flushRequest = async () => session.publish(await pendingReload)
     const editorRef = createRef<CanvasEditorHandle>()
 
     await act(async () => {
       root?.render(
         <TestErrorBoundary onError={(error) => errors.push(error)}>
-          <CanvasEditor
-            initialDocument={initialDocument}
-            ref={editorRef}
-            services={createCanvasServices({ persistence: { load, save } })}
-          />
+          <CanvasEditor ref={editorRef} services={createCanvasServices()} session={session} />
         </TestErrorBoundary>,
       )
     })
     expect(container.textContent).not.toContain("Loading canvas…")
-    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
 
     let reload: Promise<void> | undefined
     await act(async () => {
@@ -1079,8 +1273,11 @@ test("keeps an existing Canvas visible while an authoritative document reload is
       await Promise.resolve()
     })
 
-    expect(observedEditor).toMatchObject({ hydrating: true, readOnly: true })
-    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
+    expect(observedEditor).toMatchObject({
+      document: { metadata: { title: "Initial" } },
+      hydrating: false,
+      readOnly: false,
+    })
     expect(container.textContent).not.toContain("Loading canvas…")
 
     await act(async () => {
@@ -1090,124 +1287,21 @@ test("keeps an existing Canvas visible while an authoritative document reload is
     await reload
 
     expect(observedEditor).toMatchObject({
-      document: { metadata: { title: "Authoritative" }, revision: 1 },
+      document: { metadata: { title: "Authoritative" } },
       hydrating: false,
       readOnly: false,
     })
     expect(container.textContent).not.toContain("Loading canvas…")
-    expect(getObservedMutationSurface()).toEqual({ disabled: false, visible: true })
-    expect(save).not.toHaveBeenCalled()
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
     observedEditor = undefined
-    observedMutationSurface = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
 })
 
-test("keeps a running selection action pending across its own authoritative document refresh", async () => {
-  const restoreWindow = installTestWindow()
-  const errors: Error[] = []
-  let root: Root | undefined
-  EditorProbe = EditorStateProbe
-  observedEditor = undefined
-  observedMutationSurface = undefined
-
-  try {
-    const container = document.createElement("div")
-    document.body.append(container)
-    root = createRoot(container, {
-      onCaughtError: () => undefined,
-      onUncaughtError: (error) => errors.push(error instanceof Error ? error : new Error(String(error))),
-    })
-    const node = createTextNode({
-      id: "selection-source",
-      metadata: {},
-      position: { x: 0, y: 0 },
-      resourceState: { status: "ready" },
-    })
-    const initialDocument = createCanvasDocument({ id: "selection-action-refresh", nodes: [node] })
-    const authoritativeDocument = { ...initialDocument, revision: 1 }
-    let resolveReload!: (document: typeof authoritativeDocument) => void
-    const pendingReload = new Promise<typeof authoritativeDocument>((resolve) => {
-      resolveReload = resolve
-    })
-    let loadAttempt = 0
-    const load = mock(async () => {
-      loadAttempt += 1
-      return loadAttempt === 1 ? initialDocument : pendingReload
-    })
-    let resolveAction!: () => void
-    const pendingAction = new Promise<void>((resolve) => {
-      resolveAction = resolve
-    })
-    let actionSignal: AbortSignal | undefined
-    const action: CanvasSelectionAction = {
-      async execute(context) {
-        actionSignal = context.signal
-        await pendingAction
-      },
-      id: "selection.long-running",
-      label: "Long-running action",
-    }
-    const editorRef = createRef<CanvasEditorHandle>()
-
-    await act(async () => {
-      root?.render(
-        <CanvasEditor
-          initialDocument={initialDocument}
-          ref={editorRef}
-          selectionActions={[action]}
-          services={createCanvasServices({ persistence: { load, save: async (document) => document } })}
-        />,
-      )
-    })
-    await act(async () => getObservedEditor()?.selectNodes([node.id]))
-    const visibleAction = getObservedEditor()?.visibleSelectionActions.find((candidate) => candidate.id === action.id)
-    expect(visibleAction).toBeDefined()
-
-    await act(async () => {
-      if (visibleAction) getObservedEditor()?.executeSelectionAction(visibleAction)
-      await Promise.resolve()
-    })
-    expect(actionSignal?.aborted).toBeFalse()
-    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
-
-    let reload: Promise<void> | undefined
-    await act(async () => {
-      reload = editorRef.current?.reloadAuthoritative()
-      await Promise.resolve()
-    })
-    expect(actionSignal?.aborted).toBeFalse()
-    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
-    expect(getObservedMutationSurface()).toEqual({ disabled: true, visible: true })
-
-    await act(async () => {
-      resolveReload(authoritativeDocument)
-      await Promise.resolve()
-    })
-    await reload
-    expect(actionSignal?.aborted).toBeFalse()
-    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeTrue()
-
-    await act(async () => {
-      resolveAction()
-      await Promise.resolve()
-    })
-    expect(getObservedEditor()?.isSelectionActionPending(action.id)).toBeFalse()
-    expect(errors).toEqual([])
-  } finally {
-    EditorProbe = undefined
-    observedEditor = undefined
-    observedMutationSurface = undefined
-    if (root) await act(async () => root?.unmount())
-    await restoreWindow()
-  }
-})
-
-test("imperative insertion reuses registered renderer placement, selection, and persistence", async () => {
+test("imperative insertion cannot turn an initialDocument preview into durable state", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
@@ -1232,18 +1326,18 @@ test("imperative insertion reuses registered renderer placement, selection, and 
       nodes: [existing],
       title: "Insertion",
     })
+    const create = mock(({ position }) =>
+      createTextNode({ id: "inserted", metadata: {}, position, resourceState: { status: "ready" } }),
+    )
     const fileRendererRegistry = createCanvasFileRendererRegistry([
       {
         component: () => null,
-        create: ({ position }) =>
-          createTextNode({ id: "inserted", metadata: {}, position, resourceState: { status: "ready" } }),
+        create,
         id: "test.renderer",
         label: "Test renderer",
         matches: (data) => data.kind === "test.renderer",
       },
     ])
-    const load = mock(async () => initialDocument)
-    const save = mock(async (document) => document)
     const editorRef = createRef<CanvasEditorHandle>()
 
     await act(async () => {
@@ -1253,7 +1347,7 @@ test("imperative insertion reuses registered renderer placement, selection, and 
             fileRendererRegistry={fileRendererRegistry}
             initialDocument={initialDocument}
             ref={editorRef}
-            services={createCanvasServices({ persistence: { load, save } })}
+            services={createCanvasServices()}
           />
         </TestErrorBoundary>,
       )
@@ -1264,22 +1358,13 @@ test("imperative insertion reuses registered renderer placement, selection, and 
       insertedNodeId = editorRef.current?.insertNode("test.renderer")
     })
     const editorAfterInsertion = getObservedEditor()
-    expect(insertedNodeId).toBe("inserted")
-    expect(editorAfterInsertion?.document.nodes).toHaveLength(2)
-    expect(editorAfterInsertion?.document.nodes.find((node) => node.id === "inserted")).toMatchObject({
-      data: { kind: "test.renderer" },
-      position: { x: 304, y: 0 },
-      type: "file",
-    })
-    expect([...(editorAfterInsertion?.selection.nodeIds ?? [])]).toEqual(["inserted"])
+    expect(insertedNodeId).toBeUndefined()
+    expect(create).not.toHaveBeenCalled()
+    expect(editorAfterInsertion?.document).toEqual(initialDocument)
+    expect(editorAfterInsertion?.selection.nodeIds.size).toBe(0)
 
     await act(async () => {
       await editorRef.current?.flush()
-    })
-    expect(save).toHaveBeenCalledTimes(1)
-    expect(save.mock.calls[0]?.[0]).toMatchObject({
-      nodes: [{ id: "existing" }, { data: { kind: "test.renderer" }, id: "inserted", position: { x: 304, y: 0 } }],
-      revision: 1,
     })
 
     let missingNodeId: string | undefined = "unexpected"
@@ -1287,7 +1372,7 @@ test("imperative insertion reuses registered renderer placement, selection, and 
       missingNodeId = editorRef.current?.insertNode("missing.renderer")
     })
     expect(missingNodeId).toBeUndefined()
-    expect(getObservedEditor()?.document.nodes).toHaveLength(2)
+    expect(getObservedEditor()?.document.nodes).toHaveLength(1)
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
@@ -1380,7 +1465,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
             services={createCanvasServices({
               generate: {
                 describeTool: async (toolId) => ({ fields: [], toolId }),
-                generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+                generate: async () => ({ createdNodeIds: [], toolId: "unused", warnings: [] }),
                 listTools: async () => [],
               },
             })}
@@ -1435,7 +1520,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
   }
 })
 
-test("publishes scope-safe selection without injecting built-in selection actions", async () => {
+test("publishes scope-safe selection and requests the read-only Inspector without a document commit", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
@@ -1455,13 +1540,16 @@ test("publishes scope-safe selection without injecting built-in selection action
       position: { x: 20, y: 40 },
       resourceState: { status: "ready", url: "asset://hidden" },
     })
-    const initialDocument = { ...createCanvasDocument({ id: "projection", nodes: [node] }), revision: 5 }
+    const initialDocument = createCanvasDocument({ id: "projection", nodes: [node] })
     const projections: CanvasSelectionProjection[] = []
+    const inspectorRequests: CanvasInspectorProjection[] = []
+
     await act(async () => {
       root?.render(
         <TestErrorBoundary onError={(error) => errors.push(error)}>
           <CanvasEditor
             initialDocument={initialDocument}
+            onInspectorRequest={(projection) => inspectorRequests.push(projection)}
             onSelectionProjectionChange={(projection) => projections.push(projection)}
             services={createCanvasServices()}
             viewId="primary"
@@ -1475,7 +1563,6 @@ test("publishes scope-safe selection without injecting built-in selection action
       inspector: null,
       kind: "none",
       nodeIds: [],
-      revision: 5,
       scopeId: "project-a/projection",
       viewId: "primary",
     })
@@ -1487,11 +1574,26 @@ test("publishes scope-safe selection without injecting built-in selection action
       nodeIds: [node.id],
       scopeId: "project-a/projection",
     })
-    expect(getObservedEditor()?.visibleSelectionActions).toEqual([])
+    const inspectorAction = getObservedEditor()?.visibleSelectionActions.find(
+      (action) => action.id === "canvas.inspector.open",
+    )
+    expect(inspectorAction).toBeDefined()
+
+    await act(async () => {
+      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
+      await Promise.resolve()
+    })
+    expect(inspectorRequests).toHaveLength(1)
+    expect(inspectorRequests[0]).toMatchObject({ nodeId: node.id })
 
     await act(async () => getObservedEditor()?.selectNodes([]))
     expect(projections.at(-1)).toMatchObject({ inspector: null, kind: "none", nodeIds: [] })
-    expect(getObservedEditor()?.document.revision).toBe(5)
+    await act(async () => {
+      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
+      await Promise.resolve()
+    })
+    expect(inspectorRequests).toHaveLength(1)
+    expect(getObservedEditor()?.document).toEqual(initialDocument)
     expect(errors).toEqual([])
   } finally {
     EditorProbe = undefined
@@ -1501,7 +1603,7 @@ test("publishes scope-safe selection without injecting built-in selection action
   }
 })
 
-test("does not replay the initial fit after the first mutation on an initially empty Canvas", async () => {
+test("keeps viewport commands transient instead of changing the Canvas projection", async () => {
   const restoreWindow = installTestWindow()
   let root: Root | undefined
   EditorProbe = EditorStateProbe
@@ -1513,38 +1615,24 @@ test("does not replay the initial fit after the first mutation on an initially e
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
+    const initialDocument = createCanvasDocument({ id: "viewport-transient" })
 
     await act(async () => {
-      root?.render(
-        <CanvasEditor
-          initialDocument={createCanvasDocument({ id: "empty-then-mutate" })}
-          services={createCanvasServices()}
-        />,
-      )
+      root?.render(<CanvasEditor initialDocument={initialDocument} services={createCanvasServices()} />)
     })
 
-    expect(getObservedEditor()?.document.nodes).toEqual([])
+    expect(getObservedEditor()?.document).toEqual(initialDocument)
     fitView.mockClear()
     setViewport.mockClear()
+    zoomIn.mockClear()
 
     await act(async () => {
-      getObservedEditor()?.commit((document) => ({
-        ...document,
-        nodes: [
-          createTextNode({
-            id: "first-note",
-            metadata: {},
-            position: { x: 40, y: 60 },
-            resourceState: { status: "ready" },
-          }),
-        ],
-        revision: document.revision + 1,
-      }))
+      container.querySelector<HTMLButtonElement>('button[aria-label="Zoom in"]')?.click()
     })
 
-    expect(getObservedEditor()?.document.nodes.map((node) => node.id)).toEqual(["first-note"])
+    expect(zoomIn).toHaveBeenCalledTimes(1)
+    expect(getObservedEditor()?.document).toEqual(initialDocument)
     expect(fitView).not.toHaveBeenCalled()
-    expect(setViewport).not.toHaveBeenCalled()
   } finally {
     EditorProbe = undefined
     observedEditor = undefined
@@ -1609,14 +1697,10 @@ test("navigates the top creation menu by keyboard and restores its trigger on Es
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
+    const session = new TestCanvasSession(createCanvasDocument({ id: "creation-menu-keyboard" }))
 
     await act(async () => {
-      root?.render(
-        <CanvasEditor
-          initialDocument={createCanvasDocument({ id: "creation-menu-keyboard" })}
-          services={createCanvasServices()}
-        />,
-      )
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
     })
 
     const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
@@ -1643,65 +1727,6 @@ test("navigates the top creation menu by keyboard and restores its trigger on Es
     expect(menu?.hidden).toBeTrue()
     expect(document.activeElement).toBe(trigger)
   } finally {
-    if (root) await act(async () => root?.unmount())
-    await restoreWindow()
-  }
-})
-
-test("opens filtered pickers from top media actions without creating empty nodes", async () => {
-  const restoreWindow = installTestWindow()
-  let root: Root | undefined
-  EditorProbe = EditorStateProbe
-  observedEditor = undefined
-
-  try {
-    const container = document.createElement("div")
-    document.body.append(container)
-    root = createRoot(container)
-    const add = mock(async () => ({ createdNodeIds: [], revision: 0, warnings: [] }))
-
-    await act(async () => {
-      root?.render(
-        <CanvasEditor
-          initialDocument={createCanvasDocument({ id: "top-media-picker" })}
-          services={createCanvasServices({ mutation: { add } })}
-        />,
-      )
-    })
-
-    const trigger = container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')
-    const imageInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="image"]')
-    const videoInput = container.querySelector<HTMLInputElement>('[data-canvas-resource-picker="video"]')
-    const imageClick = mock(() => undefined)
-    const videoClick = mock(() => undefined)
-    Object.defineProperty(imageInput, "click", { configurable: true, value: imageClick })
-    Object.defineProperty(videoInput, "click", { configurable: true, value: videoClick })
-
-    await act(async () => {
-      trigger?.click()
-    })
-    const imageAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Image"]')
-    await act(async () => {
-      imageAction?.click()
-    })
-
-    expect(imageClick).toHaveBeenCalledTimes(1)
-    expect(add).not.toHaveBeenCalled()
-    expect(getObservedEditor()?.document.nodes).toEqual([])
-
-    await act(async () => {
-      trigger?.click()
-    })
-    const videoAction = container.querySelector<HTMLButtonElement>('button[aria-label="Add Video"]')
-    await act(async () => {
-      videoAction?.click()
-    })
-
-    expect(videoClick).toHaveBeenCalledTimes(1)
-    expect(add).not.toHaveBeenCalled()
-    expect(getObservedEditor()?.document.nodes).toEqual([])
-  } finally {
-    EditorProbe = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

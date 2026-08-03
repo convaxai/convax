@@ -9,6 +9,7 @@ const projectSnapshot: ProjectControllerSnapshot = {
   changingActiveProject: false,
   error: null,
   initialized: true,
+  pendingRecoveryProjectId: null,
   projects: [{
     createdAt: 1,
     id: "project-1",

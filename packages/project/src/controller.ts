@@ -9,6 +9,8 @@ export interface ProjectControllerSnapshot {
   changingActiveProject: boolean
   error: string | null
   initialized: boolean
+  /** Renderer-session selection only; never persisted or treated as Project authority. */
+  pendingRecoveryProjectId: string | null
   projects: ProjectRecord[]
 }
 
@@ -17,6 +19,7 @@ const initialSnapshot: ProjectControllerSnapshot = {
   changingActiveProject: false,
   error: null,
   initialized: false,
+  pendingRecoveryProjectId: null,
   projects: [],
 }
 
@@ -62,11 +65,33 @@ export class ProjectController {
     try {
       const { projects } = await this.client.listProjects()
       if (generation !== this.generation) return
-      const activeProjectId = this.snapshot.activeProjectId && projects.some((project) => project.id === this.snapshot.activeProjectId)
+      const activeProjectId = this.snapshot.activeProjectId && projects.some(
+        (project) => project.id === this.snapshot.activeProjectId && isOpenableProject(project),
+      )
         ? this.snapshot.activeProjectId
-        : (projects.find((project) => !project.missing)?.id ?? null)
-      this.update({ changingActiveProject: false, error: null, initialized: true, projects })
-      if (activeProjectId !== this.snapshot.activeProjectId) this.applyActiveProject(activeProjectId)
+        : (projects.find(isOpenableProject)?.id ?? null)
+      if (activeProjectId === null) {
+        const pendingRecoveryProjectId = selectStartupRecoveryProjectId(projects)
+        if (this.snapshot.activeProjectId !== null) {
+          this.applyActiveProject(null, { initialized: true, projects }, pendingRecoveryProjectId)
+        } else {
+          this.update({
+            changingActiveProject: false,
+            error: null,
+            initialized: true,
+            pendingRecoveryProjectId,
+            projects,
+          })
+        }
+        return
+      }
+      // Listing is discovery only. A restored Project must cross the same Main
+      // activation/touch barrier as an explicit selection before renderer state
+      // starts addressing its Canvas routes.
+      this.update({ changingActiveProject: true, error: null, pendingRecoveryProjectId: null, projects })
+      const activated = await this.client.touchProject({ projectId: activeProjectId })
+      if (generation !== this.generation) return
+      this.applyActiveProject(activeProjectId, { initialized: true, projects: activated.projects })
     } catch (error) {
       if (generation !== this.generation) return
       this.update({ changingActiveProject: false, error: errorMessage(error), initialized: true })
@@ -128,6 +153,11 @@ export class ProjectController {
       if (request !== this.selectionRequest) return false
       this.update({ error: null, initialized: true, projects: result.projects })
       if (result.canceled || !result.project) return false
+      if (result.project.recovery && result.project.recovery.status !== "current") {
+        this.update({ pendingRecoveryProjectId: result.project.id })
+        return false
+      }
+      this.update({ pendingRecoveryProjectId: null })
       await this.activate(result.project.id)
       return this.snapshot.activeProjectId === result.project.id && this.snapshot.error === null
     } catch (error) {
@@ -182,9 +212,44 @@ export class ProjectController {
           projects: result.projects,
         })
       }
-      const next = result.projects.find((project) => !project.missing)
-      this.update({ projects: result.projects })
-      this.applyActiveProject(next?.id ?? null)
+      // Forgetting while no Project is active is inventory-only. It must not
+      // implicitly select a fallback or enter an activation lane without a
+      // transition request that can prove currentness.
+      if (!removesActiveProject) {
+        this.update({
+          changingActiveProject: false,
+          error: null,
+          pendingRecoveryProjectId:
+            this.snapshot.pendingRecoveryProjectId === projectId
+              ? selectStartupRecoveryProjectId(result.projects)
+              : this.snapshot.pendingRecoveryProjectId,
+          projects: result.projects,
+        })
+        return
+      }
+      const next = result.projects.find(isOpenableProject)
+      const pendingRecoveryProjectId = next ? null : selectStartupRecoveryProjectId(result.projects)
+      // Main has already quiesced the removed Project before publishing this
+      // result. Clear the renderer authority immediately, then cross the same
+      // touch/activation barrier before exposing any fallback Project.
+      this.generation += 1
+      this.update({
+        activeProjectId: null,
+        changingActiveProject: Boolean(next),
+        error: null,
+        pendingRecoveryProjectId,
+        projects: result.projects,
+      })
+      if (!next) return
+      try {
+        const activated = await this.client.touchProject({ projectId: next.id })
+        if (request !== this.transitionRequest) return
+        this.applyActiveProject(next.id, { projects: activated.projects })
+      } catch (error) {
+        if (request === this.transitionRequest) {
+          this.update({ changingActiveProject: false, error: errorMessage(error) })
+        }
+      }
     } catch (error) {
       if (removesActiveProject && request === this.transitionRequest) {
         this.options.onActiveProjectChangeCanceled?.()
@@ -202,6 +267,12 @@ export class ProjectController {
     this.update({ error: null })
   }
 
+  dismissPendingRecoveryProject(projectId: string) {
+    if (this.snapshot.pendingRecoveryProjectId === projectId) {
+      this.update({ pendingRecoveryProjectId: null })
+    }
+  }
+
   dispose() {
     this.generation += 1
     this.selectionRequest += 1
@@ -209,12 +280,18 @@ export class ProjectController {
     this.listeners.clear()
   }
 
-  private applyActiveProject(projectId: string | null) {
+  private applyActiveProject(
+    projectId: string | null,
+    patch: Pick<Partial<ProjectControllerSnapshot>, "initialized" | "projects"> = {},
+    pendingRecoveryProjectId: string | null = null,
+  ) {
     this.generation += 1
     this.update({
+      ...patch,
       activeProjectId: projectId,
       changingActiveProject: false,
       error: null,
+      pendingRecoveryProjectId,
     })
   }
 
@@ -226,4 +303,18 @@ export class ProjectController {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isOpenableProject(project: ProjectRecord) {
+  return !project.missing && (!project.recovery || project.recovery.status === "current")
+}
+
+function selectStartupRecoveryProjectId(projects: readonly ProjectRecord[]) {
+  return projects
+    .filter(
+      (project) =>
+        !project.missing &&
+        project.recovery?.status === "unsupported-portable-project-version",
+    )
+    .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt || left.id.localeCompare(right.id))[0]?.id ?? null
 }

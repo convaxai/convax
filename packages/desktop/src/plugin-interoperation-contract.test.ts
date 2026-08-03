@@ -30,7 +30,7 @@ describe("v8 inter-Plugin contribution integration", () => {
         },
       },
       description: "Capability provider",
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
       id: "capability-provider",
       name: "Capability Provider",
       runtime: { command: "capability-provider", type: "mcp-stdio" },

@@ -100,8 +100,7 @@ describe("Plugin API compatibility", () => {
 
     const changedContractWithoutVersion = structuredClone(versioned("3.0.0")) as any
     changedContractWithoutVersion.apis[0].contract.request.maxBytes -= 1
-    changedContractWithoutVersion.apis[0].contract.digest =
-      `sha256:${"0".repeat(64)}` as `sha256:${string}`
+    changedContractWithoutVersion.apis[0].contract.digest = `sha256:${"0".repeat(64)}` as `sha256:${string}`
     expect(checkPluginApiCompatibility(previous, changedContractWithoutVersion)).toEqual([
       expect.objectContaining({
         kind: "api-changed",
@@ -165,9 +164,9 @@ describe("Plugin API generation", () => {
     expect(markdown).toContain("`canvas.inputs.open`")
     expect(markdown).toContain("`canvas.inputs.image.open` | 2.0.0 | 2.0.0")
     expect(markdown).toContain("`canvas.inputs.image.close` | 2.0.0 | 2.0.0")
-    expect(markdown).toContain("`generation.execute` | 1.0.0 | 2.0.0")
+    expect(markdown).toContain("`generation.execute` | 1.0.0 | 3.0.0")
     expect(markdown).toContain("- Introduced: 1.0.0")
-    expect(markdown).toContain("- Current contract since: 2.0.0")
+    expect(markdown).toContain("- Current contract since: 3.0.0")
     expect(markdown).toContain("The response contains no image bytes, native path, or unrestricted URL.")
     expect(markdown).toContain("Electron protocol GET/HEAD requests have no trusted sender or frame principal.")
     expect(markdown).toContain("opaque 128-bit bearer URL")
@@ -180,7 +179,7 @@ describe("Plugin API generation", () => {
     expect(markdown).toContain("`resource-unavailable`")
     expect(markdown).toContain("Request schema: closed object: `ref (required)`, `projection (optional)`")
     expect(markdown).toContain(
-      "Response schema: closed object: `document (required)`, `projection (required)`, `ref (required)`, `storageVersion (required)`",
+      "Response schema: closed object: `document (required)`, `projection (required)`, `ref (required)`",
     )
     expect(markdown).toContain("#### Request contract")
     expect(markdown).toContain('"maxLength": 25165824')
@@ -203,18 +202,13 @@ describe("Plugin API generation", () => {
     expect(() => parsePluginApiCatalogArtifact(missingContractSince)).toThrow("is incomplete")
 
     const preIntroductionContract = JSON.parse(json)
-    preIntroductionContract.apis.find(
-      ({ id }: { id: string }) => id === "canvas.inputs.image.open",
-    ).contractSince = "1.9.0"
-    expect(() => parsePluginApiCatalogArtifact(preIntroductionContract)).toThrow(
-      "contractSince precedes since",
-    )
+    preIntroductionContract.apis.find(({ id }: { id: string }) => id === "canvas.inputs.image.open").contractSince =
+      "1.9.0"
+    expect(() => parsePluginApiCatalogArtifact(preIntroductionContract)).toThrow("contractSince precedes since")
 
     const futureContract = JSON.parse(json)
-    futureContract.apis[0].contractSince = "2.0.1"
-    expect(() => parsePluginApiCatalogArtifact(futureContract)).toThrow(
-      "has a future contractSince version",
-    )
+    futureContract.apis[0].contractSince = "3.0.1"
+    expect(() => parsePluginApiCatalogArtifact(futureContract)).toThrow("has a future contractSince version")
 
     const futureDialect = JSON.parse(json)
     futureDialect.apis[0].contract.dialect = "convax.plugin-api-wire-schema/999"
@@ -228,7 +222,7 @@ describe("Plugin API generation", () => {
     const imageCreate = unknownNumericFeature.apis.find(
       ({ id }: { id: string }) => id === "canvas.resource.image.create",
     )
-    imageCreate.contract.result.schema.properties.revision.exclusiveMaximum = 10
+    imageCreate.contract.result.schema.properties.operationReceipt.properties.resultEntities.exclusiveMaximum = 10
     expect(() => parsePluginApiCatalogArtifact(unknownNumericFeature)).toThrow("unknown field: exclusiveMaximum")
 
     const unknownProductFeature = JSON.parse(json)
@@ -266,8 +260,9 @@ describe("Plugin API generation", () => {
 
     const nonFiniteMinimum = JSON.parse(json)
     const image = nonFiniteMinimum.apis.find(({ id }: { id: string }) => id === "canvas.resource.image.create")
-    image.contract.result.schema.properties.revision.minimum = Number.POSITIVE_INFINITY
-    expect(() => parsePluginApiCatalogArtifact(nonFiniteMinimum)).toThrow("number contract is invalid")
+    image.contract.result.schema.properties.operationReceipt.properties.resultEntities.maxItems =
+      Number.POSITIVE_INFINITY
+    expect(() => parsePluginApiCatalogArtifact(nonFiniteMinimum)).toThrow("array contract is invalid")
   })
 
   test("keeps 1.0.0 as opaque wire-schema/2 evidence while the current runtime remains wire-schema/3 only", async () => {
@@ -285,9 +280,9 @@ describe("Plugin API generation", () => {
     expect(() => parsePluginApiCatalogArtifact(initial)).toThrow("is not a Plugin API catalog snapshot")
 
     const current = snapshotPluginApiCatalog(pluginApiCatalog)
-    expect(current.version).toBe("2.0.0")
+    expect(current.version).toBe("3.0.0")
     expect(current.apis.every(({ contract }) => contract.dialect === pluginApiWireSchemaDialect)).toBe(true)
-    expect(JSON.parse(readFileSync(join(import.meta.dir, "../history/2.0.0.json"), "utf8"))).toEqual(current)
+    expect(JSON.parse(readFileSync(join(import.meta.dir, "../history/3.0.0.json"), "utf8"))).toEqual(current)
     await checkPluginApiHistory(join(import.meta.dir, "../history"))
   })
 
@@ -296,6 +291,11 @@ describe("Plugin API generation", () => {
     const historyDirectory = join(root, "history")
     const outputDirectory = join(root, "generated")
     try {
+      mkdirSync(historyDirectory, { recursive: true })
+      writeFileSync(
+        join(historyDirectory, "2.0.0.json"),
+        readFileSync(join(import.meta.dir, "../history/2.0.0.json"), "utf8"),
+      )
       await appendPluginApiHistory(historyDirectory)
       const missing = await generatePluginApiArtifacts({ historyDirectory, outputDirectory, check: true })
       expect(missing.changed).toHaveLength(2)
@@ -317,6 +317,11 @@ describe("Plugin API generation", () => {
     const root = mkdtempSync(join(tmpdir(), "convax-plugin-api-history-"))
     const historyDirectory = join(root, "history")
     try {
+      mkdirSync(historyDirectory, { recursive: true })
+      writeFileSync(
+        join(historyDirectory, "2.0.0.json"),
+        readFileSync(join(import.meta.dir, "../history/2.0.0.json"), "utf8"),
+      )
       const path = await appendPluginApiHistory(historyDirectory)
       const history = JSON.parse(readFileSync(path, "utf8"))
       history.apis[0].docs.summary = "Mutated in place."

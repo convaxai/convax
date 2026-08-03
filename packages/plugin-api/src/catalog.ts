@@ -47,9 +47,17 @@ const defineV2Contract = <const Definition extends Omit<PluginApiDefinitionInput
     contractSince: "2.0.0",
   })
 
+const defineV3Contract = <const Definition extends Omit<PluginApiDefinitionInput, "contractSince">>(
+  definition: Definition,
+) =>
+  definePluginApi({
+    ...definition,
+    contractSince: "3.0.0",
+  })
+
 export const pluginApiCatalog = definePluginApiCatalog(
   definePluginApiRelease("1.0.0", [
-    defineV2Contract({
+    defineV3Contract({
       id: "host.context.get",
       completion: "cancelable",
       grant: null,
@@ -109,7 +117,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "An acknowledgement; closing an already closed handle is idempotent.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.node.get",
       completion: "cancelable",
       grant: "canvas.node.read",
@@ -120,25 +128,25 @@ export const pluginApiCatalog = definePluginApiCatalog(
         summary: "Read the owning Plugin node projection.",
         description: "Returns a bounded renderer-safe projection of the exact node bound to the connection.",
         request: "No parameters; the owning node comes from the bound connection.",
-        response: "The owning node identity, revision, geometry, and Plugin state projection.",
+        response: "The owning node identity, geometry, and Plugin state projection.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.node.state.replace",
       completion: "commit-preserving",
       grant: "canvas.node.write",
       scope: "own-node",
       sideEffect: "write",
-      errors: [...contextErrors, ...permissionErrors],
+      errors: [...contextErrors, ...permissionErrors, ...resourceErrors],
       docs: {
         summary: "Replace the owning node's bounded Plugin state.",
         description:
-          "Commits only the namespaced Plugin state through the authoritative Canvas application service with revision checks.",
+          "Commits only the namespaced Plugin state through one Canvas-owned semantic intent guarded by the current node incarnation.",
         request: "`{ state }`, where state is a bounded JSON value.",
-        response: "`{ updated: true }` after the authoritative state replacement commits.",
+        response: "The durable operation receipt and current owning-node projection after the replacement commits.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.resource.image.create",
       completion: "commit-preserving",
       grant: "canvas.image.write",
@@ -198,7 +206,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of available generation tools and their public input contracts.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "generation.execute",
       completion: "commit-preserving",
       grant: "generation.execute",
@@ -211,7 +219,8 @@ export const pluginApiCatalog = definePluginApiCatalog(
           "Revalidates the active Plugin, authorized executable, inputs, cancellation, and live resource guards immediately before execution.",
         request:
           "`{ output?, prompt, references?: Array<{ inputKey, role }>, resultMode?, toolId? }`; every opaque input key must come from the current owning node's canvas.inputs.list result.",
-        response: "The bounded selected tool result, created node ids, authoritative revision, and warnings.",
+        response:
+          "The bounded selected tool result, created node ids, optional committed operation receipt/projection, and warnings.",
       },
     }),
     defineV2Contract({
@@ -230,7 +239,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of renderer-safe Project summaries.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.catalog.list",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -245,7 +254,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
         response: "A bounded list of portable Canvas catalog entries.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.document.get",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -258,10 +267,10 @@ export const pluginApiCatalog = definePluginApiCatalog(
         description:
           "Returns a bounded portable structure or geometry projection from Main's authoritative Canvas application service.",
         request: "`{ ref, projection }`, using an explicit portable Project/Canvas reference and supported projection.",
-        response: "The requested pathless document projection and authoritative revision.",
+        response: "The requested pathless document projection.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.nodes.query",
       completion: "cancelable",
       audience: ["web-plugin", "companion"],
@@ -273,10 +282,10 @@ export const pluginApiCatalog = definePluginApiCatalog(
         summary: "Query bounded node projections in one authorized Canvas.",
         description: "Executes a host-defined bounded query without exposing native paths or resource bytes.",
         request: "`{ ref, query }`, using an explicit portable Project/Canvas reference and bounded query.",
-        response: "Matching node projections and the authoritative Canvas revision.",
+        response: "Matching node summaries and the current pathless Canvas projection.",
       },
     }),
-    defineV2Contract({
+    defineV3Contract({
       id: "canvas.transaction.execute",
       completion: "commit-preserving",
       audience: ["web-plugin", "companion"],
@@ -285,11 +294,11 @@ export const pluginApiCatalog = definePluginApiCatalog(
       sideEffect: "write",
       errors: [...contextErrors, ...permissionErrors],
       docs: {
-        summary: "Commit one non-empty revision-bound Canvas transaction.",
+        summary: "Commit one closed Canvas command through the authoritative application service.",
         description:
-          "Validates bounded commands against one authoritative revision and persists the accepted transaction atomically.",
-        request: "`{ ref, expectedRevision, commands, transactionId }` with a bounded non-empty command list.",
-        response: "The committed authoritative revision and bounded command results.",
+          "Maps one bounded command to a Canvas-owned semantic intent, commits it atomically, and returns its durable operation identity.",
+        request: "`{ ref, command, commandId }` with one bounded closed command and an idempotency key.",
+        response: "The durable operation receipt, current pathless projection, and bounded command result.",
       },
     }),
     defineV2Contract({
@@ -303,7 +312,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
       docs: {
         summary: "Subscribe to bounded events for one authorized Canvas.",
         description:
-          "Creates a connection-scoped subscription; events are revisioned invalidations or safe projections, never native data.",
+          "Creates a connection-scoped subscription; events carry operation receipts as invalidations or safe projections, never native data.",
         request: "`{ ref }`, using an explicit portable Project/Canvas reference.",
         response: "A connection-bound subscription identifier.",
       },
@@ -359,6 +368,7 @@ export const pluginApiCatalog = definePluginApiCatalog(
       },
     }),
   ]),
+  definePluginApiRelease("3.0.0", []),
 )
 
 type CatalogPluginApiId = (typeof pluginApiCatalog.apis)[number]["id"]

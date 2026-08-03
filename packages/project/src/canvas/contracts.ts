@@ -1,12 +1,15 @@
 export interface ProjectCanvas {
-  createdAt: number
+  /** Legacy display metadata; ProjectIndex route identity does not authorize by wall time. */
+  createdAt?: number
   id: string
   name: string
-  updatedAt: number
+  /** Legacy display metadata; ProjectIndex route identity does not authorize by wall time. */
+  updatedAt?: number
 }
 
 export interface ProjectCanvasCatalog {
   canvases: ProjectCanvas[]
+  creationAvailability: "available" | "team-authority-pending" | "read-only-recovery-required"
   projectId: string
 }
 

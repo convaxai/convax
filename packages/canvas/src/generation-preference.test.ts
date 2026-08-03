@@ -1,14 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { duplicateCanvasSelection } from "./commands"
-import { createCanvasDocument, createTextNode as createCanvasTextNode } from "./document"
-import { parseStoredCanvasDocument, serializeCanvasDocument } from "./application/persistence"
+import { createCanvasDocument, createTextNode as createCanvasTextNode, parseCanvasDocument } from "./document"
 import {
   canvasNodeGenerationPreferenceKey,
   canvasNodeGenerationPreferenceSchema,
   getCanvasNodeGenerationToolId,
   setCanvasNodeGenerationToolId,
 } from "./generation-preference"
-import { canvasHistoryReducer, createCanvasHistory } from "./history"
 
 function createTextNode(input: Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
   metadata?: Record<string, unknown>
@@ -41,21 +39,6 @@ describe("Canvas node generation preference", () => {
     })
     expect(updated.nodes[1]).toBe(second)
     expect(setCanvasNodeGenerationToolId(updated, first.id, "plugin.example:image.generate")).toBe(updated)
-  })
-
-  test("is an undoable node-local Canvas commit", () => {
-    const first = createTextNode({ id: "first", position: { x: 0, y: 0 } })
-    const second = createTextNode({ id: "second", position: { x: 100, y: 0 } })
-    const document = createCanvasDocument({ id: "canvas", nodes: [first, second] })
-    const history = canvasHistoryReducer(createCanvasHistory(document), {
-      type: "commit-update",
-      update: (current) => setCanvasNodeGenerationToolId(current, first.id, "tool"),
-    })
-
-    expect(history.document.revision).toBe(1)
-    expect(getCanvasNodeGenerationToolId(history.document.nodes[0])).toBe("tool")
-    expect(history.document.nodes[1]).toBe(second)
-    expect(history.past).toEqual([document])
   })
 
   test("clears only the override so the node can inherit again", () => {
@@ -97,11 +80,11 @@ describe("Canvas node generation preference", () => {
     expect(clone && getCanvasNodeGenerationToolId(clone)).toBe("tool")
   })
 
-  test("round trips the node override with the portable Canvas document", () => {
+  test("round trips the node override through the read-only Canvas projection parser", () => {
     const node = createTextNode({ id: "first", position: { x: 0, y: 0 } })
     const stored = setCanvasNodeGenerationToolId(createCanvasDocument({ id: "canvas", nodes: [node] }), node.id, "tool")
-    const restored = parseStoredCanvasDocument(serializeCanvasDocument(stored), stored.id)
+    const restored = parseCanvasDocument(structuredClone(stored), stored.id)
 
-    expect(getCanvasNodeGenerationToolId(restored.nodes[0])).toBe("tool")
+    expect(restored && getCanvasNodeGenerationToolId(restored.nodes[0])).toBe("tool")
   })
 })

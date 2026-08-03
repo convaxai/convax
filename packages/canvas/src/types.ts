@@ -96,7 +96,6 @@ export interface CanvasMetadata {
 
 export interface CanvasDocument {
   id: CanvasDocumentId
-  revision: number
   metadata: CanvasMetadata
   nodes: CanvasNode[]
   edges: CanvasEdge[]

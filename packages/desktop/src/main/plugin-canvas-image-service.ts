@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto"
 
-import type { CanvasAddResourceSourcesRequest, CanvasApplicationCommandResult } from "@convax/canvas/application"
-import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
+import type {
+  CanvasAddResourceSourcesRequest,
+  CanvasApplicationCommandResult,
+  CanvasApplicationService,
+} from "@convax/canvas/application"
+import type { CanvasNode } from "@convax/canvas/core"
 import type { PluginCanvasImageCreateRequest, PluginCanvasImageCreateResult } from "../plugin-canvas-image-contracts"
 import { requireProjectResourceReference } from "@convax/project/canvas"
 import type { PluginPrincipal } from "../plugin-capability-contracts"
@@ -13,10 +17,9 @@ import {
   type InstalledWebPluginSummary,
 } from "../plugin-contracts"
 import { PluginHostApiError } from "../plugin-host-errors"
+import { projectPluginCanvasStructureDocument } from "./plugin-canvas-projection"
 
-interface PluginCanvasImageDocumentPort {
-  load(ref: { canvasId: string; scopeId: string }): Promise<{ document: CanvasDocument | null }>
-}
+type PluginCanvasImageApplicationPort = Pick<CanvasApplicationService, "query">
 
 interface PluginCanvasImageProjectPort {
   publishGenerated(input: {
@@ -52,7 +55,7 @@ interface PluginCanvasImagePluginPort {
 }
 
 export interface PluginCanvasImageServiceOptions {
-  documents: PluginCanvasImageDocumentPort
+  application: PluginCanvasImageApplicationPort
   plugins: PluginCanvasImagePluginPort
   projects: PluginCanvasImageProjectPort
   resources: PluginCanvasImageResourcePort
@@ -176,9 +179,6 @@ function validateRequest(request: PluginCanvasImageCreateRequest) {
   requireIdentifier(request.pluginVersion, "Plugin Canvas image Plugin version", versionPattern)
   requireIdentifier(request.ref?.canvasId, "Plugin Canvas image Canvas id")
   requireIdentifier(request.ref?.scopeId, "Plugin Canvas image Project id")
-  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-    throw new Error("Plugin Canvas image expected revision is invalid")
-  }
   return { bytes: requireDataUrl(request.dataUrl), name: requireName(request.name) }
 }
 
@@ -205,13 +205,13 @@ export class PluginCanvasImagePublicationPartialSuccessError extends Error {
 }
 
 export class PluginCanvasImageService {
-  readonly #documents: PluginCanvasImageDocumentPort
+  readonly #application: PluginCanvasImageApplicationPort
   readonly #plugins: PluginCanvasImagePluginPort
   readonly #projects: PluginCanvasImageProjectPort
   readonly #resources: PluginCanvasImageResourcePort
 
   constructor(options: PluginCanvasImageServiceOptions) {
-    this.#documents = options.documents
+    this.#application = options.application
     this.#plugins = options.plugins
     this.#projects = options.projects
     this.#resources = options.resources
@@ -235,10 +235,10 @@ export class PluginCanvasImageService {
     if (input.principal.runtime !== "web") {
       throw new Error("Plugin Canvas image Host API requires a Web principal")
     }
+    await input.checkpoint.checkpoint()
     return this.#create(
       {
         dataUrl: input.dataUrl,
-        expectedRevision: (await input.checkpoint.checkpoint()).documentRevision,
         name: input.name,
         operationId: input.operationId,
         ownerNodeId: input.binding.nodeId,
@@ -266,12 +266,8 @@ export class PluginCanvasImageService {
       undefined,
       principal,
     )
-    const snapshot = await this.#documents.load(request.ref)
-    if (!snapshot.document) throw new Error(`Canvas document was not found: ${request.ref.canvasId}`)
-    if (snapshot.document.revision !== request.expectedRevision) {
-      throw new Error("Canvas changed before the Plugin screenshot could be created")
-    }
-    const owner = snapshot.document.nodes.find((node) => node.id === request.ownerNodeId)
+    const snapshot = await this.#application.query(request.ref)
+    const owner = snapshot.projection.nodes.find((node) => node.id === request.ownerNodeId)
     if (!owner || !matchesWebPluginCanvasNode(identity.plugin, owner.data)) {
       throw new Error("Plugin screenshot owner node is no longer available")
     }
@@ -305,11 +301,8 @@ export class PluginCanvasImageService {
         identity.digest,
         principal,
       )
-      const current = await this.#documents.load(request.ref)
-      if (!current.document || current.document.revision !== request.expectedRevision) {
-        throw new Error("Canvas changed before the Plugin screenshot could be created")
-      }
-      const currentOwner = current.document.nodes.find((node) => node.id === request.ownerNodeId)
+      const current = await this.#application.query(request.ref)
+      const currentOwner = current.projection.nodes.find((node) => node.id === request.ownerNodeId)
       if (!currentOwner || !matchesWebPluginCanvasNode(currentIdentity.plugin, currentOwner.data)) {
         throw new Error("Plugin screenshot owner node is no longer available")
       }
@@ -320,8 +313,6 @@ export class PluginCanvasImageService {
         ...(checkpoint ? { beforeCommit: () => checkpoint.checkpoint().then(() => undefined) } : {}),
         canvasId: request.ref.canvasId,
         commandId: `plugin-image:${request.operationId}`,
-        conflictPolicy: "reject",
-        expectedRevision: request.expectedRevision,
         relation: {
           anchorNodeIds: [request.ownerNodeId],
           direction: "from-anchor",
@@ -335,7 +326,11 @@ export class PluginCanvasImageService {
       if (!createdNodeId || result.createdNodeIds.length !== 1) {
         throw new Error("Plugin screenshot did not create exactly one Canvas image node")
       }
-      return { createdNodeId, revision: result.document.revision }
+      return {
+        createdNodeId,
+        operationReceipt: structuredClone(result.operationReceipt),
+        projection: projectPluginCanvasStructureDocument(result.document),
+      }
     } catch (error) {
       throw new PluginCanvasImagePublicationPartialSuccessError(publishedPath, error)
     }

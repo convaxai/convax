@@ -13,6 +13,18 @@ import { PluginHostApiError } from "../plugin-host-errors"
 import { PluginHostApiService } from "./plugin-host-api-service"
 
 const digest = (character: string) => character.repeat(64)
+const catalogOperationReceipt = () =>
+  ({
+    actorId: "A".repeat(43),
+    baseFrontierDigest: digest("a"),
+    format: "convax.canvas-operation-receipt/2",
+    historyMaterialDigest: null,
+    intentDigest: digest("b"),
+    intentKind: "canvas.nodes.set-plugin-state/2",
+    operationId: "A".repeat(22),
+    resultEntities: [],
+    semanticRoot: true,
+  }) as never
 const allApiIds = pluginApiCatalog.apis.map(({ id }) => id)
 const capabilities = [
   "agent.prompt",
@@ -45,7 +57,6 @@ const toolPrincipal: PluginPrincipal = { ...principal, runtime: "tool" }
 
 const nodeContext: PluginHostNodeContext = {
   canvas: { id: "canvas-1", name: "Canvas" },
-  documentRevision: 4,
   node: {
     data: { kind: "file", label: "Plugin node" },
     id: "node-1",
@@ -72,7 +83,7 @@ function resolvedPrincipal(input: PluginPrincipal = principal): PluginHostResolv
     activeRevision: input.activeRevision,
     activeSetDigest: input.activeSetDigest,
     capabilities,
-    hostApi: { major: 2, optional: [], required: allApiIds },
+    hostApi: { major: 3, optional: [], required: allApiIds },
     manifestDigest: input.manifestDigest,
     pluginId: input.pluginId,
     pluginName: "Fixture Plugin",
@@ -82,14 +93,14 @@ function resolvedPrincipal(input: PluginPrincipal = principal): PluginHostResolv
 }
 
 function canvasClient(log: string[]): PluginCanvasCapabilityClient {
+  const pluginDocument = (canvasId: string) => ({ edges: [], id: canvasId, nodes: [], title: "Canvas" })
   return {
     async getDocument(ref, projection) {
       log.push("canvas.document.get")
       return {
-        document: { edges: [], id: ref.canvasId, nodes: [], revision: 4, title: "Canvas" },
+        document: pluginDocument(ref.canvasId),
         projection: projection ?? "geometry",
         ref,
-        storageVersion: "4",
       } as never
     },
     async listCanvases(projectId) {
@@ -102,13 +113,13 @@ function canvasClient(log: string[]): PluginCanvasCapabilityClient {
     },
     async queryNodes(ref) {
       log.push("canvas.nodes.query")
-      return { nodes: [], ref, revision: 4, storageVersion: "4" }
+      return { nodes: [], projection: pluginDocument(ref.canvasId), ref }
     },
     async subscribe(_ref, listener) {
       log.push("canvas.events.subscribe")
       listener({
+        operationReceipt: catalogOperationReceipt(),
         ref: { canvasId: "canvas-1", projectId: "project-1" },
-        revision: 5,
         source: "host",
       })
       return { close: () => log.push("subscription.close") }
@@ -119,9 +130,9 @@ function canvasClient(log: string[]): PluginCanvasCapabilityClient {
         affectedNodeIds: [],
         changed: true,
         createdNodeIds: [],
+        operationReceipt: catalogOperationReceipt(),
+        projection: pluginDocument(request.ref.canvasId),
         ref: request.ref,
-        revision: 5,
-        storageVersion: "5",
         warnings: [],
       }
     },
@@ -144,12 +155,22 @@ function operations(log: string[]): PluginHostNodeOperationsPort {
     async createCanvasImage({ checkpoint }) {
       await checkpoint.checkpoint()
       log.push("canvas.resource.image.create")
-      return { createdNodeId: "image-1", revision: 5 }
+      return {
+        createdNodeId: "image-1",
+        operationReceipt: catalogOperationReceipt(),
+        projection: { edges: [], id: "canvas-1", nodes: [], title: "Canvas" },
+      }
     },
     async executeGeneration({ checkpoint }) {
       await checkpoint.checkpoint()
       log.push("generation.execute")
-      return { createdNodeIds: ["generated-1"], revision: 5, toolId: "tool-1", warnings: [] }
+      return {
+        createdNodeIds: ["generated-1"],
+        operationReceipt: catalogOperationReceipt(),
+        projection: { edges: [], id: "canvas-1", nodes: [], title: "Canvas" },
+        toolId: "tool-1",
+        warnings: [],
+      }
     },
     async listGenerationTools() {
       log.push("generation.tools.list")
@@ -211,6 +232,11 @@ function operations(log: string[]): PluginHostNodeOperationsPort {
     async replaceNodeState({ checkpoint }) {
       await checkpoint.checkpoint()
       log.push("canvas.node.state.replace")
+      return {
+        operationReceipt: catalogOperationReceipt(),
+        projection: structuredClone(nodeContext.node),
+        updated: true as const,
+      }
     },
   }
 }
@@ -311,10 +337,9 @@ describe("PluginHostApiService", () => {
       {
         method: "canvas.transaction.execute",
         params: {
-          commands: [{ delta: { x: 1, y: 1 }, nodeIds: ["node-1"], type: "nodes.move" }],
-          expectedRevision: 4,
+          command: { delta: { x: 1, y: 1 }, nodeIds: ["node-1"], type: "nodes.move" },
+          commandId: "transaction-1",
           ref: { canvasId: "canvas-1", projectId: "project-1" },
-          transactionId: "transaction-1",
         },
       },
       {
@@ -336,13 +361,13 @@ describe("PluginHostApiService", () => {
             availability: expect.arrayContaining([
               {
                 available: true,
-                catalogVersion: "2.0.0",
-                contractSince: "2.0.0",
+                catalogVersion: "3.0.0",
+                contractSince: "3.0.0",
                 id: "generation.execute",
                 since: "1.0.0",
               },
             ]),
-            catalogVersion: "2.0.0",
+            catalogVersion: "3.0.0",
           },
         })
       }
@@ -400,6 +425,11 @@ describe("PluginHostApiService", () => {
           await continueMutation.promise
           await checkpoint.checkpoint()
           persisted += 1
+          return {
+            operationReceipt: catalogOperationReceipt(),
+            projection: structuredClone(nodeContext.node),
+            updated: true as const,
+          }
         },
       },
     })
@@ -432,7 +462,11 @@ describe("PluginHostApiService", () => {
           await continuePublication.promise
           await checkpoint.checkpoint()
           published += 1
-          return { createdNodeId: "image-1", revision: 5 }
+          return {
+            createdNodeId: "image-1",
+            operationReceipt: catalogOperationReceipt(),
+            projection: { edges: [], id: "canvas-1", nodes: [], title: "Canvas" },
+          }
         },
       },
     })

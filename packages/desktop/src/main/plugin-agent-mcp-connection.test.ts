@@ -14,7 +14,7 @@ const plugin = parseWebPluginManifest({
     },
   },
   description: "Remote Agent MCP",
-  hostApi: { major: 2, optional: [], required: [] },
+  hostApi: { major: 3, optional: [], required: [] },
   id: "video-editor",
   name: "Video Editor",
   schema: "convax.plugin/8",

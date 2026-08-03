@@ -14,7 +14,6 @@ describe("CanvasInspector", () => {
           nodeId: "frame",
           nodeKind: "image",
           rendererId: "image",
-          revision: 4,
           scopeId: "scope",
           sections: [
             {

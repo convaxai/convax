@@ -77,7 +77,7 @@ function generationPlugin(
       },
     },
     description: "External generation tools",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id,
     name: options.name ?? "Image Tools",
     runtime: {
@@ -96,7 +96,7 @@ function staticPlugin(): InstalledWebPluginSummary {
     contributes: { canvas: { renderer: { create: true } } },
     description: "Static renderer",
     entry: "index.html",
-    hostApi: { major: 2, optional: [], required: ["host.context.get"] },
+    hostApi: { major: 3, optional: [], required: ["host.context.get"] },
     id: "static-viewer",
     name: "Static Viewer",
     schema: webPluginManifestSchemaV8,
@@ -140,7 +140,7 @@ function declarativeGenerationPlugin(options: { recovery?: boolean; skill?: bool
       ...(options.skill ? { skills: [{ name: "declarative-workflow", path: "skills/declarative-workflow" }] } : {}),
     },
     description: "Explicit models and operations",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "declarative-tools",
     name: "Declarative Tools",
     runtime: { command: "declarative-tools-cli", type: "mcp-stdio" },
@@ -156,7 +156,7 @@ function servicePlugin(
     capabilities: [],
     contributes: { service: { actions } },
     description: "External account service",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "account-tools",
     name: "Account Tools",
     runtime: { command: "account-tool-cli", type: "mcp-stdio" },
@@ -175,7 +175,7 @@ function llmPlugin(): InstalledWebPluginSummary {
       },
     },
     description: "External LLM provider",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "xiaoyunque-generation",
     name: "XiaoYunque",
     runtime: { command: "convax-xiaoyunque-mcp", type: "mcp-stdio" },
@@ -1271,7 +1271,7 @@ describe("GenerationPluginRuntime", () => {
       ...declarativeGenerationPlugin(),
       capabilities: ["projects.read", "canvas.document.read"] as InstalledWebPluginSummary["capabilities"],
       hostApi: {
-        major: 2,
+        major: 3,
         optional: ["canvas.document.get", "canvas.nodes.query"],
         required: ["projects.list"],
       },
@@ -1279,10 +1279,9 @@ describe("GenerationPluginRuntime", () => {
     const capabilityClient: PluginCanvasCapabilityClient = {
       async getDocument(ref) {
         return {
-          document: { edges: [], id: ref.canvasId, nodes: [], revision: 1, title: "Main" },
+          document: { edges: [], id: ref.canvasId, nodes: [], title: "Main" },
           projection: "geometry",
           ref,
-          storageVersion: "v1",
         }
       },
       async listCanvases(projectId) {
@@ -1292,7 +1291,7 @@ describe("GenerationPluginRuntime", () => {
         return [{ available: true, id: "project-one", name: "One" }]
       },
       async queryNodes(ref) {
-        return { nodes: [], ref, revision: 1, storageVersion: "v1" }
+        return { nodes: [], projection: { edges: [], id: ref.canvasId, nodes: [], title: "Main" }, ref }
       },
       async subscribe() {
         return { close() {} }
@@ -1302,9 +1301,9 @@ describe("GenerationPluginRuntime", () => {
           affectedNodeIds: [],
           changed: false,
           createdNodeIds: [],
+          operationReceipt: {} as never,
+          projection: { edges: [], id: request.ref.canvasId, nodes: [], title: "Main" },
           ref: request.ref,
-          revision: request.expectedRevision,
-          storageVersion: "v1",
           warnings: [],
         }
       },
@@ -1363,7 +1362,7 @@ describe("GenerationPluginRuntime", () => {
       ...installed,
       capabilities: ["canvas.document.read"] as InstalledWebPluginSummary["capabilities"],
       hostApi: {
-        major: 2,
+        major: 3,
         optional: ["canvas.document.get", "canvas.nodes.query"],
         required: [],
       },

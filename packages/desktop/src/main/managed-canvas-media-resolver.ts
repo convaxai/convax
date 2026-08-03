@@ -1,6 +1,12 @@
 import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
-import type { CanvasDocumentClient, CanvasDocumentRef } from "@convax/canvas/application"
+import {
+  createCanvasNodeContentGuard,
+  matchesCanvasNodeContentGuard,
+  type CanvasApplicationService,
+  type CanvasDocumentRef,
+  type CanvasNodeContentGuard,
+} from "@convax/canvas/application"
 import type { ProjectFileInfo } from "@convax/project-files/contracts"
 import { getProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
 import type { ProjectManagedAssetStore } from "@convax/project/node"
@@ -8,7 +14,6 @@ import type { ProjectManagedAssetStore } from "@convax/project/node"
 export type ManagedCanvasMediaKind = "audio" | "image" | "video"
 
 export interface ManagedCanvasMediaRequest extends CanvasDocumentRef {
-  expectedRevision: number
   nodeIds: readonly string[]
 }
 
@@ -78,7 +83,7 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
   constructor(
     private readonly input: {
       assets: Pick<ProjectManagedAssetStore, "resolve">
-      documents: Pick<CanvasDocumentClient, "load">
+      application: Pick<CanvasApplicationService, "query">
       projects: ManagedCanvasMediaProjectPathResolver
     },
   ) {}
@@ -92,21 +97,14 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
     validateResolutionRequest(request)
     if (options.allowedKinds.size === 0) throw new Error("Managed Canvas media kinds are required")
 
-    const snapshot = await this.input.documents.load({ canvasId: request.canvasId, scopeId: request.scopeId })
+    const snapshot = await this.input.application.query({ canvasId: request.canvasId, scopeId: request.scopeId })
     throwIfAborted(signal)
-    const document = snapshot.document
-    if (!document) throw new ManagedCanvasMediaStaleError(`Canvas was not found: ${request.canvasId}`)
+    const document = snapshot.projection
     if (document.id !== request.canvasId) {
       throw new ManagedCanvasMediaStaleError(
         `Canvas document scope did not match the ${options.operationLabel} request`,
       )
     }
-    if (document.revision !== request.expectedRevision) {
-      throw new ManagedCanvasMediaStaleError(
-        `Canvas changed before ${options.operationLabel} (expected revision ${request.expectedRevision}, found ${document.revision})`,
-      )
-    }
-
     const nodeById = new Map(document.nodes.map((node) => [node.id, node]))
     const references = request.nodeIds.map((nodeId) => {
       const node = nodeById.get(nodeId)
@@ -123,7 +121,7 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
           `Canvas media must be stored in the active Project before ${options.operationLabel}: ${node.data.label}`,
         )
       }
-      return { kind, reference }
+      return { expectedTarget: createCanvasNodeContentGuard(node), kind, nodeId, reference }
     })
 
     const resolved: ResolvedManagedCanvasMedia[] = []
@@ -167,7 +165,25 @@ export class ManagedCanvasMediaResolver implements ManagedCanvasMediaResolutionP
         ),
       )
     }
+    await this.recheckCanvasTargets(request, references, options.operationLabel, signal)
     return resolved
+  }
+
+  private async recheckCanvasTargets(
+    request: ManagedCanvasMediaRequest,
+    expected: readonly { expectedTarget: CanvasNodeContentGuard; nodeId: string }[],
+    operationLabel: string,
+    signal?: AbortSignal,
+  ) {
+    throwIfAborted(signal)
+    const current = await this.input.application.query({ canvasId: request.canvasId, scopeId: request.scopeId })
+    throwIfAborted(signal)
+    for (const item of expected) {
+      const matches = current.projection.nodes.filter((node) => node.id === item.nodeId)
+      if (matches.length !== 1 || !matchesCanvasNodeContentGuard(matches[0]!, item.expectedTarget)) {
+        throw new ManagedCanvasMediaStaleError(`Canvas media changed while preparing ${operationLabel}: ${item.nodeId}`)
+      }
+    }
   }
 }
 
@@ -351,9 +367,6 @@ function validateResolutionRequest(request: ManagedCanvasMediaRequest) {
     !request.canvasId
   ) {
     throw new Error("A Project-scoped Canvas reference is required")
-  }
-  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-    throw new Error("Canvas expectedRevision must be a non-negative integer")
   }
   if (
     !Array.isArray(request.nodeIds) ||

@@ -67,7 +67,6 @@ export function createCanvasMediaSelectionDragSource(
       let response: { expiresAt: number; itemCount: number; ticket: string }
       try {
         response = await options.client.prepare({
-          expectedRevision: context.document.revision,
           nodeIds: [...context.selectedNodeIds],
           prepareId,
           ref: { canvasId: context.document.id, scopeId: options.scopeId },

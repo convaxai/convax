@@ -1,4 +1,5 @@
 import { setCanvasNodeGeometry } from "../commands"
+import { encodeRestrictedJcsV2, ordinarySha256V2 } from "@convax/collaboration"
 import { getCanvasNodePresentationSize, getCanvasNodeSize } from "../document"
 import type { CanvasDocument, CanvasPoint, CanvasSize } from "../types"
 
@@ -31,8 +32,8 @@ export interface CanvasLayoutEdgeSnapshot {
 /** Geometry-only input that is safe to compute outside a mounted Canvas view. */
 export interface CanvasLayoutSnapshot {
   edges: readonly CanvasLayoutEdgeSnapshot[]
+  geometryDigest: string
   nodes: readonly CanvasLayoutNodeSnapshot[]
-  revision: number
 }
 
 export interface CanvasLayoutPosition {
@@ -42,13 +43,13 @@ export interface CanvasLayoutPosition {
 }
 
 /**
- * A provider proposes positions against one immutable revision. The host still
+ * A provider proposes positions against one immutable geometry digest. The host still
  * validates and applies the plan as one Canvas mutation.
  */
 export interface CanvasLayoutPlan {
   positions: readonly CanvasLayoutPosition[]
   providerId: string
-  sourceRevision: number
+  sourceGeometryDigest: string
 }
 
 export interface CanvasLayoutProviderRequest<TOptions = unknown> {
@@ -129,16 +130,16 @@ const DIRECTED_ORDER_SWEEPS = 4
 const DIRECTED_ALIGN_ITERATIONS = 6
 
 export function createCanvasLayoutSnapshot(document: CanvasDocument): CanvasLayoutSnapshot {
-  return {
+  const geometry = {
     edges: document.edges.map((edge) => ({ source: edge.source, target: edge.target })),
     nodes: document.nodes.map((node) => ({
       id: node.id,
-      parentId: node.parentId,
+      ...(node.parentId === undefined ? {} : { parentId: node.parentId }),
       position: { ...node.position },
       size: getCanvasNodePresentationSize(node),
     })),
-    revision: document.revision,
   }
+  return { ...geometry, geometryDigest: ordinarySha256V2(encodeRestrictedJcsV2(geometry)) }
 }
 
 export const builtinCanvasLayoutProvider: CanvasLayoutProvider<CanvasAutoLayoutOptions> = {
@@ -172,7 +173,7 @@ export function computeBuiltinCanvasLayoutPlan(
     return {
       positions: layoutIds.map((id) => ({ nodeId: id, position: { ...nodeById.get(id)!.position } })),
       providerId: BUILTIN_LAYOUT_PROVIDER_ID,
-      sourceRevision: request.snapshot.revision,
+      sourceGeometryDigest: request.snapshot.geometryDigest,
     }
   }
 
@@ -227,15 +228,13 @@ export function computeBuiltinCanvasLayoutPlan(
         position: preserveEquivalentRoundedPoint(roundPoint(position), nodeById.get(nodeId)!.position),
       })),
     providerId: BUILTIN_LAYOUT_PROVIDER_ID,
-    sourceRevision: request.snapshot.revision,
+    sourceGeometryDigest: request.snapshot.geometryDigest,
   }
 }
 
 export function applyCanvasLayoutPlan(document: CanvasDocument, plan: CanvasLayoutPlan): CanvasDocument {
-  if (plan.sourceRevision !== document.revision) {
-    throw new CanvasLayoutValidationError(
-      `Canvas layout plan revision conflict: expected ${plan.sourceRevision}, received ${document.revision}`,
-    )
+  if (plan.sourceGeometryDigest !== createCanvasLayoutSnapshot(document).geometryDigest) {
+    throw new CanvasLayoutValidationError("Canvas layout geometry changed after the plan was computed")
   }
   if (!plan.providerId.trim()) throw new CanvasLayoutValidationError("Canvas layout provider id is required")
   const existing = new Set(document.nodes.map((node) => node.id))
@@ -384,8 +383,8 @@ function validateOptions(options: CanvasAutoLayoutOptions) {
 }
 
 function validateSnapshot(snapshot: CanvasLayoutSnapshot) {
-  if (!Number.isFinite(snapshot.revision) || snapshot.revision < 0) {
-    throw new CanvasLayoutValidationError("Canvas layout revision must be a finite non-negative number")
+  if (!/^[0-9a-f]{64}$/.test(snapshot.geometryDigest)) {
+    throw new CanvasLayoutValidationError("Canvas layout geometry digest is invalid")
   }
   const nodeById = new Map<string, CanvasLayoutNodeSnapshot>()
   for (const node of snapshot.nodes) {

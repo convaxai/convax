@@ -18,7 +18,7 @@ function executableManifest(id: string, version = "1.0.0") {
     capabilities: [],
     contributes: { service: { actions: ["authorize"] } },
     description: "test",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id,
     name: id,
     runtime: { command: `${id}-tool`, type: "mcp-stdio" },
@@ -100,12 +100,12 @@ describe("PluginSnapshotInstaller", () => {
         files: {
           "manifest.json": JSON.stringify({
             ...executableManifest("legacy-tools"),
-            hostApi: { major: 1, optional: [], required: [] },
+            hostApi: { major: 2, optional: [], required: [] },
           }),
         },
         sourceIdentity: digest("legacy source"),
       }),
-    ).rejects.toThrow("major must be 2")
+    ).rejects.toThrow("major must be 3")
 
     expect(await fs.readdir(path.join(root, "installations", "closures"))).toEqual([activeSnapshotDigest])
     const reopened = await new PluginInstallationRuntime(path.join(root, "installations")).readActive()

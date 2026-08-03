@@ -66,7 +66,6 @@ function createService(listTools: CanvasGenerateService["listTools"]): CanvasGen
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate: mock(async () => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: "tool.image",
       warnings: [],
     })),
@@ -527,16 +526,15 @@ describe("CanvasGenerationPanel", () => {
       container.querySelector("form")?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))
     })
 
-    expect(onSubmit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        documentId: "canvas-a",
-        expectedRevision: document.revision,
-        prompt: "Create a cover",
-        promptContextNodeIds: [],
-        scopeId: "project-a",
-        tool: expect.objectContaining({ id: "tool.image" }),
-      }),
-    )
+    const submission = onSubmit.mock.calls[0]?.[0]
+    expect(submission).toMatchObject({
+      documentId: "canvas-a",
+      prompt: "Create a cover",
+      promptContextNodeIds: [],
+      scopeId: "project-a",
+      tool: { id: "tool.image" },
+    })
+    expect(submission).not.toHaveProperty("expectedRevision")
     await act(async () => root?.unmount())
     root = undefined
     expect(acceptedOperationSignal?.aborted).toBe(false)

@@ -64,7 +64,7 @@ function installedPlugin(id = "example-plugin", version = "1.0.0", command = "ex
       },
     },
     description: "Example",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id,
     name: id,
     runtime: { command, type: "mcp-stdio" },

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import {
-  addCanvasNodes,
   alignCanvasNodes,
   canGroupCanvasNodes,
   connectCanvasNodes,
@@ -40,7 +39,6 @@ import {
   createTextNode as createCanvasTextNode,
   parseCanvasDocument,
 } from "./document"
-import { canvasHistoryReducer, createCanvasHistory } from "./history"
 import { createCanvasServices } from "./services"
 
 type TestTextNodeInput = Omit<Parameters<typeof createCanvasTextNode>[0], "metadata" | "resourceState"> & {
@@ -206,111 +204,6 @@ describe("canvas history", () => {
     expect(cloned.nodes[0]?.data.metadata).not.toBe(node.data.metadata)
   })
 
-  test("hydrates a persisted revision without turning it into an undoable edit", () => {
-    const initial = createCanvasDocument({ id: "canvas_hydrate" })
-    const hydrated = canvasHistoryReducer(createCanvasHistory(initial), {
-      type: "hydrate",
-      document: {
-        ...initial,
-        revision: 7,
-        nodes: [createTextNode({ id: "persisted", position: { x: 0, y: 0 }, text: "Saved" })],
-      },
-    })
-
-    expect(hydrated.document.revision).toBe(7)
-    expect(hydrated.document.nodes.map((node) => node.id)).toEqual(["persisted"])
-    expect(hydrated.past).toEqual([])
-    expect(hydrated.future).toEqual([])
-  })
-
-  test("keeps unchanged card identities when Main acknowledges a renderer connection", () => {
-    const source = createTextNode({ id: "source", position: { x: 0, y: 0 } })
-    const target = createTextNode({ id: "target", position: { x: 400, y: 0 } })
-    const initial = createCanvasDocument({ id: "canvas_acknowledge", nodes: [source, target] })
-    const connected = canvasHistoryReducer(createCanvasHistory(initial), {
-      document: connectCanvasNodes(initial, { id: "connection", source: source.id, target: target.id }),
-      type: "commit",
-    })
-
-    const authoritative = {
-      ...structuredClone(connected.document),
-      revision: connected.document.revision + 1,
-    }
-    const acknowledged = canvasHistoryReducer(connected, {
-      document: authoritative,
-      expectedRevision: connected.document.revision,
-      type: "acknowledge",
-    })
-
-    expect(acknowledged).not.toBe(connected)
-    expect(acknowledged.document).not.toBe(connected.document)
-    expect(acknowledged.document.revision).toBe(authoritative.revision)
-    expect(acknowledged.document.nodes).toBe(connected.document.nodes)
-    expect(acknowledged.document.nodes[0]).toBe(source)
-    expect(acknowledged.document.nodes[1]).toBe(target)
-    expect(acknowledged.document.edges).toBe(connected.document.edges)
-  })
-
-  test("reuses only unchanged cards when hydrating an authoritative mutation", () => {
-    const source = createTextNode({ id: "source", position: { x: 0, y: 0 }, text: "Source" })
-    const target = createTextNode({ id: "target", position: { x: 400, y: 0 }, text: "Before" })
-    const currentDocument = {
-      ...connectCanvasNodes(createCanvasDocument({ id: "canvas_reconcile", nodes: [source, target] }), {
-        id: "connection",
-        source: source.id,
-        target: target.id,
-      }),
-      revision: 1,
-    }
-    const current = canvasHistoryReducer(createCanvasHistory(currentDocument), {
-      document: { ...currentDocument, metadata: { ...currentDocument.metadata, description: "Local edit" } },
-      type: "commit",
-    })
-    const authoritativeTarget = {
-      ...structuredClone(target),
-      data: { ...structuredClone(target.data), resourceState: { status: "ready" as const, text: "After" } },
-    }
-    const authoritative = {
-      ...structuredClone(current.document),
-      nodes: [structuredClone(source), authoritativeTarget],
-      revision: current.document.revision + 1,
-    }
-
-    const hydrated = canvasHistoryReducer(current, { document: authoritative, type: "hydrate" })
-
-    expect(hydrated.document.revision).toBe(authoritative.revision)
-    expect(hydrated.document.nodes[0]).toBe(current.document.nodes[0])
-    expect(hydrated.document.nodes[1]).toBe(authoritativeTarget)
-    expect(hydrated.document.nodes[1]?.data).toMatchObject({ resourceState: { text: "After" } })
-    expect(hydrated.document.edges[0]).toBe(current.document.edges[0])
-    expect(hydrated.past).toEqual([])
-    expect(hydrated.future).toEqual([])
-  })
-
-  test("does not reuse card identities when hydrating another Canvas document", () => {
-    const currentNode = createTextNode({ id: "shared-node", position: { x: 0, y: 0 }, text: "Current" })
-    const currentTarget = createTextNode({ id: "shared-target", position: { x: 400, y: 0 }, text: "Target" })
-    const currentDocument = connectCanvasNodes(
-      createCanvasDocument({ id: "canvas_current", nodes: [currentNode, currentTarget], title: "Current" }),
-      { id: "current-edge", source: currentNode.id, target: currentTarget.id },
-    )
-    const authoritative = {
-      ...structuredClone(currentDocument),
-      id: "canvas_next",
-      metadata: { title: "Next" },
-    }
-
-    const hydrated = canvasHistoryReducer(createCanvasHistory(currentDocument), {
-      document: authoritative,
-      type: "hydrate",
-    })
-
-    expect(hydrated.document).toBe(authoritative)
-    expect(hydrated.document.nodes).not.toBe(currentDocument.nodes)
-    expect(hydrated.document.nodes[0]).not.toBe(currentDocument.nodes[0])
-    expect(hydrated.document.edges).not.toBe(currentDocument.edges)
-    expect(hydrated.document.metadata).not.toBe(currentDocument.metadata)
-  })
 
   test("keeps file and agent as internal roles while hiding generic and agent insertion", () => {
     const registry = createDefaultCanvasNodeRegistry()
@@ -460,82 +353,6 @@ describe("canvas history", () => {
       }).data,
     ).toMatchObject({ label: "Video", resourceState: { status: "stale" } })
   })
-  test("undoes and redoes committed documents", () => {
-    const initial = createCanvasDocument({ id: "canvas_test" })
-    const node = createTextNode({ id: "node_a", position: { x: 20, y: 30 } })
-    const committed = canvasHistoryReducer(createCanvasHistory(initial), {
-      type: "commit",
-      document: addCanvasNodes(initial, [node]).document,
-    })
-
-    expect(committed.document.revision).toBe(1)
-    expect(committed.document.nodes).toHaveLength(1)
-    const undone = canvasHistoryReducer(committed, { type: "undo" })
-    expect(undone.document.revision).toBe(2)
-    expect(undone.document.nodes).toHaveLength(0)
-    const redone = canvasHistoryReducer(undone, { type: "redo" })
-    expect(redone.document.revision).toBe(3)
-    expect(redone.document.nodes.map((item) => item.id)).toEqual(["node_a"])
-  })
-
-  test("records a gesture as one history entry", () => {
-    const node = createTextNode({ id: "node_a", position: { x: 0, y: 0 } })
-    const initial = createCanvasDocument({ id: "canvas_test", nodes: [node] })
-    const started = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
-    const movedOnce = canvasHistoryReducer(started, {
-      type: "replace",
-      document: { ...initial, nodes: [{ ...node, position: { x: 20, y: 10 } }] },
-    })
-    const movedTwice = canvasHistoryReducer(movedOnce, {
-      type: "replace",
-      document: { ...initial, nodes: [{ ...node, position: { x: 80, y: 40 } }] },
-    })
-    const finished = canvasHistoryReducer(movedTwice, { type: "end-gesture" })
-
-    expect(finished.past).toHaveLength(1)
-    expect(finished.document.nodes[0].position).toEqual({ x: 80, y: 40 })
-    expect(canvasHistoryReducer(finished, { type: "undo" }).document.nodes[0].position).toEqual({ x: 0, y: 0 })
-  })
-
-  test("persists committed gesture previews while keeping one undo entry", () => {
-    const initial = createCanvasDocument({ id: "canvas_typing" })
-    const first = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
-    const withNode = addCanvasNodes(first.document, [
-      createTextNode({ id: "typed", position: { x: 0, y: 0 } }),
-    ]).document
-    const previewed = canvasHistoryReducer(first, { type: "commit", document: withNode })
-    expect(previewed.document.revision).toBe(1)
-    expect(previewed.past).toHaveLength(0)
-    const finished = canvasHistoryReducer(previewed, { type: "end-gesture" })
-    expect(finished.past).toHaveLength(1)
-    expect(canvasHistoryReducer(finished, { type: "undo" }).document.nodes).toEqual([])
-  })
-
-  test("commits keyboard-style position changes outside a gesture", () => {
-    const initial = createCanvasDocument({ nodes: [createTextNode({ id: "a", position: { x: 0, y: 0 }, text: "A" })] })
-    const committed = canvasHistoryReducer(createCanvasHistory(initial), {
-      type: "preview-or-commit-update",
-      update: (document) => ({
-        ...document,
-        nodes: document.nodes.map((node) => (node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node)),
-      }),
-    })
-    expect(committed.document.revision).toBe(1)
-    expect(committed.past).toHaveLength(1)
-
-    let previewed = canvasHistoryReducer(createCanvasHistory(initial), { type: "begin-gesture" })
-    previewed = canvasHistoryReducer(previewed, {
-      type: "preview-or-commit-update",
-      update: (document) => ({
-        ...document,
-        nodes: document.nodes.map((node) => (node.id === "a" ? { ...node, position: { x: 8, y: 0 } } : node)),
-      }),
-    })
-    expect(previewed.document.revision).toBe(0)
-    previewed = canvasHistoryReducer(previewed, { type: "end-gesture" })
-    expect(previewed.document.revision).toBe(1)
-    expect(previewed.past).toHaveLength(1)
-  })
 })
 
 describe("canvas connections", () => {
@@ -585,22 +402,6 @@ describe("canvas connections", () => {
 })
 
 describe("canvas commands", () => {
-  test("applies async-style updates to the latest history document", () => {
-    const initial = createCanvasDocument({ id: "canvas_async" })
-    const concurrent = createTextNode({ id: "concurrent", position: { x: 0, y: 0 } })
-    const uploaded = createTextNode({ id: "uploaded", position: { x: 20, y: 20 } })
-    const afterEdit = canvasHistoryReducer(createCanvasHistory(initial), {
-      type: "commit",
-      document: addCanvasNodes(initial, [concurrent]).document,
-    })
-    const afterUpload = canvasHistoryReducer(afterEdit, {
-      type: "commit-update",
-      update: (document) => addCanvasNodes(document, [uploaded]).document,
-    })
-
-    expect(afterUpload.document.nodes.map((node) => node.id)).toEqual(["concurrent", "uploaded"])
-  })
-
   test("canonicalizes every directed connection to right-output and left-input ports", () => {
     const source = createTextNode({ id: "source", position: { x: 0, y: 0 } })
     const target = createTextNode({ id: "target", position: { x: 0, y: 400 } })

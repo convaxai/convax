@@ -95,7 +95,7 @@ const text = createTextNode({
 function selection(nodeIds: string[], edgeIds: string[] = []) {
   const document = createCanvasDocument({ id: "canvas", title: "Canvas" })
   return createCanvasSelectionActionContext(
-    { ...document, nodes: [managedImage, managedVideo, projectFileVideo, remoteVideo, text], revision: 7 },
+    { ...document, nodes: [managedImage, managedVideo, projectFileVideo, remoteVideo, text] },
     nodeIds,
     edgeIds,
     signal,
@@ -158,7 +158,7 @@ function operationPlugin(withSkill = false): InstalledWebPluginSummary {
       ...(withSkill ? { skills: [{ name: "media-workflow", path: "skills/media-workflow" }] } : {}),
     },
     description: "A replaceable media operation Plugin.",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "acme-media",
     name: "Acme Media",
     runtime: { command: "acme-media-mcp", type: "mcp-stdio" },
@@ -251,7 +251,7 @@ function immediateImageOperationPlugin(): InstalledWebPluginSummary {
       },
     },
     description: "Local cutout",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "cutout-studio",
     name: "Cutout Studio",
     runtime: { command: "convax-cutout-mcp", type: "mcp-stdio" },
@@ -370,7 +370,6 @@ describe("manifest-driven media operation requests", () => {
       createMediaOperationReturnRequest({ action, canvasId: "canvas", context, projectId: "project" }, "operation-1"),
     ).toMatchObject({
       expectedOutputCount: 1,
-      expectedRevision: 7,
       operationId: "operation-1",
       output: "text",
       prompt: "Import the selected media.",

@@ -32,7 +32,7 @@ export interface CanvasUploadMutationHost
   extends Pick<CanvasResourceClient, "add" | "createLocalFileToken"> {
   createCommandId(): string
   createSourceId(): string
-  flushAuthoritativeCanvas(): Promise<Pick<CanvasDocument, "id" | "revision"> | undefined>
+  flushAuthoritativeCanvas(): Promise<Pick<CanvasDocument, "id"> | undefined>
 }
 
 export function resolveCanvasUploadItems(request: CanvasUploadRequest, host: CanvasUploadHost): CanvasUploadSources {
@@ -83,7 +83,6 @@ export async function addCanvasUploadResources(
     anchor: request.anchor,
     canvasId: request.canvasId,
     commandId: host.createCommandId(),
-    expectedRevision: authoritativeDocument.revision,
     localFiles,
     ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
     projectId: request.projectId,

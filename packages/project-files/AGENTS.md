@@ -4,7 +4,14 @@ This package owns the renderer-safe, Project-scoped file capability.
 
 ## Allowed
 
-- Contracts using `projectId + normalized project-relative path`.
+- Opaque `ProjectEntryId`, `ProjectFileId`, `ProjectDirectoryId`, and
+  `ProjectVersionId` (`pv_<64 lowercase hex>`) types plus their strict codecs.
+  Allocation belongs to the Project collaboration application service; callers
+  never choose these ids.
+- Contracts using stable entry identity plus a normalized project-relative path
+  projection/hint.
+- Exact source/target relocation receipts for move and rename; callers must never
+  infer correspondence from a basename or array search.
 - Directory listings, expansion/loading state, preview/selection state, file CRUD,
   import/copy/move/open/reveal clients and controller behavior.
 - Serializable drag payloads that retain Project scope.
@@ -17,6 +24,8 @@ This package owns the renderer-safe, Project-scoped file capability.
 - Node `fs`/`path`, native absolute paths, DOM/React state, or browser persistence.
 - Exposing `.convax` as ordinary user content or permitting general mutation of
   private Project metadata.
+- Allocating Project entry/version identities, resolving global URIs, or treating
+  a path as durable identity.
 - Adding file methods back to `ProjectController` or new production use of the
   deprecated aggregate `ProjectClient` compatibility type.
 

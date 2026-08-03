@@ -10,26 +10,30 @@ interface Listener {
   listener(event: PluginCanvasChangeEvent): void
 }
 
-const maximumTrackedCanvases = 10_000
+const maximumTrackedOperations = 10_000
 
 /**
- * Process-local invalidation bus. It carries identities and revisions only;
+ * Process-local invalidation bus. It carries identities and bounded operation receipts only;
  * document bodies and resource bytes are always re-read through capability
  * services with fresh authorization checks.
  */
 export class CanvasDocumentChangeBus implements PluginCanvasChangeBus {
   private readonly allListeners = new Set<(event: PluginCanvasChangeEvent) => void>()
-  private readonly latestRevisionByCanvas = new Map<string, number>()
+  private readonly seenOperations = new Set<string>()
   private readonly listeners = new Set<Listener>()
 
   publish(event: PluginCanvasChangeEvent) {
     const safeEvent = structuredClone(event)
-    const key = JSON.stringify([safeEvent.ref.projectId, safeEvent.ref.canvasId])
-    const latest = this.latestRevisionByCanvas.get(key)
-    if (latest !== undefined && latest >= safeEvent.revision) return
-    this.latestRevisionByCanvas.set(key, safeEvent.revision)
-    if (this.latestRevisionByCanvas.size > maximumTrackedCanvases) {
-      this.latestRevisionByCanvas.delete(this.latestRevisionByCanvas.keys().next().value ?? "")
+    const key = JSON.stringify([
+      safeEvent.ref.projectId,
+      safeEvent.ref.canvasId,
+      safeEvent.operationReceipt.actorId,
+      safeEvent.operationReceipt.operationId,
+    ])
+    if (this.seenOperations.has(key)) return
+    this.seenOperations.add(key)
+    if (this.seenOperations.size > maximumTrackedOperations) {
+      this.seenOperations.delete(this.seenOperations.values().next().value ?? "")
     }
     for (const item of [...this.listeners]) {
       if (item.filter.projectId !== safeEvent.ref.projectId) continue

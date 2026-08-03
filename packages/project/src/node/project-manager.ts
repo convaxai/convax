@@ -9,6 +9,7 @@ import type {
   ProjectFileContents,
   ProjectFileInfo,
   ProjectMutationResult,
+  ProjectRecoveryStatusV1,
   ProjectTextFileContents,
   ProjectTextPreviewContents,
 } from "../contracts"
@@ -72,6 +73,7 @@ import {
   readStableProjectUtf8File,
   sameProjectFileSnapshot,
 } from "./stable-project-file"
+import { inspectPortableProjectCutover, PortableProjectResetError } from "./collaboration/portable-cutover"
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
@@ -245,7 +247,11 @@ export class NodeProjectManager
     return Promise.all(
       projects.map(async (project) => {
         const safe = await isSafeProjectRoot(project.rootPath)
-        return { ...toProjectRecord(project), missing: !safe }
+        return {
+          ...toProjectRecord(project),
+          missing: !safe,
+          ...(safe ? await projectRecoveryProjection(project.rootPath) : {}),
+        }
       }),
     ).then((records) => records.sort(compareProjects))
   }
@@ -257,6 +263,7 @@ export class NodeProjectManager
       if (!(await isSafeProjectRoot(current.rootPath))) {
         throw new Error(`Project folder is unavailable: ${current.rootPath}`)
       }
+      await assertPortableProjectOpenable(current.rootPath)
       const latestTimestamp = projects.reduce(
         (latest, project) => Math.max(latest, project.lastOpenedAt),
         0,
@@ -279,6 +286,7 @@ export class NodeProjectManager
     if (!stat.isDirectory()) throw new Error(`Project root is not a directory: ${rootPath}`)
     const registeredProjects = await this.readStableRegistry()
     const existingByRoot = registeredProjects.find((project) => sameNativePath(project.rootPath, realRoot))
+    const recovery = await projectRecoveryProjection(realRoot)
     const manifest = await this.ensureProjectManifest(realRoot, existingByRoot?.id ?? projectIdForPath(realRoot))
     const id = manifest.projectId
     const existingById = registeredProjects.find((project) => project.id === id)
@@ -289,7 +297,7 @@ export class NodeProjectManager
       }
       rebindFromRoot = existingById.rootPath
     }
-    return this.mutateRegistry((projects) => {
+    const registered = await this.mutateRegistry((projects) => {
       const conflicting = projects.find((project) => project.id === id && !sameNativePath(project.rootPath, realRoot))
       if (conflicting && (!rebindFromRoot || !sameNativePath(conflicting.rootPath, rebindFromRoot))) {
         throw new Error(`Project id is already bound to another folder: ${conflicting.rootPath}`)
@@ -330,6 +338,7 @@ export class NodeProjectManager
         value: toProjectRecord(project),
       }
     })
+    return { ...registered, ...recovery }
   }
 
   createProject(input: { name: string; parentPath: string }) {
@@ -459,7 +468,10 @@ export class NodeProjectManager
     const targetPath = joinRelative(parentOf(sourcePath), name)
     assertUserMutationPath(targetPath)
     const { absolutePath: target } = await this.resolveOutput(input.projectId, targetPath)
-    if (sourcePath === targetPath) return mutation("rename", input.projectId, [sourcePath], [sourcePath], [targetPath])
+    if (sourcePath === targetPath) return {
+      ...mutation("rename", input.projectId, [sourcePath], [sourcePath], [targetPath]),
+      relocations: [{ sourcePath, targetPath }],
+    }
     const caseOnlyRename = sourcePath.toLowerCase() === targetPath.toLowerCase()
     const targetStat = await fs.lstat(target).catch((error: unknown) => {
       if (isNodeError(error) && error.code === "ENOENT") return null
@@ -474,13 +486,19 @@ export class NodeProjectManager
         await fs.rename(temporary, source)
         throw error
       }
-      return mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath])
+      return {
+        ...mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath]),
+        relocations: [{ sourcePath, targetPath }],
+      }
     }
     if (targetStat || (await existsPortable(target, this.caseInsensitivePaths))) {
       throw new Error(`Project entry already exists: ${targetPath}`)
     }
     await fs.rename(source, target)
-    return mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath])
+    return {
+      ...mutation("rename", input.projectId, [sourcePath, targetPath], [sourcePath], [targetPath]),
+      relocations: [{ sourcePath, targetPath }],
+    }
   }
 
   moveEntries(input: { destinationPath?: string; paths: string[]; projectId: string }) {
@@ -525,7 +543,10 @@ export class NodeProjectManager
     }
     for (const move of moves) await movePath(move.source, move.target)
     const targetPaths = moves.map((move) => move.targetPath)
-    return mutation("move", input.projectId, [...sourcePaths, ...targetPaths], sourcePaths, targetPaths)
+    return {
+      ...mutation("move", input.projectId, [...sourcePaths, ...targetPaths], sourcePaths, targetPaths),
+      relocations: moves.map(({ sourcePath, targetPath }) => Object.freeze({ sourcePath, targetPath })),
+    }
   }
 
   copyEntries(input: { destinationPath?: string; paths: string[]; projectId: string }) {
@@ -1074,6 +1095,33 @@ export class NodeProjectManager
       `${JSON.stringify({ projects, version: 1 } satisfies ProjectRegistryFile, null, 2)}\n`,
     )
   }
+}
+
+async function assertPortableProjectOpenable(projectRoot: string) {
+  const cutover = await inspectPortableProjectCutover(projectRoot)
+  if (cutover.status === "unsupported-portable-project-version") throw cutover.error
+  if (cutover.status === "recovery-required") {
+    throw new PortableProjectResetError(
+      "RECOVERY_REQUIRED",
+      "Project has an incomplete collaboration reset and cannot be opened",
+    )
+  }
+}
+
+async function projectRecoveryProjection(
+  projectRoot: string,
+): Promise<Readonly<{ recovery: ProjectRecoveryStatusV1 }> | Record<string, never>> {
+  const cutover = await inspectPortableProjectCutover(projectRoot)
+  if (cutover.status === "current") return Object.freeze({})
+  if (cutover.status === "recovery-required") {
+    return Object.freeze({ recovery: Object.freeze({ status: "recovery-required" as const }) })
+  }
+  return Object.freeze({
+    recovery: Object.freeze({
+      legacyPaths: Object.freeze([...cutover.error.legacyPaths]),
+      status: "unsupported-portable-project-version" as const,
+    }),
+  })
 }
 
 async function ensureSafeDirectory(directory: string, description: string) {

@@ -5,7 +5,6 @@ export const pluginMaterializationIpcChannels = {
 export interface PluginMaterializationInput {
   actionId: string
   canvasId: string
-  expectedRevision: number
   pluginId: string
   pluginVersion: string
   projectId: string
@@ -14,9 +13,12 @@ export interface PluginMaterializationInput {
 
 export interface PluginMaterializationResult {
   createdNodeId: string
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2
+  projection: CanvasDocument
 }
 
 export interface PluginMaterializationRendererClient {
   materialize(input: PluginMaterializationInput): Promise<PluginMaterializationResult>
 }
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { CanvasDocument } from "@convax/canvas/core"

@@ -4,9 +4,15 @@ Canvas owns document and editor semantics independently of Project and Agent.
 
 ## Layers
 
-- `core`: pure schema, history and document primitives; no host I/O.
-- `application`: business/primitive commands, queries, revision/conflict handling,
-  resource orchestration, and repository ports.
+- `core`: pure schema and document primitives; no host I/O and no global shard
+  renderer history.
+- `collaboration`: exact v2 eleven-root Yjs schema, canonical projection, closed `/2`
+  typed intents, pure reducer/write-evidence validation, and owner ports into the
+  generic replica/candidate kernel.
+- `application`: business/primitive commands, queries, semantic guards, resource
+  orchestration, and host-neutral document/view ports. Its `application/errors`
+  export is the lightweight browser-safe error contract for sandbox adapters that
+  must not load the Yjs-bearing collaboration entry.
 - `view`: explicitly scoped selection, reveal, viewport, animation and notification.
 - root/components: editor, registries, plugins and React rendering.
 
@@ -20,20 +26,22 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Add product behavior as a business operation first. UI handlers and Agent adapters
   call the same operation; do not duplicate sizing, placement, relationship, save, or
   validation logic at either edge.
-- Primitive commands are explicit low-level operations and still pass through actor,
-  command-id, revision and persistence rules.
-- Ordered application transactions execute against one starting revision, advance
-  the document at most once, and persist with one repository CAS. Transaction
-  idempotency is owned here, not by Desktop transports. Reject empty transport
-  transactions and bound retained replay results by aggregate document size rather
-  than only by receipt count.
+- Renderer and public callers submit frozen, bounded typed intents to the owning
+  Main application service. They must not transport `CanvasDocument` patches,
+  expected revisions, raw Yjs updates, caller-selected identities, or private
+  application commands. Missing intent mappings fail closed until the exact v2
+  owner reducer owns them.
+- `CanvasDocument` has no global revision counter. Internal durable storage tokens,
+  accepted causal frontiers, entity incarnation guards, content digests,
+  and operation receipts are separate concepts and must not leak back into a global
+  renderer version.
 - Whole-Canvas tidy uses the Canvas-owned size-aware directed-cluster business
   operation, including component packing, cycles, groups and isolates. Directed
   strategies compact otherwise unrelated nodes into a deterministic shelf;
   conservative component packing may explicitly preserve their mental map. Primitive
   grid/horizontal/vertical layout requires explicit node ids. Host or Plugin layout
-  engines may only return a host-neutral revision-bound geometry plan; Canvas
-  validates and applies it atomically.
+  engines may only return a host-neutral geometry-digest-bound plan; Canvas validates
+  it and submits one bounded typed intent atomically.
 - View effects are valid capabilities but cannot turn a committed domain mutation
   into a failed mutation.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
@@ -96,10 +104,32 @@ Canvas owns document and editor semantics independently of Project and Agent.
   packages, permissions, iframe transport, Project/Agent calls and package storage
   belong to the host. A Web Plugin renderer still produces a `file` node and must
   mutate the document through the same editor/application APIs as built-in UI.
-- Main's application/repository is the sole authoritative document writer. The
-  editor may keep gesture state and an optimistic projection, but persistence emits
-  revision-bound element commands and accepts Main's committed result. An
-  authoritative reload never saves the stale renderer projection first.
+- Main's `replicaDoc` is the sole local durable Canvas authority. Every command
+  clones it into one isolated `candidateDoc`, applies one closed typed intent, and
+  can affect authority only through the exact final replica-signed frame after the
+  durable head barrier. `initialDocument` and renderer state are immutable/read-only
+  projections, never editable or persistent fallbacks.
+- Undo/redo is session-only selection in the collaboration-owned
+  `SessionUndoCoordinatorV2`; Canvas materializes a fresh closed semantic
+  inverse/forward intent against the latest `replicaDoc`. Remote/bootstrap/recovery
+  frames and projection rebuilds never enter or reorder the stack, and raw
+  Y.UndoManager updates never cross the authoritative boundary.
+- React Flow selection, hover, measured size, camera, drag preview, menus and
+  Awareness are transient Canvas-owned view state. `onNodesChange`/`onEdgesChange`
+  must not mutate the canonical projection. Drag stop resolves entity incarnations
+  and submits exactly one `canvas.nodes.set-geometry/2` typed intent for the complete
+  gesture. Desktop must not own a competing React Flow document store, gesture
+  reducer, incarnation resolver, or view-command policy.
+- Canvas identity is the Project-derived `cv_<64 lowercase hex>` carried
+  byte-identically by route, shared `DocumentScopeV2`, and Canvas genesis. The
+  Project-owned route `shardEpoch` is outside Canvas content and Canvas never creates
+  a `docEpoch`.
+- This package consumes only the selector-installed R5 Canvas artifact and the
+  Kernel-created runtime admitted from the matching four-artifact protocol bundle.
+  The Canvas owner schema digest is the bundle's domain-separated artifact digest,
+  never the annex file SHA. Missing selector members, digest mismatch, or a
+  cross-artifact runtime fails closed; revision-4 drafts and live implementation
+  never provide fallback semantics.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

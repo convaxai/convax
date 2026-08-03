@@ -12,6 +12,7 @@ import {
   type CanvasGenerationToolSummary,
   type CanvasNode,
 } from "@convax/canvas"
+import { createCanvasGenerationTargetGuard } from "@convax/canvas/application"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { describe, expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
@@ -97,7 +98,6 @@ function assistantRequest(
   return {
     document: {
       ...createCanvasDocument({ id: "canvas-one", nodes }),
-      revision: 7,
     },
     ...(output ? { generation: { output } } : {}),
     mentionedNodeIds,
@@ -310,14 +310,17 @@ describe("Canvas card generation request", () => {
         selectedNodeIds: ["image-card"],
         source: "canvas-card",
       },
-      expectedRevision: 7,
       expectedOutputCount: 1,
       operationId: "operation-one",
       output: "image",
       prompt: "Turn this into a poster",
       referenceConstraint: { ownerNodeId: "image-card", type: "direct-incoming" },
       references: [{ nodeId: "image-card", role: "reference_image" }],
-      resultMode: { nodeId: "image-card", type: "replace-node" },
+      resultMode: {
+        expectedTarget: createCanvasGenerationTargetGuard(node),
+        nodeId: "image-card",
+        type: "replace-node",
+      },
       signal: controller.signal,
       toolId: "creative-tools/image.generate",
       toolInput: { aspect_ratio: "16:9", steps: 24 },
@@ -530,7 +533,11 @@ describe("Canvas card generation request", () => {
       output: "image",
       prompt: "A small rabbit",
       references: [],
-      resultMode: { nodeId: "image-card", type: "replace-node" },
+      resultMode: {
+        expectedTarget: createCanvasGenerationTargetGuard(node),
+        nodeId: "image-card",
+        type: "replace-node",
+      },
     })
   })
 
@@ -675,11 +682,14 @@ describe("Canvas card generation lifecycle", () => {
     return {
       anchor: { x: 0, y: 0 },
       context: { documentId: "canvas-one", selectedNodeIds: ["image-card"], source: "canvas-card" },
-      expectedRevision: 7,
       output: "image",
       prompt: "A small rabbit",
       references: [],
-      resultMode: { nodeId: "image-card", type: "replace-node" },
+      resultMode: {
+        expectedTarget: createCanvasGenerationTargetGuard(imageNode()),
+        nodeId: "image-card",
+        type: "replace-node",
+      },
       signal,
       toolId: "creative-tools/image.generate",
     }
@@ -698,7 +708,6 @@ describe("Canvas card generation lifecycle", () => {
 
     resolveGeneration({
       createdNodeIds: ["generated"],
-      revision: 8,
       toolId: "creative-tools/image.generate",
       warnings: [],
     })
@@ -785,7 +794,6 @@ describe("Canvas card generation lifecycle", () => {
 
       resolveGeneration({
         createdNodeIds: ["generated"],
-        revision: 8,
         toolId: "creative-tools/image.generate",
         warnings: [],
       })
@@ -898,7 +906,7 @@ describe("Canvas card generation lifecycle", () => {
         request={assistantRequest(owner)}
         service={{
           describeTool: async (toolId) => ({ fields: [], toolId }),
-          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          generate: async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }),
           listTools: async () => [],
         }}
       />,
@@ -919,7 +927,7 @@ describe("Canvas card generation lifecycle", () => {
         }}
         service={{
           describeTool: async (toolId) => ({ fields: [], toolId }),
-          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          generate: async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }),
           listTools: async () => [],
         }}
       />,
@@ -931,7 +939,7 @@ describe("Canvas card generation lifecycle", () => {
   test("keeps image generation compact while preserving the larger Agent conversation mode", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
-      generate: async () => ({ createdNodeIds: ["generated"], revision: 8, toolId: "tools/image", warnings: [] }),
+      generate: async () => ({ createdNodeIds: ["generated"], toolId: "tools/image", warnings: [] }),
       listTools: async () => [],
     }
     const owner = imageNode()
@@ -999,7 +1007,7 @@ describe("Canvas card generation lifecycle", () => {
         request={request}
         service={{
           describeTool: async (toolId) => ({ fields: [], toolId }),
-          generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+          generate: async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }),
           listTools: async () => [],
         }}
       />,
@@ -1014,7 +1022,7 @@ describe("Canvas card generation lifecycle", () => {
   test("renders only Agent when the request has no generation capability", () => {
     const service: CanvasGenerateService = {
       describeTool: async (toolId) => ({ fields: [], toolId }),
-      generate: async () => ({ createdNodeIds: [], revision: 8, toolId: "tools/image", warnings: [] }),
+      generate: async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }),
       listTools: async () => [],
     }
     const nodes: CanvasNode[] = [

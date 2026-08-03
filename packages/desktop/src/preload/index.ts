@@ -1,5 +1,5 @@
 import type { AgentClient } from "@convax/agent-runtime"
-import type { ProjectLifecycleClient } from "@convax/project"
+import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasChangeEvent, ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { contextBridge, ipcRenderer, webUtils } from "electron"
@@ -21,6 +21,8 @@ import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
+import { createCanvasSessionPreloadClientV2 } from "./canvas-session-client"
+import { createProjectTeamCollaborationPreloadClientV2 } from "./project-team-collaboration-client"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -37,6 +39,12 @@ const channels = {
   openProject: "project:open",
   renameProject: "project:rename",
   touchProject: "project:touch",
+} as const
+
+const projectRecoveryChannels = {
+  confirmReset: "project:recovery-confirm-reset",
+  inspectProject: "project:recovery-inspect",
+  previewReset: "project:recovery-preview-reset",
 } as const
 
 const projectFilesChannels = {
@@ -304,6 +312,13 @@ const projectClient = {
   touchProject: (input) => ipcRenderer.invoke(channels.touchProject, input),
 } satisfies ProjectLifecycleClient
 
+const projectRecoveryClient = {
+  confirmReset: (input) =>
+    ipcRenderer.invoke(projectRecoveryChannels.confirmReset, { projectId: input.projectId, token: input.token }),
+  inspectProject: (projectId) => ipcRenderer.invoke(projectRecoveryChannels.inspectProject, { projectId }),
+  previewReset: (projectId) => ipcRenderer.invoke(projectRecoveryChannels.previewReset, { projectId }),
+} satisfies ProjectCollaborationRecoveryClient
+
 const projectFilesClient = {
   copyEntries: (input) => ipcRenderer.invoke(projectFilesChannels.copyEntries, input),
   createEntry: (input) => ipcRenderer.invoke(projectFilesChannels.createEntry, input),
@@ -347,7 +362,13 @@ const projectCanvasClient = {
 const projectsClient = {
   ...projectClient,
   canvases: projectCanvasClient,
-} satisfies ProjectLifecycleClient & { canvases: ProjectCanvasClient }
+  collaboration: createProjectTeamCollaborationPreloadClientV2(ipcRenderer),
+  recovery: projectRecoveryClient,
+} satisfies ProjectLifecycleClient & {
+  canvases: ProjectCanvasClient
+  collaboration: import("../project-team-collaboration-contracts").ProjectTeamCollaborationClientV2
+  recovery: ProjectCollaborationRecoveryClient
+}
 
 const agentClient = {
   abort: (input) => ipcRenderer.invoke(agentChannels.abort, input),
@@ -382,6 +403,12 @@ const canvasDocumentClient = {
   execute: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.execute, input),
   load: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.load, input),
 } satisfies CanvasRendererDocumentClient
+
+const canvasSessionClient = createCanvasSessionPreloadClientV2({
+  invoke: (channel, input) => ipcRenderer.invoke(channel, input),
+  on: (channel, listener) => ipcRenderer.on(channel, listener),
+  removeListener: (channel, listener) => ipcRenderer.removeListener(channel, listener),
+})
 
 const canvasResourceClient = createCanvasResourcePreloadClient({
   getPathForFile: (file) => webUtils.getPathForFile(file),
@@ -583,6 +610,7 @@ contextBridge.exposeInMainWorld("convax", {
     externalMediaDrag: canvasExternalMediaDragClient,
     pluginMaterialization: pluginMaterializationClient,
     renderer: canvasRendererClient,
+    sessions: canvasSessionClient,
     resources: canvasResourceClient,
     textResources: canvasTextResourceClient,
   },

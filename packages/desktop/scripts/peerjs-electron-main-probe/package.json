@@ -1,0 +1,5 @@
+{
+  "name": "convax-peerjs-electron-main-probe",
+  "private": true,
+  "main": "main.cjs"
+}

@@ -115,6 +115,14 @@ function capabilityRequest(method: string, params?: unknown) {
   }
 }
 
+function operationReceipt(operationId: string) {
+  return { actorId: "plugin-one", operationId } as never
+}
+
+function emptyPluginDocument(canvasId: string) {
+  return { edges: [], id: canvasId, nodes: [], title: "Main" }
+}
+
 function createClient() {
   const listeners = new Set<(event: PluginCanvasChangeEvent) => void>()
   const closeSubscription = mock(() => undefined)
@@ -125,17 +133,15 @@ function createClient() {
     ): Promise<PluginCanvasDocumentResult> => {
       if (projection === "structure") {
         return {
-          document: { edges: [], id: ref.canvasId, nodes: [], revision: 1, title: "Main" },
+          document: emptyPluginDocument(ref.canvasId),
           projection,
           ref,
-          storageVersion: "v1",
         }
       }
       return {
-        document: { edges: [], id: ref.canvasId, nodes: [], revision: 1, title: "Main" },
+        document: emptyPluginDocument(ref.canvasId),
         projection,
         ref,
-        storageVersion: "v1",
       }
     },
   )
@@ -143,9 +149,8 @@ function createClient() {
   const listProjects = mock(async () => [{ available: true, id: "project-one", name: "Project One" }])
   const queryNodes = mock(async (ref: PluginCanvasRef) => ({
     nodes: [],
+    projection: emptyPluginDocument(ref.canvasId),
     ref,
-    revision: 1,
-    storageVersion: "v1",
   }))
   const subscribe = mock(
     async (
@@ -160,9 +165,9 @@ function createClient() {
     affectedNodeIds: [],
     changed: false,
     createdNodeIds: [],
+    operationReceipt: operationReceipt(request.commandId),
+    projection: emptyPluginDocument(request.ref.canvasId),
     ref: request.ref,
-    revision: request.expectedRevision,
-    storageVersion: "v1",
     warnings: [],
   }))
   const client: PluginCanvasCapabilityClient = {
@@ -199,7 +204,7 @@ function createAuthority(
           activeSetDigest: issuedPrincipal.activeSetDigest,
           capabilities: options.capabilities ?? [],
           hostApi: {
-            major: 2,
+            major: 3,
             optional: [],
             required: [
               "projects.list",
@@ -832,8 +837,8 @@ describe("registerPluginCapabilityIpc", () => {
       sender,
     )
     const event: PluginCanvasChangeEvent = {
+      operationReceipt: operationReceipt("operation-event-2"),
       ref: { canvasId: "canvas-one", projectId: "project-one" },
-      revision: 2,
       source: "host",
     }
 
@@ -849,7 +854,7 @@ describe("registerPluginCapabilityIpc", () => {
     })
     sender.destroy()
     expect(client.closeSubscription).toHaveBeenCalledTimes(1)
-    client.emit({ ...event, revision: 3 })
+    client.emit({ ...event, operationReceipt: operationReceipt("operation-event-3") })
     expect(sender.send).toHaveBeenCalledTimes(1)
     await expect(
       Promise.resolve(

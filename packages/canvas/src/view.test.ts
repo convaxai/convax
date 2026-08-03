@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import {
   CanvasViewDocumentMismatchError,
   CanvasViewNotFoundError,
-  CanvasViewRevisionMismatchError,
   CanvasViewScopeMismatchError,
   createCanvasViewRegistry,
   resolveCanvasDocumentFitEffect,
@@ -36,14 +35,12 @@ function createDocument(nodes: CanvasNode[]): CanvasDocument {
     id: "canvas",
     metadata: { title: "Canvas" },
     nodes,
-    revision: 0,
   }
 }
 
 function createSession(viewId: string, documentId: string, scopeId = "project_one") {
   let snapshot: CanvasViewSnapshot = {
     documentId,
-    revision: 0,
     scopeId,
     selectedEdgeIds: [],
     selectedNodeIds: [],
@@ -290,21 +287,6 @@ describe("canvas view registry", () => {
     ).rejects.toBeInstanceOf(CanvasViewScopeMismatchError)
   })
 
-  test("rejects a command aimed at a stale document revision", async () => {
-    const registry = createCanvasViewRegistry()
-    registry.register(createSession("main", "canvas").session)
-
-    await expect(
-      registry.execute({
-        command: { type: "selection.clear" },
-        expectedDocumentId: "canvas",
-        expectedRevision: 1,
-        expectedScopeId: "project_one",
-        viewId: "main",
-      }),
-    ).rejects.toBeInstanceOf(CanvasViewRevisionMismatchError)
-  })
-
   test("waits for the mounted view to finish loading before validating and executing", async () => {
     const registry = createCanvasViewRegistry()
     const target = createSession("main", "canvas")
@@ -317,7 +299,6 @@ describe("canvas view registry", () => {
     const pending = registry.execute({
       command: { type: "selection.set", nodeIds: ["node_a"] },
       expectedDocumentId: "canvas",
-      expectedRevision: 0,
       expectedScopeId: "project_one",
       viewId: "main",
     })

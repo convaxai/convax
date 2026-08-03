@@ -1,4 +1,5 @@
 import type { AgentResource } from "@convax/agent-runtime"
+import { canonicalize as canonicalizeConvaxUri, parse as parseConvaxUri } from "@convax/uri"
 
 export interface AgentActiveCanvas {
   id: string
@@ -6,11 +7,11 @@ export interface AgentActiveCanvas {
 }
 
 export function agentCanvasResourceUri(canvasId: string) {
-  return `convax://canvas/${encodeURIComponent(canvasId)}`
+  return canonicalizeConvaxUri(`convax://canvas/${encodeURIComponent(canvasId)}`)
 }
 
 export function agentCanvasNodeResourceUri(canvasId: string, nodeId: string) {
-  return `${agentCanvasResourceUri(canvasId)}/node/${encodeURIComponent(nodeId)}`
+  return canonicalizeConvaxUri(`${agentCanvasResourceUri(canvasId)}/node/${encodeURIComponent(nodeId)}`)
 }
 
 export function createAgentCanvasNodeResource(canvasId: string, nodeId: string, name: string): AgentResource {
@@ -21,11 +22,11 @@ export function createAgentCanvasNodeResource(canvasId: string, nodeId: string, 
   }
 }
 
-export function isAgentCanvasResource(resource: AgentResource) {
+export function isAgentCanvasResource(resource: AgentResource): boolean {
   if (resource.kind !== "resource") return false
   try {
-    const url = new URL(resource.uri)
-    return url.protocol === "convax:" && url.hostname === "canvas"
+    const uri = parseConvaxUri(resource.uri)
+    return uri.scheme === "convax" && uri.authority === "canvas"
   } catch {
     return false
   }

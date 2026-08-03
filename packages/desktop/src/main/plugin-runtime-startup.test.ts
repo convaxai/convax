@@ -127,7 +127,7 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
   const legacyManifest = JSON.stringify(legacyManifestValue)
   const currentProjection = parseWebPluginManifest({
     ...legacyManifestValue,
-    hostApi: { ...legacyManifestValue.hostApi, major: 2 },
+    hostApi: { ...legacyManifestValue.hostApi, major: 3 },
   })
   const packageFiles = [
     { bytes: Buffer.from("<h1>legacy</h1>"), path: "index.html" },

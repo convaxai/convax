@@ -33,8 +33,9 @@ the current Convax Plugin package contract.
   snapshots, leases, grants, execution, IPC, filesystem, network, or UI state.
 - Marketplace source/delivery schemas or concrete Plugin implementations.
 
-The package may depend only on `@convax/plugin-api`. Keep portable contracts free of
-Electron, Node, browser globals, native paths, credentials, and concrete Plugin ids.
+The package may depend only on `@convax/bounded-value` and `@convax/plugin-api`.
+Keep portable contracts free of Electron, Node, browser globals, native paths,
+credentials, and concrete Plugin ids.
 `convax.plugin-capability/3` is Host-internal and must never be exported as an
 authoring transport or accepted from an iframe.
 

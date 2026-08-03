@@ -1,4 +1,6 @@
 import type { CanvasDocument, CanvasNode } from "@convax/canvas"
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { PluginCanvasStructureDocument } from "./plugin-capability-contracts"
 import type { WebPluginGenerationInputRole, WebPluginGenerationModality } from "./plugin-contracts"
 import type { InstalledPlugin } from "./plugin-api"
 import type { PluginConnectedMediaOpenResult } from "./plugin-connected-media-contracts"
@@ -70,14 +72,16 @@ export interface PluginGenerationCanvasResult {
   createdNodeIds: readonly string[]
   /** Present only for a text operation whose declared delivery is `return`. */
   outputText?: string
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2 | null
+  projection: PluginCanvasStructureDocument
   toolId: string
   warnings: readonly string[]
 }
 
 export interface PluginCanvasImageResult {
   createdNodeId: string
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2
+  projection: PluginCanvasStructureDocument
 }
 
 export type PluginGenerationResultMode = "create-pending-node" | "return"
@@ -121,7 +125,6 @@ export interface PluginCanvasHost {
   readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<PluginProjectTextResult>
   readConnectedImage(input: {
     canvasId: string
-    expectedRevision: number
     nodeId: string
     ownerNodeId: string
     projectId: string
@@ -185,7 +188,6 @@ export interface PluginHostRequestContext {
   ): Promise<readonly PluginGenerationToolSummary[]>
   openConnectedMedia(
     input: PluginNodeInvocationRef & {
-      expectedRevision: number
       pluginVersion: string
       signal: AbortSignal
       sourceNodeId: string
@@ -203,7 +205,6 @@ export interface PluginHostRequestContext {
   readProjectText(input: { path: string; projectId: string; signal: AbortSignal }): Promise<PluginProjectTextResult>
   readConnectedImage(input: {
     canvasId: string
-    expectedRevision: number
     nodeId: string
     ownerNodeId: string
     projectId: string

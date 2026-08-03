@@ -23,17 +23,30 @@
       "types": "./dist/drag.d.ts",
       "import": "./dist/drag.js",
       "default": "./dist/drag.js"
+    },
+    "./identity": {
+      "types": "./dist/identity.d.ts",
+      "import": "./dist/identity.js",
+      "default": "./dist/identity.js"
+    },
+    "./project-uri": {
+      "types": "./dist/project-uri.d.ts",
+      "import": "./dist/project-uri.js",
+      "default": "./dist/project-uri.js"
     }
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:browser": "bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/index.ts src/contracts.ts src/drag.ts",
+    "build:browser": "for entry in src/index.ts src/contracts.ts src/drag.ts src/identity.ts src/project-uri.ts; do bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:browser && bun run build:types",
     "test": "bun test",
     "typecheck": "tsgo --noEmit",
     "prepack": "bun run build",
     "prepublishOnly": "bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "@convax/uri": "workspace:^"
   },
   "devDependencies": {
     "@typescript/native-preview": "catalog:",

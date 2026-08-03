@@ -385,12 +385,7 @@ describe("Project Canvas document dehydration", () => {
     ).resolves.toEqual(persistedSubmitting)
     expect(resolutions).toBe(0)
 
-    const failed = finishCanvasNodeGenerationRun(
-      submitting,
-      placeholder.id,
-      "operation-one",
-      "Generation failed",
-    )
+    const failed = finishCanvasNodeGenerationRun(submitting, placeholder.id, "operation-one", "Generation failed")
     const persistedFailed = dehydrateProjectCanvasDocument(failed)
     expect(getCanvasNodeGenerationRun(persistedFailed.nodes[0]!)).toMatchObject({
       failureMessage: "Generation failed",
@@ -414,9 +409,7 @@ describe("Project Canvas document dehydration", () => {
       [canvasNodeGenerationPreferenceKey]: { future: true, schema: "convax.node-generation-preference/99" },
     }
     const persistedUnreadablePreference = dehydrateProjectCanvasDocument(unreadablePreference)
-    expect(persistedUnreadablePreference.nodes[0]!.data.metadata).toEqual(
-      unreadablePreference.nodes[0]!.data.metadata,
-    )
+    expect(persistedUnreadablePreference.nodes[0]!.data.metadata).toEqual(unreadablePreference.nodes[0]!.data.metadata)
     expect(getCanvasNodeGenerationToolId(persistedUnreadablePreference.nodes[0]!)).toBeUndefined()
 
     const unreadableRun = structuredClone(source)
@@ -748,8 +741,8 @@ describe("Project Canvas document dehydration", () => {
 })
 
 describe("Project Canvas document hydration", () => {
-  const documentFor = (reference: ProjectResourceReference) => ({
-    ...createCanvasDocument({
+  const documentFor = (reference: ProjectResourceReference) =>
+    createCanvasDocument({
       id: "canvas-hydration",
       nodes: [
         reference.kind === "project-directory"
@@ -772,9 +765,7 @@ describe("Project Canvas document hydration", () => {
               resourceState: { status: "stale" },
             }),
       ],
-    }),
-    revision: 17,
-  })
+    })
 
   test.each([
     ["missing", { kind: "project-file", path: "missing.md" }],
@@ -785,7 +776,6 @@ describe("Project Canvas document hydration", () => {
 
     const hydrated = await hydrateProjectCanvasDocument(document, async () => ({ status }))
 
-    expect(hydrated.revision).toBe(17)
     expect(hydrated.nodes[0]!.data.resourceState).toEqual({ status })
     expect(getProjectResourceReference(hydrated.nodes[0]!.data.metadata)).toEqual(reference)
     expect(getProjectResourceReference(hydrated.nodes[0]!.data.metadata)).not.toBe(reference)
@@ -809,7 +799,6 @@ describe("Project Canvas document hydration", () => {
     })
 
     expect(hydrated).not.toBe(document)
-    expect(hydrated.revision).toBe(document.revision)
     expect(hydrated.nodes[0]!.data.resourceState).toEqual({
       contentRevision: "a".repeat(64),
       editableText: true,
@@ -828,25 +817,22 @@ describe("Project Canvas document hydration", () => {
       name: "hero.png",
       sha256: "e".repeat(64),
     } as const
-    const document = {
-      ...createCanvasDocument({
-        id: "canvas-media-hydration",
-        nodes: [
-          createMediaNode({
-            id: "hero",
-            position: { x: 0, y: 0 },
-            resource: {
-              id: "hero-resource",
-              kind: "image",
-              metadata: { [projectResourceReferenceKey]: reference },
-              name: reference.name,
-              state: { status: "stale" },
-            },
-          }),
-        ],
-      }),
-      revision: 3,
-    }
+    const document = createCanvasDocument({
+      id: "canvas-media-hydration",
+      nodes: [
+        createMediaNode({
+          id: "hero",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "hero-resource",
+            kind: "image",
+            metadata: { [projectResourceReferenceKey]: reference },
+            name: reference.name,
+            state: { status: "stale" },
+          },
+        }),
+      ],
+    })
 
     const hydrated = await hydrateProjectCanvasDocument(document, async () => ({
       mediaType: "image/png",
@@ -925,7 +911,6 @@ describe("Project Canvas document hydration", () => {
     const stale = markProjectCanvasResourcesStale(document)
 
     expect(stale).not.toBe(document)
-    expect(stale.revision).toBe(document.revision)
     expect(stale.nodes[0]!.data.resourceState).toEqual({
       contentRevision: "note-revision",
       status: "stale",

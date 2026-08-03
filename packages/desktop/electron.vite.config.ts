@@ -132,10 +132,12 @@ export function assertSandboxedPreloadBundle(bundle: Record<string, SandboxedPre
   const emittedFiles = new Set(Object.keys(bundle))
   for (const [fileName, output] of Object.entries(bundle)) {
     if (output.type !== "chunk" || !output.isEntry) continue
-    const sharedChunks = (output.imports ?? []).filter((imported) => emittedFiles.has(imported))
-    if (sharedChunks.length) {
+    const forbiddenImports = (output.imports ?? []).filter(
+      (imported) => emittedFiles.has(imported) || imported !== "electron",
+    )
+    if (forbiddenImports.length) {
       throw new Error(
-        `Sandboxed preload ${fileName} must be self-contained; emitted imports: ${sharedChunks.join(", ")}`,
+        `Sandboxed preload ${fileName} must be self-contained; forbidden imports: ${forbiddenImports.join(", ")}`,
       )
     }
   }
@@ -154,6 +156,7 @@ export function sandboxedPreloadBoundaryPlugin(): Plugin {
 export const desktopPreloadInputs = {
   index: "src/preload/index.ts",
   pet: "src/preload/pet.ts",
+  "peerjs-transport-host": "src/preload/peerjs-transport-host.ts",
   "plugin-service-browser-authorization": "src/preload/plugin-service-browser-authorization.ts",
 } as const
 

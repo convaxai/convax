@@ -1,11 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 
 import type { AgentRuntime } from "@convax/agent-runtime"
-import {
-  createCanvasDocumentPatchCommand,
-  type CanvasApplicationService,
-  type CanvasDocumentClient,
-} from "@convax/canvas/application"
+import type { CanvasApplicationService } from "@convax/canvas/application"
 import {
   isCanvasFileNode,
   type CanvasDocument,
@@ -13,7 +9,7 @@ import {
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas/core"
-import { getProjectResourceReference, type ProjectCanvasClient } from "@convax/project/canvas"
+import { getProjectResourceReference, type ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
 import type { PluginApiGenerationReference } from "@convax/plugin-api"
 
@@ -27,7 +23,7 @@ import {
   type PluginCanvasImageService,
 } from "./plugin-canvas-image-service"
 import type { PluginConnectedMediaService } from "./plugin-connected-media-service"
-import { matchesWebPluginCanvasNodeIdentity, webPluginStateMetadataKey } from "../plugin-canvas-node"
+import { matchesWebPluginCanvasNodeIdentity } from "../plugin-canvas-node"
 import type {
   PluginHostNodeBinding,
   PluginHostNodeContext,
@@ -42,6 +38,8 @@ import {
   PluginHostApiPartialSuccessError,
   PluginHostApiResourceUnavailableError,
 } from "../plugin-host-errors"
+import { projectPluginCanvasStructureDocument } from "./plugin-canvas-projection"
+import type { PluginCanvasStateServiceV1 } from "./plugin-canvas-state-service"
 
 interface PluginHostProjectPort {
   list(): Promise<readonly ProjectRecord[]>
@@ -55,13 +53,15 @@ interface PluginHostProjectPort {
 
 export interface PluginHostApiMainAdapterOptions {
   agent: Pick<AgentRuntime, "abort" | "createSession" | "prompt">
-  application: Pick<CanvasApplicationService, "execute">
-  canvases: Pick<ProjectCanvasClient, "getCanvasCatalog">
-  documents: Pick<CanvasDocumentClient, "load">
+  application: Pick<CanvasApplicationService, "execute" | "query">
+  canvases: {
+    getCanvasCatalog(input: { projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+  }
   generation: Pick<GenerationCanvasService, "generate" | "listTools">
   images: Pick<PluginCanvasImageService, "createForHostApi">
   media: Pick<PluginConnectedMediaService, "close" | "closeImage" | "open" | "openImage" | "revokeFrame">
   projects: PluginHostProjectPort
+  states: Pick<PluginCanvasStateServiceV1, "replace">
 }
 
 /**
@@ -79,8 +79,8 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     signal?: AbortSignal
   }): Promise<PluginHostNodeContext | null> {
     throwIfAborted(input.signal)
-    const [{ document }, projects, catalog] = await Promise.all([
-      this.options.documents.load({
+    const [{ projection: document }, projects, catalog] = await Promise.all([
+      this.options.application.query({
         canvasId: input.binding.canvasId,
         scopeId: input.binding.projectId,
       }),
@@ -90,14 +90,13 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
     throwIfAborted(input.signal)
     if (!document || document.id !== input.binding.canvasId) return null
     const project = projects.find((candidate) => candidate.id === input.binding.projectId && !candidate.missing)
-    const canvas = catalog.canvases.find((candidate) => candidate.id === input.binding.canvasId)
+    const canvas = catalog.visibleCanvases.find((candidate) => candidate.canvasId === input.binding.canvasId)
     const node = document.nodes.find((candidate) => candidate.id === input.binding.nodeId)
     if (!project || !canvas || !node || !matchesWebPluginCanvasNodeIdentity(input.principal.pluginId, node.data)) {
       return null
     }
     return {
-      canvas: { id: canvas.id, name: canvas.name },
-      documentRevision: document.revision,
+      canvas: { id: canvas.canvasId, ...(canvas.title === null ? {} : { name: canvas.title }) },
       node: rendererSafeNode(node),
       project: { id: project.id, name: project.name },
     }
@@ -134,11 +133,8 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
   }
 
   async executeGeneration(input: Parameters<PluginHostNodeOperationsPort["executeGeneration"]>[0]) {
-    const context = await input.checkpoint.checkpoint()
+    await input.checkpoint.checkpoint()
     const snapshot = await this.loadDocument(input.binding, input.signal)
-    if (snapshot.revision !== context.documentRevision) {
-      throw new PluginHostApiError("stale-context", "Canvas changed during generation preparation")
-    }
     const owner = requireOwnedNode(snapshot, input.binding, input.principal.pluginId)
     const references = generationReferences(
       snapshot,
@@ -151,7 +147,6 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
       .generate(
         {
           anchor: nodeOutputAnchor(owner),
-          expectedRevision: snapshot.revision,
           operationId: input.operationId,
           ...(input.output ? { output: input.output } : {}),
           prompt: input.prompt,
@@ -169,6 +164,10 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
         input.signal,
         { beforeExternalCall: () => input.checkpoint.checkpoint().then(() => undefined) },
       )
+      .then((result) => ({
+        ...result,
+        projection: projectPluginCanvasStructureDocument(result.projection),
+      }))
       .catch((error: unknown) => {
         if (error instanceof GenerationPublicationPartialSuccessError) {
           throw new PluginHostApiPartialSuccessError("Plugin generation publication partially succeeded", {
@@ -216,14 +215,10 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
       throw new PluginHostApiError("stale-context", "Plugin input owner is no longer current")
     }
     const document = await this.loadDocument(input.binding, input.signal)
-    if (document.revision !== context.documentRevision) {
-      throw new PluginHostApiError("stale-context", "Canvas changed during Plugin input preparation")
-    }
     const source = resolveConnectedInput(document, input.binding, input.principal, this.#inputKeySecret, input.inputKey)
     return this.options.media.open(
       {
         ...mediaFrame(input.binding, input.principal, input.transport.frameId),
-        expectedRevision: context.documentRevision,
         sourceNodeId: source.id,
       },
       input.transport.senderId,
@@ -241,14 +236,10 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
       throw new PluginHostApiError("stale-context", "Plugin image input owner is no longer current")
     }
     const document = await this.loadDocument(input.binding, input.signal)
-    if (document.revision !== context.documentRevision) {
-      throw new PluginHostApiError("stale-context", "Canvas changed during Plugin image input preparation")
-    }
     const source = resolveConnectedInput(document, input.binding, input.principal, this.#inputKeySecret, input.inputKey)
     return this.options.media.openImage(
       {
         ...mediaFrame(input.binding, input.principal, input.transport.frameId),
-        expectedRevision: context.documentRevision,
         sourceNodeId: source.id,
       },
       input.transport.senderId,
@@ -316,46 +307,24 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
   }
 
   async replaceNodeState(input: Parameters<PluginHostNodeOperationsPort["replaceNodeState"]>[0]) {
-    const context = await input.checkpoint.checkpoint()
-    const document = await this.loadDocument(input.binding, input.signal)
-    if (document.revision !== context.documentRevision) {
-      throw new PluginHostApiError("stale-context", "Canvas changed during Plugin state preparation")
-    }
-    requireOwnedNode(document, input.binding, input.principal.pluginId)
-    const next: CanvasDocument = {
-      ...document,
-      nodes: document.nodes.map((node) =>
-        node.id !== input.binding.nodeId
-          ? node
-          : {
-              ...node,
-              data: {
-                ...node.data,
-                metadata: {
-                  ...metadata(node.data),
-                  [webPluginStateMetadataKey]: structuredClone(input.state),
-                },
-              },
-            },
-      ),
-    }
-    await this.options.application.execute({
-      beforeCommit: () => input.checkpoint.checkpoint().then(() => undefined),
-      canvasId: input.binding.canvasId,
-      envelope: {
-        actor: { id: input.principal.pluginId, kind: "plugin" },
-        command: createCanvasDocumentPatchCommand(document, next),
-        commandId: `plugin-state:${input.operationId}`,
-        expectedRevision: document.revision,
-      },
-      scopeId: input.binding.projectId,
-      ...(input.signal ? { signal: input.signal } : {}),
+    const result = await this.options.states.replace({
+      binding: input.binding,
+      checkpoint: input.checkpoint,
+      commandId: `plugin-state:${input.operationId}`,
+      principal: input.principal,
+      signal: input.signal,
+      state: input.state,
     })
+    return {
+      operationReceipt: result.operationReceipt,
+      projection: rendererSafeNode(result.node),
+      updated: true as const,
+    }
   }
 
   private async loadDocument(binding: PluginHostNodeBinding, signal?: AbortSignal) {
     throwIfAborted(signal)
-    const { document } = await this.options.documents.load({
+    const { projection: document } = await this.options.application.query({
       canvasId: binding.canvasId,
       scopeId: binding.projectId,
     })
