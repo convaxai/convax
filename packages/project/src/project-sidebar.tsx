@@ -14,6 +14,10 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
   Input,
   Tooltip,
   TooltipProvider,
@@ -483,32 +487,16 @@ export function ProjectSidebar({
                         {visibleEntries.length}
                       </span>
                     </button>
-                    <Tooltip content="New file">
-                      <Button
-                        aria-label="New file"
-                        onClick={() => {
-                          setFilesExpanded(true)
-                          void beginCreate("file")
-                        }}
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        <Plus />
-                      </Button>
-                    </Tooltip>
-                    <Tooltip content="New folder">
-                      <Button
-                        aria-label="New folder"
-                        onClick={() => {
-                          setFilesExpanded(true)
-                          void beginCreate("directory")
-                        }}
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        <FolderPlus />
-                      </Button>
-                    </Tooltip>
+                    <ProjectEntryAddMenu
+                      onAddFile={() => {
+                        setFilesExpanded(true)
+                        void beginCreate("file")
+                      }}
+                      onAddFolder={() => {
+                        setFilesExpanded(true)
+                        void beginCreate("directory")
+                      }}
+                    />
                     <Tooltip content="Open project folder">
                       <Button
                         aria-label="Open project folder"
@@ -538,32 +526,16 @@ export function ProjectSidebar({
                         Files
                       </span>
                     </button>
-                    <Tooltip content="New file">
-                      <Button
-                        aria-label="New file"
-                        onClick={() => {
-                          setFilesExpanded(true)
-                          void beginCreate("file")
-                        }}
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        <Plus />
-                      </Button>
-                    </Tooltip>
-                    <Tooltip content="New folder">
-                      <Button
-                        aria-label="New folder"
-                        onClick={() => {
-                          setFilesExpanded(true)
-                          void beginCreate("directory")
-                        }}
-                        size="icon-sm"
-                        variant="ghost"
-                      >
-                        <FolderPlus />
-                      </Button>
-                    </Tooltip>
+                    <ProjectEntryAddMenu
+                      onAddFile={() => {
+                        setFilesExpanded(true)
+                        void beginCreate("file")
+                      }}
+                      onAddFolder={() => {
+                        setFilesExpanded(true)
+                        void beginCreate("directory")
+                      }}
+                    />
                     <Tooltip content="Refresh">
                       <Button
                         aria-label="Refresh files"
@@ -1036,6 +1008,41 @@ export function ProjectSidebar({
         ) : null}
       </aside>
     </TooltipProvider>
+  )
+}
+
+function ProjectEntryAddMenu({ onAddFile, onAddFolder }: { onAddFile: () => void; onAddFolder: () => void }) {
+  const preserveEditorFocusRef = useRef(false)
+  const selectAddAction = (action: () => void) => {
+    preserveEditorFocusRef.current = true
+    action()
+  }
+
+  return (
+    <DropdownMenu>
+      <Tooltip content="Add file or folder">
+        <DropdownMenuTrigger aria-label="Add file or folder" size="icon-sm" variant="ghost">
+          <Plus />
+        </DropdownMenuTrigger>
+      </Tooltip>
+      <DropdownMenuContent
+        align="end"
+        onCloseAutoFocus={(event) => {
+          if (!preserveEditorFocusRef.current) return
+          preserveEditorFocusRef.current = false
+          event.preventDefault()
+        }}
+      >
+        <DropdownMenuItem onSelect={() => selectAddAction(onAddFile)}>
+          <Plus />
+          Add file
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => selectAddAction(onAddFolder)}>
+          <FolderPlus />
+          Add folder
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 

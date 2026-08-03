@@ -24,6 +24,14 @@ export {
   type DialogProps,
 } from "./components/dialog"
 export {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  type DropdownMenuProps,
+} from "./components/dropdown-menu"
+export {
   Disclosure,
   DisclosureContent,
   DisclosureTrigger,
