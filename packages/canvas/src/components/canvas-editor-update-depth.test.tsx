@@ -1520,7 +1520,7 @@ test("imperative commands open Canvas-owned search and generation surfaces", asy
   }
 })
 
-test("publishes scope-safe selection and requests the read-only Inspector without a document commit", async () => {
+test("publishes scope-safe selection without restoring the removed Inspector action", async () => {
   const restoreWindow = installTestWindow()
   const errors: Error[] = []
   let root: Root | undefined
@@ -1574,25 +1574,14 @@ test("publishes scope-safe selection and requests the read-only Inspector withou
       nodeIds: [node.id],
       scopeId: "project-a/projection",
     })
-    const inspectorAction = getObservedEditor()?.visibleSelectionActions.find(
-      (action) => action.id === "canvas.inspector.open",
-    )
-    expect(inspectorAction).toBeDefined()
-
-    await act(async () => {
-      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
-      await Promise.resolve()
-    })
-    expect(inspectorRequests).toHaveLength(1)
-    expect(inspectorRequests[0]).toMatchObject({ nodeId: node.id })
+    expect(
+      getObservedEditor()?.visibleSelectionActions.some((action) => action.id === "canvas.inspector.open"),
+    ).toBeFalse()
+    expect(inspectorRequests).toEqual([])
 
     await act(async () => getObservedEditor()?.selectNodes([]))
     expect(projections.at(-1)).toMatchObject({ inspector: null, kind: "none", nodeIds: [] })
-    await act(async () => {
-      if (inspectorAction) getObservedEditor()?.executeSelectionAction(inspectorAction)
-      await Promise.resolve()
-    })
-    expect(inspectorRequests).toHaveLength(1)
+    expect(inspectorRequests).toEqual([])
     expect(getObservedEditor()?.document).toEqual(initialDocument)
     expect(errors).toEqual([])
   } finally {

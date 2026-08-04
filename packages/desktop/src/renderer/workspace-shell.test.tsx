@@ -117,7 +117,7 @@ describe("WorkspaceShell", () => {
     expect(source).not.toContain("setPartVisible(WorkbenchLayoutParts.SecondarySidebar, true)")
     expect(
       source.match(/ensureWorkbenchPartVisible\(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar\)/g),
-    ).toHaveLength(4)
+    ).toHaveLength(3)
   })
 
   test("composes one Project entry, keeps the account menu in the sidebar, and removes titlebar search chrome", async () => {

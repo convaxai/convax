@@ -1,15 +1,12 @@
 import {
   CanvasEditor,
-  CanvasInspector,
   createDefaultCanvasFileRendererRegistry,
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
   createCanvasServices,
-  matchesCanvasSelectionProjectionScope,
   type CanvasEditorHandle,
   type CanvasDocument,
   type CanvasGenerateService,
-  type CanvasInspectorProjection,
   type CanvasNotification,
   type CanvasSelectionProjection,
   type CanvasSelectionAction,
@@ -174,7 +171,6 @@ import {
 import {
   closedWorkspaceUtilityDrawer,
   openAgentUtility,
-  openInspectorUtility,
   reconcileWorkspaceUtilityDrawer,
   type WorkspaceUtilityDrawerState,
 } from "./workspace-utility-drawer-state"
@@ -204,7 +200,6 @@ function App() {
   const [desktopSurface, setDesktopSurface] = useState(createDesktopSurfaceState)
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false)
   const [projectTitlebarEntryHost, setProjectTitlebarEntryHost] = useState<HTMLDivElement | null>(null)
-  const [canvasInspector, setCanvasInspector] = useState<CanvasInspectorProjection | null>(null)
   const [activeCanvasNodes, setActiveCanvasNodes] = useState<ProjectCanvasSidebarNodeProjection | null>(null)
   const [projectCanvasFilteredKinds, setProjectCanvasFilteredKinds] = useState<ReadonlySet<string>>(() => new Set())
   const [sidebarNodeReveal, setSidebarNodeReveal] = useState<{
@@ -695,43 +690,15 @@ function App() {
     canvasSessionFailure?.key === canvasSessionScopeKey ? canvasSessionFailure.message : null
   const publishCanvasSelection = useCallback(
     (projection: CanvasSelectionProjection) => {
-      if (
-        !publishCanvasSelectionToWorkbench({
-          activeCanvasId,
-          activeProjectId,
-          controller: workbenchController,
-          expectedViewId: "desktop-main",
-          projection,
-        })
-      ) {
-        return
-      }
-      setCanvasInspector((current) =>
-        current && projection.inspector?.nodeId === current.nodeId ? projection.inspector : null,
-      )
+      publishCanvasSelectionToWorkbench({
+        activeCanvasId,
+        activeProjectId,
+        controller: workbenchController,
+        expectedViewId: "desktop-main",
+        projection,
+      })
     },
     [activeCanvasId, activeProjectId, workbenchController],
-  )
-  const openCanvasInspector = useCallback(
-    (projection: CanvasInspectorProjection) => {
-      if (
-        !activeProjectId ||
-        !activeCanvasId ||
-        !matchesCanvasSelectionProjectionScope(projection, {
-          documentId: activeCanvasId,
-          scopeId: activeProjectId,
-          viewId: "desktop-main",
-        })
-      ) {
-        return
-      }
-      if (!ensureWorkbenchPartVisible(workbenchLayoutController, WorkbenchLayoutParts.SecondarySidebar)) return
-      setCanvasInspector(projection)
-      setWorkspaceUtilityDrawer(
-        openInspectorUtility({ canvasId: activeCanvasId, projectId: activeProjectId }, projection.nodeId),
-      )
-    },
-    [activeCanvasId, activeProjectId, workbenchLayoutController],
   )
   const activeMediaOperationDialog = isMediaOperationDialogInScope(
     mediaOperationDialog,
@@ -1589,10 +1556,6 @@ function App() {
       return reconciled
     })
   }, [activeCanvasId, activeProjectId, secondarySidebar.visible])
-  useEffect(() => {
-    if (workspaceUtilityDrawer.mode !== "inspector" || canvasInspector) return
-    setWorkspaceUtilityDrawer(activeProjectId ? openAgentUtility(activeProjectId) : closedWorkspaceUtilityDrawer)
-  }, [activeProjectId, canvasInspector, workspaceUtilityDrawer.mode])
   const workspaceLayout = resolveWorkspaceLayout({
     agentVisible: secondarySidebar.visible,
     projectSidebarVisible: primarySidebar.visible,
@@ -2006,10 +1969,7 @@ function App() {
     utilityVisible: secondarySidebar.visible,
     viewportWidth,
   })
-  const utilityModes = [
-    { label: locale === "zh-CN" ? "助手" : "Agent", value: "agent" as const },
-    ...(canvasInspector ? [{ label: locale === "zh-CN" ? "检查器" : "Inspector", value: "inspector" as const }] : []),
-  ]
+  const utilityModes = [{ label: locale === "zh-CN" ? "助手" : "Agent", value: "agent" as const }]
   const closeWorkspaceUtility = () => {
     setWorkspaceUtilityDrawer(closedWorkspaceUtilityDrawer)
     workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.SecondarySidebar, false)
@@ -2018,11 +1978,6 @@ function App() {
   const changeWorkspaceUtilityMode = (mode: WorkspaceUtilityActiveMode) => {
     if (!activeProjectId) return
     if (mode === "agent") setWorkspaceUtilityDrawer(openAgentUtility(activeProjectId))
-    else if (mode === "inspector" && activeCanvasId && canvasInspector) {
-      setWorkspaceUtilityDrawer(
-        openInspectorUtility({ canvasId: activeCanvasId, projectId: activeProjectId }, canvasInspector.nodeId),
-      )
-    }
   }
   const applicationCommands = useMemo<readonly ApplicationCommand[]>(
     () => [
@@ -2319,7 +2274,6 @@ function App() {
                         session={activeCanvasSession}
                         nodeRegistry={canvasNodeRegistry}
                         onDocumentChange={publishActiveCanvasNodes}
-                        onInspectorRequest={openCanvasInspector}
                         onSelectionProjectionChange={publishCanvasSelection}
                         readOnly={
                           workbenchSnapshot.changingInput ||
@@ -2411,7 +2365,6 @@ function App() {
                       : "transition-[width] duration-300 ease-[cubic-bezier(0.78,0,0.22,1)] motion-reduce:transition-none"
                   }`}
                   closeLabel={locale === "zh-CN" ? "关闭工具抽屉" : "Close utility drawer"}
-                  inspector={canvasInspector ? <CanvasInspector className="pb-3" projection={canvasInspector} /> : null}
                   modal={workspaceLayout.utilityPresentation === "sheet"}
                   mode={secondarySidebar.visible ? workspaceUtilityDrawer.mode : "closed"}
                   modes={utilityModes}

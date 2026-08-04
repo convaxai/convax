@@ -64,7 +64,6 @@ import {
   Magnet,
   MapPinned,
   MousePointer2,
-  PanelRightOpen,
   Plus,
   Redo2,
   Rows3,
@@ -560,7 +559,7 @@ export interface CanvasEditorProps {
   onGenerationStateChange?: (running: boolean) => void
   /** Publishes a bounded, scope-tagged projection for the host's active Canvas Input. */
   onSelectionProjectionChange?: (projection: CanvasSelectionProjection) => void
-  /** Requests host-owned Inspector presentation for the current eligible projection. */
+  /** @deprecated Inspector presentation was removed; this callback is no longer invoked. */
   onInspectorRequest?: (projection: CanvasInspectorProjection) => void
   readOnly?: boolean
   /** Explicit host policy wins; independent consumers fall back to the OS preference. */
@@ -1498,8 +1497,6 @@ function CanvasEditorContent(
       selectionContext,
     ],
   )
-  const selectionProjectionRef = useRef(selectionProjection)
-  selectionProjectionRef.current = selectionProjection
   useLayoutEffect(() => {
     try {
       props.onSelectionProjectionChange?.(selectionProjection)
@@ -2610,30 +2607,9 @@ function CanvasEditorContent(
       ),
     [history.document, selectedEdgeIds, selectedNodeIds, selectionActionController],
   )
-  const inspectorAction = useMemo<CanvasSelectionAction | null>(() => {
-    const inspector = selectionProjection.inspector
-    if (!inspector || !props.onInspectorRequest) return null
-    return {
-      execute(context) {
-        if (context.signal.aborted || selectionProjectionRef.current.inspector !== inspector) return
-        props.onInspectorRequest?.(inspector)
-      },
-      icon: <PanelRightOpen />,
-      id: "canvas.inspector.open",
-      label: "Open Inspector",
-      presentation: { placement: "primary" },
-    }
-  }, [props.onInspectorRequest, selectionProjection.inspector])
-  const availableSelectionActions = useMemo(
-    () =>
-      inspectorAction
-        ? [inspectorAction, ...(props.selectionActions ?? []).filter((action) => action.id !== inspectorAction.id)]
-        : (props.selectionActions ?? []),
-    [inspectorAction, props.selectionActions],
-  )
   const visibleSelectionActions = useMemo(
-    () => getVisibleCanvasSelectionActions(availableSelectionActions, selectionActionContext),
-    [availableSelectionActions, selectionActionContext],
+    () => getVisibleCanvasSelectionActions(props.selectionActions ?? [], selectionActionContext),
+    [props.selectionActions, selectionActionContext],
   )
   const visibleSelectionDragSource = useMemo(
     () => getVisibleCanvasSelectionDragSource(props.selectionDragSource, selectionActionContext),
