@@ -12,7 +12,6 @@ import { pluginExecutionAuthorizationIdentity } from "../src/main/plugin-install
 import type { InstalledPluginSnapshotDescriptor } from "../src/main/plugin-installation-snapshot-contracts"
 
 import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
-import { assertEmptyPersistedCanvasV2 } from "./desktop-packaged-smoke-canvas"
 import {
   assertAutomaticPreinstalledAuthorization,
   assertLocalMarketplaceIdentity,
@@ -452,13 +451,7 @@ async function seedProject(userDataRoot: string, projectRoot: string) {
   const entry = require.resolve("@convax/project/node")
   const projectNode = (await import(pathToFileURL(entry).href)) as typeof import("@convax/project/node")
   const projects = new projectNode.NodeProjectManager({ registryFile: path.join(userDataRoot, "projects.json") })
-  const project = await projects.addProject(projectRoot)
-  const canvases = new projectNode.NodeProjectCanvasManager(projects, projects)
-  const catalog = await canvases.getCanvasCatalog({ projectId: project.id })
-  if (catalog.canvases[0]?.id !== "canvas-main") {
-    throw new Error(`Packaged smoke could not seed canvas-main: ${JSON.stringify(catalog)}`)
-  }
-  return project
+  return projects.addProject(projectRoot)
 }
 
 const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-smoke-用户数据 😀-"))
@@ -493,6 +486,9 @@ try {
   }
   delete environment.CONVAX_USER_DATA_DIR
   delete environment.ELECTRON_RENDERER_URL
+  // The packaged smoke owns no deployment trust roots. Keep it offline and
+  // assert the current fail-closed collaboration surface deterministically.
+  delete environment.CONVAX_COLLABORATION_CONTROL_RUNTIME
   // Finder does not reliably provide shell locale variables. Exercise the final
   // macOS artifact under that GUI-style environment instead of inheriting the
   // terminal locale that launched this smoke harness.
@@ -550,9 +546,16 @@ try {
         )
       }
       const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
-      const canvasId = catalog.canvases[0]?.id
-      if (canvasId !== "canvas-main") throw new Error("The packaged Project did not expose canvas-main")
-      await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")
+      if (catalog.creationAvailability !== "team-authority-pending" || catalog.canvases.length !== 0) {
+        throw new Error("The packaged Project did not preserve its empty pending-authority catalog: " + JSON.stringify(catalog))
+      }
+      await waitFor(
+        () => document.querySelector('[data-project-collaboration-pending="true"]'),
+        "the packaged collaboration authority gate",
+      )
+      if (document.querySelector(".convax-canvas")) {
+        throw new Error("The packaged Desktop exposed a Canvas without admitted team authority")
+      }
       if (document.querySelector('[data-project-home="true"]')) {
         throw new Error("The packaged Desktop showed first-run onboarding despite having a seeded Project")
       }
@@ -607,13 +610,8 @@ try {
         () => document.querySelector('[data-marketplace-surface="true"]'),
         "the packaged Marketplace Settings surface",
       )
-      const loaded = await window.convax.canvas.documents.load({ canvasId, scopeId: project.id })
-      if (!loaded.document) throw new Error("The packaged Canvas document did not load")
-      if (loaded.document.nodes.length !== 0) {
-        throw new Error("The isolated packaged Canvas was not empty: " + JSON.stringify(loaded.document.nodes))
-      }
       return {
-        canvasId,
+        collaborationPending: true,
         defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
           catalogCard,
@@ -633,14 +631,14 @@ try {
       }
     })()`,
   )) as {
-    canvasId?: string
+    collaborationPending?: boolean
     defaultRemote?: { id?: string; version?: string }
     marketplace?: unknown
     projectId?: string
     protocol?: string
   }
   if (
-    seeded.canvasId !== "canvas-main" ||
+    seeded.collaborationPending !== true ||
     preinstalledDefaultExpected !== Boolean(seeded.defaultRemote) ||
     (seeded.defaultRemote !== undefined &&
       (seeded.defaultRemote.id !== defaultRemotePluginId || !seeded.defaultRemote.version)) ||
@@ -680,8 +678,6 @@ try {
     throw new Error(`Packaged OpenCode runtime did not become ready: ${JSON.stringify(agent)}`)
   }
 
-  const documentFile = path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json")
-  assertEmptyPersistedCanvasV2(await fs.readFile(documentFile, "utf8"))
   await assertLocalMarketplaceIdentity(userDataRoot)
   if (preinstalledDefaultExpected) {
     const defaultRemote = seeded.defaultRemote
