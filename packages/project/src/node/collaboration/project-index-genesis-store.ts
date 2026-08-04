@@ -49,6 +49,7 @@ import {
   type NodeCollaborationPersistenceFaultHooksV2,
   type NodeReplicaHeadMaterializerV2,
 } from "./persistence-store"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 const MANIFEST_MAGIC = Buffer.from("CVXPMV02", "ascii")
 const MANIFEST_HEADER_BYTES = 12
@@ -330,7 +331,7 @@ export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
   const staged = await lstatOrNull(staging)
   if (!staged) {
     await fs.mkdir(staging, { mode: 0o700 })
-    await fsyncDirectory(parent)
+    await fsyncProjectDirectoryV2(parent)
     await writeNewManifest(path.join(staging, "manifest-v2.bin"), expectedManifestBytes)
     await input.faults?.afterManifestFsync?.()
   } else if (!staged.isDirectory() || staged.isSymbolicLink()) {
@@ -341,7 +342,7 @@ export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
 
   const head = await initializeOrVerifyStagedStore(staging, input)
   await input.faults?.afterGenesisFsync?.()
-  await fsyncDirectory(staging)
+  await fsyncProjectDirectoryV2(staging)
   await input.faults?.beforePublishRename?.()
   try {
     await fs.rename(staging, target)
@@ -351,7 +352,7 @@ export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
     }
     throw error
   }
-  await fsyncDirectory(parent)
+  await fsyncProjectDirectoryV2(parent)
   return head
 }
 
@@ -514,7 +515,7 @@ async function writeNewManifest(target: string, bytes: Uint8Array): Promise<void
   } finally {
     await handle.close()
   }
-  await fsyncDirectory(path.dirname(target))
+  await fsyncProjectDirectoryV2(path.dirname(target))
 }
 
 async function readPlainBoundedFile(target: string): Promise<Uint8Array> {
@@ -536,11 +537,6 @@ async function lstatOrNull(target: string) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
     throw error
   })
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, "r")
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 function sameScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {

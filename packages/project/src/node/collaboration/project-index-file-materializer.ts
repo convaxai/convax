@@ -8,6 +8,10 @@ import type {
   ProjectIndexFileMaterializationProjectionPortV2,
 } from "../../canvas/project-index-file-application"
 import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
+import {
+  fsyncProjectDirectoryV2,
+  isNodeDirectoryDurabilityErrorV2,
+} from "./directory-durability"
 
 export interface ProjectIndexMaterializationBlobPortV2 {
   copyVerifiedBytesTo(reference: ProjectResourceReferenceV2, stagingPath: string): Promise<void>
@@ -94,7 +98,8 @@ export class ProjectIndexFileMaterializerV2 {
         await this.#ensureDirectory(entry.path)
         next.set(entry.entryId, tracked(entry))
         materializedPaths.push(entry.path)
-      } catch {
+      } catch (error) {
+        if (isNodeDirectoryDurabilityErrorV2(error)) throw error
         pendingPaths.push({ path: entry.path, code: "native-path-conflict" })
       }
     }
@@ -106,6 +111,7 @@ export class ProjectIndexFileMaterializerV2 {
         next.set(entry.entryId, tracked(entry))
         materializedPaths.push(entry.path)
       } catch (error) {
+        if (isNodeDirectoryDurabilityErrorV2(error)) throw error
         pendingPaths.push({ path: entry.path, code: isBlobUnavailable(error) ? "blob-unavailable" : "native-path-conflict" })
         if (previous) next.set(previous.entryId, previous)
       }
@@ -169,7 +175,7 @@ export class ProjectIndexFileMaterializerV2 {
         await fs.rename(staging, target)
       }
       await fsyncFile(target)
-      await fsyncDirectory(path.dirname(target))
+      await fsyncProjectDirectoryV2(path.dirname(target))
     } finally {
       await fs.rm(staging, { force: true }).catch(() => undefined)
     }
@@ -182,7 +188,7 @@ export class ProjectIndexFileMaterializerV2 {
     if (current === null) return true
     if (current !== entry.blobDigest) return false
     await fs.unlink(target)
-    await fsyncDirectory(path.dirname(target))
+    await fsyncProjectDirectoryV2(path.dirname(target))
     return true
   }
 
@@ -190,9 +196,10 @@ export class ProjectIndexFileMaterializerV2 {
     const target = this.#absolute(portablePath)
     try {
       await fs.rmdir(target)
-      await fsyncDirectory(path.dirname(target))
+      await fsyncProjectDirectoryV2(path.dirname(target))
       return true
     } catch (error) {
+      if (isNodeDirectoryDurabilityErrorV2(error)) throw error
       if (isNodeError(error) && (error.code === "ENOENT" || error.code === "ENOTEMPTY")) return error.code === "ENOENT"
       return false
     }
@@ -268,11 +275,6 @@ async function digestRegularFile(target: string): Promise<DigestV2 | null> {
 }
 
 async function fsyncFile(target: string): Promise<void> {
-  const handle = await fs.open(target, "r")
-  try { await handle.sync() } finally { await handle.close() }
-}
-
-async function fsyncDirectory(target: string): Promise<void> {
   const handle = await fs.open(target, "r")
   try { await handle.sync() } finally { await handle.close() }
 }

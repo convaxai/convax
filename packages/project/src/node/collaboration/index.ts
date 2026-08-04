@@ -1,4 +1,5 @@
 export * from "./native-store-keys"
+export * from "./directory-durability"
 export * from "./blob-replication-store"
 export * from "./persistence-store"
 export * from "./portable-cutover"

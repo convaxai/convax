@@ -25,7 +25,7 @@ beforeEach(async () => {
 
 afterEach(async () => { await fs.rm(temporaryRoot, { recursive: true, force: true }) })
 
-describe("ProjectIndexFileMaterializerV2", () => {
+describe.skipIf(process.platform === "win32")("ProjectIndexFileMaterializerV2 real-filesystem durability", () => {
   test("materializes simultaneous peer Markdown heads as primary plus deterministic conflict copy", async () => {
     const primary = encoder.encode("peer A\n")
     const conflict = encoder.encode("peer B\n")

@@ -16,6 +16,7 @@ import {
 
 const roots: string[] = []
 const epoch = "AQEBAQEBAQEBAQEBAQEBAQ"
+const durabilityTest = test.skipIf(process.platform === "win32")
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
@@ -121,7 +122,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe("changed")
   })
 
-  test("keeps a verified genesis staged when the team service is unavailable", async () => {
+  durabilityTest("keeps a verified genesis staged when the team service is unavailable", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     const result = await executeWithLease(
@@ -133,7 +134,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
-  test("allows only a verifier-proven non-team Project to allocate and publish a local epoch", async () => {
+  durabilityTest("allows only a verifier-proven non-team Project to allocate and publish a local epoch", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     const localEpoch = allocateLocalProjectEpoch()
@@ -170,7 +171,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(rejectedRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe("catalog")
   })
 
-  test("never publishes a rejected staged genesis or epoch receipt", async () => {
+  durabilityTest("never publishes a rejected staged genesis or epoch receipt", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     await expect(
@@ -179,7 +180,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe("catalog")
   })
 
-  test("binds authorization to the exact supplied evidence", async () => {
+  durabilityTest("binds authorization to the exact supplied evidence", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     const exactEvidence = new Uint8Array([7, 8, 9])
@@ -205,7 +206,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe("catalog")
   })
 
-  test("publishes by same-filesystem swap while preserving stable identity and ordinary files", async () => {
+  durabilityTest("publishes by same-filesystem swap while preserving stable identity and ordinary files", async () => {
     const projectRoot = await createLegacyProject()
     const manifestBefore = await fs.readFile(path.join(projectRoot, ".convax", "project.json"))
     const plan = await planPortableProjectReset(projectRoot)
@@ -225,7 +226,7 @@ describe("portable collaboration cutover", () => {
     expect((await inspectPortableProjectCutover(projectRoot)).status).toBe("current")
   })
 
-  test("binds receipt verification to the exact reset intent and rejects a staging symlink", async () => {
+  durabilityTest("binds receipt verification to the exact reset intent and rejects a staging symlink", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     let verifiedIntent: string | undefined
@@ -290,7 +291,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "utf8")).toBe("catalog")
   })
 
-  test("strictly retries an existing stage after genesis publication crashes", async () => {
+  durabilityTest("strictly retries an existing stage after genesis publication crashes", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     let attempts = 0
@@ -312,7 +313,7 @@ describe("portable collaboration cutover", () => {
     expect(attempts).toBe(2)
   })
 
-  test("rejects a symlink injected into the staged tree immediately before publication", async () => {
+  durabilityTest("rejects a symlink injected into the staged tree immediately before publication", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     const outside = path.join(projectRoot, "outside.bin")
@@ -339,7 +340,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(outside, "utf8")).toBe("outside")
   })
 
-  test("retains both complete trees when post-publication verification fails", async () => {
+  durabilityTest("retains both complete trees when post-publication verification fails", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     const rejectedReopen = verifier("verified")
@@ -352,7 +353,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
-  test("never follows a replacement retirement-tree symlink while deleting approved private bytes", async () => {
+  durabilityTest("never follows a replacement retirement-tree symlink while deleting approved private bytes", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     await expect(
@@ -376,7 +377,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
-  test("a crash after the first rename fails closed as recovery-required", async () => {
+  durabilityTest("a crash after the first rename fails closed as recovery-required", async () => {
     const projectRoot = await createLegacyProject()
     const plan = await planPortableProjectReset(projectRoot)
     await expect(

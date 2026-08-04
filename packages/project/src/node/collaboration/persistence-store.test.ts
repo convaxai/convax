@@ -31,13 +31,14 @@ const projectEpoch = id128(1)
 const shardEpoch = id128(2)
 const localActor = actorId(1)
 const remoteActor = actorId(2)
+const durabilityTest = test.skipIf(process.platform === "win32")
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
 describe("NodeCollaborationPersistenceV2", () => {
-  test("physically shards ProjectIndex and Canvas without raw identities in paths", async () => {
+  durabilityTest("physically shards ProjectIndex and Canvas without raw identities in paths", async () => {
     const fixture = await createFixture()
     const index = projectIndexScope()
     const canvas = canvasScope()
@@ -53,7 +54,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("publishes checkpoint, base, head and genesis proof behind one idempotent shard barrier", async () => {
+  durabilityTest("publishes checkpoint, base, head and genesis proof behind one idempotent shard barrier", async () => {
     const fixture = await createFixture()
     const scope = canvasScope()
     const input = genesisProofInput(scope, "proof-one")
@@ -67,7 +68,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("fails closed when the sole durable head loses its installed checkpoint-set closure", async () => {
+  durabilityTest("fails closed when the sole durable head loses its installed checkpoint-set closure", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
@@ -84,7 +85,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("installs a verified checkpoint set behind object, journal and sole-head barriers", async () => {
+  durabilityTest("installs a verified checkpoint set behind object, journal and sole-head barriers", async () => {
     const fixture = await createFixture({}, undefined, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -112,7 +113,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("does not write checkpoint candidates for a stale sole head", async () => {
+  durabilityTest("does not write checkpoint candidates for a stale sole head", async () => {
     const fixture = await createFixture({}, undefined, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
@@ -131,7 +132,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("prunes only after dual authority, a new journal-base head and a second complete root scan", async () => {
+  durabilityTest("prunes only after dual authority, a new journal-base head and a second complete root scan", async () => {
     const beforeRoots = digest("roots-before")
     const afterRoots = digest("roots-after")
     let scan = 0
@@ -193,7 +194,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("does not publish a partial genesis and resumes the same G after staging loss", async () => {
+  durabilityTest("does not publish a partial genesis and resumes the same G after staging loss", async () => {
     let fail = true
     const fixture = await createFixture({
       afterGenesisStagingFsync: async () => {
@@ -213,7 +214,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("crosses object, outbox, journal and sole-head barriers before ACK eligibility", async () => {
+  durabilityTest("crosses object, outbox, journal and sole-head barriers before ACK eligibility", async () => {
     const events: string[] = []
     const fixture = await createFixture({
       afterFrameFileFsync: async () => { events.push("frame") },
@@ -246,7 +247,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("exposes only the installed base and accepted exact frame closure", async () => {
+  durabilityTest("exposes only the installed base and accepted exact frame closure", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -271,7 +272,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("retains dependency-pending exact bytes durably and idempotently outside accepted objects", async () => {
+  durabilityTest("retains dependency-pending exact bytes durably and idempotently outside accepted objects", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
@@ -299,7 +300,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("lists only exact durable outbox frames and retains them for separate ACK policy", async () => {
+  durabilityTest("lists only exact durable outbox frames and retains them for separate ACK policy", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -327,7 +328,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("journals a verified replica ACK before retiring the frame outbox and reopens it idempotently", async () => {
+  durabilityTest("journals a verified replica ACK before retiring the frame outbox and reopens it idempotently", async () => {
     const fixture = await createFixture({}, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -345,7 +346,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("recovers an ACK journal below head before outbox retirement", async () => {
+  durabilityTest("recovers an ACK journal below head before outbox retirement", async () => {
     let armed = false
     const verifier = { verifyCurrent: async () => true }
     const fixture = await createFixture({ afterJournalFileFsync: async () => { if (armed) throw new Error("ack crash") } }, verifier)
@@ -367,7 +368,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("closes the shard when outbox cleanup is visible but its durable ACK object is missing", async () => {
+  durabilityTest("closes the shard when outbox cleanup is visible but its durable ACK object is missing", async () => {
     const fixture = await createFixture({}, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -391,7 +392,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("fails closed on an unexpected outbox filename instead of skipping it", async () => {
+  durabilityTest("fails closed on an unexpected outbox filename instead of skipping it", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
@@ -409,7 +410,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("reopen completes the exact journal-below-head frame without command replay", async () => {
+  durabilityTest("reopen completes the exact journal-below-head frame without command replay", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
@@ -432,7 +433,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("accepts a complete head after response loss immediately after rename", async () => {
+  durabilityTest("accepts a complete head after response loss immediately after rename", async () => {
     let crash = true
     const fixture = await createFixture({
       afterHeadRename: async () => {
@@ -467,7 +468,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("lookup distinguishes object-only, same-frame recovery and accepted", async () => {
+  durabilityTest("lookup distinguishes object-only, same-frame recovery and accepted", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
@@ -487,7 +488,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     fixture.store.dispose()
   })
 
-  test("reopens an opaque object-only frame after loss at the immutable-object barrier", async () => {
+  durabilityTest("reopens an opaque object-only frame after loss at the immutable-object barrier", async () => {
     let crash = true
     const fixture = await createFixture({
       afterFrameFileFsync: async () => {
@@ -516,7 +517,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     reopened.dispose()
   })
 
-  test("stale head evidence quarantines the shard instead of exposing a version conflict", async () => {
+  durabilityTest("stale head evidence quarantines the shard instead of exposing a version conflict", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)

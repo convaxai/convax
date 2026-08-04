@@ -7,6 +7,7 @@ import { NodeProjectCollaborationRecoveryServiceV1 } from "./project-collaborati
 
 const roots: string[] = []
 const projectId = "project-recovery"
+const durabilityTest = test.skipIf(process.platform === "win32")
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
@@ -31,7 +32,7 @@ describe("NodeProjectCollaborationRecoveryServiceV1", () => {
     expect(preview.preview.some((entry) => "byteLength" in entry || "contentDigest" in entry)).toBe(false)
   })
 
-  test("re-plans under the Project close gate and publishes only verifier-approved genesis", async () => {
+  durabilityTest("re-plans under the Project close gate and publishes only verifier-approved genesis", async () => {
     const root = await createLegacyProject()
     let gateEntered = false
     let authorityPreparedInsideGate = false

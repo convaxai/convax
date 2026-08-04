@@ -64,6 +64,13 @@ This package owns the durable Project aggregate and native Project adapters.
   evidence can be signed. A remote blob ACK is audit/status evidence only and marks
   a new reference replicated only together with a frame ACK from that same current
   credential-bound replica.
+- Collaboration v1 durable publication is supported by the current Project/node
+  adapter on macOS and Linux only. Ordinary Node/Bun directory `fsync` reports
+  `EPERM` on Windows and is normalized solely to
+  `NodeDirectoryDurabilityUnavailableErrorV2`; it is never success, never a durable
+  ACK, and never a materialization conflict. Windows collaboration mutation remains
+  fail-closed until a reviewed native write-through adapter satisfies the frozen
+  barriers or a later authority revision defines another equivalent primitive.
 - Structural durable ACKs are exact immutable objects. Project/node journals the
   verified ACK and advances the sole durable head before retiring the frame outbox;
   retry must match the accepted exact ACK. Reopen treats an ACK journal with a

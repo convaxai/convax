@@ -35,6 +35,7 @@ import {
   deriveJournalSegmentNativeKeyV2,
   deriveObjectNativeKeyV2,
 } from "./native-store-keys"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 const LOCAL_RECORD_DOMAIN = Buffer.from("convax.local-project-store-record-digest/2\0", "utf8")
 const OPERATION_INDEX_DOMAIN = Buffer.from("convax.local-operation-index-key/2\0", "utf8")
@@ -577,7 +578,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
           acceptedActorHeadsDigest: baseRecord.actorHeadsDigest,
         }
         await replaceDurableRecord(layout.durableHead, head)
-        await fsyncDirectory(layout.directory)
+        await fsyncProjectDirectoryV2(layout.directory)
         return freezeHead(input.acceptedBase, localRecordDigest(head))
       } catch (error) {
         throw classifyNativeFailure(error)
@@ -603,14 +604,14 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       if (stagedStat) {
         if (!stagedStat.isDirectory() || stagedStat.isSymbolicLink()) corrupt("Canvas genesis staging path is untrusted")
         await fs.rm(stagingDirectory, { recursive: true })
-        await fsyncDirectory(path.dirname(stagingDirectory))
+        await fsyncProjectDirectoryV2(path.dirname(stagingDirectory))
       }
       await this.createDocumentLayout(staging)
       try {
         const head = await this.populateInitialShard(staging, input, proofCarrierExactBytes)
         await this.hooks.afterGenesisStagingFsync?.()
         await fs.rename(stagingDirectory, layout.directory)
-        await fsyncDirectory(path.dirname(layout.directory))
+        await fsyncProjectDirectoryV2(path.dirname(layout.directory))
         return head
       } catch (error) {
         throw classifyNativeFailure(error)
@@ -665,7 +666,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       acceptedActorHeadsDigest: baseRecord.actorHeadsDigest,
     }
     await replaceDurableRecord(layout.durableHead, head)
-    await fsyncDirectory(layout.directory)
+    await fsyncProjectDirectoryV2(layout.directory)
     return freezeHead(input.acceptedBase, localRecordDigest(head))
   }
 
@@ -818,7 +819,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
           if (existing.digest !== journalDigest) corrupt("Checkpoint journal sequence is occupied by another transition")
         } else {
           await writeDurableNewFile(journalPath, encodeRecord(journalRecord))
-          await fsyncDirectory(layout.journalSegments)
+          await fsyncProjectDirectoryV2(layout.journalSegments)
           await this.hooks.afterJournalFileFsync?.()
         }
         const head: LocalDurableHeadV2 = {
@@ -1148,7 +1149,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       }
       const journalRecordDigest = localRecordDigest(record)
       await writeDurableNewFile(target, encodeRecord(record))
-      await fsyncDirectory(layout.journalSegments)
+      await fsyncProjectDirectoryV2(layout.journalSegments)
       await this.hooks.afterJournalFileFsync?.()
       return Object.freeze({ ref, journalRecordDigest })
     })
@@ -1417,7 +1418,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
         if (existing.digest !== journalDigest) corrupt("ACK journal sequence is occupied by another transition")
       } else {
         await writeDurableNewFile(journalPath, encodeRecord(journalRecord))
-        await fsyncDirectory(layout.journalSegments)
+        await fsyncProjectDirectoryV2(layout.journalSegments)
         await this.hooks.afterJournalFileFsync?.()
       }
       const head: LocalDurableHeadV2 = {
@@ -1773,8 +1774,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
         }
         if (await fileExists(trash)) corrupt("Prune trash already contains a conflicting candidate")
         await fs.rename(source, trash)
-        await fsyncDirectory(directory)
-        await fsyncDirectory(layout.pruneTrash)
+        await fsyncProjectDirectoryV2(directory)
+        await fsyncProjectDirectoryV2(layout.pruneTrash)
       }
       const trashStat = await fs.lstat(trash).catch((error) => {
         if (isNodeError(error) && error.code === "ENOENT") return null
@@ -1785,7 +1786,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
         corrupt("Prune trash candidate identity changed")
       }
       await fs.unlink(trash)
-      await fsyncDirectory(layout.pruneTrash)
+      await fsyncProjectDirectoryV2(layout.pruneTrash)
       deleted += 1
     }
     return deleted
@@ -1796,7 +1797,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     await fs.unlink(target).catch((error) => {
       if (!isNodeError(error) || error.code !== "ENOENT") throw error
     })
-    await fsyncDirectory(layout.outboxFrames)
+    await fsyncProjectDirectoryV2(layout.outboxFrames)
   }
 
   private async findJournalForFrame(layout: DocumentLayoutV2, frameDigest: DigestV2): Promise<boolean> {
@@ -1956,8 +1957,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     ]) {
       await ensureTrustedDirectory(directory, this.collaborationDirectory)
     }
-    await fsyncDirectory(layout.directory)
-    await fsyncDirectory(path.dirname(layout.directory))
+    await fsyncProjectDirectoryV2(layout.directory)
+    await fsyncProjectDirectoryV2(path.dirname(layout.directory))
   }
 
   private layout(scope: DocumentScopeV2): DocumentLayoutV2 {
@@ -2554,7 +2555,7 @@ async function writeDurableNewFile(target: string, exactBytes: Readonly<Uint8Arr
   } finally {
     await handle.close()
   }
-  await fsyncDirectory(path.dirname(target))
+  await fsyncProjectDirectoryV2(path.dirname(target))
 }
 
 async function replaceDurableRecord(
@@ -2582,7 +2583,7 @@ async function replaceDurableRecord(
     if (destination?.isSymbolicLink()) corrupt("Durable pointer destination is a symbolic link")
     await fs.rename(temporary, target)
     await hooks.afterHeadRename?.()
-    await fsyncDirectory(directory)
+    await fsyncProjectDirectoryV2(directory)
     await hooks.afterHeadDirectoryFsync?.()
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined)
@@ -2602,15 +2603,6 @@ async function assertTrustedParent(target: string): Promise<void> {
   const parent = path.dirname(target)
   const stat = await fs.lstat(parent)
   if (!stat.isDirectory() || stat.isSymbolicLink()) corrupt("Native write parent is not a trusted directory")
-}
-
-async function fsyncDirectory(directory: string): Promise<void> {
-  const handle = await fs.open(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try {
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
 }
 
 async function assertMissing(target: string): Promise<void> {

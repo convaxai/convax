@@ -63,13 +63,14 @@ const authority = {
   uriProtocolDigest: parseDigestV2("9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38"),
 }
 const localActor = actor(7)
+const durabilityTest = test.skipIf(process.platform === "win32")
 
 afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true })
 })
 
 describe("ProjectIndex native genesis store", () => {
-  test("publishes a new unteamed Project atomically and reopens the exact installed base", async () => {
+  durabilityTest("publishes a new unteamed Project atomically and reopens the exact installed base", async () => {
     const fixture = await createFixture()
     const first = await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
     expect(first.scope).toEqual(scope)
@@ -93,7 +94,7 @@ describe("ProjectIndex native genesis store", () => {
     }
   })
 
-  test("rejects unknown manifest fields, checksum tampering and stale live authority", async () => {
+  durabilityTest("rejects unknown manifest fields, checksum tampering and stale live authority", async () => {
     const fixture = await createFixture()
     const exact = encodeProjectNativeStoreManifestV2(fixture.genesis.manifest)
     const payloadLength = Buffer.from(exact).readUInt32BE(8)
@@ -109,7 +110,7 @@ describe("ProjectIndex native genesis store", () => {
     })).rejects.toThrow("authority is not current")
   })
 
-  test("resumes the same staged genesis after crashes but rejects another epoch as equivocation", async () => {
+  durabilityTest("resumes the same staged genesis after crashes but rejects another epoch as equivocation", async () => {
     const fixture = await createFixture()
     let failManifest = true
     await expect(initializeUnteamedProjectIndexNativeStoreV2({
@@ -123,7 +124,7 @@ describe("ProjectIndex native genesis store", () => {
     await expect(initializeUnteamedProjectIndexNativeStoreV2(another.input)).rejects.toThrow("equivocation")
   })
 
-  test("resumes after durable genesis and detects an altered installed base on restart", async () => {
+  durabilityTest("resumes after durable genesis and detects an altered installed base on restart", async () => {
     const fixture = await createFixture()
     let failGenesis = true
     await expect(initializeUnteamedProjectIndexNativeStoreV2({

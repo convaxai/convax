@@ -39,6 +39,7 @@ import {
   projectResourceReferenceDigestV2,
   type ProjectResourceReferenceV2,
 } from "../../collaboration/project-index"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 const digestPattern = /^[0-9a-f]{64}$/u
 const maximumBlobBytes = 64n * 1024n * 1024n * 1024n
@@ -257,7 +258,7 @@ export class ProjectBlobReplicationStoreV2 {
       try {
         await verifyFile(stagingPath, reference.blob.digest, reference.blob.byteLength)
         await fsyncFile(stagingPath)
-        await fsyncDirectory(path.dirname(stagingPath))
+        await fsyncProjectDirectoryV2(path.dirname(stagingPath))
       } catch (error) {
         await fs.rm(stagingPath, { force: true }).catch(() => undefined)
         throw error
@@ -482,7 +483,7 @@ export class ProjectBlobReplicationStoreV2 {
       const published: TransferRecordV2 = Object.freeze({ ...record, state: "published" })
       await replaceJcs(metadataPath, published)
       await fs.rm(partialPath, { force: true })
-      await fsyncDirectory(this.#transfersRoot)
+      await fsyncProjectDirectoryV2(this.#transfersRoot)
       return evidence
     })
   }
@@ -606,8 +607,8 @@ export class ProjectBlobReplicationStoreV2 {
       await verifyFile(target, reference.blob.digest, reference.blob.byteLength)
     }
     await fsyncFile(target)
-    await fsyncDirectory(path.dirname(target))
-    await fsyncDirectory(this.#cacheRoot)
+    await fsyncProjectDirectoryV2(path.dirname(target))
+    await fsyncProjectDirectoryV2(this.#cacheRoot)
     const objectKey = `sha256/${reference.blob.digest.slice(0, 2)}/${reference.blob.digest}`
     const without = this.#presence.entries.filter((entry) => entry.blobSha256 !== reference.blob.digest)
     await this.#replacePresence([...without, Object.freeze({
@@ -837,7 +838,7 @@ async function requireRealDirectory(target: string, label: string): Promise<stri
 async function writeNewDurable(target: string, bytes: Readonly<Uint8Array>) {
   const handle = await fs.open(target, "wx", 0o600)
   try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
-  await fsyncDirectory(path.dirname(target))
+  await fsyncProjectDirectoryV2(path.dirname(target))
 }
 
 async function writeNewOrVerify(target: string, bytes: Uint8Array) {
@@ -853,7 +854,7 @@ async function replaceJcs(target: string, value: unknown) {
   try {
     await writeNewDurable(temporary, encodeRestrictedJcsV2(value))
     await fs.rename(temporary, target)
-    await fsyncDirectory(path.dirname(target))
+    await fsyncProjectDirectoryV2(path.dirname(target))
   } finally { await fs.rm(temporary, { force: true }).catch(() => undefined) }
 }
 
@@ -871,5 +872,4 @@ async function readJcsIfPresent(target: string): Promise<unknown | null> {
 }
 
 async function fsyncFile(target: string) { const handle = await fs.open(target, "r"); try { await handle.sync() } finally { await handle.close() } }
-async function fsyncDirectory(target: string) { const handle = await fs.open(target, "r"); try { await handle.sync() } finally { await handle.close() } }
 function isNodeError(error: unknown): error is NodeJS.ErrnoException { return error instanceof Error && "code" in error }

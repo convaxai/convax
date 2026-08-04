@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 export type ProjectResetConfirmationTokenV1 = `reset-host-${string}` & { readonly __projectResetToken: unique symbol }
 
@@ -331,15 +332,15 @@ export async function executePortableProjectReset(
     token: plan.token,
   })
   await writeDurableNewFile(recoveryPath, recoveryEnvelope)
-  await fsyncDirectory(plan.projectRoot)
+  await fsyncProjectDirectoryV2(plan.projectRoot)
   try {
     await assertPlainDirectory(convaxDirectory, "Project .convax", "RECOVERY_REQUIRED")
     await assertPlainDirectory(stagedConvaxDirectory, "Reset staging directory", "RECOVERY_REQUIRED")
     await fs.rename(convaxDirectory, backupDirectory)
-    await fsyncDirectory(plan.projectRoot)
+    await fsyncProjectDirectoryV2(plan.projectRoot)
     await input.faultHooks?.afterOriginalRenamed?.()
     await fs.rename(stagedConvaxDirectory, convaxDirectory)
-    await fsyncDirectory(plan.projectRoot)
+    await fsyncProjectDirectoryV2(plan.projectRoot)
     if ((await snapshotDirectoryDigest(convaxDirectory)) !== stagedTreeDigest) {
       throw new Error("Published Project tree differs from the verified staged tree")
     }
@@ -361,9 +362,9 @@ export async function executePortableProjectReset(
       throw new Error("Retired Project tree differs from the confirmed deletion set")
     }
     await fs.rm(backupDirectory, { recursive: true })
-    await fsyncDirectory(plan.projectRoot)
+    await fsyncProjectDirectoryV2(plan.projectRoot)
     await fs.rm(recoveryPath)
-    await fsyncDirectory(plan.projectRoot)
+    await fsyncProjectDirectoryV2(plan.projectRoot)
     return { projectId: plan.projectId, status: "published" }
   } catch (error) {
     throw new PortableProjectResetError(
@@ -668,22 +669,13 @@ async function fsyncTree(directory: string): Promise<void> {
       }
     }
   }
-  await fsyncDirectory(directory)
+  await fsyncProjectDirectoryV2(directory)
 }
 
 async function writeDurableNewFile(target: string, bytes: Uint8Array) {
   const handle = await fs.open(target, "wx", 0o600)
   try {
     await handle.writeFile(bytes)
-    await handle.sync()
-  } finally {
-    await handle.close()
-  }
-}
-
-async function fsyncDirectory(directory: string) {
-  const handle = await fs.open(directory, "r")
-  try {
     await handle.sync()
   } finally {
     await handle.close()

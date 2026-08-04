@@ -20,7 +20,7 @@ const projectEpoch = id(1)
 
 afterEach(async () => Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true }))))
 
-describe("Project remote-ingress COW74 map", () => {
+describe.skipIf(process.platform === "win32")("Project remote-ingress COW74 map real-filesystem durability", () => {
   test("publishes and reopens the exact empty root", async () => {
     const fixture = await open("stable-key-state")
     const published = await fixture.map.publish([], "0" as never)

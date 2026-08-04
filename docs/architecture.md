@@ -837,6 +837,15 @@ state changes.
 contiguous-prefix cursor, verifies exact duplicate chunks from staged bytes, and
 returns plain ACK-signing evidence only after full length/SHA-256, create-new
 content-addressed publication, file/directory fsync and presence-index fsync.
+The current v1 Project/node adapter can prove those barriers on macOS and Linux.
+Ordinary Node/Bun directory `fsync` returns `EPERM` on Windows, so the shared native
+boundary raises `NodeDirectoryDurabilityUnavailableErrorV2` and collaboration
+mutation fails closed before any durable ACK, saved-locally result, blob durability
+evidence or successful materialization result may be claimed. The error is not a
+native-path conflict and must not be swallowed. Windows durable collaboration
+publication remains unavailable until a reviewed native write-through adapter
+satisfies the frozen barriers, or a later authority revision specifies another
+equivalent primitive; read-only Project inspection is not disabled by this boundary.
 The ProjectIndex owner also projects a stable-entry materialization plan containing
 only the resolved current location and exact hash-pinned resource. Project/node's
 single native materializer subscribes to accepted ProjectIndex invalidations and

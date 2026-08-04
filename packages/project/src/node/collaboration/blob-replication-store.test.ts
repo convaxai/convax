@@ -30,9 +30,10 @@ const receiver = {
   receiverAuthorizationDigest: ordinarySha256V2(new TextEncoder().encode("authorization")),
 }
 const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(9)))
+const durabilityTest = test.skipIf(process.platform === "win32")
 
 describe("Project/node blob replication store", () => {
-  test("resumes chunks after restart, accepts exact duplicates, verifies digest before durable evidence and bootstraps have", async () => {
+  durabilityTest("resumes chunks after restart, accepts exact duplicates, verifies digest before durable evidence and bootstraps have", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-store-"))
     try {
       const senderDirectory = await collaborationDirectory(root, "sender")
@@ -65,7 +66,7 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
-  test("rejects digest tampering and transfer-id equivocation", async () => {
+  durabilityTest("rejects digest tampering and transfer-id equivocation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-tamper-"))
     try {
       const sender = await open(await collaborationDirectory(root, "sender"))
@@ -81,7 +82,7 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
-  test("publishes only verified create-new materialization staging and notifies durable observers", async () => {
+  durabilityTest("publishes only verified create-new materialization staging and notifies durable observers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-materialize-"))
     try {
       const store = await open(await collaborationDirectory(root, "project"))
@@ -99,7 +100,7 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
-  test("persists verified remote ACK but keeps it pending until the same current replica frame ACK exists", async () => {
+  durabilityTest("persists verified remote ACK but keeps it pending until the same current replica frame ACK exists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-ack-"))
     try {
       const directory = await collaborationDirectory(root, "sender")
@@ -116,7 +117,7 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
-  test("delays unreferenced cache GC across restart and deletes nothing when a root scan fails", async () => {
+  durabilityTest("delays unreferenced cache GC across restart and deletes nothing when a root scan fails", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-gc-"))
     let now = 1_000
     try {

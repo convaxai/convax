@@ -19,6 +19,7 @@ import {
   type Uint64V2,
 } from "@convax/collaboration"
 import { deriveObjectNativeKeyV2 } from "./native-store-keys"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 export type RemoteIngressEvidenceMapKindV2 = "stable-key-state" | "member-quota"
 
@@ -404,7 +405,7 @@ async function putImmutable(directory: string, kind: string, digest: DigestV2, b
     const winner = await fs.readFile(target)
     if (!Buffer.from(winner).equals(Buffer.from(bytes))) throw new Error("Immutable COW object equivocation")
   } finally { await fs.unlink(temporary).catch(() => undefined) }
-  await fsyncDirectory(directory)
+  await fsyncProjectDirectoryV2(directory)
 }
 
 async function readImmutable(directory: string, kind: string, digest: DigestV2): Promise<Uint8Array> {
@@ -418,12 +419,6 @@ async function ensureRealDirectory(directory: string): Promise<void> {
   await fs.mkdir(directory, { recursive: true, mode: 0o700 })
   const stat = await fs.lstat(directory)
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("COW directory is untrusted")
-}
-
-async function fsyncDirectory(directory: string) {
-  if (process.platform === "win32") return
-  const handle = await fs.open(directory, "r")
-  try { await handle.sync() } finally { await handle.close() }
 }
 
 function assertKeys(value: unknown, expected: readonly string[]): asserts value is Record<string, unknown> {

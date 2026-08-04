@@ -21,7 +21,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
-describe("Project reset record store", () => {
+describe.skipIf(process.platform === "win32")("Project reset record store real-filesystem durability", () => {
   test("repairs an exact fsynced envelope transition left before atomic rename", async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-reset-records-"))
     roots.push(directory)

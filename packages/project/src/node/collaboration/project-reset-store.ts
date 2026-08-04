@@ -17,6 +17,7 @@ import {
   type ProjectResetConfirmationV2,
   type ProjectResetReasonV2,
 } from "../../collaboration-protocol/project-reset"
+import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 const RECORDS_FILE = "project-reset-records-v2.jcs"
 const MAX_RECORD_BYTES = 64 * 1024
@@ -184,8 +185,7 @@ async function writeOrReplaceRecord(target: string, bytes: Uint8Array): Promise<
     await fs.rm(temporary, { force: true }).catch(() => undefined)
     throw error
   }
-  const directory = await fs.open(path.dirname(target), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
-  try { await directory.sync() } finally { await directory.close() }
+  await fsyncProjectDirectoryV2(path.dirname(target))
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
