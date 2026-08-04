@@ -30,12 +30,13 @@ describe("Desktop Project startup wiring", () => {
     expect(indexSource).not.toContain("openDesktopHome")
   })
 
-  test("packaged smoke requires a seeded Project to bypass onboarding", () => {
-    expect(packagedSmokeSource).toContain(
+  test("packaged smoke seeds a Project without bypassing collaboration authority", () => {
+    expect(packagedSmokeSource).toContain("the packaged collaboration authority gate")
+    expect(packagedSmokeSource).toContain("OS-backed replica signing vault is unavailable")
+    expect(packagedSmokeSource).toContain("The packaged Desktop exposed a Canvas without admitted team authority")
+    expect(packagedSmokeSource).toContain("showed first-run onboarding despite having a seeded Project")
+    expect(packagedSmokeSource).not.toContain(
       'await waitFor(() => document.querySelector(".convax-canvas"), "the packaged Canvas")',
-    )
-    expect(packagedSmokeSource).toContain(
-      "showed first-run onboarding despite having a seeded Project",
     )
     expect(packagedSmokeSource).not.toContain("the packaged Home or Canvas")
     expect(packagedSmokeSource).not.toContain("the seeded Project entry")

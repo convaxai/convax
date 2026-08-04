@@ -545,14 +545,24 @@ try {
           + ${JSON.stringify(seededProject.id)} + ", got " + JSON.stringify(projects.projects),
         )
       }
-      const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
-      if (catalog.creationAvailability !== "team-authority-pending" || catalog.canvases.length !== 0) {
-        throw new Error("The packaged Project did not preserve its empty pending-authority catalog: " + JSON.stringify(catalog))
+      const linuxSecureStorageMayBeUnavailable = ${JSON.stringify(process.platform === "linux")}
+      let collaborationState = "team-authority-pending"
+      try {
+        const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
+        if (catalog.creationAvailability !== "team-authority-pending" || catalog.canvases.length !== 0) {
+          throw new Error("The packaged Project did not preserve its empty pending-authority catalog: " + JSON.stringify(catalog))
+        }
+        await waitFor(
+          () => document.querySelector('[data-project-collaboration-pending="true"]'),
+          "the packaged collaboration authority gate",
+        )
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        if (!linuxSecureStorageMayBeUnavailable || !message.includes("OS-backed replica signing vault is unavailable")) {
+          throw error
+        }
+        collaborationState = "secure-vault-unavailable"
       }
-      await waitFor(
-        () => document.querySelector('[data-project-collaboration-pending="true"]'),
-        "the packaged collaboration authority gate",
-      )
       if (document.querySelector(".convax-canvas")) {
         throw new Error("The packaged Desktop exposed a Canvas without admitted team authority")
       }
@@ -611,7 +621,7 @@ try {
         "the packaged Marketplace Settings surface",
       )
       return {
-        collaborationPending: true,
+        collaborationState,
         defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
           catalogCard,
@@ -631,14 +641,17 @@ try {
       }
     })()`,
   )) as {
-    collaborationPending?: boolean
+    collaborationState?: string
     defaultRemote?: { id?: string; version?: string }
     marketplace?: unknown
     projectId?: string
     protocol?: string
   }
+  const expectedCollaborationState =
+    seeded.collaborationState === "team-authority-pending" ||
+    (process.platform === "linux" && seeded.collaborationState === "secure-vault-unavailable")
   if (
-    seeded.collaborationPending !== true ||
+    !expectedCollaborationState ||
     preinstalledDefaultExpected !== Boolean(seeded.defaultRemote) ||
     (seeded.defaultRemote !== undefined &&
       (seeded.defaultRemote.id !== defaultRemotePluginId || !seeded.defaultRemote.version)) ||
