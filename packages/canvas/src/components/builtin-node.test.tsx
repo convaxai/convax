@@ -190,6 +190,7 @@ function renderWithEditor(
     canRelinkResource: options.canRelinkResource ?? false,
     commit: options.commit ?? (() => {}),
     connectionNodeTypes: [],
+    quickConnectionNodeTypes: [],
     document: options.document ?? createCanvasDocument({ id: "canvas-test", nodes: [targetNode] }),
     duplicateNode: () => {},
     endGesture: () => {},

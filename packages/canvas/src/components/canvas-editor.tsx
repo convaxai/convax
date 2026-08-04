@@ -1674,6 +1674,13 @@ function CanvasEditorContent(
     ],
     [fileRendererRegistryVersion, props.fileRendererRegistry, props.nodeRegistry, registryVersion],
   )
+  // R5 can atomically create connected resource nodes, but it has no generic
+  // create-agent-plus-edge intent. Keep unsupported compound writes out of the UI
+  // instead of splitting one user action into two independently durable frames.
+  const quickConnectionNodeTypes = useMemo(
+    () => connectionNodeTypes.filter((definition) => definition.type === "text"),
+    [connectionNodeTypes],
+  )
 
   useEffect(() => {
     const active = generationControllerRef.current
@@ -3949,6 +3956,7 @@ function CanvasEditorContent(
       canRelinkResource: mutationService !== undefined && typeof Reflect.get(mutationService, "relink") === "function",
       fileRenderers: props.fileRendererRegistry,
       connectionNodeTypes,
+      quickConnectionNodeTypes,
       visibleSelectionActions,
       visibleSelectionDragSource,
       selectionDragArmed,
@@ -3991,6 +3999,7 @@ function CanvasEditorContent(
       canonicalDocument.nodes,
       commit,
       connectionNodeTypes,
+      quickConnectionNodeTypes,
       duplicateNode,
       executeSelectionAction,
       enteringNodeIds,
@@ -4617,7 +4626,7 @@ function CanvasEditorContent(
                   </ReactFlow>
                   {pendingConnection ? (
                     <PendingConnectionMenu
-                      items={connectionNodeTypes}
+                      items={quickConnectionNodeTypes}
                       onSelect={(type) => {
                         const connection = pendingConnection
                         setPendingConnection(null)

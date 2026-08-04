@@ -13,8 +13,9 @@ test("Desktop packaging verifies the one root Marketplace product lock before co
     "bun ../../scripts/marketplace-product-lock.ts ../../marketplaces.lock.json",
   )
   expect(manifest.scripts?.dev).toMatch(
-    /^bun run build:workspace-dependencies && bun run collaboration:prepare && bun run marketplace:prepare && /,
+    /^bun run build:workspace-dependencies && bun run collaboration:prepare && bun run marketplace:prepare:dev && /,
   )
+  expect(manifest.scripts?.["marketplace:prepare:dev"]).toContain("prepare-development-marketplace-product.ts")
   expect(manifest.scripts?.["marketplace:prepare"]?.startsWith("bun run marketplace:verify && ")).toBe(true)
   expect(manifest.scripts?.["marketplace:prepare"]).toContain("stage-marketplace-product-lock.ts")
   expect(manifest.scripts?.["marketplace:prepare"]).toContain("materialize-marketplace-product-lock.ts")

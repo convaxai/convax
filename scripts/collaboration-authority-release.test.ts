@@ -65,6 +65,38 @@ class FakeHost implements CollaborationAuthorityReleaseHostV1 {
 }
 
 describe("collaboration authority static release checker", () => {
+  test("Git checkout policy preserves every authority identity byte as LF on Windows", () => {
+    const paths = [ACTIVE_AUTHORITY_POINTER_PATH, ...AUTHORITY_SNAPSHOT_PATHS]
+    const result = Bun.spawnSync(["git", "-C", repositoryRoot, "check-attr", "-z", "text", "eol", "--", ...paths], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    expect(new TextDecoder().decode(result.stderr)).toBe("")
+    expect(result.exitCode).toBe(0)
+
+    const fields = new TextDecoder().decode(result.stdout).split("\0")
+    expect(fields.pop()).toBe("")
+    const attributes = new Map<string, Map<string, string>>()
+    for (let index = 0; index < fields.length; index += 3) {
+      const path = fields[index]
+      const attribute = fields[index + 1]
+      const value = fields[index + 2]
+      const values = attributes.get(path) ?? new Map<string, string>()
+      values.set(attribute, value)
+      attributes.set(path, values)
+    }
+
+    expect([...attributes.keys()]).toEqual(paths)
+    for (const path of paths) {
+      expect(attributes.get(path)).toEqual(
+        new Map([
+          ["text", "set"],
+          ["eol", "lf"],
+        ]),
+      )
+    }
+  })
+
   test("golden selector, static verifier, and initial promoter accept the same sealed release", () => {
     const promotionHost = createPromotionHost()
     const promoted = promoteInitialCollaborationAuthorityReleaseWithHostV1(promotionHost, "base")

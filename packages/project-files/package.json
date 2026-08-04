@@ -36,8 +36,8 @@
     }
   },
   "scripts": {
-    "clean": "rm -rf dist",
-    "build:browser": "for entry in src/index.ts src/contracts.ts src/drag.ts src/identity.ts src/project-uri.ts; do bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist \"$entry\"; done",
+    "clean": "bun scripts/clean.ts",
+    "build:browser": "bun scripts/build-browser.ts",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "bun run typecheck && bun run clean && bun run build:browser && bun run build:types",
     "test": "bun test",
