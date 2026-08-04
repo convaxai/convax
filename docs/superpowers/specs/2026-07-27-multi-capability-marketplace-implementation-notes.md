@@ -127,7 +127,7 @@ git push
 - 发布使用 protected branch/tag/environment；
 - 高权限发布 job 只消费低权限 job 已验证的 exact digest artifact；
 - repository、Pages、Release 和 API URL 全部参数化；
-- 不出现未替换的 `microvoid/convax-plugins` 硬编码。
+- 不出现未替换的旧仓库身份硬编码。
 
 `add-target` 是第三方 managed-stdio companion 的唯一输入方式。它把已构建、已校验
 的 regular file 收入 scaffold-owned

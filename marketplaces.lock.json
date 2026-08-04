@@ -2,12 +2,12 @@
   "policy": {
     "builtin": {
       "marketplaceId": "convax-builtin",
-      "repository": "microvoid/convax-plugins"
+      "repository": "convaxai/convax-plugins"
     },
     "official": {
-      "descriptorUrl": "https://microvoid.github.io/convax-plugins/marketplace.json",
+      "descriptorUrl": "https://convaxai.github.io/convax-plugins/marketplace.json",
       "marketplaceId": "convax-official",
-      "repository": "microvoid/convax-plugins"
+      "repository": "convaxai/convax-plugins"
     },
     "preinstalledPackages": [
       {
@@ -20,14 +20,14 @@
         ]
       }
     ],
-    "revision": 1
+    "revision": 2
   },
   "resolved": {
     "builtinBundle": {
       "name": "convax-builtin-bundle.zip",
       "sha256": "eeee927379f673e898c50c3f02a9209c01c9088216d42e89e4e6cc6ef6ff490f",
       "size": 673705,
-      "url": "https://github.com/microvoid/convax-plugins/releases/download/builtin-c35b953590814241c25d20471585d121ab87974b594245b2632f971f4fadc636/convax-builtin-bundle.zip"
+      "url": "https://github.com/convaxai/convax-plugins/releases/download/builtin-c35b953590814241c25d20471585d121ab87974b594245b2632f971f4fadc636/convax-builtin-bundle.zip"
     },
     "builtinReservations": [
       {
@@ -38,38 +38,38 @@
     "official": {
       "descriptor": {
         "name": "marketplace.json",
-        "sha256": "99fca1ee3ca090d51eaf3698b63d67cdf3d61a2b303c3801c918405ae5bac11f",
-        "size": 566,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/marketplace.json"
+        "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
+        "size": 563,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "958744daffe7f904ab9d33c64dda85c05b902c26094efe045678f61c81de5bea",
-        "size": 28391,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/registry-v2.json"
+        "sha256": "aa44c44b9af13bcd2e3377029a23d09fdbcdb4a141af0b93df793956143aabdb",
+        "size": 22677,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/registry-v2.json"
       },
-      "revision": "59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5",
+      "revision": "f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "09ce75680ec113148dd086d1e4c25e63c026452d4bb5f60d9e75407eec6e3786",
-        "size": 16207,
-        "url": "https://github.com/microvoid/convax-plugins/releases/download/registry-v2-59a54e89fda7ad91e6d22691229e55d9dfa20fa46a5847d21ebacb83cb86b0c5/showcase-v2.json"
+        "sha256": "c19ec8df0764c55294bbef8a6c7c527917d1daa5c3f8c6f6843d2ecd30c52c41",
+        "size": 13941,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/showcase-v2.json"
       }
     },
     "packages": [
       {
         "artifact": {
-          "name": "plugin-ffmpeg-tools-0.4.0.zip",
-          "sha256": "8d634aa398247daf2685ac26627ae291bf97789dae255c19a10aefac367ef526",
+          "name": "plugin-ffmpeg-tools-0.4.1.zip",
+          "sha256": "ba039d552da0fa37b01dbbbeea764e48ed513bdefa2f2d08251c07b2306e5d77",
           "size": 60003,
-          "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.0/plugin-ffmpeg-tools-0.4.0.zip"
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.1/plugin-ffmpeg-tools-0.4.1.zip"
         },
         "companions": [
           {
             "name": "ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
             "sha256": "5d7b34be9de73972978b1e3931ffa48f6ccedb4244638b30627afe9ea3240c48",
             "size": 21187504,
-            "url": "https://github.com/microvoid/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.0/ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-ffmpeg-tools-v0.4.1/ffmpeg-tools-0.2.1-darwin-arm64-convax-ffmpeg-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -82,14 +82,14 @@
             "name": "skill-ffmpeg-canvas-0.4.0.zip",
             "sha256": "fc16f062c04396ae43580f3854dca5c8cbaec2a202a2f4aee30d30fe3e08c8c4",
             "size": 10831,
-            "url": "https://github.com/microvoid/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.4.0/skill-ffmpeg-canvas-0.4.0.zip"
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/skill-ffmpeg-canvas-v0.4.0/skill-ffmpeg-canvas-0.4.0.zip"
           }
         ],
         "setup": "explicit",
-        "version": "0.4.0"
+        "version": "0.4.1"
       }
     ],
-    "policyDigest": "ddd78ddb809166be2698ebd718d2947429bfb17a9071e9c72be655a7713d143e"
+    "policyDigest": "def05aabca25b82ff3abbe685552378ca10e067425cebe9690aca66219d53b35"
   },
   "schema": "convax.marketplace-product-lock/1"
 }

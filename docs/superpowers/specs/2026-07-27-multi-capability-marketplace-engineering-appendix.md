@@ -295,7 +295,7 @@ Official 是固定来源：
 
 ```text
 marketplaceId: convax-official
-repository: microvoid/convax-plugins
+repository: convaxai/convax-plugins
 ```
 
 Official adapter 支持：
