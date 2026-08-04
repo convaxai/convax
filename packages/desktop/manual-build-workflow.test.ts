@@ -14,7 +14,7 @@ describe("manual Desktop installer workflow", () => {
     expect(workflow).not.toMatch(/^\s{2}(push|pull_request|schedule):/m)
     expect(workflow).toContain("          - prod\n          - beta\n          - dev")
     expect(workflow).toContain("confirm_commit:")
-    expect(workflow.match(/github\.ref == 'refs\/heads\/convax-next'/g)).toHaveLength(2)
+    expect(workflow.match(/github\.ref == 'refs\/heads\/main'/g)).toHaveLength(2)
     expect(workflow.match(/github\.actor == 'fearclear'/g)).toHaveLength(2)
     expect(workflow.match(/github\.triggering_actor == 'fearclear'/g)).toHaveLength(2)
     expect(workflow.match(/inputs\.confirm_commit == github\.sha/g)).toHaveLength(2)

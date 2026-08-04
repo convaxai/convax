@@ -16,7 +16,7 @@ function artifact(name: string, tag: string) {
     name,
     sha256: "a".repeat(64),
     size: 12,
-    url: `https://github.com/microvoid/convax-plugins/releases/download/${tag}/${name}`,
+    url: `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`,
   }
 }
 
@@ -27,12 +27,12 @@ function validLock(): MarketplaceProductLock {
   const policy: MarketplaceProductPolicy = {
     builtin: {
       marketplaceId: "convax-builtin",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     official: {
-      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+      descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
       marketplaceId: "convax-official",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     preinstalledPackages: [
       {
@@ -43,7 +43,7 @@ function validLock(): MarketplaceProductLock {
         targets: ["darwin-arm64"],
       },
     ],
-    revision: 1,
+    revision: 2,
   }
   return {
     policy,
@@ -81,7 +81,7 @@ function validLock(): MarketplaceProductLock {
 }
 
 describe("Marketplace product lock", () => {
-  test("accepts the exact v1 Builtin and Official closure", () => {
+  test("accepts the exact v2 Builtin and Official policy closure", () => {
     expect(parseMarketplaceProductLock(validLock())).toEqual(validLock())
   })
 
@@ -107,7 +107,7 @@ describe("Marketplace product lock", () => {
 
   test("rejects mutable URLs and malformed immutable byte identities", () => {
     const lock = validLock()
-    lock.resolved.official.registry.url = "https://microvoid.github.io/convax-plugins/latest.json"
+    lock.resolved.official.registry.url = "https://convaxai.github.io/convax-plugins/latest.json"
     lock.resolved.official.registry.sha256 = "not-a-digest"
     expect(() => parseMarketplaceProductLock(lock)).toThrow("immutable")
     const nonDefaultPort = validLock()

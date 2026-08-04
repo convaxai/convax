@@ -18,12 +18,12 @@ export type MarketplacePreinstalledPackagePolicy = {
 export type MarketplaceProductPolicy = {
   builtin: {
     marketplaceId: "convax-builtin"
-    repository: "microvoid/convax-plugins"
+    repository: "convaxai/convax-plugins"
   }
   official: {
     descriptorUrl: string
     marketplaceId: "convax-official"
-    repository: "microvoid/convax-plugins"
+    repository: "convaxai/convax-plugins"
   }
   preinstalledPackages: MarketplacePreinstalledPackagePolicy[]
   revision: number
@@ -129,7 +129,7 @@ function parseArtifact(
     parsed.hostname !== "github.com" ||
     parsed.port !== "" ||
     parsed.pathname !== `/${segments.join("/")}` ||
-    segments[0] !== "microvoid" ||
+    segments[0] !== "convaxai" ||
     segments[1] !== "convax-plugins" ||
     releaseIndex !== 3 ||
     segments.length !== 6 ||
@@ -187,10 +187,10 @@ export function parseMarketplaceProductPolicy(value: unknown): MarketplaceProduc
   exactKeys(official, ["descriptorUrl", "marketplaceId", "repository"], "policy.official")
   if (
     builtin.marketplaceId !== "convax-builtin" ||
-    builtin.repository !== "microvoid/convax-plugins" ||
+    builtin.repository !== "convaxai/convax-plugins" ||
     official.marketplaceId !== "convax-official" ||
-    official.repository !== "microvoid/convax-plugins" ||
-    official.descriptorUrl !== "https://microvoid.github.io/convax-plugins/marketplace.json" ||
+    official.repository !== "convaxai/convax-plugins" ||
+    official.descriptorUrl !== "https://convaxai.github.io/convax-plugins/marketplace.json" ||
     !Number.isSafeInteger(input.revision) ||
     Number(input.revision) < 1
   ) {
@@ -209,12 +209,12 @@ export function parseMarketplaceProductPolicy(value: unknown): MarketplaceProduc
   return {
     builtin: {
       marketplaceId: "convax-builtin",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     official: {
-      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+      descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
       marketplaceId: "convax-official",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     preinstalledPackages,
     revision: Number(input.revision),

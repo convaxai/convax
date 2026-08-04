@@ -27,7 +27,7 @@ package.
 Convax host/platform source and concrete capability-package source are intentionally
 split across repositories. This repository owns Plugin contracts, validation,
 installation, lifecycle, runtime composition, UI/IPC, and Registry consumption.
-The `microvoid/convax-plugins` repository owns every concrete Plugin, Skill, and
+The `convaxai/convax-plugins` repository owns every concrete Plugin, Skill, and
 companion tool, including official and default-catalog integrations. A new
 integration therefore adds generic host support here only when the ABI genuinely
 lacks it, while its manifest, assets, workflow instructions, and executable source
@@ -757,7 +757,7 @@ closure pins the Builtin bundle, Official descriptor/Registry/Showcase, package,
 owned-Skill, presentation, and target companion URLs, sizes, and SHA-256 values.
 Packaging consumes and verifies this closure without resolving “latest.” Startup
 installs every verified member of the Builtin bundle from its offline bytes, then
-applies the product preinstall policy. The v1 policy contains only
+applies the product preinstall policy. The v2 policy contains only
 `convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup.
 Automatic setup remains an independent durable `CapabilityTransition` that
 publishes an `ExecutionGrant`; it does not execute the companion. It is admitted

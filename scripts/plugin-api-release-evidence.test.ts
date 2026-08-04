@@ -29,13 +29,13 @@ function input(overrides: Record<string, unknown> = {}) {
     commit: "a".repeat(40),
     packageCatalogBytes: catalogBytes,
     packageJson: { name: "@convax/plugin-api", version: "2.0.0" },
-    repository: "microvoid/convax",
-    repositoryId: "1293264965",
-    repositoryOwnerId: "125447777",
+    repository: "convaxai/convax",
+    repositoryId: "1322708874",
+    repositoryOwnerId: "312877127",
     tarballIntegrity: npmIntegrity,
     tarballBytes,
     version: "2.0.0",
-    workflowRef: "microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
+    workflowRef: "convaxai/convax/.github/workflows/plugin-api-release.yml@refs/heads/main",
     ...overrides,
   }
 }
@@ -46,13 +46,13 @@ describe("Plugin API release evidence", () => {
       schema: "convax.plugin-api-runtime-conformance/1",
       profile: "convax.plugin-api-host-runtime/1",
       host: {
-        repository: "microvoid/convax",
-        repositoryId: "1293264965",
-        repositoryOwnerId: "125447777",
+        repository: "convaxai/convax",
+        repositoryId: "1322708874",
+        repositoryOwnerId: "312877127",
         commit: "a".repeat(40),
       },
       workflow: {
-        ref: "microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
+        ref: "convaxai/convax/.github/workflows/plugin-api-release.yml@refs/heads/main",
       },
       sigstore: {
         bundle: {
@@ -61,11 +61,11 @@ describe("Plugin API release evidence", () => {
         },
         certificate: {
           identity:
-            "https://github.com/microvoid/convax/.github/workflows/plugin-api-release.yml@refs/heads/convax-next",
+            "https://github.com/convaxai/convax/.github/workflows/plugin-api-release.yml@refs/heads/main",
           oidcIssuer: "https://token.actions.githubusercontent.com",
           workflowName: "Publish Plugin API immutable evidence",
-          workflowRef: "refs/heads/convax-next",
-          repository: "microvoid/convax",
+          workflowRef: "refs/heads/main",
+          repository: "convaxai/convax",
           sourceSha: "a".repeat(40),
           trigger: "workflow_dispatch",
         },
@@ -123,7 +123,7 @@ describe("Plugin API release evidence", () => {
     expect(() =>
       buildPluginApiReleaseEvidence(
         input({
-          workflowRef: "microvoid/convax/.github/workflows/other.yml@refs/heads/convax-next",
+          workflowRef: "convaxai/convax/.github/workflows/other.yml@refs/heads/main",
         }),
       ),
     ).toThrow("protected Plugin API publication workflow")

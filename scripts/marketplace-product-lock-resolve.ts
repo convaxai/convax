@@ -277,7 +277,7 @@ function releaseAssetIdentity(input: ProductLockInputArtifact, context: string) 
     url.search ||
     url.hash ||
     url.pathname !== `/${segments.join("/")}` ||
-    segments[0] !== "microvoid" ||
+    segments[0] !== "convaxai" ||
     segments[1] !== "convax-plugins" ||
     segments[2] !== "releases" ||
     segments[3] !== "download" ||
@@ -379,10 +379,10 @@ export async function resolveMarketplaceProductLock(
       throw new Error(`${context} metadata Release tag does not match the locked Registry revision`)
     }
   }
-  const officialPagesRoot = "https://microvoid.github.io/convax-plugins"
+  const officialPagesRoot = "https://convaxai.github.io/convax-plugins"
   if (
     descriptor.id !== policy.official.marketplaceId ||
-    descriptor.repository.owner !== "microvoid" ||
+    descriptor.repository.owner !== "convaxai" ||
     descriptor.repository.name !== "convax-plugins" ||
     descriptor.registry.v2.url !== `${officialPagesRoot}/registry/v2/index.json` ||
     descriptor.showcase.v2.url !== `${officialPagesRoot}/showcase/v2/index.json` ||

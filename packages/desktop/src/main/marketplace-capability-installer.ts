@@ -108,7 +108,7 @@ export class DesktopMarketplaceCapabilityInstaller implements MarketplaceCapabil
             kind: "artifact",
             sha256: sha256Hex(bytes),
             size: bytes.byteLength,
-            url: "https://github.com/microvoid/convax-plugins/releases/download/builtin/internal",
+            url: "https://github.com/convaxai/convax-plugins/releases/download/builtin/internal",
           },
           id: item.id,
           kind: "skill",

@@ -1,4 +1,4 @@
-export const githubUrl = "https://github.com/microvoid/convax"
+export const githubUrl = "https://github.com/convaxai/convax"
 export const downloadUrl = `${githubUrl}/releases/latest`
 
 export const navItems = [

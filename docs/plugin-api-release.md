@@ -35,13 +35,13 @@ external publication evidence.
 ## Protected workflows
 
 All three workflows must be dispatched from the exact head of protected
-`convax-next`. They have no commit input: `COMMIT` is always the run's
+`main`. They have no commit input: `COMMIT` is always the run's
 `GITHUB_SHA`, eliminating an otherwise meaningless second source of identity. Their
 unprivileged build/verification jobs check out that exact SHA with persisted
 credentials disabled. Privileged signing, npm-stage, and Release jobs never check
 out or execute repository code: they consume only the exact checksummed artifact
 produced by the unprivileged job. Every job also binds the immutable GitHub
-repository id `1293264965` and owner id `125447777`; a repository-name takeover is
+repository id `1322708874` and owner id `312877127`; a repository-name takeover is
 not accepted. The workflows reject a package version that differs from
 `packages/plugin-api/package.json`, any Catalog schema other than
 `convax.plugin-api-catalog/3`, and any non-stable SemVer.
@@ -63,7 +63,7 @@ identifiers or private paths.
 
 ### 1. Initial bootstrap preparation
 
-Run `plugin-api-bootstrap.yml` from the exact protected `convax-next` head with
+Run `plugin-api-bootstrap.yml` from the exact protected `main` head with
 version `2.0.0`. It fails if `@convax/plugin-api` already exists. It runs:
 
 - package typecheck, tests, compatibility verification, generated-output check and
@@ -82,7 +82,7 @@ tarball with interactive 2FA:
 
 ```sh
 commit=<exact-40-character-bootstrap-commit>
-identity=https://github.com/microvoid/convax/.github/workflows/plugin-api-bootstrap.yml@refs/heads/convax-next
+identity=https://github.com/convaxai/convax/.github/workflows/plugin-api-bootstrap.yml@refs/heads/main
 for artifact in \
   convax-plugin-api-2.0.0.tgz \
   plugin-api.json \
@@ -101,16 +101,16 @@ for artifact in \
     --certificate-identity "$identity" \
     --certificate-oidc-issuer https://token.actions.githubusercontent.com \
     --certificate-github-workflow-name "Prepare Plugin API bootstrap" \
-    --certificate-github-workflow-ref refs/heads/convax-next \
-    --certificate-github-workflow-repository microvoid/convax \
+    --certificate-github-workflow-ref refs/heads/main \
+    --certificate-github-workflow-repository convaxai/convax \
     --certificate-github-workflow-sha "$commit" \
     --certificate-github-workflow-trigger workflow_dispatch \
     "$artifact"
 done
 jq -e '
-  .host.repository == "microvoid/convax" and
-  .host.repositoryId == "1293264965" and
-  .host.repositoryOwnerId == "125447777"
+  .host.repository == "convaxai/convax" and
+  .host.repositoryId == "1322708874" and
+  .host.repositoryOwnerId == "312877127"
 ' runtime-conformance.json >/dev/null
 sha256sum --check SHA256SUMS
 sha512sum --check SHA512SUMS
@@ -126,7 +126,7 @@ identity even when its extracted files look equivalent.
 
 After `2.0.0` exists, configure npm staged publishing for:
 
-- repository: `microvoid/convax`;
+- repository: `convaxai/convax`;
 - workflow: `plugin-api-npm-stage.yml`;
 - permission: stage publishing only, not direct publishing.
 
@@ -141,7 +141,7 @@ provenance; the Sigstore bundles are the source-build identity evidence.
 ### 3. Registry-backed immutable Host evidence
 
 Only after npm exposes the exact version, enable immutable Releases for
-`microvoid/convax`, set the repository Actions variable
+`convaxai/convax`, set the repository Actions variable
 `CONVAX_IMMUTABLE_RELEASES_ENABLED=true`, and run `plugin-api-release.yml` with the
 current exact protected head whose checked-in package version and Catalog bytes
 match the published npm package. The Host commit may advance after npm staging, but
@@ -217,7 +217,7 @@ needed by the capability request they are resolving.
 
 Repository files cannot establish these controls:
 
-- protect `convax-next`;
+- protect `main`;
 - restrict manual dispatch of publication workflows and require independent review
   for the initial npm publication;
 - after bootstrap, configure stage-only npm publishing, require human 2FA approval,

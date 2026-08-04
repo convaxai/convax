@@ -14,12 +14,12 @@ export type MarketplacePreinstalledPackagePolicy = {
 export type MarketplaceProductPolicy = {
     builtin: {
         marketplaceId: "convax-builtin";
-        repository: "microvoid/convax-plugins";
+        repository: "convaxai/convax-plugins";
     };
     official: {
         descriptorUrl: string;
         marketplaceId: "convax-official";
-        repository: "microvoid/convax-plugins";
+        repository: "convaxai/convax-plugins";
     };
     preinstalledPackages: MarketplacePreinstalledPackagePolicy[];
     revision: number;

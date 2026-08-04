@@ -13,7 +13,7 @@ Convax 的内置依赖。
 
 ## 1. 核心决策
 
-Convax 把 Nexus 展示为一个与内置 OpenCode Service 并列的已安装 **Service**。具体集成由 `microvoid/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
+Convax 把 Nexus 展示为一个与内置 OpenCode Service 并列的已安装 **Service**。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
 
 Nexus Service 负责：
 
@@ -182,7 +182,7 @@ Convax 只负责通用平台能力：
 
 ### 4.3 Convax Plugins 仓库
 
-`microvoid/convax-plugins` 仓库负责：
+`convaxai/convax-plugins` 仓库负责：
 
 - Nexus Service Plugin Manifest 和资源；
 - 经过验证的 Nexus Companion 可执行文件；

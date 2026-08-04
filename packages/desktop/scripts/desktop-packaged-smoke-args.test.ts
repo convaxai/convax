@@ -3,6 +3,17 @@ import { describe, expect, test } from "bun:test"
 import { desktopPackagedSmokeLaunchArguments } from "./desktop-packaged-smoke-args"
 
 describe("Desktop packaged smoke launch arguments", () => {
+  test("isolates the Official Marketplace Pages host from the packaged smoke run", () => {
+    const arguments_ = desktopPackagedSmokeLaunchArguments({
+      debuggerPort: 9_224,
+      executable: "/tmp/convax",
+      platform: "linux",
+    })
+
+    expect(arguments_).toContain("--host-resolver-rules=MAP convaxai.github.io 127.0.0.1")
+    expect(arguments_).not.toContain("--host-resolver-rules=MAP microvoid.github.io 127.0.0.1")
+  })
+
   test("isolates macOS smoke runs from the developer's login Keychain", () => {
     expect(
       desktopPackagedSmokeLaunchArguments({

@@ -3,7 +3,7 @@
 Convax Desktop installers are built by the `Manual desktop installers` GitHub
 Actions workflow. The workflow has only a `workflow_dispatch` trigger and accepts
 an explicit `prod`, `beta`, or `dev` channel. It is intentionally restricted to
-the `convax-next` branch, the `fearclear` actor, and a manually confirmed exact
+the `main` branch, the `fearclear` actor, and a manually confirmed exact
 commit SHA.
 
 The macOS job runs on an arm64 GitHub-hosted runner and always fails closed unless
@@ -54,26 +54,26 @@ To send a P12 to GitHub without writing its Base64 form to another file:
 
 ```bash
 base64 -i DeveloperIDApplication.p12 | gh secret set MAC_CSC_LINK \
-  --repo microvoid/convax
+  --repo convaxai/convax
 ```
 
 Set the other secrets from a hidden prompt:
 
 ```bash
-gh secret set MAC_CSC_KEY_PASSWORD --repo microvoid/convax
-gh secret set APPLE_ID --repo microvoid/convax
-gh secret set APPLE_APP_SPECIFIC_PASSWORD --repo microvoid/convax
-gh variable set APPLE_TEAM_ID --repo microvoid/convax
-gh variable set PACKAGED_PROVENANCE_DENYLIST_B64 --repo microvoid/convax
+gh secret set MAC_CSC_KEY_PASSWORD --repo convaxai/convax
+gh secret set APPLE_ID --repo convaxai/convax
+gh secret set APPLE_APP_SPECIFIC_PASSWORD --repo convaxai/convax
+gh variable set APPLE_TEAM_ID --repo convaxai/convax
+gh variable set PACKAGED_PROVENANCE_DENYLIST_B64 --repo convaxai/convax
 ```
 
 ## Run and download
 
-Run only a merged `convax-next` revision:
+Run only a merged `main` revision:
 
 ```bash
-gh workflow run desktop-build.yml --repo microvoid/convax --ref convax-next \
-  -f channel=prod -f confirm_commit=<40-character-convax-next-sha>
+gh workflow run desktop-build.yml --repo convaxai/convax --ref main \
+  -f channel=prod -f confirm_commit=<40-character-main-sha>
 ```
 
 Download the completed run's artifacts from its GitHub Actions page. Artifact

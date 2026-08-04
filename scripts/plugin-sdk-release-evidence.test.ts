@@ -29,9 +29,9 @@ function input(overrides: Record<string, unknown> = {}) {
       checks: pluginSdkReleaseConformanceChecks.map(({ id }) => ({ id, status: "passed" })),
     },
     commit: "a".repeat(40),
-    repository: "microvoid/convax",
-    repositoryId: "1293264965",
-    repositoryOwnerId: "125447777",
+    repository: "convaxai/convax",
+    repositoryId: "1322708874",
+    repositoryOwnerId: "312877127",
     sdkPackageJson: {
       name: "@convax/plugin-sdk",
       version: "0.1.0",
@@ -41,7 +41,7 @@ function input(overrides: Record<string, unknown> = {}) {
     sdkTarballBytes,
     sdkTarballIntegrity: sdkIntegrity,
     sdkVersion: "0.1.0",
-    workflowRef: "microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
+    workflowRef: "convaxai/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/main",
     ...overrides,
   }
 }
@@ -52,13 +52,13 @@ describe("Plugin SDK Host package release evidence", () => {
       schema: "convax.host-package-release/1",
       profile: "convax.plugin-sdk-authoring-package/1",
       host: {
-        repository: "microvoid/convax",
-        repositoryId: "1293264965",
-        repositoryOwnerId: "125447777",
+        repository: "convaxai/convax",
+        repositoryId: "1322708874",
+        repositoryOwnerId: "312877127",
         commit: "a".repeat(40),
       },
       workflow: {
-        ref: "microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
+        ref: "convaxai/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/main",
       },
       sigstore: {
         bundle: {
@@ -67,11 +67,11 @@ describe("Plugin SDK Host package release evidence", () => {
         },
         certificate: {
           identity:
-            "https://github.com/microvoid/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/convax-next",
+            "https://github.com/convaxai/convax/.github/workflows/plugin-sdk-release.yml@refs/heads/main",
           oidcIssuer: "https://token.actions.githubusercontent.com",
           workflowName: "Publish Plugin SDK immutable evidence",
-          workflowRef: "refs/heads/convax-next",
-          repository: "microvoid/convax",
+          workflowRef: "refs/heads/main",
+          repository: "convaxai/convax",
           sourceSha: "a".repeat(40),
           trigger: "workflow_dispatch",
         },
@@ -134,7 +134,7 @@ describe("Plugin SDK Host package release evidence", () => {
     expect(() =>
       buildPluginSdkReleaseEvidence(
         input({
-          workflowRef: "microvoid/convax/.github/workflows/other.yml@refs/heads/convax-next",
+          workflowRef: "convaxai/convax/.github/workflows/other.yml@refs/heads/main",
         }),
       ),
     ).toThrow("protected Plugin SDK publication workflow")

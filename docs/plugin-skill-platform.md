@@ -13,7 +13,7 @@ drift.
 
 Every Canvas integration is a Plugin contribution. Concrete 3D directors, media
 processing, external editors, generation vendors, and companion tools live in the
-`microvoid/convax-plugins` repository. Convax owns only the generic Host:
+`convaxai/convax-plugins` repository. Convax owns only the generic Host:
 
 - Skills compose typed capabilities as Agent instructions.
 - MCP contributions are configured through the existing Agent or managed-sidecar

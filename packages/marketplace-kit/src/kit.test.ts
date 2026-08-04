@@ -688,15 +688,15 @@ describe("@convax/marketplace-kit", () => {
     await createMarketplaceStarter(root, {
       id: "convax-official",
       name: "Convax Official",
-      owner: "microvoid",
+      owner: "convaxai",
       repository: "convax-plugins",
       starter: "skill",
     })
     const starter = join(root, "packages/skills/example-skill")
     await rm(starter, { recursive: true })
     const officialDescriptor = JSON.parse(await readFile(join(root, "marketplace.json"), "utf8"))
-    officialDescriptor.registry.v2.url = "https://microvoid.github.io/convax-plugins/registry/v2/index.json"
-    officialDescriptor.showcase.v2.url = "https://microvoid.github.io/convax-plugins/showcase/v2/index.json"
+    officialDescriptor.registry.v2.url = "https://convaxai.github.io/convax-plugins/registry/v2/index.json"
+    officialDescriptor.showcase.v2.url = "https://convaxai.github.io/convax-plugins/showcase/v2/index.json"
     await Bun.write(join(root, "marketplace.json"), `${JSON.stringify(officialDescriptor, null, 2)}\n`)
     const skillRoot = join(root, "packages/skills/canvas-storyboard")
     await mkdir(join(skillRoot, "package"), { recursive: true })

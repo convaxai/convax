@@ -131,9 +131,9 @@ export async function stageMarketplaceProductLock(options: {
   parseShowcaseV2(json(showcaseBytes, "Official Showcase"), registry, descriptor)
   if (
     descriptor.id !== lock.policy.official.marketplaceId ||
-    descriptor.registry.v2.url !== "https://microvoid.github.io/convax-plugins/registry/v2/index.json" ||
+    descriptor.registry.v2.url !== "https://convaxai.github.io/convax-plugins/registry/v2/index.json" ||
     descriptor.registry.v1 !== undefined ||
-    descriptor.showcase.v2.url !== "https://microvoid.github.io/convax-plugins/showcase/v2/index.json" ||
+    descriptor.showcase.v2.url !== "https://convaxai.github.io/convax-plugins/showcase/v2/index.json" ||
     registry.revision !== lock.resolved.official.revision
   ) {
     throw new Error("Official locked metadata does not close its descriptor and policy")

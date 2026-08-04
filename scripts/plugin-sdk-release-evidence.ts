@@ -11,9 +11,9 @@ export const PLUGIN_SDK_CHECK_RESULTS_SCHEMA = "convax.plugin-sdk-check-results/
 export const SIGSTORE_BUNDLE_MEDIA_TYPE = "application/vnd.dev.sigstore.bundle.v0.3+json" as const
 export const SIGSTORE_BUNDLE_SUFFIX = ".sigstore.json" as const
 export const SIGSTORE_OIDC_ISSUER = "https://token.actions.githubusercontent.com" as const
-export const CONVAX_REPOSITORY_ID = "1293264965" as const
-export const CONVAX_REPOSITORY_OWNER_ID = "125447777" as const
-const PROTECTED_WORKFLOW_REF = "refs/heads/convax-next"
+export const CONVAX_REPOSITORY_ID = "1322708874" as const
+export const CONVAX_REPOSITORY_OWNER_ID = "312877127" as const
+const PROTECTED_WORKFLOW_REF = "refs/heads/main"
 const MAX_CATALOG_BYTES = 16 * 1024 * 1024
 const MAX_PACKAGE_JSON_BYTES = 128 * 1024
 const MAX_TARBALL_BYTES = 32 * 1024 * 1024
@@ -149,7 +149,7 @@ function assertPassedCheckResults(value: unknown): void {
 }
 
 export function buildPluginSdkReleaseEvidence(input: EvidenceInput): Record<string, unknown> {
-  if (input.repository !== "microvoid/convax") fail("repository must be microvoid/convax")
+  if (input.repository !== "convaxai/convax") fail("repository must be convaxai/convax")
   if (input.repositoryId !== CONVAX_REPOSITORY_ID) fail("repository id must match the immutable Convax repository id")
   if (input.repositoryOwnerId !== CONVAX_REPOSITORY_OWNER_ID) {
     fail("repository owner id must match the immutable Convax owner id")

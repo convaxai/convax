@@ -3,6 +3,8 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 2
+
 export function configureMarketplaceProductPolicy(revision: number): MarketplaceProductPolicy {
   if (!Number.isSafeInteger(revision) || revision < 1) {
     throw new Error("Marketplace product policy revision must be a positive safe integer")
@@ -10,12 +12,12 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
   return {
     builtin: {
       marketplaceId: "convax-builtin",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     official: {
-      descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+      descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
       marketplaceId: "convax-official",
-      repository: "microvoid/convax-plugins",
+      repository: "convaxai/convax-plugins",
     },
     preinstalledPackages: [
       {

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       commit:
-        description: Exact convax-next commit to stage
+        description: Exact main commit to stage
         required: true
         type: string
       marketplace_version:
@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   stage:
-    if: github.ref == 'refs/heads/convax-next'
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           [ "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT" ]
-          git merge-base --is-ancestor HEAD origin/convax-next
+          git merge-base --is-ancestor HEAD origin/main
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
         with:
           node-version: 24

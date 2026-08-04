@@ -11,7 +11,7 @@ const nimbusConfig = defineNimbusConfig({
   title: "Convax",
   description: "围绕本地项目、可编辑画布、Agent 与可安装创作能力构建的桌面可视化工作空间。",
   locale: "zh-CN",
-  github: "https://github.com/microvoid/convax",
+  github: "https://github.com/convaxai/convax",
   socialImageAlt: "Convax 文档预览",
   // Nimbus 0.8.2 invokes the Windows `pagefind.cmd` shim through execFile,
   // which Node rejects with EINVAL. Production docs deploy on Linux and keep

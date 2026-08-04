@@ -72,7 +72,7 @@ function localReleaseCoordinates(artifact: MarketplaceArtifactLock) {
   if (
     segments.length !== 7 ||
     segments[0] !== "" ||
-    segments[1] !== "microvoid" ||
+    segments[1] !== "convaxai" ||
     segments[2] !== "convax-plugins" ||
     segments[3] !== "releases" ||
     segments[4] !== "download"
@@ -158,7 +158,7 @@ export async function materializeMarketplaceProductLock(options: {
       ? await readLocalRelease(path.resolve(options.localReleaseRoot), artifact)
       : await fetcher.fetch(artifact.url, "release", {
           maxBytes: artifact.size,
-          repository: { owner: "microvoid", repository: "convax-plugins" },
+          repository: { owner: "convaxai", repository: "convax-plugins" },
         })
     if (bytes.byteLength !== artifact.size || sha256Hex(bytes) !== artifact.sha256) {
       throw new Error(`Materialized Marketplace artifact does not match its product lock: ${artifact.sha256}`)

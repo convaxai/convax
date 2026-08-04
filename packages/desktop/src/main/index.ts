@@ -241,10 +241,10 @@ const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
 const officialMarketplaceSourceKey = computeSourceKey({
   deliveryPolicy: "github-pages-releases",
-  descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+  descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
   kind: "network",
   marketplaceId: "convax-official",
-  repository: { name: "convax-plugins", owner: "microvoid" },
+  repository: { name: "convax-plugins", owner: "convaxai" },
 })
 type CloseGate = "approved" | "flushing" | "idle"
 
@@ -1616,7 +1616,7 @@ function startApplication() {
                 packageCount: 0,
                 publisher: "microvoid",
                 removable: false,
-                repository: "microvoid/convax-plugins",
+                repository: "convaxai/convax-plugins",
               },
             ],
       installer: marketplaceInstaller,

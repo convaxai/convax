@@ -87,7 +87,7 @@ function remoteCatalog() {
   const unsubscribe = mock(() => undefined)
   const port = {
     getPluginReleaseUrl: mock(
-      async (id: string) => `https://github.com/microvoid/convax-plugins/releases/tag/plugin-${id}-v1.0.0`,
+      async (id: string) => `https://github.com/convaxai/convax-plugins/releases/tag/plugin-${id}-v1.0.0`,
     ),
     installPlugin: mock(async (id: string) => manifest(id)),
     listPluginCatalog: mock(async (installedIds: ReadonlySet<string>) => [
@@ -351,7 +351,7 @@ describe("registerPluginManagementIpc v8 snapshot routing", () => {
       true,
     )
     expect(openedExternalUrls).toEqual([
-      "https://github.com/microvoid/convax-plugins/releases/tag/plugin-remote-plugin-v1.0.0",
+      "https://github.com/convaxai/convax-plugins/releases/tag/plugin-remote-plugin-v1.0.0",
     ])
     remote.emitChange()
     expect(target.webContents.send).toHaveBeenCalledWith(pluginManagementIpcChannels.changed)

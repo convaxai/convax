@@ -165,7 +165,7 @@ optional API 不可用时插件必须走声明过的降级路径。
 ## 5. Plugin-to-Host 变更治理
 
 具体 Plugin、Plugin-owned Skill、standalone Skill、MCP server 和 companion 源码属于
-`microvoid/convax-plugins`。Plugin 实现任务可以只读检查 Host 的公共 Catalog/SDK，
+`convaxai/convax-plugins`。Plugin 实现任务可以只读检查 Host 的公共 Catalog/SDK，
 但不得修改、建分支、提交或发起本 Host 仓库的 PR。
 
 缺失能力时只能在 Plugin 仓库提交

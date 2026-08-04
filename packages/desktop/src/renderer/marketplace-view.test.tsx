@@ -114,7 +114,7 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
         packageCount: 3,
         publisher: "Convax",
         removable: false,
-        repository: "microvoid/convax-plugins",
+        repository: "convaxai/convax-plugins",
       },
     ]),
     onDidChange: mock(() => () => undefined),

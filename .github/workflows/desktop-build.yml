@@ -13,7 +13,7 @@ on:
           - beta
           - dev
       confirm_commit:
-        description: Exact 40-character convax-next commit SHA to build
+        description: Exact 40-character main commit SHA to build
         required: true
         type: string
 
@@ -28,7 +28,7 @@ jobs:
   macos:
     name: macOS arm64 (signed and notarized)
     if: >-
-      github.ref == 'refs/heads/convax-next' &&
+      github.ref == 'refs/heads/main' &&
       github.actor == 'fearclear' &&
       github.triggering_actor == 'fearclear' &&
       inputs.confirm_commit == github.sha
@@ -103,7 +103,7 @@ jobs:
   windows:
     name: Windows x64 (unsigned)
     if: >-
-      github.ref == 'refs/heads/convax-next' &&
+      github.ref == 'refs/heads/main' &&
       github.actor == 'fearclear' &&
       github.triggering_actor == 'fearclear' &&
       inputs.confirm_commit == github.sha

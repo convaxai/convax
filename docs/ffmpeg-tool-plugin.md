@@ -2,7 +2,7 @@
 
 本文不再定义某个具体媒体工具插件的产品、Manifest 或命令实现。具体 Plugin、
 Plugin-owned Skill、companion、发布配置、许可证材料与 target smoke tests 属于
-`microvoid/convax-plugins`。当前 Host contract 见
+`convaxai/convax-plugins`。当前 Host contract 见
 [`plugin-system-analysis.md`](plugin-system-analysis.md) 和生成的
 `@convax/plugin-api` / `@convax/plugin-sdk` reference。
 

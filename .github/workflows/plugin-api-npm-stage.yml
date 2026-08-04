@@ -22,9 +22,9 @@ jobs:
     env:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
-      REPOSITORY: microvoid/convax
-      REPOSITORY_ID: "1293264965"
-      REPOSITORY_OWNER_ID: "125447777"
+      REPOSITORY: convaxai/convax
+      REPOSITORY_ID: "1322708874"
+      REPOSITORY_OWNER_ID: "312877127"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -38,13 +38,13 @@ jobs:
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
           test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
           test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
-          test "$GITHUB_REF" = refs/heads/convax-next
+          test "$GITHUB_REF" = refs/heads/main
           [[ "$COMMIT" =~ ^[a-f0-9]{40}$ ]]
           test "$COMMIT" = "$GITHUB_SHA"
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           test "$(git rev-parse HEAD)" = "$COMMIT"
-          git fetch --no-tags origin refs/heads/convax-next:refs/remotes/origin/convax-next
-          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/convax-next
+          git fetch --no-tags origin refs/heads/main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main
           test "$(jq -r '.name' packages/plugin-api/package.json)" = "@convax/plugin-api"
           test "$(jq -r '.version' packages/plugin-api/package.json)" = "$VERSION"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
@@ -148,9 +148,9 @@ jobs:
     env:
       COMMIT: ${{ github.sha }}
       VERSION: ${{ inputs.version }}
-      REPOSITORY: microvoid/convax
-      REPOSITORY_ID: "1293264965"
-      REPOSITORY_OWNER_ID: "125447777"
+      REPOSITORY: convaxai/convax
+      REPOSITORY_ID: "1322708874"
+      REPOSITORY_OWNER_ID: "312877127"
       NPM_CONFIG_PROVENANCE: "false"
     steps:
       - name: Verify protected staging identity
@@ -160,7 +160,7 @@ jobs:
           test "$GITHUB_REPOSITORY" = "$REPOSITORY"
           test "$GITHUB_REPOSITORY_ID" = "$REPOSITORY_ID"
           test "$GITHUB_REPOSITORY_OWNER_ID" = "$REPOSITORY_OWNER_ID"
-          test "$GITHUB_REF" = refs/heads/convax-next
+          test "$GITHUB_REF" = refs/heads/main
           test "$COMMIT" = "$GITHUB_SHA"
           [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
@@ -219,7 +219,7 @@ jobs:
               (.host | keys) == ["commit", "repository", "repositoryId", "repositoryOwnerId"] and
               (.workflow | keys) == ["ref"] and
               .host == {
-                repository: "microvoid/convax",
+                repository: "convaxai/convax",
                 repositoryId: $repository_id,
                 repositoryOwnerId: $repository_owner_id,
                 commit: $commit
@@ -234,8 +234,8 @@ jobs:
                   identity: ("https://github.com/" + $workflow),
                   oidcIssuer: "https://token.actions.githubusercontent.com",
                   workflowName: "Stage Plugin API npm package",
-                  workflowRef: "refs/heads/convax-next",
-                  repository: "microvoid/convax",
+                  workflowRef: "refs/heads/main",
+                  repository: "convaxai/convax",
                   sourceSha: $commit,
                   trigger: "workflow_dispatch"
                 },
@@ -284,7 +284,7 @@ jobs:
               --certificate-identity "$identity" \
               --certificate-oidc-issuer "$issuer" \
               --certificate-github-workflow-name "Stage Plugin API npm package" \
-              --certificate-github-workflow-ref refs/heads/convax-next \
+              --certificate-github-workflow-ref refs/heads/main \
               --certificate-github-workflow-repository "$REPOSITORY" \
               --certificate-github-workflow-sha "$COMMIT" \
               --certificate-github-workflow-trigger workflow_dispatch \

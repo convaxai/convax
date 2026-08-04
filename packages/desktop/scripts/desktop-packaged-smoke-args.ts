@@ -7,7 +7,7 @@ export interface DesktopPackagedSmokeLaunchOptions {
 export function desktopPackagedSmokeLaunchArguments(options: DesktopPackagedSmokeLaunchOptions) {
   return [
     options.executable,
-    "--host-resolver-rules=MAP microvoid.github.io 127.0.0.1",
+    "--host-resolver-rules=MAP convaxai.github.io 127.0.0.1",
     "--remote-debugging-address=127.0.0.1",
     `--remote-debugging-port=${options.debuggerPort}`,
     // The smoke profile must not read or mutate the developer's login Keychain.

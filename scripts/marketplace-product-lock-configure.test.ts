@@ -1,15 +1,30 @@
 import { describe, expect, test } from "bun:test"
+import { join } from "node:path"
 
-import { configureMarketplaceProductPolicy } from "./marketplace-product-lock-configure"
+import {
+  CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION,
+  configureMarketplaceProductPolicy,
+} from "./marketplace-product-lock-configure"
 
 describe("Marketplace product policy configuration", () => {
-  test("creates only the approved v1 source and preinstall policy", () => {
-    expect(configureMarketplaceProductPolicy(7)).toEqual({
-      builtin: { marketplaceId: "convax-builtin", repository: "microvoid/convax-plugins" },
+  test("requires an explicit policy revision at the CLI boundary", () => {
+    const result = Bun.spawnSync([process.execPath, join(import.meta.dir, "marketplace-product-lock-configure.ts")], {
+      stderr: "pipe",
+      stdout: "pipe",
+    })
+
+    expect(result.exitCode).not.toBe(0)
+    expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
+  })
+
+  test("creates only the approved v2 source and preinstall policy", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(2)
+    expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
+      builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
-        descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+        descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
         marketplaceId: "convax-official",
-        repository: "microvoid/convax-plugins",
+        repository: "convaxai/convax-plugins",
       },
       preinstalledPackages: [
         {
@@ -20,7 +35,7 @@ describe("Marketplace product policy configuration", () => {
           targets: ["darwin-arm64"],
         },
       ],
-      revision: 7,
+      revision: 2,
     })
   })
 

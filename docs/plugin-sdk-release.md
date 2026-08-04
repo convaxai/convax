@@ -55,7 +55,7 @@ artifact names.
 
 ## Protected publication workflows
 
-All workflows dispatch from the exact head of protected `convax-next`; no workflow
+All workflows dispatch from the exact head of protected `main`; no workflow
 accepts a commit input. The unprivileged `build` or `verify` job checks out
 `github.sha` with persisted credentials disabled, installs with
 `bun install --frozen-lockfile --ignore-scripts`, runs the complete SDK release
@@ -69,14 +69,14 @@ all of these exact predicates:
 
 - issuer `https://token.actions.githubusercontent.com`;
 - certificate identity
-  `https://github.com/microvoid/convax/.github/workflows/<workflow>@refs/heads/convax-next`;
-- exact workflow name and ref `refs/heads/convax-next`;
-- repository `microvoid/convax`;
+  `https://github.com/convaxai/convax/.github/workflows/<workflow>@refs/heads/main`;
+- exact workflow name and ref `refs/heads/main`;
+- repository `convaxai/convax`;
 - exact 40-character source SHA; and
 - trigger `workflow_dispatch`.
 
 The signed `host-package-release.json` additionally fixes the immutable GitHub
-repository id `1293264965` and owner id `125447777`. A repository name is routing
+repository id `1322708874` and owner id `312877127`. A repository name is routing
 data; those ids prevent a deleted-and-recreated namespace from inheriting trust.
 
 All third-party Actions are pinned to full commit SHAs. GitHub Environments and
@@ -108,19 +108,19 @@ for artifact in \
   cosign verify-blob \
     --bundle "$artifact.sigstore.json" \
     --certificate-identity \
-      "https://github.com/microvoid/convax/.github/workflows/plugin-sdk-bootstrap.yml@refs/heads/convax-next" \
+      "https://github.com/convaxai/convax/.github/workflows/plugin-sdk-bootstrap.yml@refs/heads/main" \
     --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
     --certificate-github-workflow-name "Prepare Plugin SDK bootstrap" \
-    --certificate-github-workflow-ref refs/heads/convax-next \
-    --certificate-github-workflow-repository microvoid/convax \
+    --certificate-github-workflow-ref refs/heads/main \
+    --certificate-github-workflow-repository convaxai/convax \
     --certificate-github-workflow-sha <exact-40-character-bootstrap-commit> \
     --certificate-github-workflow-trigger workflow_dispatch \
     "$artifact"
 done
 jq -e '
-  .host.repository == "microvoid/convax" and
-  .host.repositoryId == "1293264965" and
-  .host.repositoryOwnerId == "125447777"
+  .host.repository == "convaxai/convax" and
+  .host.repositoryId == "1322708874" and
+  .host.repositoryOwnerId == "312877127"
 ' host-package-release.json >/dev/null
 sha256sum --check SHA256SUMS
 sha512sum --check SHA512SUMS
@@ -140,7 +140,7 @@ version, signs the exact candidate, uploads
 
 Configure the npm trusted publisher with:
 
-- repository `microvoid/convax`;
+- repository `convaxai/convax`;
 - workflow `plugin-sdk-npm-stage.yml`;
 - no GitHub Environment binding; and
 - stage-only permission, never direct publish permission.
@@ -242,7 +242,7 @@ provenance for a concrete Plugin bundle.
 
 Repository files cannot establish branch protection, immutable-Release settings,
 npm trusted-publisher scope, maintainer independence or human npm 2FA. Protect
-`convax-next`, prevent unreviewed workflow changes, enable immutable Releases and
+`main`, prevent unreviewed workflow changes, enable immutable Releases and
 set `CONVAX_IMMUTABLE_RELEASES_ENABLED=true` only after the API reports them
 enabled, keep GitHub-hosted runners for npm trusted publishing, configure only the
 stage-only publisher above, and require a human to approve every npm stage.

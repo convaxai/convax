@@ -27,7 +27,7 @@ test("scaffolds one starter with hardened workflows and no official hardcoding",
   expect(Object.keys(packageJson.devDependencies)).toEqual(["@convax/marketplace-kit"])
   const workflow = await readFile(join(root, ".github/workflows/check.yml"), "utf8")
   expect(workflow).not.toContain("pull_request_target")
-  expect(workflow).not.toContain("microvoid/convax-plugins")
+  expect(workflow).not.toContain("convaxai/convax-plugins")
   expect(workflow).toContain("permissions:")
 })
 

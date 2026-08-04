@@ -13,11 +13,11 @@ import { resolveMarketplaceProductLock, type MarketplaceProductLockInput } from 
 import { createDeterministicZip } from "../packages/marketplace-kit/src"
 
 const policy: MarketplaceProductPolicy = {
-  builtin: { marketplaceId: "convax-builtin", repository: "microvoid/convax-plugins" },
+  builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
   official: {
-    descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+    descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
     marketplaceId: "convax-official",
-    repository: "microvoid/convax-plugins",
+    repository: "convaxai/convax-plugins",
   },
   preinstalledPackages: [
     {
@@ -28,22 +28,22 @@ const policy: MarketplaceProductPolicy = {
       targets: ["darwin-arm64"],
     },
   ],
-  revision: 1,
+  revision: 2,
 }
 
 const unreachedOfficial: MarketplaceProductLockInput["official"] = {
   descriptor: {
     path: "marketplace.json",
-    url: "https://github.com/microvoid/convax-plugins/releases/download/unreached/marketplace.json",
+    url: "https://github.com/convaxai/convax-plugins/releases/download/unreached/marketplace.json",
   },
   registry: {
     path: "registry.json",
-    url: "https://github.com/microvoid/convax-plugins/releases/download/unreached/registry.json",
+    url: "https://github.com/convaxai/convax-plugins/releases/download/unreached/registry.json",
   },
   revision: "a".repeat(64),
   showcase: {
     path: "showcase.json",
-    url: "https://github.com/microvoid/convax-plugins/releases/download/unreached/showcase.json",
+    url: "https://github.com/convaxai/convax-plugins/releases/download/unreached/showcase.json",
   },
 }
 
@@ -96,7 +96,7 @@ describe("Marketplace product lock resolution", () => {
     const root = await mkdtemp(join(tmpdir(), "convax-product-lock-"))
     const builtin = builtinFixture()
     const release = (name: string, tag: string) =>
-      `https://github.com/microvoid/convax-plugins/releases/download/${tag}/${name}`
+      `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`
     const pluginBytes = Buffer.from("plugin")
     const ownedSkillBytes = Buffer.from("owned-skill")
     const companionBytes = Buffer.from("companion")
@@ -107,11 +107,11 @@ describe("Marketplace product lock resolution", () => {
       name: "Convax Official",
       publisher: { name: "Convax" },
       registry: {
-        v2: { url: "https://microvoid.github.io/convax-plugins/registry/v2/index.json" },
+        v2: { url: "https://convaxai.github.io/convax-plugins/registry/v2/index.json" },
       },
-      repository: { name: "convax-plugins", owner: "microvoid" },
+      repository: { name: "convax-plugins", owner: "convaxai" },
       schema: "convax.marketplace/1",
-      showcase: { v2: { url: "https://microvoid.github.io/convax-plugins/showcase/v2/index.json" } },
+      showcase: { v2: { url: "https://convaxai.github.io/convax-plugins/showcase/v2/index.json" } },
     }
     const registryPackages = [
       {
@@ -143,7 +143,7 @@ describe("Marketplace product lock resolution", () => {
         kind: "plugin",
         manifest: {
           contributes: { skills: [{ name: "ffmpeg-canvas", path: "skills/ffmpeg-canvas" }] },
-          hostApi: { major: 2, optional: [], required: [] },
+          hostApi: { major: 3, optional: [], required: [] },
           id: "ffmpeg-tools",
           schema: "convax.plugin/8",
           version: "1.0.0",
@@ -273,7 +273,7 @@ describe("Marketplace product lock resolution", () => {
       ...descriptor,
       registry: {
         ...descriptor.registry,
-        v2: { url: "https://microvoid.github.io/convax-plugins/somewhere/registry.json" },
+        v2: { url: "https://convaxai.github.io/convax-plugins/somewhere/registry.json" },
       },
     }
     await writeFile(join(root, "marketplace.json"), `${JSON.stringify(nonCanonicalDescriptor)}\n`)
@@ -344,7 +344,7 @@ describe("Marketplace product lock resolution", () => {
       resolveMarketplaceProductLock(policy, root, {
         builtinBundle: {
           path: "../outside.zip",
-          url: "https://github.com/microvoid/convax-plugins/releases/download/v1/outside.zip",
+          url: "https://github.com/convaxai/convax-plugins/releases/download/v1/outside.zip",
         },
         builtinManifestPath: "bundle.json",
         builtinReservations: [{ id: "canvas-storyboard", kind: "skill" }],
@@ -380,7 +380,7 @@ describe("Marketplace product lock resolution", () => {
       resolveMarketplaceProductLock(policy, root, {
         builtinBundle: {
           path: "builtin.zip",
-          url: `https://github.com/microvoid/convax-plugins/releases/download/builtin-${builtin.manifest.release.id}/builtin.zip`,
+          url: `https://github.com/convaxai/convax-plugins/releases/download/builtin-${builtin.manifest.release.id}/builtin.zip`,
         },
         builtinManifestPath: "bundle.json",
         builtinReservations: [{ id: "canvas-storyboard", kind: "skill" }],
@@ -400,7 +400,7 @@ describe("Marketplace product lock resolution", () => {
       resolveMarketplaceProductLock(policy, root, {
         builtinBundle: {
           path: "builtin.zip",
-          url: `https://github.com/microvoid/convax-plugins/releases/download/builtin-${builtin.manifest.release.id}/builtin.zip`,
+          url: `https://github.com/convaxai/convax-plugins/releases/download/builtin-${builtin.manifest.release.id}/builtin.zip`,
         },
         builtinManifestPath: "bundle.json",
         builtinReservations: [{ id: "different-skill", kind: "skill" }],
@@ -420,7 +420,7 @@ describe("Marketplace product lock resolution", () => {
       resolveMarketplaceProductLock(policy, root, {
         builtinBundle: {
           path: "builtin.zip",
-          url: "https://github.com/microvoid/convax-plugins/releases/download/v1/builtin.zip",
+          url: "https://github.com/convaxai/convax-plugins/releases/download/v1/builtin.zip",
         },
         builtinManifestPath: "bundle.json",
         builtinReservations: [{ id: "canvas-storyboard", kind: "skill" }],

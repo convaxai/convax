@@ -22,14 +22,14 @@ async function fixture() {
     path: "releases/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
     sha256: digest(packageBytes),
     size: packageBytes.byteLength,
-    url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
+    url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
   }
   const companionArtifact = {
     name: "p-1.0.0-darwin-arm64-companion",
     path: "releases/plugin-p-v1.0.0/p-1.0.0-darwin-arm64-companion",
     sha256: digest(companionBytes),
     size: companionBytes.byteLength,
-    url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-p-v1.0.0/p-1.0.0-darwin-arm64-companion",
+    url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-p-v1.0.0/p-1.0.0-darwin-arm64-companion",
   }
   await writeFile(join(root, packageArtifact.path), packageBytes)
   await writeFile(join(root, companionArtifact.path), companionBytes)

@@ -135,7 +135,7 @@ describe("@convax/marketplace strict contracts", () => {
       },
       delivery: {
         ...artifact,
-        url: "https://github.com/microvoid/convax-plugins/releases/download/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
+        url: "https://github.com/convaxai/convax-plugins/releases/download/plugin-p-v1.0.0/plugin-p-1.0.0.zip",
       },
     }
     const mcp = {
@@ -798,18 +798,18 @@ describe("@convax/marketplace strict contracts", () => {
   test("parses generic preinstall identities symmetrically and rejects Release path injection", () => {
     const lockedArtifact = (name: string, tag: string) => ({
       name,
-      url: `https://github.com/microvoid/convax-plugins/releases/download/${tag}/${name}`,
+      url: `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`,
       size: 10,
       sha256: "a".repeat(64),
     })
     const officialRevision = "b".repeat(64)
     const lockFor = (id: string) => {
       const policy = {
-        builtin: { marketplaceId: "convax-builtin" as const, repository: "microvoid/convax-plugins" as const },
+        builtin: { marketplaceId: "convax-builtin" as const, repository: "convaxai/convax-plugins" as const },
         official: {
-          descriptorUrl: "https://microvoid.github.io/convax-plugins/marketplace.json",
+          descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
           marketplaceId: "convax-official" as const,
-          repository: "microvoid/convax-plugins" as const,
+          repository: "convaxai/convax-plugins" as const,
         },
         preinstalledPackages: [
           {
