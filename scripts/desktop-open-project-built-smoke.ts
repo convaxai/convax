@@ -362,7 +362,25 @@ try {
       )
       enterProject.click()
     }
-    const canvasElement = await waitFor(
+    const collaborationOrCanvas = await waitFor(
+      () => document.querySelector(".convax-canvas")
+        || document.querySelector('[data-project-collaboration-pending="true"]'),
+      "the collaboration bootstrap or active Canvas",
+    )
+    if (collaborationOrCanvas.matches('[data-project-collaboration-pending="true"]')) {
+      const createTeam = await waitFor(
+        () => document.querySelector('[data-project-collaboration-action="create"]'),
+        "the local team bootstrap action",
+      )
+      createTeam.click()
+      const continueOrCanvas = await waitFor(
+        () => document.querySelector(".convax-canvas")
+          || buttonWithAnyText("Continue to Project", "继续进入项目"),
+        "the bootstrapped collaboration authority",
+      )
+      if (!continueOrCanvas.matches(".convax-canvas")) continueOrCanvas.click()
+    }
+    await waitFor(
       () => document.querySelector(".convax-canvas"),
       "the active Canvas",
     ).catch((error) => {
@@ -376,7 +394,15 @@ try {
       throw new Error(
         String(error)
           + "; Project Home state: "
-          + JSON.stringify({ alert, buttons, text: home?.textContent?.trim().slice(0, 500) }),
+          + JSON.stringify({
+            alert,
+            body: document.body.textContent?.trim().slice(0, 1000),
+            buttons,
+            collaborationPending: Boolean(document.querySelector('[data-project-collaboration-pending="true"]')),
+            projectLoading: Boolean(document.querySelector('[data-project-loading="true"]')),
+            resetRecovery: Boolean(document.querySelector('[data-project-reset-recovery="true"]')),
+            text: home?.textContent?.trim().slice(0, 500),
+          }),
       )
     })
     await waitFor(() => !document.body.textContent?.includes("Loading canvas"), "Canvas hydration")
@@ -427,7 +453,6 @@ try {
           type: "elements.remove",
         },
         commandId: "smoke-generation-cleanup-after-remount",
-        expectedRevision: initialDocument.document.revision,
         ref: { canvasId: selectedCanvasId, scopeId: projectId },
       })
       if (cleanup.document.nodes.some((node) => node.id.startsWith("generation-"))) {
@@ -463,7 +488,7 @@ try {
       position: { x: -720, y: 0 },
       type: "file",
     }
-    const addedGenerationOwner = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         addedEdges: [],
         addedNodes: [generationOwner],
@@ -474,7 +499,6 @@ try {
         updatedNodes: [],
       },
       commandId: "smoke-generation-owner-add",
-      expectedRevision: initialDocument.document?.revision ?? 0,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const persistedGenerationSnapshot = await window.convax.canvas.documents.load({
@@ -493,7 +517,7 @@ try {
       if (Object.keys(generationGuardData.metadata).length === 0) delete generationGuardData.metadata
     }
     const generationGuard = { data: generationGuardData, type: persistedGenerationOwner.type }
-    const startedGeneration = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         nodeId: generationOwner.id,
         operationId: "operation-built-smoke",
@@ -502,7 +526,6 @@ try {
         type: "generation.run.start",
       },
       commandId: "smoke-generation-start",
-      expectedRevision: persistedGenerationSnapshot.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const concurrentNode = {
@@ -518,7 +541,6 @@ try {
       position: { x: -360, y: 0 },
       type: "file",
     }
-    const concurrentRevision = startedGeneration.document.revision
     const [markRunningAttempt, unrelatedEditAttempt] = await Promise.allSettled([
       window.convax.canvas.documents.execute({
         command: {
@@ -528,7 +550,6 @@ try {
           type: "generation.run.mark-running",
         },
         commandId: "smoke-generation-running",
-        expectedRevision: concurrentRevision,
         ref: { canvasId: selectedCanvasId, scopeId: projectId },
       }),
       window.convax.canvas.documents.execute({
@@ -542,50 +563,17 @@ try {
           updatedNodes: [],
         },
         commandId: "smoke-generation-unrelated-edit",
-        expectedRevision: concurrentRevision,
         ref: { canvasId: selectedCanvasId, scopeId: projectId },
       }),
     ])
-    if (markRunningAttempt.status === unrelatedEditAttempt.status) {
-      throw new Error("Canvas CAS did not admit exactly one concurrent generation mutation")
+    if (markRunningAttempt.status !== "fulfilled" || unrelatedEditAttempt.status !== "fulfilled") {
+      throw new Error("Independent Canvas intents did not both commit through the candidate/replica boundary")
     }
-    let racedDocument = await window.convax.canvas.documents.load({
+    const racedDocument = await window.convax.canvas.documents.load({
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
     if (!racedDocument.document) throw new Error("Canvas disappeared during generation race")
-    if (markRunningAttempt.status === "rejected") {
-      await window.convax.canvas.documents.execute({
-        command: {
-          nodeId: generationOwner.id,
-          operationId: "operation-built-smoke",
-          taskId: "task_built_smoke_123",
-          type: "generation.run.mark-running",
-        },
-        commandId: "smoke-generation-running-retry",
-        expectedRevision: racedDocument.document.revision,
-        ref: { canvasId: selectedCanvasId, scopeId: projectId },
-      })
-    } else {
-      await window.convax.canvas.documents.execute({
-        command: {
-          addedEdges: [],
-          addedNodes: [concurrentNode],
-          removedEdgeIds: [],
-          removedNodeIds: [],
-          type: "document.patch",
-          updatedEdges: [],
-          updatedNodes: [],
-        },
-        commandId: "smoke-generation-unrelated-edit-retry",
-        expectedRevision: racedDocument.document.revision,
-        ref: { canvasId: selectedCanvasId, scopeId: projectId },
-      })
-    }
-    racedDocument = await window.convax.canvas.documents.load({
-      canvasId: selectedCanvasId,
-      scopeId: projectId,
-    })
     const runningOwner = racedDocument.document?.nodes.find((node) => node.id === generationOwner.id)
     const runningState = runningOwner?.data.metadata?.convaxGenerationRun
     if (
@@ -614,7 +602,6 @@ try {
         type: "resources.replace-generated",
       },
       commandId: "smoke-generation-replace",
-      expectedRevision: racedDocument.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const succeededOwner = replacedGeneration.document.nodes.find((node) => node.id === generationOwner.id)
@@ -633,7 +620,7 @@ try {
       id: "generation-late-owner",
       position: { x: -720, y: 280 },
     }
-    const addedLateOwner = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         addedEdges: [],
         addedNodes: [lateOwner],
@@ -644,7 +631,6 @@ try {
         updatedNodes: [],
       },
       commandId: "smoke-generation-late-owner-add",
-      expectedRevision: replacedGeneration.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const persistedLateSnapshot = await window.convax.canvas.documents.load({
@@ -657,7 +643,7 @@ try {
     delete lateGuardData.resourceState
     if (lateGuardData.metadata && Object.keys(lateGuardData.metadata).length === 0) delete lateGuardData.metadata
     const lateGuard = { data: lateGuardData, type: persistedLateOwner.type }
-    const startedLateRun = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         nodeId: lateOwner.id,
         operationId: "operation-late-smoke",
@@ -666,13 +652,11 @@ try {
         type: "generation.run.start",
       },
       commandId: "smoke-generation-late-start",
-      expectedRevision: persistedLateSnapshot.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
-    const deletedLateOwner = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: { nodeIds: [lateOwner.id], type: "elements.remove" },
       commandId: "smoke-generation-late-delete",
-      expectedRevision: startedLateRun.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const lateReplacement = await window.convax.canvas.documents.execute({
@@ -694,23 +678,18 @@ try {
         type: "resources.replace-generated",
       },
       commandId: "smoke-generation-late-replace",
-      expectedRevision: deletedLateOwner.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     }).then(
       () => ({ rejected: false }),
       () => ({ rejected: true }),
     )
     if (!lateReplacement.rejected) throw new Error("A late generation callback revived a deleted Canvas node")
-    const beforeRestartFallback = await window.convax.canvas.documents.load({
-      canvasId: selectedCanvasId,
-      scopeId: projectId,
-    })
     const restartFallbackOwner = {
       ...generationOwner,
       id: "generation-restart-fallback-owner",
       position: { x: -360, y: 280 },
     }
-    const addedRestartFallback = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         addedEdges: [],
         addedNodes: [restartFallbackOwner],
@@ -721,10 +700,9 @@ try {
         updatedNodes: [],
       },
       commandId: "smoke-generation-restart-fallback-add",
-      expectedRevision: beforeRestartFallback.document?.revision ?? 0,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
-    const startedRestartFallback = await window.convax.canvas.documents.execute({
+    await window.convax.canvas.documents.execute({
       command: {
         nodeId: restartFallbackOwner.id,
         operationId: "operation-restart-fallback-smoke",
@@ -733,7 +711,6 @@ try {
         type: "generation.run.start",
       },
       commandId: "smoke-generation-restart-fallback-start",
-      expectedRevision: addedRestartFallback.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     await window.convax.canvas.documents.execute({
@@ -744,7 +721,6 @@ try {
         type: "generation.run.mark-running",
       },
       commandId: "smoke-generation-restart-fallback-running",
-      expectedRevision: startedRestartFallback.document.revision,
       ref: { canvasId: selectedCanvasId, scopeId: projectId },
     })
     const reconciledFallback = await window.convax.generation.reconcileCanvas({
@@ -765,7 +741,7 @@ try {
       throw new Error("Restart reconciliation did not fail closed for an active run without an admitted LRO")
     }
       sessionStorage.setItem("convax.smoke.generation-race.v1", JSON.stringify({
-        concurrentConflict: true,
+        concurrentIndependentEdits: true,
         lateCallbackRejected: lateReplacement.rejected,
         restartFallbackFailed: fallbackRun.status === "failed",
         status: succeededRun.status,
@@ -889,7 +865,7 @@ try {
     language?: string
     projectId?: string
     generationRace?: {
-      concurrentConflict?: boolean
+      concurrentIndependentEdits?: boolean
       lateCallbackRejected?: boolean
       restartFallbackFailed?: boolean
       status?: string
@@ -900,7 +876,7 @@ try {
     summary.canvasCount !== 1 ||
     summary.documentId !== "canvas-main" ||
     summary.language !== "zh-CN" ||
-    summary.generationRace?.concurrentConflict !== true ||
+    summary.generationRace?.concurrentIndependentEdits !== true ||
     summary.generationRace.lateCallbackRejected !== true ||
     summary.generationRace.restartFallbackFailed !== true ||
     summary.generationRace.status !== "succeeded"
