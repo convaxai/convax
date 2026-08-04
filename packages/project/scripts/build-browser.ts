@@ -3,13 +3,7 @@ import { resolve } from "node:path"
 const packageRoot = resolve(import.meta.dir, "..")
 const sourceRoot = resolve(packageRoot, "src")
 const outputDirectory = resolve(packageRoot, "dist")
-const entrypoints = [
-  "src/index.ts",
-  "src/contracts.ts",
-  "src/drag.ts",
-  "src/identity.ts",
-  "src/project-uri.ts",
-]
+const entrypoints = ["src/index.ts", "src/contracts.ts", "src/canvas/index.ts", "src/collaboration-protocol.ts"]
 
 for (const entrypoint of entrypoints) {
   const result = Bun.spawnSync(
@@ -29,5 +23,5 @@ for (const entrypoint of entrypoints) {
     ],
     { cwd: packageRoot, stderr: "inherit", stdout: "inherit" },
   )
-  if (result.exitCode !== 0) throw new Error(`Failed to build @convax/project-files entry ${entrypoint}`)
+  if (result.exitCode !== 0) throw new Error(`Failed to build @convax/project browser entry ${entrypoint}`)
 }

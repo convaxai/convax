@@ -5,10 +5,11 @@ const sourceRoot = resolve(packageRoot, "src")
 const outputDirectory = resolve(packageRoot, "dist")
 const entrypoints = [
   "src/index.ts",
-  "src/contracts.ts",
-  "src/drag.ts",
-  "src/identity.ts",
-  "src/project-uri.ts",
+  "src/application/index.ts",
+  "src/application/errors.ts",
+  "src/collaboration/index.ts",
+  "src/core.ts",
+  "src/view.ts",
 ]
 
 for (const entrypoint of entrypoints) {
@@ -29,5 +30,5 @@ for (const entrypoint of entrypoints) {
     ],
     { cwd: packageRoot, stderr: "inherit", stdout: "inherit" },
   )
-  if (result.exitCode !== 0) throw new Error(`Failed to build @convax/project-files entry ${entrypoint}`)
+  if (result.exitCode !== 0) throw new Error(`Failed to build @convax/canvas entry ${entrypoint}`)
 }
