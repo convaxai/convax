@@ -8,6 +8,11 @@ import {
   PluginCanvasImagePublicationPartialSuccessError,
   PluginCanvasImageService,
 } from "./plugin-canvas-image-service"
+import {
+  canvasCommandResult,
+  canvasOperationReceipt,
+  canvasQueryApplication,
+} from "./canvas-application-test-fixtures"
 
 function pngDataUrl(width = 2, height = 1) {
   const bytes = Buffer.alloc(24)
@@ -19,11 +24,10 @@ function pngDataUrl(width = 2, height = 1) {
 }
 
 function document(): CanvasDocument {
-  return {
-    ...createCanvasDocument({
-      id: "canvas-1",
-      nodes: [
-        {
+  return createCanvasDocument({
+    id: "canvas-1",
+    nodes: [
+      {
           data: {
             kind: "plugin.capture-surface",
             label: "Capture Surface",
@@ -39,17 +43,14 @@ function document(): CanvasDocument {
           position: { x: 100, y: 60 },
           style: { height: 640, width: 980 },
           type: "file",
-        },
-      ],
-    }),
-    revision: 3,
-  }
+      },
+    ],
+  })
 }
 
 function request(): PluginCanvasImageCreateRequest {
   return {
     dataUrl: pngDataUrl(),
-    expectedRevision: 3,
     name: "viewport-capture.png",
     operationId: "capture-1",
     ownerNodeId: "plugin-node-1",
@@ -70,7 +71,7 @@ function pluginIdentity(
       contributes: { canvas: { renderer: { create: true, height: 640, width: 980 } } },
       description: "Capture one viewport",
       entry: "index.html",
-      hostApi: { major: 2, optional: [], required: ["host.context.get"] },
+      hostApi: { major: 3, optional: [], required: ["host.context.get"] },
       id: "capture-surface",
       name: "Capture Surface",
       schema: "convax.plugin/8",
@@ -80,17 +81,17 @@ function pluginIdentity(
   }
 }
 
+function applicationFor(...projections: readonly CanvasDocument[]) {
+  let index = 0
+  return canvasQueryApplication(() => projections[Math.min(index++, projections.length - 1)]!)
+}
+
 describe("Plugin Canvas image service", () => {
   test("publishes a validated PNG and creates one connected image node", async () => {
     const canvas = document()
-    const addResources = mock(async () => ({
-      affectedNodeIds: ["image-1"],
-      changed: true,
-      createdNodeIds: ["image-1"],
-      document: { ...canvas, revision: 4 },
-      storageVersion: "storage-4",
-      warnings: [],
-    }))
+    const addResources = mock(async () =>
+      canvasCommandResult({ createdNodeIds: ["image-1"], document: canvas, operationId: "plugin-image:capture-1" }),
+    )
     const publishGenerated = mock(async (input: { bytes?: Uint8Array; extension: string; name?: string }) => {
       expect(input.bytes).toEqual(Buffer.from(pngDataUrl().split(",")[1]!, "base64"))
       expect(input).toMatchObject({ extension: ".png", name: "viewport-capture.png" })
@@ -99,7 +100,7 @@ describe("Plugin Canvas image service", () => {
     const resolveCapabilityIdentity = mock(async () => pluginIdentity())
     const controller = new AbortController()
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity },
       projects: { publishGenerated },
       resources: { addResources },
@@ -107,7 +108,8 @@ describe("Plugin Canvas image service", () => {
 
     await expect(service.create(request(), controller.signal)).resolves.toEqual({
       createdNodeId: "image-1",
-      revision: 4,
+      operationReceipt: canvasOperationReceipt("plugin-image:capture-1"),
+      projection: expect.objectContaining({ id: "canvas-1" }),
     })
     expect(resolveCapabilityIdentity).toHaveBeenCalledTimes(2)
     expect(addResources).toHaveBeenCalledWith(
@@ -142,7 +144,7 @@ describe("Plugin Canvas image service", () => {
       snapshotDigest: current ? "d".repeat(64) : "f".repeat(64),
     })
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity: async () => exactIdentity() },
       projects: {
         async publishGenerated(input) {
@@ -176,7 +178,7 @@ describe("Plugin Canvas image service", () => {
     const canvas = document()
     const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: { publishGenerated },
       resources: {
@@ -200,7 +202,7 @@ describe("Plugin Canvas image service", () => {
     const canvas = document()
     const bug = new TypeError("publisher invariant failed")
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: {
         async publishGenerated() {
@@ -225,7 +227,7 @@ describe("Plugin Canvas image service", () => {
     })
     let resolution = 0
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: {
         resolveCapabilityIdentity: async () =>
           resolution++ === 0 ? pluginIdentity() : pluginIdentity({}, "b".repeat(64)),
@@ -243,26 +245,21 @@ describe("Plugin Canvas image service", () => {
     expect(publishGenerated).toHaveBeenCalledTimes(1)
   })
 
-  test("rechecks the authoritative Canvas revision after publication before a stale commit", async () => {
+  test("rechecks the authoritative Plugin owner after publication before a stale commit", async () => {
     const canvas = document()
     const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const addResources = mock(async () => {
       throw new Error("must not commit")
     })
-    let load = 0
     const service = new PluginCanvasImageService({
-      documents: {
-        load: async () => ({
-          document: load++ === 0 ? canvas : { ...canvas, revision: canvas.revision + 1 },
-        }),
-      },
+      application: applicationFor(canvas, createCanvasDocument({ id: canvas.id })),
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: { publishGenerated },
       resources: { addResources },
     })
 
     await expect(service.create(request())).rejects.toMatchObject({
-      cause: expect.objectContaining({ message: "Canvas changed before the Plugin screenshot could be created" }),
+      cause: expect.objectContaining({ message: "Plugin screenshot owner node is no longer available" }),
       name: "PluginCanvasImagePublicationPartialSuccessError",
       publishedPaths: ["Generated/capture.png"],
     })
@@ -281,7 +278,7 @@ describe("Plugin Canvas image service", () => {
       throw new Error("must not commit")
     })
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: { publishGenerated },
       resources: { addResources },
@@ -300,18 +297,12 @@ describe("Plugin Canvas image service", () => {
     const canvas = document()
     const publishGenerated = mock(async () => ({ path: "Generated/capture.png" }))
     const service = new PluginCanvasImageService({
-      documents: { load: async () => ({ document: canvas }) },
+      application: applicationFor(canvas),
       plugins: { resolveCapabilityIdentity: async () => pluginIdentity() },
       projects: { publishGenerated },
       resources: {
-        addResources: async () => ({
-          affectedNodeIds: [],
-          changed: true,
-          createdNodeIds: [],
-          document: { ...canvas, revision: 4 },
-          storageVersion: "storage-4",
-          warnings: [],
-        }),
+        addResources: async () =>
+          canvasCommandResult({ document: canvas, operationId: "plugin-image:capture-1" }),
       },
     })
 
@@ -330,7 +321,6 @@ function nodeContextForImage(canvas: CanvasDocument) {
   const node = canvas.nodes[0]!
   return {
     canvas: { id: canvas.id },
-    documentRevision: canvas.revision,
     node: {
       data: node.data,
       id: node.id,

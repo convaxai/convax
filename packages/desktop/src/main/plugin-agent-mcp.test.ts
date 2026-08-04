@@ -21,7 +21,7 @@ function remotePlugin(id = "remote-editor", oauth: "auto" | "none" = "auto") {
       },
     },
     description: "Remote MCP Plugin",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id,
     name: id,
     schema: "convax.plugin/8",

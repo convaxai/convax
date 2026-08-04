@@ -3,7 +3,7 @@ import { createCanvasDocument } from "@convax/canvas"
 
 import { executePluginCanvasImageWrite, preparePluginCanvasImageWrite } from "./plugin-canvas-image-write"
 
-test("waits for a pending renderer save and uses Main's resulting revision", async () => {
+test("waits for a pending renderer flush and uses Main's authoritative projection", async () => {
   let releaseSave!: (document: ReturnType<typeof createCanvasDocument>) => void
   const pendingSave = new Promise<ReturnType<typeof createCanvasDocument>>((resolve) => {
     releaseSave = resolve
@@ -28,8 +28,8 @@ test("waits for a pending renderer save and uses Main's resulting revision", asy
   await Promise.resolve()
   expect(settled).toBeFalse()
 
-  releaseSave({ ...createCanvasDocument({ id: "canvas-1" }), revision: 7 })
-  await expect(write).resolves.toMatchObject({ id: "canvas-1", revision: 7 })
+  releaseSave(createCanvasDocument({ id: "canvas-1" }))
+  await expect(write).resolves.toMatchObject({ id: "canvas-1" })
   expect(assertCurrentScope).toHaveBeenCalledTimes(2)
 })
 
@@ -55,7 +55,7 @@ test("rechecks scope and cancellation after the authoritative save barrier", asy
   )
 
   activeCanvasId = "canvas-2"
-  releaseSave({ ...createCanvasDocument({ id: "canvas-1" }), revision: 3 })
+  releaseSave(createCanvasDocument({ id: "canvas-1" }))
   await expect(write).rejects.toThrow("Plugin call is no longer in the active Canvas")
 
   const canceled = new AbortController()

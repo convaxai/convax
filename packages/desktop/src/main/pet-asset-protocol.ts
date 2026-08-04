@@ -1,3 +1,4 @@
+import { parse as parseConvaxUri } from "@convax/uri"
 import { pathToFileURL } from "node:url"
 
 import { customPetIdPattern } from "./custom-pet-store"
@@ -13,21 +14,12 @@ export const petAssetPrivileges = {
 
 export function petAssetIdForUrl(value: string) {
   try {
-    const url = new URL(value)
-    if (
-      url.protocol !== `${petAssetScheme}:` ||
-      url.hostname !== "pet" ||
-      url.username ||
-      url.password ||
-      url.port ||
-      url.search ||
-      url.hash
-    ) {
+    const uri = parseConvaxUri(value)
+    if (uri.scheme !== petAssetScheme || uri.authority !== "pet" || uri.query || uri.fragment) {
       return null
     }
-    const match = /^\/([^/]+)$/.exec(url.pathname)
-    if (!match) return null
-    const id = decodeURIComponent(match[1]!)
+    if (uri.pathSegments.length !== 1 || uri.pathSegments[0]!.includes("/")) return null
+    const id = uri.pathSegments[0]!
     return customPetIdPattern.test(id) && id.length <= 80 ? id : null
   } catch {
     return null

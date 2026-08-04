@@ -73,7 +73,7 @@ async function candidate(input: {
     },
     description: `${input.id} real stdio fixture`,
     hostApi: {
-      major: 2,
+      major: 3,
       optional: [],
       required: input.projectsRead ? ["projects.list"] : executable ? [] : ["host.context.get"],
     },

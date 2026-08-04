@@ -423,7 +423,7 @@ function NodeConnectionHandles(props: { nodeId: string }) {
           position={connectMenuSide === "left" ? Position.Left : Position.Right}
         >
           <ConnectionNodeMenu
-            items={editor.connectionNodeTypes}
+            items={editor.quickConnectionNodeTypes}
             onSelect={(type) => {
               editor.quickConnect(props.nodeId, connectMenuSide, type)
               setConnectMenuSide(null)

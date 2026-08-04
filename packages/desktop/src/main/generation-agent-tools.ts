@@ -44,7 +44,6 @@ const topLevelFields = new Set([
   "anchor",
   "canvasId",
   "commandId",
-  "expectedRevision",
   "output",
   "prompt",
   "promptContextNodeIds",
@@ -93,7 +92,7 @@ export function createGenerationAgentToolProvider(service: GenerationCanvasAgent
       return {
         changed: result.createdNodeIds.length > 0,
         createdNodeIds: result.createdNodeIds,
-        revision: result.revision,
+        operationReceipt: result.operationReceipt,
         toolId: result.toolId,
         warnings: result.warnings,
       }
@@ -140,11 +139,6 @@ function definition(tools: readonly GenerationToolSummary[]): AgentToolDefinitio
           maxLength: 256,
           minLength: 1,
           type: "string",
-        },
-        expectedRevision: {
-          description: "Revision returned by the latest Canvas query.",
-          minimum: 0,
-          type: "integer",
         },
         output: {
           description: "Optional output modality used to select a compatible installed tool.",
@@ -194,7 +188,7 @@ function definition(tools: readonly GenerationToolSummary[]): AgentToolDefinitio
           type: "object",
         },
       },
-      required: ["anchor", "canvasId", "commandId", "expectedRevision", "prompt", "promptContextNodeIds", "references"],
+      required: ["anchor", "canvasId", "commandId", "prompt", "promptContextNodeIds", "references"],
       type: "object",
     },
   }
@@ -209,7 +203,6 @@ function generationRequest(
   const canvasId = requiredIdentifier(value.canvasId, "canvasId")
   const commandId = requiredIdentifier(value.commandId, "commandId")
   const prompt = boundedPrompt(value.prompt)
-  const expectedRevision = requiredInteger(value.expectedRevision, "expectedRevision", 0)
   const anchor = point(value.anchor, "anchor")
   const output = optionalEnum(value.output, "output", outputModalities)
   const toolId = optionalIdentifier(value.toolId, "toolId")
@@ -239,7 +232,6 @@ function generationRequest(
   return {
     anchor,
     expectedOutputCount: 1,
-    expectedRevision,
     operationId: commandId,
     ...(output === undefined ? {} : { output }),
     prompt,

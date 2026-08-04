@@ -1,5 +1,6 @@
 import type { AgentResource, AgentRuntimeResource } from "@convax/agent-runtime"
-import { parseStoredCanvasDocument } from "@convax/canvas/application"
+import type { CanvasDocument } from "@convax/canvas/core"
+import { canonicalize as canonicalizeConvaxUri, parse as parseConvaxUri } from "@convax/uri"
 import { isAbsolute, win32 } from "node:path"
 
 export interface AgentProjectResolver {
@@ -7,8 +8,8 @@ export interface AgentProjectResolver {
 }
 
 export interface AgentCanvasSnapshot {
-  /** A canonical persisted Canvas document envelope used as a read-only snapshot. */
-  content: string
+  /** Disposable, pathless Canvas-owned projection used as a read-only snapshot. */
+  document: CanvasDocument
   name?: string
 }
 
@@ -43,46 +44,37 @@ function validateCanvasNodeId(nodeId: string) {
   return value
 }
 
-function decodeResourceSegment(value: string) {
-  try {
-    return decodeURIComponent(value)
-  } catch {
-    throw new Error("Agent structured resource URI is invalid")
-  }
-}
-
 /** Parse a full Canvas or one Canvas-node resource URI owned by the desktop host. */
 export function parseAgentCanvasResourceUri(value: string): AgentCanvasResourceReference {
   const input = value.trim()
-  let url: URL
+  let uri: ReturnType<typeof parseConvaxUri>
   try {
-    url = new URL(input)
+    uri = parseConvaxUri(input)
   } catch {
     throw new Error("Agent structured resource URI is invalid")
   }
-  const segments = url.pathname.split("/")
+  const segments = uri.pathSegments
   if (
-    url.protocol !== "convax:" ||
-    url.hostname !== "canvas" ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash ||
-    (segments.length !== 2 && segments.length !== 4) ||
-    segments[0] !== "" ||
-    (segments.length === 4 && segments[2] !== "node")
+    uri.scheme !== "convax" ||
+    uri.authority !== "canvas" ||
+    uri.query ||
+    uri.fragment ||
+    (segments.length !== 1 && segments.length !== 3) ||
+    (segments.length === 3 && segments[1] !== "node") ||
+    segments.some((segment) => segment.includes("/") && segment !== segments.at(-1))
   ) {
     throw new Error("Agent structured resource URI is invalid")
   }
-  const canvasId = validateCanvasId(decodeResourceSegment(segments[1]!))
-  const nodeId = segments.length === 4 ? validateCanvasNodeId(decodeResourceSegment(segments[3]!)) : undefined
+  const canvasId = validateCanvasId(segments[0]!)
+  const nodeId = segments.length === 3 ? validateCanvasNodeId(segments[2]!) : undefined
   return {
     canvasId,
     ...(nodeId ? { nodeId } : {}),
-    uri: nodeId
-      ? `convax://canvas/${encodeURIComponent(canvasId)}/node/${encodeURIComponent(nodeId)}`
-      : `convax://canvas/${encodeURIComponent(canvasId)}`,
+    uri: canonicalizeConvaxUri(
+      nodeId
+        ? `convax://canvas/${encodeURIComponent(canvasId)}/node/${encodeURIComponent(nodeId)}`
+        : `convax://canvas/${encodeURIComponent(canvasId)}`,
+    ),
   }
 }
 
@@ -110,12 +102,8 @@ async function prepareStructuredResource(
   if (!canvasSnapshots) throw new Error("Canvas node resources are unavailable")
   const reference = parseAgentCanvasResourceUri(resource.uri)
   const snapshot = await canvasSnapshots.resolveCanvasSnapshot({ canvasId: reference.canvasId, projectId })
-  let document: ReturnType<typeof parseStoredCanvasDocument>
-  try {
-    document = parseStoredCanvasDocument(snapshot.content, reference.canvasId)
-  } catch {
-    throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
-  }
+  const document = structuredClone(snapshot.document)
+  if (document.id !== reference.canvasId) throw new Error(`Canvas snapshot is invalid: ${reference.canvasId}`)
   const requestedName = resource.name?.trim()
   const node = reference.nodeId ? document.nodes.find((candidate) => candidate.id === reference.nodeId) : undefined
   if (reference.nodeId && !node) throw new Error(`Canvas node was not found: ${reference.nodeId}`)
@@ -131,7 +119,6 @@ async function prepareStructuredResource(
         canvas: {
           id: document.id,
           name: snapshot.name,
-          revision: document.revision,
         },
         ...(children ? { children } : {}),
         edges,

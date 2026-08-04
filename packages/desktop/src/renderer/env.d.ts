@@ -1,8 +1,9 @@
 import type { AgentClient } from "@convax/agent-runtime"
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
+import type { CanvasRendererSessionTransportV2 } from "../canvas-session-contracts"
 import type { CanvasRendererClient } from "../canvas-renderer-contracts"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
-import type { ProjectLifecycleClient } from "@convax/project"
+import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient } from "@convax/project"
 import type { ProjectCanvasClient } from "@convax/project/canvas"
 import type { ProjectFilesClient } from "@convax/project-files"
 import type { CanvasResourceClient, CanvasTextResourceClient, DesktopProtocolClient } from "../desktop-protocol"
@@ -17,6 +18,7 @@ import type { PetSettingsHostClient } from "./pet-settings-host"
 import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 import type { MarketplaceClient } from "../marketplace-contracts"
 import type { MainWindowControlsClient } from "../main-window-controls-contracts"
+import type { ProjectTeamCollaborationClientV2 } from "../project-team-collaboration-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -31,6 +33,7 @@ declare global {
         pluginMaterialization: PluginMaterializationRendererClient
         renderer: CanvasRendererClient
         resources: CanvasResourceClient
+        sessions: CanvasRendererSessionTransportV2
         textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
@@ -46,7 +49,11 @@ declare global {
       plugins: WebPluginClient
       pluginServices: PluginServiceClient
       projectFiles: ProjectFilesClient
-      projects: ProjectLifecycleClient & { canvases: ProjectCanvasClient }
+      projects: ProjectLifecycleClient & {
+        canvases: ProjectCanvasClient
+        collaboration: ProjectTeamCollaborationClientV2
+        recovery: ProjectCollaborationRecoveryClient
+      }
       protocol?: DesktopProtocolClient
       systemStatus: WorkspaceSystemStatusClient
     }

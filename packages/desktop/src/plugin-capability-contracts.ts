@@ -1,4 +1,5 @@
 import type { CanvasApplicationCommand, CanvasNodeQuery, CanvasNodeSummary } from "@convax/canvas/application"
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
 import type { CanvasEdge, CanvasPoint, CanvasSize } from "@convax/canvas/core"
 import type { PluginApiDeclaration } from "@convax/plugin-api"
 
@@ -39,10 +40,8 @@ export interface PluginProjectSummary {
 }
 
 export interface PluginCanvasSummary {
-  createdAt: number
   id: string
   name: string
-  updatedAt: number
 }
 
 export interface PluginCanvasCatalogResult {
@@ -68,7 +67,6 @@ export interface PluginCanvasGeometryDocument {
   edges: Array<Pick<CanvasEdge, "id" | "source" | "target">>
   id: string
   nodes: PluginCanvasGeometryNode[]
-  revision: number
   title: string
 }
 
@@ -98,27 +96,23 @@ export type PluginCanvasDocumentResult =
       document: PluginCanvasGeometryDocument
       projection: "geometry"
       ref: PluginCanvasRef
-      storageVersion: string | null
     }
   | {
       document: PluginCanvasStructureDocument
       projection: "structure"
       ref: PluginCanvasRef
-      storageVersion: string | null
     }
 
 export interface PluginCanvasNodeQueryResult {
   nodes: CanvasNodeSummary[]
+  projection: PluginCanvasStructureDocument
   ref: PluginCanvasRef
-  revision: number
-  storageVersion: string | null
 }
 
 export interface PluginCanvasTransactionRequest {
-  commands: readonly PluginCanvasDocumentCommand[]
-  expectedRevision: number
+  command: PluginCanvasDocumentCommand
+  commandId: string
   ref: PluginCanvasRef
-  transactionId: string
 }
 
 /**
@@ -136,17 +130,17 @@ export interface PluginCanvasTransactionResult {
   affectedNodeIds: string[]
   changed: boolean
   createdNodeIds: string[]
+  operationReceipt: BoundedOperationReceiptV2
+  projection: PluginCanvasStructureDocument
   ref: PluginCanvasRef
-  revision: number
-  storageVersion: string
   /** The commit succeeded, but its potentially huge id lists were omitted from the transport response. */
   summaryTruncated?: boolean
   warnings: string[]
 }
 
 export interface PluginCanvasChangeEvent {
+  operationReceipt: BoundedOperationReceiptV2
   ref: PluginCanvasRef
-  revision: number
   source: "plugin" | "renderer" | "host"
 }
 

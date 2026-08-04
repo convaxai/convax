@@ -9,7 +9,6 @@ export const canvasExternalMediaDragIpcChannels = {
 
 /** Pathless selection snapshot admitted by Desktop main before a native file drag. */
 export interface CanvasExternalMediaDragRequest {
-  expectedRevision: number
   nodeIds: string[]
   ref: CanvasDocumentRef
 }

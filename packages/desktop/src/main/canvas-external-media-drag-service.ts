@@ -141,7 +141,6 @@ export class CanvasExternalMediaDragService implements CanvasExternalMediaDragTi
       const media = await this.input.media.resolve(
         {
           canvasId: request.ref.canvasId,
-          expectedRevision: request.expectedRevision,
           nodeIds: request.nodeIds,
           scopeId: request.ref.scopeId,
         },

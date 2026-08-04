@@ -1,4 +1,5 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
+import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
@@ -16,7 +17,8 @@ export type CanvasTextResourceClient = CanvasTextResourceService
 
 export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2
+  projection: CanvasDocument
   warnings: readonly string[]
 }
 
@@ -24,7 +26,6 @@ export interface CanvasResourceAddInput {
   anchor: CanvasPoint
   canvasId: string
   commandId: string
-  expectedRevision: number
   localFiles?: readonly {
     mediaType?: string
     name: string
@@ -44,7 +45,6 @@ export interface CanvasResourceAddInput {
 export interface CanvasResourceRelinkInput {
   canvasId: string
   commandId: string
-  expectedRevision: number
   nodeId: string
   source:
     | { kind: "host-directory" | "host-file"; path: string }
@@ -54,18 +54,17 @@ export interface CanvasResourceRelinkInput {
 export interface CanvasResourceSaveEditableCopyInput {
   canvasId: string
   commandId: string
-  expectedRevision: number
   nodeId: string
 }
 
 export interface CanvasResourceRelinkResult {
-  revision: number
+  operationReceipt: BoundedOperationReceiptV2
+  projection: CanvasDocument
   warnings: readonly string[]
 }
 
 export interface CanvasConnectedImageReadInput {
   canvasId: string
-  expectedRevision: number
   nodeId: string
   ownerNodeId: string
 }
@@ -80,7 +79,7 @@ export interface CanvasConnectedImageReadResult {
 export interface CanvasResourceClient {
   add(input: CanvasResourceAddInput): Promise<CanvasResourceAddResult>
   createLocalFileToken(file: File): string
-  hydrateStale(input: { canvasId: string; revision: number }): Promise<CanvasDocument>
+  hydrateStale(input: { canvasId: string }): Promise<CanvasDocument>
   readConnectedImage(input: CanvasConnectedImageReadInput): Promise<CanvasConnectedImageReadResult>
   relink(input: CanvasResourceRelinkInput): Promise<CanvasResourceRelinkResult>
   saveEditableCopy(input: CanvasResourceSaveEditableCopyInput): Promise<CanvasResourceRelinkResult>

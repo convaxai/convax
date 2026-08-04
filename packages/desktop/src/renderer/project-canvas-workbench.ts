@@ -1,4 +1,4 @@
-import type { CanvasDocument, CanvasResourceMutationService } from "@convax/canvas"
+import type { CanvasResourceMutationService } from "@convax/canvas"
 import type { ProjectCanvas, ProjectCanvasControllerSnapshot } from "@convax/project/canvas"
 import type { ProjectFilesControllerSnapshot } from "@convax/project-files"
 import type { WorkbenchCanvasInput, WorkbenchInput, WorkbenchSnapshot } from "@convax/workbench"
@@ -46,7 +46,7 @@ export async function runProjectCanvasResourceRelink(input: {
   activeCanvasId: string | null | undefined
   activeProjectId: string | null | undefined
   createCommandId(): string
-  flush(): Promise<Pick<CanvasDocument, "id" | "revision"> | undefined>
+  flush(): Promise<{ id: string } | undefined>
   projectFiles: { getSnapshot(): ProjectFilesControllerSnapshot }
   request: ProjectCanvasResourceRelinkRequest
   resources: Pick<CanvasResourceClient, "createLocalFileToken" | "relink">
@@ -76,7 +76,6 @@ export async function runProjectCanvasResourceRelink(input: {
   return input.resources.relink({
     canvasId: input.activeCanvasId,
     commandId: input.createCommandId(),
-    expectedRevision: authoritativeDocument.revision,
     nodeId: input.request.nodeId,
     source,
   })

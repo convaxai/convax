@@ -22,16 +22,16 @@ describe("CanvasReloadQueue", () => {
     const queue = new CanvasReloadQueue()
     const reloads = [deferred(), deferred()]
     let reloadCount = 0
-    let repositoryRevision = 436
-    let renderedRevision = 0
+    let repositorySnapshot = "first"
+    let renderedSnapshot = ""
     const reload = async () => {
-      const revision = repositoryRevision
+      const snapshot = repositorySnapshot
       await reloads[reloadCount++].promise
-      renderedRevision = revision
+      renderedSnapshot = snapshot
     }
 
     const first = queue.request(reload)
-    repositoryRevision = 443
+    repositorySnapshot = "second"
     const second = queue.request(reload)
     let settled = false
     void Promise.all([first, second]).then(() => {
@@ -43,12 +43,12 @@ describe("CanvasReloadQueue", () => {
     await advanceMicrotasks()
 
     expect(reloadCount).toBe(2)
-    expect(renderedRevision).toBe(436)
+    expect(renderedSnapshot).toBe("first")
     expect(settled).toBeFalse()
 
     reloads[1].resolve()
     await Promise.all([first, second])
-    expect(renderedRevision).toBe(443)
+    expect(renderedSnapshot).toBe("second")
     expect(settled).toBeTrue()
   })
 

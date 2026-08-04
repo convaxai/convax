@@ -12,6 +12,7 @@ import {
   type PortablePluginUiMenuItem,
   type PortablePluginUiToolbarItem,
 } from "./ui"
+import { parsePortablePluginStateSchemaV1, type PortableBoundedValueSchemaV1 } from "./state-schema"
 
 export interface PortablePluginCanvasRendererContribution {
   readonly create?: boolean
@@ -19,6 +20,7 @@ export interface PortablePluginCanvasRendererContribution {
   readonly height?: number
   readonly mimeTypes?: readonly string[]
   readonly nodeKinds?: readonly string[]
+  readonly stateSchema?: PortableBoundedValueSchemaV1
   readonly width?: number
 }
 
@@ -105,7 +107,7 @@ function parseRenderer(value: unknown): PortablePluginCanvasRendererContribution
   const input = portableRecord(value, "Canvas renderer contribution")
   assertPortableKeys(
     input,
-    ["create", "extensions", "height", "mimeTypes", "nodeKinds", "width"],
+    ["create", "extensions", "height", "mimeTypes", "nodeKinds", "stateSchema", "width"],
     "Canvas renderer contribution",
   )
   if (input.create !== undefined && typeof input.create !== "boolean") {
@@ -140,6 +142,7 @@ function parseRenderer(value: unknown): PortablePluginCanvasRendererContribution
     ...(input.height === undefined ? {} : { height: parseDimension(input.height, "Canvas renderer height") }),
     ...(mimeTypes === undefined ? {} : { mimeTypes }),
     ...(nodeKinds === undefined ? {} : { nodeKinds }),
+    ...(input.stateSchema === undefined ? {} : { stateSchema: parsePortablePluginStateSchemaV1(input.stateSchema) }),
     ...(input.width === undefined ? {} : { width: parseDimension(input.width, "Canvas renderer width") }),
   }
 }

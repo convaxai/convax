@@ -10,8 +10,9 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { NodeProps } from "@xyflow/react"
+import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
 import { CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
-import type { CanvasNode } from "../types"
+import type { CanvasDocument, CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let renderedNodes: CanvasNode[] = []
@@ -255,6 +256,51 @@ const [
 ])
 
 let nextNodeId = 0
+const createdNodes = new Map<string, CanvasNode>()
+
+class NodeEntryCanvasSession implements CanvasRendererCollaborationClientV2 {
+  readonly authority = "project-collaboration-application" as const
+  readonly undoModel = "project-yjs-semantic-history" as const
+  private readonly listeners = new Set<() => void>()
+
+  constructor(private projection: CanvasDocument) {}
+
+  canRedo() {
+    return false
+  }
+
+  canUndo() {
+    return false
+  }
+
+  async flush() {}
+
+  getProjection() {
+    return this.projection
+  }
+
+  publish(projection: CanvasDocument) {
+    this.projection = projection
+    for (const listener of this.listeners) listener()
+  }
+
+  async redo() {}
+
+  resolveNodeEntity(nodeId: string) {
+    return this.projection.nodes.some((node) => node.id === nodeId)
+      ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}` }
+      : undefined
+  }
+
+  async submit(_command: CanvasRendererCommandV2) {}
+
+  subscribe(listener: () => void) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  async undo() {}
+}
 
 function TestNode(props: NodeProps<CanvasNode>) {
   return (
@@ -270,11 +316,13 @@ function createTestRegistry() {
       component: TestNode,
       create: ({ position }) => {
         const id = `created-${++nextNodeId}`
-        return createMediaNode({
+        const node = createMediaNode({
           id,
           position,
           resource: { id, kind: "image", metadata: {}, state: { status: "ready" } },
         })
+        createdNodes.set(id, node)
+        return node
       },
       label: "File",
       type: "file",
@@ -333,28 +381,52 @@ function installTestWindow(reducedMotion = false) {
 
 function editorElement(
   editorRef: ReturnType<typeof createRef<CanvasEditorHandle | null>>,
+  nodeRegistry: ReturnType<typeof createTestRegistry>,
+  session: NodeEntryCanvasSession,
   viewScopeId: string,
   reducedMotion?: boolean,
 ) {
   return (
     <CanvasEditor
-      initialDocument={createCanvasDocument({
-        id: "node-entry",
-        nodes: [
-          createMediaNode({
-            id: "hydrated",
-            position: { x: 20, y: 40 },
-            resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
-          }),
-        ],
-      })}
-      nodeRegistry={createTestRegistry()}
+      nodeRegistry={nodeRegistry}
       reducedMotion={reducedMotion}
       ref={editorRef}
-      services={createCanvasServices()}
+      services={createNodeEntryServices(session)}
+      session={session}
       viewScopeId={viewScopeId}
     />
   )
+}
+
+function createNodeEntryDocument() {
+  return createCanvasDocument({
+    id: "node-entry",
+    nodes: [
+      createMediaNode({
+        id: "hydrated",
+        position: { x: 20, y: 40 },
+        resource: { id: "hydrated", kind: "image", metadata: {}, state: { status: "ready" } },
+      }),
+    ],
+  })
+}
+
+function createNodeEntryServices(session: NodeEntryCanvasSession) {
+  return createCanvasServices({
+    mutation: {
+      async add(input) {
+        const id = `created-${++nextNodeId}`
+        const node = createMediaNode({
+          id,
+          position: input.anchor,
+          resource: { id, kind: "image", metadata: {}, state: { status: "ready" } },
+        })
+        createdNodes.set(id, node)
+        session.publish({ ...session.getProjection(), nodes: [...session.getProjection().nodes, node] })
+        return { createdNodeIds: [id], warnings: [] }
+      },
+    },
+  })
 }
 
 test("mounts rapid new nodes with one inner-shell entrance and never replays hydration or virtualization", async () => {
@@ -363,24 +435,31 @@ test("mounts rapid new nodes with one inner-shell entrance and never replays hyd
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
+  createdNodes.clear()
+  const session = new NodeEntryCanvasSession(createNodeEntryDocument())
+  const nodeRegistry = createTestRegistry()
 
   try {
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(editorElement(editorRef, "scope-a")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-a")))
 
     expect(
       container.querySelector('[data-id="hydrated"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
     ).toBeFalse()
 
-    let firstId: string | undefined
-    let secondId: string | undefined
+    const firstId = "created-1"
+    const secondId = "created-2"
     await act(async () => {
-      firstId = editorRef.current?.insertNode("file")
+      editorRef.current?.insertNode("text")
+      await Promise.resolve()
+      await Promise.resolve()
     })
     await act(async () => {
-      secondId = editorRef.current?.insertNode("file")
+      editorRef.current?.insertNode("text")
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
     const first = container.querySelector<HTMLElement>(`[data-id="${firstId}"] .convax-node`)
@@ -400,14 +479,14 @@ test("mounts rapid new nodes with one inner-shell entrance and never replays hyd
     expect(second?.hasAttribute("data-canvas-node-entering")).toBeFalse()
 
     renderNodes = false
-    await act(async () => root?.render(editorElement(editorRef, "scope-a")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-a")))
     renderNodes = true
-    await act(async () => root?.render(editorElement(editorRef, "scope-a")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-a")))
     expect(
       container.querySelector(`[data-id="${firstId}"] .convax-node`)?.hasAttribute("data-canvas-node-entering"),
     ).toBeFalse()
 
-    await act(async () => root?.render(editorElement(editorRef, "scope-b")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-b")))
     expect(
       container.querySelector('[data-id="hydrated"] .convax-node')?.hasAttribute("data-canvas-node-entering"),
     ).toBeFalse()
@@ -423,15 +502,20 @@ test("host reduced motion skips the transient frame while keeping the created no
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
+  createdNodes.clear()
+  const session = new NodeEntryCanvasSession(createNodeEntryDocument())
+  const nodeRegistry = createTestRegistry()
 
   try {
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(editorElement(editorRef, "scope-reduced", true)))
-    let createdId: string | undefined
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-reduced", true)))
+    const createdId = "created-1"
     await act(async () => {
-      createdId = editorRef.current?.insertNode("file")
+      editorRef.current?.insertNode("text")
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
     const created = container.querySelector(`[data-id="${createdId}"] .convax-node`)
@@ -450,15 +534,20 @@ test("an explicit host animation preference overrides OS reduced motion", async 
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
+  createdNodes.clear()
+  const session = new NodeEntryCanvasSession(createNodeEntryDocument())
+  const nodeRegistry = createTestRegistry()
 
   try {
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(editorElement(editorRef, "scope-host-motion", false)))
-    let createdId: string | undefined
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "scope-host-motion", false)))
+    const createdId = "created-1"
     await act(async () => {
-      createdId = editorRef.current?.insertNode("file")
+      editorRef.current?.insertNode("text")
+      await Promise.resolve()
+      await Promise.resolve()
     })
 
     expect(
@@ -565,6 +654,7 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
     ],
   })
   let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
   let requestedAnchor: { x: number; y: number } | undefined
   let resolveCamera!: () => void
   const cameraFinished = new Promise<void>((resolve) => {
@@ -582,7 +672,6 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initial}
           services={createCanvasServices({
             mutation: {
               async add(input) {
@@ -602,16 +691,13 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
                       },
                     }),
                   ],
-                  revision: authoritative.revision + 1,
                 }
-                return { createdNodeIds: ["header-created"], revision: authoritative.revision, warnings: [] }
+                session.publish(authoritative)
+                return { createdNodeIds: ["header-created"], warnings: [] }
               },
             },
-            persistence: {
-              load: async () => authoritative,
-              save: async (document) => document,
-            },
           })}
+          session={session}
         />,
       )
       await Promise.resolve()
@@ -632,7 +718,7 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
       await Promise.resolve()
       await Promise.resolve()
     })
-    expect(document.activeElement).toBe(addTrigger)
+    expect(document.activeElement === addTrigger).toBeTrue()
 
     expect(requestedAnchor).toBeDefined()
     expect(requestedAnchor!.x).toBeGreaterThanOrEqual(0)
@@ -672,25 +758,21 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
   }
 })
 
-test("focuses a node created after dragging a connection to empty canvas before its entry presentation", async () => {
+test("does not offer non-atomic Agent creation after dragging a connection to empty canvas", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
-  let resolveCamera!: () => void
-  const cameraFinished = new Promise<void>((resolve) => {
-    resolveCamera = resolve
-  })
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
-  setViewport.mockImplementation(async (_viewport, options) => {
-    if ((options?.duration ?? 0) > 0) await cameraFinished
-  })
+  const session = new NodeEntryCanvasSession(createNodeEntryDocument())
+  const nodeRegistry = createTestRegistry()
+  setViewport.mockClear()
 
   try {
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(editorElement(editorRef, "drag-connect-focus")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "drag-connect-focus")))
     const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
     Object.defineProperty(canvas, "getBoundingClientRect", {
       configurable: true,
@@ -710,30 +792,16 @@ test("focuses a node created after dragging a connection to empty canvas before 
       await Promise.resolve()
     })
 
-    const agentOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
+    const pendingMenu = container.querySelector<HTMLElement>('[data-convax-pending-connection="menu"]')
+    const agentOption = [...(pendingMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Agent"),
     )
-    expect(agentOption).toBeDefined()
-    await act(async () => {
-      agentOption?.click()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-
-    const created = container.querySelector<HTMLElement>('[data-id="created-1"] .convax-node')
-    const focusCall = setViewport.mock.calls.find((call) => call[1]?.duration === 400)
-    expect(focusCall).toBeDefined()
-    expect(focusCall?.[0]).toMatchObject({ zoom: 1.2 })
-    expect(created?.hasAttribute("data-canvas-node-entering")).toBeFalse()
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("pending-focus")
-
-    await act(async () => {
-      resolveCamera()
-      await Promise.resolve()
-      await Promise.resolve()
-    })
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
+    const textOption = [...(pendingMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Text"),
+    )
+    expect(pendingMenu).toBeDefined()
+    expect(agentOption).toBeUndefined()
+    expect(textOption).toBeDefined()
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -742,35 +810,38 @@ test("focuses a node created after dragging a connection to empty canvas before 
   }
 })
 
-test("keeps click-to-connect creation on the immediate entry path without camera focus", async () => {
+test("does not offer non-atomic Agent creation from click-to-connect", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
+  const session = new NodeEntryCanvasSession(createNodeEntryDocument())
+  const nodeRegistry = createTestRegistry()
   setViewport.mockClear()
 
   try {
     const container = document.createElement("div")
     document.body.append(container)
     root = createRoot(container)
-    await act(async () => root?.render(editorElement(editorRef, "click-connect-entry")))
+    await act(async () => root?.render(editorElement(editorRef, nodeRegistry, session, "click-connect-entry")))
     await act(async () => editorRef.current?.selectNodes(["hydrated"]))
 
     const outputHandle = container.querySelector<HTMLButtonElement>(
       `[data-id="hydrated"] [data-canvas-test-handle="${CANVAS_NODE_OUTPUT_HANDLE_ID}"]`,
     )
     await act(async () => outputHandle?.click())
-    const agentOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
-      (button) => button.textContent?.includes("Agent"),
+    const connectionMenu = container.querySelector<HTMLElement>(".convax-connect-menu-positioner")
+    const agentOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Agent"))
+    const textOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Text"),
     )
-    expect(agentOption).toBeDefined()
-    await act(async () => agentOption?.click())
-
-    const created = container.querySelector<HTMLElement>('[data-id="created-1"] .convax-node')
+    expect(connectionMenu).toBeDefined()
+    expect(agentOption).toBeUndefined()
+    expect(textOption).toBeDefined()
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeFalse()
-    expect(created?.dataset.canvasNodeEntering).toBe("true")
-    expect(created?.dataset.canvasNodeEntryPhase).toBe("entering")
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
@@ -790,6 +861,7 @@ test("focuses a text node created after dragging a connection to empty canvas", 
     ],
   })
   let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
   let resolveCamera!: () => void
   const cameraFinished = new Promise<void>((resolve) => {
     resolveCamera = resolve
@@ -807,7 +879,6 @@ test("focuses a text node created after dragging a connection to empty canvas", 
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initial}
           nodeRegistry={createTestRegistry()}
           services={createCanvasServices({
             mutation: {
@@ -823,16 +894,13 @@ test("focuses a text node created after dragging a connection to empty canvas", 
                       resourceState: { status: "ready" },
                     }),
                   ],
-                  revision: authoritative.revision + 1,
                 }
-                return { createdNodeIds: ["drag-created-text"], revision: authoritative.revision, warnings: [] }
+                session.publish(authoritative)
+                return { createdNodeIds: ["drag-created-text"], warnings: [] }
               },
             },
-            persistence: {
-              load: async () => authoritative,
-              save: async (document) => document,
-            },
           })}
+          session={session}
         />,
       )
       await Promise.resolve()
@@ -890,6 +958,7 @@ test("focuses a picker-created image before entry and clears a held external-dra
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({ id: "picker-create-entry" })
   let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
   let resolveCamera!: () => void
   const cameraFinished = new Promise<void>((resolve) => {
     resolveCamera = resolve
@@ -908,7 +977,6 @@ test("focuses a picker-created image before entry and clears a held external-dra
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initial}
           selectionDragSource={{
             id: "native-files",
             label: "Keep holding Command-Shift",
@@ -934,17 +1002,14 @@ test("focuses a picker-created image before entry and clears a held external-dra
                       },
                     }),
                   ],
-                  revision: authoritative.revision + 1,
                 }
+                session.publish(authoritative)
                 expect(input.files).toHaveLength(1)
-                return { createdNodeIds: ["picker-created"], revision: authoritative.revision, warnings: [] }
+                return { createdNodeIds: ["picker-created"], warnings: [] }
               },
             },
-            persistence: {
-              load: async () => authoritative,
-              save: async (document) => document,
-            },
           })}
+          session={session}
         />,
       )
       await Promise.resolve()
@@ -1016,6 +1081,7 @@ test("runs the context-menu-created text node through the same camera focus and 
     ],
   })
   let authoritative = initial
+  const session = new NodeEntryCanvasSession(initial)
   let requestedAnchor: { x: number; y: number } | undefined
   let resolveCamera!: () => void
   const cameraFinished = new Promise<void>((resolve) => {
@@ -1034,7 +1100,6 @@ test("runs the context-menu-created text node through the same camera focus and 
     await act(async () => {
       root?.render(
         <CanvasEditor
-          initialDocument={initial}
           nodeRegistry={createTestRegistry()}
           selectionActions={[{ execute: () => undefined, id: "test.action", label: "Test action" }]}
           services={createCanvasServices({
@@ -1052,16 +1117,13 @@ test("runs the context-menu-created text node through the same camera focus and 
                       resourceState: { status: "ready" },
                     }),
                   ],
-                  revision: authoritative.revision + 1,
                 }
-                return { createdNodeIds: ["context-created"], revision: authoritative.revision, warnings: [] }
+                session.publish(authoritative)
+                return { createdNodeIds: ["context-created"], warnings: [] }
               },
             },
-            persistence: {
-              load: async () => authoritative,
-              save: async (document) => document,
-            },
           })}
+          session={session}
         />,
       )
       await Promise.resolve()

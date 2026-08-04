@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { serializeCanvasDocument } from "@convax/canvas/application"
-import { createCanvasDocument, createGroupNode, createTextNode } from "@convax/canvas/core"
+import { createCanvasDocument, createGroupNode, createTextNode, type CanvasDocument } from "@convax/canvas/core"
 
 import {
   parseAgentCanvasResourceUri,
@@ -8,8 +7,8 @@ import {
   prepareAgentResources,
 } from "./agent-resource-preparation"
 
-function canvasSnapshot() {
-  return serializeCanvasDocument({
+function canvasSnapshot(): CanvasDocument {
+  return {
     edges: [
       { id: "edge-related", source: "node-1", target: "node-2" },
       { id: "edge-unrelated", source: "node-2", target: "node-3" },
@@ -25,7 +24,7 @@ function canvasSnapshot() {
         },
         id: "node-1",
         position: { x: 0, y: 0 },
-        type: "file",
+        type: "file" as const,
       },
       {
         data: {
@@ -35,7 +34,7 @@ function canvasSnapshot() {
         },
         id: "node-2",
         position: { x: 320, y: 0 },
-        type: "file",
+        type: "file" as const,
       },
       {
         data: {
@@ -45,11 +44,10 @@ function canvasSnapshot() {
         },
         id: "node-3",
         position: { x: 640, y: 0 },
-        type: "file",
+        type: "file" as const,
       },
     ],
-    revision: 4,
-  })
+  }
 }
 
 function nestedGroupCanvasSnapshot() {
@@ -97,8 +95,7 @@ function nestedGroupCanvasSnapshot() {
     position: { x: 800, y: 0 },
     resourceState: { status: "ready" },
   })
-  return serializeCanvasDocument(
-    createCanvasDocument({
+  return createCanvasDocument({
       edges: [
         { id: "edge-child", source: "child-a", target: "child-b" },
         { id: "edge-nested", source: "nested-child", target: "unrelated" },
@@ -106,8 +103,7 @@ function nestedGroupCanvasSnapshot() {
       id: "canvas-1",
       nodes: [group, childA, childB, nestedChild, unrelated],
       title: "Nested groups",
-    }),
-  )
+    })
 }
 
 describe("prepareAgentResources", () => {
@@ -124,7 +120,7 @@ describe("prepareAgentResources", () => {
       {
         resolveCanvasSnapshot: async (input) => {
           snapshotRequests.push(input)
-          return { content: canvasSnapshot(), name: "Stored Canvas" }
+          return { document: canvasSnapshot(), name: "Stored Canvas" }
         },
       },
       "project-1",
@@ -143,7 +139,7 @@ describe("prepareAgentResources", () => {
     if (resources[0]?.kind !== "resource") throw new Error("Expected a structured resource")
     const content = JSON.parse(resources[0].content)
     expect(content).toMatchObject({
-      canvas: { id: "canvas-1", name: "Stored Canvas", revision: 4 },
+      canvas: { id: "canvas-1", name: "Stored Canvas" },
       node: { id: "node-1" },
       type: "convax.canvas-node",
       version: 1,
@@ -155,7 +151,7 @@ describe("prepareAgentResources", () => {
   test("prepares a selected group with only its direct children", async () => {
     const prepared = await prepareAgentResources(
       { resolveEntryPath: async () => "unused" },
-      { resolveCanvasSnapshot: async () => ({ content: nestedGroupCanvasSnapshot() }) },
+      { resolveCanvasSnapshot: async () => ({ document: nestedGroupCanvasSnapshot() }) },
       "project-1",
       [{ kind: "resource", uri: "convax://canvas/canvas-1/node/group-1" }],
     )
@@ -182,7 +178,7 @@ describe("prepareAgentResources", () => {
       {
         resolveCanvasSnapshot: async (input) => {
           snapshotRequests.push(input)
-          return { content: canvasSnapshot(), name: "Stored name" }
+          return { document: canvasSnapshot(), name: "Stored name" }
         },
       },
       "project-1",
@@ -200,7 +196,7 @@ describe("prepareAgentResources", () => {
     })
     if (resources[0]?.kind !== "resource") throw new Error("Expected a structured resource")
     expect(JSON.parse(resources[0].content)).toMatchObject({
-      canvas: { id: "canvas-1", revision: 4 },
+      canvas: { id: "canvas-1" },
       name: "Stored name",
       type: "convax.canvas",
       version: 1,
@@ -290,7 +286,7 @@ describe("prepareAgentResources", () => {
     await expect(
       prepareAgentResources(
         manager,
-        { resolveCanvasSnapshot: async () => ({ content: canvasSnapshot() }) },
+        { resolveCanvasSnapshot: async () => ({ document: canvasSnapshot() }) },
         "project-1",
         resource,
       ),
@@ -298,7 +294,7 @@ describe("prepareAgentResources", () => {
     await expect(
       prepareAgentResources(
         manager,
-        { resolveCanvasSnapshot: async () => ({ content: "{not-json" }) },
+        { resolveCanvasSnapshot: async () => ({ document: "{not-json" as never }) },
         "project-1",
         resource,
       ),
@@ -306,7 +302,7 @@ describe("prepareAgentResources", () => {
     await expect(
       prepareAgentResources(
         manager,
-        { resolveCanvasSnapshot: async () => ({ content: JSON.stringify(createCanvasDocument({ id: "canvas-1" })) }) },
+        { resolveCanvasSnapshot: async () => ({ document: { malformed: true } as never }) },
         "project-1",
         resource,
       ),

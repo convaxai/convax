@@ -1,0 +1,204 @@
+import { describe, expect, test } from "bun:test"
+import { join } from "node:path"
+import {
+  encodeBase64urlV2,
+  encodeRestrictedJcsV2,
+  parseActorIdV2,
+  parseCanvasIdV2,
+  parseDigestV2,
+  parseId128V2,
+  parseMemberIdV2,
+  parseProjectIdV2,
+  parseReplicaIdV2,
+  parseSignatureV2,
+  selectInstalledProtocolAuthorityV2,
+  validateAuthorityReleaseSnapshotV1,
+  createSelectedDocumentOwnerArtifactFactoryV2,
+  type ValidationArtifactRefV2,
+  type VerifiedProtocolAuthorityV2,
+} from "@convax/collaboration"
+import { selectedCanvasDocumentOwnerArtifactDefinitionV2 } from "./session"
+import {
+  buildCanvasGenesisProofCarrierV2,
+  installCanvasGenesisProofCarrierVerifierFactoryV2,
+  type CanvasGenesisBuildAuthorV2,
+  type CanvasGenesisHistoricalAuthorVerifierPortV2,
+} from "./genesis"
+
+const repositoryRoot = join(import.meta.dir, "../../../..")
+const authorityRoot = "docs/superpowers/specs/authorities/collaboration-v10/r5"
+const authorityPaths = Object.freeze([
+  "docs/superpowers/specs/2026-07-31-global-uri-protocol.md",
+  `${authorityRoot}/appendices/canvas-schema.md`,
+  `${authorityRoot}/appendices/collaboration-kernel.md`,
+  `${authorityRoot}/appendices/control-plane.md`,
+  `${authorityRoot}/appendices/project-persistence.md`,
+  `${authorityRoot}/authority.sha256`,
+  `${authorityRoot}/main.md`,
+  `${authorityRoot}/protocol-schema-bundle-v2.json`,
+  `${authorityRoot}/review-evidence.json`,
+  `${authorityRoot}/reviews/canvas-intent-runtime/receipt.json`,
+  `${authorityRoot}/reviews/canvas-intent-runtime/report.md`,
+  `${authorityRoot}/reviews/collaboration-api/receipt.json`,
+  `${authorityRoot}/reviews/collaboration-api/report.md`,
+  `${authorityRoot}/reviews/project-store-reviewer/receipt.json`,
+  `${authorityRoot}/reviews/project-store-reviewer/report.md`,
+])
+
+describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
+  test("builds exact checkpoint/carrier bytes and validates the closed Canvas identity", async () => {
+    const authority = await loadAuthority()
+    const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+    if ("status" in runtimeResult) throw new Error(runtimeResult.code)
+    const author = buildAuthor(authority)
+    const historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2 = {
+      verifyHistoricalAuthor(input) {
+        if (
+          input.checkpoint.core.authorReplicaId !== author.authorReplicaId ||
+          input.checkpoint.core.authorActorId !== author.authorActorId
+        ) return { status: "rejected" }
+        return Object.freeze({
+          status: "verified",
+          authorActorId: author.authorActorId,
+          authorReplicaId: author.authorReplicaId,
+          authorCredentialCoreDigest: author.checkpointAuthorCredentialCoreDigest,
+        })
+      },
+    }
+    const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({ authority, historicalAuthorVerifier })
+    const created = factory.createVerifier(runtimeResult)
+    if (created.status !== "created") throw new Error(created.code)
+    const scope = Object.freeze({
+      projectId: parseProjectIdV2("project"),
+      projectEpoch: id128(1),
+      docKind: "canvas" as const,
+      docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`),
+      shardEpoch: id128(2),
+    })
+    const result = await buildCanvasGenesisProofCarrierV2({
+      authority,
+      runtime: runtimeResult,
+      verifier: created.verifier,
+      scope,
+      projectIndexRouteDependencyFrameDigest: digest(90),
+      author,
+    })
+
+    expect(result.status).toBe("built")
+    if (result.status !== "built") return
+    expect(new TextDecoder().decode(result.proofCarrierExactBytes.slice(0, 8))).toBe("CVXCGP02")
+    expect(result.validatedIdentity.identity.projectIndexRouteDependencyFrameDigest).toBe(digest(90))
+    expect(result.validatedIdentity.checkpointObjectDigest).toBe(result.checkpointObjectDigest)
+    expect(created.verifier(result.proofCarrierExactBytes).status).toBe("validated")
+  })
+
+  test("rejects a tampered section and never exposes a partial identity", async () => {
+    const authority = await loadAuthority()
+    const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+    if ("status" in runtimeResult) throw new Error(runtimeResult.code)
+    const author = buildAuthor(authority)
+    const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({
+      authority,
+      historicalAuthorVerifier: {
+        verifyHistoricalAuthor: () => ({
+          status: "verified",
+          authorActorId: author.authorActorId,
+          authorReplicaId: author.authorReplicaId,
+          authorCredentialCoreDigest: author.checkpointAuthorCredentialCoreDigest,
+        }),
+      },
+    })
+    const created = factory.createVerifier(runtimeResult)
+    if (created.status !== "created") throw new Error(created.code)
+    const built = await buildCanvasGenesisProofCarrierV2({
+      authority,
+      runtime: runtimeResult,
+      verifier: created.verifier,
+      scope: {
+        projectId: parseProjectIdV2("project"), projectEpoch: id128(3), docKind: "canvas",
+        docId: parseCanvasIdV2(`cv_${"3".repeat(64)}`), shardEpoch: id128(4),
+      },
+      projectIndexRouteDependencyFrameDigest: digest(91),
+      author,
+    })
+    if (built.status !== "built") throw new Error("failed to build test carrier")
+    const tampered = new Uint8Array(built.proofCarrierExactBytes)
+    tampered[tampered.length - 1] ^= 1
+    const result = created.verifier(tampered)
+    expect(result.status).toBe("rejected")
+    expect("identity" in result).toBe(false)
+  })
+})
+
+function buildAuthor(authority: VerifiedProtocolAuthorityV2): CanvasGenesisBuildAuthorV2 {
+  const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
+  const artifact = (
+    owner: ValidationArtifactRefV2["owner"],
+    name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence",
+  ) => {
+    const selected = byName.get(name)!
+    return Object.freeze({
+      artifact: Object.freeze({ owner, format: selected.format, artifactDigest: selected.artifactDigest }),
+      exactBytes: new TextEncoder().encode(`selected:${name}:${selected.artifactDigest}`),
+    })
+  }
+  return Object.freeze({
+    checkpointId: id128(10),
+    authorMemberId: parseMemberIdV2(encoded(11, 16)),
+    authorReplicaId: parseReplicaIdV2("replica_00000001"),
+    authorActorId: parseActorIdV2(encoded(12, 32)),
+    authorAuthorizationDigest: digest(13),
+    checkpointAuthorCredentialCoreDigest: digest(14),
+    checkpointAuthorCredentialExactBytes: new TextEncoder().encode("credential"),
+    checkpointAuthorMembershipSnapshotCoreDigest: digest(15),
+    checkpointAuthorMembershipSnapshotExactBytes: new TextEncoder().encode("membership"),
+    checkpointAuthorReservationReceiptCoreDigest: digest(16),
+    checkpointAuthorReservationReceiptExactBytes: new TextEncoder().encode("reservation"),
+    serviceTrustBundleCoreDigest: digest(17),
+    serviceTrustBundleExactBytes: new TextEncoder().encode("trust"),
+    validationArtifacts: Object.freeze([
+      artifact("canvas", "canvas-schema"),
+      artifact("control-plane", "control-plane"),
+      artifact("kernel", "collaboration-kernel"),
+      artifact("project-index", "project-persistence"),
+    ]),
+    signCheckpointCoreDigest: async () => parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(1))),
+  })
+}
+
+async function loadAuthority(): Promise<VerifiedProtocolAuthorityV2> {
+  const files = await Promise.all(authorityPaths.map(async (path) => ({
+    path,
+    bytes: new Uint8Array(await Bun.file(join(repositoryRoot, path)).arrayBuffer()),
+  })))
+  const activePointerBytes = withLf(encodeRestrictedJcsV2({
+    authorityId: "collaboration-v10",
+    evidencePath: `${authorityRoot}/review-evidence.json`,
+    evidenceSha256: "9a781faaa3ed28963066ba3ef28eb4367611568042bb14929feab5c2c884d678",
+    format: "convax.collaboration-active-authority-pointer/1",
+    manifestPath: `${authorityRoot}/authority.sha256`,
+    manifestSha256: "2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed",
+    previousSelection: {
+      kind: "legacy-manifest",
+      manifestPath: "docs/superpowers/specs/2026-08-01-p2p-v10-authority.sha256",
+      manifestSha256: "68a78f5ffdf3222667aaa213a492c3b79db6133f2206da1067a4976138edbcde",
+    },
+    revision: "r5",
+    sequence: "1",
+  }))
+  return selectInstalledProtocolAuthorityV2(validateAuthorityReleaseSnapshotV1({ activePointerBytes, files }))
+}
+
+function withLf(bytes: Uint8Array): Uint8Array {
+  const result = new Uint8Array(bytes.byteLength + 1)
+  result.set(bytes)
+  result[result.length - 1] = 0x0a
+  return result
+}
+
+function id128(seed: number) { return parseId128V2(encoded(seed, 16)) }
+function digest(seed: number) { return parseDigestV2([...bytes(seed, 32)].map((value) => value.toString(16).padStart(2, "0")).join("")) }
+function encoded(seed: number, length: number) { return encodeBase64urlV2(bytes(seed, length)) }
+function bytes(seed: number, length: number) { return Uint8Array.from({ length }, (_, index) => (seed * 17 + index * 29) & 0xff) }

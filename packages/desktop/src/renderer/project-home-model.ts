@@ -40,12 +40,19 @@ export function resolveProjectStartup(snapshot: ProjectControllerSnapshot): Proj
   }
 
   const activeProject = snapshot.projects.find(
-    (project) => project.id === snapshot.activeProjectId && project.missing !== true,
+    (project) =>
+      project.id === snapshot.activeProjectId &&
+      project.missing !== true &&
+      (!project.recovery || project.recovery.status === "current"),
   )
   if (snapshot.error && !activeProject) {
     return { kind: "recovery", reason: "registry-error" }
   }
-  const project = activeProject ?? snapshot.projects.find((candidate) => candidate.missing !== true)
+  const project = activeProject ?? snapshot.projects.find(
+    (candidate) =>
+      candidate.missing !== true &&
+      (!candidate.recovery || candidate.recovery.status === "current"),
+  )
   return project
     ? {
         kind: "restore",

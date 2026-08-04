@@ -1,5 +1,8 @@
 import { describe, expect, mock, test } from "bun:test"
-import { CanvasApplicationService, CanvasStorageConflictError } from "@convax/canvas/application"
+import {
+  executeCanvasApplicationCommand,
+  type CanvasApplicationCommandRequest,
+} from "@convax/canvas/application"
 import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
 
 import { projectResourceReferenceKey } from "@convax/project/canvas"
@@ -16,6 +19,7 @@ import {
   PluginProjectScopeError,
   type PluginCanvasChangeBus,
 } from "./plugin-canvas-capability-service"
+import { canvasOperationReceipt } from "./canvas-application-test-fixtures"
 
 const principal: PluginPrincipal = {
   activeRevision: 7,
@@ -38,7 +42,7 @@ const installed: ResolvedPluginPrincipal = {
     "canvas.events.subscribe",
   ],
   hostApi: {
-    major: 2,
+    major: 3,
     optional: [],
     required: [
       "projects.list",
@@ -66,7 +70,6 @@ function fixture(
   let currentPrincipal: ResolvedPluginPrincipal | null = { ...installed, capabilities }
   let projectBound = true
   let publishFailure = false
-  let storageVersion = "storage-1"
   let document = createCanvasDocument({
     id: "canvas-main",
     title: "Main",
@@ -93,34 +96,23 @@ function fixture(
       }),
     ],
   })
-  const repository = {
-    async load(ref: { canvasId: string; scopeId: string }) {
-      if (ref.scopeId !== "project-one" || ref.canvasId !== document.id) return { document: null, storageVersion: null }
-      return { document: structuredClone(document), storageVersion }
-    },
-    async save(request: {
-      document: typeof document
-      expectedStorageVersion: string | null
-      ref: { canvasId: string; scopeId: string }
-    }) {
-      if (request.expectedStorageVersion !== storageVersion) {
-        throw new CanvasStorageConflictError(request.expectedStorageVersion, storageVersion)
-      }
-      document = structuredClone(request.document)
-      storageVersion = `storage-${Number(storageVersion.split("-")[1]) + 1}`
-      return { storageVersion }
-    },
-  }
-  const application = new CanvasApplicationService(repository)
   const mutationRun = mock((_ref: unknown) => undefined)
   const mutationSignal = mock((_signal: AbortSignal | undefined) => undefined)
   const documentRead = mock((_ref: unknown) => undefined)
   const applicationTransactions = mock(
-    async (request: Parameters<CanvasApplicationService["executeTransaction"]>[0]) => {
+    async (request: CanvasApplicationCommandRequest) => {
       mutationRun({ canvasId: request.canvasId, projectId: request.scopeId })
       mutationSignal(request.signal)
       await beforeMutation?.()
-      return application.executeTransaction(request)
+      if (request.signal?.aborted) {
+        throw request.signal.reason ?? new DOMException("Canvas operation was canceled", "AbortError")
+      }
+      const result = executeCanvasApplicationCommand(document, request.envelope)
+      document = structuredClone(result.document)
+      return {
+        ...result,
+        operationReceipt: canvasOperationReceipt(request.envelope.commandId, request.envelope.actor.id),
+      }
     },
   )
   const listeners = new Set<(event: PluginCanvasChangeEvent) => void>()
@@ -143,27 +135,35 @@ function fixture(
   }
   const service = new PluginCanvasCapabilityService({
     application: {
-      executeTransaction: applicationTransactions,
-      query: (ref, query) => application.query(ref, query),
+      execute: applicationTransactions,
+      async query(ref) {
+        documentRead(ref)
+        beforeRead?.()
+        return { nodes: [], projection: structuredClone(document) }
+      },
     },
     canvases: {
       async getCanvasCatalog({ projectId }) {
         if (projectId !== "project-one") throw new Error("Project not found")
-        return {
-          canvases: canvasCatalogued ? [{ createdAt: 1, id: document.id, name: "Main", updatedAt: 2 }] : [],
-          projectId,
+        const route = {
+          activationDigest: "a".repeat(64),
+          canvasId: document.id,
+          routeProjectionDigest: "b".repeat(64),
+          shardEpoch: "AAAAAAAAAAAAAAAAAAAAAA",
+          state: "live",
+          title: "Main",
         }
+        const visibleCanvases = canvasCatalogued ? [route] : []
+        return {
+          format: "convax.project-canvas-catalog-projection/2",
+          projectEpoch: "BBBBBBBBBBBBBBBBBBBBBB",
+          projectId,
+          routes: visibleCanvases,
+          visibleCanvases,
+        } as never
       },
     },
     changes,
-    documents: {
-      async load(ref) {
-        documentRead(ref)
-        beforeRead?.()
-        return repository.load(ref)
-      },
-      save: (request) => repository.save(request),
-    },
     ...(limits.maximumDocumentBytes === undefined ? {} : { maximumDocumentBytes: limits.maximumDocumentBytes }),
     plugins: {
       async resolve(input) {
@@ -246,7 +246,7 @@ describe("PluginCanvasCapabilityService", () => {
     ])
     expect(JSON.stringify(projects)).not.toContain("rootPath")
     expect(await client.listCanvases("project-one")).toEqual({
-      canvases: [{ createdAt: 1, id: "canvas-main", name: "Main", updatedAt: 2 }],
+      canvases: [{ id: "canvas-main", name: "Main" }],
       projectId: "project-one",
     })
   })
@@ -282,50 +282,46 @@ describe("PluginCanvasCapabilityService", () => {
     )
   })
 
-  test("injects the Plugin actor and commits an atomic document transaction through Main", async () => {
+  test("injects the Plugin actor and commits one typed document command through Main", async () => {
     const { document, mutationRun, published, service } = fixture()
     const client = await service.connect({ principal, scope: { kind: "project", projectId: "project-one" } })
     const result = await client.transact({
-      commands: [
-        {
-          type: "nodes.setGeometry",
-          updates: [{ nodeId: "image", position: { x: 100, y: 200 } }],
-        },
-        { type: "nodes.connect", connection: { source: "image", target: "note" } },
-      ],
-      expectedRevision: 0,
+      command: {
+        type: "nodes.setGeometry",
+        updates: [{ nodeId: "image", position: { x: 100, y: 200 } }],
+      },
+      commandId: "arrange-1",
       ref: { canvasId: "canvas-main", projectId: "project-one" },
-      transactionId: "arrange-1",
     })
 
     expect(mutationRun).toHaveBeenCalledTimes(1)
-    expect(result).toMatchObject({ changed: true, revision: 1, storageVersion: "storage-2" })
-    expect(document().revision).toBe(1)
+    expect(result).toMatchObject({
+      changed: true,
+      operationReceipt: expect.objectContaining({ operationId: "arrange-1" }),
+    })
     expect(document().nodes.find((node) => node.id === "image")?.position).toEqual({ x: 100, y: 200 })
-    expect(document().edges).toHaveLength(1)
     expect(published).toEqual([
       {
+        operationReceipt: canvasOperationReceipt("arrange-1", principal.pluginId),
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        revision: 1,
         source: "plugin",
       },
     ])
   })
 
-  test("keeps a committed transaction successful when revision publication fails", async () => {
+  test("keeps a committed command successful when invalidation publication fails", async () => {
     const current = fixture()
     const client = await current.service.connect({ principal, scope: { kind: "project", projectId: "project-one" } })
     current.rejectPublication()
 
     await expect(
       client.transact({
-        commands: [{ type: "nodes.move", delta: { x: 2, y: 3 }, nodeIds: ["note"] }],
-        expectedRevision: 0,
+        command: { type: "nodes.move", delta: { x: 2, y: 3 }, nodeIds: ["note"] },
+        commandId: "publish-failure-after-commit",
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        transactionId: "publish-failure-after-commit",
       }),
-    ).resolves.toMatchObject({ changed: true, revision: 1 })
-    expect(current.document().revision).toBe(1)
+    ).resolves.toMatchObject({ changed: true })
+    expect(current.document().nodes.find(({ id }) => id === "note")?.position).toEqual({ x: 402, y: 23 })
   })
 
   test("rejects resource commands even if an untyped transport tries to smuggle one into a document transaction", async () => {
@@ -333,20 +329,18 @@ describe("PluginCanvasCapabilityService", () => {
     const client = await service.connect({ principal, scope: { kind: "project", projectId: "project-one" } })
     await expect(
       client.transact({
-        commands: [{ type: "resources.add" }] as never,
-        expectedRevision: 0,
+        command: { type: "resources.add" } as never,
+        commandId: "forged-resource",
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        transactionId: "forged-resource",
       }),
     ).rejects.toThrow("cannot mutate resource references")
     await expect(
       client.transact({
-        commands: [],
-        expectedRevision: 0,
+        command: { type: "nodes.move", delta: { x: 0, y: 0 }, nodeIds: ["note"] },
+        commandId: "",
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        transactionId: "empty",
       }),
-    ).rejects.toThrow("at least one command")
+    ).rejects.toThrow("command id")
   })
 
   test("fails closed on missing grants, scope widening, update, or uninstall", async () => {
@@ -377,13 +371,12 @@ describe("PluginCanvasCapabilityService", () => {
     mutation.removeCanvas()
     await expect(
       mutationClient.transact({
-        commands: [{ type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] }],
-        expectedRevision: 0,
+        command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] },
+        commandId: "stale-catalog",
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        transactionId: "stale-catalog",
       }),
     ).rejects.toThrow("Canvas was not found")
-    expect(mutation.document().revision).toBe(0)
+    expect(mutation.document().nodes.find(({ id }) => id === "note")?.position).toEqual({ x: 400, y: 20 })
 
     const read = fixture()
     const readClient = await read.service.connect({
@@ -411,17 +404,16 @@ describe("PluginCanvasCapabilityService", () => {
     await expect(
       client.transact(
         {
-          commands: [{ type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] }],
-          expectedRevision: 0,
+          command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] },
+          commandId: "canceled-while-queued",
           ref: { canvasId: "canvas-main", projectId: "project-one" },
-          transactionId: "canceled-while-queued",
         },
         controller.signal,
       ),
     ).rejects.toThrow("Plugin Canvas capability request was canceled")
 
     expect(current.applicationTransactions).not.toHaveBeenCalled()
-    expect(current.document().revision).toBe(0)
+    expect(current.document().nodes.find(({ id }) => id === "note")?.position).toEqual({ x: 400, y: 20 })
     expect(current.published).toEqual([])
   })
 
@@ -435,37 +427,36 @@ describe("PluginCanvasCapabilityService", () => {
 
     await client.transact(
       {
-        commands: [{ type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] }],
-        expectedRevision: 0,
+        command: { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: ["note"] },
+        commandId: "tool-signal-to-application",
         ref: { canvasId: "canvas-main", projectId: "project-one" },
-        transactionId: "tool-signal-to-application",
       },
       controller.signal,
     )
 
     expect(current.applicationTransactions).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }))
-    expect(current.document().revision).toBe(1)
+    expect(current.document().nodes.find(({ id }) => id === "note")?.position).toEqual({ x: 401, y: 21 })
   })
 
-  test("serializes revision events and closes when their Canvas leaves the live catalog", async () => {
+  test("deduplicates operation events and closes when their Canvas leaves the live catalog", async () => {
     const current = fixture()
     const client = await current.service.connect({ principal, scope: { kind: "all-bound-projects" } })
     const events: PluginCanvasChangeEvent[] = []
     await client.subscribe({ projectId: "project-one" }, (event) => events.push(event))
-    const event = (revision: number): PluginCanvasChangeEvent => ({
+    const event = (operationId: string): PluginCanvasChangeEvent => ({
+      operationReceipt: canvasOperationReceipt(operationId),
       ref: { canvasId: "canvas-main", projectId: "project-one" },
-      revision,
       source: "host",
     })
 
-    current.emitChange(event(2))
-    current.emitChange(event(1))
+    current.emitChange(event("operation-2"))
+    current.emitChange(event("operation-2"))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(events.map(({ revision }) => revision)).toEqual([2])
+    expect(events.map(({ operationReceipt }) => String(operationReceipt.operationId))).toEqual(["operation-2"])
 
     current.removeCanvas()
-    current.emitChange(event(3))
+    current.emitChange(event("operation-3"))
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(events.map(({ revision }) => revision)).toEqual([2])
+    expect(events.map(({ operationReceipt }) => String(operationReceipt.operationId))).toEqual(["operation-2"])
   })
 })

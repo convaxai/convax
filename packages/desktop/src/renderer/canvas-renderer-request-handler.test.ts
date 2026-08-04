@@ -73,7 +73,6 @@ describe("Canvas renderer request handler", () => {
         input: {
           command: { type: "selection.clear" },
           expectedDocumentId: "canvas-1",
-          expectedRevision: 4,
           expectedScopeId: "project-1",
           viewId: "desktop-main",
         },

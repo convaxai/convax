@@ -1,4 +1,5 @@
 import type { AgentResource } from "@convax/agent-runtime"
+import { isAgentCanvasResource } from "../agent-canvas-context"
 import {
   findAgentComposerQuery,
   normalizeAgentComposerDraft,
@@ -82,26 +83,37 @@ export function agentComposerTokenPresentation(resource: AgentResource): AgentCo
     }
   }
 
-  if (resource.kind === "resource" && resource.uri.startsWith("convax://canvas/")) {
+  if (resource.kind === "resource") {
+    if (isAgentCanvasResource(resource)) {
+      const label = resource.name || resource.uri
+      return {
+        editLabel: `Change Canvas reference: ${label}`,
+        family: "canvas",
+        label,
+        prefix: "@",
+        removeLabel: `Remove Canvas reference: ${label}`,
+        title: `Canvas reference: ${label}`,
+      }
+    }
     const label = resource.name || resource.uri
     return {
-      editLabel: `Change Canvas reference: ${label}`,
-      family: "canvas",
+      editLabel: `Change Project reference: ${label}`,
+      family: "project",
       label,
       prefix: "@",
-      removeLabel: `Remove Canvas reference: ${label}`,
-      title: `Canvas reference: ${label}`,
+      removeLabel: `Remove Project reference: ${label}`,
+      title: `Project reference: ${resource.uri}`,
     }
   }
 
-  const label = resource.name || (resource.kind === "resource" ? resource.uri : portableBasename(resource.path))
+  const label = resource.name || portableBasename(resource.path)
   return {
     editLabel: `Change Project reference: ${label}`,
     family: "project",
     label,
     prefix: "@",
     removeLabel: `Remove Project reference: ${label}`,
-    title: `Project reference: ${resource.kind === "resource" ? resource.uri : resource.path}`,
+    title: `Project reference: ${resource.path}`,
   }
 }
 

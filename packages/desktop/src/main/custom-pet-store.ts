@@ -1,6 +1,7 @@
 import { constants as fsConstants, type Dirent } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
+import { canonicalize as canonicalizeConvaxUri } from "@convax/uri"
 
 import type { PetCustomCollectionSnapshot, PetCustomPet } from "../pet-contracts"
 import {
@@ -50,7 +51,7 @@ function requireCustomPetId(value: string) {
 }
 
 function assetUrl(id: string) {
-  return `convax-pet-asset://pet/${encodeURIComponent(id)}`
+  return canonicalizeConvaxUri(`convax-pet-asset://pet/${encodeURIComponent(id)}`)
 }
 
 function asRecord(value: unknown, label: string) {

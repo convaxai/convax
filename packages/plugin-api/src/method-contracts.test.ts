@@ -189,18 +189,16 @@ describe("portable Plugin Host API method contracts", () => {
   test("admits only the author-callable Canvas transaction command subset", () => {
     expect(
       parsePluginApiParams("canvas.transaction.execute", {
-        commands: [{ delta: { x: 1, y: -2 }, nodeIds: ["node-1"], type: "nodes.move" }],
-        expectedRevision: 4,
+        command: { delta: { x: 1, y: -2 }, nodeIds: ["node-1"], type: "nodes.move" },
+        commandId: "command-1",
         ref: { canvasId: "canvas-1", projectId: "project-1" },
-        transactionId: "tx-1",
       }),
-    ).toMatchObject({ expectedRevision: 4, transactionId: "tx-1" })
+    ).toMatchObject({ commandId: "command-1" })
     expect(() =>
       parsePluginApiParams("canvas.transaction.execute", {
-        commands: [{ type: "resources.add" }],
-        expectedRevision: 4,
+        command: { type: "resources.add" },
+        commandId: "command-2",
         ref: { canvasId: "canvas-1", projectId: "project-1" },
-        transactionId: "tx-2",
       }),
     ).toThrow("must match exactly one schema variant")
   })

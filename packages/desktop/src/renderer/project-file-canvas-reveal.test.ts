@@ -5,9 +5,8 @@ import { revealProjectFileOnCanvas } from "./project-file-canvas-reveal"
 
 const scope = { canvasId: "canvas-1", projectId: "project-1" }
 
-function documentWithProjectFile(revision = 4) {
-  return {
-    ...createCanvasDocument({
+function documentWithProjectFile() {
+  return createCanvasDocument({
       id: scope.canvasId,
       nodes: [
         createTextNode({
@@ -19,9 +18,7 @@ function documentWithProjectFile(revision = 4) {
           resourceState: { status: "ready" },
         }),
       ],
-    }),
-    revision,
-  }
+    })
 }
 
 describe("Project file Canvas reveal", () => {
@@ -31,7 +28,6 @@ describe("Project file Canvas reveal", () => {
       missingNodeIds: [],
       snapshot: {
         documentId: scope.canvasId,
-        revision: 4,
         scopeId: scope.projectId,
         selectedEdgeIds: [],
         selectedNodeIds: ["notes"],
@@ -42,7 +38,7 @@ describe("Project file Canvas reveal", () => {
     const reloadAuthoritative = mock(async () => undefined)
     const result = await revealProjectFileOnCanvas({
       currentScope: () => scope,
-      documents: { load: mock(async () => ({ document: documentWithProjectFile(), storageVersion: "v4" })) },
+      documents: { load: mock(async () => ({ nodes: [], projection: documentWithProjectFile() })) },
       editor: () => ({ ...scope, handle: { reloadAuthoritative } }),
       path: "Notes/brief.md",
       scope,
@@ -51,7 +47,6 @@ describe("Project file Canvas reveal", () => {
         list: () => [
           {
             documentId: scope.canvasId,
-            revision: 4,
             scopeId: scope.projectId,
             selectedEdgeIds: [],
             selectedNodeIds: [],
@@ -73,26 +68,26 @@ describe("Project file Canvas reveal", () => {
         type: "nodes.reveal",
       },
       expectedDocumentId: "canvas-1",
-      expectedRevision: 4,
       expectedScopeId: "project-1",
       viewId: "desktop-main",
     })
   })
 
-  test("refreshes an older mounted projection and abandons a stale Project switch", async () => {
+  test("abandons a reveal when the active Project changes during the authoritative load", async () => {
     let activeScope: typeof scope | null = scope
-    let viewRevision = 3
     const execute = mock(async () => {
       throw new Error("must not execute after the scope changes")
     })
-    const reloadAuthoritative = mock(async () => {
-      viewRevision = 4
-      activeScope = { canvasId: "canvas-2", projectId: "project-2" }
-    })
+    const reloadAuthoritative = mock(async () => undefined)
 
     const result = await revealProjectFileOnCanvas({
       currentScope: () => activeScope,
-      documents: { load: mock(async () => ({ document: documentWithProjectFile(), storageVersion: "v4" })) },
+      documents: {
+        load: mock(async () => {
+          activeScope = { canvasId: "canvas-2", projectId: "project-2" }
+          return { nodes: [], projection: documentWithProjectFile() }
+        }),
+      },
       editor: () => ({ ...scope, handle: { reloadAuthoritative } }),
       path: "Notes/brief.md",
       scope,
@@ -101,7 +96,6 @@ describe("Project file Canvas reveal", () => {
         list: () => [
           {
             documentId: scope.canvasId,
-            revision: viewRevision,
             scopeId: scope.projectId,
             selectedEdgeIds: [],
             selectedNodeIds: [],
@@ -113,7 +107,7 @@ describe("Project file Canvas reveal", () => {
     })
 
     expect(result).toBe("stale")
-    expect(reloadAuthoritative).toHaveBeenCalledTimes(1)
+    expect(reloadAuthoritative).not.toHaveBeenCalled()
     expect(execute).not.toHaveBeenCalled()
   })
 })

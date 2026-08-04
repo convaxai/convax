@@ -1,7 +1,8 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { CanvasEdge, CanvasNode } from "../types"
+import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
+import type { CanvasDocument, CanvasEdge, CanvasNode } from "../types"
 import type { CanvasAppearanceInput } from "../appearance"
 
 const fitView = mock(async () => undefined)
@@ -47,6 +48,7 @@ let renderedReactFlowOptions:
   | {
       connectionRadius?: number
       multiSelectionKeyCode?: readonly string[]
+      snapGrid?: readonly [number, number]
       snapToGrid?: boolean
     }
   | undefined
@@ -72,11 +74,22 @@ function Passthrough(props: { children?: ReactNode }) {
 }
 
 function reactNodeText(node: ReactNode): string {
-  if (node === null || node === undefined || typeof node === "boolean") return ""
-  if (typeof node === "string" || typeof node === "number") return String(node)
-  if (Array.isArray(node)) return node.map(reactNodeText).join("")
-  if (isValidElement<{ children?: ReactNode }>(node)) return reactNodeText(node.props.children)
-  return ""
+  const pending: ReactNode[] = [node]
+  const text: string[] = []
+  for (let visited = 0; pending.length > 0 && visited < 128; visited += 1) {
+    const current = pending.pop()
+    if (current === null || current === undefined || typeof current === "boolean") continue
+    if (typeof current === "string" || typeof current === "number") {
+      text.push(String(current))
+      continue
+    }
+    if (Array.isArray(current)) {
+      pending.push(...current.toReversed())
+      continue
+    }
+    if (isValidElement<{ children?: ReactNode }>(current)) pending.push(current.props.children)
+  }
+  return text.join("")
 }
 
 function MockReactFlow(props: {
@@ -86,12 +99,18 @@ function MockReactFlow(props: {
   edges?: CanvasEdge[]
   multiSelectionKeyCode?: readonly string[]
   nodes?: CanvasNode[]
+  snapGrid?: readonly [number, number]
   snapToGrid?: boolean
 }) {
   renderedCanvasEdges = props.edges ?? []
   renderedCanvasNodes = props.nodes ?? []
   renderedColorMode = props.colorMode
-  renderedReactFlowOptions = props
+  renderedReactFlowOptions = {
+    connectionRadius: props.connectionRadius,
+    multiSelectionKeyCode: props.multiSelectionKeyCode,
+    snapGrid: props.snapGrid,
+    snapToGrid: props.snapToGrid,
+  }
   return <>{props.children}</>
 }
 
@@ -219,7 +238,6 @@ mock.module("@xyflow/react", () => ({
 const { createCanvasDocument, createGroupNode, createTextNode } = await import("../document")
 const { setCanvasGroupFolded } = await import("../group-fold")
 const { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } = await import("../connections")
-const { canvasHistoryReducer, createCanvasHistory } = await import("../history")
 const {
   abortCanvasReload,
   abortCanvasReloadBeforeWait,
@@ -240,6 +258,43 @@ const {
 const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
+
+class StaticCanvasSession implements CanvasRendererCollaborationClientV2 {
+  readonly authority = "project-collaboration-application" as const
+  readonly undoModel = "project-yjs-semantic-history" as const
+
+  constructor(private readonly projection: CanvasDocument) {}
+
+  canRedo() {
+    return false
+  }
+
+  canUndo() {
+    return false
+  }
+
+  async flush() {}
+
+  getProjection() {
+    return this.projection
+  }
+
+  async redo() {}
+
+  resolveNodeEntity(nodeId: string) {
+    return this.projection.nodes.some((node) => node.id === nodeId)
+      ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}` }
+      : undefined
+  }
+
+  async submit(_command: CanvasRendererCommandV2) {}
+
+  subscribe() {
+    return () => undefined
+  }
+
+  async undo() {}
+}
 
 beforeEach(() => {
   buttonActions.clear()
@@ -281,14 +336,15 @@ function renderEditor(
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
   } = {},
 ) {
+  const initialDocument = options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })
   return renderToStaticMarkup(
     <CanvasEditor
-      initialDocument={options.initialDocument ?? createCanvasDocument({ id: "canvas-viewport" })}
       appearance={options.appearance}
       onGenerateRequest={options.onGenerateRequest}
       readOnly={options.readOnly}
       selectionDragSource={options.selectionDragSource}
       services={services}
+      session={new StaticCanvasSession(initialDocument)}
     />,
   )
 }
@@ -601,13 +657,20 @@ describe("CanvasEditor node dimension projection", () => {
     })
     expect(styleOnly).not.toHaveProperty("initialHeight")
     expect(styleOnly).not.toHaveProperty("initialWidth")
-    expect(renderedCanvasNodes.find((node) => node.id === "measured")).not.toHaveProperty("initialWidth")
-    expect(renderedCanvasNodes.find((node) => node.id === "measured")).not.toHaveProperty("initialHeight")
-    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("initialWidth")
-    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("initialHeight")
+    expect(renderedCanvasNodes.find((node) => node.id === "measured")).toMatchObject({
+      initialHeight: 888,
+      initialWidth: 999,
+    })
+    expect(renderedCanvasNodes.find((node) => node.id === "measured")).not.toHaveProperty("measured")
+    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).toMatchObject({
+      initialHeight: 876,
+      initialWidth: 987,
+    })
+    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("height")
+    expect(renderedCanvasNodes.find((node) => node.id === "explicit")).not.toHaveProperty("width")
     expect(renderedCanvasNodes.find((node) => node.id === "initialized")).toMatchObject({
-      initialHeight: 456,
-      initialWidth: 567,
+      initialHeight: 765,
+      initialWidth: 876,
     })
     expect(renderedCanvasNodes.find((node) => node.id === "string-style")).not.toHaveProperty("initialWidth")
     expect(renderedCanvasNodes.find((node) => node.id === "string-style")).not.toHaveProperty("initialHeight")
@@ -615,25 +678,12 @@ describe("CanvasEditor node dimension projection", () => {
 })
 
 describe("CanvasEditor resource mutation", () => {
-  test("announces blocking authoritative hydration without relying on spinner motion", () => {
+  test("does not invent blocking hydration while the session projection is already authoritative", () => {
     const initialDocument = createCanvasDocument({ id: "loading-canvas" })
-    const markup = renderEditor(
-      createCanvasServices({
-        persistence: {
-          load: async () => initialDocument,
-          save: async (document) => document,
-        },
-      }),
-      { initialDocument },
-    )
+    const markup = renderEditor(createCanvasServices(), { initialDocument })
 
-    expect(markup).toContain('role="status"')
-    expect(markup).toContain('aria-live="polite"')
-    expect(markup).toContain("Loading canvas…")
-    expect(markup).toContain('data-slot="loading"')
-    expect(markup).toContain('data-slot="loading-spinner"')
-    expect(markup).toContain('aria-hidden="true"')
-    expect(markup.match(/role="status"/g)?.length).toBe(1)
+    expect(markup).not.toContain('role="status"')
+    expect(markup).not.toContain("Loading canvas…")
   })
 
   test("keeps a cancelled relink selection isolated from the next ordinary multi-file upload", () => {
@@ -665,7 +715,7 @@ describe("CanvasEditor resource mutation", () => {
     expect(markup).not.toMatch(/data-canvas-resource-picker="relink"[^>]*multiple/)
   })
 
-  test("replaces only transient resource state without changing the Canvas revision", () => {
+  test("replaces only transient resource state without changing document metadata", () => {
     const document = createCanvasDocument({
       id: "canvas-runtime-refresh",
       nodes: [
@@ -690,7 +740,9 @@ describe("CanvasEditor resource mutation", () => {
       text: "after",
     })
 
-    expect(updated.revision).toBe(document.revision)
+    expect(updated).not.toBe(document)
+    expect(updated.id).toBe(document.id)
+    expect(updated.metadata).toBe(document.metadata)
     expect(updated.nodes[0]!.data.resourceState).toEqual({
       contentRevision: "b".repeat(64),
       editableText: true,
@@ -717,9 +769,7 @@ describe("CanvasEditor resource mutation", () => {
         },
       ],
     })
-    const older = createCanvasDocument({ id: "older" })
-    const newer = createCanvasDocument({ id: "newer" })
-    let history = { ...createCanvasHistory(initial), future: [newer], past: [older] }
+    let document = initial
     const selection = { nodeIds: ["note"] }
     const viewport = { x: 17, y: 29, zoom: 1.35 }
     const persist = mock(() => undefined)
@@ -734,11 +784,11 @@ describe("CanvasEditor resource mutation", () => {
     })
     const controller = new CanvasResourceRefreshController({
       current: () => ({
-        document: history.document,
-        scope: { documentId: history.document.id, generation: 0, scopeId: "project-one" },
+        document,
+        scope: { documentId: document.id, generation: 0, scopeId: "project-one" },
       }),
-      replace(document) {
-        history = canvasHistoryReducer(history, { document, type: "replace" })
+      replace(next) {
+        document = next
       },
       service: {
         hydrateStale,
@@ -761,7 +811,7 @@ describe("CanvasEditor resource mutation", () => {
     })
 
     const first = controller.invalidateResources()
-    expect((history.document.nodes[0]!.data.resourceState as { status: string }).status).toBe("stale")
+    expect((document.nodes[0]!.data.resourceState as { status: string }).status).toBe("stale")
     const second = controller.invalidateResources()
     expect(hydrateStale).toHaveBeenCalledTimes(1)
 
@@ -786,35 +836,31 @@ describe("CanvasEditor resource mutation", () => {
     })
     await Promise.all([first, second])
 
-    expect(history.document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "second" })
-    expect(history.document.revision).toBe(initial.revision)
-    expect(history.past).toEqual([older])
-    expect(history.future).toEqual([newer])
+    expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "second" })
+    expect(document.id).toBe(initial.id)
+    expect(document.metadata).toBe(initial.metadata)
     expect(selection).toEqual({ nodeIds: ["note"] })
     expect(viewport).toEqual({ x: 17, y: 29, zoom: 1.35 })
     expect(persist).not.toHaveBeenCalled()
   })
 
-  test("discards a stale hydration result and schedules a trailing pass after scope, revision, or reference changes", async () => {
-    const initial = {
-      ...createCanvasDocument({
-        id: "canvas-stale-result",
-        nodes: [
-          {
-            id: "note",
-            data: {
-              kind: "text" as const,
-              label: "Note",
-              metadata: { resource: "Notes/a.md" },
-              resourceState: { status: "ready" as const },
-            },
-            position: { x: 0, y: 0 },
-            type: "file" as const,
+  test("discards a stale hydration result and schedules a trailing pass after scope or reference changes", async () => {
+    const initial = createCanvasDocument({
+      id: "canvas-stale-result",
+      nodes: [
+        {
+          id: "note",
+          data: {
+            kind: "text" as const,
+            label: "Note",
+            metadata: { resource: "Notes/a.md" },
+            resourceState: { status: "ready" as const },
           },
-        ],
-      }),
-      revision: 4,
-    }
+          position: { x: 0, y: 0 },
+          type: "file" as const,
+        },
+      ],
+    })
     let document = initial
     let scopeId = "project-one"
     const requests: Array<{ input: typeof initial; resolve(document: typeof initial): void }> = []
@@ -846,7 +892,6 @@ describe("CanvasEditor resource mutation", () => {
     scopeId = "project-two"
     document = {
       ...document,
-      revision: 5,
       nodes: document.nodes.map((node) => ({
         ...node,
         data: { ...node.data, metadata: { resource: "Notes/b.md" } },
@@ -874,7 +919,7 @@ describe("CanvasEditor resource mutation", () => {
     })
     await refresh
 
-    expect(document.revision).toBe(5)
+    expect(document.id).toBe(initial.id)
     expect(document.nodes[0]!.data.metadata).toEqual({ resource: "Notes/b.md" })
     expect(document.nodes[0]!.data.resourceState).toEqual({ status: "ready", text: "current" })
   })
@@ -882,8 +927,8 @@ describe("CanvasEditor resource mutation", () => {
   test("ignores delayed success and failure after switching to another scope with the same Canvas id", async () => {
     const operation = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     let current = operation
-    let resolveMutation!: (value: { createdNodeIds: string[]; revision: number; warnings: string[] }) => void
-    const mutation = new Promise<{ createdNodeIds: string[]; revision: number; warnings: string[] }>((resolve) => {
+    let resolveMutation!: (value: { createdNodeIds: string[]; warnings: string[] }) => void
+    const mutation = new Promise<{ createdNodeIds: string[]; warnings: string[] }>((resolve) => {
       resolveMutation = resolve
     })
     const reload = mock(async () => undefined)
@@ -903,7 +948,7 @@ describe("CanvasEditor resource mutation", () => {
     )
 
     current = { documentId: "canvas-main", generation: 1, scopeId: "project-b" }
-    resolveMutation({ createdNodeIds: ["old-note"], revision: 1, warnings: [] })
+    resolveMutation({ createdNodeIds: ["old-note"], warnings: [] })
     await completion
     handleCanvasResourceMutationFailure({
       currentScope: () => current,
@@ -934,7 +979,7 @@ describe("CanvasEditor resource mutation", () => {
         calls.push("reload")
         throw new Error("ENOENT: /native/private/project")
       },
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       selectNodes,
       show,
       signal: new AbortController().signal,
@@ -958,7 +1003,7 @@ describe("CanvasEditor resource mutation", () => {
       currentScope: () => scope,
       operationScope: scope,
       reload: async () => undefined,
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       runViewEffect: async () => {
         throw new Error("view closed")
       },
@@ -981,7 +1026,7 @@ describe("CanvasEditor resource mutation", () => {
       reload: async () => {
         calls.push("reload")
       },
-      result: { createdNodeIds: ["one", "two", "one"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["one", "two", "one"], warnings: [] },
       runViewEffect: async (nodeIds) => {
         calls.push(`view:${nodeIds.join(",")}`)
       },
@@ -1003,7 +1048,7 @@ describe("CanvasEditor resource mutation", () => {
       reload: async () => {
         calls.push("reload")
       },
-      result: { createdNodeIds: ["one", "one"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["one", "one"], warnings: [] },
       selectNodes: (nodeIds) => calls.push(`select:${nodeIds.join(",")}`),
       show: () => calls.push("show"),
       signal: new AbortController().signal,
@@ -1068,7 +1113,7 @@ describe("CanvasEditor resource mutation", () => {
       currentScope: () => scope,
       operationScope: scope,
       reload: reloadBefore,
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       selectNodes: selectBefore,
       show: showBefore,
       signal: abortedBefore.signal,
@@ -1086,7 +1131,7 @@ describe("CanvasEditor resource mutation", () => {
       reload: async () => {
         abortedDuring.abort()
       },
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       selectNodes: selectDuring,
       show: showDuring,
       signal: abortedDuring.signal,
@@ -1103,7 +1148,7 @@ describe("CanvasEditor resource mutation", () => {
       operationScope: scope,
       prepareCreatedNodes: (nodeIds) => presentationAfterSelect.push(`prepare:${nodeIds.join(",")}`),
       reload: async () => undefined,
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       selectNodes: () => abortedBeforeNotify.abort(),
       show: showAfterSelect,
       signal: abortedBeforeNotify.signal,
@@ -1120,7 +1165,7 @@ describe("CanvasEditor resource mutation", () => {
       operationScope: scope,
       prepareCreatedNodes: (nodeIds) => presentationAfterView.push(`prepare:${nodeIds.join(",")}`),
       reload: async () => undefined,
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       runViewEffect: async () => {
         currentScope = { ...scope, generation: 1 }
       },
@@ -1147,7 +1192,7 @@ describe("CanvasEditor resource mutation", () => {
           signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true })
         })
       }) as never,
-      result: { createdNodeIds: ["note"], revision: 1, warnings: [] },
+      result: { createdNodeIds: ["note"], warnings: [] },
       selectNodes,
       show,
       signal: mutationController.signal,
@@ -1263,7 +1308,7 @@ describe("CanvasEditor resource mutation", () => {
         mutation: {
           async add(input) {
             additions.push(input)
-            return { createdNodeIds: ["note"], revision: 1, warnings: [] }
+            return { createdNodeIds: ["note"], warnings: [] }
           },
         },
       }),
@@ -1275,7 +1320,6 @@ describe("CanvasEditor resource mutation", () => {
 
     expect(additions).toHaveLength(1)
     expect(additions[0]).toMatchObject({
-      expectedRevision: 0,
       files: [],
       sources: [{ kind: "new-text", text: "" }],
     })
@@ -1289,7 +1333,7 @@ describe("CanvasEditor resource mutation", () => {
         mutation: {
           async add(input) {
             additions.push(input)
-            return { createdNodeIds: ["brief"], revision: 1, warnings: [] }
+            return { createdNodeIds: ["brief"], warnings: [] }
           },
         },
       }),
@@ -1310,7 +1354,6 @@ describe("CanvasEditor resource mutation", () => {
 
     expect(additions).toHaveLength(1)
     expect(additions[0]).toMatchObject({
-      expectedRevision: 0,
       files: [expect.objectContaining({ name: "brief.txt" })],
       sources: [],
       transfer: { data: { Files: "" }, types: ["Files"] },
@@ -1480,7 +1523,7 @@ describe("CanvasEditor insertion surfaces", () => {
       createCanvasServices({
         generate: {
           describeTool: async (toolId) => ({ fields: [], toolId }),
-          generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+          generate: async () => ({ createdNodeIds: [], toolId: "unused", warnings: [] }),
           listTools: async () => [],
         },
         mutation: {
@@ -1511,7 +1554,7 @@ describe("CanvasEditor insertion surfaces", () => {
       createCanvasServices({
         generate: {
           describeTool: async (toolId) => ({ fields: [], toolId }),
-          generate: async () => ({ createdNodeIds: [], revision: 0, toolId: "unused", warnings: [] }),
+          generate: async () => ({ createdNodeIds: [], toolId: "unused", warnings: [] }),
           listTools: async () => [],
         },
       }),

@@ -68,7 +68,7 @@ const manifest = parsePluginManifestV8({
   description: "Client test Plugin",
   entry: "web/index.html",
   hostApi: {
-    major: 2,
+    major: 3,
     optional: ["canvas.resource.image.create"],
     required: ["host.context.get"],
   },
@@ -156,15 +156,14 @@ function failure(
   return { error, id, ok: false, protocol: pluginHostProtocolV8, type: "response" }
 }
 
-function hostContextResult(revision = 1, availability: readonly ApiAvailability[] = []) {
+function hostContextResult(_projectionSequence = 1, availability: readonly ApiAvailability[] = []) {
   return {
     canvas: { id: "c1" },
-    hostApi: { availability, catalogVersion: "2.0.0" },
+    hostApi: { availability, catalogVersion: "3.0.0" },
     node: {
       data: { kind: "plugin", label: "Plugin" },
       id: "n1",
       position: { x: 0, y: 0 },
-      revision,
       type: "file",
     },
     plugin: { id: "client-test", name: "Client Test", version: "1.0.0" },
@@ -326,7 +325,7 @@ describe("createPluginHostClient", () => {
         },
       },
       description: "Static Plugin",
-      hostApi: { major: 2, optional: [], required: [] },
+      hostApi: { major: 3, optional: [], required: [] },
       id: "static-plugin",
       name: "Static Plugin",
       schema: "convax.plugin/8",
@@ -470,7 +469,7 @@ describe("createPluginHostClient", () => {
     })
     await expect(client.getHostApiAvailability("host.context.get")).resolves.toEqual({
       available: false,
-      contractSince: "2.0.0",
+      contractSince: "3.0.0",
       id: "host.context.get",
       reason: "unsupported-host",
       recoverable: false,
@@ -700,8 +699,28 @@ describe("createPluginHostClient", () => {
       name: "large.png",
     })
     expect(bytesPort.sent).toHaveLength(1)
-    bytesPort.emit(response("bytes-1", { createdNodeId: "node-1", revision: 2 }))
-    await expect(largeCall).resolves.toEqual({ createdNodeId: "node-1", revision: 2 })
+    const imageResult = {
+      createdNodeId: "node-1",
+      operationReceipt: {
+        actorId: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        baseFrontierDigest: "0".repeat(64),
+        format: "convax.canvas-operation-receipt/2",
+        historyMaterialDigest: null,
+        intentDigest: "1".repeat(64),
+        intentKind: "canvas.plugin.creation-group/2",
+        operationId: "aaaaaaaaaaaaaaaaaaaaaa",
+        resultEntities: [{ id: "node-1", incarnation: "aaaaaaaaaaaaaaaaaaaaaa", kind: "node" }],
+        semanticRoot: true,
+      },
+      projection: {
+        edges: [],
+        id: "canvas-1",
+        nodes: [{ id: "node-1", kind: "file", label: "large.png", position: { x: 0, y: 0 }, size: { height: 100, width: 100 } }],
+        title: "Canvas",
+      },
+    } as const
+    bytesPort.emit(response("bytes-1", imageResult))
+    await expect(largeCall).resolves.toEqual(imageResult)
     expect(bytesClient.closed).toBeFalse()
 
     const port = new FakePort()

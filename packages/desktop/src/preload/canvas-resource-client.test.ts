@@ -1,12 +1,13 @@
 import { describe, expect, mock, test } from "bun:test"
 import { canvasResourcePartialFailureKind } from "../canvas-resource-private-contract"
-import { CanvasTextResourceConflictError } from "@convax/canvas/application"
+import { CanvasTextResourceConflictError } from "@convax/canvas/application/errors"
 import {
   canvasResourceHydrateStaleIpcChannel,
   canvasResourceReadConnectedImageIpcChannel,
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
+import { encodeBase64urlV2, parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
 function request(overrides: Record<string, unknown> = {}) {
@@ -14,7 +15,6 @@ function request(overrides: Record<string, unknown> = {}) {
     anchor: { x: 20, y: 40 },
     canvasId: "canvas-main",
     commandId: "add-resources",
-    expectedRevision: 3,
     localFiles: [],
     projectId: "project-one",
     sources: [{ kind: "host-file" as const, path: "media/hero.png", sourceId: "hero" }],
@@ -22,13 +22,30 @@ function request(overrides: Record<string, unknown> = {}) {
   }
 }
 
+const operationReceipt = {
+  format: "convax.canvas-operation-receipt/2" as const,
+  actorId: parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(1))),
+  operationId: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(2))),
+  intentKind: "canvas.nodes.create/2" as const,
+  intentDigest: parseDigestV2("a".repeat(64)),
+  baseFrontierDigest: parseDigestV2("b".repeat(64)),
+  resultEntities: [],
+  semanticRoot: true,
+  historyMaterialDigest: parseDigestV2("c".repeat(64)),
+}
+
+function resourceResult(createdNodeIds: readonly string[] = ["created"]) {
+  return {
+    createdNodeIds,
+    operationReceipt,
+    projection: createCanvasDocument({ id: "canvas-main" }),
+    warnings: [],
+  }
+}
+
 function setup(
   invoke = mock(
-    async (_channel?: string, _input?: unknown): Promise<unknown> => ({
-      createdNodeIds: ["created"],
-      revision: 4,
-      warnings: [],
-    }),
+    async (_channel?: string, _input?: unknown): Promise<unknown> => resourceResult(),
   ),
 ) {
   let nextToken = 0
@@ -49,16 +66,14 @@ describe("preload Canvas resource client", () => {
       client.relink({
         canvasId: "canvas-main",
         commandId: "relink-project-file",
-        expectedRevision: 3,
         nodeId: "image-node",
         source: { kind: "host-file", path: "media/replacement.png" },
       }),
-    ).resolves.toMatchObject({ revision: 4 })
+    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-relink", {
       canvasId: "canvas-main",
       commandId: "relink-project-file",
-      expectedRevision: 3,
       nodeId: "image-node",
       source: { kind: "host-file", path: "media/replacement.png" },
     })
@@ -73,7 +88,7 @@ describe("preload Canvas resource client", () => {
       async (channel?: string, _input?: unknown): Promise<unknown> =>
         channel === "canvas:resource-local-file-register"
           ? undefined
-          : { createdNodeIds: [], revision: 4, warnings: [] },
+          : resourceResult([]),
     )
     const { client } = setup(invoke)
     const file = new File(["replacement"], "replacement.png", { type: "image/png" })
@@ -81,12 +96,11 @@ describe("preload Canvas resource client", () => {
     const input = {
       canvasId: "canvas-main",
       commandId: "relink-local-file",
-      expectedRevision: 3,
       nodeId: "image-node",
       source: { kind: "local-file" as const, mediaType: file.type, name: file.name, sourceToken },
     }
 
-    await expect(client.relink(input)).resolves.toMatchObject({ revision: 4 })
+    await expect(client.relink(input)).resolves.toMatchObject({ projection: { id: "canvas-main" } })
     expect(invoke.mock.calls[0]).toEqual([
       "canvas:resource-local-file-register",
       { sourcePath: "/native/replacement.png", sourceToken },
@@ -96,7 +110,6 @@ describe("preload Canvas resource client", () => {
       {
         canvasId: "canvas-main",
         commandId: "relink-local-file",
-        expectedRevision: 3,
         nodeId: "image-node",
         source: { kind: "local-file", mediaType: "image/png", name: "replacement.png", sourceToken },
       },
@@ -112,15 +125,13 @@ describe("preload Canvas resource client", () => {
       client.saveEditableCopy({
         canvasId: "canvas-main",
         commandId: "save-editable-copy",
-        expectedRevision: 3,
         nodeId: "managed-text",
       }),
-    ).resolves.toMatchObject({ revision: 4 })
+    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-save-editable-copy", {
       canvasId: "canvas-main",
       commandId: "save-editable-copy",
-      expectedRevision: 3,
       nodeId: "managed-text",
     })
     const serialized = JSON.stringify(invoke.mock.calls)
@@ -152,12 +163,9 @@ describe("preload Canvas resource client", () => {
     const invoke = mock(async () => hydrated)
     const { client } = setup(invoke)
 
-    await expect(client.hydrateStale({ canvasId: "canvas-main", revision: document.revision })).resolves.toEqual(
-      hydrated,
-    )
+    await expect(client.hydrateStale({ canvasId: "canvas-main" })).resolves.toEqual(hydrated)
     expect(invoke).toHaveBeenCalledWith(canvasResourceHydrateStaleIpcChannel, {
       canvasId: "canvas-main",
-      revision: document.revision,
     })
   })
 
@@ -172,14 +180,12 @@ describe("preload Canvas resource client", () => {
 
     const result = await client.readConnectedImage({
       canvasId: "canvas-main",
-      expectedRevision: 3,
       nodeId: "image-node",
       ownerNodeId: "plugin-node",
     })
 
     expect(invoke).toHaveBeenCalledWith(canvasResourceReadConnectedImageIpcChannel, {
       canvasId: "canvas-main",
-      expectedRevision: 3,
       nodeId: "image-node",
       ownerNodeId: "plugin-node",
     })
@@ -213,7 +219,6 @@ describe("preload Canvas resource client", () => {
       await expect(
         client.readConnectedImage({
           canvasId: "canvas-main",
-          expectedRevision: 3,
           nodeId: "image-node",
           ownerNodeId: "plugin-node",
         }),
@@ -237,7 +242,6 @@ describe("preload Canvas resource client", () => {
       anchor: { x: 20, y: 40 },
       canvasId: "canvas-main",
       commandId: "add-resources",
-      expectedRevision: 3,
       externalFiles: [
         {
           mediaType: "image/png",
@@ -295,7 +299,7 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ revision: 4 })
+    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
   })
 
   test("an invalid token does not consume valid peers, while an IPC failure consumes the whole valid batch", async () => {
@@ -374,13 +378,13 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ revision: 4 })
+    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
   })
 
   test("does not mint a token for an in-memory File without a native path", () => {
     const client = createCanvasResourcePreloadClient({
       getPathForFile: () => "",
-      invoke: async () => ({ createdNodeIds: [], revision: 0, warnings: [] }),
+      invoke: async () => resourceResult([]),
       randomUUID: () => "unused",
     })
     expect(client.createLocalFileToken(new File(["memory"], "memory.txt"))).toBe("")
@@ -478,7 +482,7 @@ describe("Canvas text resource preload client", () => {
       conflictError = error
     }
     expect(conflictError).toBeInstanceOf(CanvasTextResourceConflictError)
-    expect((conflictError as CanvasTextResourceConflictError).actualRevision).toBe("c".repeat(64))
+    expect((conflictError as CanvasTextResourceConflictError).actualContentRevision).toBe("c".repeat(64))
 
     const failed = createCanvasTextResourcePreloadClient({
       invoke: async () => {

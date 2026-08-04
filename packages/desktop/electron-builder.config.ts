@@ -53,6 +53,11 @@ export function createElectronBuilderConfig(environment: NodeJS.ProcessEnv = pro
     files: ["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"],
     extraResources: [
       {
+        from: ".packaging/collaboration-authority",
+        to: "collaboration-authority",
+        filter: ["**/*"],
+      },
+      {
         from: ".packaging/marketplace-product",
         to: "marketplace-product",
         filter: ["**/*"],

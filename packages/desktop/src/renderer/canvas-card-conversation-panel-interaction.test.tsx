@@ -96,7 +96,6 @@ test("removes a default generation @ input from the submitted references", async
         id: "canvas",
         nodes: [owner, input],
       }),
-      revision: 3,
     },
     generation: { initialPrompt: "Create a new scene", output: "image" },
     mentionedNodeIds: [input.id],
@@ -107,7 +106,7 @@ test("removes a default generation @ input from the submitted references", async
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate: mock(async (generationRequest) => {
       submitted = generationRequest
-      return { createdNodeIds: [], revision: 4, toolId: generationRequest.toolId!, warnings: [] }
+      return { createdNodeIds: [], toolId: generationRequest.toolId!, warnings: [] }
     }),
     listTools: mock(async () => [
       {
@@ -154,7 +153,6 @@ test("removes a default generation @ input from the submitted references", async
         ...request.document,
         edges: [...request.document.edges, { id: "added-edge", source: addedInput.id, target: owner.id }],
         nodes: [...request.document.nodes, addedInput],
-        revision: 4,
       },
       mentionedNodeIds: [input.id, addedInput.id],
     }
@@ -266,7 +264,6 @@ test("isolates a text card's model and tool options while switching image and vi
       submitted = generationRequest
       return {
         createdNodeIds: ["generated-video"],
-        revision: 1,
         toolId: generationRequest.toolId!,
         warnings: [],
       }
@@ -395,7 +392,6 @@ test("shows the first real compatible model without writing a node override", as
     }),
     generate: mock(async (generationRequest) => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: generationRequest.toolId!,
       warnings: [],
     })),
@@ -494,7 +490,6 @@ test("renders the shared cached model without loading and preserves it when back
     describeTool,
     generate: mock(async (generationRequest) => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: generationRequest.toolId!,
       warnings: [],
     })),
@@ -598,7 +593,6 @@ test("preserves edits to cached card options while their description refreshes",
     ),
     generate: mock(async (generationRequest) => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: generationRequest.toolId!,
       warnings: [],
     })),
@@ -715,7 +709,6 @@ test("updates a mounted card from the host's shared catalog subscription", async
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate: mock(async (generationRequest) => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: generationRequest.toolId!,
       warnings: [],
     })),
@@ -812,7 +805,7 @@ test("submits the latest card model across delayed preference acknowledgements",
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate: mock(async (generationRequest) => {
       submitted = generationRequest
-      return { createdNodeIds: [], revision: 1, toolId: generationRequest.toolId!, warnings: [] }
+      return { createdNodeIds: [], toolId: generationRequest.toolId!, warnings: [] }
     }),
     listTools: mock(async () => [
       {
@@ -986,7 +979,6 @@ test("uses a text @ input as prompt context without requiring model reference su
       submitted = generationRequest
       return {
         createdNodeIds: [],
-        revision: 1,
         toolId: generationRequest.toolId!,
         warnings: [],
       }
@@ -1092,7 +1084,6 @@ test("keeps models visible but blocks a genuinely incompatible media @ input", a
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate: mock(async (generationRequest) => ({
       createdNodeIds: [],
-      revision: 1,
       toolId: generationRequest.toolId!,
       warnings: [],
     })),
@@ -1169,7 +1160,7 @@ test("blocks an oversized mix of prompt context and media inputs before IPC", as
     mode: "file",
     ownerNodeId: owner.id,
   }
-  const generate = mock(async () => ({ createdNodeIds: [], revision: 1, toolId: "tools/image", warnings: [] }))
+  const generate = mock(async () => ({ createdNodeIds: [], toolId: "tools/image", warnings: [] }))
   const service: CanvasGenerateService = {
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
     generate,
@@ -1228,7 +1219,7 @@ test("opens Services when the card output has no available model", async () => {
   }
   const service: CanvasGenerateService = {
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
-    generate: mock(async () => ({ createdNodeIds: [], revision: 1, toolId: "unused", warnings: [] })),
+    generate: mock(async () => ({ createdNodeIds: [], toolId: "unused", warnings: [] })),
     listTools: mock(async () => []),
   }
 
@@ -1296,7 +1287,7 @@ test("reloads an open card when a service becomes available or disconnects", asy
   )
   const service: CanvasGenerateService = {
     describeTool: mock(async (toolId) => ({ fields: [], toolId })),
-    generate: mock(async () => ({ createdNodeIds: [], revision: 1, toolId: "unused", warnings: [] })),
+    generate: mock(async () => ({ createdNodeIds: [], toolId: "unused", warnings: [] })),
     listTools,
   }
 

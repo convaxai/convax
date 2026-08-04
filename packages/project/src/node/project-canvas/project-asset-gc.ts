@@ -2,7 +2,8 @@ import { createHash, randomUUID } from "node:crypto"
 import { constants as fsConstants, type BigIntStats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import type { ProjectCanvas } from "../../canvas/contracts"
+import { parseDigestV2, parseProjectIdV2 } from "@convax/collaboration"
+import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
 import type { ProjectRootResolver, ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 export const projectAssetGcGraceMs = 7 * 24 * 60 * 60 * 1_000
@@ -16,21 +17,9 @@ export interface ProjectAssetGcState {
   entries: Record<string, { unreferencedSince: string }>
 }
 
-interface ProjectCanvasMaintenanceCatalogPort {
-  runCurrentCatalogMaintenance<T>(
-    input: { projectId: string },
-    operation: (catalog: { canvases: readonly ProjectCanvas[] }) => Promise<T>,
-  ): Promise<T>
-}
-
-interface ProjectCanvasMaintenanceDocumentPort {
-  loadAllStrict(input: { canvases: readonly ProjectCanvas[]; projectId: string }): Promise<ReadonlySet<string>>
-}
-
 export interface ProjectAssetGcOptions {
   assets: ProjectManagedAssetStore
-  catalogs: ProjectCanvasMaintenanceCatalogPort
-  documents: ProjectCanvasMaintenanceDocumentPort
+  references: ProjectIndexCurrentBlobReferencePortV2
   now?: () => number
   projects: ProjectRootResolver
 }
@@ -72,15 +61,13 @@ const hashChunkBytes = 64 * 1024
 
 export class ProjectAssetGc {
   readonly #assets: ProjectManagedAssetStore
-  readonly #catalogs: ProjectCanvasMaintenanceCatalogPort
-  readonly #documents: ProjectCanvasMaintenanceDocumentPort
+  readonly #references: ProjectIndexCurrentBlobReferencePortV2
   readonly #now: () => number
   readonly #projects: ProjectRootResolver
 
   constructor(options: ProjectAssetGcOptions) {
     this.#assets = options.assets
-    this.#catalogs = options.catalogs
-    this.#documents = options.documents
+    this.#references = options.references
     this.#now = options.now ?? Date.now
     this.#projects = options.projects
   }
@@ -136,10 +123,15 @@ export class ProjectAssetGc {
     await cleanProjectStaging(layout.projectStagingPath, now)
   }
 
-  #loadLiveDigests(projectId: string) {
-    return this.#catalogs.runCurrentCatalogMaintenance({ projectId }, (catalog) =>
-      this.#documents.loadAllStrict({ canvases: catalog.canvases, projectId }),
-    )
+  async #loadLiveDigests(projectId: string) {
+    const values = await this.#references.queryCurrentBlobDigests({ projectId: parseProjectIdV2(projectId) })
+    const result = new Set<string>()
+    for (const digest of values) {
+      if (!digestPattern.test(digest))
+        throw new Error("ProjectIndex current blob-reference query returned an invalid digest")
+      result.add(parseDigestV2(digest))
+    }
+    return result
   }
 }
 

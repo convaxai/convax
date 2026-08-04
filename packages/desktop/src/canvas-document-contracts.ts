@@ -1,8 +1,8 @@
 import type {
   CanvasApplicationCommand,
   CanvasApplicationCommandResult,
+  CanvasApplicationQueryResult,
   CanvasDocumentRef,
-  CanvasDocumentSnapshot,
 } from "@convax/canvas/application"
 
 export const canvasDocumentIpcChannels = {
@@ -13,12 +13,11 @@ export const canvasDocumentIpcChannels = {
 export interface CanvasRendererCommandRequest {
   command: CanvasApplicationCommand
   commandId: string
-  expectedRevision: number
   ref: CanvasDocumentRef
 }
 
 /** Renderer transport: reads authoritative snapshots and submits commands only. */
 export interface CanvasRendererDocumentClient {
   execute(request: CanvasRendererCommandRequest): Promise<CanvasApplicationCommandResult>
-  load(ref: CanvasDocumentRef): Promise<CanvasDocumentSnapshot>
+  load(ref: CanvasDocumentRef): Promise<CanvasApplicationQueryResult>
 }

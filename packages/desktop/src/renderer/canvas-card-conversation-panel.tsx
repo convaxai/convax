@@ -14,6 +14,7 @@ import {
   type CanvasGenerationToolSummary,
   type CanvasNode,
 } from "@convax/canvas"
+import { createCanvasGenerationTargetGuard } from "@convax/canvas/application"
 import {
   Button,
   SegmentedTabs,
@@ -188,7 +189,6 @@ export function createCanvasCardGenerationRequest(input: {
       selectedNodeIds: [node.id],
       source: "canvas-card",
     },
-    expectedRevision: input.request.document.revision,
     expectedOutputCount: 1,
     operationId: input.operationId ?? globalThis.crypto.randomUUID(),
     output: ownerOutput,
@@ -198,7 +198,9 @@ export function createCanvasCardGenerationRequest(input: {
       : {}),
     referenceConstraint: { ownerNodeId: node.id, type: "direct-incoming" },
     references: generationInputs.references,
-    resultMode: createsNewTask ? { type: "create-pending-node" } : { nodeId: node.id, type: "replace-node" },
+    resultMode: createsNewTask
+      ? { type: "create-pending-node" }
+      : { expectedTarget: createCanvasGenerationTargetGuard(node), nodeId: node.id, type: "replace-node" },
     signal: input.signal,
     toolId: input.tool.id,
     ...(Object.keys(toolInput).length > 0 ? { toolInput } : {}),

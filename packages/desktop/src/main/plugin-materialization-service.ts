@@ -91,14 +91,17 @@ export class PluginMaterializationService {
             type: "nodes.materialize-connected",
           },
           commandId: `plugin-materialize-${randomUUID()}`,
-          expectedRevision: request.expectedRevision,
         },
         scopeId: request.projectId,
       })
       if (!result.createdNodeIds.includes(node.id)) {
         throw new Error("Canvas did not materialize the Plugin node")
       }
-      return { createdNodeId: node.id, revision: result.document.revision }
+      return {
+        createdNodeId: node.id,
+        operationReceipt: structuredClone(result.operationReceipt),
+        projection: structuredClone(result.document),
+      }
     } finally {
       active.release()
     }
@@ -147,8 +150,5 @@ function validateMaterializationInput(input: PluginMaterializationInput) {
     ) {
       throw new Error(`Plugin materialization ${label} is invalid`)
     }
-  }
-  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
-    throw new Error("Plugin materialization expectedRevision must be a non-negative integer")
   }
 }

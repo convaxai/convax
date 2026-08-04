@@ -7,6 +7,7 @@
     "noEmit": false,
     "baseUrl": ".",
     "paths": {
+      "@convax/bounded-value": ["../bounded-value/dist/index.d.ts"],
       "@convax/plugin-api": ["../plugin-api/dist/index.d.ts"],
       "@convax/plugin-api/*": ["../plugin-api/dist/*"]
     },

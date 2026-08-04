@@ -21,7 +21,7 @@ function plugin(overrides: Partial<InstalledWebPluginSummary> = {}): InstalledWe
       },
     },
     description: "Local transforms",
-    hostApi: { major: 2, optional: [], required: [] },
+    hostApi: { major: 3, optional: [], required: [] },
     id: "media-tools",
     name: "Media Tools",
     runtime: { command: "media-tools", type: "mcp-stdio" },

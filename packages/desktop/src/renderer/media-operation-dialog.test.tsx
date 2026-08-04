@@ -140,7 +140,6 @@ describe("MediaOperationDialog", () => {
     const failure = new MediaOperationPartialError("Second step failed", {
       createdNodeIds: ["first-result"],
       nextRequestIndex: 1,
-      revision: 4,
       warnings: [],
     })
     expect(shouldCloseMediaDialogAfterFailure(context.signal, operation.signal, failure)).toBeFalse()

@@ -45,7 +45,6 @@ const document = {
       type: "file",
     },
   ],
-  revision: 3,
   title: "Canvas",
 } as const
 
@@ -99,18 +98,29 @@ function adapter(options?: {
   const closeImage = mock(() => true)
   const instance = new PluginHostApiMainAdapter({
     agent: {} as never,
-    application: {} as never,
-    canvases: {
-      async getCanvasCatalog() {
-        return {
-          canvases: [{ createdAt: 1, id: binding.canvasId, name: "Canvas", updatedAt: 1 }],
-          projectId: binding.projectId,
-        }
+    application: {
+      async execute() { throw new Error("unused") },
+      async query() {
+        const projection = options?.document?.() ?? document
+        return { nodes: [], projection } as never
       },
     },
-    documents: {
-      async load() {
-        return { document: options?.document?.() ?? document, storageVersion: "3" } as never
+    canvases: {
+      async getCanvasCatalog() {
+        const route = {
+          activationDigest: "a".repeat(64),
+          canvasId: binding.canvasId as never,
+          routeProjectionDigest: "b".repeat(64),
+          shardEpoch: "AAAAAAAAAAAAAAAAAAAAAA" as never,
+          state: "live" as const,
+          title: "Canvas",
+        }
+        return {
+          format: "convax.project-canvas-catalog-projection/2" as const,
+          projectId: binding.projectId as never,
+          routes: [route],
+          visibleCanvases: [route],
+        } as never
       },
     },
     generation: (options?.generation ?? {}) as never,
@@ -143,6 +153,7 @@ function adapter(options?: {
         throw new Error("unused")
       },
     },
+    states: {} as never,
   })
   return { close, closeImage, instance, open, openImage }
 }
@@ -238,7 +249,6 @@ describe("PluginHostApiMainAdapter connected media", () => {
     expect(openImage).toHaveBeenCalledWith(
       {
         canvasId: binding.canvasId,
-        expectedRevision: document.revision,
         frameId: "frame-1",
         nodeId: binding.nodeId,
         pluginId: principal.pluginId,
@@ -344,7 +354,6 @@ describe("PluginHostApiMainAdapter connected media", () => {
           async checkpoint() {
             return {
               canvas: { id: binding.canvasId, name: "Canvas" },
-              documentRevision: document.revision,
               node: document.nodes[1]!,
               project: { id: binding.projectId, name: "Project" },
             }
@@ -374,7 +383,6 @@ function generationCheckpoint(
       position: { x: number; y: number }
       type: string
     }>
-    revision: number
   },
   ownerBinding = binding,
 ): PluginHostMutationCheckpoint {
@@ -384,7 +392,6 @@ function generationCheckpoint(
       if (!owner) throw new Error("Missing test Plugin owner")
       return {
         canvas: { id: ownerBinding.canvasId, name: "Canvas" },
-        documentRevision: liveDocument.revision,
         node: owner as PluginHostNodeContext["node"],
         project: { id: ownerBinding.projectId, name: "Project" },
       }
@@ -395,16 +402,24 @@ function generationCheckpoint(
 function generationResult() {
   return {
     createdNodeIds: ["generated-1"],
-    revision: 4,
+    operationReceipt: null,
+    projection: { edges: [], id: binding.canvasId, nodes: [], title: "Canvas" },
     toolId: "tool-1",
     warnings: [],
   }
 }
 
+function generationServiceResult() {
+  return {
+    ...generationResult(),
+    projection: { edges: [], id: binding.canvasId, metadata: { title: "Canvas" }, nodes: [] },
+  }
+}
+
 describe("PluginHostApiMainAdapter generation input keys", () => {
-  test("resolves an opaque key to the internal node reference without invalidating it for unrelated revisions", async () => {
+  test("resolves an opaque key without invalidating it for unrelated Canvas edits", async () => {
     const live = structuredClone(document) as any
-    const generate = mock(async (_request: unknown) => generationResult())
+    const generate = mock(async (_request: unknown) => generationServiceResult())
     const { instance } = adapter({
       document: () => live,
       generation: { generate, listTools: mock(async () => []) },
@@ -412,7 +427,6 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
     const inputKey = await currentInputKey(instance)
     expect(inputKey).not.toContain("source-1")
 
-    live.revision += 1
     live.nodes[0].position.x += 50
     live.nodes.push({
       data: { kind: "text", label: "Unrelated" },
@@ -433,7 +447,6 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
     ).resolves.toEqual(generationResult())
     expect(generate).toHaveBeenCalledTimes(1)
     expect(generate.mock.calls[0]?.[0]).toMatchObject({
-      expectedRevision: live.revision,
       referenceConstraint: {
         ownerNodeId: binding.nodeId,
         ownerPluginId: principal.pluginId,
@@ -446,7 +459,7 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
 
   test("rejects forged keys and role/type mismatches before calling the generation executor", async () => {
     const live = structuredClone(document) as any
-    const generate = mock(async (_request: unknown) => generationResult())
+    const generate = mock(async (_request: unknown) => generationServiceResult())
     const { instance } = adapter({
       document: () => live,
       generation: { generate, listTools: mock(async () => []) },
@@ -477,14 +490,13 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
 
   test("invalidates a key when its direct edge or resource binding changes", async () => {
     const live = structuredClone(document) as any
-    const generate = mock(async (_request: unknown) => generationResult())
+    const generate = mock(async (_request: unknown) => generationServiceResult())
     const { instance } = adapter({
       document: () => live,
       generation: { generate, listTools: mock(async () => []) },
     })
     const edgeKey = await currentInputKey(instance)
     live.edges[0].id = "replacement-edge"
-    live.revision += 1
     await expect(
       instance.executeGeneration({
         binding,
@@ -498,7 +510,6 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
 
     const resourceKey = await currentInputKey(instance)
     live.nodes[0].data.resourceState = { contentRevision: "changed-content", status: "ready" }
-    live.revision += 1
     await expect(
       instance.executeGeneration({
         binding,
@@ -514,7 +525,7 @@ describe("PluginHostApiMainAdapter generation input keys", () => {
 
   test("binds keys to the exact Plugin snapshot, owning node, and Project scope", async () => {
     const live = structuredClone(document) as any
-    const generate = mock(async (_request: unknown) => generationResult())
+    const generate = mock(async (_request: unknown) => generationServiceResult())
     const { instance } = adapter({
       document: () => live,
       generation: { generate, listTools: mock(async () => []) },

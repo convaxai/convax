@@ -17,7 +17,6 @@ const maximumPendingPreparesPerSender = 8
 
 export interface ActiveCanvasExternalDragScope {
   canvasId: string
-  revision: number
   scopeId: string
   selectedEdgeIds: readonly string[]
   selectedNodeIds: readonly string[]
@@ -40,7 +39,6 @@ export async function showCanvasExternalMediaDragStartFailure(
       type: "notification.show",
     },
     expectedDocumentId: snapshot.documentId,
-    expectedRevision: snapshot.revision,
     expectedScopeId: snapshot.scopeId,
     viewId: snapshot.viewId,
   })
@@ -192,7 +190,6 @@ function matchesActiveSelection(
     active &&
       active.canvasId === request.ref.canvasId &&
       active.scopeId === request.ref.scopeId &&
-      active.revision === request.expectedRevision &&
       active.selectedEdgeIds.length === 0 &&
       equalIds(active.selectedNodeIds, request.nodeIds),
   )
@@ -207,7 +204,7 @@ function requirePrepareRequest(value: unknown): CanvasExternalMediaDragPrepareRe
     throw new Error("Canvas external drag request is required")
   }
   const input = value as Record<string, unknown>
-  if (Object.keys(input).some((key) => !["expectedRevision", "nodeIds", "prepareId", "ref"].includes(key))) {
+  if (Object.keys(input).some((key) => !["nodeIds", "prepareId", "ref"].includes(key))) {
     throw new Error("Canvas external drag request contains unsupported fields")
   }
   if (!input.ref || typeof input.ref !== "object" || Array.isArray(input.ref)) {
@@ -223,9 +220,6 @@ function requirePrepareRequest(value: unknown): CanvasExternalMediaDragPrepareRe
   ) {
     throw new Error("Canvas external drag requires a Project-scoped Canvas reference")
   }
-  if (!Number.isSafeInteger(input.expectedRevision) || (input.expectedRevision as number) < 0) {
-    throw new Error("Canvas external drag expectedRevision must be a non-negative integer")
-  }
   if (!isPrepareId(input.prepareId)) {
     throw new Error("Canvas external drag prepareId must be an opaque URL-safe token")
   }
@@ -239,7 +233,6 @@ function requirePrepareRequest(value: unknown): CanvasExternalMediaDragPrepareRe
     throw new Error("Canvas external drag nodeIds must contain 1 to 100 unique Canvas node ids")
   }
   return {
-    expectedRevision: input.expectedRevision as number,
     nodeIds: [...input.nodeIds],
     prepareId: input.prepareId,
     ref: { canvasId: ref.canvasId, scopeId: ref.scopeId },
@@ -248,7 +241,6 @@ function requirePrepareRequest(value: unknown): CanvasExternalMediaDragPrepareRe
 
 function selectionRequest(request: CanvasExternalMediaDragPrepareRequest): CanvasExternalMediaDragRequest {
   return {
-    expectedRevision: request.expectedRevision,
     nodeIds: request.nodeIds,
     ref: request.ref,
   }

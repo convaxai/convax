@@ -23,8 +23,8 @@ function throwIfAborted(signal: AbortSignal) {
 }
 
 /**
- * Waits for optimistic renderer edits to reach Main and returns the revision that
- * the authoritative image transaction must guard.
+ * Waits for pending typed commands to reach Main and returns the projected
+ * document used to derive semantic guards for the image transaction.
  */
 export async function preparePluginCanvasImageWrite(
   input: PluginCanvasImageWriteScope,

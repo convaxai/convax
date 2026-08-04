@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasResourceSource } from "./application"
+import type { CanvasGenerationTargetGuard, CanvasResourceSource } from "./application"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 export { CanvasTextResourceConflictError } from "./application/errors"
@@ -18,7 +18,6 @@ export interface CanvasResourceMutationTransfer {
 
 export interface CanvasResourceMutationRequest {
   anchor: CanvasPoint
-  expectedRevision: number
   files?: readonly File[]
   /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
   parentId?: string
@@ -35,21 +34,15 @@ export interface CanvasResourceMutationRequest {
 export interface CanvasResourceMutationService {
   add(input: CanvasResourceMutationRequest): Promise<{
     createdNodeIds: readonly string[]
-    revision: number
     warnings: readonly string[]
   }>
   relink?(input: {
-    expectedRevision: number
     file?: File
     nodeId: string
     signal: AbortSignal
     source?: Extract<CanvasResourceSource, { kind: "host-directory" | "host-file" }>
-  }): Promise<{ revision: number; warnings: readonly string[] }>
-  saveEditableCopy?(input: {
-    expectedRevision: number
-    nodeId: string
-    signal: AbortSignal
-  }): Promise<{ revision: number; warnings: readonly string[] }>
+  }): Promise<{ warnings: readonly string[] }>
+  saveEditableCopy?(input: { nodeId: string; signal: AbortSignal }): Promise<{ warnings: readonly string[] }>
 }
 
 export interface CanvasResourceHydrationService {
@@ -211,7 +204,7 @@ export interface CanvasGenerationReference {
 export type CanvasGenerationResultMode =
   | { type: "add" }
   | { type: "create-pending-node" }
-  | { nodeId: string; type: "replace-node" }
+  | { expectedTarget: CanvasGenerationTargetGuard; nodeId: string; type: "replace-node" }
 
 /** Host-neutral authority that Main must revalidate before staging card-scoped inputs. */
 export interface CanvasGenerationReferenceConstraint {
@@ -221,7 +214,6 @@ export interface CanvasGenerationReferenceConstraint {
 
 export interface CanvasGenerateRequest {
   anchor: CanvasPoint
-  expectedRevision: number
   /** Fresh host operation correlation for this logical submission. */
   operationId?: string
   /** Trusted host output cardinality guard; this is never sent to the generation tool. */
@@ -252,7 +244,6 @@ export interface CanvasGenerateRequest {
 
 export interface CanvasGenerateResult {
   createdNodeIds: readonly string[]
-  revision: number
   toolId: string
   warnings: readonly string[]
 }
@@ -356,12 +347,6 @@ function inferCanvasGenerationInputRole(node: CanvasNode): CanvasGenerationInput
   return undefined
 }
 
-export interface CanvasPersistenceService {
-  load: (documentId: string, signal: AbortSignal) => Promise<CanvasDocument | null>
-  /** Commits the renderer's optimistic delta and returns Main's authoritative projection. */
-  save: (document: CanvasDocument, signal: AbortSignal) => Promise<CanvasDocument>
-}
-
 export interface CanvasExportRequest {
   document: CanvasDocument
   format: string
@@ -434,7 +419,6 @@ export interface CanvasServiceMap {
   hydration: CanvasResourceHydrationService
   mutation: CanvasResourceMutationService
   generate: CanvasGenerateService
-  persistence: CanvasPersistenceService
   export: CanvasExportService
   notify: CanvasNotificationService
   telemetry: CanvasTelemetryService

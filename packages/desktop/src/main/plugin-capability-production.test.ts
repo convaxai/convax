@@ -115,7 +115,7 @@ function candidate(
     description: `${id} capability integration fixture`,
     ...(options.headless ? {} : { entry: "index.html" }),
     hostApi: {
-      major: 2,
+      major: 3,
       optional: [],
       required: options.headless
         ? options.canvasRead
@@ -329,7 +329,7 @@ async function runtimeFixture(
   const canvasCapabilities = input.reverseCanvas
     ? new PluginCanvasCapabilityService({
         application: {
-          async executeTransaction() {
+          async execute() {
             throw new Error("Unexpected Canvas transaction")
           },
           async query() {
@@ -338,21 +338,19 @@ async function runtimeFixture(
         },
         canvases: {
           async getCanvasCatalog({ projectId }) {
-            return { canvases: [], projectId, revision: 0 }
+            return {
+              format: "convax.project-canvas-catalog-projection/2",
+              projectEpoch: "AAAAAAAAAAAAAAAAAAAAAA",
+              projectId,
+              routes: [],
+              visibleCanvases: [],
+            } as never
           },
         },
         changes: {
           publish() {},
           subscribe() {
             return { close() {} }
-          },
-        },
-        documents: {
-          async load() {
-            throw new Error("Unexpected Canvas document read")
-          },
-          async save() {
-            throw new Error("Unexpected Canvas document write")
           },
         },
         plugins: principals,

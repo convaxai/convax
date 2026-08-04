@@ -4,7 +4,6 @@ import { canvasCommandCapabilities, getCanvasCommandCapability } from "./capabil
 describe("canvas command capability catalog", () => {
   test("makes business operations the default Agent surface and keeps primitives explicit", () => {
     expect(canvasCommandCapabilities.map((capability) => capability.commandType)).toEqual([
-      "document.patch",
       "canvas.auto-layout",
       "resources.add",
       "elements.remove",
@@ -29,7 +28,6 @@ describe("canvas command capability catalog", () => {
     })
     expect(canvasCommandCapabilities.filter((capability) => capability.layer === "primitive")).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ commandType: "document.patch", defaultForAgent: false }),
         expect.objectContaining({ commandType: "nodes.move", defaultForAgent: false }),
         expect.objectContaining({ commandType: "elements.remove", defaultForAgent: false }),
       ]),

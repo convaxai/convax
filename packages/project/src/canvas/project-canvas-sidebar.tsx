@@ -57,6 +57,7 @@ export interface ProjectCanvasSidebarProps {
   controller: ProjectCanvasController
   filteredKinds?: ReadonlySet<string>
   loadNodes?(input: { canvasId: string; projectId: string }): Promise<readonly ProjectCanvasSidebarNode[]>
+  creationUnavailableReason?: string
   navigationBusy?: boolean
   navigationError?: string | null
   /** @deprecated Compose ProjectCanvasSwitcher in the ProjectSidebar header instead. */

@@ -29,7 +29,7 @@ function plugin() {
       description: "Timeline",
       entry: "index.html",
       hostApi: {
-        major: 2,
+        major: 3,
         optional: ["canvas.inputs.open", "canvas.inputs.close"],
         required: ["host.context.get"],
       },

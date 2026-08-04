@@ -5,8 +5,6 @@ import type { CanvasAddResourcesCommand } from "./commands"
 import {
   applyCanvasBusinessCommand,
   CanvasCommandValidationError,
-  CanvasRevisionConflictError,
-  createCanvasDocumentPatchCommand,
   createCanvasNodeContentGuard,
   executeCanvasBusinessCommand,
   findOpenCanvasPoint,
@@ -79,98 +77,6 @@ describe("canvas application commands", () => {
     })
   })
 
-  test("commits a renderer element patch without accepting a whole replacement document", () => {
-    const first = createTextNode({
-      id: "first",
-      metadata: {},
-      position: { x: 0, y: 0 },
-      resourceState: { status: "ready", text: "Before" },
-    })
-    const removed = createTextNode({
-      id: "removed",
-      metadata: {},
-      position: { x: 200, y: 0 },
-      resourceState: { status: "ready", text: "Remove" },
-    })
-    const base = createCanvasDocument({ id: "canvas-patch", nodes: [first, removed], title: "Before" })
-    const added = createTextNode({
-      id: "added",
-      metadata: {},
-      position: { x: 400, y: 0 },
-      resourceState: { status: "ready", text: "Added" },
-    })
-    const target = connectCanvasNodes(
-      {
-        ...base,
-        metadata: { ...base.metadata, title: "After" },
-        nodes: [
-          {
-            ...first,
-            data: { ...first.data, resourceState: { status: "ready", text: "After" } },
-          },
-          added,
-        ],
-      },
-      { id: "edge-added", source: first.id, target: added.id },
-    )
-    const command = createCanvasDocumentPatchCommand(base, target)
-
-    expect(command).toMatchObject({
-      addedNodes: [{ id: added.id }],
-      metadata: { title: "After" },
-      removedNodeIds: [removed.id],
-      updatedNodes: [{ id: first.id }],
-    })
-    expect("document" in command).toBeFalse()
-
-    const committed = executeCanvasBusinessCommand(base, {
-      actor: { id: "renderer-one", kind: "renderer" },
-      command,
-      commandId: "renderer-patch-one",
-      expectedRevision: 0,
-    })
-    expect(committed.document).toMatchObject({
-      metadata: { title: "After" },
-      revision: 1,
-    })
-    expect(committed.document.nodes.map((node) => node.id)).toEqual([first.id, added.id])
-    expect(committed.document.nodes[0]?.data).toMatchObject({
-      resourceState: { status: "ready", text: "After" },
-    })
-    expect(committed.document.edges).toEqual([
-      expect.objectContaining({ id: "edge-added", source: first.id, target: added.id }),
-    ])
-  })
-
-  test("rejects malformed renderer patches and stale revisions", () => {
-    const node = createTextNode({
-      id: "node",
-      metadata: {},
-      position: { x: 0, y: 0 },
-      resourceState: { status: "ready" },
-    })
-    const base = createCanvasDocument({ id: "canvas-patch-guard", nodes: [node] })
-    const command = createCanvasDocumentPatchCommand(base, {
-      ...base,
-      nodes: [{ ...node, position: { x: 20, y: 30 } }],
-    })
-    expect(() =>
-      executeCanvasBusinessCommand(base, {
-        actor: { id: "renderer-one", kind: "renderer" },
-        command,
-        commandId: "renderer-patch-stale",
-        expectedRevision: 1,
-      }),
-    ).toThrow(CanvasRevisionConflictError)
-    expect(() =>
-      applyCanvasBusinessCommand(base, {
-        ...command,
-        removedNodeIds: [node.id],
-        updatedNodes: [{ ...node, position: { x: 20, y: 30 } }],
-      }),
-    ).toThrow("cannot be removed and updated")
-  })
-
   test("adds prepared resources with product sizing, placement, and explicit relations", () => {
     const anchor = {
       ...createTextNode({
@@ -190,7 +96,7 @@ describe("canvas application commands", () => {
       height: 180,
       width: 320,
     })
-    expect(applied.document.revision).toBe(0)
+    expect(applied.document).not.toHaveProperty("revision")
     expect(applied.createdNodeIds).toEqual(["image_node", "text_node"])
     expect(applied.document.nodes.find((node) => node.id === "image_node")).toMatchObject({
       position: { x: 344, y: 0 },
@@ -247,10 +153,9 @@ describe("canvas application commands", () => {
         sourceNodeId: source.id,
       },
       commandId: "materialize-editor",
-      expectedRevision: 0,
     })
 
-    expect(committed.document.revision).toBe(1)
+    expect(committed.document).not.toHaveProperty("revision")
     expect(committed.createdNodeIds).toEqual([plugin.id])
     expect(committed.document.nodes.find((node) => node.id === plugin.id)).toMatchObject({
       data: { kind: "plugin.editor" },
@@ -268,7 +173,6 @@ describe("canvas application commands", () => {
           sourceNodeId: source.id,
         },
         commandId: "wrong-source-kind",
-        expectedRevision: 0,
       }),
     ).toThrow("requires a audio file node")
   })
@@ -333,37 +237,12 @@ describe("canvas application commands", () => {
     expect(open).not.toEqual({ x: 400, y: 100 })
   })
 
-  test("commits one logical revision and rejects a stale caller", () => {
-    const document = createCanvasDocument({
-      id: "canvas_revision",
-      nodes: [
-        createTextNode({
-          id: "anchor",
-          metadata: { source: "Notes/anchor.md" },
-          position: { x: 0, y: 0 },
-          resourceState: { status: "ready" },
-        }),
-      ],
-    })
-    const envelope = {
-      actor: { id: "agent_one", kind: "agent" as const },
-      command: addResourcesCommand(),
-      commandId: "command_one",
-      expectedRevision: 0,
-    }
-    const committed = executeCanvasBusinessCommand(document, envelope)
-
-    expect(committed.document.revision).toBe(1)
-    expect(() => executeCanvasBusinessCommand(committed.document, envelope)).toThrow(CanvasRevisionConflictError)
-  })
-
   test("keeps an empty command as a no-op and validates referenced nodes", () => {
     const document = createCanvasDocument({ id: "canvas_noop" })
     const empty = executeCanvasBusinessCommand(document, {
       actor: { id: "ui", kind: "ui" },
       command: { type: "resources.add", items: [], placement: { anchor: { x: 0, y: 0 } } },
       commandId: "empty",
-      expectedRevision: 0,
     })
     expect(empty.changed).toBeFalse()
     expect(empty.document).toBe(document)
@@ -408,7 +287,7 @@ describe("canvas application commands", () => {
     })
   })
 
-  test("accepts structural groups as whole-group endpoints across every relation command", () => {
+  test("connects whole structural groups while preserving nested resource placement", () => {
     const group = createGroupNode({ id: "group", height: 300, position: { x: 0, y: 0 }, width: 400 })
     const card = createTextNode({
       id: "card",
@@ -426,15 +305,7 @@ describe("canvas application commands", () => {
       expect.objectContaining({ source: group.id, target: card.id }),
     ])
 
-    const patch = createCanvasDocumentPatchCommand(document, {
-      ...document,
-      edges: [{ id: "group-edge", source: card.id, target: group.id }],
-    })
-    expect(applyCanvasBusinessCommand(document, patch).document.edges).toEqual([
-      expect.objectContaining({ id: "group-edge", source: card.id, target: group.id }),
-    ])
-
-    const added = applyCanvasBusinessCommand(document, {
+    const related = applyCanvasBusinessCommand(document, {
       items: [
         {
           item: { id: "text", kind: "text", metadata: {}, state: { status: "ready", text: "New" } },
@@ -445,20 +316,8 @@ describe("canvas application commands", () => {
       relation: { anchorNodeIds: [group.id], mode: "connect" },
       type: "resources.add",
     })
-    expect(added.document.edges).toEqual([
+    expect(related.document.edges).toEqual([
       expect.objectContaining({ source: group.id, target: "new-text" }),
-    ])
-
-    const pending = applyCanvasBusinessCommand(document, {
-      kind: "image",
-      label: "Pending",
-      nodeId: "pending",
-      placement: { anchor: { x: 0, y: 0 } },
-      relation: { anchorNodeIds: [group.id], mode: "connect" },
-      type: "resources.pending.create",
-    })
-    expect(pending.document.edges).toEqual([
-      expect.objectContaining({ source: group.id, target: "pending" }),
     ])
 
     const nested = applyCanvasBusinessCommand(document, {
@@ -490,7 +349,7 @@ describe("canvas application commands", () => {
     ).toThrow("is not a structural group")
   })
 
-  test("reparents through the revision-bound application command and rejects group cycles", () => {
+  test("reparents through the typed application command and rejects group cycles", () => {
     const outer = createGroupNode({
       id: "outer",
       height: 300,

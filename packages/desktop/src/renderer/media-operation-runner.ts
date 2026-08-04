@@ -1,14 +1,9 @@
 import type { CanvasGenerateRequest, CanvasGenerateResult } from "@convax/canvas"
-import {
-  isGenerationCanvasRevisionConflictFailure,
-  type GenerationCanvasRequest,
-  type GenerationCanvasResult,
-} from "../generation-contracts"
+import type { GenerationCanvasRequest, GenerationCanvasResult } from "../generation-contracts"
 
 export interface MediaOperationProgress {
   createdNodeIds: readonly string[]
   nextRequestIndex: number
-  revision: number
   warnings: readonly string[]
 }
 
@@ -62,44 +57,28 @@ export async function runMediaOperationSequence(options: {
   for (let index = progress.nextRequestIndex; index < options.requests.length; index += 1) {
     throwIfAborted(options.signal)
     let result: CanvasGenerateResult
-    let safeRevisionRetries = 0
-    while (true) {
-      try {
-        if (index > 0 && options.refreshProgress) {
-          progress = await options.refreshProgress(progress)
-          options.onProgress(progress)
-          throwIfAborted(options.signal)
-        }
-        result = await options.generate({
-          ...options.requests[index],
-          expectedRevision: progress.revision,
-          ...(index > 0 && progress.createdNodeIds.length > 0
-            ? { relationAnchorNodeIds: [...progress.createdNodeIds] }
-            : {}),
-        })
-        break
-      } catch (failure) {
-        if (
-          index > 0 &&
-          options.refreshProgress &&
-          safeRevisionRetries < 3 &&
-          !options.signal.aborted &&
-          isGenerationCanvasRevisionConflictFailure(failure)
-        ) {
-          safeRevisionRetries += 1
-          continue
-        }
-        if (progress.nextRequestIndex > 0 && !options.signal.aborted) {
-          throw new MediaOperationPartialError(options.partialFailureMessage(failure), progress, { cause: failure })
-        }
-        throw failure
+    try {
+      if (index > 0 && options.refreshProgress) {
+        progress = await options.refreshProgress(progress)
+        options.onProgress(progress)
+        throwIfAborted(options.signal)
       }
+      result = await options.generate({
+        ...options.requests[index],
+        ...(index > 0 && progress.createdNodeIds.length > 0
+          ? { relationAnchorNodeIds: [...progress.createdNodeIds] }
+          : {}),
+      })
+    } catch (failure) {
+      if (progress.nextRequestIndex > 0 && !options.signal.aborted) {
+        throw new MediaOperationPartialError(options.partialFailureMessage(failure), progress, { cause: failure })
+      }
+      throw failure
     }
 
     progress = {
       createdNodeIds: [...progress.createdNodeIds, ...result.createdNodeIds],
       nextRequestIndex: index + 1,
-      revision: result.revision,
       warnings: [...progress.warnings, ...result.warnings],
     }
     options.onProgress(progress)

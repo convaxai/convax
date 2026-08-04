@@ -275,11 +275,10 @@ const hostNode = object(
     id: string(),
     parentId: string(),
     position: point,
-    revision: integer,
     style: jsonObject(),
     type: string(80),
   },
-  ["data", "id", "position", "revision", "type"],
+  ["data", "id", "position", "type"],
 )
 
 const generationReference = object({ inputKey: string(), role: inputRole }, ["inputKey", "role"])
@@ -431,10 +430,9 @@ const geometryDocument = object(
     edges: array(edge, 10_000),
     id: string(256),
     nodes: array(geometryNode, 10_000),
-    revision: integer,
     title: string(512),
   },
-  ["edges", "id", "nodes", "revision", "title"],
+  ["edges", "id", "nodes", "title"],
 )
 const structureDocument = object(
   {
@@ -442,11 +440,44 @@ const structureDocument = object(
     edges: array(edge, 10_000),
     id: string(256),
     nodes: array(structureNode, 10_000),
-    revision: integer,
     tags: array(string(), 256),
     title: string(512),
   },
-  ["edges", "id", "nodes", "revision", "title"],
+  ["edges", "id", "nodes", "title"],
+)
+const operationReceipt = object(
+  {
+    actorId: string(43),
+    baseFrontierDigest: string(64, { refinement: "lowercase-sha256" }),
+    format: literal("convax.canvas-operation-receipt/2"),
+    historyMaterialDigest: union(nil, string(64, { refinement: "lowercase-sha256" })),
+    intentDigest: string(64, { refinement: "lowercase-sha256" }),
+    intentKind: string(256),
+    operationId: string(22),
+    resultEntities: array(
+      object(
+        {
+          id: string(256),
+          incarnation: string(256),
+          kind: enumString(["node", "edge"]),
+        },
+        ["id", "incarnation", "kind"],
+      ),
+      10_000,
+    ),
+    semanticRoot: bool,
+  },
+  [
+    "actorId",
+    "baseFrontierDigest",
+    "format",
+    "historyMaterialDigest",
+    "intentDigest",
+    "intentKind",
+    "operationId",
+    "resultEntities",
+    "semanticRoot",
+  ],
 )
 const nodeSummary = object(
   {
@@ -546,7 +577,11 @@ export const pluginApiWireContracts = Object.freeze({
   "canvas.node.get": contract(none, hostNode, { result: MiB }),
   "canvas.node.state.replace": contract(
     object({ state: jsonObject(256 * KiB) }, ["state"]),
-    object({ updated: literal(true) }, ["updated"]),
+    object({ operationReceipt, projection: hostNode, updated: literal(true) }, [
+      "operationReceipt",
+      "projection",
+      "updated",
+    ]),
     { request: 256 * KiB + 4 * KiB },
   ),
   "canvas.resource.image.create": contract(
@@ -557,7 +592,11 @@ export const pluginApiWireContracts = Object.freeze({
       },
       ["dataUrl", "name"],
     ),
-    object({ createdNodeId: string(), revision: integer }, ["createdNodeId", "revision"]),
+    object({ createdNodeId: string(), operationReceipt, projection: structureDocument }, [
+      "createdNodeId",
+      "operationReceipt",
+      "projection",
+    ]),
     { request: 24 * MiB + 4 * KiB },
   ),
   "project.file.text.read": contract(
@@ -596,11 +635,12 @@ export const pluginApiWireContracts = Object.freeze({
       {
         createdNodeIds: array(string(), 32),
         outputText: string(64 * KiB, { allowEmpty: true }),
-        revision: integer,
+        operationReceipt: union(nil, operationReceipt),
+        projection: union(nil, structureDocument),
         toolId: string(256),
         warnings: array(string(), 32),
       },
-      ["createdNodeIds", "revision", "toolId", "warnings"],
+      ["createdNodeIds", "operationReceipt", "projection", "toolId", "warnings"],
     ),
     { result: 256 * KiB },
   ),
@@ -621,15 +661,7 @@ export const pluginApiWireContracts = Object.freeze({
     object({ projectId: string(256) }, ["projectId"]),
     object(
       {
-        canvases: array(
-          object({ createdAt: finite, id: string(256), name: string(512), updatedAt: finite }, [
-            "createdAt",
-            "id",
-            "name",
-            "updatedAt",
-          ]),
-          10_000,
-        ),
+        canvases: array(object({ id: string(256), name: string(512) }, ["id", "name"]), 10_000),
         projectId: string(256),
       },
       ["canvases", "projectId"],
@@ -644,18 +676,16 @@ export const pluginApiWireContracts = Object.freeze({
           document: geometryDocument,
           projection: literal("geometry"),
           ref: canvasRef,
-          storageVersion: union(nil, string(256)),
         },
-        ["document", "projection", "ref", "storageVersion"],
+        ["document", "projection", "ref"],
       ),
       object(
         {
           document: structureDocument,
           projection: literal("structure"),
           ref: canvasRef,
-          storageVersion: union(nil, string(256)),
         },
-        ["document", "projection", "ref", "storageVersion"],
+        ["document", "projection", "ref"],
       ),
     ),
     { result: 8 * MiB },
@@ -665,36 +695,34 @@ export const pluginApiWireContracts = Object.freeze({
     object(
       {
         nodes: array(nodeSummary, 1_000),
+        projection: structureDocument,
         ref: canvasRef,
-        revision: integer,
-        storageVersion: union(nil, string(256)),
       },
-      ["nodes", "ref", "revision", "storageVersion"],
+      ["nodes", "projection", "ref"],
     ),
     { request: MiB, result: 8 * MiB },
   ),
   "canvas.transaction.execute": contract(
     object(
       {
-        commands: array(transactionCommand, 256, 1),
-        expectedRevision: integer,
+        command: transactionCommand,
+        commandId: string(128),
         ref: canvasRef,
-        transactionId: string(128),
       },
-      ["commands", "expectedRevision", "ref", "transactionId"],
+      ["command", "commandId", "ref"],
     ),
     object(
       {
         affectedNodeIds: stringList(10_000),
         changed: bool,
         createdNodeIds: stringList(10_000),
+        operationReceipt,
+        projection: structureDocument,
         ref: canvasRef,
-        revision: integer,
-        storageVersion: string(256),
         summaryTruncated: bool,
         warnings: stringList(),
       },
-      ["affectedNodeIds", "changed", "createdNodeIds", "ref", "revision", "storageVersion", "warnings"],
+      ["affectedNodeIds", "changed", "createdNodeIds", "operationReceipt", "projection", "ref", "warnings"],
     ),
     { request: MiB, result: 2 * MiB },
   ),

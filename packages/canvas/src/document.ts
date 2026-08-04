@@ -37,7 +37,6 @@ export function createCanvasDocument(input?: {
 }): CanvasDocument {
   return {
     id: input?.id ?? createCanvasId("canvas"),
-    revision: 0,
     metadata: {
       title: input?.title ?? "Untitled canvas",
       description: input?.description,
@@ -52,9 +51,6 @@ export function parseCanvasDocument(value: unknown, expectedId?: string): Canvas
     !isRecord(value) ||
     typeof value.id !== "string" ||
     (expectedId !== undefined && value.id !== expectedId) ||
-    typeof value.revision !== "number" ||
-    !Number.isFinite(value.revision) ||
-    value.revision < 0 ||
     !isRecord(value.metadata) ||
     typeof value.metadata.title !== "string" ||
     !Array.isArray(value.nodes) ||

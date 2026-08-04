@@ -1,3 +1,8 @@
 packages/plugin-api/history/*.json text eol=lf
 packages/plugin-api/generated/plugin-api.json text eol=lf
 packages/plugin-api/generated/plugin-api.md text eol=lf
+
+# These bytes participate in the frozen collaboration authority identity.
+docs/superpowers/specs/collaboration-v10-active-authority.json text eol=lf
+docs/superpowers/specs/2026-07-31-global-uri-protocol.md text eol=lf
+docs/superpowers/specs/authorities/collaboration-v10/r5/** text eol=lf

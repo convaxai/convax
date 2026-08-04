@@ -1,13 +1,10 @@
 import type { CanvasCommandActor, CanvasNodeGenerationRunCommand } from "./commands"
-import { CanvasRevisionConflictError } from "./commands"
-import { CanvasStorageConflictError, type CanvasDocumentRef } from "./persistence"
+import type { CanvasDocumentRef } from "./persistence"
 import type { CanvasApplicationCommandResult, CanvasApplicationService } from "./service"
 
 interface CanvasNodeGenerationRunRequestBase extends CanvasDocumentRef {
   actor: CanvasCommandActor
   commandId: string
-  conflictPolicy?: "reject" | "retry"
-  expectedRevision: number
   signal?: AbortSignal
 }
 
@@ -35,8 +32,6 @@ export interface CanvasInterruptInactiveGenerationRunsRequest extends CanvasNode
 }
 
 type CanvasGenerationRunApplication = Pick<CanvasApplicationService, "execute" | "query">
-
-const maximumConflictRetries = 2
 
 /** Headless Canvas-owned run state orchestration shared by every host entry point. */
 export class CanvasNodeGenerationRunBusinessService {
@@ -81,39 +76,13 @@ export class CanvasNodeGenerationRunBusinessService {
     request: CanvasNodeGenerationRunRequestBase,
     command: CanvasNodeGenerationRunCommand,
   ): Promise<CanvasApplicationCommandResult> {
-    let expectedRevision = request.expectedRevision
-    let conflicts = 0
-    while (true) {
-      throwIfAborted(request.signal)
-      try {
-        return await this.application.execute({
-          canvasId: request.canvasId,
-          envelope: {
-            actor: request.actor,
-            command,
-            commandId: conflicts === 0 ? request.commandId : `${request.commandId}:retry-${conflicts}`,
-            expectedRevision,
-          },
-          scopeId: request.scopeId,
-          ...(request.signal ? { signal: request.signal } : {}),
-        })
-      } catch (error) {
-        if (
-          request.conflictPolicy === "reject" ||
-          conflicts >= maximumConflictRetries ||
-          !(error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError)
-        ) {
-          throw error
-        }
-        conflicts += 1
-        throwIfAborted(request.signal)
-        const latest = await this.application.query(
-          { canvasId: request.canvasId, scopeId: request.scopeId },
-          { limit: 0 },
-        )
-        expectedRevision = latest.revision
-      }
-    }
+    throwIfAborted(request.signal)
+    return this.application.execute({
+      canvasId: request.canvasId,
+      envelope: { actor: request.actor, command, commandId: request.commandId },
+      scopeId: request.scopeId,
+      ...(request.signal ? { signal: request.signal } : {}),
+    })
   }
 }
 

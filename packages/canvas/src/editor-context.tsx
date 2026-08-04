@@ -31,6 +31,8 @@ export interface CanvasEditorController {
   canRelinkResource: boolean
   fileRenderers: CanvasFileRendererRegistry
   connectionNodeTypes: readonly CanvasConnectionNodeType[]
+  /** Node kinds whose create-plus-edge operation is one admitted atomic Canvas intent. */
+  quickConnectionNodeTypes: readonly CanvasConnectionNodeType[]
   visibleSelectionActions: readonly CanvasSelectionAction[]
   visibleSelectionDragSource: CanvasSelectionDragSource | null
   selectionDragArmed: boolean

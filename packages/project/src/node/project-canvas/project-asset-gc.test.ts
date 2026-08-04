@@ -38,7 +38,7 @@ describe("ProjectAssetGc", () => {
 
     now += 1
     await setup.gc.scan("project_one")
-    expect(setup.loadAllStrict).toHaveBeenCalledTimes(4)
+    expect(setup.queryCurrentBlobDigests).toHaveBeenCalledTimes(4)
     expect(await blobExists(orphan)).toBe(false)
     expect((await readState()).entries).toEqual({})
   })
@@ -71,7 +71,7 @@ describe("ProjectAssetGc", () => {
 
     await setup.gc.scan("project_one")
 
-    expect(setup.loadAllStrict).toHaveBeenCalledTimes(1)
+    expect(setup.queryCurrentBlobDigests).toHaveBeenCalledTimes(1)
     expect(await blobExists(orphan)).toBe(true)
     expect((await readState()).entries[orphan]).toEqual({ unreferencedSince: iso(now) })
   })
@@ -95,7 +95,7 @@ describe("ProjectAssetGc", () => {
 
     expect(await blobExists(due)).toBe(true)
     expect(await quarantineExists(due)).toBe(false)
-    expect(setup.loadAllStrict).toHaveBeenCalledTimes(1)
+    expect(setup.queryCurrentBlobDigests).toHaveBeenCalledTimes(1)
   })
 
   test("clears a due mark without deleting when the second scan observes a new reference", async () => {
@@ -106,7 +106,7 @@ describe("ProjectAssetGc", () => {
 
     await setup.gc.scan("project_one")
 
-    expect(setup.loadAllStrict).toHaveBeenCalledTimes(2)
+    expect(setup.queryCurrentBlobDigests).toHaveBeenCalledTimes(2)
     expect(await blobExists(digest)).toBe(true)
     expect((await readState()).entries).toEqual({})
   })
@@ -236,7 +236,7 @@ describe("ProjectAssetGc", () => {
     expect(await fs.readFile(quarantinePath(mismatchedDigest), "utf8")).toBe("wrong quarantine bytes")
   })
 
-  test("fails closed on digest mismatch, canonical symlinks, oversized blobs, and unreadable Canvas scans", async () => {
+  test("fails closed on invalid blobs and unavailable ProjectIndex references", async () => {
     const mismatched = "e".repeat(64)
     await fs.writeFile(blobPath(mismatched), "wrong bytes")
     await expect(harness().gc.scan("project_one")).rejects.toThrow(/digest mismatch/i)
@@ -253,14 +253,21 @@ describe("ProjectAssetGc", () => {
     await expect(harness([], 4).gc.scan("project_one")).rejects.toThrow(/maximum size/i)
     await fs.rm(blobPath(oversized))
 
-    const scanError = new Error("Canvas document could not be read")
-    await expect(harness([scanError]).gc.scan("project_one")).rejects.toThrow(scanError.message)
+    const queryError = new Error("ProjectIndex current blob references are unavailable")
+    await expect(harness([queryError]).gc.scan("project_one")).rejects.toThrow(queryError.message)
     expect(
       await fs.access(gcStatePath()).then(
         () => true,
         () => false,
       ),
     ).toBe(false)
+  })
+
+  test("rejects a malformed ProjectIndex current blob reference before publishing GC state", async () => {
+    await writeBlob("must-not-be-marked")
+
+    await expect(harness([new Set(["not-a-digest"])]).gc.scan("project_one")).rejects.toThrow("invalid digest")
+    await expect(fs.access(gcStatePath())).rejects.toThrow()
   })
 
   test("ignores unknown blob names, prunes missing records, and never enumerates Project-public directories", async () => {
@@ -333,19 +340,11 @@ function harness(
   maximumBytes = 1024 * 1024,
 ) {
   let scanIndex = 0
-  const loadAllStrict = mock(async () => {
+  const queryCurrentBlobDigests = mock(async () => {
     const result = scans[scanIndex++] ?? new Set<string>()
     if (result instanceof Error) throw result
     return typeof result === "function" ? result() : result
   })
-  const catalogs = {
-    runCurrentCatalogMaintenance: async <T>(
-      _input: { projectId: string },
-      operation: (catalog: {
-        canvases: Array<{ createdAt: number; id: string; name: string; updatedAt: number }>
-      }) => Promise<T>,
-    ) => operation({ canvases: [{ createdAt: 1, id: "canvas-main", name: "Main", updatedAt: 1 }] }),
-  }
   const roots = {
     async resolveProjectRoot() {
       return projectRoot
@@ -355,12 +354,11 @@ function harness(
   return {
     gc: new ProjectAssetGc({
       assets,
-      catalogs,
-      documents: { loadAllStrict },
+      references: { queryCurrentBlobDigests: queryCurrentBlobDigests as never },
       now: () => now,
       projects: roots,
     }),
-    loadAllStrict,
+    queryCurrentBlobDigests,
   }
 }
 

@@ -50,7 +50,8 @@ class FakeGenerationService implements GenerationCanvasAgentPort {
     this.calls.push({ actor, request, signal })
     return {
       createdNodeIds: ["generated-1"],
-      revision: request.expectedRevision + 1,
+      operationReceipt: null,
+      projection: { id: request.ref.canvasId, metadata: { title: "Main" }, nodes: [], edges: [] },
       toolId: request.toolId ?? "image-tools/generate.image",
       warnings: ["view refresh was skipped"],
     }
@@ -62,7 +63,6 @@ function validInput(overrides: Record<string, unknown> = {}) {
     anchor: { x: 320, y: 180 },
     canvasId: "canvas-main",
     commandId: "generate-1",
-    expectedRevision: 4,
     output: "image",
     prompt: "Create a quiet landscape",
     promptContextNodeIds: [],
@@ -168,7 +168,6 @@ describe("generation Agent tool", () => {
       "anchor",
       "canvasId",
       "commandId",
-      "expectedRevision",
       "prompt",
       "promptContextNodeIds",
       "references",
@@ -187,7 +186,7 @@ describe("generation Agent tool", () => {
     ).resolves.toEqual({
       changed: true,
       createdNodeIds: ["generated-1"],
-      revision: 5,
+      operationReceipt: null,
       toolId: "image-tools/generate.image",
       warnings: ["view refresh was skipped"],
     })
@@ -198,7 +197,6 @@ describe("generation Agent tool", () => {
         request: {
           anchor: { x: 320, y: 180 },
           expectedOutputCount: 1,
-          expectedRevision: 4,
           operationId: "generate-1",
           output: "image",
           prompt: "Create a quiet landscape",
@@ -354,11 +352,10 @@ describe("generation Agent tool", () => {
     }
   })
 
-  test("strictly validates ids, revisions, prompts, references, and capability selection", async () => {
+  test("strictly validates ids, prompts, references, and capability selection", async () => {
     const invalidInputs: Array<[Record<string, unknown>, string]> = [
       [validInput({ canvasId: " canvas-main" }), "canvasId"],
       [validInput({ commandId: "" }), "commandId"],
-      [validInput({ expectedRevision: 1.5 }), "expectedRevision"],
       [validInput({ prompt: "   " }), "prompt"],
       [validInput({ anchor: { x: Number.POSITIVE_INFINITY, y: 0 } }), "anchor.x"],
       [validInput({ anchor: { z: 1, x: 0, y: 0 } }), "unsupported field"],

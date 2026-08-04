@@ -1,3 +1,4 @@
+import { canonicalize as canonicalizeConvaxUri, parse as parseConvaxUri } from "@convax/uri"
 import {
   requireWebPluginId,
   requireWebPluginRelativePath,
@@ -70,32 +71,22 @@ export function webPluginAssetUrl(
 ) {
   const identity = webPluginAssetRuntimeIdentity(plugin)
   const relativePath = requireWebPluginRelativePath(relativePathInput, "Plugin asset path")
-  const url = new URL(
-    `${webPluginAssetScheme}://r${identity.activeRevision}` +
-      `.a${identity.activeSetDigest.slice(0, 32)}.a${identity.activeSetDigest.slice(32)}` +
-      `.s${identity.snapshotDigest.slice(0, 32)}.s${identity.snapshotDigest.slice(32)}/`,
-  )
-  url.pathname = [
-    identity.pluginId,
-    encodeURIComponent(identity.pluginVersion),
-    ...relativePath.split("/").map(encodeURIComponent),
-  ].join("/")
-  return url.href
+  const authority =
+    `r${identity.activeRevision}` +
+    `.a${identity.activeSetDigest.slice(0, 32)}.a${identity.activeSetDigest.slice(32)}` +
+    `.s${identity.snapshotDigest.slice(0, 32)}.s${identity.snapshotDigest.slice(32)}`
+  const encodedPath = [identity.pluginId, identity.pluginVersion, ...relativePath.split("/")]
+    .map((segment) => encodeURIComponent(segment))
+    .join("/")
+  return canonicalizeConvaxUri(`${webPluginAssetScheme}://${authority}/${encodedPath}`)
 }
 
 export function parseWebPluginAssetUrl(value: string): ParsedWebPluginAssetUrl {
-  const url = new URL(value)
-  if (
-    url.protocol !== `${webPluginAssetScheme}:` ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash
-  ) {
+  const uri = parseConvaxUri(value)
+  if (uri.scheme !== webPluginAssetScheme || uri.query || uri.fragment) {
     throw new Error("Plugin asset URL is not supported")
   }
-  const host = url.hostname.split(".")
+  const host = uri.authority.split(".")
   if (
     host.length !== 5 ||
     !/^r[1-9]\d*$/.test(host[0] ?? "") ||
@@ -106,38 +97,20 @@ export function parseWebPluginAssetUrl(value: string): ParsedWebPluginAssetUrl {
   ) {
     throw new Error("Plugin asset URL has no exact runtime origin")
   }
-  const segments = url.pathname.slice(1).split("/")
-  if (segments.length < 3) {
+  const segments = uri.pathSegments
+  if (segments.length < 3 || segments.some((segment) => segment.includes("/"))) {
     throw new Error("Plugin asset URL has no exact runtime identity")
   }
   const pluginId = requireWebPluginId(segments[0])
-  let pluginVersion: string
-  let relativePath: string
-  try {
-    pluginVersion = requireVersion(decodeURIComponent(segments[1]!))
-    relativePath = requireWebPluginRelativePath(
-      segments
-        .slice(2)
-        .map((segment) => decodeURIComponent(segment))
-        .join("/"),
-      "Plugin asset path",
-    )
-  } catch {
-    throw new Error("Plugin asset URL is malformed")
-  }
+  const pluginVersion = requireVersion(segments[1]!)
+  const relativePath = requireWebPluginRelativePath(segments.slice(2).join("/"), "Plugin asset path")
   return Object.freeze({
     identity: Object.freeze({
       activeRevision: requireRevision(host[0]!.slice(1)),
-      activeSetDigest: requireDigest(
-        `${host[1]!.slice(1)}${host[2]!.slice(1)}`,
-        "Plugin asset ActiveSet digest",
-      ),
+      activeSetDigest: requireDigest(`${host[1]!.slice(1)}${host[2]!.slice(1)}`, "Plugin asset ActiveSet digest"),
       pluginId,
       pluginVersion,
-      snapshotDigest: requireDigest(
-        `${host[3]!.slice(1)}${host[4]!.slice(1)}`,
-        "Plugin asset snapshot digest",
-      ),
+      snapshotDigest: requireDigest(`${host[3]!.slice(1)}${host[4]!.slice(1)}`, "Plugin asset snapshot digest"),
     }),
     relativePath,
   })

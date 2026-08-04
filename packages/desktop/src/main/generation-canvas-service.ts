@@ -6,9 +6,6 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 import {
-  CanvasCommandIdConflictError,
-  CanvasRevisionConflictError,
-  CanvasStorageConflictError,
   createCanvasGenerationTargetGuard,
   type CanvasAddResourceSourcesRequest,
   type CanvasApplicationCommandResult,
@@ -23,6 +20,7 @@ import {
   type CanvasReplaceGeneratedResourceSourceRequest,
   type CanvasReplaceResourceSourceRequest,
   type CanvasStartNodeGenerationRunRequest,
+  type CanvasApplicationService,
 } from "@convax/canvas/application"
 import {
   getCanvasNodeGenerationRun,
@@ -37,7 +35,6 @@ import {
   type ProjectResourceReference,
 } from "@convax/project/canvas"
 import {
-  generationCanvasRevisionConflictCode,
   type GenerationCanvasRequest,
   type GenerationCanvasReconcileResult,
   type GenerationCanvasResult,
@@ -65,9 +62,7 @@ import {
 import type { GenerationInputSnapshotStore } from "./generation-input-snapshot-store"
 import { generationRecoveryResultDigest } from "./generation-recovery-result-digest"
 
-export interface GenerationCanvasDocumentPort {
-  load(ref: { canvasId: string; scopeId: string }): Promise<{ document: CanvasDocument | null }>
-}
+export type GenerationCanvasApplicationPort = Pick<CanvasApplicationService, "query">
 
 export interface GenerationCanvasProjectPort {
   readFileInfo(input: { path: string; projectId: string }): Promise<{
@@ -163,7 +158,7 @@ export interface GenerationToolExecutionPort {
 
 export interface GenerationCanvasServiceOptions {
   assets: GenerationCanvasManagedAssetPort
-  documents: GenerationCanvasDocumentPort
+  application: GenerationCanvasApplicationPort
   maxInputFileBytes?: number
   maxInputBytes?: number
   maxInlineOutputFileBytes?: number
@@ -257,7 +252,6 @@ const defaultMaxInlineOutputFileBytes = 64 * 1024 * 1024
 const defaultMaxOutputFileBytes = 2 * 1024 * 1024 * 1024
 const defaultMaxOutputFiles = 16
 const maxGenerationExecutions = 1_000
-const maxGenerationReconcileRetries = 2
 const maxReturnedOutputTextBytes = 64 * 1024
 const maxGenerationWarnings = 32
 const maxGenerationWarningLength = 2_000
@@ -345,10 +339,7 @@ function normalizedGenerationFailureDiagnostic(content: readonly McpToolContent[
 function safeGenerationLogMessage(value: string) {
   if (unsafeGenerationFailureDiagnosticCharacters.test(value)) return undefined
   const normalized = value.replace(/\s+/g, " ").trim()
-  if (
-    !normalized ||
-    unsafeGenerationFailureDiagnosticPatterns.some((pattern) => pattern.test(normalized))
-  ) {
+  if (!normalized || unsafeGenerationFailureDiagnosticPatterns.some((pattern) => pattern.test(normalized))) {
     return undefined
   }
   return normalized.length <= 1_000 ? normalized : `${normalized.slice(0, 999).trimEnd()}…`
@@ -405,10 +396,7 @@ function isGenerationServiceUnavailableFailure(error: unknown) {
   return false
 }
 
-function generationFailureMessage(
-  error: unknown,
-  tool: GenerationToolSummary,
-) {
+function generationFailureMessage(error: unknown, tool: GenerationToolSummary) {
   if (!isGenerationServiceUnavailableFailure(error)) return undefined
   const rawServiceName = tool.pluginName
   if (!rawServiceName || rawServiceName.length > 160 || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(rawServiceName)) {
@@ -833,9 +821,6 @@ function validateRequest(request: GenerationCanvasRequest) {
   ) {
     throw new Error(`Generation prompt or text context must contain between 1 and ${maxPromptLength} characters`)
   }
-  if (!Number.isSafeInteger(request.expectedRevision) || request.expectedRevision < 0) {
-    throw new Error("Generation expected revision must be a non-negative integer")
-  }
   if (
     request.expectedOutputCount !== undefined &&
     (!Number.isSafeInteger(request.expectedOutputCount) ||
@@ -1253,7 +1238,7 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
  */
 export class GenerationCanvasService {
   readonly #assets: GenerationCanvasManagedAssetPort
-  readonly #documents: GenerationCanvasDocumentPort
+  readonly #application: GenerationCanvasApplicationPort
   readonly #executions = new Map<string, GenerationExecution>()
   readonly #maxInputFileBytes: number
   readonly #maxInputBytes: number
@@ -1280,7 +1265,7 @@ export class GenerationCanvasService {
 
   constructor(options: GenerationCanvasServiceOptions) {
     this.#assets = options.assets
-    this.#documents = options.documents
+    this.#application = options.application
     this.#maxInputFileBytes = requireGenerationMaximum(
       options.maxInputFileBytes,
       defaultMaxInputFileBytes,
@@ -1410,52 +1395,39 @@ export class GenerationCanvasService {
     requireIdentifier(actor.id, "Generation actor id")
     requireIdentifier(actor.kind, "Generation actor kind")
     await this.#cleanupAcknowledgedOperations()
-    for (let attempt = 0; ; attempt += 1) {
-      const snapshot = await this.#documents.load(ref)
-      if (!snapshot.document) throw new Error(`Canvas document was not found: ${ref.canvasId}`)
-      const activeNodes = snapshot.document.nodes.filter((node) => {
-        const run = getCanvasNodeGenerationRun(node)
-        return run ? isCanvasNodeGenerationRunActive(run) : false
-      })
-      await this.#startStoredSupervisions(ref, actor, snapshot.document.nodes)
-      if (!activeNodes.length) {
-        return { failedNodeIds: [], revision: snapshot.document.revision }
-      }
-      const liveRuns = [...this.#executions.values()].flatMap((execution) => {
-        const target = execution.state.target
-        return !execution.state.settled && target?.scopeId === ref.scopeId && target.canvasId === ref.canvasId
+    const snapshot = await this.#application.query(ref)
+    const activeNodes = snapshot.projection.nodes.filter((node) => {
+      const run = getCanvasNodeGenerationRun(node)
+      return run ? isCanvasNodeGenerationRunActive(run) : false
+    })
+    await this.#startStoredSupervisions(ref, actor, snapshot.projection.nodes)
+    if (!activeNodes.length) {
+      return { failedNodeIds: [], operationReceipt: null, projection: structuredClone(snapshot.projection) }
+    }
+    const liveRuns = [...this.#executions.values()].flatMap((execution) => {
+      const target = execution.state.target
+      return !execution.state.settled && target?.scopeId === ref.scopeId && target.canvasId === ref.canvasId
+        ? [{ nodeId: target.nodeId, operationId: target.operationId }]
+        : []
+    })
+    liveRuns.push(
+      ...[...this.#supervisions.values()].flatMap(({ target }) =>
+        target.scopeId === ref.scopeId && target.canvasId === ref.canvasId
           ? [{ nodeId: target.nodeId, operationId: target.operationId }]
-          : []
-      })
-      liveRuns.push(
-        ...[...this.#supervisions.values()].flatMap(({ target }) =>
-          target.scopeId === ref.scopeId && target.canvasId === ref.canvasId
-            ? [{ nodeId: target.nodeId, operationId: target.operationId }]
-            : [],
-        ),
-      )
-      try {
-        const result = await this.#runs.interruptInactive({
-          actor,
-          canvasId: ref.canvasId,
-          commandId: `generation:reconcile:${randomUUID()}:attempt-${attempt}`,
-          conflictPolicy: "reject",
-          expectedRevision: snapshot.document.revision,
-          liveRuns,
-          scopeId: ref.scopeId,
-        })
-        return {
-          failedNodeIds: result.affectedNodeIds,
-          revision: result.document.revision,
-        }
-      } catch (error) {
-        if (
-          attempt >= maxGenerationReconcileRetries ||
-          !(error instanceof CanvasRevisionConflictError || error instanceof CanvasStorageConflictError)
-        ) {
-          throw error
-        }
-      }
+          : [],
+      ),
+    )
+    const result = await this.#runs.interruptInactive({
+      actor,
+      canvasId: ref.canvasId,
+      commandId: `generation:reconcile:${randomUUID()}`,
+      liveRuns,
+      scopeId: ref.scopeId,
+    })
+    return {
+      failedNodeIds: result.affectedNodeIds,
+      operationReceipt: structuredClone(result.operationReceipt),
+      projection: structuredClone(result.document),
     }
   }
 
@@ -1909,12 +1881,11 @@ export class GenerationCanvasService {
 
   async #persistRecoveredTask(ledger: GenerationOperationLedger, taskId: string, actor: CanvasCommandActor) {
     const document = (
-      await this.#documents.load({
+      await this.#application.query({
         canvasId: ledger.canvasId,
         scopeId: ledger.projectId,
       })
-    ).document
-    if (!document) throw new Error("Generation recovery Canvas was removed")
+    ).projection
     const node = document.nodes.find((candidate) => candidate.id === ledger.nodeId)
     if (getCanvasNodeGenerationRun(node!)?.operationId !== ledger.operationId) {
       throw new Error("Generation recovery Canvas owner changed")
@@ -1923,8 +1894,6 @@ export class GenerationCanvasService {
       actor,
       canvasId: ledger.canvasId,
       commandId: `generation:${ledger.operationId}:recover-task:${taskId}`,
-      conflictPolicy: "retry",
-      expectedRevision: document.revision,
       nodeId: ledger.nodeId,
       operationId: ledger.operationId,
       scopeId: ledger.projectId,
@@ -1932,23 +1901,15 @@ export class GenerationCanvasService {
     })
   }
 
-  async #persistRecoveredTerminal(
-    ledger: GenerationOperationLedger,
-    actor: CanvasCommandActor,
-  ) {
-    const document = (
-      await this.#documents.load({
-        canvasId: ledger.canvasId,
-        scopeId: ledger.projectId,
-      })
-    ).document
-    if (!document) throw new Error("Generation recovery Canvas was removed")
+  async #persistRecoveredTerminal(ledger: GenerationOperationLedger, actor: CanvasCommandActor) {
+    await this.#application.query({
+      canvasId: ledger.canvasId,
+      scopeId: ledger.projectId,
+    })
     await this.#runs.finish({
       actor,
       canvasId: ledger.canvasId,
       commandId: `generation:${ledger.operationId}:recover-terminal:failed`,
-      conflictPolicy: "retry",
-      expectedRevision: document.revision,
       nodeId: ledger.nodeId,
       operationId: ledger.operationId,
       scopeId: ledger.projectId,
@@ -1989,9 +1950,8 @@ export class GenerationCanvasService {
           role: reference.role,
         }
       })
-      const currentDocument = (await this.#documents.load({ canvasId: ledger.canvasId, scopeId: ledger.projectId }))
-        .document
-      if (!currentDocument) throw new Error("Generation recovery Canvas was removed")
+      const currentDocument = (await this.#application.query({ canvasId: ledger.canvasId, scopeId: ledger.projectId }))
+        .projection
       await this.#assertStoredRecoveryCanvasInputs(ledger, stored, currentDocument)
       await prepared.call(
         {
@@ -1999,12 +1959,11 @@ export class GenerationCanvasService {
           operation_id: externalGenerationOperationId(
             {
               anchor: { x: 0, y: 0 },
-              expectedRevision: 0,
               operationId: ledger.operationId,
               prompt: stored.prompt,
               ref: { canvasId: ledger.canvasId, scopeId: ledger.projectId },
               references: stored.canvasRequest.references,
-              resultMode: { nodeId: ledger.nodeId, type: "replace-node" },
+              resultMode: { expectedTarget: stored.targetGuard, nodeId: ledger.nodeId, type: "replace-node" },
               toolId: ledger.toolId,
             },
             actor,
@@ -2019,9 +1978,8 @@ export class GenerationCanvasService {
         async (event) => {
           if (event.type === "external-started") {
             const latestDocument = (
-              await this.#documents.load({ canvasId: ledger.canvasId, scopeId: ledger.projectId })
-            ).document
-            if (!latestDocument) throw new Error("Generation recovery Canvas was removed")
+              await this.#application.query({ canvasId: ledger.canvasId, scopeId: ledger.projectId })
+            ).projection
             await this.#assertStoredRecoveryCanvasInputs(ledger, stored, latestDocument)
             return
           }
@@ -2047,12 +2005,10 @@ export class GenerationCanvasService {
   #storedRecoveryCanvasRequest(
     ledger: GenerationOperationLedger,
     stored: StoredGenerationRecoveryCall,
-    expectedRevision: number,
   ): GenerationCanvasRequest {
     return {
       anchor: { x: 0, y: 0 },
       expectedOutputCount: stored.canvasRequest.expectedOutputCount,
-      expectedRevision,
       operationId: ledger.operationId,
       output: stored.canvasRequest.output,
       prompt: stored.canvasRequest.prompt ?? stored.prompt,
@@ -2063,7 +2019,7 @@ export class GenerationCanvasService {
       referenceConstraint: stored.canvasRequest.referenceConstraint,
       references: [...stored.canvasRequest.references],
       relationAnchorNodeIds: [...stored.canvasRequest.relationAnchorNodeIds],
-      resultMode: { nodeId: ledger.nodeId, type: "replace-node" },
+      resultMode: { expectedTarget: stored.targetGuard, nodeId: ledger.nodeId, type: "replace-node" },
       toolId: ledger.toolId,
       toolInput: stored.input,
     }
@@ -2092,7 +2048,7 @@ export class GenerationCanvasService {
     ) {
       throw new Error("Generation recovery replacement target changed")
     }
-    const request = this.#storedRecoveryCanvasRequest(ledger, stored, document.revision)
+    const request = this.#storedRecoveryCanvasRequest(ledger, stored)
     const promptContexts = await this.#stagePromptContexts(document, request)
     if (
       composeGenerationPrompt(request, promptContexts) !== stored.prompt ||
@@ -2117,9 +2073,8 @@ export class GenerationCanvasService {
     },
   ) {
     const ref = { canvasId: ledger.canvasId, scopeId: ledger.projectId }
-    const snapshot = await this.#documents.load(ref)
-    if (!snapshot.document) throw new Error("Generation recovery Canvas was removed")
-    await this.#assertStoredRecoveryCanvasInputs(ledger, stored, snapshot.document)
+    const snapshot = await this.#application.query(ref)
+    await this.#assertStoredRecoveryCanvasInputs(ledger, stored, snapshot.projection)
     const temporaryDirectory = replayDirectories
       ? undefined
       : await fs.mkdtemp(path.join(this.#temporaryRoot, "convax-generation-result-"))
@@ -2170,22 +2125,19 @@ export class GenerationCanvasService {
           ).path,
         )
       }
-      const latest = await this.#documents.load(ref)
-      if (!latest.document) throw new Error("Generation recovery Canvas was removed")
-      await this.#assertStoredRecoveryCanvasInputs(ledger, stored, latest.document)
-      const result = await this.#resources.replaceGeneratedResource({
+      const latest = await this.#application.query(ref)
+      await this.#assertStoredRecoveryCanvasInputs(ledger, stored, latest.projection)
+      await this.#resources.replaceGeneratedResource({
         actor,
         canvasId: ledger.canvasId,
         commandId: `generation:${ledger.operationId}`,
-        conflictPolicy: "retry",
-        expectedRevision: latest.document.revision,
         expectedTarget: stored.targetGuard,
         operationId: ledger.operationId,
         scopeId: ledger.projectId,
         source: { kind: "host-file", path: publishedPath, sourceId: randomUUID() },
         targetNodeId: ledger.nodeId,
       })
-      this.#refreshRendererProjection(ref, result.document.revision, [])
+      this.#refreshRendererProjection(ref, [])
     } finally {
       if (temporaryDirectory) {
         await fs.rm(temporaryDirectory, { force: true, recursive: true }).catch(() => undefined)
@@ -2206,7 +2158,6 @@ export class GenerationCanvasService {
     const fingerprint = stableJson({
       anchor: request.anchor,
       expectedOutputCount: request.expectedOutputCount,
-      expectedRevision: request.expectedRevision,
       output: request.output,
       parentId: request.parentId,
       prompt: request.prompt,
@@ -2222,7 +2173,7 @@ export class GenerationCanvasService {
     const existing = this.#executions.get(key)
     if (existing) {
       if (existing.fingerprint !== fingerprint) {
-        throw new CanvasCommandIdConflictError(request.operationId)
+        throw new Error("Generation operation id was reused with a different request")
       }
       return waitForCaller(existing.result, signal)
     }
@@ -2296,15 +2247,9 @@ export class GenerationCanvasService {
   ): Promise<GenerationCanvasResult> {
     assertNotAborted(signal)
     const tool = selectTool(await this.#tools.listTools(request.output ? { output: request.output } : {}), request)
-    const snapshot = await this.#documents.load(request.ref)
-    if (!snapshot.document) throw new Error(`Canvas document was not found: ${request.ref.canvasId}`)
-    if (snapshot.document.revision !== request.expectedRevision) {
-      throw new Error(
-        `${generationCanvasRevisionConflictCode}: Generation expected Canvas revision ${request.expectedRevision}, received ${snapshot.document.revision}`,
-      )
-    }
+    const snapshot = await this.#application.query(request.ref)
     let workingRequest = request
-    let workingDocument = snapshot.document
+    let workingDocument = snapshot.projection
     let resultMode = request.resultMode ?? { type: "add" as const }
     assertToolResultMode(tool, resultMode)
     assertToolInputBinding(tool, request.referenceConstraint)
@@ -2324,24 +2269,25 @@ export class GenerationCanvasService {
       if (replacementTarget.type !== "file" || replacementTarget.data.kind === "group") {
         throw new Error(`Generation replacement requires a Canvas file node: ${resultMode.nodeId}`)
       }
+      if (stableJson(createCanvasGenerationTargetGuard(replacementTarget)) !== stableJson(resultMode.expectedTarget)) {
+        throw new Error("Generation replacement target changed before the operation started")
+      }
     }
-    let replacementGuard: GenerationReplacementGuard | undefined = replacementTarget
-      ? { kind: "generation", value: createCanvasGenerationTargetGuard(replacementTarget) }
-      : undefined
-    let requiresStableRevision =
+    let replacementGuard: GenerationReplacementGuard | undefined =
+      resultMode.type === "replace-node" ? { kind: "generation", value: resultMode.expectedTarget } : undefined
+    let requiresStableReferences =
       request.referenceConstraint !== undefined ||
       (request.promptContextNodeIds?.length ?? 0) > 0 ||
       request.references.length > 0 ||
       (request.relationAnchorNodeIds?.length ?? 0) > 0
     const promptContexts = await this.#stagePromptContexts(workingDocument, workingRequest, signal)
     let effectivePrompt = composeGenerationPrompt(workingRequest, promptContexts)
-    let referenceSnapshot = requiresStableRevision
+    let referenceSnapshot = requiresStableReferences
       ? generationReferenceSnapshot(workingDocument, workingRequest, promptContexts)
       : undefined
     assertNotAborted(signal)
     let pendingTarget: PendingGenerationTarget | undefined
     let temporaryDirectory: string | undefined
-    let runRevision = request.expectedRevision
     let runStarted = false
     let recordedTaskId: string | undefined
     let operationLedger: GenerationOperationLedger | undefined
@@ -2358,8 +2304,6 @@ export class GenerationCanvasService {
           anchor: request.anchor,
           canvasId: request.ref.canvasId,
           commandId: `generation-pending:${request.operationId}`,
-          conflictPolicy: "reject",
-          expectedRevision: request.expectedRevision,
           kind: tool.output,
           operationId: request.operationId,
           ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
@@ -2385,7 +2329,6 @@ export class GenerationCanvasService {
           throw new Error("Pending generation did not create the expected Canvas file node and run")
         }
         pendingTarget = { nodeId }
-        runRevision = pendingResult.document.revision
         runStarted = true
         onRunStarted({
           canvasId: request.ref.canvasId,
@@ -2393,25 +2336,22 @@ export class GenerationCanvasService {
           operationId: request.operationId,
           scopeId: request.ref.scopeId,
         })
-        workingRequest = {
-          ...request,
-          expectedRevision: runRevision,
-          resultMode: { nodeId, type: "replace-node" },
-        }
+        const expectedTarget = createCanvasGenerationTargetGuard(pendingNode)
+        workingRequest = { ...request, resultMode: { expectedTarget, nodeId, type: "replace-node" } }
         workingDocument = pendingResult.document
-        resultMode = { nodeId, type: "replace-node" }
-        replacementGuard = { kind: "generation", value: createCanvasGenerationTargetGuard(pendingNode) }
-        requiresStableRevision =
+        resultMode = { expectedTarget, nodeId, type: "replace-node" }
+        replacementGuard = { kind: "generation", value: expectedTarget }
+        requiresStableReferences =
           workingRequest.referenceConstraint !== undefined ||
           (workingRequest.promptContextNodeIds?.length ?? 0) > 0 ||
           workingRequest.references.length > 0 ||
           (workingRequest.relationAnchorNodeIds?.length ?? 0) > 0
         effectivePrompt = composeGenerationPrompt(workingRequest, promptContexts)
-        referenceSnapshot = requiresStableRevision
+        referenceSnapshot = requiresStableReferences
           ? generationReferenceSnapshot(workingDocument, workingRequest, promptContexts)
           : undefined
 
-        this.#refreshRendererProjection(request.ref, pendingResult.document.revision, [nodeId])
+        this.#refreshRendererProjection(request.ref, [nodeId])
       } else if (replacementTarget && resultMode.type === "replace-node") {
         onRunStarted({
           canvasId: request.ref.canvasId,
@@ -2423,8 +2363,6 @@ export class GenerationCanvasService {
           actor,
           canvasId: request.ref.canvasId,
           commandId: `generation:${request.operationId}:submitting`,
-          conflictPolicy: "reject",
-          expectedRevision: request.expectedRevision,
           nodeId: resultMode.nodeId,
           operationId: request.operationId,
           prompt: workingRequest.prompt.trim(),
@@ -2433,9 +2371,7 @@ export class GenerationCanvasService {
           toolId: tool.id,
         })
         retainOperation()
-        runRevision = started.document.revision
         runStarted = true
-        workingRequest = { ...workingRequest, expectedRevision: runRevision }
         workingDocument = started.document
       }
 
@@ -2463,7 +2399,7 @@ export class GenerationCanvasService {
         referenceSnapshot,
         promptContexts,
         references,
-        requiresStableRevision,
+        requiresStableReferences,
       )
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
       assertNotAborted(signal)
@@ -2551,7 +2487,7 @@ export class GenerationCanvasService {
           referenceSnapshot,
           promptContexts,
           references,
-          requiresStableRevision,
+          requiresStableReferences,
         )
         if (replacementGuard) {
           await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
@@ -2577,23 +2513,19 @@ export class GenerationCanvasService {
             taskId: event.taskId,
           })
         }
-        const transitioned = await this.#runs.markRunning({
+        await this.#runs.markRunning({
           actor,
           canvasId: workingRequest.ref.canvasId,
           commandId:
             event.type === "external-started"
               ? `generation:${workingRequest.operationId}:running`
               : `generation:${workingRequest.operationId}:task:${event.taskId}`,
-          conflictPolicy: "retry",
-          expectedRevision: runRevision,
           nodeId: resultMode.nodeId,
           operationId: workingRequest.operationId,
           scopeId: workingRequest.ref.scopeId,
           signal,
           ...(event.type === "submitted" ? { taskId: event.taskId } : {}),
         })
-        runRevision = transitioned.document.revision
-        workingRequest = { ...workingRequest, expectedRevision: runRevision }
         if (event.type === "submitted") recordedTaskId = event.taskId
         if (event.type === "external-started") {
           // markRunning may reconcile a newer Canvas revision. Verify the exact
@@ -2698,7 +2630,7 @@ export class GenerationCanvasService {
         referenceSnapshot,
         promptContexts,
         references,
-        requiresStableRevision,
+        requiresStableReferences,
       )
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
       if (toolResult.isError) {
@@ -2727,7 +2659,7 @@ export class GenerationCanvasService {
         referenceSnapshot,
         promptContexts,
         references,
-        requiresStableRevision,
+        requiresStableReferences,
       )
       if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
       assertNotAborted(signal)
@@ -2740,13 +2672,13 @@ export class GenerationCanvasService {
         if (Buffer.byteLength(outputText, "utf8") > maxReturnedOutputTextBytes) {
           throw new Error("Returned Plugin operation text exceeds the Agent result size limit")
         }
-        const currentDocument = stableDocument ?? (await this.#documents.load(workingRequest.ref)).document
-        if (!currentDocument) throw new Error(`Canvas document was not found: ${workingRequest.ref.canvasId}`)
+        const currentDocument = stableDocument ?? (await this.#application.query(workingRequest.ref)).projection
         assertNotAborted(signal)
         return {
           createdNodeIds: [],
+          operationReceipt: null,
           outputText,
-          revision: currentDocument.revision,
+          projection: structuredClone(currentDocument),
           toolId: tool.id,
           warnings: admitted.warnings,
         }
@@ -2784,7 +2716,7 @@ export class GenerationCanvasService {
           referenceSnapshot,
           promptContexts,
           references,
-          requiresStableRevision,
+          requiresStableReferences,
         )
         if (replacementGuard) await this.#assertStableReplacementTarget(workingRequest, replacementGuard)
         const sources: CanvasAddResourceSourcesRequest["sources"] = publishedPaths.map((publishedPath) => ({
@@ -2803,8 +2735,6 @@ export class GenerationCanvasService {
                 actor,
                 canvasId: workingRequest.ref.canvasId,
                 commandId: `generation:${workingRequest.operationId}`,
-                conflictPolicy: "retry",
-                expectedRevision: runRevision,
                 expectedTarget: replacementGuard!.value,
                 operationId: workingRequest.operationId,
                 scopeId: workingRequest.ref.scopeId,
@@ -2817,9 +2747,6 @@ export class GenerationCanvasService {
                 anchor: workingRequest.anchor,
                 canvasId: workingRequest.ref.canvasId,
                 commandId: `generation:${workingRequest.operationId}`,
-                conflictPolicy: "retry",
-                expectedRevision: workingRequest.expectedRevision,
-                ...(workingRequest.parentId === undefined ? {} : { parentId: workingRequest.parentId }),
                 relation: generationResultRelation(workingRequest),
                 scopeId: workingRequest.ref.scopeId,
                 ...(signal ? { signal } : {}),
@@ -2850,10 +2777,11 @@ export class GenerationCanvasService {
           this.#logGenerationFailure("committed receipt finalization", error)
         }
       }
-      this.#refreshRendererProjection(request.ref, result.document.revision, result.createdNodeIds)
+      this.#refreshRendererProjection(request.ref, result.createdNodeIds)
       return {
         createdNodeIds: pendingTarget ? [pendingTarget.nodeId] : result.createdNodeIds,
-        revision: result.document.revision,
+        operationReceipt: structuredClone(result.operationReceipt),
+        projection: structuredClone(result.document),
         toolId: tool.id,
         warnings,
       }
@@ -2926,18 +2854,16 @@ export class GenerationCanvasService {
             terminalPhase = "indeterminate"
           }
           const failureMessage = generationFailureMessage(error, tool)
-          const terminal = await this.#runs.finish({
+          await this.#runs.finish({
             actor,
             canvasId: request.ref.canvasId,
             commandId: `generation:${request.operationId}:terminal`,
-            conflictPolicy: "retry",
-            expectedRevision: runRevision,
             ...(failureMessage === undefined ? {} : { failureMessage }),
             nodeId: resultMode.nodeId,
             operationId: request.operationId,
             scopeId: request.ref.scopeId,
           })
-          this.#refreshRendererProjection(request.ref, terminal.document.revision, [])
+          this.#refreshRendererProjection(request.ref, [])
           if (
             operationLedger &&
             recovery &&
@@ -2979,7 +2905,7 @@ export class GenerationCanvasService {
     }
   }
 
-  #refreshRendererProjection(ref: GenerationCanvasRequest["ref"], revision: number, nodeIds: readonly string[]) {
+  #refreshRendererProjection(ref: GenerationCanvasRequest["ref"], nodeIds: readonly string[]) {
     void (async () => {
       const reloaded = await this.#renderer.reloadDocument(ref)
       if (!reloaded || nodeIds.length === 0) return
@@ -2991,7 +2917,6 @@ export class GenerationCanvasService {
           type: "nodes.reveal",
         },
         expectedDocumentId: ref.canvasId,
-        expectedRevision: revision,
         expectedScopeId: ref.scopeId,
         viewId: "desktop-main",
       })
@@ -3020,7 +2945,7 @@ export class GenerationCanvasService {
   async #assertStableReplacementTarget(request: GenerationCanvasRequest, expected: GenerationReplacementGuard) {
     let document: CanvasDocument | null
     try {
-      document = (await this.#documents.load(request.ref)).document
+      document = (await this.#application.query(request.ref)).projection
     } catch {
       document = null
     }
@@ -3047,8 +2972,8 @@ export class GenerationCanvasService {
     if (!required) return undefined
     let document: CanvasDocument | null
     try {
-      const snapshot = await this.#documents.load(request.ref)
-      document = snapshot.document
+      const snapshot = await this.#application.query(request.ref)
+      document = snapshot.projection
     } catch {
       // Collapse every stale document/edge/source shape to one application error.
       document = null

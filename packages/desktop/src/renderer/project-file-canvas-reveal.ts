@@ -23,7 +23,7 @@ export async function revealProjectFileOnCanvas(input: {
   const loaded = await input.documents.load(ref)
   if (!sameScope(input.currentScope(), input.scope) || !sameScope(input.editor(), input.scope)) return "stale"
 
-  const nodeIds = (loaded.document?.nodes ?? [])
+  const nodeIds = (loaded.projection?.nodes ?? [])
     .filter((node) => {
       const reference = getProjectResourceReference(node.data.metadata)
       return reference?.kind === "project-file" && reference.path === input.path
@@ -31,15 +31,7 @@ export async function revealProjectFileOnCanvas(input: {
     .map((node) => node.id)
   if (nodeIds.length === 0) return "not-found"
 
-  let view = activeView(input.views, input.scope)
-  if (!view) return "stale"
-  if (loaded.document && view.revision !== loaded.document.revision) {
-    const mounted = input.editor()
-    if (!mounted || !sameScope(mounted, input.scope)) return "stale"
-    await mounted.handle.reloadAuthoritative()
-    if (!sameScope(input.currentScope(), input.scope) || !sameScope(input.editor(), input.scope)) return "stale"
-    view = activeView(input.views, input.scope)
-  }
+  const view = activeView(input.views, input.scope)
   if (!view) return "stale"
 
   await input.views.execute({
@@ -51,7 +43,6 @@ export async function revealProjectFileOnCanvas(input: {
       type: "nodes.reveal",
     },
     expectedDocumentId: input.scope.canvasId,
-    expectedRevision: view.revision,
     expectedScopeId: input.scope.projectId,
     viewId: view.viewId,
   })

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { parseStoredCanvasDocument, serializeCanvasDocument } from "./application/persistence"
 import { duplicateCanvasSelection } from "./commands"
 import { createCanvasDocument, createGroupNode, createTextNode } from "./document"
 import {
@@ -10,7 +9,6 @@ import {
   getCanvasGroupColorValue,
   setCanvasGroupAppearance,
 } from "./group-appearance"
-import { canvasHistoryReducer, createCanvasHistory } from "./history"
 
 function groupNode(id = "group") {
   return createGroupNode({
@@ -134,23 +132,17 @@ describe("Canvas group appearance", () => {
     })
   })
 
-  test("is undoable, duplicated, and portable", () => {
+  test("is duplicated and remains structurally cloneable without a renderer-owned history store", () => {
     const group = groupNode()
     const document = createCanvasDocument({ id: "canvas", nodes: [group] })
-    const history = canvasHistoryReducer(createCanvasHistory(document), {
-      type: "commit-update",
-      update: (current) =>
-        setCanvasGroupAppearance(current, group.id, {
-          color: "pink",
-          emoji: "heart",
-        }),
+    const updated = setCanvasGroupAppearance(document, group.id, {
+      color: "pink",
+      emoji: "heart",
     })
-    const duplicated = duplicateCanvasSelection(history.document, [group.id])
+    const duplicated = duplicateCanvasSelection(updated, [group.id])
     const clone = duplicated.document.nodes.find((node) => node.id !== group.id)
-    const restored = parseStoredCanvasDocument(serializeCanvasDocument(duplicated.document), duplicated.document.id)
+    const restored = structuredClone(duplicated.document)
 
-    expect(history.document.revision).toBe(1)
-    expect(history.past).toEqual([document])
     expect(clone && getCanvasGroupAppearance(clone)).toEqual({
       color: "pink",
       emoji: "heart",

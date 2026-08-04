@@ -82,7 +82,6 @@ afterEach(() => {
 })
 
 const selection: CanvasExternalMediaDragRequest = {
-  expectedRevision: 7,
   nodeIds: ["image-1", "audio-1"],
   ref: { canvasId: "canvas-1", scopeId: "project-1" },
 }
@@ -101,7 +100,6 @@ const ticket = {
 function active() {
   return {
     canvasId: selection.ref.canvasId,
-    revision: selection.expectedRevision,
     scopeId: selection.ref.scopeId,
     selectedEdgeIds: [],
     selectedNodeIds: [...selection.nodeIds],
@@ -227,7 +225,6 @@ describe("Canvas external media drag IPC", () => {
         type: "notification.show",
       },
       expectedDocumentId: snapshot.documentId,
-      expectedRevision: snapshot.revision,
       expectedScopeId: snapshot.scopeId,
       viewId: snapshot.viewId,
     })

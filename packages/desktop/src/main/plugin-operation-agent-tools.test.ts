@@ -11,7 +11,6 @@ import {
 const scope = { directory: "/project/a", scopeId: "project-a" }
 const activeCanvas: PluginOperationAgentActiveCanvas = {
   canvasId: "canvas-main",
-  revision: 7,
   scopeId: "project-a",
 }
 
@@ -85,15 +84,17 @@ class FakeGenerationService implements GenerationCanvasAgentPort {
     if (request.resultMode?.type === "return") {
       return {
         createdNodeIds: [],
+        operationReceipt: null,
         outputText: '{"assetIds":["asset-one"]}',
-        revision: request.expectedRevision,
+        projection: { id: request.ref.canvasId, metadata: { title: "Main" }, nodes: [], edges: [] },
         toolId: request.toolId ?? "missing",
         warnings: [],
       }
     }
     return {
       createdNodeIds: ["operation-result"],
-      revision: request.expectedRevision + 1,
+      operationReceipt: null,
+      projection: { id: request.ref.canvasId, metadata: { title: "Main" }, nodes: [], edges: [] },
       toolId: request.toolId ?? "missing",
       warnings: ["view refresh was skipped"],
     }
@@ -208,8 +209,8 @@ describe("Plugin operation Agent tools", () => {
     ).resolves.toEqual({
       changed: false,
       createdNodeIds: [],
+      operationReceipt: null,
       outputText: '{"assetIds":["asset-one"]}',
-      revision: 7,
       toolId: "media-operations/import.media",
       warnings: [],
     })
@@ -217,7 +218,6 @@ describe("Plugin operation Agent tools", () => {
     expect(service.calls[0]?.request).toMatchObject({
       anchor: { x: 0, y: 0 },
       expectedOutputCount: 1,
-      expectedRevision: 7,
       output: "text",
       referenceConstraint: {
         ownerNodeId: "plugin-card",
@@ -273,7 +273,7 @@ describe("Plugin operation Agent tools", () => {
     ).resolves.toEqual({
       changed: true,
       createdNodeIds: ["operation-result"],
-      revision: 8,
+      operationReceipt: null,
       toolId: "media-operations/transform.media",
       warnings: ["view refresh was skipped"],
     })
@@ -285,7 +285,6 @@ describe("Plugin operation Agent tools", () => {
     expect(call.request).toMatchObject({
       anchor: { x: 420, y: 240 },
       expectedOutputCount: 1,
-      expectedRevision: 7,
       output: "video",
       prompt: "Run installed Plugin operation media-operations/transform.media.",
       ref: { canvasId: "canvas-main", scopeId: "project-a" },
@@ -351,13 +350,6 @@ describe("Plugin operation Agent tools", () => {
         validInput(),
       ),
     ).rejects.toThrow("Open a Canvas")
-    await expect(
-      provider(service, { ...activeCanvas, revision: -1 }).callTool(
-        scope,
-        "plugin_media_operations_transform_media",
-        validInput(),
-      ),
-    ).rejects.toThrow("revision")
     expect(service.calls).toEqual([])
   })
 
@@ -466,7 +458,8 @@ describe("Plugin operation Agent tools", () => {
     const service = new FakeGenerationService([returnOperationTool()])
     service.generate = async (request) => ({
       createdNodeIds: ["unexpected-node"],
-      revision: request.expectedRevision + 1,
+      operationReceipt: null,
+      projection: { id: request.ref.canvasId, metadata: { title: "Main" }, nodes: [], edges: [] },
       toolId: request.toolId ?? "missing",
       warnings: [],
     })

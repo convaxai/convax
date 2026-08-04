@@ -3,7 +3,7 @@ import { constants as fsConstants, type Stats } from "node:fs"
 import fs from "node:fs/promises"
 import { performance } from "node:perf_hooks"
 import { Readable } from "node:stream"
-import type { CanvasDocumentClient } from "@convax/canvas/application"
+import type { CanvasApplicationService } from "@convax/canvas/application"
 import type { CanvasDocument, CanvasNode } from "@convax/canvas/core"
 import {
   getPluginApiDefinition,
@@ -15,6 +15,7 @@ import {
 } from "@convax/plugin-api"
 import { getProjectResourceReference, type ProjectResourceReference } from "@convax/project/canvas"
 import type { ProjectCanvasImageRead, ProjectCanvasImageReadPort } from "@convax/project/node"
+import { canonicalize as canonicalizeConvaxUri, parse as parseConvaxUri } from "@convax/uri"
 
 import type {
   PluginConnectedImageCloseInput,
@@ -62,7 +63,6 @@ interface ConnectedSessionBase {
   abortController: AbortController
   bearerToken: string
   canvasId: string
-  expectedRevision: number
   frameId: string
   idleExpiresAt: number
   manifestDigest: string
@@ -97,7 +97,7 @@ interface ConnectedImageSession extends ConnectedSessionBase {
 
 type ConnectedMediaSession = ConnectedImageSession | ConnectedStreamSession
 
-type ConnectedMediaDocumentStore = Pick<CanvasDocumentClient, "load">
+type ConnectedMediaApplicationPort = Pick<CanvasApplicationService, "query">
 
 interface ConnectedMediaMonotonicClock {
   now(): number
@@ -120,7 +120,7 @@ export class PluginConnectedMediaService {
     private readonly input: {
       changes: Pick<CanvasDocumentChangeBus, "subscribeAll">
       clock?: ConnectedMediaMonotonicClock
-      documents: ConnectedMediaDocumentStore
+      application: ConnectedMediaApplicationPort
       images: PluginConnectedImageInspector
       media: ManagedCanvasMediaResolutionPort
       plugins: InstalledPluginCapabilityIdentitySource
@@ -161,7 +161,7 @@ export class PluginConnectedMediaService {
   ): Promise<PluginConnectedImageOpenResult> {
     throwIfAborted(signal)
     const principal = await this.requirePrincipal(request, "canvas.inputs.image.open", signal)
-    const { document, reference } = await this.requireLiveImageBinding(request, signal)
+    const { reference } = await this.requireLiveImageBinding(request, signal)
     this.cleanupExpired()
     this.requireImageSessionCapacity(request, senderId)
     const image = await this.readImageResource(request.projectId, reference, signal)
@@ -183,10 +183,7 @@ export class PluginConnectedMediaService {
       throw new PluginHostApiError("stale-context", "Plugin changed while its connected image was opening")
     }
     const currentBinding = await this.requireLiveImageBinding(request, signal)
-    if (
-      currentBinding.document.revision !== document.revision ||
-      !sameProjectResourceReference(currentBinding.reference, reference)
-    ) {
+    if (!sameProjectResourceReference(currentBinding.reference, reference)) {
       throw new PluginHostApiError("stale-context", "Canvas changed while its connected image was opening")
     }
     const finalImage = await this.readImageResource(request.projectId, reference, signal)
@@ -195,10 +192,7 @@ export class PluginConnectedMediaService {
     }
     await this.requirePrincipal(request, "canvas.inputs.image.open", signal, principal)
     const finalBinding = await this.requireLiveImageBinding(request, signal)
-    if (
-      finalBinding.document.revision !== document.revision ||
-      !sameProjectResourceReference(finalBinding.reference, reference)
-    ) {
+    if (!sameProjectResourceReference(finalBinding.reference, reference)) {
       throw new PluginHostApiError("stale-context", "Canvas changed while its connected image was finalized")
     }
     throwIfAborted(signal)
@@ -217,7 +211,6 @@ export class PluginConnectedMediaService {
       bytes: Uint8Array.from(finalImage.bytes),
       canvasId: request.canvasId,
       contentRevision: finalImage.contentDigest,
-      expectedRevision: document.revision,
       frameId: request.frameId,
       height: decodedDimensions.height,
       idleExpiresAt: now + idleLifetimeMs,
@@ -264,12 +257,11 @@ export class PluginConnectedMediaService {
     this.requireStreamSessionCapacity(request, senderId)
 
     const principal = await this.requirePrincipal(request, "canvas.inputs.open", signal)
-    const { document, source } = await this.requireLiveBinding(request, signal)
+    const { source } = await this.requireLiveBinding(request, signal)
     const [resolved] = await this.input.media
       .resolve(
         {
           canvasId: request.canvasId,
-          expectedRevision: request.expectedRevision,
           nodeIds: [request.sourceNodeId],
           scopeId: request.projectId,
         },
@@ -316,7 +308,6 @@ export class PluginConnectedMediaService {
       activeStreams: new Set(),
       bearerToken,
       canvasId: request.canvasId,
-      expectedRevision: document.revision,
       frameId: request.frameId,
       identity: { ...resolved.identity },
       idleExpiresAt: now + idleLifetimeMs,
@@ -632,10 +623,10 @@ export class PluginConnectedMediaService {
 
   private async requireLiveImageBinding(request: PluginConnectedImageOpenInput, signal?: AbortSignal) {
     throwIfAborted(signal)
-    const snapshot = await this.input.documents.load({ canvasId: request.canvasId, scopeId: request.projectId })
+    const snapshot = await this.input.application.query({ canvasId: request.canvasId, scopeId: request.projectId })
     throwIfAborted(signal)
-    const document = snapshot.document
-    if (!document || document.id !== request.canvasId || document.revision !== request.expectedRevision) {
+    const document = snapshot.projection
+    if (!document || document.id !== request.canvasId) {
       throw new PluginHostApiError("stale-context", "Plugin connected-image Canvas binding changed")
     }
     const owner = document.nodes.find((node) => node.id === request.nodeId)
@@ -676,13 +667,10 @@ export class PluginConnectedMediaService {
 
   private async requireLiveBinding(request: PluginConnectedMediaOpenInput, signal?: AbortSignal) {
     throwIfAborted(signal)
-    const snapshot = await this.input.documents.load({ canvasId: request.canvasId, scopeId: request.projectId })
+    const snapshot = await this.input.application.query({ canvasId: request.canvasId, scopeId: request.projectId })
     throwIfAborted(signal)
-    const document = snapshot.document
+    const document = snapshot.projection
     if (!document || document.id !== request.canvasId) throw new Error("Plugin Canvas was not found")
-    if (document.revision !== request.expectedRevision) {
-      throw new Error("Canvas changed before the connected-media session opened")
-    }
     const owner = document.nodes.find((node) => node.id === request.nodeId)
     if (!owner || !matchesWebPluginCanvasNodeIdentity(request.pluginId, owner.data)) {
       throw new Error("Plugin frame no longer owns its Canvas node")
@@ -712,7 +700,6 @@ export class PluginConnectedMediaService {
       const { reference } = await this.requireLiveImageBinding(
         {
           ...frame,
-          expectedRevision: session.expectedRevision,
           sourceNodeId: session.sourceNodeId,
         },
         signal,
@@ -726,7 +713,6 @@ export class PluginConnectedMediaService {
     const { source } = await this.requireLiveBinding(
       {
         ...frame,
-        expectedRevision: session.expectedRevision,
         sourceNodeId: session.sourceNodeId,
       },
       signal,
@@ -735,7 +721,6 @@ export class PluginConnectedMediaService {
     const [resolved] = await this.input.media.resolve(
       {
         canvasId: session.canvasId,
-        expectedRevision: session.expectedRevision,
         nodeIds: [session.sourceNodeId],
         scopeId: session.projectId,
       },
@@ -1060,27 +1045,22 @@ function sameFrame(session: ConnectedMediaSession, frame: PluginConnectedMediaFr
 }
 
 function parseConnectedMediaUrl(value: string) {
-  const url = new URL(value)
-  if (
-    url.protocol !== `${pluginConnectedMediaScheme}:` ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash
-  ) {
+  const uri = parseConvaxUri(value)
+  if (uri.scheme !== pluginConnectedMediaScheme || uri.query || uri.fragment) {
     throw new Error("Connected-media URL is invalid")
   }
-  const sessionId = url.hostname
-  const segments = url.pathname.split("/").filter(Boolean)
-  if (segments.length !== 1) throw new Error("Connected-media URL is invalid")
+  const sessionId = uri.authority
+  const segments = uri.pathSegments
+  if (segments.length !== 1 || segments[0]!.includes("/")) throw new Error("Connected-media URL is invalid")
   validateIdentifier(sessionId, "sessionId", 128)
   if (!/^[a-f0-9]{32}$/u.test(segments[0]!)) throw new Error("Connected-media bearer token is invalid")
   return { bearerToken: segments[0], sessionId }
 }
 
 function connectedMediaBearerUrl(sessionId: string, bearerToken: string) {
-  return `${pluginConnectedMediaScheme}://${sessionId}/${bearerToken}`
+  return canonicalizeConvaxUri(
+    `${pluginConnectedMediaScheme}://${encodeURIComponent(sessionId)}/${encodeURIComponent(bearerToken)}`,
+  )
 }
 
 function connectedMediaHeaders(mimeType: string, length: number) {
@@ -1151,17 +1131,11 @@ function validateFrameInput(input: PluginConnectedMediaFrameRef) {
 function validateOpenInput(input: PluginConnectedMediaOpenInput) {
   validateFrameInput(input)
   validateIdentifier(input.sourceNodeId, "sourceNodeId", 256)
-  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
-    throw new Error("Connected-media expectedRevision must be a non-negative integer")
-  }
 }
 
 function validateImageOpenInput(input: PluginConnectedImageOpenInput) {
   validateFrameInput(input)
   validateIdentifier(input.sourceNodeId, "sourceNodeId", 2_048)
-  if (!Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 0) {
-    throw new Error("Connected-image expectedRevision must be a non-negative integer")
-  }
 }
 
 function isAbortError(error: unknown) {

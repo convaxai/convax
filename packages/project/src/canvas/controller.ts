@@ -3,6 +3,7 @@ import type { ProjectCanvasCatalog, ProjectCanvasClient, ProjectCanvas } from ".
 export interface ProjectCanvasControllerSnapshot {
   busy: boolean
   canvases: ProjectCanvas[]
+  creationAvailability: ProjectCanvasCatalog["creationAvailability"]
   error: string | null
   projectId: string | null
 }
@@ -10,6 +11,7 @@ export interface ProjectCanvasControllerSnapshot {
 const initialSnapshot: ProjectCanvasControllerSnapshot = {
   busy: false,
   canvases: [],
+  creationAvailability: "team-authority-pending",
   error: null,
   projectId: null,
 }
@@ -49,6 +51,7 @@ export class ProjectCanvasController {
     this.update({
       busy: Boolean(projectId),
       canvases: [],
+      creationAvailability: "team-authority-pending",
       error: null,
       projectId,
     })
@@ -91,6 +94,14 @@ export class ProjectCanvasController {
   async createCanvas(name?: string) {
     const projectId = this.snapshot.projectId
     if (!projectId || (this.activity && this.activity !== "refresh")) return
+    if (this.snapshot.creationAvailability !== "available") {
+      this.update({
+        error: this.snapshot.creationAvailability === "team-authority-pending"
+          ? "Canvas creation is waiting for team collaboration authority."
+          : "Canvas creation is unavailable while Project recovery is required.",
+      })
+      return
+    }
     const generation = this.generation
     const request = ++this.request
     this.activity = "mutation"
@@ -188,7 +199,7 @@ export class ProjectCanvasController {
     if (!this.isActive(projectId, generation) || catalog.projectId !== projectId) {
       throw new Error("Project Canvas catalog response did not match the active project.")
     }
-    this.update({ canvases: catalog.canvases })
+    this.update({ canvases: catalog.canvases, creationAvailability: catalog.creationAvailability })
   }
 
   private scheduleRefresh() {

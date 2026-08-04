@@ -245,7 +245,7 @@ export interface AgentPanelProps {
   layout?: AgentPanelLayout
   onOpenSkillDetails?: (name: string) => boolean | Promise<boolean>
   /**
-   * Supplied only by a future revision-safe review owner. Ordinary completed
+   * Supplied only by a future provenance-safe review owner. Ordinary completed
    * Agent output is not pending Canvas change.
    */
   pendingChanges?: boolean
@@ -1118,7 +1118,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
         if (canvasId === props.activeCanvas?.id) await props.beforePrompt?.()
         const snapshot = await window.convax.canvas.documents.load({ canvasId, scopeId })
         if (!mountedRef.current || activeProjectRef.current !== scopeId || !isLatest()) return
-        const document = snapshot.document
+        const document = snapshot.projection
         if (!document) throw new Error(`Canvas document was not found: ${canvasId}`)
         setLoadedCanvasDocuments((current) => new Map(current).set(canvasId, document))
       } catch (cause) {

@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/package.json",
+  "name": "@convax/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "bun run typecheck && bun run clean && bun build --production --target=browser --format=esm --packages=external --sourcemap=linked --outdir=dist src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsgo --noEmit",
+    "prepack": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run test"
+  },
+  "dependencies": {
+    "@convax/collaboration": "workspace:^",
+    "@convax/project": "workspace:^"
+  },
+  "devDependencies": {
+    "@typescript/native-preview": "catalog:",
+    "@types/bun": "catalog:",
+    "typescript": "catalog:"
+  }
+}

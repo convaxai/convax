@@ -1,4 +1,4 @@
-import { CanvasTextResourceConflictError } from "@convax/canvas/application"
+import { CanvasTextResourceConflictError } from "@convax/canvas/application/errors"
 import { parseCanvasDocument } from "@convax/canvas/core"
 import {
   canvasResourceHydrateStaleIpcChannel,
@@ -16,6 +16,7 @@ import {
   isCanvasResourcePartialFailureResponse,
   isCanvasTextResourceConflictResponse,
 } from "../canvas-resource-private-contract"
+import { assertOperationReceiptDtoV2 } from "./canvas-operation-receipt-codec"
 
 interface CanvasResourcePreloadClientOptions {
   getPathForFile(file: File): string
@@ -124,7 +125,6 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
           anchor: input.anchor,
           canvasId: input.canvasId,
           commandId: input.commandId,
-          expectedRevision: input.expectedRevision,
           externalFiles: resolved,
           ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
           projectId: input.projectId,
@@ -195,7 +195,6 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       return invokeCanvasResourceRelink(options, canvasResourceRelinkIpcChannel, {
         canvasId: input.canvasId,
         commandId: input.commandId,
-        expectedRevision: input.expectedRevision,
         nodeId: input.nodeId,
         source,
       })
@@ -213,7 +212,6 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       return invokeCanvasResourceRelink(options, canvasResourceSaveEditableCopyIpcChannel, {
         canvasId: input.canvasId,
         commandId: input.commandId,
-        expectedRevision: input.expectedRevision,
         nodeId: input.nodeId,
       })
     },
@@ -285,11 +283,14 @@ async function invokeCanvasResourceRelink(
   if (!isRecord(result) || !isStringArray(result.warnings)) {
     throw new Error("Canvas relink response is invalid")
   }
-  const revision = result.revision
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
-    throw new Error("Canvas relink response is invalid")
+  const projection = parseCanvasDocument(result.projection)
+  if (!projection) throw new Error("Canvas relink projection is invalid")
+  assertOperationReceiptDtoV2(result.operationReceipt)
+  return {
+    operationReceipt: structuredClone(result.operationReceipt),
+    projection,
+    warnings: result.warnings,
   }
-  return { revision, warnings: result.warnings }
 }
 
 function isStringArray(value: unknown): value is string[] {
@@ -306,19 +307,19 @@ function requireCanvasResourceAddResult(value: unknown): CanvasResourceAddResult
   if (!isRecord(value) || !Array.isArray(value.createdNodeIds) || !Array.isArray(value.warnings)) {
     throw new Error("Canvas resource response is invalid")
   }
-  const revision = value.revision
-  if (typeof revision !== "number" || !Number.isSafeInteger(revision) || revision < 0) {
-    throw new Error("Canvas resource response revision is invalid")
-  }
   if (
     value.createdNodeIds.some((id) => typeof id !== "string") ||
     value.warnings.some((item) => typeof item !== "string")
   ) {
     throw new Error("Canvas resource response is invalid")
   }
+  const projection = parseCanvasDocument(value.projection)
+  if (!projection) throw new Error("Canvas resource response projection is invalid")
+  assertOperationReceiptDtoV2(value.operationReceipt)
   return {
     createdNodeIds: value.createdNodeIds,
-    revision,
+    operationReceipt: structuredClone(value.operationReceipt),
+    projection,
     warnings: value.warnings,
   }
 }

@@ -8,7 +8,6 @@ export interface PluginConnectedMediaFrameRef extends PluginNodeInvocationRef {
 }
 
 export interface PluginConnectedMediaOpenInput extends PluginConnectedMediaFrameRef {
-  expectedRevision: number
   sourceNodeId: string
 }
 

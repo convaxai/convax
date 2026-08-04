@@ -15,6 +15,7 @@ import {
   type PluginApiGenerationReference,
   type PluginApiId,
 } from "@convax/plugin-api"
+import { parse as parseConvaxUri } from "@convax/uri"
 
 import type { PluginCanvasEventSubscription, PluginPrincipal } from "../plugin-capability-contracts"
 import { PluginHostApiError } from "../plugin-host-errors"
@@ -311,11 +312,11 @@ export class PluginHostApiService {
               signal,
               authorized.resolved,
             )
-            result = structuredClone({ ...context.node, revision: context.documentRevision })
+            result = structuredClone(context.node)
             assertRendererSafeNode(result)
           } else if (call.method === "canvas.node.state.replace") {
             const binding = requireNode(node, call.method)
-            await this.#operations.replaceNodeState({
+            result = await this.#operations.replaceNodeState({
               binding,
               checkpoint: checkpoint(call.method, operationId, signal),
               operationId,
@@ -323,7 +324,6 @@ export class PluginHostApiService {
               signal,
               state: structuredClone(call.params.state) as Record<string, unknown>,
             })
-            result = { updated: true }
           } else if (call.method === "canvas.resource.image.create") {
             const binding = requireNode(node, call.method)
             const created = await this.#operations.createCanvasImage({
@@ -598,9 +598,7 @@ export class PluginHostApiService {
       !context ||
       context.project.id !== binding.projectId ||
       context.canvas.id !== binding.canvasId ||
-      context.node.id !== binding.nodeId ||
-      !Number.isSafeInteger(context.documentRevision) ||
-      context.documentRevision < 0
+      context.node.id !== binding.nodeId
     ) {
       throw new PluginHostApiScopeError("Plugin owning Project, Canvas, or node changed")
     }
@@ -630,7 +628,7 @@ function hostContext(
   const result = {
     canvas: structuredClone(context.canvas),
     hostApi: { availability, catalogVersion: PLUGIN_API_CATALOG_VERSION },
-    node: structuredClone({ ...context.node, revision: context.documentRevision }),
+    node: structuredClone(context.node),
     plugin: {
       id: authorized.resolved.pluginId,
       name: authorized.resolved.pluginName,
@@ -816,22 +814,20 @@ function sanitizeOpenedImageInput(value: unknown) {
 }
 
 function requireConnectedMediaBearerUrl(value: string, sessionId: string) {
-  let url: URL
+  let uri: ReturnType<typeof parseConvaxUri>
   try {
-    url = new URL(value)
+    uri = parseConvaxUri(value)
   } catch {
     throw new Error("Plugin opened input bearer URL is invalid")
   }
-  const segments = url.pathname.split("/").filter(Boolean)
+  const segments = uri.pathSegments
   if (
-    url.protocol !== "convax-connected-media:" ||
-    url.hostname !== sessionId ||
-    url.username ||
-    url.password ||
-    url.port ||
-    url.search ||
-    url.hash ||
+    uri.scheme !== "convax-connected-media" ||
+    uri.authority !== sessionId ||
+    uri.query ||
+    uri.fragment ||
     segments.length !== 1 ||
+    segments[0]!.includes("/") ||
     !/^[a-f0-9]{32}$/u.test(segments[0]!)
   ) {
     throw new Error("Plugin opened input bearer URL is invalid")
@@ -839,11 +835,7 @@ function requireConnectedMediaBearerUrl(value: string, sessionId: string) {
 }
 
 function sanitizeCanvasImageResult(value: unknown) {
-  const result = exactRecord(value, ["createdNodeId", "revision"], "Plugin Canvas image result")
-  return {
-    createdNodeId: boundedString(result.createdNodeId, "Plugin Canvas image node id", 2_048),
-    revision: nonNegativeInteger(result.revision, "Plugin Canvas image revision"),
-  }
+  return parsePluginApiResult("canvas.resource.image.create", value)
 }
 
 function sanitizeProjectTextResult(value: unknown, requestedPath: string) {
@@ -882,30 +874,7 @@ function sanitizeGenerationTools(value: readonly unknown[], expectedOutput?: str
 }
 
 function sanitizeGenerationResult(value: unknown) {
-  const result = exactRecord(
-    value,
-    ["createdNodeIds", "outputText", "revision", "toolId", "warnings"],
-    "Plugin generation result",
-  )
-  if (!Array.isArray(result.createdNodeIds) || result.createdNodeIds.length > 32) {
-    throw new Error("Plugin generation result node ids are invalid")
-  }
-  if (!Array.isArray(result.warnings) || result.warnings.length > 32) {
-    throw new Error("Plugin generation result warnings are invalid")
-  }
-  return {
-    createdNodeIds: result.createdNodeIds.map((id, index) =>
-      boundedString(id, `Plugin generated node ${index}`, 2_048),
-    ),
-    ...(result.outputText === undefined
-      ? {}
-      : { outputText: boundedString(result.outputText, "Plugin generation output text", 64 * 1024, true) }),
-    revision: nonNegativeInteger(result.revision, "Plugin generation result revision"),
-    toolId: boundedString(result.toolId, "Plugin generation result tool id", 256),
-    warnings: result.warnings.map((warning, index) =>
-      boundedString(warning, `Plugin generation warning ${index}`, 2_000),
-    ),
-  }
+  return parsePluginApiResult("generation.execute", value)
 }
 
 function optionalGenerationReferences(value: unknown) {

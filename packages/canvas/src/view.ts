@@ -232,7 +232,6 @@ function isCanvasFitZoomLimit(value: number | undefined) {
 export interface CanvasViewSnapshot {
   documentId: string
   focusedGroupId?: string | null
-  revision: number
   scopeId: string
   selectedEdgeIds: string[]
   selectedNodeIds: string[]
@@ -274,7 +273,6 @@ export interface CanvasViewCommandResult {
 
 export interface CanvasViewExecutionGuard {
   expectedDocumentId: string
-  expectedRevision?: number
   expectedScopeId: string
 }
 
@@ -328,27 +326,12 @@ export class CanvasViewScopeMismatchError extends Error {
   }
 }
 
-export class CanvasViewRevisionMismatchError extends Error {
-  readonly actualRevision: number
-  readonly expectedRevision: number
-
-  constructor(expectedRevision: number, actualRevision: number) {
-    super(`Canvas view revision changed: expected ${expectedRevision}, received ${actualRevision}`)
-    this.name = "CanvasViewRevisionMismatchError"
-    this.expectedRevision = expectedRevision
-    this.actualRevision = actualRevision
-  }
-}
-
 export function assertCanvasViewGuard(snapshot: CanvasViewSnapshot, guard: CanvasViewExecutionGuard) {
   if (snapshot.documentId !== guard.expectedDocumentId) {
     throw new CanvasViewDocumentMismatchError(guard.expectedDocumentId, snapshot.documentId)
   }
   if (snapshot.scopeId !== guard.expectedScopeId) {
     throw new CanvasViewScopeMismatchError(guard.expectedScopeId, snapshot.scopeId)
-  }
-  if (guard.expectedRevision !== undefined && snapshot.revision !== guard.expectedRevision) {
-    throw new CanvasViewRevisionMismatchError(guard.expectedRevision, snapshot.revision)
   }
 }
 

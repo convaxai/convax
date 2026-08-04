@@ -7,7 +7,7 @@ function canvas(id: string, name = id): ProjectCanvas {
 }
 
 function catalog(projectId: string, canvases = [canvas("canvas-main")]): ProjectCanvasCatalog {
-  return { canvases, projectId }
+  return { canvases, creationAvailability: "available", projectId }
 }
 
 function harness() {
@@ -51,6 +51,7 @@ describe("ProjectCanvasController", () => {
     expect(controller.getSnapshot()).toEqual({
       busy: false,
       canvases: [canvas("canvas-main")],
+      creationAvailability: "available",
       error: null,
       projectId: "one",
     })
@@ -64,6 +65,25 @@ describe("ProjectCanvasController", () => {
     expect(controller.getSnapshot().canvases).toEqual([canvas("canvas-main")])
     expect(controller.getSnapshot()).not.toHaveProperty("activeCanvasId")
     expect(controller.getSnapshot()).not.toHaveProperty("changingActiveCanvas")
+    controller.dispose()
+  })
+
+  test("surfaces pending team collaboration authority without inventing a Canvas", async () => {
+    const { client } = harness()
+    client.getCanvasCatalog = mock(async ({ projectId }) => catalog(projectId, []))
+    client.createCanvas = mock(async () => {
+      throw new Error("Project Canvas route command was rejected: dependency-pending")
+    })
+    const controller = new ProjectCanvasController(client)
+
+    await controller.setProject("one")
+    await controller.createCanvas()
+
+    expect(controller.getSnapshot()).toMatchObject({
+      canvases: [],
+      error: "Project Canvas route command was rejected: dependency-pending",
+      projectId: "one",
+    })
     controller.dispose()
   })
 

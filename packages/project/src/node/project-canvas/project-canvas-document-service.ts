@@ -1,42 +1,24 @@
-import {
-  CanvasStorageConflictError,
-  type CanvasDocumentClient,
-  type CanvasDocumentRef,
-  type CanvasDocumentRepository,
+import type {
+  CanvasApplicationCommandRequest,
+  CanvasApplicationCommandResult,
+  CanvasApplicationQueryResult,
+  CanvasCollaborationApplicationPort,
+  CanvasDocumentRef,
+  CanvasNodeQuery,
 } from "@convax/canvas/application"
-import { createCanvasDocument } from "@convax/canvas/core"
-import type { ProjectCanvasCatalogStore } from "./project-canvas-document-repository"
 
-export class ProjectCanvasDocumentService implements CanvasDocumentClient {
-  constructor(
-    private readonly repository: CanvasDocumentRepository,
-    private readonly catalog: ProjectCanvasCatalogStore,
-  ) {}
+/**
+ * Compatibility-named thin client around the Main-owned Canvas application port.
+ * It has no repository, save/load, revision, JSON codec or retry authority.
+ */
+export class ProjectCanvasDocumentService implements CanvasCollaborationApplicationPort {
+  constructor(private readonly collaboration: CanvasCollaborationApplicationPort) {}
 
-  async load(ref: CanvasDocumentRef) {
-    const current = await this.repository.load(ref)
-    if (current.document) return current
-
-    const catalog = await this.catalog.getCanvasCatalog({ projectId: ref.scopeId })
-    const canvas = catalog.canvases.find((candidate) => candidate.id === ref.canvasId)
-    if (!canvas) throw new Error(`Canvas was not found in project ${ref.scopeId}: ${ref.canvasId}`)
-    const document = createCanvasDocument({ id: canvas.id, title: canvas.name })
-    try {
-      const saved = await this.repository.save({
-        document,
-        expectedStorageVersion: null,
-        ref,
-      })
-      return { document, storageVersion: saved.storageVersion }
-    } catch (error) {
-      if (!(error instanceof CanvasStorageConflictError)) throw error
-      const concurrent = await this.repository.load(ref)
-      if (concurrent.document) return concurrent
-      throw error
-    }
+  query(ref: CanvasDocumentRef, query?: CanvasNodeQuery): Promise<CanvasApplicationQueryResult> {
+    return this.collaboration.query(ref, query)
   }
 
-  save(request: Parameters<CanvasDocumentRepository["save"]>[0]) {
-    return this.repository.save(request)
+  submit(request: CanvasApplicationCommandRequest): Promise<CanvasApplicationCommandResult> {
+    return this.collaboration.submit(request)
   }
 }

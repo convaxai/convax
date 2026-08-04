@@ -114,7 +114,6 @@ describe("Canvas renderer projection bridge", () => {
     const viewOperation = renderer.executeView({
       command: { type: "selection.clear" },
       expectedDocumentId: "canvas-1",
-      expectedRevision: 1,
       expectedScopeId: "project-1",
       viewId: "desktop-main",
     })
@@ -125,7 +124,6 @@ describe("Canvas renderer projection bridge", () => {
         missingNodeIds: [],
         snapshot: {
           documentId: "canvas-1",
-          revision: 1,
           scopeId: "project-1",
           selectedEdgeIds: [],
           selectedNodeIds: [],
@@ -162,7 +160,6 @@ describe("Canvas renderer projection bridge", () => {
         result: {
           snapshot: {
             documentId: "canvas-second",
-            revision: 4,
             scopeId: "project-second",
             selectedEdgeIds: [],
             selectedNodeIds: [],

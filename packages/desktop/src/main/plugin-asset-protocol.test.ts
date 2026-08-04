@@ -51,7 +51,7 @@ function assetResolver(
   resolveAsset: (relativePath: string, identity: WebPluginAssetRuntimeIdentity) => Promise<string>,
   plugin: {
     capabilities: string[]
-    hostApi?: { major: 2; optional: string[]; required: string[] }
+    hostApi?: { major: 3; optional: string[]; required: string[] }
     id: string
     schema: string
   } = {
@@ -161,7 +161,7 @@ describe("Plugin asset protocol", () => {
             plugin: {
               capabilities: authorized ? ["canvas.connectedMedia.stream"] : [],
               hostApi: {
-                major: 2,
+                major: 3,
                 optional: declared ? ["canvas.inputs.open"] : [],
                 required: ["host.context.get"],
               },
@@ -208,7 +208,7 @@ describe("Plugin asset protocol", () => {
             plugin: {
               capabilities: authorized ? ["canvas.connectedImages.read"] : [],
               hostApi: {
-                major: 2,
+                major: 3,
                 optional: declared ? ["canvas.inputs.image.open"] : [],
                 required: ["host.context.get"],
               },
@@ -266,7 +266,7 @@ describe("Plugin asset protocol", () => {
                     },
                   }
                 : {},
-              hostApi: { major: 2, optional: [], required: [] },
+              hostApi: { major: 3, optional: [], required: [] },
               id: "director-stage",
               schema,
             },

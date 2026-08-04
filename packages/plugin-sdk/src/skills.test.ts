@@ -5,7 +5,7 @@ import { parsePortablePluginSkills, validatePortableSkillToolReferences } from "
 
 describe("portable Plugin-owned Skills", () => {
   const hostApi = parseRuntimePluginApiDeclaration({
-    major: 2,
+    major: 3,
     optional: [],
     required: ["skill.context.read"],
   })

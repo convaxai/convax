@@ -24,6 +24,11 @@
       "import": "./dist/canvas/index.js",
       "default": "./dist/canvas/index.js"
     },
+    "./collaboration-protocol": {
+      "types": "./dist/collaboration-protocol.d.ts",
+      "import": "./dist/collaboration-protocol.js",
+      "default": "./dist/collaboration-protocol.js"
+    },
     "./node": {
       "types": "./dist/node/index.d.ts",
       "import": "./dist/node/index.js",
@@ -33,7 +38,7 @@
   },
   "scripts": {
     "clean": "rm -rf dist",
-    "build:browser": "bun build --production --keep-names --target=browser --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/index.ts src/contracts.ts src/canvas/index.ts",
+    "build:browser": "bun scripts/build-browser.ts",
     "build:node": "bun build --production --keep-names --target=node --format=esm --packages=external --external='@convax/*' --sourcemap=linked --root=src --outdir=dist src/node/index.ts",
     "build:css": "bun scripts/build-css.ts",
     "build:types": "tsc -p tsconfig.build.json",
@@ -44,10 +49,14 @@
     "prepublishOnly": "bun run typecheck && bun run test"
   },
   "dependencies": {
+    "@noble/hashes": "catalog:",
     "@convax/canvas": "workspace:^",
+    "@convax/collaboration": "workspace:^",
     "@convax/project-files": "workspace:^",
+    "@convax/uri": "workspace:^",
     "@convax/ui": "workspace:^",
-    "lucide-react": "catalog:"
+    "lucide-react": "catalog:",
+    "yjs": "catalog:"
   },
   "peerDependencies": {
     "react": "^18.2.0 || ^19.0.0",

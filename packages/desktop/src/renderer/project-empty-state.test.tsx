@@ -1,10 +1,37 @@
 import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
+  ProjectCollaborationPendingState,
   ProjectLoadingState,
   ProjectRecoveryState,
   ProjectRegistryLoadingState,
 } from "./project-empty-state"
+
+describe("ProjectCollaborationPendingState", () => {
+  test("explains why an empty local Project cannot create a Canvas", () => {
+    const markup = renderToStaticMarkup(<ProjectCollaborationPendingState />)
+    expect(markup).toContain('data-project-collaboration-pending="true"')
+    expect(markup).toContain("Team collaboration authority required")
+    expect(markup).toContain("Creating or editing a Canvas requires team identity setup")
+    expect(markup).not.toContain('data-project-collaboration-action="create"')
+  })
+
+  test("offers only explicit team bootstrap or invitation enrollment when the typed client is available", () => {
+    const markup = renderToStaticMarkup(
+      <ProjectCollaborationPendingState
+        onCreateTeam={async () => ({ invitation: null })}
+        onJoinTeam={async () => undefined}
+        projectId="project-alpha"
+      />,
+    )
+
+    expect(markup).toContain('data-project-collaboration-action="create"')
+    expect(markup).toContain('data-project-collaboration-action="join"')
+    expect(markup).toContain("Create team and enable collaboration")
+    expect(markup).toContain("Join an existing team")
+    expect(markup).not.toContain('data-project-collaboration-action="join-submit"')
+  })
+})
 
 describe("ProjectRegistryLoadingState", () => {
   test("keeps startup in an accessible loading state without onboarding actions", () => {

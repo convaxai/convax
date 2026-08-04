@@ -31,7 +31,6 @@ const document = {
       type: "file",
     },
   ],
-  revision: 2,
 } satisfies CanvasDocument
 
 describe("Canvas camera policy", () => {

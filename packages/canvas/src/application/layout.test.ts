@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { canvasHistoryReducer, createCanvasHistory } from "../history"
 import { createCanvasDocument, createGroupNode, createTextNode, getCanvasNodeSize } from "../document"
 import { setCanvasGroupFolded } from "../group-fold"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "../types"
@@ -317,7 +316,12 @@ describe("built-in Canvas layout provider", () => {
     const document = createCanvasDocument({ nodes: [text("a", 0, 0), text("b", 0, 0)] })
     const plan = planCanvasLayout(document)
 
-    expect(() => applyCanvasLayoutPlan({ ...document, revision: 1 }, plan)).toThrow("revision conflict")
+    expect(() =>
+      applyCanvasLayoutPlan(
+        { ...document, nodes: document.nodes.map((node) => node.id === "a" ? { ...node, position: { x: 1, y: 0 } } : node) },
+        plan,
+      ),
+    ).toThrow("geometry changed")
     expect(() =>
       applyCanvasLayoutPlan(document, {
         ...plan,
@@ -355,7 +359,7 @@ describe("built-in Canvas layout provider", () => {
 })
 
 describe("Canvas auto-layout business operation", () => {
-  test("commits one application revision and is one undo step", () => {
+  test("commits one deterministic application layout", () => {
     const document = createCanvasDocument({
       edges: [edge("ab", "a", "b")],
       nodes: [text("a", 500, 300), text("b", 0, 0)],
@@ -365,18 +369,10 @@ describe("Canvas auto-layout business operation", () => {
       actor: { id: "ui", kind: "ui" },
       command: { type: "canvas.auto-layout" },
       commandId: "tidy",
-      expectedRevision: 0,
     })
-    const withHistory = canvasHistoryReducer(createCanvasHistory(document), {
-      document: applied.document,
-      type: "commit",
-    })
-    const undone = canvasHistoryReducer(withHistory, { type: "undo" })
 
     expect(applied.changed).toBeTrue()
-    expect(committed.document.revision).toBe(1)
-    expect(withHistory.past).toHaveLength(1)
-    expect(undone.document.nodes.map((node) => node.position)).toEqual(document.nodes.map((node) => node.position))
+    expect(committed.document.nodes.map((node) => node.position)).toEqual(applied.document.nodes.map((node) => node.position))
   })
 
   test("uses strict absolute batch geometry with optional persistent sizes", () => {
@@ -391,28 +387,15 @@ describe("Canvas auto-layout business operation", () => {
         ],
       },
       commandId: "geometry",
-      expectedRevision: 0,
     })
 
     expect(committed.document).toMatchObject({
-      revision: 1,
       nodes: [
         { id: "a", position: { x: 40, y: 50 }, style: { height: 222, width: 333 } },
         { id: "b", position: { x: -20, y: 70 } },
       ],
     })
     expect(getCanvasNodeSize(committed.document.nodes[0]!)).toEqual({ height: 222, width: 333 })
-    expect(() =>
-      executeCanvasApplicationCommand(document, {
-        actor: { id: "plugin", kind: "plugin" },
-        command: {
-          type: "nodes.setGeometry",
-          updates: [{ nodeId: "a", position: { x: 1, y: 2 } }],
-        },
-        commandId: "stale-geometry",
-        expectedRevision: 1,
-      }),
-    ).toThrow("revision conflict")
     expect(() =>
       applyCanvasApplicationCommand(document, {
         type: "nodes.setGeometry",

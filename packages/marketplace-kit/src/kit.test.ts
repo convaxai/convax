@@ -44,7 +44,20 @@ describe("@convax/marketplace-kit", () => {
     expect(packageMetadata.schema).toBe("convax.package/2")
     expect(manifest).toMatchObject({
       schema: "convax.plugin/8",
-      hostApi: { major: 2, required: ["host.context.get"], optional: [] },
+      hostApi: { major: 3, required: ["host.context.get"], optional: [] },
+      contributes: {
+        canvas: {
+          renderer: {
+            stateSchema: {
+              type: "object",
+              maxProperties: "0",
+              required: [],
+              properties: {},
+              additionalProperties: false,
+            },
+          },
+        },
+      },
     })
     await checkMarketplace(root)
 
@@ -57,14 +70,14 @@ describe("@convax/marketplace-kit", () => {
 
     for (const [index, invalidManifest] of [
       { ...manifest, schema: "convax.plugin/7" },
-      { ...manifest, hostApi: { major: 2, required: ["unknown.api"], optional: [] } },
+      { ...manifest, hostApi: { major: 3, required: ["unknown.api"], optional: [] } },
       {
         ...manifest,
-        hostApi: { major: 2, required: ["host.context.get", "host.context.get"], optional: [] },
+        hostApi: { major: 3, required: ["host.context.get", "host.context.get"], optional: [] },
       },
       {
         ...manifest,
-        hostApi: { major: 2, required: ["host.context.get"], optional: ["host.context.get"] },
+        hostApi: { major: 3, required: ["host.context.get"], optional: ["host.context.get"] },
       },
       { ...manifest, hostApi: { major: 1, required: ["host.context.get"], optional: [] } },
       { ...manifest, hostApi: { major: 2, required: [], optional: [] } },
@@ -163,7 +176,7 @@ describe("@convax/marketplace-kit", () => {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
           contributes: {},
-          hostApi: { major: 2, required: [], optional: [] },
+          hostApi: { major: 3, required: [], optional: [] },
           id: "imported-plugin",
           name: "Imported Plugin",
           description: "Imported Plugin description",
@@ -377,7 +390,7 @@ describe("@convax/marketplace-kit", () => {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
           contributes: {},
-          hostApi: { major: 2, required: [], optional: [] },
+          hostApi: { major: 3, required: [], optional: [] },
           id: "example-plugin",
           name: "Example Plugin",
           description: "Example Plugin",
@@ -514,7 +527,7 @@ describe("@convax/marketplace-kit", () => {
             schema: "convax.plugin/8",
             capabilities: ["projects.read"],
             contributes: {},
-            hostApi: { major: 2, required: [], optional: [] },
+            hostApi: { major: 3, required: [], optional: [] },
             id,
             name: id,
             description,
@@ -754,7 +767,7 @@ describe("@convax/marketplace-kit", () => {
         {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
-          hostApi: { major: 2, required: [], optional: [] },
+          hostApi: { major: 3, required: [], optional: [] },
           id: "ffmpeg-tools",
           name: "FFmpeg Tools",
           description: "FFmpeg tools",
@@ -810,7 +823,7 @@ describe("@convax/marketplace-kit", () => {
         {
           schema: "convax.plugin/8",
           capabilities: ["projects.read"],
-          hostApi: { major: 2, required: [], optional: [] },
+          hostApi: { major: 3, required: [], optional: [] },
           id: "headless-workflows",
           name: "Headless Workflows",
           description: "Skill-only headless Plugin",
@@ -892,7 +905,7 @@ describe("@convax/marketplace-kit", () => {
             schema: "convax.plugin/8",
             capabilities: ["projects.read"],
             contributes: {},
-            hostApi: { major: 2, required: [], optional: [] },
+            hostApi: { major: 3, required: [], optional: [] },
             id: "nexus-service",
             name: "Nexus Service",
             description,
