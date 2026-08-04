@@ -83,9 +83,10 @@ export async function assertNoLegacyDefaultCapabilityReceipt(userDataRoot: strin
 export function assertMarketplaceSmokeSnapshot(
   snapshot: unknown,
   automaticPreinstall?: { id: string; version: string },
+  options: { marketplaceSurfaceRequired?: boolean } = {},
 ) {
   if (!isRecord(snapshot)) throw new Error("Packaged Marketplace smoke snapshot is invalid")
-  if (snapshot.marketplaceSurfaceVisible !== true) {
+  if ((options.marketplaceSurfaceRequired ?? true) && snapshot.marketplaceSurfaceVisible !== true) {
     throw new Error("Packaged Desktop did not expose the Marketplace Settings surface")
   }
   const settingsSources = snapshot.settingsSources

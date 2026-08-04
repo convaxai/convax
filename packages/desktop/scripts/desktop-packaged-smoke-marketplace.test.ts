@@ -208,6 +208,27 @@ describe("packaged smoke automatic preinstall assertions", () => {
     ).toThrow("unsupported target")
   })
 
+  test("keeps Marketplace IPC assertions when Project authority storage blocks the workspace UI", () => {
+    const snapshot = {
+      catalogCard: { id: "canvas-storyboard", kind: "skill" },
+      marketplaceSurfaceVisible: false,
+      settingsSources: [{ id: "convax-official", removable: false }],
+      storyboardSources: ["convax-builtin"],
+      storyboardChoice: { marketplaceLabel: "convax-builtin", setup: "none", version: "1.0.0" },
+      storyboardInstalled: {
+        id: "canvas-storyboard",
+        kind: "skill",
+        sourceLabel: "convax-builtin",
+        state: "ready",
+        version: "1.0.0",
+      },
+    }
+    expect(() =>
+      assertMarketplaceSmokeSnapshot(snapshot, undefined, { marketplaceSurfaceRequired: false }),
+    ).not.toThrow()
+    expect(() => assertMarketplaceSmokeSnapshot(snapshot)).toThrow("did not expose")
+  })
+
   test("validates the transparent Local source identity from userData", async () => {
     const userDataRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-local-smoke-"))
     roots.push(userDataRoot)

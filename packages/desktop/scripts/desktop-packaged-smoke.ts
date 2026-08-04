@@ -603,30 +603,34 @@ try {
       const ffmpegInstalled = marketplaceInventory.capabilities.find(
         (capability) => capability.kind === "plugin" && capability.id === defaultRemotePluginId,
       )
-      const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
-      if (!(applicationMenuTrigger instanceof HTMLElement)) {
-        throw new Error("The packaged sidebar did not expose the application menu")
+      let marketplaceSurfaceVisible = false
+      if (collaborationState !== "secure-vault-unavailable") {
+        const applicationMenuTrigger = document.querySelector('[data-application-menu-trigger="true"]')
+        if (!(applicationMenuTrigger instanceof HTMLElement)) {
+          throw new Error("The packaged sidebar did not expose the application menu")
+        }
+        applicationMenuTrigger.click()
+        const capabilitiesMenuItem = await waitFor(
+          () => document.querySelector('[data-application-menu-item="capabilities"]'),
+          "the application menu Marketplace entry",
+        )
+        if (!(capabilitiesMenuItem instanceof HTMLElement)) {
+          throw new Error("The packaged application menu did not expose Marketplace")
+        }
+        capabilitiesMenuItem.click()
+        await waitFor(
+          () => document.querySelector('[data-marketplace-surface="true"]'),
+          "the packaged Marketplace Settings surface",
+        )
+        marketplaceSurfaceVisible = true
       }
-      applicationMenuTrigger.click()
-      const capabilitiesMenuItem = await waitFor(
-        () => document.querySelector('[data-application-menu-item="capabilities"]'),
-        "the application menu Marketplace entry",
-      )
-      if (!(capabilitiesMenuItem instanceof HTMLElement)) {
-        throw new Error("The packaged application menu did not expose Marketplace")
-      }
-      capabilitiesMenuItem.click()
-      await waitFor(
-        () => document.querySelector('[data-marketplace-surface="true"]'),
-        "the packaged Marketplace Settings surface",
-      )
       return {
         collaborationState,
         defaultRemote: packagedDefault ? { id: packagedDefault.id, version: packagedDefault.version } : undefined,
         marketplace: {
           catalogCard,
           ffmpegInstalled,
-          marketplaceSurfaceVisible: Boolean(document.querySelector('[data-marketplace-surface="true"]')),
+          marketplaceSurfaceVisible,
           settingsSources,
           storyboardSources: storyboardChoices.map((choice) => choice.marketplaceLabel),
           storyboardChoice: {
@@ -665,6 +669,7 @@ try {
     preinstalledDefaultExpected && seeded.defaultRemote?.version
       ? { id: defaultRemotePluginId, version: seeded.defaultRemote.version }
       : undefined,
+    { marketplaceSurfaceRequired: seeded.collaborationState !== "secure-vault-unavailable" },
   )
   const agent = (await renderer.evaluate(
     `(async () => {
