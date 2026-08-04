@@ -228,8 +228,16 @@ const rendererPort = rendererPortReservation.port
 const inspectorPort = inspectorPortReservation.port
 rendererPortReservation.stop(true)
 inspectorPortReservation.stop(true)
+// The built smoke owns disposable userData and must not depend on or mutate the
+// developer/runner login Keychain. The packaged smoke uses the same isolation.
 const child = Bun.spawn(
-  [electronBinary, `--inspect=${inspectorPort}`, `--remote-debugging-port=${rendererPort}`, desktopRoot],
+  [
+    electronBinary,
+    ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
+    `--inspect=${inspectorPort}`,
+    `--remote-debugging-port=${rendererPort}`,
+    desktopRoot,
+  ],
   {
     cwd: repositoryRoot,
     env: {
