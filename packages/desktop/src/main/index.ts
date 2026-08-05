@@ -259,8 +259,8 @@ interface ProjectTeamCollaborationRuntimeV2 {
 /**
  * Keeps the V10 Team/control/data-plane closure absent until persisted protocol
  * selection and an explicit V10 sharing path require it. V11/R1 local-owner is a
- * closed production capability: status remains renderer-safe, while create/join
- * cannot instantiate a legacy Team runtime as an accidental fallback.
+ * closed production capability: leaving the final V10 Project destroys the whole
+ * legacy runtime, while create/join cannot instantiate it as an accidental fallback.
  */
 export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   createRuntime(): ProjectTeamCollaborationRuntimeV2
@@ -274,10 +274,12 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   let runtime: ProjectTeamCollaborationRuntimeV2 | undefined
   let runtimeProjectId: string | null = null
   let unsubscribeRuntime: (() => void) | undefined
+  let projectedStatus: ProjectTeamCollaborationStatusV2 | null = null
   let disposed = false
   const listeners = new Set<(status: ProjectTeamCollaborationStatusV2) => void>()
 
   const publish = (status: ProjectTeamCollaborationStatusV2) => {
+    if (activeProjectId === status.projectId) projectedStatus = status
     for (const listener of listeners) {
       try { listener(status) } catch { /* Display observers never affect collaboration authority. */ }
     }
@@ -312,8 +314,30 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     if (runtime) return runtime
     const created = input.createRuntime()
     runtime = created
-    unsubscribeRuntime = created.service.subscribe(publish)
+    unsubscribeRuntime = created.service.subscribe((status) => {
+      if (runtime !== created || activeProtocol !== "v10-r5" || activeProjectId !== status.projectId) return
+      publish(status)
+    })
     return created
+  }
+  const destroyRuntime = async (fallbackProjectId?: string) => {
+    const current = runtime
+    const projectId = runtimeProjectId ?? fallbackProjectId ?? null
+    runtime = undefined
+    runtimeProjectId = null
+    const unsubscribe = unsubscribeRuntime
+    unsubscribeRuntime = undefined
+    unsubscribe?.()
+    if (!current) return
+    const failures: unknown[] = []
+    if (projectId !== null) {
+      try { await current.service.quiesceProject(projectId) } catch (error) { failures.push(error) }
+    }
+    try { await current.dispose() } catch (error) { failures.push(error) }
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Project Team collaboration runtime teardown failed")
+    }
   }
   const ensureRuntimeProject = async (projectId: string) => {
     const created = ensureRuntime()
@@ -342,7 +366,8 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   })
   const service: ProjectTeamCollaborationMainServiceV2 = Object.freeze({
     getStatus(projectId: string) {
-      if (activeProjectId === projectId && activeProtocol !== "v10-r5") return unavailableStatus(projectId)
+      if (activeProjectId === projectId && activeProtocol !== "v10-r5") return localOnlyStatus(projectId)
+      if (activeProjectId === projectId && projectedStatus?.projectId === projectId) return projectedStatus
       return runtime?.service.getStatus(projectId) ?? localOnlyStatus(projectId)
     },
     async bootstrapTeam(projectId: string) {
@@ -367,27 +392,42 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     async activateProject(projectId: string, protocol: MainProjectProtocolSelectionV3) {
       requireLive()
       const previousProjectId = activeProjectId
-      if (runtime && runtimeProjectId && previousProjectId && previousProjectId !== projectId) {
-        await runtime.service.quiesceProject(previousProjectId)
-        runtimeProjectId = null
-      }
       activeProjectId = projectId
       activeProtocol = protocol
+      projectedStatus = null
       if (protocol !== "v10-r5") {
-        publish(unavailableStatus(projectId))
+        try {
+          await destroyRuntime(previousProjectId ?? undefined)
+        } finally {
+          publish(localOnlyStatus(projectId))
+        }
         return
       }
-      await input.activateV10Project({ projectId, service: activationService })
+      try {
+        if (runtime && previousProjectId !== null && previousProjectId !== projectId) {
+          await destroyRuntime(previousProjectId)
+        }
+        await input.activateV10Project({ projectId, service: activationService })
+      } catch (activationError) {
+        let teardownError: unknown
+        try { await destroyRuntime(projectId) } catch (error) { teardownError = error }
+        if (activeProjectId === projectId && activeProtocol === "v10-r5") {
+          publish(unavailableStatus(projectId))
+        }
+        if (teardownError !== undefined) {
+          console.warn("Project Team collaboration teardown also failed after activation", teardownError)
+          throw new Error("Project Team collaboration activation and teardown failed", { cause: activationError })
+        }
+        throw activationError
+      }
     },
     async quiesceProject(projectId: string) {
       requireLive()
-      if (runtime && runtimeProjectId === projectId) {
-        await runtime.service.quiesceProject(projectId)
-        runtimeProjectId = null
-      }
       if (activeProjectId === projectId) {
         activeProjectId = null
         activeProtocol = null
+        projectedStatus = null
+        await destroyRuntime(projectId)
       }
     },
     async dispose() {
@@ -395,12 +435,9 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
       disposed = true
       activeProjectId = null
       activeProtocol = null
-      runtimeProjectId = null
-      unsubscribeRuntime?.()
-      unsubscribeRuntime = undefined
+      projectedStatus = null
       listeners.clear()
-      await runtime?.dispose()
-      runtime = undefined
+      await destroyRuntime()
     },
   })
 }
