@@ -8,6 +8,7 @@ import type {
   CollaborationPersistencePortV2,
   CompareAndCommitReplicaHeadPortResultV2,
   DecodedCausalEditFrameV2,
+  DecodedCausalEditFrameV3,
   DigestV2,
   DocumentScopeV2,
   FrameObjectRefV2,
@@ -24,6 +25,7 @@ import type {
 } from "@convax/collaboration"
 import {
   frameObjectRefFromDecodedFrameV2,
+  frameObjectRefFromDecodedFrameV3,
   parseActorIdV2,
   parseDigestV2,
   parseMemberIdV2,
@@ -1034,15 +1036,17 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   async retainExactFrame(
-    frame: DecodedCausalEditFrameV2,
+    frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3,
     reason: PendingFrameReasonV2,
   ): Promise<"retained" | "capacity-exceeded"> {
     this.requireLive()
     if (!isPendingReason(reason)) invalid("Pending frame reason is invalid")
-    const ref = frameObjectRefFromDecodedFrameV2(frame)
+    const ref = frame.header.format === "convax.causal-edit-frame/3"
+      ? frameObjectRefFromDecodedFrameV3(frame as DecodedCausalEditFrameV3)
+      : frameObjectRefFromDecodedFrameV2(frame as DecodedCausalEditFrameV2)
     validateFrameRef(ref)
     if (!(frame.bytes instanceof Uint8Array) || frame.bytes.byteLength < 1 || frame.bytes.byteLength > MAX_FRAME_BYTES) {
-      invalid("Pending frame bytes must be a non-empty CVXCOLL2 envelope within 2 MiB")
+      invalid("Pending frame bytes must be a non-empty causal envelope within 2 MiB")
     }
     const inspected = await this.materializer.inspectFrame(ref, frame.bytes)
     assertSameFrameRef(inspected.ref, ref)
@@ -1073,7 +1077,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     this.requireLive()
     validateFrameRef(ref)
     if (!(exactBytes instanceof Uint8Array) || exactBytes.byteLength < 1 || exactBytes.byteLength > MAX_FRAME_BYTES) {
-      invalid("Frame bytes must be a non-empty CVXCOLL2 envelope within 2 MiB")
+      invalid("Frame bytes must be a non-empty causal envelope within 2 MiB")
     }
     const layout = this.layout(ref.scope)
     await this.serial(layout.directory, async () => {

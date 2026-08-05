@@ -76,7 +76,7 @@ function teamAuthority() {
 
 function frameBytes(authority: CausalSignerAuthorityV3) {
   const vector = encodeStateVectorV2(new Y.Doc())
-  const intentJcs = encodeRestrictedJcsV2({ format: "convax.typed-intent/3", kind: "canvas.node.create", value: {} })
+  const intentJcs = encodeRestrictedJcsV2({ format: "convax.typed-intent/2", kind: "canvas.node.create", value: {} })
   const intentDigest = rawDigest("convax.typed-intent/3", intentJcs)
   const authorityDependencies = authority.kind === "local-project-owner"
     ? [

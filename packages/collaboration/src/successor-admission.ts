@@ -19,7 +19,7 @@ import {
 import {
   causalEditSignatureDigestV3,
   decodeCausalEditFrameV3,
-  type CandidateSuccessorProtocolAuthorityV3,
+  type SuccessorProtocolAuthorityV3,
   type DecodedCausalEditFrameV3,
 } from "./successor-frame"
 
@@ -75,7 +75,7 @@ export interface CandidateIncomingFrameAdmissionStrategyV3 {
  * reject until a sealed successor release and selector exist.
  */
 export function createCandidateIncomingFrameAdmissionStrategyV3(input: Readonly<{
-  candidate: CandidateSuccessorProtocolAuthorityV3
+  candidate: SuccessorProtocolAuthorityV3
   resolver: SuccessorIncomingAuthorityProofResolverPortV3
   verifier: Ed25519VerifierPortV2
 }>): CandidateIncomingFrameAdmissionStrategyV3 {

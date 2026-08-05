@@ -57,7 +57,7 @@ const authority: LocalProjectOwnerSignerAuthorityV3 = {
 function fixture() {
   const vector = encodeStateVectorV2(new Y.Doc())
   const intentJcs = encodeRestrictedJcsV2({
-    format: "convax.typed-intent/3",
+    format: "convax.typed-intent/2",
     kind: "canvas.node.create",
     value: { id: "n1" },
   })
@@ -143,7 +143,7 @@ describe("non-production CVXCOLL3 candidate codec", () => {
       encoded = encodeCausalEditFrameV3(gate, input)
     expect(new TextDecoder().decode(encoded.subarray(0, 8))).toBe("CVXCOLL3")
     expect(ordinarySha256V2(encoded)).toBe(
-      parseDigestV2("f8c7dbd6f0d54eb86694f5c96a741e5d126b4695dbeb35959f16a57a6a3efcbf"),
+      parseDigestV2("97e58b42f2ca147cdd546451a55a4c14b61570619896f34bd8f46e348ab99795"),
     )
     expect(decodeCausalEditFrameV3(gate, encoded).header.core.signerAuthorityKind).toBe("local-project-owner")
     for (const offset of [0, 11, 30, encoded.length - 1]) {

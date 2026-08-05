@@ -15,6 +15,8 @@ import type {
 import type { ReplicaSignerPortV2 } from "./crypto"
 import type { YjsDocumentFactoryV2 } from "./yjs-codec"
 import type { CausalClosurePortV2 } from "./causal"
+import type { CausalDependencyRefV3, DecodedCausalEditFrameV3 } from "./successor-frame"
+import type { CausalSignerAuthorityV3 } from "./successor-authority"
 
 export interface JournalAppendPortEvidenceV2 {
   readonly ref: FrameObjectRefV2
@@ -159,4 +161,65 @@ export interface CollaborationKernelPortsV2 extends YjsDocumentFactoryV2 {
 
 export interface ProjectionInvalidationPortV2 {
   publish(input: { readonly scope: DocumentScopeV2; readonly frameDigest: DigestV2 }): void
+}
+
+/**
+ * Successor ports deliberately reuse the stable Project-native durability shapes
+ * while keeping V3 frames and signer evidence out of the V2 kernel surface.
+ * These interfaces are non-activating until a verified V11 release selects them.
+ */
+export interface LocalFrameAuthorityV3 {
+  readonly actorId: ActorIdV2
+  readonly actorSequence: Uint64V2
+  /** The first V3 frame names an installed signed bridge; it is never null. */
+  readonly predecessorFrameDigest: DigestV2
+  readonly signerAuthority: CausalSignerAuthorityV3
+  readonly dependencies: readonly CausalDependencyRefV3[]
+  readonly validationArtifacts: ValidationArtifactSetV2
+  readonly signer: ReplicaSignerPortV2
+}
+
+export interface LocalAuthorityPortV3 {
+  readonly actorId: ActorIdV2
+  prepareFinalFrameAuthority(input: {
+    readonly scope: DocumentScopeV2
+    readonly operationId: Id128V2
+    readonly baseFrontier: CausalFrontierV2
+    readonly previousActorHead: CausalHeadRefV2 | null
+    readonly ownerSchemaDigest: DigestV2
+  }): Promise<LocalFrameAuthorityV3 | "pending" | "rejected">
+}
+
+export interface IncomingAuthorityVerificationPortV3 {
+  verifyFrameAuthority(frame: DecodedCausalEditFrameV3): Promise<
+    | { readonly replicaPublicKey: PublicKeyV2 }
+    | "pending"
+    | "rejected"
+  >
+}
+
+export interface IncomingOwnerFactResolverPortV3 {
+  resolve(input: {
+    readonly frame: DecodedCausalEditFrameV3
+    readonly declaredDependencies: OwnerIntentDependenciesV2<DocumentScopeV2["docKind"]>
+    readonly signal?: AbortSignal
+  }): Promise<IncomingOwnerFactResolutionV2>
+}
+
+export interface ExactBaseResolverPortV3 {
+  reconstructExactBase(frame: DecodedCausalEditFrameV3): Promise<ExactReconstructedBaseV2 | "pending" | "rejected">
+}
+
+export interface PendingInboxPortV3 {
+  retainExactFrame(frame: DecodedCausalEditFrameV3, reason: PendingFrameReasonV2): Promise<"retained" | "capacity-exceeded">
+}
+
+export interface CollaborationKernelPortsV3 extends YjsDocumentFactoryV2 {
+  readonly persistence: CollaborationPersistencePortV2
+  readonly localAuthority: LocalAuthorityPortV3
+  readonly incomingAuthority: IncomingAuthorityVerificationPortV3
+  readonly incomingFacts: IncomingOwnerFactResolverPortV3
+  readonly exactBaseResolver: ExactBaseResolverPortV3
+  readonly causalClosure: CausalClosurePortV2
+  readonly pendingInbox: PendingInboxPortV3
 }
