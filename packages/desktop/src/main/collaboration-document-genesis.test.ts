@@ -31,7 +31,7 @@ import {
 } from "@convax/project/node"
 
 import { createCanvasDocumentGenesisVerifierPortV2 } from "./canvas-document-genesis"
-import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
+import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
 
 const bytes = new TextEncoder()
 const projectEpoch = id(1)
@@ -59,8 +59,7 @@ const predecessor = Object.freeze({
 
 describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact Canvas CVXCGP02 candidate through the real Node sole-writer barrier", async () => {
-    const stagedAuthorityRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority")
-    const authority = await loadCollaborationAuthorityV2({ explicitAuthorityRoot: stagedAuthorityRoot })
+    const authority = await loadHistoricalTestAuthorityV2()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
       .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)

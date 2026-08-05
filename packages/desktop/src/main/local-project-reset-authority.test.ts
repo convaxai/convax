@@ -11,7 +11,7 @@ import {
   readProjectResetRecordsV2,
 } from "@convax/project/node"
 
-import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
+import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVaultV2, type ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
 import { LocalProjectResetAuthorityV2 } from "./local-project-reset-authority"
@@ -210,9 +210,7 @@ async function createFixture() {
   await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "catalog")
   await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "document")
   await fs.writeFile(path.join(projectRoot, "Notes", "keep.md"), "keep")
-  const authority = await loadCollaborationAuthorityV2({
-    explicitAuthorityRoot: path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority"),
-  })
+  const authority = await loadHistoricalTestAuthorityV2()
   const projectId = parseProjectIdV2("project_test")
   const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), availableStorage)
   const owners = new NodeDurableLocalProjectOwnerAuthorityV2({

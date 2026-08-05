@@ -207,14 +207,18 @@ For any matching change, read the full routed reference before planning or editi
   local-owner bootstrap through the Project/node verifier; path presence alone is
   neither Team evidence nor permission to reset current collaboration state.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
-  Team control-plane state. This keeps the shell local-first, but it does not make
-  the frozen v2 kernel locally writable: without its selected signer authority the
-  Project remains `local-authority-unavailable`.
-- V3 local-owner authority-source adapters are successor-only seams. Do not compose
-  them into v2 document sessions or treat Project/node successor records as a
-  runtime selector. Production composition requires the complete sealed successor,
-  its verified pointer, dual-version dispatcher, and durable one-way sharing
-  handoff; missing or ambiguous sharing state stays fail-closed.
+  Team control-plane state. This keeps the shell local-first; mutation authority
+  still comes only from the verified V11/R1 selector or its pinned historical V2
+  dispatch, never from shell state.
+- Compose V3 local-owner authority adapters only through the active V11/R1 release,
+  its complete pinned V10/R5 dependency, and the verified dual-version dispatcher.
+  R1 permits only promotion of a verified pristine, unshared V10 ProjectIndex into
+  one local-owner V3 Project with one deterministic default Canvas. Direct-new V3,
+  additional V3 Canvases, sharing, and ambiguous promotion remain fail-closed;
+  Project/node record presence alone is not a runtime selector.
+- Retain the canonical Project root and local actor binding across zero-lease writer
+  disposal. Admit a changed binding only after the serialized close/reset operation
+  succeeds; failure keeps the prior binding and makes later acquisition fail closed.
 
 - Run `bun typecheck && bun test` from `packages/desktop`.
 - Run focused tests for the changed capability and its failure/recovery path.

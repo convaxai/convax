@@ -6,9 +6,10 @@ Electron, filesystem, React, or a concrete document schema.
 
 ## Owns
 
-- Shared v2 ids/scopes/stamps, restricted JCS, exact Yjs 13.6.31 update-v1 codecs,
-  bounded envelopes, causal frames/frontiers, exact-base validation, the binary
-  `CVXCAR02` checkpoint-carrier structural codec, and checkpoint/causal-floor
+- Historical V2 and selected V3 ids/scopes/stamps, restricted JCS, exact Yjs 13.6.31
+  update-v1 codecs, bounded envelopes, causal frames/frontiers, exact-base
+  validation, protocol-authority selection/dispatch, the binary `CVXCAR02`
+  historical checkpoint-carrier structural codec, and checkpoint/causal-floor
   primitives.
 - One Main-owned `replicaDoc` per shard plus one isolated `candidateDoc` per command.
   Owner packages inject their exact closed schema, reducer, canonicalizer, evidence,
@@ -17,8 +18,9 @@ Electron, filesystem, React, or a concrete document schema.
   ordering contract. Replication outboxes and ACKs are metadata, never another doc.
 - Transaction-origin separation, typed persistence/journal ports without an I/O
   implementation, and the transient `SessionUndoCoordinatorV2`.
-- The exact four-owner artifact manifest and one instantiated
-  `ProtocolSchemaBundleV2.coreDigest`/`protocolDigest` from the frozen v10 authority.
+- The exact V11/R1 four-owner artifact manifest and
+  `ProtocolSchemaBundleV3.coreDigest`/`protocolDigest`, plus the complete historical
+  V10/R5 authority pinned by that release.
 
 ## Does not own
 
@@ -48,18 +50,17 @@ Electron, filesystem, React, or a concrete document schema.
   coordinator. Remote/bootstrap/recovery frames never enter or reorder its stacks.
   Owners materialize a new semantic inverse/forward intent; raw Y.UndoManager bytes
   never enter candidate, replica, journal, or wire.
-- Missing or mismatched files in the root's sealed R5 authority release fail
-  closed before decode or sign as `protocol-schema-bundle-unavailable`.
-- Successor-shaped V3 authority DTOs, verification ports, and protocol codec
-  strategy seams are non-active implementation scaffolding. The only selected
-  production strategy remains V2 and requires `VerifiedProtocolAuthorityV2`.
-  Never pass V3 evidence into the v2 kernel, dispatch V3 bytes without a verified
-  successor selector, or infer activation from public exports or passing tests.
-- A successor becomes usable only as one sealed release containing its complete
-  core/context/frame and wire codec, admission closure, dual-version dispatcher,
-  independently generated artifacts, external role receipts, review evidence,
-  manifest, pointer, and mutation checks. Repository-local code or approval prose
-  cannot satisfy that gate.
+- Missing or mismatched files in the sealed V11/R1 release or its pinned V10/R5
+  dependency fail closed before dispatch, decode, or sign as
+  `protocol-schema-bundle-unavailable`.
+- The verified V11 selector activates V3 only for R1's narrow promotion of a
+  verified pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project
+  with one deterministic default Canvas. Shared, non-pristine, incomplete, or
+  ambiguous V10 Projects continue through the pinned historical V2 authority.
+  Direct-new V3, additional V3 Canvas creation, and V3 sharing are unavailable.
+- Never pass V3 evidence into the V2 kernel, dispatch either protocol without the
+  verified V11 release and historical pin, or infer activation from public exports,
+  directory presence, durable records, source constants, or passing tests.
 - The non-active V3 sharing-handoff codec binds one exact Project epoch, owner
   predecessor, ProjectIndex head, sorted live-Canvas head closure, initial Team
   artifact digests, and successor protocol. Its receipt requires owner and trusted

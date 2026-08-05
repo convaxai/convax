@@ -99,9 +99,10 @@ contract and its routed references.
 - React Flow projection, measurements, selection, viewport, and gesture previews
   remain transient Canvas-owned view state. Desktop supplies shell and adapters,
   not a competing document store.
-- Collaboration v10 composition must load the selected frozen R5 authority and fail
-  closed on missing or mismatched identity-chain members. Older drafts, receipts,
-  code, or portable JSON bytes are evidence only and never runtime fallback.
+- Collaboration composition must load the active V11/R1 release and its complete
+  pinned historical V10/R5 dependency before dual-version dispatch. Missing or
+  mismatched identity-chain members fail closed. Older drafts, receipts, code, or
+  portable JSON bytes are evidence only and never runtime fallback.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
 - Card conversations infer only direct incoming file nodes. Image/video replacement

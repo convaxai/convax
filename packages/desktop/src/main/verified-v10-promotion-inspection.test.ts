@@ -15,7 +15,7 @@ import { CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/canvas/collab
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import type { EmptyProjectDefaultCanvasClaimSourceV3 } from "@convax/project/node"
 
-import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
+import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
 import { createLocalProjectOwnerIndexRegistrationPortV2 } from "./main-project-index-runtime-registry"
@@ -85,9 +85,7 @@ async function createFixture(options: {
   const projectRoot = path.join(root, "project")
   const userData = path.join(root, "user-data")
   await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
-  const authority = await loadCollaborationAuthorityV2({
-    explicitAuthorityRoot: path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority"),
-  })
+  const authority = await loadHistoricalTestAuthorityV2()
   const projectId = parseProjectIdV2("project-v10-promotion")
   const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), {
     isEncryptionAvailable: () => true,
