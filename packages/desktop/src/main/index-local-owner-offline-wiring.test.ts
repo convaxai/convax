@@ -98,7 +98,7 @@ function onlineStatus(projectId: string): TestStatus {
   })
 }
 
-function createRuntimeHarness(options: { failActivation?: boolean } = {}) {
+function createRuntimeHarness(options: { failActivation?: boolean; waitForLocalActivation?: Promise<void> } = {}) {
   let currentStatus = localOnlyStatus("inactive")
   let statusListener: ((status: TestStatus) => void) | undefined
   let staleStatusListener: ((status: TestStatus) => void) | undefined
@@ -109,6 +109,7 @@ function createRuntimeHarness(options: { failActivation?: boolean } = {}) {
     activatedProjects: [] as string[],
     connectivityCalls: [] as boolean[],
     disposeCalls: 0,
+    localActivatedProjects: [] as string[],
     quiescedProjects: [] as string[],
     unsubscribeCalls: 0,
     emitConnectivity(online: boolean) { connectivityListener?.(online) },
@@ -116,6 +117,8 @@ function createRuntimeHarness(options: { failActivation?: boolean } = {}) {
   }
   const service: TestService = {
     async activateLocalProject(projectId) {
+      harness.localActivatedProjects.push(projectId)
+      if (options.waitForLocalActivation) await options.waitForLocalActivation
       currentStatus = localOnlyStatus(projectId)
       return currentStatus
     },
@@ -313,6 +316,42 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     failed.emitStaleStatus(onlineStatus("project-broken-team"))
     expect(forwarded).toHaveLength(forwardedAfterFailure)
     expect(forwarded.at(-1)?.state).toBe("attention")
+    await gate.dispose()
+  })
+
+  test("a V11 switch prevents a stale V10 activation from restoring cleared runtime state", async () => {
+    let releaseLocalActivation: () => void = () => undefined
+    const waitForLocalActivation = new Promise<void>((resolve) => { releaseLocalActivation = resolve })
+    const runtimes: ReturnType<typeof createRuntimeHarness>[] = []
+    const createRuntime = mock(() => {
+      const next = createRuntimeHarness(runtimes.length === 0 ? { waitForLocalActivation } : undefined)
+      runtimes.push(next)
+      return next.runtime
+    })
+    const activateV10Project = mock(async ({ projectId, service }: TestActivationRequest) =>
+      service.activateLocalProject(projectId))
+    const gate = createProtocolGate({ activateV10Project, createRuntime })
+
+    await gate.activateProject("project-race", "v10-r5")
+    const staleBootstrap = gate.service.bootstrapTeam("project-race").then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(createRuntime).toHaveBeenCalledTimes(1)
+    expect(runtimes[0].localActivatedProjects).toEqual(["project-race"])
+
+    await gate.activateProject("project-v11", "v11-r1-local-owner")
+    expect(runtimes[0].disposeCalls).toBe(1)
+    releaseLocalActivation()
+    const staleError = await staleBootstrap
+    expect(staleError).toBeInstanceOf(Error)
+    expect(errorMessage(staleError)).toContain("became stale")
+    expect(gate.service.getStatus("project-v11")).toEqual(localOnlyStatus("project-v11"))
+
+    await gate.activateProject("project-race", "v10-r5")
+    await gate.service.bootstrapTeam("project-race")
+    expect(createRuntime).toHaveBeenCalledTimes(2)
+    expect(runtimes[1].localActivatedProjects).toEqual(["project-race"])
     await gate.dispose()
   })
 
