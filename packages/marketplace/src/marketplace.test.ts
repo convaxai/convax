@@ -820,10 +820,11 @@ describe("@convax/marketplace strict contracts", () => {
             setup: "automatic",
           },
         ],
+        recoveryArtifacts: [],
         revision: 1,
       } satisfies MarketplaceProductPolicy
       return {
-        schema: "convax.marketplace-product-lock/1",
+        schema: "convax.marketplace-product-lock/2",
         policy,
         resolved: {
           policyDigest: canonicalProductPolicyDigest(policy),
@@ -856,6 +857,7 @@ describe("@convax/marketplace strict contracts", () => {
               ],
             },
           ],
+          recoveryArtifacts: [],
         },
       }
     }

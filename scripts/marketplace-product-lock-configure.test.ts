@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates only the approved v2 source and preinstall policy", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(2)
+  test("creates only the approved v3 source, preinstall policy, and empty recovery set", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(3)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -35,7 +35,8 @@ describe("Marketplace product policy configuration", () => {
           targets: ["darwin-arm64"],
         },
       ],
-      revision: 2,
+      recoveryArtifacts: [],
+      revision: 3,
     })
   })
 

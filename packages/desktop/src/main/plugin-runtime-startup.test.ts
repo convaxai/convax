@@ -190,6 +190,7 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
         plugins: [
           {
             artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+            hostApiMajor: 1,
             pluginId: "legacy",
             snapshotDigest: snapshot.digest,
             sourceIdentity: sha256("legacy source"),

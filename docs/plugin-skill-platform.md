@@ -122,6 +122,14 @@ lease on its exact immutable snapshots. Durable long-running Host owners may hol
 a bounded persistent pin; a pin preserves bytes but grants no execution authority.
 Unsupported legacy state is rejected without silently rewriting or deleting it.
 
+The packaged product lock may retain a bounded replacement closure for offline
+recovery of one exact retired-Host-API Plugin binding. This is not a preinstall or
+discovery source: the Host exposes it only to the existing explicit update path
+after quarantine inspection matches source, Plugin id, old version, archive
+SHA-256/size, immutable snapshot digest, and old Host API major. Fresh installs,
+default provisioning, mismatched snapshots, and directory scans cannot consume it.
+The successful CAS remains inert for the quarantined process until restart.
+
 Plugin-owned Skills are read directly from the leased immutable closure. A generic
 `resolveSkillPaths` port passes only absolute Skill directories to
 `@convax/agent-runtime`; the Agent runtime never receives Plugin ids, ActiveSet

@@ -50,6 +50,15 @@ interface PackagedManifest {
   schema: "convax.packaged-marketplace-product/1"
 }
 
+export interface PackagedRetiredPluginRecovery {
+  readonly artifact: { readonly sha256: string; readonly size: number }
+  readonly hostApiMajor: number
+  readonly pluginId: string
+  readonly snapshotDigest: string
+  readonly sourceIdentity: string
+  readonly version: string
+}
+
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]) {
   const actual = Object.keys(value).sort()
   const wanted = [...expected].sort()
@@ -279,6 +288,41 @@ export class PackagedMarketplaceProduct {
     if (!lockedPackage || artifactKey(lockedPackage.artifact) !== artifactKey(item.delivery)) {
       throw new Error("Package is not selected by the Marketplace product lock")
     }
+    return this.#verifiedLockedCandidate(item, lockedPackage)
+  }
+
+  async verifiedRecoveryCandidate(
+    item: RegistryPackage,
+    recovery: PackagedRetiredPluginRecovery,
+  ): Promise<VerifiedMarketplaceCandidate | null> {
+    if (item.kind !== "plugin" || item.delivery.kind !== "artifact") return null
+    const delivery = item.delivery
+    const lockedPackage = this.lock.resolved.recoveryArtifacts.find(
+      (entry) =>
+        entry.kind === item.kind &&
+        entry.id === item.id &&
+        entry.version === item.version &&
+        artifactKey(entry.artifact) === artifactKey(delivery),
+    )
+    if (!lockedPackage) return null
+    const retired = lockedPackage.retired
+    if (
+      recovery.pluginId !== lockedPackage.id ||
+      recovery.sourceIdentity !== this.#officialSourceKey() ||
+      recovery.version !== retired.version ||
+      artifactKey(recovery.artifact) !== artifactKey(retired.artifact) ||
+      recovery.snapshotDigest !== retired.snapshotDigest ||
+      recovery.hostApiMajor !== retired.hostApiMajor
+    ) {
+      return null
+    }
+    return this.#verifiedLockedCandidate(item, lockedPackage)
+  }
+
+  async #verifiedLockedCandidate(
+    item: RegistryPackage,
+    lockedPackage: MarketplaceProductLock["resolved"]["packages"][number],
+  ): Promise<VerifiedMarketplaceCandidate> {
     const artifactBytes = await this.#read(lockedPackage.artifact)
     const companionBytes: Record<string, Uint8Array> = {}
     for (const declaration of item.companions ?? []) {
@@ -302,8 +346,8 @@ export class PackagedMarketplaceProduct {
     }
   }
 
-  catalog(): SourceQualifiedItem[] {
-    const officialSourceKey = computeSourceKey({
+  #officialSourceKey() {
+    return computeSourceKey({
       deliveryPolicy: "github-pages-releases",
       descriptorUrl: this.lock.policy.official.descriptorUrl,
       kind: "network",
@@ -313,6 +357,10 @@ export class PackagedMarketplaceProduct {
         owner: this.descriptor.repository.owner,
       },
     })
+  }
+
+  catalog(): SourceQualifiedItem[] {
+    const officialSourceKey = this.#officialSourceKey()
     const builtinKey = builtinSourceKey()
     return [
       ...this.builtin.members.map(

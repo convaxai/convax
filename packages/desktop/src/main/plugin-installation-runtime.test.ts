@@ -406,6 +406,7 @@ describe("PluginInstallationRuntime", () => {
       plugins: [
         {
           artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+          hostApiMajor: 1,
           pluginId: "legacy",
           snapshotDigest: legacy.snapshot.digest,
           sourceIdentity: sha256("legacy:source"),
@@ -413,6 +414,7 @@ describe("PluginInstallationRuntime", () => {
         },
         {
           artifact: { sha256: sha256("legacy-other archive"), size: 2_048 },
+          hostApiMajor: 1,
           pluginId: "legacy-other",
           snapshotDigest: other.snapshot.digest,
           sourceIdentity: sha256("legacy-other:source"),
