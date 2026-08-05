@@ -416,30 +416,30 @@ the Desktop-owned managed-stdio profile.
 
 ## 3. Packages and dependency graph
 
-| Package                     | Responsibility                                                                                                                                          |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                              |
-| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                         |
-| `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                      |
-| `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics |
-| `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                       |
-| `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                     |
+| Package                     | Responsibility                                                                                                                                                                               |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                                                                   |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                              |
+| `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                                                           |
+| `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics             |
+| `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                                                             |
+| `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                                                          |
 | `@convax/collaboration`     | Generic v2 primitives/JCS, causal frames/frontiers, replica/candidate kernel, binary `CVXCAR02` checkpoint-carrier/checkpoint/floor primitives, journal ports, and session undo coordination |
-| `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                  |
-| `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                         |
-| `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                               |
-| `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                       |
-| `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                                                     |
-| `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                          |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                              |
-| `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                            |
-| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                               |
-| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                 |
-| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                     |
-| `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                        |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                                               |
-| `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                                               |
-| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                               |
+| `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                       |
+| `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                              |
+| `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                    |
+| `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                                                            |
+| `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                                                                                          |
+| `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                               |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                                                                  |
+| `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                 |
+| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                                                    |
+| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                                                      |
+| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                                                          |
+| `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                                                             |
+| `@convax/web`               | Public marketing site and responsive product storytelling                                                                                                                                    |
+| `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                                                                                    |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                    |
 
 Allowed internal runtime dependencies:
 
@@ -568,7 +568,7 @@ boundary checker fails closed until those admissions are complete.
 | Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                             |
 | Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                              |
 | React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                             |
-| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port             | Read-only bounded projection; never Canvas document state                                          |
+| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                          |
 | Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                               |
 | Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                           |
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                         |
@@ -782,6 +782,16 @@ or other user-visible content. Unsupported legacy bytes may be retired only by t
 explicit reset policy after confirmation, never by open, checkpoint, or GC.
 The Node open guard runs before registry publication or recency mutation. Its
 host-local reset planner inventories and digests the exact private deletion set;
+ProjectIndex first registration independently repeats that cutover guard before it
+may create a durable local-owner binding or publish collaboration genesis bytes. A
+legacy Project previously affected by the old ordering may use the unteamed reset
+branch only when Project/node verifies that the published collaboration tree is the
+exact manifest-bound empty genesis for the pre-existing local-owner binding, has
+the single expected checkpoint/set/base/head inventory, and contains no accepted
+frame, Canvas route, Team/control identity, reset evidence, or unknown native state.
+This recognition treats the tree only as a rejected bootstrap artifact; it does not
+authorize reset of a current Project or reuse an old epoch. Any mismatch requires
+the control-plane rollover path and keeps the Project closed.
 publication requires the exact control/Project verifier to persist and approve the
 frozen confirmation/approval/rollover evidence, then re-verifies the complete
 published tree before retiring the old private tree. Stale plans, symlink changes,

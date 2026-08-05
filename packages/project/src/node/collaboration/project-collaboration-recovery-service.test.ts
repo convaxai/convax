@@ -60,9 +60,7 @@ describe("NodeProjectCollaborationRecoveryServiceV1", () => {
     expect(authorityPreparedInsideGate).toBe(true)
     expect(await fs.readFile(path.join(root, "keep.md"), "utf8")).toBe("keep")
     await expect(fs.access(path.join(root, ".convax", "canvases", "catalog.json"))).rejects.toThrow()
-    expect(await fs.readFile(path.join(root, ".convax", "collaboration", "manifest-v2.bin"), "utf8")).toBe(
-      "manifest",
-    )
+    expect(await fs.readFile(path.join(root, ".convax", "collaboration", "manifest-v2.bin"), "utf8")).toBe("manifest")
   })
 
   test("rejects a stale confirmation before asking the authority to stage genesis", async () => {
@@ -78,6 +76,14 @@ describe("NodeProjectCollaborationRecoveryServiceV1", () => {
     expect(prepared).toBe(false)
     expect(await fs.readFile(path.join(root, ".convax", "canvases", "catalog.json"), "utf8")).toBe("changed")
   })
+
+  test("checks reset authority before exposing a destructive preview", async () => {
+    const root = await createLegacyProject()
+    const service = createService(root, { resetUnavailable: true })
+
+    await expect(service.previewReset(projectId)).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
+    expect(await fs.readFile(path.join(root, ".convax", "canvases", "catalog.json"), "utf8")).toBe("legacy")
+  })
 })
 
 function createService(
@@ -85,16 +91,24 @@ function createService(
   overrides: {
     gate?: ConstructorParameters<typeof NodeProjectCollaborationRecoveryServiceV1>[0]["gate"]
     onPrepare?(): void
+    resetUnavailable?: boolean
   } = {},
 ) {
   return new NodeProjectCollaborationRecoveryServiceV1({
-    projects: { resolveProjectRoot: async (requested) => (requested === projectId ? root : Promise.reject(new Error("unknown"))) },
+    projects: {
+      resolveProjectRoot: async (requested) => (requested === projectId ? root : Promise.reject(new Error("unknown"))),
+    },
     gate:
       overrides.gate ??
       ({
         runClosed: async ({ operation }) => operation(),
       } satisfies ConstructorParameters<typeof NodeProjectCollaborationRecoveryServiceV1>[0]["gate"]),
     authority: {
+      async inspectReset() {
+        return overrides.resetUnavailable
+          ? { reason: "team-epoch-rollover-required" as const, status: "unavailable" as const }
+          : { status: "eligible" as const }
+      },
       async prepareReset() {
         overrides.onPrepare?.()
         return {

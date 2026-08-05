@@ -6,7 +6,7 @@ import { createWebCryptoEd25519VerifierV2, parseProjectIdV2 } from "@convax/coll
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import {
   NodeProjectCollaborationRecoveryServiceV1,
-  planPortableProjectReset,
+  ProjectBlobReplicationStoreV2,
   readProjectNativeStoreManifestV2,
   readProjectResetRecordsV2,
 } from "@convax/project/node"
@@ -14,7 +14,11 @@ import {
 import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
 import { ElectronReplicaSigningVaultV2, type ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
-import { LocalProjectResetAuthorityV2, TeamProjectResetUnavailableErrorV2 } from "./local-project-reset-authority"
+import { LocalProjectResetAuthorityV2 } from "./local-project-reset-authority"
+import {
+  initializeLocalOwnerProjectIndexNativeStoreV2,
+  verifyPristineLocalOwnerProjectIndexNativeStoreV2,
+} from "./main-project-index-runtime-registry"
 
 const roots: string[] = []
 
@@ -27,11 +31,17 @@ describe("local Project reset authority", () => {
     const fixture = await createFixture()
     const service = new NodeProjectCollaborationRecoveryServiceV1({
       authority: fixture.resets,
-      gate: { async runClosed({ operation }) { return operation() } },
-      projects: { async resolveProjectRoot(projectId) {
-        if (projectId !== "project_test") throw new Error("unknown Project")
-        return fixture.projectRoot
-      } },
+      gate: {
+        async runClosed({ operation }) {
+          return operation()
+        },
+      },
+      projects: {
+        async resolveProjectRoot(projectId) {
+          if (projectId !== "project_test") throw new Error("unknown Project")
+          return fixture.projectRoot
+        },
+      },
     })
     const legacyCatalog = path.join(fixture.projectRoot, ".convax", "canvases", "catalog.json")
     const catalogBefore = await fs.readFile(legacyCatalog)
@@ -59,27 +69,132 @@ describe("local Project reset authority", () => {
     expect(records.manifest.oldProjectEpoch).toBeNull()
     expect(records.manifest.newProjectEpoch).toBe(native.projectIndexScope.projectEpoch)
     expect(records.manifest.newProjectIndexShardEpoch).toBe(native.projectIndexScope.shardEpoch)
-    expect(records.manifest.emptyProjectIndexCanonicalStateDigest).toBe(
-      native.emptyProjectIndexCanonicalStateDigest,
-    )
+    expect(records.manifest.emptyProjectIndexCanonicalStateDigest).toBe(native.emptyProjectIndexCanonicalStateDigest)
     expect(records.confirmation.core.confirmationPrincipal.kind).toBe("local-project-owner")
     expect(records.confirmation.core.ordinaryProjectFilesPreserved).toBeTrue()
     expect(await service.inspectProject("project_test")).toEqual({ status: "current" })
   })
 
-  test("refuses local authority when the exact private tree contains team/collaboration evidence", async () => {
+  test("recovers an exact pristine local-owner bootstrap published beside legacy Canvas bytes", async () => {
+    const fixture = await createFixture()
+    const owner = await fixture.owners.ensureForDurableProject({
+      projectId: parseProjectIdV2("project_test"),
+      projectRoot: fixture.projectRoot,
+    })
+    const collaborationDirectory = path.join(fixture.projectRoot, ".convax", "collaboration")
+    await initializeLocalOwnerProjectIndexNativeStoreV2({
+      authority: fixture.authority,
+      collaborationDirectory,
+      owner,
+      verifyCheckpointSignature: (binding, coreDigest, signature) =>
+        fixture.owners.verifyCheckpointSignature(binding, coreDigest, signature),
+    })
+    await ProjectBlobReplicationStoreV2.open({
+      collaborationDirectory,
+      projectId: owner.binding.projectId,
+      projectEpoch: owner.binding.projectEpoch,
+      protocolDigest: fixture.authority.protocolDigest,
+    })
+    await verifyPristineLocalOwnerProjectIndexNativeStoreV2({
+      authority: fixture.authority,
+      collaborationDirectory,
+      owner,
+      verifyCheckpointSignature: (binding, coreDigest, signature) =>
+        fixture.owners.verifyCheckpointSignature(binding, coreDigest, signature),
+    })
+    const service = new NodeProjectCollaborationRecoveryServiceV1({
+      authority: fixture.resets,
+      gate: {
+        async runClosed({ operation }) {
+          return operation()
+        },
+      },
+      projects: {
+        async resolveProjectRoot() {
+          return fixture.projectRoot
+        },
+      },
+    })
+
+    const preview = await service.previewReset("project_test")
+    expect(preview.preview.map((entry) => entry.path)).toContain(".convax/collaboration/manifest-v2.bin")
+    expect(await service.confirmReset({ projectId: "project_test", token: preview.token })).toEqual({
+      projectId: "project_test",
+      status: "published",
+    })
+    expect(await fs.readFile(path.join(fixture.projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
+  })
+
+  test("refuses local authority during preview when collaboration state is not the exact pristine bootstrap", async () => {
     const fixture = await createFixture()
     const collaboration = path.join(fixture.projectRoot, ".convax", "collaboration")
     await fs.mkdir(collaboration)
     await fs.writeFile(path.join(collaboration, "legacy-membership.bin"), "team-evidence")
-    const plan = await planPortableProjectReset(fixture.projectRoot)
+    const service = new NodeProjectCollaborationRecoveryServiceV1({
+      authority: fixture.resets,
+      gate: {
+        async runClosed({ operation }) {
+          return operation()
+        },
+      },
+      projects: {
+        async resolveProjectRoot() {
+          return fixture.projectRoot
+        },
+      },
+    })
 
-    await expect(fixture.resets.prepareReset({ plan })).rejects.toBeInstanceOf(
-      TeamProjectResetUnavailableErrorV2,
-    )
+    await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
     expect(await fs.readdir(collaboration)).toEqual(["legacy-membership.bin"])
   })
+
+  test("rejects a formerly pristine bootstrap after any collaboration state appears", async () => {
+    const fixture = await createFixture()
+    const owner = await fixture.owners.ensureForDurableProject({
+      projectId: parseProjectIdV2("project_test"),
+      projectRoot: fixture.projectRoot,
+    })
+    const collaborationDirectory = path.join(fixture.projectRoot, ".convax", "collaboration")
+    await initializeLocalOwnerProjectIndexNativeStoreV2({
+      authority: fixture.authority,
+      collaborationDirectory,
+      owner,
+      verifyCheckpointSignature: (binding, coreDigest, signature) =>
+        fixture.owners.verifyCheckpointSignature(binding, coreDigest, signature),
+    })
+    const frames = path.join(
+      collaborationDirectory,
+      "documents",
+      await onlyEntry(path.join(collaborationDirectory, "documents")),
+      "objects",
+      "frames",
+    )
+    await fs.writeFile(path.join(frames, `${"a".repeat(64)}.bin`), "accepted-state")
+    const before = await fs.readFile(path.join(frames, `${"a".repeat(64)}.bin`))
+    const service = new NodeProjectCollaborationRecoveryServiceV1({
+      authority: fixture.resets,
+      gate: {
+        async runClosed({ operation }) {
+          return operation()
+        },
+      },
+      projects: {
+        async resolveProjectRoot() {
+          return fixture.projectRoot
+        },
+      },
+    })
+
+    await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
+    expect(await fs.readFile(path.join(frames, `${"a".repeat(64)}.bin`))).toEqual(before)
+  })
 })
+
+async function onlyEntry(directory: string): Promise<string> {
+  const entries = await fs.readdir(directory)
+  if (entries.length !== 1 || !entries[0]) throw new Error("expected one entry")
+  return entries[0]
+}
 
 async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-local-reset-"))
@@ -104,15 +219,18 @@ async function createFixture() {
     rootDirectory: path.join(userData, "local-project-owner"),
     authority,
     schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-    projects: { async resolveProjectRoot({ projectId: requested }) {
-      if (requested !== projectId) throw new Error("unknown Project")
-      return projectRoot
-    } },
+    projects: {
+      async resolveProjectRoot({ projectId: requested }) {
+        if (requested !== projectId) throw new Error("unknown Project")
+        return projectRoot
+      },
+    },
     vault,
     verifier: createWebCryptoEd25519VerifierV2(),
   })
   return {
     authority,
+    owners,
     projectRoot,
     resets: new LocalProjectResetAuthorityV2({ authority, owners }),
   }

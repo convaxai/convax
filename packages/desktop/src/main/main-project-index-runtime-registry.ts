@@ -37,10 +37,12 @@ import type {
 import {
   createEmptyProjectIndexGenesisCandidateV2,
   initializeUnteamedProjectIndexNativeStoreV2,
+  inspectPortableProjectCutover,
   ProjectBlobReplicationStoreV2,
   ProjectIndexFileMaterializerV2,
   readProjectNativeStoreManifestV2,
   verifyEmptyProjectIndexGenesisV2,
+  verifyPristineUnteamedProjectIndexNativeStoreV2,
   type NodeReplicaHeadMaterializerV2,
 } from "@convax/project/node"
 
@@ -82,7 +84,10 @@ export interface MainProjectIndexFirstRegistrationPortV2 {
 export class CollaborationEnrollmentRequiredErrorV2 extends Error {
   readonly code = "collaboration-enrollment-required" as const
 
-  constructor(readonly projectId: string, options?: ErrorOptions) {
+  constructor(
+    readonly projectId: string,
+    options?: ErrorOptions,
+  ) {
     super(`Project collaboration enrollment is required: ${projectId}`, options)
     this.name = "CollaborationEnrollmentRequiredErrorV2"
   }
@@ -95,14 +100,11 @@ export function createExistingProjectIndexRegistrationPortV2(
   const port: MainProjectIndexFirstRegistrationPortV2 = {
     async ensureRegistered({ projectId, projectRoot }) {
       try {
-        const manifest = await readProjectNativeStoreManifestV2(
-          path.join(projectRoot, ".convax", "collaboration"),
-          {
-            protocolDigest: authority.protocolDigest,
-            schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-            uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
-          },
-        )
+        const manifest = await readProjectNativeStoreManifestV2(path.join(projectRoot, ".convax", "collaboration"), {
+          protocolDigest: authority.protocolDigest,
+          schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+          uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
+        })
         if (manifest.projectIndexScope.projectId !== projectId) {
           throw new Error("ProjectIndex manifest crossed the bound Project")
         }
@@ -130,6 +132,11 @@ export function createLocalProjectOwnerIndexRegistrationPortV2(
 ): MainProjectIndexFirstRegistrationPortV2 {
   const port: MainProjectIndexFirstRegistrationPortV2 = {
     async ensureRegistered({ projectId, projectRoot }) {
+      const cutover = await inspectPortableProjectCutover(projectRoot)
+      if (cutover.status === "unsupported-portable-project-version") throw cutover.error
+      if (cutover.status === "recovery-required") {
+        throw new Error("Project collaboration reset recovery must finish before first registration")
+      }
       const authorityTuple = {
         protocolDigest: authority.protocolDigest,
         schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
@@ -165,73 +172,129 @@ export async function initializeLocalOwnerProjectIndexNativeStoreV2(input: {
   readonly owner: ResolvedLocalProjectOwnerAuthorityV2
   readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
 }): Promise<ProjectIndexScopeV2> {
-      const { authority, owner, collaborationDirectory } = input
-      const authorityTuple = {
-        protocolDigest: authority.protocolDigest,
-        schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-        uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
-      } as const
-      const scope: ProjectIndexScopeV2 = Object.freeze({
-        projectId: owner.binding.projectId,
-        projectEpoch: owner.binding.projectEpoch,
-        docKind: "project-index",
-        docId: "project-index",
-        shardEpoch: owner.binding.projectIndexShardEpoch,
-      })
-      const candidate = createEmptyProjectIndexGenesisCandidateV2({
-        scope,
-        actorId: owner.binding.actorId,
-        operationId: owner.binding.genesisOperationId,
-        checkpointId: owner.binding.genesisCheckpointId,
-        authorMemberId: owner.binding.memberId,
-        authorReplicaId: owner.binding.replicaId,
-        authorAuthorizationDigest: owner.binding.bindingDigest,
-        validationArtifactSetDigest: owner.binding.validationArtifactSetDigest,
-        authority: authorityTuple,
-      })
-      const coreDigest = replicaCheckpointCoreDigestV2(candidate.checkpointCore)
-      const checkpoint = Object.freeze({
-        format: "convax.replica-checkpoint/2" as const,
-        core: candidate.checkpointCore,
-        coreDigest,
-        replicaSignature: await owner.signer.sign(Buffer.from(coreDigest, "hex")),
-      })
-      const genesis = await verifyEmptyProjectIndexGenesisV2({
-        scope,
-        document: candidate.document,
-        checkpointExactBytes: encodeRestrictedJcsV2(checkpoint),
-        initializationAuthorityDigest: owner.binding.bindingDigest,
-        verifier: {
-          async verify(value) {
-            const core = value.core
-            if (
-              core.authorMemberId !== owner.binding.memberId ||
-              core.authorReplicaId !== owner.binding.replicaId ||
-              core.authorActorId !== owner.binding.actorId ||
-              core.authorAuthorizationDigest !== owner.binding.bindingDigest ||
-              core.validationArtifactSetDigest !== owner.binding.validationArtifactSetDigest
-            ) return false
-            return input.verifyCheckpointSignature(owner.binding, value.coreDigest, value.replicaSignature)
-          },
-        },
-      })
-      await initializeUnteamedProjectIndexNativeStoreV2({
-        collaborationDirectory,
-        localActorId: owner.binding.actorId,
-        materializer: genesisMaterializer,
-        genesis,
-      })
-      const installed = await readProjectNativeStoreManifestV2(collaborationDirectory, authorityTuple)
-      if (
-        installed.projectIndexScope.projectId !== scope.projectId ||
-        installed.initializationAuthorityDigest !== owner.binding.bindingDigest
-      ) throw new Error("Installed ProjectIndex genesis crossed local owner authority")
-      return installed.projectIndexScope
+  const { authority, owner, collaborationDirectory } = input
+  const prepared = await prepareLocalOwnerProjectIndexGenesisV2(input)
+  const authorityTuple = {
+    protocolDigest: authority.protocolDigest,
+    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
+  } as const
+  const { genesis, scope } = prepared
+  await initializeUnteamedProjectIndexNativeStoreV2({
+    collaborationDirectory,
+    localActorId: owner.binding.actorId,
+    materializer: genesisMaterializer,
+    genesis,
+  })
+  const installed = await readProjectNativeStoreManifestV2(collaborationDirectory, authorityTuple)
+  if (
+    installed.projectIndexScope.projectId !== scope.projectId ||
+    installed.initializationAuthorityDigest !== owner.binding.bindingDigest
+  )
+    throw new Error("Installed ProjectIndex genesis crossed local owner authority")
+  return installed.projectIndexScope
+}
+
+export async function verifyPristineLocalOwnerProjectIndexNativeStoreV2(input: {
+  readonly authority: VerifiedProtocolAuthorityV2
+  readonly collaborationDirectory: string
+  readonly owner: ResolvedLocalProjectOwnerAuthorityV2
+  readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
+}): Promise<void> {
+  const manifest = await readProjectNativeStoreManifestV2(input.collaborationDirectory, {
+    protocolDigest: input.authority.protocolDigest,
+    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    uriProtocolDigest: input.authority.protocolSchemaBundle.core.uriProtocolDigest,
+  })
+  await verifyPristineUnteamedProjectIndexNativeStoreV2({
+    collaborationDirectory: input.collaborationDirectory,
+    localActorId: input.owner.binding.actorId,
+    materializer: genesisMaterializer,
+    manifest,
+    verifier: {
+      async verify(checkpoint) {
+        const core = checkpoint.core
+        if (
+          core.authorMemberId !== input.owner.binding.memberId ||
+          core.authorReplicaId !== input.owner.binding.replicaId ||
+          core.authorActorId !== input.owner.binding.actorId ||
+          core.authorAuthorizationDigest !== input.owner.binding.bindingDigest ||
+          core.validationArtifactSetDigest !== input.owner.binding.validationArtifactSetDigest
+        )
+          return false
+        return input.verifyCheckpointSignature(input.owner.binding, checkpoint.coreDigest, checkpoint.replicaSignature)
+      },
+    },
+  })
+}
+
+async function prepareLocalOwnerProjectIndexGenesisV2(input: {
+  readonly authority: VerifiedProtocolAuthorityV2
+  readonly collaborationDirectory: string
+  readonly owner: ResolvedLocalProjectOwnerAuthorityV2
+  readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
+}) {
+  const { authority, owner } = input
+  const authorityTuple = {
+    protocolDigest: authority.protocolDigest,
+    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
+  } as const
+  const scope: ProjectIndexScopeV2 = Object.freeze({
+    projectId: owner.binding.projectId,
+    projectEpoch: owner.binding.projectEpoch,
+    docKind: "project-index",
+    docId: "project-index",
+    shardEpoch: owner.binding.projectIndexShardEpoch,
+  })
+  const candidate = createEmptyProjectIndexGenesisCandidateV2({
+    scope,
+    actorId: owner.binding.actorId,
+    operationId: owner.binding.genesisOperationId,
+    checkpointId: owner.binding.genesisCheckpointId,
+    authorMemberId: owner.binding.memberId,
+    authorReplicaId: owner.binding.replicaId,
+    authorAuthorizationDigest: owner.binding.bindingDigest,
+    validationArtifactSetDigest: owner.binding.validationArtifactSetDigest,
+    authority: authorityTuple,
+  })
+  const coreDigest = replicaCheckpointCoreDigestV2(candidate.checkpointCore)
+  const checkpoint = Object.freeze({
+    format: "convax.replica-checkpoint/2" as const,
+    core: candidate.checkpointCore,
+    coreDigest,
+    replicaSignature: await owner.signer.sign(Buffer.from(coreDigest, "hex")),
+  })
+  const genesis = await verifyEmptyProjectIndexGenesisV2({
+    scope,
+    document: candidate.document,
+    checkpointExactBytes: encodeRestrictedJcsV2(checkpoint),
+    initializationAuthorityDigest: owner.binding.bindingDigest,
+    verifier: {
+      async verify(value) {
+        const core = value.core
+        if (
+          core.authorMemberId !== owner.binding.memberId ||
+          core.authorReplicaId !== owner.binding.replicaId ||
+          core.authorActorId !== owner.binding.actorId ||
+          core.authorAuthorizationDigest !== owner.binding.bindingDigest ||
+          core.validationArtifactSetDigest !== owner.binding.validationArtifactSetDigest
+        )
+          return false
+        return input.verifyCheckpointSignature(owner.binding, value.coreDigest, value.replicaSignature)
+      },
+    },
+  })
+  return Object.freeze({ genesis, scope })
 }
 
 const genesisMaterializer: NodeReplicaHeadMaterializerV2 = Object.freeze({
-  async inspectFrame() { throw new Error("ProjectIndex genesis has no causal frame") },
-  async applyAcceptedFrame() { throw new Error("ProjectIndex genesis has no causal frame") },
+  async inspectFrame() {
+    throw new Error("ProjectIndex genesis has no causal frame")
+  },
+  async applyAcceptedFrame() {
+    throw new Error("ProjectIndex genesis has no causal frame")
+  },
   actorHeadsDigest: replicaActorHeadSetDigestV2,
 })
 
@@ -257,28 +320,36 @@ interface OpenProjectIndexEntryV2 {
  * Main-only ProjectIndex owner. It is the sole catalog application registry;
  * neither IPC nor Desktop services cache ProjectIndex JSON/projections.
  */
-export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasApplicationPortV2, ProjectIndexCurrentBlobReferencePortV2, ProjectIndexFileApplicationPortV2, ProjectIndexFileMaterializationProjectionPortV2 {
+export class MainProjectIndexRuntimeRegistryV2
+  implements
+    ProjectIndexCanvasApplicationPortV2,
+    ProjectIndexCurrentBlobReferencePortV2,
+    ProjectIndexFileApplicationPortV2,
+    ProjectIndexFileMaterializationProjectionPortV2
+{
   private readonly entries = new Map<string, Promise<OpenProjectIndexEntryV2>>()
   private readonly lanes = new Map<string, Promise<void>>()
   private disposed = false
 
-  constructor(private readonly options: {
-    readonly authority: VerifiedProtocolAuthorityV2
-    readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinatorV2, "acquire" | "resolveProjectRoot">
-    readonly firstRegistration: MainProjectIndexFirstRegistrationPortV2
-    readonly materializers: ProjectCollaborationMaterializerRegistryV2
-    readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
-    readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
-    readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
-    readonly createOperationId: () => Id128V2
-    readonly createShardEpoch: () => Id128V2
-    describeProjectIndex(input: {
-      readonly scope: ProjectIndexScopeV2
-      readonly owner: DocumentOwnerRuntimeV2<"project-index">
-      readonly project: ProjectCollaborationRuntimeLeaseV2
-      readonly blobs: ProjectBlobReplicationStoreV2
-    }): MainProjectIndexDescriptorV2
-  }) {}
+  constructor(
+    private readonly options: {
+      readonly authority: VerifiedProtocolAuthorityV2
+      readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinatorV2, "acquire" | "resolveProjectRoot">
+      readonly firstRegistration: MainProjectIndexFirstRegistrationPortV2
+      readonly materializers: ProjectCollaborationMaterializerRegistryV2
+      readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
+      readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
+      readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
+      readonly createOperationId: () => Id128V2
+      readonly createShardEpoch: () => Id128V2
+      describeProjectIndex(input: {
+        readonly scope: ProjectIndexScopeV2
+        readonly owner: DocumentOwnerRuntimeV2<"project-index">
+        readonly project: ProjectCollaborationRuntimeLeaseV2
+        readonly blobs: ProjectBlobReplicationStoreV2
+      }): MainProjectIndexDescriptorV2
+    },
+  ) {}
 
   async queryCatalog(input: Parameters<ProjectIndexCanvasApplicationPortV2["queryCatalog"]>[0]) {
     const projectId = parseProjectIdV2(input.projectId)
@@ -290,7 +361,9 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
     return (await this.open(projectId)).application.submitRouteCommand({ ...input, projectId })
   }
 
-  async queryCurrentBlobDigests(input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentBlobDigests"]>[0]) {
+  async queryCurrentBlobDigests(
+    input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentBlobDigests"]>[0],
+  ) {
     const projectId = parseProjectIdV2(input.projectId)
     return queryMainProjectIndexCurrentBlobDigestsV2((await this.open(projectId)).application, { projectId })
   }
@@ -315,7 +388,9 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
     return (await this.open(projectId)).fileApplication.tombstoneEntry({ ...input, projectId })
   }
 
-  async queryFileMaterializationPlan(input: Parameters<ProjectIndexFileMaterializationProjectionPortV2["queryFileMaterializationPlan"]>[0]) {
+  async queryFileMaterializationPlan(
+    input: Parameters<ProjectIndexFileMaterializationProjectionPortV2["queryFileMaterializationPlan"]>[0],
+  ) {
     const projectId = parseProjectIdV2(input.projectId)
     return (await this.open(projectId)).fileApplication.queryFileMaterializationPlan({ projectId })
   }
@@ -328,7 +403,9 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
       this.entries.delete(projectId)
       const entry = await pending.catch(() => undefined)
       if (!entry) return
-      try { await entry.session.flush() } finally {
+      try {
+        await entry.session.flush()
+      } finally {
         entry.disposeFileMaterialization()
         entry.session.dispose()
         entry.runtime.dispose()
@@ -371,7 +448,8 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
     let session: MainCollaborationDocumentSessionV2<"project-index"> | undefined
     let disposeFileMaterialization: (() => void) | undefined
     try {
-      if (project.projectRoot !== projectRoot) throw new Error("Project binding changed during ProjectIndex first-register")
+      if (project.projectRoot !== projectRoot)
+        throw new Error("Project binding changed during ProjectIndex first-register")
       const owner = requireProjectIndexOwner(this.options.authority)
       const blobs = await ProjectBlobReplicationStoreV2.open({
         collaborationDirectory: project.collaborationDirectory,
@@ -422,12 +500,17 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
         projection: fileApplication,
         blobs,
       })
-      const scheduleReconcile = () => { void fileMaterializer.reconcile().catch((error: unknown) => {
-        console.error(`Failed to reconcile Project files for ${projectId}`, error)
-      }) }
+      const scheduleReconcile = () => {
+        void fileMaterializer.reconcile().catch((error: unknown) => {
+          console.error(`Failed to reconcile Project files for ${projectId}`, error)
+        })
+      }
       const unsubscribeSession = session.subscribe(scheduleReconcile)
       const unsubscribeBlobs = blobs.subscribePublished(scheduleReconcile)
-      disposeFileMaterialization = () => { unsubscribeSession(); unsubscribeBlobs() }
+      disposeFileMaterialization = () => {
+        unsubscribeSession()
+        unsubscribeBlobs()
+      }
       await fileMaterializer.reconcile()
       return Object.freeze({
         scope: registeredScope,
@@ -454,11 +537,15 @@ export class MainProjectIndexRuntimeRegistryV2 implements ProjectIndexCanvasAppl
   private async serialize<T>(projectId: string, operation: () => Promise<T>): Promise<T> {
     const previous = this.lanes.get(projectId) ?? Promise.resolve()
     let release!: () => void
-    const barrier = new Promise<void>((resolve) => { release = resolve })
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
     const lane = previous.catch(() => undefined).then(() => barrier)
     this.lanes.set(projectId, lane)
     await previous.catch(() => undefined)
-    try { return await operation() } finally {
+    try {
+      return await operation()
+    } finally {
       release()
       if (this.lanes.get(projectId) === lane) this.lanes.delete(projectId)
     }
@@ -480,7 +567,8 @@ export async function queryMainProjectIndexCurrentBlobDigestsV2(
     values.size < 0 ||
     typeof values.has !== "function" ||
     typeof values[Symbol.iterator] !== "function"
-  ) throw new TypeError("ProjectIndex current blob-reference projection is malformed")
+  )
+    throw new TypeError("ProjectIndex current blob-reference projection is malformed")
   const result = new Set<DigestV2>()
   for (const value of values) result.add(parseDigestV2(value))
   if (result.size !== values.size) {
@@ -489,11 +577,10 @@ export async function queryMainProjectIndexCurrentBlobDigestsV2(
   return result
 }
 
-function requireProjectIndexOwner(
-  authority: VerifiedProtocolAuthorityV2,
-): DocumentOwnerRuntimeV2<"project-index"> {
-  const selected = createSelectedDocumentOwnerArtifactFactoryV2(authority, "project-index")
-    .createRuntime(selectedProjectIndexDocumentOwnerArtifactDefinitionV2)
+function requireProjectIndexOwner(authority: VerifiedProtocolAuthorityV2): DocumentOwnerRuntimeV2<"project-index"> {
+  const selected = createSelectedDocumentOwnerArtifactFactoryV2(authority, "project-index").createRuntime(
+    selectedProjectIndexDocumentOwnerArtifactDefinitionV2,
+  )
   if ("status" in selected) throw new Error(`ProjectIndex owner runtime is ${selected.code}`)
   return selected
 }

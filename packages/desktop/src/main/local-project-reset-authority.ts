@@ -8,9 +8,7 @@ import {
   type Id128V2,
   type VerifiedProtocolAuthorityV2,
 } from "@convax/collaboration"
-import {
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-} from "@convax/project"
+import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import {
   parseProjectResetConfirmationV2,
   projectResetConfirmationCoreDigestV2,
@@ -32,6 +30,7 @@ import {
 
 import {
   initializeLocalOwnerProjectIndexNativeStoreV2,
+  verifyPristineLocalOwnerProjectIndexNativeStoreV2,
 } from "./main-project-index-runtime-registry"
 import {
   type NodeDurableLocalProjectOwnerAuthorityV2,
@@ -41,8 +40,8 @@ import {
 export class TeamProjectResetUnavailableErrorV2 extends Error {
   readonly code = "team-project-reset-unavailable" as const
 
-  constructor() {
-    super("Team Project reset requires the unavailable control-plane epoch rollover authority")
+  constructor(options?: ErrorOptions) {
+    super("Team Project reset requires the unavailable control-plane epoch rollover authority", options)
     this.name = "TeamProjectResetUnavailableErrorV2"
   }
 }
@@ -53,22 +52,38 @@ export class TeamProjectResetUnavailableErrorV2 extends Error {
  * record codec, tree swap, and empty ProjectIndex schema.
  */
 export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1 {
-  constructor(private readonly options: {
-    readonly authority: VerifiedProtocolAuthorityV2
-    readonly owners: NodeDurableLocalProjectOwnerAuthorityV2
-  }) {}
+  constructor(
+    private readonly options: {
+      readonly authority: VerifiedProtocolAuthorityV2
+      readonly owners: NodeDurableLocalProjectOwnerAuthorityV2
+    },
+  ) {}
+
+  async inspectReset(input: { readonly plan: PortableProjectResetPlanV1; readonly signal?: AbortSignal }): Promise<
+    | Readonly<{ status: "eligible" }>
+    | Readonly<{
+        reason: "team-epoch-rollover-required"
+        status: "unavailable"
+      }>
+  > {
+    try {
+      await this.resolveResetOwner(input.plan, false, input.signal)
+      return Object.freeze({ status: "eligible" as const })
+    } catch (error) {
+      if (error instanceof TeamProjectResetUnavailableErrorV2) {
+        return Object.freeze({ reason: "team-epoch-rollover-required" as const, status: "unavailable" as const })
+      }
+      throw error
+    }
+  }
 
   async prepareReset(input: {
     readonly plan: PortableProjectResetPlanV1
     readonly signal?: AbortSignal
   }): Promise<ProjectResetPreparedAuthorityV1> {
-    assertUnteamedResetPlan(input.plan)
     throwIfAborted(input.signal)
-    const projectId = parseProjectIdV2(input.plan.projectId)
-    const owner = await this.options.owners.ensureForDurableProject({
-      projectId,
-      projectRoot: input.plan.projectRoot,
-    })
+    const owner = await this.resolveResetOwner(input.plan, true, input.signal)
+    if (!owner) throw new Error("Local Project reset owner was not prepared")
     const confirmation = await this.createConfirmation(input.plan, owner)
     const expectedFingerprint = derivePortableProjectResetExecutionFingerprint({
       authorizationKind: "local-project-owner",
@@ -112,11 +127,18 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
         authorizeStagedReset: async (
           verifyInput: Parameters<ProjectResetPreparedAuthorityV1["verifier"]["authorizeStagedReset"]>[0],
         ) => {
-          if (!matchesVerificationInput(expected, verifyInput) || verifyInput.authorizationKind !== "local-project-owner") {
+          if (
+            !matchesVerificationInput(expected, verifyInput) ||
+            verifyInput.authorizationKind !== "local-project-owner"
+          ) {
             return "rejected"
           }
           let evidence: ProjectResetConfirmationV2
-          try { evidence = parseProjectResetConfirmationV2(verifyInput.authorizationEvidence) } catch { return "rejected" }
+          try {
+            evidence = parseProjectResetConfirmationV2(verifyInput.authorizationEvidence)
+          } catch {
+            return "rejected"
+          }
           if (!sameExactValue(evidence, confirmation) || !(await this.verifyConfirmation(owner, evidence))) {
             return "rejected"
           }
@@ -125,7 +147,9 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
             path.join(verifyInput.stagedConvaxDirectory, "collaboration"),
             "reset-staged",
             "reset-authorized",
-          )) ? "verified" : "rejected"
+          ))
+            ? "verified"
+            : "rejected"
         },
         verifyStagedGenesis: async (
           verifyInput: Parameters<ProjectResetPreparedAuthorityV1["verifier"]["verifyStagedGenesis"]>[0],
@@ -151,6 +175,55 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
         },
       }),
     })
+  }
+
+  private async resolveResetOwner(
+    plan: PortableProjectResetPlanV1,
+    createIfMissing: boolean,
+    signal?: AbortSignal,
+  ): Promise<ResolvedLocalProjectOwnerAuthorityV2 | undefined> {
+    assertNoTeamNamespaces(plan)
+    throwIfAborted(signal)
+    const projectId = parseProjectIdV2(plan.projectId)
+    const hasCollaborationStore = plan.preview.some(
+      ({ path: candidate }) => candidate === ".convax/collaboration" || candidate.startsWith(".convax/collaboration/"),
+    )
+    if (!hasCollaborationStore) {
+      return createIfMissing
+        ? this.options.owners.ensureForDurableProject({ projectId, projectRoot: plan.projectRoot })
+        : undefined
+    }
+
+    try {
+      const collaborationDirectory = path.join(plan.projectRoot, ".convax", "collaboration")
+      const manifest = await this.readNativeManifest(collaborationDirectory)
+      if (manifest.projectIndexScope.projectId !== projectId) throw new Error("ProjectIndex manifest crossed Project")
+      const owner = await this.options.owners.resolveExact({
+        projectId,
+        projectEpoch: manifest.projectIndexScope.projectEpoch,
+        initializationAuthorityDigest: manifest.initializationAuthorityDigest,
+      })
+      if (
+        owner === "missing" ||
+        owner === "rejected" ||
+        owner.binding.projectIndexShardEpoch !== manifest.projectIndexScope.shardEpoch
+      ) {
+        throw new Error("ProjectIndex bootstrap does not resolve to the exact local owner")
+      }
+      await verifyPristineLocalOwnerProjectIndexNativeStoreV2({
+        authority: this.options.authority,
+        collaborationDirectory,
+        owner,
+        verifyCheckpointSignature: (binding, coreDigest, signature) =>
+          this.options.owners.verifyCheckpointSignature(binding, coreDigest, signature),
+      })
+      throwIfAborted(signal)
+      return owner
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error
+      if (error instanceof TeamProjectResetUnavailableErrorV2) throw error
+      throw new TeamProjectResetUnavailableErrorV2({ cause: error })
+    }
   }
 
   private async createConfirmation(
@@ -230,9 +303,13 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
         this.readNativeManifest(collaborationDirectory),
         readProjectResetRecordsV2(collaborationDirectory),
       ])
-      if (records.manifest.state !== currentState || !sameExactValue(records.confirmation, expected.confirmation) ||
+      if (
+        records.manifest.state !== currentState ||
+        !sameExactValue(records.confirmation, expected.confirmation) ||
         !(await this.verifyConfirmation(expected.owner, records.confirmation)) ||
-        !matchesNativeManifest(expected, records.manifest, nativeManifest)) return false
+        !matchesNativeManifest(expected, records.manifest, nativeManifest)
+      )
+        return false
       await writeProjectResetRecordsV2(collaborationDirectory, {
         format: "convax.project-reset-records/2",
         confirmation: records.confirmation,
@@ -287,27 +364,33 @@ function createResetManifest(
   })
 }
 
-function matchesNativeManifest(expected: ResetExpected, reset: ProjectResetManifestV2, native: NativeManifest): boolean {
-  return reset.projectId === native.projectIndexScope.projectId &&
+function matchesNativeManifest(
+  expected: ResetExpected,
+  reset: ProjectResetManifestV2,
+  native: NativeManifest,
+): boolean {
+  return (
+    reset.projectId === native.projectIndexScope.projectId &&
     reset.newProjectEpoch === native.projectIndexScope.projectEpoch &&
     reset.newProjectIndexShardEpoch === native.projectIndexScope.shardEpoch &&
     reset.newProjectEpoch === expected.owner.binding.projectEpoch &&
     native.initializationAuthorityDigest === expected.owner.binding.bindingDigest &&
-    reset.requestedProtocolDigest === native.protocolDigest && reset.requestedSchemaDigest === native.schemaDigest &&
+    reset.requestedProtocolDigest === native.protocolDigest &&
+    reset.requestedSchemaDigest === native.schemaDigest &&
     reset.requestedUriProtocolDigest === native.uriProtocolDigest &&
     reset.emptyProjectIndexCheckpointDigest === native.emptyProjectIndexCheckpointObjectDigest &&
     reset.emptyProjectIndexFullUpdateDigest === native.emptyProjectIndexFullUpdateDigest &&
     reset.emptyProjectIndexStateVectorDigest === native.emptyProjectIndexStateVectorDigest &&
     reset.emptyProjectIndexCanonicalStateDigest === native.emptyProjectIndexCanonicalStateDigest
+  )
 }
 
-function assertUnteamedResetPlan(plan: PortableProjectResetPlanV1): void {
+function assertNoTeamNamespaces(plan: PortableProjectResetPlanV1): void {
   // This branch relies on the cutover invariant that legacy Convax releases
   // persisted every team/control identity under one of these exact private
   // namespaces. It is deliberately not a heuristic for arbitrary corruption:
   // any such namespace makes local authority unavailable.
   const teamNamespaces = [
-    ".convax/collaboration",
     ".convax/team",
     ".convax/membership",
     ".convax/member-credentials",
@@ -321,28 +404,37 @@ function assertUnteamedResetPlan(plan: PortableProjectResetPlanV1): void {
   if (hasTeamEvidence) throw new TeamProjectResetUnavailableErrorV2()
 }
 
-function assertStageInput(expected: ResetExpected, input: {
-  readonly nextProjectEpoch: string
-  readonly projectId: string
-}): void {
+function assertStageInput(
+  expected: ResetExpected,
+  input: {
+    readonly nextProjectEpoch: string
+    readonly projectId: string
+  },
+): void {
   if (input.projectId !== expected.plan.projectId || input.nextProjectEpoch !== expected.owner.binding.projectEpoch) {
     throw new Error("Project reset staging crossed the prepared local authority")
   }
 }
 
-function matchesVerificationInput(expected: ResetExpected, input: {
-  readonly executionFingerprint: string
-  readonly nextProjectEpoch: string
-  readonly originalTreeDigest: string
-  readonly privateDeletionSetDigest: string
-  readonly projectId: string
-  readonly unsupportedInventoryDigest: string
-}): boolean {
-  return input.executionFingerprint === expected.executionFingerprint &&
-    input.nextProjectEpoch === expected.owner.binding.projectEpoch && input.projectId === expected.plan.projectId &&
+function matchesVerificationInput(
+  expected: ResetExpected,
+  input: {
+    readonly executionFingerprint: string
+    readonly nextProjectEpoch: string
+    readonly originalTreeDigest: string
+    readonly privateDeletionSetDigest: string
+    readonly projectId: string
+    readonly unsupportedInventoryDigest: string
+  },
+): boolean {
+  return (
+    input.executionFingerprint === expected.executionFingerprint &&
+    input.nextProjectEpoch === expected.owner.binding.projectEpoch &&
+    input.projectId === expected.plan.projectId &&
     input.originalTreeDigest === expected.plan.originalTreeDigest &&
     input.privateDeletionSetDigest === expected.plan.privateDeletionSetDigest &&
     input.unsupportedInventoryDigest === expected.plan.unsupportedInventoryDigest
+  )
 }
 
 function derivedId128(domain: string, value: unknown): Id128V2 {
