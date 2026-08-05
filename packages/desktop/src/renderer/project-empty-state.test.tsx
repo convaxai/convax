@@ -40,8 +40,8 @@ describe("ProjectCollaborationPendingState", () => {
 
     expect(markup).toContain('data-project-collaboration-action="create"')
     expect(markup).toContain('data-project-collaboration-action="join"')
-    expect(markup).toContain("Create team and enable collaboration")
-    expect(markup).toContain("Join an existing team")
+    expect(markup).toContain("Start sharing and enable collaboration")
+    expect(markup).toContain("Join collaboration with an invitation")
     expect(markup).not.toContain('data-project-collaboration-action="join-submit"')
   })
 })

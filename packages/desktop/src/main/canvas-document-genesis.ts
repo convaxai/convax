@@ -14,9 +14,9 @@ import {
   type VerifiedProtocolAuthorityV2,
 } from "@convax/collaboration"
 import type {
-  DocumentGenesisVerifierPortV2,
-  PrepareDocumentGenesisResultV2,
-} from "./collaboration-document-genesis"
+  ProjectDocumentGenesisVerifierPortV2 as DocumentGenesisVerifierPortV2,
+  PrepareProjectDocumentGenesisResultV2 as PrepareDocumentGenesisResultV2,
+} from "@convax/project/node"
 
 export type PrepareCanvasGenesisAuthorResultV2 =
   | Readonly<{ status: "prepared"; author: CanvasGenesisBuildAuthorV2 }>

@@ -10,16 +10,14 @@ import {
 import type {
   InitializeNativeCollaborationShardWithGenesisProofV2,
   NodeAcceptedReplicaHeadV2,
-} from "@convax/project/node"
+} from "./persistence-store"
 
-export interface DocumentGenesisPredecessorV2 {
-  /** Exact already-durable ProjectIndex stage frame F. */
+export interface ProjectDocumentGenesisPredecessorV2 {
   readonly frame: DecodedCausalEditFrameV2
-  /** Exact resulting frontier digest returned inside the Kernel commit barrier. */
   readonly acceptedFrontierDigest: DigestV2
 }
 
-export interface VerifiedDocumentGenesisCandidateV2<K extends DocumentOwnerKindV2> {
+export interface VerifiedProjectDocumentGenesisCandidateV2<K extends DocumentOwnerKindV2> {
   readonly scope: DocumentScopeV2 & { readonly docKind: K }
   readonly checkpointObjectDigest: DigestV2
   readonly checkpointExactBytes: Readonly<Uint8Array>
@@ -27,26 +25,30 @@ export interface VerifiedDocumentGenesisCandidateV2<K extends DocumentOwnerKindV
   readonly acceptedBase: InitializeNativeCollaborationShardWithGenesisProofV2["acceptedBase"]
 }
 
-export type PrepareDocumentGenesisResultV2<K extends DocumentOwnerKindV2> =
-  | Readonly<{ status: "verified"; candidate: VerifiedDocumentGenesisCandidateV2<K> }>
+export type PrepareProjectDocumentGenesisResultV2<K extends DocumentOwnerKindV2> =
+  | Readonly<{ status: "verified"; candidate: VerifiedProjectDocumentGenesisCandidateV2<K> }>
   | Readonly<{ status: "pending" | "rejected" }>
 
-/** Owner adapter: Canvas constructs/validates CVXCGP02; this generic layer never does. */
-export interface DocumentGenesisVerifierPortV2<K extends DocumentOwnerKindV2> {
+/**
+ * Owner-specific authoring remains outside Project. A future successor can supply
+ * another implementation only after its authority is selected; this port does
+ * not infer signer kind, membership, or sharing state.
+ */
+export interface ProjectDocumentGenesisVerifierPortV2<K extends DocumentOwnerKindV2> {
   prepare(input: {
     readonly scope: DocumentScopeV2 & { readonly docKind: K }
-    readonly predecessor: DocumentGenesisPredecessorV2
+    readonly predecessor: ProjectDocumentGenesisPredecessorV2
     readonly signal?: AbortSignal
-  }): Promise<PrepareDocumentGenesisResultV2<K>>
+  }): Promise<PrepareProjectDocumentGenesisResultV2<K>>
 }
 
-export interface DurableDocumentGenesisStorePortV2 {
+export interface ProjectDocumentGenesisStorePortV2 {
   initializeShardWithGenesisProof(
     input: InitializeNativeCollaborationShardWithGenesisProofV2,
   ): Promise<NodeAcceptedReplicaHeadV2>
 }
 
-export interface DurableDocumentGenesisIdentityV2<K extends DocumentOwnerKindV2> {
+export interface DurableProjectDocumentGenesisIdentityV2<K extends DocumentOwnerKindV2> {
   readonly scope: DocumentScopeV2 & { readonly docKind: K }
   readonly predecessorFrameDigest: DigestV2
   readonly stagedProjectIndexFrontierDigest: DigestV2
@@ -60,17 +62,17 @@ export interface DurableDocumentGenesisIdentityV2<K extends DocumentOwnerKindV2>
 }
 
 /**
- * One Project-sole-writer barrier: verified owner bytes are defensively copied,
- * installed with their proof carrier, reopened identity is checked, and only then
- * may ProjectIndex activation consume the returned G/F/frontier tuple.
+ * Project-owned publication barrier for an owner-verified document genesis.
+ * It never constructs a Canvas, chooses an author, or treats a pending author as
+ * permission. The exact accepted base must survive the native store round trip.
  */
-export async function stageDurableDocumentGenesisV2<K extends DocumentOwnerKindV2>(input: {
+export async function stageDurableProjectDocumentGenesisV2<K extends DocumentOwnerKindV2>(input: {
   readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  readonly predecessor: DocumentGenesisPredecessorV2
-  readonly verifier: DocumentGenesisVerifierPortV2<K>
-  readonly store: DurableDocumentGenesisStorePortV2
+  readonly predecessor: ProjectDocumentGenesisPredecessorV2
+  readonly verifier: ProjectDocumentGenesisVerifierPortV2<K>
+  readonly store: ProjectDocumentGenesisStorePortV2
   readonly signal?: AbortSignal
-}): Promise<DurableDocumentGenesisIdentityV2<K> | "pending" | "rejected"> {
+}): Promise<DurableProjectDocumentGenesisIdentityV2<K> | "pending" | "rejected"> {
   assertNotAborted(input.signal)
   const scope = parseDocumentScopeV2(input.scope) as DocumentScopeV2 & { readonly docKind: K }
   const predecessorScope = input.predecessor.frame.header.core.scope
@@ -78,9 +80,8 @@ export async function stageDurableDocumentGenesisV2<K extends DocumentOwnerKindV
     predecessorScope.docKind !== "project-index" ||
     predecessorScope.projectId !== scope.projectId ||
     predecessorScope.projectEpoch !== scope.projectEpoch
-  ) {
-    throw new Error("Document genesis predecessor is not the same ProjectIndex epoch")
-  }
+  ) throw new Error("Document genesis predecessor is not the same ProjectIndex epoch")
+
   const predecessorFrameDigest = parseDigestV2(input.predecessor.frame.frameDigest)
   const stagedProjectIndexFrontierDigest = parseDigestV2(input.predecessor.acceptedFrontierDigest)
   const prepared = await input.verifier.prepare({ scope, predecessor: input.predecessor, signal: input.signal })
@@ -94,9 +95,8 @@ export async function stageDurableDocumentGenesisV2<K extends DocumentOwnerKindV
     durable.canonicalStateDigest !== candidate.acceptedBase.canonicalStateDigest ||
     !sameBytes(durable.fullUpdate, candidate.acceptedBase.fullUpdate) ||
     !sameBytes(durable.stateVector, candidate.acceptedBase.stateVector)
-  ) {
-    throw new Error("Durable genesis store returned a different accepted base")
-  }
+  ) throw new Error("Durable genesis store returned a different accepted base")
+
   return Object.freeze({
     scope,
     predecessorFrameDigest,
@@ -112,7 +112,7 @@ export async function stageDurableDocumentGenesisV2<K extends DocumentOwnerKindV
 }
 
 function cloneCandidate<K extends DocumentOwnerKindV2>(
-  value: VerifiedDocumentGenesisCandidateV2<K>,
+  value: VerifiedProjectDocumentGenesisCandidateV2<K>,
   expectedScope: DocumentScopeV2 & { readonly docKind: K },
 ): InitializeNativeCollaborationShardWithGenesisProofV2 {
   const scope = parseDocumentScopeV2(value.scope)

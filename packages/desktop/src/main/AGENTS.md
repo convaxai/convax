@@ -202,6 +202,15 @@ For any matching change, read the full routed reference before planning or editi
   cutover guard. A legacy recovery adapter may resolve only an exact pristine
   local-owner bootstrap through the Project/node verifier; path presence alone is
   neither Team evidence nor permission to reset current collaboration state.
+- Opening a Project with no durable Team binding must not bootstrap, join, or open
+  Team control-plane state. This keeps the shell local-first, but it does not make
+  the frozen v2 kernel locally writable: without its selected signer authority the
+  Project remains `local-authority-unavailable`.
+- V3 local-owner authority-source adapters are successor-only seams. Do not compose
+  them into v2 document sessions or treat Project/node successor records as a
+  runtime selector. Production composition requires the complete sealed successor,
+  its verified pointer, dual-version dispatcher, and durable one-way sharing
+  handoff; missing or ambiguous sharing state stays fail-closed.
 
 - Run `bun typecheck && bun test` from `packages/desktop`.
 - Run focused tests for the changed capability and its failure/recovery path.

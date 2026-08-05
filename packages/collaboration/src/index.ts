@@ -1,7 +1,4 @@
-export {
-  selectInstalledProtocolAuthorityV2,
-  validateAuthorityReleaseSnapshotV1,
-} from "./authority-selector"
+export { selectInstalledProtocolAuthorityV2, validateAuthorityReleaseSnapshotV1 } from "./authority-selector"
 export type {
   AuthorityReleaseFileV1,
   AuthorityReleaseSnapshotV1,
@@ -9,6 +6,70 @@ export type {
 } from "./authority-selector"
 
 export type { VerifiedProtocolAuthorityV2 } from "./authority"
+export {
+  SUCCESSOR_AUTHORITY_DOMAINS_V3,
+  assertLocalOwnerAuthorityClosureV3,
+  causalSignerAuthorityDigestV3,
+  localOwnerEditAuthorizationCoreDigestV3,
+  localProjectOwnerBindingCoreDigestV3,
+  parseCausalAuthorityDependenciesV3,
+  parseCausalSignerAuthorityV3,
+  parseLocalOwnerEditAuthorizationCoreV3,
+  parseLocalOwnerEditAuthorizationV3,
+  parseLocalOwnerActorSequenceAllocationPolicyV3,
+  parseLocalOwnerGenesisAuthorizationPolicyV3,
+  parseLocalProjectOwnerBindingCoreV3,
+  parseLocalProjectOwnerBindingV3,
+  verifyLocalOwnerAuthorityV3,
+} from "./successor-authority"
+export {
+  InMemoryProjectSharingHandoffSubmissionV3,
+  parseProjectSharingHandoffCoreV3,
+  parseProjectSharingHandoffReceiptV3,
+  projectSharingHandoffCoreDigestV3,
+  verifyProjectSharingHandoffReceiptV3,
+} from "./successor-handoff"
+export type {
+  ProjectSharingHandoffCoreV3,
+  ProjectSharingHandoffDocumentHeadV3,
+  ProjectSharingHandoffReceiptV3,
+  ProjectSharingHandoffSubmissionPortV3,
+  ProjectSharingHandoffSubmitResultV3,
+  ProjectSharingServiceTrustPortV3,
+} from "./successor-handoff"
+export { createCandidateIncomingFrameAdmissionStrategyV3 } from "./successor-admission"
+export type {
+  CandidateIncomingFrameAdmissionResultV3,
+  CandidateIncomingFrameAdmissionStrategyV3,
+  LocalOwnerIncomingProofV3,
+  SuccessorAuthorityProofResolutionV3,
+  SuccessorIncomingAuthorityProofResolverPortV3,
+  VerifiedTeamReplicaIncomingProofV3,
+} from "./successor-admission"
+export { SUCCESSOR_CAUSAL_EDIT_MAGIC_V3, decodeSelectedCausalEditFrame } from "./successor-frame"
+export type {
+  CausalContextV3,
+  CausalDependencyKindV3,
+  CausalDependencyRefV3,
+  CausalEditCoreV3,
+  CausalEditFrameHeaderV3,
+  DecodedCausalEditFrameV3,
+} from "./successor-frame"
+export type {
+  CausalAuthorityDependencyKindV3,
+  CausalAuthorityDependencyRefV3,
+  CausalSignerAuthorityV3,
+  LocalOwnerEditAuthorizationCoreV3,
+  LocalOwnerEditAuthorizationV3,
+  LocalOwnerActorSequenceAllocationPolicyV3,
+  LocalOwnerGenesisAuthorizationPolicyV3,
+  LocalProjectOwnerBindingCoreV3,
+  LocalProjectOwnerBindingV3,
+  LocalProjectOwnerSignerAuthorityV3,
+  LocalOwnerSharingStatePortV3,
+  TeamReplicaSignerAuthorityV3,
+  VerifiedLocalOwnerAuthorityV3,
+} from "./successor-authority"
 export { createWebCryptoEd25519VerifierV2 } from "./crypto"
 export type { Ed25519VerifierPortV2, ReplicaSignerPortV2 } from "./crypto"
 export type { YjsDocumentFactoryV2 } from "./yjs-codec"
@@ -64,24 +125,11 @@ export {
   encodeRestrictedJcsV2,
   isPlainDataObject,
 } from "./jcs"
-export {
-  ordinarySha256V2,
-  rawDomainDigestV2,
-  structuredDigestV2,
-} from "./digest"
-export {
-  comparePortableStampsV2,
-  causalFrontierDigestV2,
-  documentScopeDigestV2,
-  maxCausalFrontierV2,
-} from "./causal"
+export { ordinarySha256V2, rawDomainDigestV2, structuredDigestV2 } from "./digest"
+export { comparePortableStampsV2, causalFrontierDigestV2, documentScopeDigestV2, maxCausalFrontierV2 } from "./causal"
 export type { CausalClosurePortV2 } from "./causal"
 export { ownerCanonicalizerDescriptorDigestV2 } from "./canonicalizer"
-export {
-  parseDocumentScopeV2,
-  parsePortableStampV2,
-  parseValidationArtifactSetV2,
-} from "./parse"
+export { parseDocumentScopeV2, parsePortableStampV2, parseValidationArtifactSetV2 } from "./parse"
 
 export {
   assertExactPruningCoverageV2,

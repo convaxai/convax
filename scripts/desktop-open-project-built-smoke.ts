@@ -370,23 +370,39 @@ try {
       )
       enterProject.click()
     }
-    const collaborationOrCanvas = await waitFor(
+    const projectSurface = await waitFor(
       () => document.querySelector(".convax-canvas")
+        || document.querySelector('[data-project-local-authority-recovery="true"]')
         || document.querySelector('[data-project-collaboration-pending="true"]'),
-      "the collaboration bootstrap or active Canvas",
+      "the local Project authority state or active Canvas",
     )
-    if (collaborationOrCanvas.matches('[data-project-collaboration-pending="true"]')) {
-      const createTeam = await waitFor(
-        () => document.querySelector('[data-project-collaboration-action="create"]'),
-        "the local team bootstrap action",
-      )
-      createTeam.click()
-      const continueOrCanvas = await waitFor(
-        () => document.querySelector(".convax-canvas")
-          || buttonWithAnyText("Continue to Project", "继续进入项目"),
-        "the bootstrapped collaboration authority",
-      )
-      if (!continueOrCanvas.matches(".convax-canvas")) continueOrCanvas.click()
+    if (projectSurface.matches('[data-project-collaboration-pending="true"]')) {
+      throw new Error("Opening a personal Project started the Team collaboration flow")
+    }
+    if (projectSurface.matches('[data-project-local-authority-recovery="true"]')) {
+      const projects = await window.convax.projects.listProjects()
+      const project = projects.projects.find((candidate) => candidate.name === "empty-project")
+      if (!project) throw new Error("Open Project did not return a personal Project")
+      const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
+      if (catalog.creationAvailability !== "local-authority-unavailable") {
+        throw new Error("Personal Project recovery did not report the exact local authority state")
+      }
+      if (catalog.canvases.length !== 0) {
+        throw new Error("Unavailable local authority fabricated a default Canvas")
+      }
+      const recoveryTitle = projectSurface
+        .querySelector("#project-local-authority-recovery-title")
+        ?.textContent?.trim()
+      if (!recoveryTitle) throw new Error("Personal Project recovery did not explain the unavailable authority")
+      return {
+        canvasCount: catalog.canvases.length,
+        collaborationPending: Boolean(document.querySelector('[data-project-collaboration-pending="true"]')),
+        creationAvailability: catalog.creationAvailability,
+        localAuthorityRecovery: true,
+        projectId: project.id,
+        recoveryTitle,
+        startupMode: "local-authority-unavailable",
+      }
     }
     await waitFor(
       () => document.querySelector(".convax-canvas"),
@@ -407,6 +423,7 @@ try {
             body: document.body.textContent?.trim().slice(0, 1000),
             buttons,
             collaborationPending: Boolean(document.querySelector('[data-project-collaboration-pending="true"]')),
+            localAuthorityRecovery: Boolean(document.querySelector('[data-project-local-authority-recovery="true"]')),
             projectLoading: Boolean(document.querySelector('[data-project-loading="true"]')),
             resetRecovery: Boolean(document.querySelector('[data-project-reset-recovery="true"]')),
             text: home?.textContent?.trim().slice(0, 500),
@@ -869,9 +886,14 @@ try {
   const summary = result as {
     activeCanvasId?: string
     canvasCount?: number
+    collaborationPending?: boolean
+    creationAvailability?: string
     documentId?: string
+    localAuthorityRecovery?: boolean
     language?: string
     projectId?: string
+    recoveryTitle?: string
+    startupMode?: string
     generationRace?: {
       concurrentIndependentEdits?: boolean
       lateCallbackRejected?: boolean
@@ -879,22 +901,37 @@ try {
       status?: string
     }
   }
-  if (
-    summary.activeCanvasId !== "canvas-main" ||
-    summary.canvasCount !== 1 ||
-    summary.documentId !== "canvas-main" ||
-    summary.language !== "zh-CN" ||
-    summary.generationRace?.concurrentIndependentEdits !== true ||
-    summary.generationRace.lateCallbackRejected !== true ||
-    summary.generationRace.restartFallbackFailed !== true ||
-    summary.generationRace.status !== "succeeded"
-  ) {
-    throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
-  }
+  if (summary.startupMode === "local-authority-unavailable") {
+    if (
+      !summary.projectId ||
+      summary.canvasCount !== 0 ||
+      summary.collaborationPending !== false ||
+      summary.creationAvailability !== "local-authority-unavailable" ||
+      summary.localAuthorityRecovery !== true ||
+      !summary.recoveryTitle
+    ) {
+      throw new Error(`Unexpected personal Project startup result: ${JSON.stringify(summary)}`)
+    }
+    console.log(
+      `Desktop opened a personal local-first Project without starting Team collaboration; the selected protocol correctly reported unavailable local editing authority (${summary.projectId})`,
+    )
+  } else {
+    if (
+      summary.activeCanvasId !== "canvas-main" ||
+      summary.canvasCount !== 1 ||
+      summary.documentId !== "canvas-main" ||
+      summary.language !== "zh-CN" ||
+      summary.generationRace?.concurrentIndependentEdits !== true ||
+      summary.generationRace.lateCallbackRejected !== true ||
+      summary.generationRace.restartFallbackFailed !== true ||
+      summary.generationRace.status !== "succeeded"
+    ) {
+      throw new Error(`Unexpected Open Project result: ${JSON.stringify(summary)}`)
+    }
 
-  await evaluateStable(
-    rendererDebugger,
-    `(async () => {
+    await evaluateStable(
+      rendererDebugger,
+      `(async () => {
       const deadline = Date.now() + ${timeoutMs}
       let composer
       let requestedAgent = false
@@ -951,11 +988,11 @@ try {
         window.__convaxSmokeComposerInputType = event.inputType
       }, { once: true })
     })()`,
-  )
-  await sendDebuggerCommand(rendererDebugger, "Input.insertText", { text: "@" })
-  const composerPickerGeometry = (await evaluateStable(
-    rendererDebugger,
-    `(async () => {
+    )
+    await sendDebuggerCommand(rendererDebugger, "Input.insertText", { text: "@" })
+    const composerPickerGeometry = (await evaluateStable(
+      rendererDebugger,
+      `(async () => {
       const deadline = Date.now() + ${timeoutMs}
       let picker
       while (Date.now() < deadline) {
@@ -1008,33 +1045,33 @@ try {
         trusted: window.__convaxSmokeComposerInputTrusted,
       }
     })()`,
-  )) as {
-    composerBottom?: number
-    composerText?: string | null
-    composerTop?: number
-    gap?: number
-    pickerBottom?: number
-    pickerComputedTop?: string
-    pickerHeight?: number
-    pickerOffsetParent?: { left: number; top: number } | null
-    pickerTop?: number
-    pickerTransform?: string
-    trusted?: boolean
-  }
-  if (
-    composerPickerGeometry.composerText !== "@" ||
-    composerPickerGeometry.trusted !== true ||
-    !Number.isFinite(composerPickerGeometry.gap) ||
-    composerPickerGeometry.gap! < 6 ||
-    composerPickerGeometry.gap! > 10
-  ) {
-    throw new Error(
-      `Real Agent composer input produced invalid picker geometry: ${JSON.stringify(composerPickerGeometry)}`,
-    )
-  }
-  const composerPickerTabPoint = (await evaluateStable(
-    rendererDebugger,
-    `(async () => {
+    )) as {
+      composerBottom?: number
+      composerText?: string | null
+      composerTop?: number
+      gap?: number
+      pickerBottom?: number
+      pickerComputedTop?: string
+      pickerHeight?: number
+      pickerOffsetParent?: { left: number; top: number } | null
+      pickerTop?: number
+      pickerTransform?: string
+      trusted?: boolean
+    }
+    if (
+      composerPickerGeometry.composerText !== "@" ||
+      composerPickerGeometry.trusted !== true ||
+      !Number.isFinite(composerPickerGeometry.gap) ||
+      composerPickerGeometry.gap! < 6 ||
+      composerPickerGeometry.gap! > 10
+    ) {
+      throw new Error(
+        `Real Agent composer input produced invalid picker geometry: ${JSON.stringify(composerPickerGeometry)}`,
+      )
+    }
+    const composerPickerTabPoint = (await evaluateStable(
+      rendererDebugger,
+      `(async () => {
       const deadline = Date.now() + ${timeoutMs}
       let picker
       let tab
@@ -1058,38 +1095,38 @@ try {
       const bounds = tab.getBoundingClientRect()
       return { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
     })()`,
-  )) as { x: number; y: number }
-  await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
-    button: "left",
-    clickCount: 1,
-    type: "mousePressed",
-    x: composerPickerTabPoint.x,
-    y: composerPickerTabPoint.y,
-  })
-  await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
-    button: "left",
-    clickCount: 1,
-    type: "mouseReleased",
-    x: composerPickerTabPoint.x,
-    y: composerPickerTabPoint.y,
-  })
-  const composerPickerInteraction = (await evaluateStable(
-    rendererDebugger,
-    `(() => {
+    )) as { x: number; y: number }
+    await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
+      button: "left",
+      clickCount: 1,
+      type: "mousePressed",
+      x: composerPickerTabPoint.x,
+      y: composerPickerTabPoint.y,
+    })
+    await sendDebuggerCommand(rendererDebugger, "Input.dispatchMouseEvent", {
+      button: "left",
+      clickCount: 1,
+      type: "mouseReleased",
+      x: composerPickerTabPoint.x,
+      y: composerPickerTabPoint.y,
+    })
+    const composerPickerInteraction = (await evaluateStable(
+      rendererDebugger,
+      `(() => {
       const picker = document.querySelector('[data-agent-composer-picker="true"]')
       const tab = picker && [...picker.querySelectorAll('[role="tab"]')]
         .find((candidate) => candidate.textContent?.trim() === "Canvas")
       return { open: Boolean(picker), selected: tab?.getAttribute("aria-selected") === "true" }
     })()`,
-  )) as { open?: boolean; selected?: boolean }
-  if (!composerPickerInteraction.open || !composerPickerInteraction.selected) {
-    throw new Error(
-      `The portaled Agent composer picker dismissed its own interaction: ${JSON.stringify(composerPickerInteraction)}`,
-    )
-  }
-  await evaluateStable(
-    rendererDebugger,
-    `(() => {
+    )) as { open?: boolean; selected?: boolean }
+    if (!composerPickerInteraction.open || !composerPickerInteraction.selected) {
+      throw new Error(
+        `The portaled Agent composer picker dismissed its own interaction: ${JSON.stringify(composerPickerInteraction)}`,
+      )
+    }
+    await evaluateStable(
+      rendererDebugger,
+      `(() => {
       const agentPanel = [...document.querySelectorAll(${JSON.stringify(openAgentPanelSelector)})]
         .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
       const composer = agentPanel?.querySelector('[contenteditable="true"][aria-label="Message the project agent"]')
@@ -1100,11 +1137,11 @@ try {
       delete window.__convaxSmokeComposerInputType
       delete window.__convaxSmokeComposerInputTrusted
     })()`,
-  )
+    )
 
-  const agentGenerationModel = (await evaluateStable(
-    rendererDebugger,
-    `(async () => {
+    const agentGenerationModel = (await evaluateStable(
+      rendererDebugger,
+      `(async () => {
       const deadline = Date.now() + ${timeoutMs}
       const waitFor = async (read, label) => {
         while (Date.now() < deadline) {
@@ -1155,18 +1192,19 @@ try {
         selector: selectedLabel,
       }
     })()`,
-  )) as { model?: string | null; pickerHadAuto?: boolean; selector?: string | null }
-  if (
-    agentGenerationModel.model !== "Smoke Image by Smoke Service" ||
-    agentGenerationModel.pickerHadAuto !== false ||
-    agentGenerationModel.selector !== "Select Agent models, Smoke Service · Smoke Image"
-  ) {
-    throw new Error(`Unexpected standalone Agent model selection: ${JSON.stringify(agentGenerationModel)}`)
-  }
+    )) as { model?: string | null; pickerHadAuto?: boolean; selector?: string | null }
+    if (
+      agentGenerationModel.model !== "Smoke Image by Smoke Service" ||
+      agentGenerationModel.pickerHadAuto !== false ||
+      agentGenerationModel.selector !== "Select Agent models, Smoke Service · Smoke Image"
+    ) {
+      throw new Error(`Unexpected standalone Agent model selection: ${JSON.stringify(agentGenerationModel)}`)
+    }
 
-  console.log(
-    `Desktop workspace, diagnostics, standalone Agent model, Canvas generation CAS/late-callback/restart races, Marketplace Settings, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
-  )
+    console.log(
+      `Desktop workspace, diagnostics, standalone Agent model, Canvas generation CAS/late-callback/restart races, Marketplace Settings, and Open Project smoke passed (${summary.projectId}, canvas-main)`,
+    )
+  }
 } catch (error) {
   child.kill("SIGKILL")
   const [capturedStdout, capturedStderr] = await Promise.all([stdout, stderr])
