@@ -136,6 +136,7 @@ import {
   ProjectRecoveryState,
   ProjectRegistryLoadingState,
 } from "./project-empty-state"
+import { resolveProjectLocalCanvasSurfaceAccess } from "./project-local-canvas-access"
 import { ProjectCanvasWorkbenchCoordinator, runProjectCanvasResourceRelink } from "./project-canvas-workbench"
 import { projectCanvasSidebarNodes, sameProjectCanvasNodeProjection } from "./project-canvas-sidebar-projection"
 import { createProjectFolderBrowseService } from "./project-folder-browse-service"
@@ -647,6 +648,10 @@ function App() {
     activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
       ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
       : undefined
+  const canvasSurfaceAccess = resolveProjectLocalCanvasSurfaceAccess({
+    activeCanvasId,
+    creationAvailability: projectCanvasSnapshot.creationAvailability,
+  })
   useEffect(() => {
     setProjectCanvasFilteredKinds(new Set())
   }, [activeProjectId])
@@ -2205,7 +2210,7 @@ function App() {
                     <div className="grid size-full place-items-center text-sm text-muted-foreground">
                       File surface is not available yet.
                     </div>
-                  ) : canvasCreationUnavailable ? (
+                  ) : canvasSurfaceAccess === "blocked" ? (
                     <ProjectLocalAuthorityRecoveryState
                       locale={locale}
                       readOnly={projectCanvasSnapshot.creationAvailability === "read-only-recovery-required"}
@@ -2221,7 +2226,7 @@ function App() {
                     </div>
                   ) : workbenchSnapshot.surface.kind === "empty" ||
                     !activeProject ||
-                    !activeCanvas ||
+                    !activeCanvasId ||
                     !activeCanvasSession ? (
                     <ProjectLoadingState
                       projectName={activeProject?.name ?? "Project"}
@@ -2260,7 +2265,7 @@ function App() {
                             appearancePreferences.customAccent,
                           ),
                         }}
-                        key={`${activeProject.id}:${activeCanvas.id}`}
+                        key={`${activeProject.id}:${activeCanvasId}`}
                         clipboardScope={activeProject.id}
                         fileRendererRegistry={canvasFileRendererRegistry}
                         session={activeCanvasSession}
@@ -2277,7 +2282,7 @@ function App() {
                         selectionActions={selectionActions}
                         selectionDragSource={selectionDragSource}
                         services={services}
-                        title={activeCanvas.name}
+                        title={activeCanvas?.name ?? (locale === "zh-CN" ? "画布" : "Canvas")}
                         viewportInsets={canvasViewportInsets}
                         viewId="desktop-main"
                         viewRegistry={canvasViewRegistry}
