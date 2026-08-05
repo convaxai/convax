@@ -106,6 +106,42 @@ describe("team control vertical slice", () => {
     expect(await store.transact(projectId, (transaction) => transaction.read())).toBeNull()
   })
 
+  test("recovers byte-identical bootstrap artifacts after a lost response and rejects a conflicting retry", async () => {
+    const store = new InMemoryAtomicControlStateStore<CollaborationControlProjectStateV2>()
+    const membership = new CollaborationMembershipServiceV2(store, new FakeClock(), new DeterministicRandom(), signatures, {
+      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+    }, { verifyInstalledCurrentFloor: async () => true })
+    const projectId = parseProjectIdV2("bootstrap-response-loss")
+    const ownerMemberId = parseMemberIdV2(id(18))
+    const exact = bootstrapInput(projectId, ownerMemberId, publicKey(18), 24)
+    const factory = createProjectBootstrapAuthorizationFactoryV2({ verify: async () => true })
+    const authorize = async (input: typeof exact) => {
+      const authorization = await factory.authorize({ ...input, evidence: "verified-project-manifest" })
+      if (authorization === "rejected") throw new Error("test bootstrap rejected")
+      return authorization
+    }
+
+    const committed = await membership.bootstrapProject(exact, await authorize(exact))
+    expect(await membership.bootstrapProject(exact, await authorize(exact))).toEqual(committed)
+
+    const conflicting = { ...exact, initialProjectIndexCanonicalStateDigest: digest("f") }
+    await expect(membership.bootstrapProject(conflicting, await authorize(conflicting))).rejects.toMatchObject({ code: "project-exists" })
+    expect(await membership.bootstrapProject(exact, await authorize(exact))).toEqual(committed)
+
+    await store.transact(projectId, (transaction) => {
+      const state = transaction.read()
+      if (!state?.team) throw new Error("test Team state missing")
+      transaction.write({
+        ...state,
+        team: {
+          ...state.team,
+          currentSnapshot: { ...state.team.currentSnapshot, coreDigest: digest("e") },
+        },
+      })
+    })
+    await expect(membership.bootstrapProject(exact, await authorize(exact))).rejects.toMatchObject({ code: "project-exists" })
+  })
+
   test("expires and revokes the opaque invitation without weakening the R5 double-sign proof", async () => {
     const store = new InMemoryAtomicControlStateStore<CollaborationControlProjectStateV2>()
     const clock = new FakeClock()

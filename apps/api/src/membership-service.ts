@@ -481,7 +481,8 @@ export class CollaborationMembershipServiceV2 {
     liveBootstrapAuthorizations.delete(authorization)
     if (!authority || !sameBootstrap(authority, normalized)) fail("invalid-proof", "A live exact bootstrap capability is required")
     return this.store.transact(normalized.projectId, async (transaction) => {
-      if (transaction.read() !== null) fail("project-exists", "Collaboration Project is already provisioned")
+      const existing = transaction.read()
+      if (existing !== null) return recoverExactBootstrap(existing, normalized)
       const projectEpoch = normalized.projectEpoch
       const membershipEpoch = this.randomId128()
       const memberAuthorizationEpoch = this.randomId128()
@@ -1401,6 +1402,54 @@ export class CollaborationMembershipServiceV2 {
   private randomInvitationToken(): string { return this.randomId128() }
 
   private now(): number { return this.clock.nowEpochMilliseconds() }
+}
+
+function recoverExactBootstrap(
+  state: CollaborationControlProjectStateV2,
+  requested: Readonly<Omit<ProjectBootstrapAuthorizationRequestV2, "evidence">>,
+): TeamBootstrapResultV2 {
+  const teamState = requireTeamState(state)
+  const initialization = teamState.team.bootstrapInitialization
+  if (initialization.projectId !== requested.projectId || initialization.projectEpoch !== requested.projectEpoch
+    || initialization.projectIndexShardEpoch !== requested.projectIndexShardEpoch
+    || initialization.initializationAuthorityDigest !== requested.initializationAuthorityDigest
+    || initialization.initialProjectIndexCheckpointDigest !== requested.initialProjectIndexCheckpointDigest
+    || initialization.initialProjectIndexFullUpdateDigest !== requested.initialProjectIndexFullUpdateDigest
+    || initialization.initialProjectIndexStateVectorDigest !== requested.initialProjectIndexStateVectorDigest
+    || initialization.initialProjectIndexCanonicalStateDigest !== requested.initialProjectIndexCanonicalStateDigest) {
+    fail("project-exists", "Collaboration Project is already provisioned with different bootstrap material")
+  }
+  const snapshot = teamState.team.snapshots[0]
+  const member = snapshot?.core.members.find((candidate) => candidate.memberId === requested.ownerMemberId)
+  if (!snapshot || snapshot.core.projectId !== requested.projectId || snapshot.core.projectEpoch !== requested.projectEpoch
+    || member?.memberSigningPublicKey !== requested.ownerMemberSigningPublicKey) {
+    fail("invalid-proof", "Stored bootstrap authority is inconsistent")
+  }
+  // Bootstrap recovery is an idempotent retry of the initial transaction, not a
+  // historical-authority lookup. Returning the genesis owner graph after any
+  // membership transition would let a lost-response retry install stale Team
+  // authority on a fresh Desktop.
+  if (teamState.team.currentSnapshot.coreDigest !== snapshot.coreDigest) {
+    fail("project-exists", "Collaboration Project advanced beyond bootstrap recovery")
+  }
+  const credential = teamState.team.memberCredentials.find((candidate) =>
+    candidate.core.membershipSnapshotDigest === snapshot.coreDigest && candidate.core.memberId === requested.ownerMemberId)
+  const capability = teamState.team.adminCapabilities.find((candidate) =>
+    candidate.core.membershipSnapshotDigest === snapshot.coreDigest && candidate.core.adminMemberId === requested.ownerMemberId)
+  const invitationState = teamState.team.invitations[0]
+  if (!credential || !capability || !invitationState || invitationState.projectId !== requested.projectId) {
+    fail("invalid-proof", "Stored bootstrap recovery artifacts are incomplete")
+  }
+  if (teamState.team.currentSnapshot.core.members.find((candidate) => candidate.memberId === requested.ownerMemberId)?.state !== "active") {
+    fail("project-exists", "Bootstrap owner is no longer active")
+  }
+  return Object.freeze({
+    membershipSnapshot: snapshot,
+    ownerCredential: credential,
+    ownerAdminCapability: capability,
+    invitation: projectInvitation(invitationState),
+    initialization: teamState.team.bootstrapInitialization,
+  })
 }
 
 async function signArtifact<const Format extends string, const Domain extends `${string}/2`, const Core extends object>(format: Format, coreDomain: Domain, core: Core, signatures: ControlDigestSignaturePortV2): Promise<Readonly<{ format: Format; core: Core; coreDigest: DigestV2; serviceSignature: SignatureV2 }>> {

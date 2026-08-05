@@ -23,15 +23,15 @@ import {
   type DocumentScopeV2,
   type StateVectorV2,
 } from "@convax/collaboration"
-import { NodeCollaborationPersistenceV2 } from "@convax/project/node"
+import {
+  NodeCollaborationPersistenceV2,
+  stageDurableProjectDocumentGenesisV2,
+  type ProjectDocumentGenesisStorePortV2,
+  type ProjectDocumentGenesisVerifierPortV2,
+} from "@convax/project/node"
 
 import { createCanvasDocumentGenesisVerifierPortV2 } from "./canvas-document-genesis"
 import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
-import {
-  stageDurableDocumentGenesisV2,
-  type DurableDocumentGenesisStorePortV2,
-  type DocumentGenesisVerifierPortV2,
-} from "./collaboration-document-genesis"
 
 const bytes = new TextEncoder()
 const projectEpoch = id(1)
@@ -57,7 +57,7 @@ const predecessor = Object.freeze({
   acceptedFrontierDigest: digest("stage-frontier"),
 })
 
-describe("stageDurableDocumentGenesisV2", () => {
+describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact Canvas CVXCGP02 candidate through the real Node sole-writer barrier", async () => {
     const stagedAuthorityRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority")
     const authority = await loadCollaborationAuthorityV2({ explicitAuthorityRoot: stagedAuthorityRoot })
@@ -100,7 +100,7 @@ describe("stageDurableDocumentGenesisV2", () => {
       },
     })
     try {
-      const result = await stageDurableDocumentGenesisV2({
+      const result = await stageDurableProjectDocumentGenesisV2({
         scope: canvasScope,
         predecessor,
         verifier: adapter,
@@ -124,14 +124,14 @@ describe("stageDurableDocumentGenesisV2", () => {
     const acceptedBase = base(canvasScope)
     let installedCheckpoint: Uint8Array | undefined
     let installedCarrier: Uint8Array | undefined
-    const store: DurableDocumentGenesisStorePortV2 = {
+    const store: ProjectDocumentGenesisStorePortV2 = {
       async initializeShardWithGenesisProof(input) {
         installedCheckpoint = input.checkpointExactBytes as Uint8Array
         installedCarrier = input.proofCarrierExactBytes as Uint8Array
         return { ...input.acceptedBase, headDigest: digest("durable-head") }
       },
     }
-    const verifier: DocumentGenesisVerifierPortV2<"canvas"> = {
+    const verifier: ProjectDocumentGenesisVerifierPortV2<"canvas"> = {
       async prepare() {
         return {
           status: "verified",
@@ -145,7 +145,7 @@ describe("stageDurableDocumentGenesisV2", () => {
         }
       },
     }
-    const result = await stageDurableDocumentGenesisV2({ scope: canvasScope, predecessor, verifier, store })
+    const result = await stageDurableProjectDocumentGenesisV2({ scope: canvasScope, predecessor, verifier, store })
     expect(result).not.toBe("pending")
     expect(result).not.toBe("rejected")
     if (typeof result === "string") throw new Error("unexpected result")
@@ -163,7 +163,7 @@ describe("stageDurableDocumentGenesisV2", () => {
 
   test("propagates owner pending without touching durability", async () => {
     const initializeShardWithGenesisProof = mock(async () => { throw new Error("must not run") })
-    const result = await stageDurableDocumentGenesisV2({
+    const result = await stageDurableProjectDocumentGenesisV2({
       scope: canvasScope,
       predecessor,
       verifier: { prepare: async () => ({ status: "pending" }) },
@@ -182,7 +182,7 @@ describe("stageDurableDocumentGenesisV2", () => {
         header: { core: { scope: { ...projectIndexScope, projectId: parseProjectIdV2("other") } } },
       } as unknown as DecodedCausalEditFrameV2,
     }
-    await expect(stageDurableDocumentGenesisV2({
+    await expect(stageDurableProjectDocumentGenesisV2({
       scope: canvasScope,
       predecessor: wrong,
       verifier: { prepare },

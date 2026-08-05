@@ -75,6 +75,61 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
     expect(open).toHaveBeenCalledWith({ record, signal: expect.any(AbortSignal) })
   })
 
+  test("retries a lost bootstrap response with byte-identical authority input and installs only the recovered Team graph", async () => {
+    const record = { projectId } as DesktopTeamAuthorityRecordV1
+    const admitted = { record } as VerifiedDesktopTeamAuthorityV1
+    const membershipSnapshot = Object.freeze({ coreDigest: digest("c") })
+    const ownerCredential = Object.freeze({ coreDigest: digest("d") })
+    const ownerAdminCapability = Object.freeze({ coreDigest: digest("e") })
+    const recovered = Object.freeze({
+      membershipSnapshot,
+      ownerCredential,
+      ownerAdminCapability,
+      invitation,
+      initialization: Object.freeze({ projectId, ...nativeFacts() }),
+    })
+    const requests: unknown[] = []
+    const bootstrapTeam = mock(async (request: unknown) => {
+      requests.push(request)
+      if (requests.length === 1) throw new TypeError("response stream closed after commit")
+      return { status: "ok" as const, value: recovered }
+    })
+    const install = mock(async () => undefined)
+    const admit = mock(async (candidate: unknown) => {
+      expect(candidate).toEqual({
+        membershipSnapshot,
+        memberCredential: ownerCredential,
+        adminCapability: ownerAdminCapability,
+        replicaActorCredential: null,
+        replicaEditAuthorization: null,
+      })
+      return admitted
+    })
+    const factory = new ProductionProjectTeamPeerSessionFactoryV2({
+      control: { bootstrapTeam } as unknown as DesktopCollaborationControlHttpClientV2,
+      teamAdmission: { admit },
+      teamStore: { open: mock(async () => "missing" as const), install },
+      memberIdentity: { resolve: mock(async () => memberId) },
+      memberVault: { ensureMemberKey: mock(async () => ({ publicKey, signer: { sign: mock(async () => signature) } })) },
+      nativeFacts: { resolve: mock(async () => ({ projectId, ...nativeFacts() })) },
+      provisioner: { provision: mock(async () => ({ record, state: "active-editor" as const })) },
+      sessions: { open: mock(async () => session()) },
+      protocolDigest: digest("a"), trustBundleDigest: digest("b"), createId: () => id(9),
+      afterAuthorityChange: mock(async () => undefined),
+    })
+    const signal = new AbortController().signal
+
+    await expect(factory.bootstrapTeam({ projectId, signal })).rejects.toThrow("response stream closed after commit")
+    expect(install).not.toHaveBeenCalled()
+    await expect(factory.bootstrapTeam({ projectId, signal })).resolves.toMatchObject({ invitation, session: { status: "ready" } })
+
+    expect(requests).toHaveLength(2)
+    expect(requests[1]).toEqual(requests[0])
+    expect(admit).toHaveBeenCalledTimes(1)
+    expect(install).toHaveBeenCalledTimes(1)
+    expect(install).toHaveBeenCalledWith(admitted)
+  })
+
   test("never calls network for an unteamed open and exposes pending floor as explicit attention", async () => {
     const control = { bootstrapTeam: mock(() => { throw new Error("must not call") }) } as unknown as DesktopCollaborationControlHttpClientV2
     const missing = factoryFixture({ control, open: "missing" })

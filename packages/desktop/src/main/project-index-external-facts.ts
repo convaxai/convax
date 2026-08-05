@@ -20,13 +20,12 @@ import type {
   ProjectCanvasGenesisStagingPortV2,
   ProjectIndexFactResolutionPortV2,
 } from "@convax/project/canvas"
-import type { NodeCollaborationPersistenceV2 } from "@convax/project/node"
-import type { ProjectBlobReplicationStoreV2 } from "@convax/project/node"
-
 import {
-  stageDurableDocumentGenesisV2,
-  type DocumentGenesisVerifierPortV2,
-} from "./collaboration-document-genesis"
+  stageDurableProjectDocumentGenesisV2,
+  type NodeCollaborationPersistenceV2,
+  type ProjectBlobReplicationStoreV2,
+  type ProjectDocumentGenesisVerifierPortV2,
+} from "@convax/project/node"
 
 /**
  * First production closure: read/query and dependency-free ProjectIndex frames work;
@@ -154,7 +153,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
     NodeCollaborationPersistenceV2,
     "initializeShardWithGenesisProof" | "readGenesisProof"
   >
-  readonly genesisVerifier: DocumentGenesisVerifierPortV2<"canvas">
+  readonly genesisVerifier: ProjectDocumentGenesisVerifierPortV2<"canvas">
   readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
   readonly preflightAuthor: (input: {
     readonly projectId: DocumentScopeV2["projectId"]
@@ -259,7 +258,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
     },
     async stageCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPortV2["stageCanvasGenesis"]>[0]) {
       if (!sameProjectEpoch(request.scope, projectIndexScope)) return "rejected"
-      const staged = await stageDurableDocumentGenesisV2({
+      const staged = await stageDurableProjectDocumentGenesisV2({
         scope: request.scope,
         predecessor: request.predecessor,
         verifier: input.genesisVerifier,

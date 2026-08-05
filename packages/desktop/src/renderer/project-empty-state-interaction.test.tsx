@@ -64,7 +64,7 @@ describe("ProjectCollaborationPendingState interactions", () => {
         )
       })
 
-      await act(async () => button("Create team and enable collaboration")?.click())
+      await act(async () => button("Start sharing and enable collaboration")?.click())
       expect(onCreateTeam).toHaveBeenCalledWith("project-one")
       expect(onReady).not.toHaveBeenCalled()
       expect(document.querySelector<HTMLTextAreaElement>("#project-created-team-invitation")?.value).toBe(share)
@@ -93,7 +93,7 @@ describe("ProjectCollaborationPendingState interactions", () => {
         )
       })
 
-      await act(async () => button("Join an existing team")?.click())
+      await act(async () => button("Join collaboration with an invitation")?.click())
       const input = document.querySelector<HTMLInputElement>("#project-team-invitation")!
       await act(async () => {
         input.value = "  complete-carrier  "

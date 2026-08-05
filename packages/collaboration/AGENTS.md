@@ -50,5 +50,20 @@ Electron, filesystem, React, or a concrete document schema.
   never enter candidate, replica, journal, or wire.
 - Missing or mismatched files in the root's sealed R5 authority release fail
   closed before decode or sign as `protocol-schema-bundle-unavailable`.
+- Successor-shaped V3 authority DTOs, verification ports, and protocol codec
+  strategy seams are non-active implementation scaffolding. The only selected
+  production strategy remains V2 and requires `VerifiedProtocolAuthorityV2`.
+  Never pass V3 evidence into the v2 kernel, dispatch V3 bytes without a verified
+  successor selector, or infer activation from public exports or passing tests.
+- A successor becomes usable only as one sealed release containing its complete
+  core/context/frame and wire codec, admission closure, dual-version dispatcher,
+  independently generated artifacts, external role receipts, review evidence,
+  manifest, pointer, and mutation checks. Repository-local code or approval prose
+  cannot satisfy that gate.
+- The non-active V3 sharing-handoff codec binds one exact Project epoch, owner
+  predecessor, ProjectIndex head, sorted live-Canvas head closure, initial Team
+  artifact digests, and successor protocol. Its receipt requires owner and trusted
+  service signatures over one core digest; handoff-id retries are byte-idempotent
+  and any alternate bytes are equivocation.
 
 Run `bun typecheck && bun test`.

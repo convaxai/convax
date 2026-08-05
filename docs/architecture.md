@@ -81,6 +81,35 @@ signer and its one-way sharing handoff is scoped in the explicitly non-active
 [`collaboration v11 design draft`](superpowers/specs/2026-08-05-local-first-collaboration-v11-design.md).
 That draft is neither a selector nor runtime authority.
 
+Successor-shaped implementation seams do not change that status. Browser-safe V3
+DTO/codecs and verification ports in `@convax/collaboration`, Project/node durable
+local-owner records and device sharing tombstones, and Desktop Main authority-source
+adapters are inert compatibility work until a successor release is selected. They
+must not be passed to the selected v2 `DocumentOwnerKernel`, used to decode or sign
+frames, or treated as evidence that V11 is active. The currently selected codec
+strategy remains V2-only and is constructed from `VerifiedProtocolAuthorityV2`.
+Likewise, the Desktop activation path may avoid Team startup when no durable Team
+binding exists, but that shell-level behavior does not manufacture local mutation
+authority under R5.
+
+The inert handoff seam is closed and one-way: Collaboration binds the exact owner
+predecessor, ProjectIndex accepted head, sorted live-Canvas head set, Team artifact
+digests, and protocol into a two-signature receipt with byte-idempotent handoff-id
+submission. Project/node then installs that receipt and Team digest closure as one
+Project-private CAS before publishing the device tombstone. Either committed record
+closes owner signing; restart repairs only the missing tombstone from the same
+receipt and treats rollback or different bytes as recovery-required/equivocation.
+
+Activating those seams requires one indivisible successor change: a closed V3
+core/context/frame and new wire magic; complete incoming and local admission;
+dual-version dispatch selected only by verified protocol authority; Project-owned
+durable handoff/CAS and anti-rollback recovery; Desktop composition through that
+selected successor; independently generated schema/artifact identities; all
+required external review receipts; a sealed manifest and review evidence; and a
+new active-authority pointer with first-activation and descendant-mutation checks.
+Missing any item keeps V3 non-active and local mutation fail-closed as
+`local-authority-unavailable`.
+
 ### Architecture map
 
 This diagram is part of the canonical architecture, not a generated illustration.

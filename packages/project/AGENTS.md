@@ -124,6 +124,16 @@ This package owns the durable Project aggregate and native Project adapters.
   root's sealed R5 authority release. A missing/mismatched artifact or genuine
   owner contradiction stops decode/reset/mutation rather than selecting an older
   draft or current implementation as fallback.
+- Project/node may persist and re-verify closed successor local-owner bindings,
+  edit authorizations, genesis evidence, and device-level sharing tombstones, but
+  those stores are non-activating. Their presence never selects V3, grants mutation
+  authority, or permits downgrade from a shared/ambiguous Project to local-owner
+  signing. Until a sealed successor is selected, callers must keep them outside the
+  v2 runtime and report `local-authority-unavailable`.
+- A non-active successor sharing transition publishes one exact Project-private
+  receipt/Team-artifact-digest CAS before its device-level tombstone. Either durable
+  record permanently dominates the local-owner predecessor; a crash between them
+  is recovered only by replaying the same receipt, never by resuming owner signing.
 
 Run `bun typecheck && bun test`. Run root `bun run pack:check` for public/storage
 changes and Desktop `bun run smoke:open-project` for creation, migration, or breaking

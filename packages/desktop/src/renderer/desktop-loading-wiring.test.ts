@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url"
 
 const indexSource = readFileSync(fileURLToPath(new URL("./index.tsx", import.meta.url)), "utf8")
 const projectHomeSource = readFileSync(fileURLToPath(new URL("./project-home.tsx", import.meta.url)), "utf8")
+const mainSource = readFileSync(fileURLToPath(new URL("../main/index.ts", import.meta.url)), "utf8")
+const sharingActivationSource = readFileSync(
+  fileURLToPath(new URL("../main/project-sharing-activation.ts", import.meta.url)),
+  "utf8",
+)
 const packagedSmokeSource = readFileSync(
   fileURLToPath(new URL("../../scripts/desktop-packaged-smoke.ts", import.meta.url)),
   "utf8",
@@ -43,8 +48,9 @@ describe("Desktop Project startup wiring", () => {
   })
 
   test("keeps Team collaboration lazy and exposes sharing as an explicit Project action", () => {
-    expect(indexSource).toContain('if (sharingBinding === "missing")')
-    expect(indexSource).toContain("activateLocalProject(projectId)")
+    expect(mainSource).toContain("activateProjectSharingFromDurableBindingV2")
+    expect(sharingActivationSource).toContain('binding === "missing"')
+    expect(sharingActivationSource).toContain("input.service.activateLocalProject(projectId)")
     expect(indexSource).toContain('data-project-share=""')
     expect(indexSource).toContain("ProjectCollaborationPendingState")
   })

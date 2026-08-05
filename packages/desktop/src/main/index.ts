@@ -26,7 +26,6 @@ import {
   createWebCryptoEd25519VerifierV2,
   parseDigestV2,
   parseId128V2,
-  parseProjectIdV2,
   parseValidationArtifactSetV2,
 } from "@convax/collaboration"
 import {
@@ -228,6 +227,7 @@ import { registerProjectTeamCollaborationIpcV2 } from "./project-team-collaborat
 import {
   ProjectTeamCollaborationManagerV2,
 } from "./project-team-collaboration-manager"
+import { activateProjectSharingFromDurableBindingV2 } from "./project-sharing-activation"
 import { createDesktopCollaborationControlHttpClientV2 } from "./collaboration-control-http-client"
 import { parseDesktopCollaborationControlRuntimeConfigV1 } from "./collaboration-control-runtime-config"
 import { createDesktopTeamAuthorityAdmissionV1, NodeDurableTeamAuthorityStoreV1 } from "./durable-team-authority-store"
@@ -566,11 +566,12 @@ function startApplication() {
       collaborationCanvasSessions?.resumeProject(projectId)
       activeCollaborationProjectId = projectId
       try {
-        const sharingBinding = await collaborationTeamStore.open(parseProjectIdV2(projectId))
-        if (sharingBinding === "missing") {
-          await projectTeamCollaboration?.activateLocalProject(projectId)
-        } else {
-          await projectTeamCollaboration?.activateProject(projectId)
+        if (projectTeamCollaboration) {
+          await activateProjectSharingFromDurableBindingV2({
+            projectId,
+            sharing: collaborationTeamStore,
+            service: projectTeamCollaboration,
+          })
         }
       } catch (error) {
         // A rendezvous outage never rolls back or closes the already durable local Project.

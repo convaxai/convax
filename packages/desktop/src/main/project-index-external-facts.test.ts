@@ -15,7 +15,7 @@ import {
 } from "@convax/collaboration"
 import type { CanvasGenesisProofCarrierVerifierV2 } from "@convax/canvas/collaboration"
 
-import type { DocumentGenesisVerifierPortV2 } from "./collaboration-document-genesis"
+import type { ProjectDocumentGenesisVerifierPortV2 } from "@convax/project/node"
 import {
   createFailClosedProjectIndexFactPortsV2,
   createLocalBlobProjectIndexFactPortsV2,
@@ -197,7 +197,7 @@ function productionFixture(options: {
       acceptedBase,
     }),
   }))
-  const genesisVerifier: DocumentGenesisVerifierPortV2<"canvas"> = { prepare: prepareGenesis }
+  const genesisVerifier: ProjectDocumentGenesisVerifierPortV2<"canvas"> = { prepare: prepareGenesis }
   let initializationAttempt = 0
   let installed = false
   const initializeShardWithGenesisProof = mock(async (input: Parameters<

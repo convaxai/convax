@@ -11,7 +11,7 @@ import { maxCausalFrontierV2, nextLamportV2, validateActorSuccessorV2 } from "./
 import { assertDocumentOwnerBindingV2, validateOwnerCanonicalStateBytesV2 } from "./canonicalizer"
 import type { DigestV2, Id128V2, StateVectorV2 } from "./codecs"
 import { parseDigestV2, parseId128V2, parseUint64V2 } from "./codecs"
-import { KERNEL_DIGEST_DOMAINS_V2, PINNED_AUTHORITY_IDENTITIES_V2, PROTOCOL_SCHEMA_ARTIFACTS_V2 } from "./constants"
+import { KERNEL_DIGEST_DOMAINS_V2, PROTOCOL_SCHEMA_ARTIFACTS_V2 } from "./constants"
 import type {
   ActualWriteEvidenceV2,
   CausalContextV2,
@@ -31,12 +31,12 @@ import type {
   ReplicaActorHeadSetV2,
   ValidationArtifactSetV2,
 } from "./contracts"
-import { causalEditSignatureDigestV2, causalContextDigestV2, decodeCausalEditFrameV2, encodeCausalEditFrameV2, signCausalEditCoreV2, typedIntentDigestV2 } from "./frame"
+import { selectedCausalProtocolCodecV2, type SelectedCausalProtocolCodecV2 } from "./protocol-codec-strategy"
 import { canonicalStateDigestV2, structuredDigestV2 } from "./digest"
 import { CollaborationKernelErrorV2 } from "./errors"
 import { verifyExactEd25519V2, type Ed25519VerifierPortV2 } from "./crypto"
 import { assertExactKeysV2, decodeRestrictedJcsV2, encodeRestrictedJcsV2, isPlainDataObject, sameBytes as sameJcsBytes } from "./jcs"
-import { assertSameScopeV2, parseActualWriteEvidenceV2, parseCausalContextV2, parseCausalFrontierV2, parseDocumentScopeV2, parseReplicaActorHeadSetV2, parseValidationArtifactSetV2 } from "./parse"
+import { assertSameScopeV2, parseCausalFrontierV2, parseDocumentScopeV2, parseReplicaActorHeadSetV2, parseValidationArtifactSetV2 } from "./parse"
 import type { AcceptedHeadViewV2, CollaborationKernelPortsV2, PendingFrameReasonV2 } from "./ports"
 import type { SessionUndoCoordinatorV2 } from "./undo"
 import { assertDocumentOwnerRuntimeV2, assertOwnerExternalFactPortV2 } from "./owner-runtime"
@@ -54,7 +54,6 @@ import {
   yjsUpdateDigestV2,
 } from "./yjs-codec"
 
-const PROTOCOL_DIGEST_V2 = parseDigestV2(PINNED_AUTHORITY_IDENTITIES_V2.protocolDigest)
 const claimedOwnerFactPortsV2 = new WeakSet<object>()
 
 export interface CollaborationKernelOptionsV2 {
@@ -103,12 +102,14 @@ export interface ReplicaProjectionSnapshotV2 {
 }
 
 export class CollaborationKernelV2 {
+  private readonly codec: SelectedCausalProtocolCodecV2
   private disposed = false
   private head: AcceptedHeadViewV2
   private replicaDoc: Y.Doc
   private queue: Promise<void> = Promise.resolve()
 
   private constructor(private readonly options: CollaborationKernelOptionsV2, head: AcceptedHeadViewV2, replicaDoc: Y.Doc) {
+    this.codec = selectedCausalProtocolCodecV2(options.authority)
     this.head = head
     this.replicaDoc = replicaDoc
   }
@@ -143,7 +144,7 @@ export class CollaborationKernelV2 {
         return await this.receiveFrameExclusive(retained, signal)
       } catch (error) {
         if (error instanceof CollaborationKernelErrorV2 && error.code === "dependency-pending") {
-          return this.retainPending(decodeCausalEditFrameV2(this.options.authority, retained), "missing-artifact")
+          return this.retainPending(this.codec.decodeFrame(retained), "missing-artifact")
         }
         throw error
       }
@@ -195,7 +196,7 @@ export class CollaborationKernelV2 {
     if (lookup.status === "accepted") {
       if (!await this.options.ports.persistence.isReachableFromAcceptedHead(lookup.ref)) throw new CollaborationKernelErrorV2("read-only-recovery-required", "Accepted operation is not reachable from the sole durable head")
       await this.refreshAcceptedHead()
-      return Object.freeze({ status: "duplicate", frame: decodeCausalEditFrameV2(this.options.authority, lookup.bytes), acceptedFrontierDigest: this.head.frontierDigest })
+      return Object.freeze({ status: "duplicate", frame: this.codec.decodeFrame(lookup.bytes), acceptedFrontierDigest: this.head.frontierDigest })
     }
     if (lookup.status === "same-frame-recovery" || lookup.status === "object-only-recovery") {
       return this.recoverFinalLocalFrame(lookup.bytes, localActorId, operationId, request.signal)
@@ -230,7 +231,7 @@ export class CollaborationKernelV2 {
       operationId,
       lamport,
       baseFrontierDigest: this.head.frontierDigest,
-      protocolDigest: PROTOCOL_DIGEST_V2,
+      protocolDigest: this.codec.protocolDigest,
       ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
       validationArtifactSetDigest,
     })
@@ -246,8 +247,8 @@ export class CollaborationKernelV2 {
     const exactTypedIntent = decodeRestrictedJcsV2(typedIntentJcs)
     const intentKind = requireTypedIntentKind(exactTypedIntent)
     const intent = requireDecodedIntent(this.options.owner.protocolPort.decodeIntent(cloneBytesV2(typedIntentJcs, "typed-intent JCS")))
-    const intentDigest = typedIntentDigestV2(typedIntentJcs)
-    const context: CausalContextV2 = parseCausalContextV2({
+    const intentDigest = this.codec.typedIntentDigest(typedIntentJcs)
+    const context: CausalContextV2 = this.codec.parseCausalContext({
       format: "convax.causal-context/2",
       scope: this.options.scope,
       baseFrontier: this.head.frontier,
@@ -270,7 +271,7 @@ export class CollaborationKernelV2 {
         lamport,
         intentDigest,
         baseFrontierDigest: this.head.frontierDigest,
-        protocolDigest: PROTOCOL_DIGEST_V2,
+        protocolDigest: this.codec.protocolDigest,
         ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
         validationArtifactSetDigest,
       } as const
@@ -287,7 +288,7 @@ export class CollaborationKernelV2 {
       )
       assertConsumedDependencies(prepared.externalFacts, declaredDependencies)
       requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, candidate, applyResult), "Candidate post-state violates owner invariants")
-      const evidence = parseActualWriteEvidenceV2(this.options.owner.protocolPort.deriveActualWriteEvidence(applyResult))
+      const evidence = this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(applyResult))
       assertEvidenceClosure(evidence, this.options.scope, this.options.owner.protocolPort.schemaDigest, intentDigest)
       const actualWriteEvidenceJcs = encodeRestrictedJcsV2(evidence)
       const yjsUpdate = encodeCandidateDeltaV2(candidate, baseStateVector)
@@ -305,7 +306,7 @@ export class CollaborationKernelV2 {
           lamport,
           intentKind,
           intentDigest,
-          causalContextDigest: causalContextDigestV2(context),
+          causalContextDigest: this.codec.causalContextDigest(context),
           baseFrontierDigest: this.head.frontierDigest,
           baseStateVectorDigest: stateVectorDigestV2(baseStateVector),
           baseCanonicalStateDigest,
@@ -318,7 +319,7 @@ export class CollaborationKernelV2 {
           baseStateVectorByteLength: parseUint64V2(String(baseStateVector.byteLength)),
           yjsUpdateByteLength: parseUint64V2(String(yjsUpdate.byteLength)),
           actualWriteEvidenceJcsByteLength: parseUint64V2(String(actualWriteEvidenceJcs.byteLength)),
-          protocolDigest: PROTOCOL_DIGEST_V2,
+          protocolDigest: this.codec.protocolDigest,
           ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
           canonicalizerDigest: this.options.owner.protocolPort.canonicalizerDigest,
           validationArtifactSetDigest,
@@ -326,12 +327,12 @@ export class CollaborationKernelV2 {
           replicaActorCredentialCoreDigest: authority.signerAuthority.replicaActorCredentialCoreDigest,
           replicaEditAuthorizationCoreDigest: authority.signerAuthority.replicaEditAuthorizationCoreDigest,
         })
-        const header = await signCausalEditCoreV2(this.options.authority, core, authority.signer)
-        const bytes = encodeCausalEditFrameV2(this.options.authority, {
+        const header = await this.codec.signCore(core, authority.signer)
+        const bytes = this.codec.encodeFrame({
           header,
           sections: { typedIntentJcs, causalContextJcs, baseStateVector, yjsUpdate, actualWriteEvidenceJcs },
         })
-        const frame = decodeCausalEditFrameV2(this.options.authority, bytes)
+        const frame = this.codec.decodeFrame(bytes)
         const newHead = causalHeadRefFromDecodedFrameV2(frame)
         const durableHeadDigest = await this.persistLocal(frame, newHead, request.signal)
         try {
@@ -354,14 +355,14 @@ export class CollaborationKernelV2 {
   private async receiveFrameExclusive(bytes: Uint8Array, signal?: AbortSignal): Promise<IncomingFrameResultV2> {
     this.requireLive()
     assertNotAborted(signal)
-    const frame = decodeCausalEditFrameV2(this.options.authority, bytes)
+    const frame = this.codec.decodeFrame(bytes)
     assertSameScopeV2(frame.header.core.scope, this.options.scope, "Incoming frame scope")
     const core = frame.header.core
     assertDocumentOwnerBindingV2(this.options.owner.protocolPort)
     if (core.ownerSchemaDigest !== this.options.owner.protocolPort.schemaDigest || core.canonicalizerDigest !== this.options.owner.protocolPort.canonicalizerDigest) invalid("Incoming owner schema or canonicalizer digest mismatches")
     const lookup = await this.options.ports.persistence.lookupOperation(core.actorId, core.operationId)
     if (lookup.status === "accepted" || lookup.status === "same-frame-recovery" || lookup.status === "object-only-recovery") {
-      const accepted = decodeCausalEditFrameV2(this.options.authority, lookup.bytes)
+      const accepted = this.codec.decodeFrame(lookup.bytes)
       if (accepted.frameDigest !== frame.frameDigest) await this.quarantineEquivocation([accepted.frameDigest, frame.frameDigest])
       if (lookup.status === "accepted") {
         if (!await this.options.ports.persistence.isReachableFromAcceptedHead(lookup.ref)) throw new CollaborationKernelErrorV2("read-only-recovery-required", "Accepted incoming operation is below the durable head without reachability proof")
@@ -373,7 +374,7 @@ export class CollaborationKernelV2 {
     const authority = await this.options.ports.incomingAuthority.verifyFrameAuthority(frame)
     if (authority === "pending") return this.retainPending(frame, "missing-proof")
     if (authority === "rejected") invalid("Incoming frame authority is rejected")
-    const signatureOk = await verifyExactEd25519V2(this.options.signatureVerifier, authority.replicaPublicKey, frame.header.replicaSignature, causalEditSignatureDigestV2(frame.header.coreDigest))
+    const signatureOk = await verifyExactEd25519V2(this.options.signatureVerifier, authority.replicaPublicKey, frame.header.replicaSignature, this.codec.causalEditSignatureDigest(frame.header.coreDigest))
     if (!signatureOk) invalid("Incoming replica signature is invalid")
     const currentActorHead = actorHeadFor(this.head.actorHeads, core.actorId)
     if (currentActorHead === null && core.actorSequence !== "1") return this.retainPending(frame, "missing-predecessor")
@@ -427,7 +428,7 @@ export class CollaborationKernelV2 {
         requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, rerun, result), "Incoming rerun violates owner post invariants")
         const rerunDelta = encodeCandidateDeltaV2(rerun, base.stateVector)
         if (!sameBytes(rerunDelta, frame.sections.yjsUpdate)) invalid("Incoming owner rerun does not reproduce byte-identical Yjs delta")
-        const rerunEvidence = encodeRestrictedJcsV2(parseActualWriteEvidenceV2(this.options.owner.protocolPort.deriveActualWriteEvidence(result)))
+        const rerunEvidence = encodeRestrictedJcsV2(this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(result)))
         if (!sameBytes(rerunEvidence, frame.sections.actualWriteEvidenceJcs)) invalid("Incoming owner rerun does not reproduce exact write evidence")
       } finally {
         rerun.destroy()
@@ -468,7 +469,7 @@ export class CollaborationKernelV2 {
     operationId: Id128V2,
     signal?: AbortSignal,
   ): Promise<LocalCommitResultV2> {
-    const frame = decodeCausalEditFrameV2(this.options.authority, bytes)
+    const frame = this.codec.decodeFrame(bytes)
     const core = frame.header.core
     assertDocumentOwnerBindingV2(this.options.owner.protocolPort)
     if (core.ownerSchemaDigest !== this.options.owner.protocolPort.schemaDigest || core.canonicalizerDigest !== this.options.owner.protocolPort.canonicalizerDigest) invalid("Recovery owner schema or canonicalizer digest mismatches")
@@ -481,7 +482,7 @@ export class CollaborationKernelV2 {
     const authority = await this.options.ports.incomingAuthority.verifyFrameAuthority(frame)
     if (authority === "pending") pending("Recovery frame authority is pending")
     if (authority === "rejected") invalid("Recovery frame authority is rejected")
-    if (!await verifyExactEd25519V2(this.options.signatureVerifier, authority.replicaPublicKey, frame.header.replicaSignature, causalEditSignatureDigestV2(frame.header.coreDigest))) {
+    if (!await verifyExactEd25519V2(this.options.signatureVerifier, authority.replicaPublicKey, frame.header.replicaSignature, this.codec.causalEditSignatureDigest(frame.header.coreDigest))) {
       invalid("Recovery frame signature is invalid")
     }
     const fullBaseUpdate = encodeFullUpdateV2(this.replicaDoc)
@@ -519,7 +520,7 @@ export class CollaborationKernelV2 {
       assertConsumedDependencies(facts.port, declaredDependencies)
       requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, rerun, result), "Recovery rerun violates owner invariants")
       if (!sameBytes(encodeCandidateDeltaV2(rerun, baseStateVector), frame.sections.yjsUpdate)) invalid("Recovery rerun delta differs from original final bytes")
-      if (!sameBytes(encodeRestrictedJcsV2(parseActualWriteEvidenceV2(this.options.owner.protocolPort.deriveActualWriteEvidence(result))), frame.sections.actualWriteEvidenceJcs)) invalid("Recovery evidence differs from original final bytes")
+      if (!sameBytes(encodeRestrictedJcsV2(this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(result))), frame.sections.actualWriteEvidenceJcs)) invalid("Recovery evidence differs from original final bytes")
       const postCanonical = ownerCanonicalDigest(this.options.owner.protocolPort, authored.document)
       if (stateVectorDigestV2(authored.postStateVector) !== core.postStateVectorDigest || postCanonical !== core.postCanonicalStateDigest) invalid("Recovery post-state differs from signed core")
       const newHead = causalHeadRefFromDecodedFrameV2(frame)
