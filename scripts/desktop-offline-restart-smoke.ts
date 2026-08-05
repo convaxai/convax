@@ -1,4 +1,5 @@
 import fs from "node:fs/promises"
+import { randomUUID } from "node:crypto"
 import { createRequire } from "node:module"
 import os from "node:os"
 import path from "node:path"
@@ -172,9 +173,9 @@ function configureMain(input: { electronRequireBase: string; projectRoot: string
   return { pid: process.pid, userData: electron.app.getPath("userData") }
 }
 
-async function mainOfflineProbe() {
+async function mainOfflineProbe(url: string) {
   try {
-    await fetch("https://example.com/__convax_offline_restart_smoke__")
+    await fetch(url)
     return { failed: false }
   } catch (error) {
     return {
@@ -196,11 +197,13 @@ async function rendererOfflineProbe(url: string) {
   return Promise.race([request, timeout])
 }
 
-async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
+async function verifyRendererExternalNetworkBlocked(webSocketUrl: string, probeUrl: string) {
+  const probePattern = probeUrl.replaceAll("\\", "\\\\").replaceAll("*", "\\*").replaceAll("?", "\\?")
   return new Promise<{
     failed?: boolean
     failureInjected: boolean
     message?: string
+    probeUrl: string
     requestObserved: boolean
     timedOut?: boolean
   }>((resolve, reject) => {
@@ -215,7 +218,14 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
     let commandId = 0
     let evaluation: { failed?: boolean; message?: string; timedOut?: boolean } | undefined
     let failureInjected = false
+    const logEntries: string[] = []
+    let networkFailure: { blockedReason?: string; errorText?: string } | undefined
+    let networkRequestId: string | undefined
+    let networkRequestObserved = false
+    let pageLoadGeneration = 0
+    const pageLoadWaiters: Array<{ after: number; resolve: () => void }> = []
     let requestObserved = false
+    let restoringControls = false
     let settled = false
 
     const finish = (error?: Error) => {
@@ -227,10 +237,18 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
         reject(error)
         return
       }
-      resolve({ ...evaluation, failureInjected, requestObserved })
+      resolve({ ...evaluation, failureInjected, probeUrl, requestObserved })
     }
     const maybeFinish = () => {
-      if (evaluation && failureInjected) finish()
+      if (!evaluation || !failureInjected || restoringControls) return
+      restoringControls = true
+      void (async () => {
+        await sendCommand("Fetch.disable")
+        await sendCommand("Page.setBypassCSP", { enabled: false })
+        await sendCommand("Network.setCacheDisabled", { cacheDisabled: false })
+        await reloadPage()
+        finish()
+      })().catch((error) => finish(error instanceof Error ? error : new SmokeDefect(String(error))))
     }
     const sendCommand = (method: string, params: Record<string, unknown> = {}) =>
       new Promise<unknown>((resolveCommand, rejectCommand) => {
@@ -238,9 +256,31 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
         pending.set(id, { reject: rejectCommand, resolve: resolveCommand })
         socket.send(JSON.stringify({ id, method, params }))
       })
+    const reloadPage = async () => {
+      const after = pageLoadGeneration
+      const loaded = new Promise<void>((resolveLoad) => {
+        pageLoadWaiters.push({ after, resolve: resolveLoad })
+      })
+      await sendCommand("Page.reload", { ignoreCache: true })
+      await loaded
+    }
     const timer = setTimeout(() => {
-      finish(new SmokeDefect("Timed out injecting the Renderer external-network failure"))
-    }, 15_000)
+      finish(
+        new SmokeDefect(
+          "Timed out injecting the Renderer external-network failure: " +
+            JSON.stringify({
+              evaluation,
+              failureInjected,
+              logEntries,
+              networkFailure,
+              networkRequestObserved,
+              probePattern,
+              probeUrl,
+              requestObserved,
+            }),
+        ),
+      )
+    }, 30_000)
 
     socket.addEventListener("error", () => {
       finish(new SmokeDefect("Renderer network-control debugger WebSocket failed"))
@@ -251,6 +291,9 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
         id?: number
         method?: string
         params?: {
+          blockedReason?: string
+          entry?: { level?: string; source?: string; text?: string; url?: string }
+          errorText?: string
           request?: { url?: string }
           requestId?: string
         }
@@ -267,9 +310,44 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
         }
         return
       }
+      if (message.method === "Page.loadEventFired") {
+        pageLoadGeneration += 1
+        for (let index = pageLoadWaiters.length - 1; index >= 0; index -= 1) {
+          const waiter = pageLoadWaiters[index]
+          if (waiter && pageLoadGeneration > waiter.after) {
+            pageLoadWaiters.splice(index, 1)
+            waiter.resolve()
+          }
+        }
+        return
+      }
+      if (message.method === "Log.entryAdded" && message.params?.entry) {
+        logEntries.push(JSON.stringify(message.params.entry))
+        return
+      }
+      if (
+        message.method === "Network.requestWillBeSent" &&
+        message.params?.request?.url === probeUrl &&
+        typeof message.params.requestId === "string"
+      ) {
+        networkRequestId = message.params.requestId
+        networkRequestObserved = true
+        return
+      }
+      if (
+        message.method === "Network.loadingFailed" &&
+        typeof message.params?.requestId === "string" &&
+        message.params.requestId === networkRequestId
+      ) {
+        networkFailure = {
+          blockedReason: message.params.blockedReason,
+          errorText: message.params.errorText,
+        }
+        return
+      }
       if (
         message.method !== "Fetch.requestPaused" ||
-        message.params?.request?.url !== externalProbeUrl ||
+        message.params?.request?.url !== probeUrl ||
         typeof message.params.requestId !== "string"
       ) {
         return
@@ -288,12 +366,25 @@ async function verifyRendererExternalNetworkBlocked(webSocketUrl: string) {
     })
     socket.addEventListener("open", () => {
       void (async () => {
+        await sendCommand("Runtime.evaluate", {
+          awaitPromise: true,
+          expression:
+            "document.readyState === 'complete' ? true : new Promise((resolve) => addEventListener('load', () => resolve(true), { once: true }))",
+          returnByValue: true,
+        })
+        await sendCommand("Page.enable")
+        await sendCommand("Log.enable")
+        await sendCommand("Network.enable")
+        await sendCommand("Network.setCacheDisabled", { cacheDisabled: true })
+        await sendCommand("Network.clearBrowserCache")
+        await sendCommand("Page.setBypassCSP", { enabled: true })
+        await reloadPage()
         await sendCommand("Fetch.enable", {
-          patterns: [{ requestStage: "Request", urlPattern: externalProbeUrl }],
+          patterns: [{ requestStage: "Request", urlPattern: probePattern }],
         })
         const evaluated = (await sendCommand("Runtime.evaluate", {
           awaitPromise: true,
-          expression: "(" + rendererOfflineProbe.toString() + ")(" + JSON.stringify(externalProbeUrl) + ")",
+          expression: "(" + rendererOfflineProbe.toString() + ")(" + JSON.stringify(probeUrl) + ")",
           returnByValue: true,
         })) as {
           exceptionDetails?: { text?: string }
@@ -716,7 +807,17 @@ async function launchElectron(label: string): Promise<ElectronInstance> {
       throw new SmokeDefect(label + " Main process did not load the offline network guard before startup")
     }
 
-    const mainOffline = (await evaluate(mainDebugger, "(" + mainOfflineProbe.toString() + ")()", 15_000)) as {
+    const probeUrl = new URL(externalProbeUrl)
+    probeUrl.searchParams.set("launch", label)
+    probeUrl.searchParams.set("pid", String(mainInfo.pid))
+    probeUrl.searchParams.set("nonce", randomUUID())
+    const launchProbeUrl = probeUrl.href
+
+    const mainOffline = (await evaluate(
+      mainDebugger,
+      "(" + mainOfflineProbe.toString() + ")(" + JSON.stringify(launchProbeUrl) + ")",
+      15_000,
+    )) as {
       failed?: boolean
       message?: string
     }
@@ -724,7 +825,7 @@ async function launchElectron(label: string): Promise<ElectronInstance> {
       throw new SmokeDefect(label + " Main external-network control did not fail through the offline guard")
     }
 
-    const rendererOffline = await verifyRendererExternalNetworkBlocked(rendererDebugger)
+    const rendererOffline = await verifyRendererExternalNetworkBlocked(rendererDebugger, launchProbeUrl)
     if (
       rendererOffline.failed !== true ||
       rendererOffline.timedOut ||
@@ -821,6 +922,12 @@ try {
       first.projectId +
       ", " +
       first.canvasId +
+      "; PIDs: first=" +
+      firstPid +
+      ", second=" +
+      secondPid +
+      ", third=" +
+      thirdPid +
       ")",
   )
   completed = true
