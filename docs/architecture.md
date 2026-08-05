@@ -687,7 +687,7 @@ Electron userData/
   canvas-external-drags/                short-lived host-owned native drag copies
 
 Packaged app Resources/
-  marketplaces/                         product-lock-verified Builtin and Official immutable bytes
+  marketplaces/                         product-lock-verified Builtin, Official and retired-major recovery bytes
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
@@ -796,13 +796,31 @@ and now records this additional disposable projection; no dependency or trust ro
 changes.
 
 `marketplaces.lock.json` is the sole product input for packaged Marketplace bytes.
-Its policy declares Builtin/Official sources and `preinstalledPackages`; its resolved
-closure pins the Builtin bundle, Official descriptor/Registry/Showcase, package,
-owned-Skill, presentation, and target companion URLs, sizes, and SHA-256 values.
-Packaging consumes and verifies this closure without resolving “latest.” Startup
-installs every verified member of the Builtin bundle from its offline bytes, then
-applies the product preinstall policy. The v2 policy contains only
-`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup.
+Its `convax.marketplace-product-lock/2` policy declares Builtin/Official sources,
+`preinstalledPackages`, and a bounded `recoveryArtifacts` set; its resolved closure
+pins the Builtin bundle, Official descriptor/Registry/Showcase, package, owned-Skill,
+presentation, and target companion URLs, sizes, and SHA-256 values. Packaging
+consumes and verifies this closure without resolving “latest.” Startup installs
+every verified member of the Builtin bundle from its offline bytes, then applies the
+product preinstall policy. The current policy contains only
+`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup, and
+has no production recovery artifacts because no exact retired archive/snapshot and
+replacement Release byte identities have been admitted.
+
+A recovery artifact is not catalog membership, a preinstall, or execution authority.
+It binds one Official Plugin replacement closure to one exact already-installed
+retired binding: Plugin id, source-derived Official SourceKey, old version, old
+archive SHA-256/size, old immutable snapshot digest, and old Host API major. Only
+the existing explicit retired-major update path may read those packaged bytes, and
+only after the startup quarantine inspection reproduces that complete binding.
+Fresh install/default provisioning cannot select the recovery byte path. A mismatch
+or absent entry falls back to the ordinary exact-source network update; while
+offline it changes neither the Marketplace install record nor the quarantined
+ActiveSet. A successful offline update uses the existing one-shot CAS, keeps the
+current process quarantined, and becomes executable only after restart validates
+the new ActiveSet. Recovery never scans installation directories, rewrites a major,
+chooses the first provider, or treats package presence as authority.
+
 Automatic setup remains an independent durable `CapabilityTransition` that
 publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
 only for the exact product-locked source, id, version, and target, and only for a
@@ -1044,6 +1062,14 @@ configuration and the narrowly admitted automatic product-lock preinstall. An
 integrity/authorization mismatch is not setup-required: the Installed projection
 routes it to an exact-source update/reinstall and never offers setup as a repair for
 missing or changed immutable Plugin bytes.
+
+When startup quarantine proves the narrow retired-Host-API case, the same explicit
+source-bound update may consume a product-locked offline recovery artifact only if
+its old package/version/archive/snapshot/Host-major binding is byte-exact. The
+recovery artifact is never projected as a preinstall and cannot make a fresh Plugin
+installation happen in the background. Without an exact packaged match, the normal
+network update path remains the only candidate and offline failure leaves quarantine
+unchanged.
 
 Registry `ownerPluginId` provenance survives every source-qualified projection.
 Plugin-owned Skills are dependency artifacts of the immutable Plugin closure and are
@@ -1631,6 +1657,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   Registry cache or presentation policy. Missing/corrupt locked data fails closed;
   it is never a checked-in source package, executable search path or second
   publication mechanism.
+- Product-lock recovery bytes are a separate bounded closure, not first-install
+  content. Main releases them only to an explicit retired-major update whose
+  inspected source, id, old version, archive identity, snapshot digest and Host API
+  major all match; absent/mismatched entries never bypass fetch or quarantine.
 - A Plugin `hooks` path names one self-contained JavaScript ESM OpenCode Plugin
   module. Explicit install/update snapshots and fingerprints the exact bytes in the
   private Hook authorization store before package publication. OpenCode receives

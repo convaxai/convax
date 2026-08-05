@@ -20,7 +20,8 @@
         ]
       }
     ],
-    "revision": 2
+    "recoveryArtifacts": [],
+    "revision": 3
   },
   "resolved": {
     "builtinBundle": {
@@ -89,7 +90,8 @@
         "version": "0.4.1"
       }
     ],
-    "policyDigest": "def05aabca25b82ff3abbe685552378ca10e067425cebe9690aca66219d53b35"
+    "policyDigest": "f68abff595b70c1b8bfd095a5e242a7caf663cdfcd2a3fc7041b6146a060e8df",
+    "recoveryArtifacts": []
   },
-  "schema": "convax.marketplace-product-lock/1"
+  "schema": "convax.marketplace-product-lock/2"
 }

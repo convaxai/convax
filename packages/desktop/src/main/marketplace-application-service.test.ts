@@ -95,6 +95,7 @@ function harness(options: {
   installer?: Partial<MarketplaceCapabilityInstallerPort>
   local?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["local"]
   networkCandidates?: SourceQualifiedItem[]
+  networkFetch?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["networkFetch"]
   networkRefresh?: (id: string) => Promise<void>
   preinstalledPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["preinstalledPolicy"]
   prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
@@ -168,11 +169,13 @@ function harness(options: {
       remove: async () => undefined,
       subscribe: () => () => undefined,
     } as never,
-    networkFetch: {
-      fetch: async () => {
-        throw new Error("not used")
-      },
-    } as never,
+    networkFetch:
+      options.networkFetch ??
+      ({
+        fetch: async () => {
+          throw new Error("not used")
+        },
+      } as never),
     platform: "darwin",
     ...(options.pluginRuntimeState ? { pluginRuntimeState: options.pluginRuntimeState } : {}),
     ...(options.pluginUpdateRecoveryIds ? { pluginUpdateRecoveryIds: options.pluginUpdateRecoveryIds } : {}),
@@ -724,7 +727,7 @@ test("marks only Plugins unavailable when the Plugin runtime is quarantined for 
   })
 })
 
-test("allows only an exact retired-Host-API Plugin update and carries the installed version to publication", async () => {
+test("recovers an exact retired-Host-API Plugin from fixed offline bytes without fetching", async () => {
   const state = await stateStore()
   const bytes = new TextEncoder().encode("plugin-v2")
   const plugin: SourceQualifiedItem = {
@@ -752,6 +755,7 @@ test("allows only an exact retired-Host-API Plugin update and carries the instal
   })
   const seenMutations: Array<string | undefined> = []
   let previousVersion: string | undefined
+  let fetches = 0
   const { service } = harness({
     activePluginBindings: async () => [
       {
@@ -774,6 +778,12 @@ test("allows only an exact retired-Host-API Plugin update and carries the instal
         return {}
       },
     },
+    networkFetch: {
+      fetch: async () => {
+        fetches += 1
+        throw new Error("offline recovery must not fetch")
+      },
+    } as never,
     pluginRuntimeState: "unavailable-for-session",
     pluginUpdateRecoveryIds: new Set([plugin.id]),
     prepareFixedArtifact: async () => ({ artifactBytes: bytes, companionBytes: {} }),
@@ -797,6 +807,72 @@ test("allows only an exact retired-Host-API Plugin update and carries the instal
   })
   expect(seenMutations).toEqual(["update"])
   expect(previousVersion).toBe("1.0.0")
+  expect(fetches).toBe(0)
+})
+
+test("keeps retired-Host-API Plugin quarantine when no exact offline recovery artifact exists", async () => {
+  const state = await stateStore()
+  const bytes = new TextEncoder().encode("plugin-v2")
+  const plugin: SourceQualifiedItem = {
+    ...runtimeItem(),
+    delivery: {
+      kind: "artifact",
+      sha256: sha256Hex(bytes),
+      size: bytes.byteLength,
+      url: "https://github.com/acme/marketplace/releases/download/example-plugin-v2/plugin.zip",
+    },
+    id: "example-plugin",
+    kind: "plugin",
+    version: "2.0.0",
+  }
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: "e".repeat(64),
+      id: plugin.id,
+      kind: plugin.kind,
+      revision: 1,
+      runtimeSurface: plugin.runtimeSurface,
+      sourceKey: plugin.sourceKey,
+      version: "1.0.0",
+    })
+  })
+  let fetches = 0
+  const { service } = harness({
+    activePluginBindings: async () => [
+      {
+        active: true,
+        artifact: { sha256: "a".repeat(64), size: 1 },
+        id: plugin.id,
+        snapshotDigest: "b".repeat(64),
+        sourceKey: plugin.sourceKey,
+        version: "1.0.0",
+      },
+    ],
+    assertCapabilityMutationAllowed(_identity, mutation) {
+      if (mutation !== "update") throw new Error("Plugin runtime quarantined")
+    },
+    candidates: [plugin],
+    networkFetch: {
+      fetch: async () => {
+        fetches += 1
+        throw new Error("network offline")
+      },
+    } as never,
+    pluginRuntimeState: "unavailable-for-session",
+    pluginUpdateRecoveryIds: new Set([plugin.id]),
+    prepareFixedArtifact: async () => null,
+    state,
+  })
+
+  const [choice] = await service.beginUpdate({ id: plugin.id, kind: plugin.kind }, "renderer")
+  const confirmed = await service.confirmUpdate(choice!.confirmationToken, "renderer")
+  await expect(service.update(confirmed.selectionToken, "renderer")).rejects.toThrow("network offline")
+  expect(fetches).toBe(1)
+  expect(await service.listInstalled()).toMatchObject({
+    pluginRuntimeState: "unavailable-for-session",
+    capabilities: [{ id: plugin.id, state: "attention" }],
+  })
+  expect((await state.read()).installations).toMatchObject([{ id: plugin.id, version: "1.0.0" }])
 })
 
 test("rejects every Plugin mutation before preparing bytes or changing Marketplace state", async () => {

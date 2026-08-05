@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 2
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 3
 
 export function configureMarketplaceProductPolicy(revision: number): MarketplaceProductPolicy {
   if (!Number.isSafeInteger(revision) || revision < 1) {
@@ -28,6 +28,10 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
         targets: ["darwin-arm64"],
       },
     ],
+    // Recovery artifacts are deliberately empty until exact retired Plugin
+    // archive/snapshot identities and their current replacement releases are
+    // available. They are never a second preinstall list.
+    recoveryArtifacts: [],
     revision,
   }
 }

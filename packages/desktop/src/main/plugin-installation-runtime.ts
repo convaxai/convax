@@ -102,6 +102,7 @@ export interface RetiredHostApiPluginRecovery {
     readonly sha256: PluginSnapshotDigest
     readonly size: number
   }
+  readonly hostApiMajor: number
   readonly pluginId: string
   readonly snapshotDigest: PluginSnapshotDigest
   readonly sourceIdentity: PluginSnapshotDigest
@@ -729,6 +730,7 @@ export class PluginInstallationRuntime {
           plugins.push(
             Object.freeze({
               artifact: Object.freeze({ ...snapshot.descriptor.package.artifact }),
+              hostApiMajor: recovery.retiredMajor,
               pluginId: plugin.id,
               snapshotDigest: snapshot.digest,
               sourceIdentity: snapshot.descriptor.sourceIdentity,

@@ -1706,9 +1706,12 @@ function startApplication() {
             entry.version === item.version &&
             entry.marketplaceId === item.marketplaceId,
         )
+        const recoveryBinding = retiredHostApiRecovery?.plugins.find((entry) => entry.pluginId === item.id)
         const candidate = selected
           ? await marketplaceProduct!.verifiedCandidate(registryItem)
-          : await developmentOfficialArtifacts?.verifiedCandidate(registryItem)
+          : recoveryBinding
+            ? await marketplaceProduct?.verifiedRecoveryCandidate(registryItem, recoveryBinding)
+            : await developmentOfficialArtifacts?.verifiedCandidate(registryItem)
         if (!candidate) return null
         return {
           artifactBytes: candidate.artifactBytes,
