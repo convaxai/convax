@@ -275,6 +275,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   let runtimeProjectId: string | null = null
   let unsubscribeRuntime: (() => void) | undefined
   let projectedStatus: ProjectTeamCollaborationStatusV2 | null = null
+  let runtimeTeardown: Promise<void> | null = null
   let disposed = false
   const listeners = new Set<(status: ProjectTeamCollaborationStatusV2) => void>()
 
@@ -311,6 +312,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   }
   const ensureRuntime = () => {
     requireLive()
+    if (runtimeTeardown) throw new Error("Project Team collaboration runtime teardown is in progress")
     if (runtime) return runtime
     const created = input.createRuntime()
     runtime = created
@@ -328,21 +330,42 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     const unsubscribe = unsubscribeRuntime
     unsubscribeRuntime = undefined
     unsubscribe?.()
-    if (!current) return
-    const failures: unknown[] = []
-    if (projectId !== null) {
-      try { await current.service.quiesceProject(projectId) } catch (error) { failures.push(error) }
+    if (!current) {
+      if (runtimeTeardown) await runtimeTeardown
+      return
     }
-    try { await current.dispose() } catch (error) { failures.push(error) }
-    if (failures.length === 1) throw failures[0]
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Project Team collaboration runtime teardown failed")
+    const teardown = (async () => {
+      const failures: unknown[] = []
+      try {
+        if (projectId !== null) {
+          try { await current.service.quiesceProject(projectId) } catch (error) { failures.push(error) }
+        }
+        try { await current.dispose() } catch (error) { failures.push(error) }
+      } finally {
+        runtimeProjectId = null
+      }
+      if (failures.length === 1) throw failures[0]
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Project Team collaboration runtime teardown failed")
+      }
+    })()
+    runtimeTeardown = teardown
+    try {
+      await teardown
+    } finally {
+      if (runtimeTeardown === teardown) runtimeTeardown = null
+    }
+  }
+  const requireCurrentRuntimeProject = (created: ProjectTeamCollaborationRuntimeV2, projectId: string) => {
+    if (runtime !== created || activeProjectId !== projectId || activeProtocol !== "v10-r5") {
+      throw new Error("Project Team collaboration runtime activation became stale")
     }
   }
   const ensureRuntimeProject = async (projectId: string) => {
     const created = ensureRuntime()
     if (runtimeProjectId !== projectId) {
       await created.service.activateLocalProject(projectId)
+      requireCurrentRuntimeProject(created, projectId)
       runtimeProjectId = projectId
     }
     return created
@@ -350,7 +373,9 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
   const activationService = Object.freeze({
     async activateLocalProject(projectId: string) {
       if (runtime) {
-        const next = await runtime.service.activateLocalProject(projectId)
+        const created = runtime
+        const next = await created.service.activateLocalProject(projectId)
+        requireCurrentRuntimeProject(created, projectId)
         runtimeProjectId = projectId
         return next
       }
@@ -360,6 +385,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     async activateProject(projectId: string) {
       const created = ensureRuntime()
       const next = await created.service.activateProject(projectId)
+      requireCurrentRuntimeProject(created, projectId)
       runtimeProjectId = projectId
       return next
     },
@@ -373,11 +399,13 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     async bootstrapTeam(projectId: string) {
       requireActiveV10Project(projectId)
       const created = await ensureRuntimeProject(projectId)
+      requireCurrentRuntimeProject(created, projectId)
       return created.service.bootstrapTeam(projectId)
     },
     async joinTeam(request: Parameters<ProjectTeamCollaborationMainServiceV2["joinTeam"]>[0]) {
       requireActiveV10Project(request.projectId)
       const created = await ensureRuntimeProject(request.projectId)
+      requireCurrentRuntimeProject(created, request.projectId)
       return created.service.joinTeam(request)
     },
     subscribe(listener: Parameters<ProjectTeamCollaborationMainServiceV2["subscribe"]>[0]) {
