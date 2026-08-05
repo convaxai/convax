@@ -23,6 +23,7 @@
     "package:win": "bun run package:prepare && electron-builder --config electron-builder.config.ts --win",
     "package:linux": "bun run package:prepare && electron-builder --config electron-builder.config.ts --linux",
     "smoke:packaged": "bun run package:dir && bun scripts/desktop-packaged-smoke.ts",
+    "smoke:offline-restart": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-offline-restart-smoke.ts",
     "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
     "probe:peerjs-main": "bun scripts/peerjs-electron-main-probe.ts",
     "test": "bun scripts/desktop-test-suite.ts",

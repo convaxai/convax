@@ -150,9 +150,19 @@ export async function createMainProjectIndexRuntimeRegistryV3(input: {
         requireProject(request.projectId)
         return application.queryCurrentBlobDigests({ projectId })
       },
+      queryCurrentResources(
+        request: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentResources"]>[0],
+      ) {
+        requireProject(request.projectId)
+        return application.queryCurrentResources({ projectId })
+      },
       createDirectory(request: Parameters<ProjectIndexFileApplicationPortV2["createDirectory"]>[0]) {
         requireProject(request.projectId)
         return fileApplication.createDirectory({ ...request, projectId })
+      },
+      admitManagedBlob(request: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0]) {
+        requireProject(request.projectId)
+        return fileApplication.admitManagedBlob({ ...request, projectId })
       },
       publishFile(request: Parameters<ProjectIndexFileApplicationPortV2["publishFile"]>[0]) {
         requireProject(request.projectId)

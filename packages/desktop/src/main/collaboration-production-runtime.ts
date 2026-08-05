@@ -201,6 +201,9 @@ export function createProjectCollaborationMaterializerRegistryV2(): ProjectColla
     applyAcceptedFrame(input) {
       return requireMaterializer(input.ref.scope).applyAcceptedFrame(input)
     },
+    observeAcceptedFrame(ref, exactBytes) {
+      requireMaterializer(ref.scope).observeAcceptedFrame?.(ref, exactBytes)
+    },
     actorHeadsDigest(actorHeads) {
       return requireMaterializer(actorHeads.scope).actorHeadsDigest(actorHeads)
     },

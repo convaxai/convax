@@ -443,14 +443,83 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
+    if (!initialDocument.projection) throw new Error("The default Canvas projection did not load")
+    const offlineBasic = JSON.parse(sessionStorage.getItem("convax.smoke.v11-offline-basic.v1") ?? "null")
+    if (selectedCanvasId.startsWith("cv_")) {
+      if (!offlineBasic) {
+        if (initialDocument.projection.nodes.length !== 0) throw new Error("A new V11 Canvas was not empty")
+        const added = await window.convax.canvas.resources.add({
+          anchor: { x: 40, y: 60 },
+          canvasId: selectedCanvasId,
+          commandId: "smoke-v11-offline-add",
+          projectId,
+          sources: [
+            { kind: "new-text", name: "offline-keep", sourceId: "offline-keep", text: "Keep after restart" },
+            { kind: "new-text", name: "offline-delete", sourceId: "offline-delete", text: "Delete before restart" },
+          ],
+        })
+        const [keepNodeId, deletedNodeId] = added.createdNodeIds
+        if (!keepNodeId || !deletedNodeId || added.createdNodeIds.length !== 2) {
+          throw new Error("Offline resource admission did not create exactly two nodes")
+        }
+        await window.convax.canvas.documents.execute({
+          command: {
+            type: "nodes.setGeometry",
+            updates: [{ nodeId: keepNodeId, position: { x: 410, y: 230 }, size: { width: 300, height: 190 } }],
+          },
+          commandId: "smoke-v11-offline-geometry",
+          ref: { canvasId: selectedCanvasId, scopeId: projectId },
+        })
+        await window.convax.canvas.documents.execute({
+          command: { nodeIds: [deletedNodeId], type: "elements.remove" },
+          commandId: "smoke-v11-offline-delete-one",
+          ref: { canvasId: selectedCanvasId, scopeId: projectId },
+        })
+        sessionStorage.setItem("convax.smoke.v11-offline-basic.v1", JSON.stringify({
+          deletedNodeId,
+          keepNodeId,
+          phase: "mutated",
+        }))
+        return { reloadTimeOrigin: performance.timeOrigin }
+      }
+      if (offlineBasic.phase === "mutated") {
+        const keep = initialDocument.projection.nodes.find((node) => node.id === offlineBasic.keepNodeId)
+        if (
+          !keep || keep.position.x !== 410 || keep.position.y !== 230
+          || keep.style?.width !== 300 || keep.style?.height !== 190
+          || initialDocument.projection.nodes.some((node) => node.id === offlineBasic.deletedNodeId)
+        ) {
+          throw new Error("Offline Canvas mutation did not survive the Renderer reload")
+        }
+        await window.convax.canvas.documents.execute({
+          command: { nodeIds: [offlineBasic.keepNodeId], type: "elements.remove" },
+          commandId: "smoke-v11-offline-delete-remaining",
+          ref: { canvasId: selectedCanvasId, scopeId: projectId },
+        })
+        sessionStorage.setItem("convax.smoke.v11-offline-basic.v1", JSON.stringify({
+          ...offlineBasic,
+          phase: "deleted",
+        }))
+        return { reloadTimeOrigin: performance.timeOrigin }
+      }
+      if (offlineBasic.phase !== "deleted" || initialDocument.projection.nodes.length !== 0) {
+        throw new Error("Offline Canvas deletion did not survive the second Renderer reload")
+      }
+      return {
+        activeCanvasId: selectedCanvasId,
+        canvasCount: catalog.canvases.length,
+        documentId: initialDocument.projection.id,
+        offlineMutation: true,
+        projectId,
+        startupMode: "v11-local-offline",
+      }
+    }
     const persistedGenerationRace = JSON.parse(
       sessionStorage.getItem("convax.smoke.generation-race.v1") ?? "null",
     )
-    if (!persistedGenerationRace && initialDocument.document?.nodes.length !== 0) {
-      throw new Error("A new Canvas was not empty")
-    }
+    if (!persistedGenerationRace && initialDocument.projection.nodes.length !== 0) throw new Error("A new Canvas was not empty")
     if (persistedGenerationRace && !persistedGenerationRace.remountVerified) {
-      const remountedOwner = initialDocument.document?.nodes.find(
+      const remountedOwner = initialDocument.projection.nodes.find(
         (node) => node.id === "generation-race-owner",
       )
       const remountedRun = remountedOwner?.data.metadata?.convaxGenerationRun
@@ -492,7 +561,7 @@ try {
       // navigation boundary.
       return { reloadTimeOrigin: performance.timeOrigin }
     }
-    if (persistedGenerationRace?.remountVerified && initialDocument.document?.nodes.length !== 0) {
+    if (persistedGenerationRace?.remountVerified && initialDocument.projection.nodes.length !== 0) {
       throw new Error("Generation smoke cleanup did not survive the second Renderer remount")
     }
     if (!persistedGenerationRace) {
@@ -530,7 +599,7 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    const persistedGenerationOwner = persistedGenerationSnapshot.document?.nodes.find(
+    const persistedGenerationOwner = persistedGenerationSnapshot.projection.nodes.find(
       (node) => node.id === generationOwner.id,
     )
     if (!persistedGenerationOwner) throw new Error("Generation smoke owner was not persisted")
@@ -598,13 +667,13 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    if (!racedDocument.document) throw new Error("Canvas disappeared during generation race")
-    const runningOwner = racedDocument.document?.nodes.find((node) => node.id === generationOwner.id)
+    if (!racedDocument.projection) throw new Error("Canvas disappeared during generation race")
+    const runningOwner = racedDocument.projection.nodes.find((node) => node.id === generationOwner.id)
     const runningState = runningOwner?.data.metadata?.convaxGenerationRun
     if (
       runningState?.status !== "running"
       || runningState.taskId !== "task_built_smoke_123"
-      || !racedDocument.document?.nodes.some((node) => node.id === concurrentNode.id)
+      || !racedDocument.projection.nodes.some((node) => node.id === concurrentNode.id)
     ) {
       throw new Error("Canvas generation race lost the run receipt or unrelated edit")
     }
@@ -662,7 +731,7 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    const persistedLateOwner = persistedLateSnapshot.document?.nodes.find((node) => node.id === lateOwner.id)
+    const persistedLateOwner = persistedLateSnapshot.projection.nodes.find((node) => node.id === lateOwner.id)
     if (!persistedLateOwner) throw new Error("Late-callback owner was not persisted")
     const lateGuardData = structuredClone(persistedLateOwner.data)
     delete lateGuardData.resourceState
@@ -755,7 +824,7 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    const fallbackRun = fallbackDocument.document?.nodes.find(
+    const fallbackRun = fallbackDocument.projection.nodes.find(
       (node) => node.id === restartFallbackOwner.id,
     )?.data.metadata?.convaxGenerationRun
     if (
@@ -858,11 +927,11 @@ try {
       canvasId: selectedCanvasId,
       scopeId: projectId,
     })
-    if (!savedDocument.document) throw new Error("The active Canvas document did not load")
+    if (!savedDocument.projection) throw new Error("The active Canvas document did not load")
     return {
       activeCanvasId: selectedCanvasId,
       canvasCount: catalog.canvases.length,
-      documentId: savedDocument.document.id,
+      documentId: savedDocument.projection.id,
       language: document.documentElement.lang,
       projectId,
       generationRace: persistedGenerationRace,
@@ -891,6 +960,7 @@ try {
     documentId?: string
     localAuthorityRecovery?: boolean
     language?: string
+    offlineMutation?: boolean
     projectId?: string
     recoveryTitle?: string
     startupMode?: string
@@ -914,6 +984,19 @@ try {
     }
     console.log(
       `Desktop opened a personal local-first Project without starting Team collaboration; the selected protocol correctly reported unavailable local editing authority (${summary.projectId})`,
+    )
+  } else if (summary.startupMode === "v11-local-offline") {
+    if (
+      !summary.projectId ||
+      !summary.activeCanvasId?.startsWith("cv_") ||
+      summary.canvasCount !== 1 ||
+      summary.documentId !== summary.activeCanvasId ||
+      summary.offlineMutation !== true
+    ) {
+      throw new Error(`Unexpected V11 offline Project result: ${JSON.stringify(summary)}`)
+    }
+    console.log(
+      `Desktop opened a V11 local-owner Project and preserved add/update/delete operations across Renderer reloads (${summary.projectId})`,
     )
   } else {
     if (

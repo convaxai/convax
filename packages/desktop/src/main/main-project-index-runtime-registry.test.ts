@@ -7,7 +7,7 @@ import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import { readProjectNativeStoreManifestV2 } from "@convax/project/node"
 
-import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
+import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
 import {
@@ -28,9 +28,7 @@ describe("existing ProjectIndex registration", () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-unregistered-project-"))
     roots.push(projectRoot)
     await fs.mkdir(path.join(projectRoot, ".convax"))
-    const authority = await loadCollaborationAuthorityV2({
-      explicitAuthorityRoot: path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority"),
-    })
+    const authority = await loadHistoricalTestAuthorityV2()
     const registration = createExistingProjectIndexRegistrationPortV2(authority)
 
     await expect(
@@ -51,9 +49,7 @@ describe("existing ProjectIndex registration", () => {
       JSON.stringify({ projectId: "project-legacy-first-register", schemaVersion: "convax.project/1" }),
     )
     await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "legacy")
-    const authority = await loadCollaborationAuthorityV2({
-      explicitAuthorityRoot: path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority"),
-    })
+    const authority = await loadHistoricalTestAuthorityV2()
     let ownerCreated = false
     const registration = createLocalProjectOwnerIndexRegistrationPortV2(authority, {
       async ensureForDurableProject() {
@@ -84,9 +80,7 @@ describe("existing ProjectIndex registration", () => {
     const projectRoot = path.join(root, "project")
     const userData = path.join(root, "user-data")
     await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
-    const authority = await loadCollaborationAuthorityV2({
-      explicitAuthorityRoot: path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority"),
-    })
+    const authority = await loadHistoricalTestAuthorityV2()
     const projectId = parseProjectIdV2("project-first-register")
     const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), {
       isEncryptionAvailable: () => true,
@@ -135,6 +129,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
 
   test("propagates an unavailable owner query and never guesses from another projection", async () => {
     const application: ProjectIndexCurrentBlobReferencePortV2 = {
+      async queryCurrentResources() { return [] },
       async queryCurrentBlobDigests() {
         throw new Error("ProjectIndex session unavailable")
       },
@@ -148,6 +143,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     await expect(
       queryMainProjectIndexCurrentBlobDigestsV2(
         {
+          async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
             return [digest] as never
           },
@@ -158,6 +154,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     await expect(
       queryMainProjectIndexCurrentBlobDigestsV2(
         {
+          async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
             return new Set(["not-a-digest"]) as never
           },
@@ -171,6 +168,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     const ownerValues = new Set([digest])
     const result = await queryMainProjectIndexCurrentBlobDigestsV2(
       {
+        async queryCurrentResources() { return [] },
         async queryCurrentBlobDigests() {
           return ownerValues as never
         },

@@ -116,7 +116,9 @@ describe("Canvas v2 renderer document projection", () => {
             pluginStateSchemaDigest: digest("d"),
           },
           [canvasProjectionPluginStateMetadataKeyV2]: { color: "blue" },
-          [canvasProjectionResourceMetadataKeyV2]: { uri: projection().nodes[0]!.data.kind === "resource" ? projection().nodes[0]!.data.resource.uri : "" },
+          [canvasProjectionResourceMetadataKeyV2]: {
+            uri: projection().nodes[0]!.data.kind === "resource" ? projection().nodes[0]!.data.resource.uri : "",
+          },
         },
         resourceState: { status: "stale", mediaType: "image/png", name: "Image" },
       },
@@ -126,9 +128,7 @@ describe("Canvas v2 renderer document projection", () => {
       id: "source",
       incarnation: "source-v1",
     })
-    expect(source.data.metadata?.[canvasProjectionPluginIdentityMetadataKeyV2]).not.toHaveProperty(
-      "validationArtifact",
-    )
+    expect(source.data.metadata?.[canvasProjectionPluginIdentityMetadataKeyV2]).not.toHaveProperty("validationArtifact")
   })
 
   test("fails closed when two live incarnations collapse to one React Flow id", () => {
@@ -139,5 +139,41 @@ describe("Canvas v2 renderer document projection", () => {
         nodes: [...value.nodes, { ...value.nodes[1]!, ref: { kind: "node", id: "source", incarnation: "source-v2" } }],
       }),
     ).toThrow("duplicate live node id source")
+  })
+
+  test("projects a manual pending image as an idle empty card instead of an active generation", () => {
+    const value = projection()
+    const projected = projectCanvasDocumentV2({
+      ...value,
+      nodes: [
+        {
+          ref: { kind: "node", id: "manual-image", incarnation: "manual-image-v1" },
+          role: "file",
+          position: { x: 10, y: 20 },
+          size: { width: 320, height: 240 },
+          data: {
+            format: "convax.canvas-node-data/2",
+            kind: "placeholder",
+            owner: "manual-pending",
+            title: "Image",
+            expectedClass: "image",
+            state: { phase: "pending" },
+          },
+          plugin: null,
+          parent: null,
+          generationLifecycle: "none",
+        },
+      ],
+      edges: [],
+    })
+
+    expect(projected.document.nodes[0]).toMatchObject({
+      data: {
+        kind: "image",
+        label: "Image",
+        metadata: {},
+        status: "idle",
+      },
+    })
   })
 })

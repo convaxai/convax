@@ -199,6 +199,8 @@ import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges 
 import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import {
+  assertResourceRefV2,
+  canvasProjectionResourceMetadataKeyV2,
   canvasGeometryCommandV2,
   createReadonlyCanvasProjectionBootstrapV2,
   type CanvasEntityRefV2,
@@ -398,6 +400,7 @@ interface CanvasTransientMeasurement {
 interface CanvasTransientResourceState {
   entity?: CanvasEntityRefV2
   rendererId: string
+  resourceIdentity?: string
   state: CanvasResourceRuntimeState
 }
 
@@ -412,6 +415,37 @@ function sameCanvasSize(left: CanvasSize, right: CanvasSize) {
 function canvasFileRendererIdentity(node: CanvasNode, registry: CanvasFileRendererRegistry) {
   const definition = registry.resolve(node.data)
   return definition ? `renderer:${definition.id}` : `missing:${node.data.kind}`
+}
+
+function canvasCanonicalResourceIdentity(node: CanvasNode): string | undefined {
+  const metadata = node.data.metadata
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
+  const candidate = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+  try {
+    assertResourceRefV2(candidate)
+  } catch {
+    return undefined
+  }
+  return [
+    candidate.format,
+    candidate.uri,
+    candidate.mediaClass,
+    candidate.mime,
+    candidate.byteLength,
+    candidate.contentDigest,
+    candidate.ownerProofDigest,
+  ].join("\u0000")
+}
+
+function sameCanvasTransientResourceOwner(
+  transient: CanvasTransientResourceState,
+  node: CanvasNode,
+  entity: CanvasEntityRefV2 | undefined,
+) {
+  const resourceIdentity = canvasCanonicalResourceIdentity(node)
+  return transient.resourceIdentity !== undefined
+    ? transient.resourceIdentity === resourceIdentity
+    : !transient.entity || sameCanvasEntity(transient.entity, entity)
 }
 
 function submitCanvasTransientGeometry(
@@ -822,6 +856,21 @@ function isStaleCanvasResourceState(value: unknown) {
   return value !== null && typeof value === "object" && "status" in value && value.status === "stale"
 }
 
+function canvasResourceHydrationTargetSignature(document: CanvasDocument) {
+  return document.nodes
+    .flatMap((node) => {
+      if (!isStaleCanvasResourceState(canvasNodeResourceState(node))) return []
+      const canonicalIdentity = canvasCanonicalResourceIdentity(node)
+      if (canonicalIdentity !== undefined) return [`${node.id}\u0000${canonicalIdentity}`]
+      try {
+        return [`${node.id}\u0000${JSON.stringify(node.data.metadata)}`]
+      } catch {
+        return [node.id]
+      }
+    })
+    .join("\u0001")
+}
+
 function sameCanvasRuntimeValue(left: unknown, right: unknown) {
   if (left === right) return true
   try {
@@ -1091,9 +1140,10 @@ function CanvasEditorContent(
             }),
           }
     for (const [nodeId, transient] of resourceStates) {
+      const currentNode = document.nodes.find((node) => node.id === nodeId)
+      if (!currentNode) continue
       const currentEntity = projectionStore.resolveNodeEntity(nodeId)
-      if (transient.entity && !sameCanvasEntity(transient.entity, currentEntity)) continue
-      if (!document.nodes.some((node) => node.id === nodeId)) continue
+      if (!sameCanvasTransientResourceOwner(transient, currentNode, currentEntity)) continue
       document = replaceCanvasNodeResourceState(document, nodeId, transient.state)
     }
     return document
@@ -1406,13 +1456,18 @@ function CanvasEditorContent(
           const previous = next.get(node.id)
           if (
             previous &&
-            sameCanvasEntity(previous.entity, entity) &&
+            sameCanvasTransientResourceOwner(previous, canonicalNode, entity) &&
             previous.rendererId === rendererId &&
             sameCanvasRuntimeValue(previous.state, state)
           ) {
             continue
           }
-          next.set(node.id, { entity, rendererId, state })
+          next.set(node.id, {
+            entity,
+            rendererId,
+            resourceIdentity: canvasCanonicalResourceIdentity(canonicalNode),
+            state,
+          })
           changed = true
         }
         return changed ? next : current
@@ -1420,6 +1475,8 @@ function CanvasEditorContent(
     },
     [canonicalDocument, projectionStore, props.fileRendererRegistry],
   )
+  const replaceRuntimeResourceStatesRef = useRef(replaceRuntimeResourceStates)
+  replaceRuntimeResourceStatesRef.current = replaceRuntimeResourceStates
   const registryVersion = useSyncExternalStore(
     props.nodeRegistry.subscribe,
     props.nodeRegistry.getVersion,
@@ -1454,7 +1511,7 @@ function CanvasEditorContent(
         if (!liveNodes.has(nodeId)) continue
         const node = liveNodes.get(nodeId)!
         const entity = projectionStore.resolveNodeEntity(nodeId)
-        if (transient.entity && !sameCanvasEntity(transient.entity, entity)) continue
+        if (!sameCanvasTransientResourceOwner(transient, node, entity)) continue
         if (transient.rendererId !== canvasFileRendererIdentity(node, props.fileRendererRegistry)) continue
         next.set(nodeId, transient)
       }
@@ -2557,6 +2614,8 @@ function CanvasEditorContent(
     },
     [notificationService],
   )
+  const notifyErrorRef = useRef(notifyError)
+  notifyErrorRef.current = notifyError
   const resourceRefreshController = useMemo(
     () =>
       hydrationService
@@ -2565,15 +2624,23 @@ function CanvasEditorContent(
               document: documentRef.current,
               scope: resourceMutationScopeRef.current,
             }),
-            onError: (error) => notifyError("Could not refresh canvas resources", error),
+            onError: (error) => notifyErrorRef.current("Could not refresh canvas resources", error),
             queue: reloadQueueRef.current,
-            replace: replaceRuntimeResourceStates,
+            replace: (document) => replaceRuntimeResourceStatesRef.current(document),
             service: hydrationService,
           })
         : undefined,
-    [hydrationService, notifyError, replaceRuntimeResourceStates],
+    [hydrationService],
   )
   useEffect(() => () => resourceRefreshController?.dispose(), [resourceRefreshController])
+  const resourceHydrationTargetSignature = useMemo(
+    () => canvasResourceHydrationTargetSignature(canonicalDocument),
+    [canonicalDocument],
+  )
+  useEffect(() => {
+    if (!resourceHydrationTargetSignature) return
+    void resourceRefreshController?.invalidateResources()
+  }, [resourceHydrationTargetSignature, resourceRefreshController])
   const [selectionActionStateVersion, refreshSelectionActionState] = useReducer((version: number) => version + 1, 0)
   const selectionActionsMountedRef = useRef(false)
   const selectionActionErrorRef = useRef(notifyError)
@@ -3992,6 +4059,7 @@ function CanvasEditorContent(
           next.set(nodeId, {
             entity: projectionStore.resolveNodeEntity(nodeId),
             rendererId: canvasFileRendererIdentity(node, props.fileRendererRegistry),
+            resourceIdentity: canvasCanonicalResourceIdentity(node),
             state,
           })
           return next

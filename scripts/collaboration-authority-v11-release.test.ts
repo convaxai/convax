@@ -25,6 +25,7 @@ import {
 } from "./collaboration-authority-v11-release"
 
 const repositoryRoot = join(import.meta.dir, "..")
+const V11_PROTOCOL_DIGEST = "5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f"
 
 class FakeHost implements CollaborationAuthorityReleaseHostV1 {
   readonly worktree = new Map<string, WorktreeAuthorityEntryV1>()
@@ -51,7 +52,7 @@ describe("inactive V11/R1 freeze verifier", () => {
   test("accepts an absent pointer, exact R5 pin and sealed V11 descendant", () => {
     const host = fixture()
     expect(verifyInactiveSuccessorAuthorityCandidateWithHostV1(host, "HEAD").protocolDigest)
-      .toBe("57d00c135d15339963004535c71770b10a35e301631b96ffc172c265e276ec3f")
+      .toBe(V11_PROTOCOL_DIGEST)
   })
 
   test("rejects pointer installation before review and pointer CAS", () => {
@@ -102,7 +103,7 @@ describe("reviewed and active V11/R1 governance", () => {
   test("assembles exact 3/3 evidence and validates the reviewed inactive release", () => {
     const host = reviewedFixture()
     expect(verifyReviewedSuccessorAuthorityReleaseWithHostV1(host).protocolDigest)
-      .toBe("57d00c135d15339963004535c71770b10a35e301631b96ffc172c265e276ec3f")
+      .toBe(V11_PROTOCOL_DIGEST)
   })
 
   test("creates only the pointer after a committed reviewed release and seals active descendants", () => {

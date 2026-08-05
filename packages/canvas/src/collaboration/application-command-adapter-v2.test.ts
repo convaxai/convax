@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test"
 import type { CanvasApplicationCommand, CanvasApplicationCommandRequest } from "../application"
 import { adaptCanvasApplicationCommandV2 } from "./application-command-adapter"
 import { constructCanvasAuthoritativeIntentV2 } from "./command-construction"
-import { applyOk, context, createAgent, newCanvas, VALID_FACTS } from "./test-fixtures.test"
+import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
 import { derivedNodeRefV2 } from "./validation"
 import { validateCanvasYDocV2 } from "./ydoc"
-import { parseUint32V2 } from "@convax/collaboration"
+import { projectCanvasV2 } from "./projection"
+import type { CanvasResourceProofRefV2 } from "./types"
+import { parseUint32V2, parseUint64V2 } from "@convax/collaboration"
 
 describe("Canvas v2 application command adapter", () => {
   test("maps move, connect, group, ungroup, and incident-closed removal to closed v2 intents", () => {
@@ -105,25 +107,111 @@ describe("Canvas v2 application command adapter", () => {
     const first = createAgent(document, context(5, 1, 1), "First")
     const second = createAgent(document, context(5, 2, 2), "Second")
     const third = createAgent(document, context(5, 3, 3), "Third")
-    applyAdapted(document, context(5, 4, 4), requireAdaptation(document, context(5, 4, 4), {
-      type: "nodes.setGeometry",
-      updates: [
-        { nodeId: first.id, position: { x: 0, y: 0 } },
-        { nodeId: second.id, position: { x: 100, y: 90 } },
-        { nodeId: third.id, position: { x: 700, y: 210 } },
-      ],
-    }).command)
+    applyAdapted(
+      document,
+      context(5, 4, 4),
+      requireAdaptation(document, context(5, 4, 4), {
+        type: "nodes.setGeometry",
+        updates: [
+          { nodeId: first.id, position: { x: 0, y: 0 } },
+          { nodeId: second.id, position: { x: 100, y: 90 } },
+          { nodeId: third.id, position: { x: 700, y: 210 } },
+        ],
+      }).command,
+    )
 
     for (const [operationContext, command] of [
       [context(5, 5, 5), { type: "nodes.distribute", axis: "horizontal", nodeIds: [first.id, second.id, third.id] }],
       [context(5, 6, 6), { type: "nodes.align", direction: "top", nodeIds: [first.id, second.id, third.id] }],
-      [context(5, 7, 7), { type: "nodes.layout", layout: "vertical", gap: 50, nodeIds: [first.id, second.id, third.id] }],
+      [
+        context(5, 7, 7),
+        { type: "nodes.layout", layout: "vertical", gap: 50, nodeIds: [first.id, second.id, third.id] },
+      ],
       [context(5, 8, 8), { type: "canvas.auto-layout", nodeIds: [first.id, second.id, third.id] }],
     ] as const) {
       const mapped = requireAdaptation(document, operationContext, command)
       expect(mapped.command.kind).toBe("geometry-set")
       applyAdapted(document, operationContext, mapped.command)
     }
+  })
+
+  test("maps a proof-backed compatible file relink and applies the constructed intent", () => {
+    const document = newCanvas()
+    const node = createPendingFile(document, context(7, 1, 1), "Pending image")
+    const proof = currentResourceProof("image", 70)
+    const item = resourceItem("image", proof, "Replacement.png")
+    const operationContext = context(7, 2, 2)
+
+    const mapped = requireAdaptation(document, operationContext, {
+      type: "resources.relink",
+      item,
+      metadataKeysToRemove: ["projectResource"],
+      nodeId: node.id,
+    })
+    expect(mapped.command).toEqual({
+      kind: "resource-relink",
+      node,
+      title: "Replacement.png",
+      proof,
+    })
+    applyAdapted(document, operationContext, mapped.command)
+
+    const projected = projectCanvasV2(validateCanvasYDocV2(document)).nodes.find(
+      (candidate) => candidate.ref.id === node.id,
+    )
+    expect(projected).toMatchObject({
+      role: "file",
+      data: {
+        format: "convax.canvas-node-data/2",
+        kind: "resource",
+        title: "Replacement.png",
+        resource: proof.resource,
+      },
+    })
+  })
+
+  test("rejects relink without a current valid proof or with incompatible node and media classes", () => {
+    const document = newCanvas()
+    const file = createPendingFile(document, context(8, 1, 1), "Pending image")
+    const agent = createAgent(document, context(8, 2, 2), "Agent")
+    const imageProof = currentResourceProof("image", 80)
+    const videoProof = currentResourceProof("video", 81)
+
+    expect(
+      adapt(document, context(8, 3, 3), {
+        type: "resources.relink",
+        item: { ...resourceItem("image", imageProof), metadata: {} },
+        nodeId: file.id,
+      }),
+    ).toBe("rejected")
+    expect(
+      adapt(document, context(8, 4, 4), {
+        type: "resources.relink",
+        item: resourceItem("image", { ...imageProof, ownerProofDigest: digest(99) }),
+        nodeId: file.id,
+      }),
+    ).toBe("rejected")
+    expect(
+      adapt(document, context(8, 5, 5), {
+        type: "resources.relink",
+        item: resourceItem("video", videoProof),
+        nodeId: file.id,
+      }),
+    ).toBe("rejected")
+    expect(
+      adapt(document, context(8, 6, 6), {
+        type: "resources.relink",
+        item: resourceItem("video", imageProof),
+        nodeId: file.id,
+      }),
+    ).toBe("rejected")
+    expect(
+      adapt(document, context(8, 7, 7), {
+        type: "resources.relink",
+        item: resourceItem("image", imageProof),
+        nodeId: agent.id,
+      }),
+    ).toBe("rejected")
   })
 
   test("exhaustively rejects every remaining public command whose v2 proof contract is not frozen", () => {
@@ -143,7 +231,13 @@ describe("Canvas v2 application command adapter", () => {
       { type: "resources.add", items: [{ item, nodeId: "node" }], placement: { anchor: { x: 0, y: 0 } } },
       { type: "resources.relink", item, nodeId: "node" },
       { type: "resources.replace", expectedTarget: target, item, targetNodeId: "node" },
-      { type: "resources.replace-generated", expectedTarget: target, item, operationId: "operation", targetNodeId: "node" },
+      {
+        type: "resources.replace-generated",
+        expectedTarget: target,
+        item,
+        operationId: "operation",
+        targetNodeId: "node",
+      },
       {
         type: "nodes.materialize-connected",
         node: { id: "node", type: "file", position: { x: 0, y: 0 }, data: { kind: "image", label: "Image" } },
@@ -169,8 +263,9 @@ describe("Canvas v2 application command adapter", () => {
   test("rejects unknown actor kinds before constructing authority", () => {
     const document = newCanvas()
     const node = createAgent(document, context(4, 1, 1), "Node")
-    expect(adapt(document, context(4, 2, 2), { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: [node.id] }, "host"))
-      .toBe("rejected")
+    expect(
+      adapt(document, context(4, 2, 2), { type: "nodes.move", delta: { x: 1, y: 1 }, nodeIds: [node.id] }, "host"),
+    ).toBe("rejected")
   })
 })
 
@@ -217,4 +312,43 @@ function applyAdapted(
   })
   if (constructed === "rejected") throw new Error("Adapted Canvas command did not construct")
   return applyOk(document, operationContext, constructed.intent, VALID_FACTS)
+}
+
+function currentResourceProof(
+  mediaClass: "text" | "image" | "video" | "audio" | "file",
+  seed: number,
+): Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> {
+  const ownerProofDigest = digest(seed)
+  return {
+    format: "convax.canvas-resource-proof-ref/2",
+    mode: "current-owner-state",
+    resource: {
+      format: "convax.canvas-resource-ref/2",
+      uri:
+        `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+        `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${String(seed % 10).repeat(64)}` +
+        `?blob=sha256%3A${String((seed + 1) % 10).repeat(64)}&path=Media%2Fresource.bin`,
+      mediaClass,
+      mime: mediaClass === "image" ? "image/png" : mediaClass === "video" ? "video/mp4" : "application/octet-stream",
+      byteLength: parseUint64V2("12"),
+      contentDigest: digest(seed + 1),
+      ownerProofDigest,
+    },
+    ownerProofDigest,
+    requireCurrentLiveVersion: true,
+  }
+}
+
+function resourceItem(
+  kind: "text" | "image" | "video" | "audio" | "file",
+  proof: CanvasResourceProofRefV2,
+  name = "Resource",
+) {
+  return {
+    id: `resource-${kind}`,
+    kind,
+    metadata: { convaxCanvasResourceProofV2: proof },
+    name,
+    state: { status: "stale" as const },
+  }
 }

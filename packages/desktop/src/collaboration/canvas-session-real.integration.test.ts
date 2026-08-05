@@ -53,7 +53,7 @@ import {
 } from "@convax/project/node"
 import { peerControlCodecV2 } from "@convax/project/collaboration-protocol"
 
-import { loadCollaborationAuthorityV2 } from "../main/collaboration-authority-loader"
+import { loadHistoricalTestAuthorityV2 } from "../main/collaboration-authority.test-support"
 import {
   createMainCollaborationProductionRuntimeV2,
   createProjectCollaborationMaterializerRegistryV2,
@@ -77,7 +77,6 @@ type PeerEvent = "open" | "connection" | "error" | "disconnected" | "close"
 
 const roots: string[] = []
 const encoder = new TextEncoder()
-const stagedAuthorityRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority")
 const signature = parseSignatureV2(encodeBase64urlV2(Uint8Array.from(
   { length: 64 },
   (_, index) => index === 0 || index === 32 ? 2 : 0,
@@ -93,7 +92,7 @@ afterEach(async () => {
 
 describe("real Canvas collaboration session", () => {
   test("reopens disconnected durable edits, reconnects over CVXPEER2, converges and ACKs only durable receive", async () => {
-    const authority = await loadCollaborationAuthorityV2({ explicitAuthorityRoot: stagedAuthorityRoot })
+    const authority = await loadHistoricalTestAuthorityV2()
     const runtime = createCanvasRuntime(authority)
     const scope = canvasScope()
     const genesis = createGenesis(authority, runtime, scope)

@@ -82,6 +82,34 @@ describe("Project/node blob replication store", () => {
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
+  durabilityTest("admits a verified managed source incrementally without requiring one whole-file byte array", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-stream-"))
+    try {
+      const store = await open(await collaborationDirectory(root, "project"))
+      const bytes = new Uint8Array(2 * 1024 * 1024 + 31)
+      bytes.fill(3, 0, 1024 * 1024)
+      bytes.fill(4, 1024 * 1024)
+      const reference = resource(bytes)
+      let maximumChunk = 0
+      await store.admitVerifiedStream(reference, {
+        blob: reference.blob,
+        async readChunks(consume) {
+          for (let offset = 0; offset < bytes.byteLength; offset += 64 * 1024) {
+            const chunk = bytes.subarray(offset, Math.min(bytes.byteLength, offset + 64 * 1024))
+            maximumChunk = Math.max(maximumChunk, chunk.byteLength)
+            await consume(chunk)
+          }
+        },
+      })
+      expect(maximumChunk).toBe(64 * 1024)
+      expect(await store.queryHave([{ blobSha256: reference.blob.digest, byteLength: reference.blob.byteLength }])).toHaveLength(1)
+      await expect(store.admitVerifiedStream(reference, {
+        blob: reference.blob,
+        async readChunks(consume) { await consume(new TextEncoder().encode("wrong")) },
+      })).rejects.toThrow("match")
+    } finally { await fs.rm(root, { recursive: true, force: true }) }
+  })
+
   durabilityTest("publishes only verified create-new materialization staging and notifies durable observers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-blob-materialize-"))
     try {

@@ -39,6 +39,7 @@ import {
   projectResourceReferenceDigestV2,
   type ProjectResourceReferenceV2,
 } from "../../collaboration/project-index"
+import type { ProjectIndexManagedBlobAdmissionV2 } from "../../canvas/project-index-file-application"
 import { fsyncProjectDirectoryV2 } from "./directory-durability"
 
 const digestPattern = /^[0-9a-f]{64}$/u
@@ -278,6 +279,55 @@ export class ProjectBlobReplicationStoreV2 {
       try {
         return await this.#publishStaging(reference, staging)
       } finally {
+        await fs.rm(staging, { force: true }).catch(() => undefined)
+      }
+    })
+  }
+
+  async admitVerifiedStream(
+    reference: ProjectResourceReferenceV2,
+    admission: ProjectIndexManagedBlobAdmissionV2,
+  ): Promise<ProjectBlobDurabilityEvidenceV2> {
+    return this.#serial(async () => {
+      this.#validateReference(reference)
+      if (
+        admission.blob.format !== reference.blob.format ||
+        admission.blob.algorithm !== reference.blob.algorithm ||
+        admission.blob.digest !== reference.blob.digest ||
+        admission.blob.byteLength !== reference.blob.byteLength ||
+        admission.blob.mime !== reference.blob.mime
+      ) {
+        throw new Error("Managed blob admission does not match the ProjectIndex reference")
+      }
+      const expectedLength = BigInt(reference.blob.byteLength)
+      const staging = path.join(this.#transfersRoot, `admit-${randomUUID()}.part`)
+      const handle = await fs.open(staging, "wx", 0o600)
+      let closed = false
+      try {
+        const hash = createHash("sha256")
+        let byteLength = 0n
+        await admission.readChunks(async (chunkInput) => {
+          const chunk = new Uint8Array(chunkInput)
+          if (chunk.byteLength === 0) return
+          byteLength += BigInt(chunk.byteLength)
+          if (byteLength > expectedLength) throw new Error("Managed blob admission exceeded its declared length")
+          hash.update(chunk)
+          let offset = 0
+          while (offset < chunk.byteLength) {
+            const { bytesWritten } = await handle.write(chunk, offset, chunk.byteLength - offset, null)
+            if (bytesWritten < 1) throw new Error("Managed blob admission made no write progress")
+            offset += bytesWritten
+          }
+        })
+        if (byteLength !== expectedLength || hash.digest("hex") !== reference.blob.digest) {
+          throw new Error("Managed blob admission bytes do not match the ProjectIndex reference")
+        }
+        await handle.sync()
+        await handle.close()
+        closed = true
+        return await this.#publishStaging(reference, staging)
+      } finally {
+        if (!closed) await handle.close().catch(() => undefined)
         await fs.rm(staging, { force: true }).catch(() => undefined)
       }
     })

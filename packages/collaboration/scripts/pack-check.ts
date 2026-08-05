@@ -5,6 +5,7 @@ import {
   generateSuccessorAuthorityReleaseV1,
   verifyGeneratedSuccessorAuthorityReleaseV1,
 } from "../../../scripts/collaboration-authority-v11/generate"
+import { verifyActiveSuccessorAuthorityReleaseV1 } from "../../../scripts/collaboration-authority-v11-release"
 
 const packageRoot = join(import.meta.dir, "..")
 const repositoryRoot = join(packageRoot, "../..")
@@ -119,6 +120,7 @@ const expectedRuntimeKeys = Object.freeze([
   "stableCheckpointSetCoreDigestV2",
   "stateVectorDigestV2",
   "structuredDigestV2",
+  "typedIntentDigestV3",
   "uint32ToNumberV2",
   "uint64ToBigIntV2",
   "validateAuthorityReleaseSnapshotV1",
@@ -165,15 +167,14 @@ const expectedRuntimeKeys = Object.freeze([
   "protocolPromotionBridgeCoreDigestV3",
   "protocolPromotionBridgeSignatureDigestV3",
   "verifyLocalOwnerAuthorityV3",
+  "verifyExactEd25519V2",
   "verifyProjectSharingHandoffProposalV3",
   "verifyProjectSharingHandoffReceiptV3",
   "verifyProtocolPromotionBridgeV3",
 ].sort())
 
 verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
-if (await Bun.file(join(repositoryRoot, "docs/superpowers/specs/collaboration-v11-active-authority.json")).exists()) {
-  throw new Error("Packed collaboration cannot activate V11 before its exact reviewed pointer promotion")
-}
+verifyActiveSuccessorAuthorityReleaseV1({ repositoryRoot })
 
 try {
   const pack = Bun.spawnSync({

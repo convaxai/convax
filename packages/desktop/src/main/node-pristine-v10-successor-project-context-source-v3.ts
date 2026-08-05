@@ -278,7 +278,12 @@ export class NodePristineV10SuccessorProjectContextSourceV3
             requiredBlobDigests: requiredProjectIndexBlobDigestsV2,
             facts: facts.facts,
             canvasGenesis: facts.canvasGenesis,
-            blobs: { publish: ({ reference, exactBytes }) => blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined) },
+            blobs: {
+              admitManaged: ({ reference, admission }) =>
+                blobs.admitVerifiedStream(reference, admission).then(() => undefined),
+              publish: ({ reference, exactBytes }) =>
+                blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined),
+            },
             fileMaterialization: {
               open: (projection) => ProjectIndexFileMaterializerV2.open({ projectId, projectRoot, projection, blobs }),
               subscribeBlobPublished: (listener) => blobs.subscribePublished(() => listener()),

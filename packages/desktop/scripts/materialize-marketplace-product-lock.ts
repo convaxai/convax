@@ -14,7 +14,11 @@ function artifacts(lock: MarketplaceProductLock) {
     lock.resolved.official.descriptor,
     lock.resolved.official.registry,
     lock.resolved.official.showcase,
-    ...lock.resolved.packages.flatMap((entry) => [entry.artifact, ...entry.ownedSkills, ...entry.companions]),
+    ...[...lock.resolved.packages, ...lock.resolved.recoveryArtifacts].flatMap((entry) => [
+      entry.artifact,
+      ...entry.ownedSkills,
+      ...entry.companions,
+    ]),
   ]
 }
 

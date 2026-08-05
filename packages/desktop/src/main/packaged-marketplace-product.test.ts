@@ -1,12 +1,19 @@
 import { describe, expect, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 
 import {
   canonicalJson,
+  canonicalProductPolicyDigest,
+  computeSourceKey,
   parseBuiltinBundleArchive,
   sha256Hex,
+  type MarketplaceArtifactLock,
+  type MarketplaceProductLock,
 } from "@convax/marketplace"
 
-import { projectPackagedBuiltinRuntimeSurfaces } from "./packaged-marketplace-product"
+import { PackagedMarketplaceProduct, projectPackagedBuiltinRuntimeSurfaces } from "./packaged-marketplace-product"
 
 interface ZipEntry {
   readonly bytes: Uint8Array
@@ -26,9 +33,7 @@ function uint32(value: number) {
 }
 
 function concat(chunks: readonly Uint8Array[]) {
-  const output = new Uint8Array(
-    chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
-  )
+  const output = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0))
   let offset = 0
   for (const chunk of chunks) {
     output.set(chunk, offset)
@@ -114,20 +119,12 @@ function deterministicZip(entriesValue: readonly ZipEntry[]) {
   ])
 }
 
-function manifest(
-  surface: "agent" | "canvas",
-  overrides: Record<string, unknown> = {},
-) {
+function manifest(surface: "agent" | "canvas", overrides: Record<string, unknown> = {}) {
   return {
     capabilities: [],
-    contributes:
-      surface === "canvas"
-        ? { canvas: { renderer: { create: true } } }
-        : {},
+    contributes: surface === "canvas" ? { canvas: { renderer: { create: true } } } : {},
     description: "Packaged Builtin Plugin fixture",
-    ...(surface === "canvas"
-      ? { entry: "index.html" }
-      : { hooks: "hook.mjs" }),
+    ...(surface === "canvas" ? { entry: "index.html" } : { hooks: "hook.mjs" }),
     hostApi: {
       major: 3,
       optional: [],
@@ -210,28 +207,226 @@ describe("Packaged Builtin Plugin runtime-surface projection", () => {
     ["agent", "agent"],
   ] as const)("reads a canonical v8 %s manifest from the member artifact", (surface, expected) => {
     const fixture = builtinFixture(manifest(surface))
-    const projected = projectPackagedBuiltinRuntimeSurfaces(
-      fixture.bundle,
-      fixture.archive,
-    )
+    const projected = projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)
     expect(projected.get(`builtin-fixture\0${"1.0.0"}`)).toBe(expected)
   })
 
   test("fails closed when the artifact manifest identity differs from the bundle member", () => {
-    const fixture = builtinFixture(
-      manifest("canvas", { id: "another-plugin" }),
+    const fixture = builtinFixture(manifest("canvas", { id: "another-plugin" }))
+    expect(() => projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)).toThrow(
+      "identity does not match",
     )
-    expect(() =>
-      projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive),
-    ).toThrow("identity does not match")
   })
 
   test("fails closed when the artifact contains a pre-v8 manifest", () => {
-    const fixture = builtinFixture(
-      manifest("canvas", { schema: "convax.plugin/7" }),
+    const fixture = builtinFixture(manifest("canvas", { schema: "convax.plugin/7" }))
+    expect(() => projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)).toThrow(
+      "must use convax.plugin/8",
     )
-    expect(() =>
-      projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive),
-    ).toThrow("must use convax.plugin/8")
   })
+})
+
+function lockedArtifact(name: string, tag: string, bytes: Uint8Array): MarketplaceArtifactLock {
+  return {
+    name,
+    sha256: sha256Hex(bytes),
+    size: bytes.byteLength,
+    url: `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`,
+  }
+}
+
+test("exposes packaged recovery bytes only for one exact retired Plugin binding", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-packaged-recovery-"))
+  try {
+    const builtin = builtinFixture(manifest("canvas"))
+    const pluginManifest = {
+      capabilities: [],
+      contributes: { canvas: { renderer: { create: true } } },
+      description: "Current replacement fixture",
+      entry: "index.html",
+      hostApi: { major: 3, optional: [], required: ["host.context.get"] },
+      id: "legacy-tools",
+      name: "Legacy Tools",
+      schema: "convax.plugin/8",
+      version: "2.0.0",
+    }
+    const pluginBytes = deterministicZip([
+      { bytes: new TextEncoder().encode("<!doctype html><title>Legacy Tools</title>"), path: "index.html" },
+      { bytes: new TextEncoder().encode(JSON.stringify(pluginManifest)), path: "manifest.json" },
+    ])
+    const pluginArtifact = lockedArtifact("plugin-legacy-tools-2.0.0.zip", "plugin-legacy-tools-v2.0.0", pluginBytes)
+    const registryPackages = [
+      {
+        compatibility: { convax: ">=0.1.0" },
+        delivery: {
+          kind: "artifact" as const,
+          sha256: pluginArtifact.sha256,
+          size: pluginArtifact.size,
+          url: pluginArtifact.url,
+        },
+        id: "legacy-tools",
+        kind: "plugin" as const,
+        manifest: pluginManifest,
+        presentation: { description: "Current replacement fixture", name: "Legacy Tools" },
+        version: "2.0.0",
+      },
+    ]
+    const officialRevision = sha256Hex(canonicalJson(registryPackages))
+    const descriptor = {
+      compatibility: { convax: ">=0.1.0" },
+      delivery: { kind: "github-pages-releases" },
+      id: "convax-official",
+      name: "Convax Official",
+      publisher: { name: "Convax" },
+      registry: { v2: { url: "https://convaxai.github.io/convax-plugins/registry/v2/index.json" } },
+      repository: { name: "convax-plugins", owner: "convaxai" },
+      schema: "convax.marketplace/1",
+      showcase: { v2: { url: "https://convaxai.github.io/convax-plugins/showcase/v2/index.json" } },
+    }
+    const registry = {
+      marketplaceId: "convax-official",
+      packages: registryPackages,
+      revision: officialRevision,
+      schema: "convax.registry/2",
+      sequence: 1,
+    }
+    const showcase = {
+      marketplaceId: "convax-official",
+      packages: [],
+      revision: officialRevision,
+      schema: "convax.showcase/2",
+    }
+    const descriptorBytes = new TextEncoder().encode(`${JSON.stringify(descriptor)}\n`)
+    const registryBytes = new TextEncoder().encode(`${JSON.stringify(registry)}\n`)
+    const showcaseBytes = new TextEncoder().encode(`${JSON.stringify(showcase)}\n`)
+    const retired = {
+      artifact: { sha256: "c".repeat(64), size: 2_048 },
+      hostApiMajor: 2,
+      snapshotDigest: "d".repeat(64),
+      sourceKey: "e".repeat(64),
+      version: "1.0.0",
+    }
+    const policy: MarketplaceProductLock["policy"] = {
+      builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
+      official: {
+        descriptorUrl: "https://convaxai.github.io/convax-plugins/marketplace.json",
+        marketplaceId: "convax-official",
+        repository: "convaxai/convax-plugins",
+      },
+      preinstalledPackages: [],
+      recoveryArtifacts: [
+        {
+          id: "legacy-tools",
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          retired,
+          targets: [],
+          version: "2.0.0",
+        },
+      ],
+      revision: 3,
+    }
+    const lock: MarketplaceProductLock = {
+      policy,
+      resolved: {
+        builtinBundle: lockedArtifact(
+          "convax-builtin-bundle.zip",
+          `builtin-${builtin.bundle.release.id}`,
+          builtin.archive,
+        ),
+        builtinReservations: builtin.bundle.members.map(({ id, kind }) => ({ id, kind })),
+        official: {
+          descriptor: lockedArtifact("marketplace.json", `registry-v2-${officialRevision}`, descriptorBytes),
+          registry: lockedArtifact("registry-v2.json", `registry-v2-${officialRevision}`, registryBytes),
+          revision: officialRevision,
+          showcase: lockedArtifact("showcase-v2.json", `registry-v2-${officialRevision}`, showcaseBytes),
+        },
+        packages: [],
+        policyDigest: canonicalProductPolicyDigest(policy),
+        recoveryArtifacts: [
+          {
+            artifact: pluginArtifact,
+            companions: [],
+            id: "legacy-tools",
+            kind: "plugin",
+            marketplaceId: "convax-official",
+            ownedSkills: [],
+            retired,
+            setup: "explicit",
+            version: "2.0.0",
+          },
+        ],
+      },
+      schema: "convax.marketplace-product-lock/2",
+    }
+    const staged = [
+      { artifact: lock.resolved.builtinBundle, bytes: builtin.archive, relativePath: "builtin/bundle.zip" },
+      {
+        artifact: lock.resolved.official.descriptor,
+        bytes: descriptorBytes,
+        relativePath: "official/marketplace.json",
+      },
+      { artifact: lock.resolved.official.registry, bytes: registryBytes, relativePath: "official/registry-v2.json" },
+      { artifact: lock.resolved.official.showcase, bytes: showcaseBytes, relativePath: "official/showcase-v2.json" },
+      { artifact: pluginArtifact, bytes: pluginBytes, relativePath: "recovery-artifacts/legacy-tools/plugin.zip" },
+    ]
+    for (const entry of staged) {
+      const target = path.join(root, entry.relativePath)
+      await fs.mkdir(path.dirname(target), { recursive: true })
+      await fs.writeFile(target, entry.bytes)
+    }
+    await fs.writeFile(
+      path.join(root, "manifest.json"),
+      `${JSON.stringify({
+        lock,
+        paths: staged.map(({ artifact, relativePath }) => ({
+          path: relativePath,
+          sha256: artifact.sha256,
+          size: artifact.size,
+        })),
+        reservation: { members: lock.resolved.builtinReservations, schema: "convax.builtin-reservation/1" },
+        schema: "convax.packaged-marketplace-product/1",
+      })}\n`,
+    )
+
+    const product = await PackagedMarketplaceProduct.load(root)
+    const item = product.registry.packages[0]!
+    await expect(product.verifiedCandidate(item)).rejects.toThrow("not selected")
+
+    const exactRecovery = {
+      ...retired,
+      pluginId: "legacy-tools",
+      sourceIdentity: retired.sourceKey,
+    }
+    await expect(product.verifiedRecoveryCandidate(item, exactRecovery)).resolves.toMatchObject({
+      artifactBytes: pluginBytes,
+      item,
+    })
+    expect(product.retiredPluginSourceMigrations()).toEqual([
+      {
+        fromSourceIdentity: retired.sourceKey,
+        pluginId: "legacy-tools",
+        toSourceIdentity: computeSourceKey({
+        deliveryPolicy: "github-pages-releases",
+        descriptorUrl: policy.official.descriptorUrl,
+        kind: "network",
+        marketplaceId: "convax-official",
+        repository: { name: "convax-plugins", owner: "convaxai" },
+      }),
+      },
+    ])
+    for (const mismatch of [
+      { ...exactRecovery, artifact: { ...exactRecovery.artifact, sha256: "e".repeat(64) } },
+      { ...exactRecovery, artifact: { ...exactRecovery.artifact, size: 2_049 } },
+      { ...exactRecovery, hostApiMajor: 1 },
+      { ...exactRecovery, pluginId: "another-plugin" },
+      { ...exactRecovery, snapshotDigest: "e".repeat(64) },
+      { ...exactRecovery, sourceIdentity: "f".repeat(64) },
+      { ...exactRecovery, version: "1.0.1" },
+    ]) {
+      await expect(product.verifiedRecoveryCandidate(item, mismatch)).resolves.toBeNull()
+    }
+  } finally {
+    await fs.rm(root, { force: true, recursive: true })
+  }
 })

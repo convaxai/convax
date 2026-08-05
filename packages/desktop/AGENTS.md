@@ -99,9 +99,10 @@ contract and its routed references.
 - React Flow projection, measurements, selection, viewport, and gesture previews
   remain transient Canvas-owned view state. Desktop supplies shell and adapters,
   not a competing document store.
-- Collaboration v10 composition must load the selected frozen R5 authority and fail
-  closed on missing or mismatched identity-chain members. Older drafts, receipts,
-  code, or portable JSON bytes are evidence only and never runtime fallback.
+- Collaboration composition must load the active V11/R1 release and its complete
+  pinned historical V10/R5 dependency before dual-version dispatch. Missing or
+  mismatched identity-chain members fail closed. Older drafts, receipts, code, or
+  portable JSON bytes are evidence only and never runtime fallback.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
 - Card conversations infer only direct incoming file nodes. Image/video replacement
@@ -129,6 +130,11 @@ contract and its routed references.
   authorization with the immutable snapshot. Integrity or byte mismatch routes to
   exact-source reinstall/update, never a second Plugin setup action. Static Web
   Plugins receive the same exact source/version/artifact-bound authorization.
+- Product-lock recovery bytes are visible only to an explicit quarantined
+  retired-major update after exact retired-source/id/old-version/archive/snapshot/
+  Host-major matching and an exact move to the lock-derived current Official
+  SourceKey. Fresh install and default provisioning cannot consume them; a
+  successful CAS stays inert until restart, and no other source migration is valid.
 - Native paths, credentials, cookies, authorization URLs, SourceKeys, snapshot
   digests, executable bindings, transport choices, and raw diagnostics stay in Main.
 - Preserve `contextIsolation`, disabled Node integration, sandboxing, trusted sender

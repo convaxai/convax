@@ -51,18 +51,27 @@ This package owns the durable Project aggregate and native Project adapters.
   and publishes the registry binding without adopting an existing directory.
 - Files inside the Project are referenced directly. Only files admitted from outside
   the Project are copied to deterministic content-addressed paths below
-  `.convax/assets/blobs/`; duplicate bytes share one blob.
+  `.convax/assets/blobs/`; duplicate bytes share one blob. Before Canvas can reference
+  one, Project/node streams it through a process-local admission capability into the
+  durable Project blob store and ProjectIndex commits one immutable, unlocated
+  `managed-blob` identity with `managed-admission` provenance. Do not replace this
+  path with a renderer-provided digest, a whole-file memory buffer, or a generic
+  caller-selectable provenance.
 - Managed-asset admission, reference admission and GC use one Desktop-composed
   `ProjectManagedAssetStore` and its Project-scoped in-process asset mutex. GC derives
-  liveness from typed Canvas references, waits
+  liveness from the validated ProjectIndex current-resource projection, waits
   through one seven-day grace period, atomically persists timing state before deleting
-  due blobs, and fails safe when it cannot scan every document. `gc.json` is
+  due blobs, and fails safe when that owner projection is unavailable. `gc.json` is
   rebuildable timing state, not a catalog.
 - ProjectIndex current-resource projection is the sole portable blob-currentness
   authority. Native GC calls the browser-safe
-  `ProjectIndexCurrentBlobReferencePortV2`; Desktop must delegate that query to the
-  live ProjectIndex owner session and must not inspect a Y.Doc or filesystem
-  projection. `ProjectBlobReplicationStoreV2` may cache exact bytes and rebuild a
+  `ProjectIndexCurrentBlobReferencePortV2`; each resource projection carries the
+  exact reference, storage class, and optional materialized path. Desktop must
+  delegate that query to the live ProjectIndex owner session and must not infer
+  managed-vs-project-file identity by subtracting the file materialization plan.
+  Project Canvas hydration may attach a concrete Project reference transiently, but
+  must restore canonical Canvas metadata before returning. `ProjectBlobReplicationStoreV2`
+  may cache exact bytes and rebuild a
   local presence index, but it cannot choose a version. Receive is one resumable
   contiguous transfer prefix; full length/SHA-256, create-new publication, file and
   directory fsync, then presence-index fsync must all finish before blob durability
@@ -121,16 +130,18 @@ This package owns the durable Project aggregate and native Project adapters.
   empty genesis and closed native inventory; any frame, route, unknown path, Team
   identity, or authority mismatch remains closed and requires rollover authority.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts in the
-  root's sealed R5 authority release. A missing/mismatched artifact or genuine
-  owner contradiction stops decode/reset/mutation rather than selecting an older
-  draft or current implementation as fallback.
-- Project/node may persist and re-verify closed successor local-owner bindings,
-  edit authorizations, genesis evidence, and device-level sharing tombstones, but
-  those stores are non-activating. Their presence never selects V3, grants mutation
-  authority, or permits downgrade from a shared/ambiguous Project to local-owner
-  signing. Until a sealed successor is selected, callers must keep them outside the
-  v2 runtime and report `local-authority-unavailable`.
-- A non-active successor sharing transition publishes one exact Project-private
+  active V11/R1 release and its complete pinned V10/R5 dependency. A missing or
+  mismatched artifact or genuine owner contradiction stops dispatch, decode, reset,
+  or mutation rather than selecting an older draft or current implementation as
+  fallback.
+- Project/node may persist and re-verify closed V3 local-owner bindings, edit
+  authorizations, genesis evidence, and device-level sharing tombstones. Their
+  presence alone never selects V3 or permits downgrade from a shared/ambiguous
+  Project to local-owner signing. R1 admits them only through the verified promotion
+  of one pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project with
+  one deterministic default Canvas. Direct-new V3, additional V3 Canvases, and V3
+  sharing remain unavailable and fail closed.
+- The non-active V3 sharing transition publishes one exact Project-private
   receipt/Team-artifact-digest CAS before its device-level tombstone. Either durable
   record permanently dominates the local-owner predecessor; a crash between them
   is recovered only by replaying the same receipt, never by resuming owner signing.

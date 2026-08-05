@@ -125,6 +125,12 @@ For any matching change, read the full routed reference before planning or editi
   only update path requires a dedicated inspection proving intact pointer, closure,
   authorization, topology, and retired-major-only incompatibility. All other
   mutations stay blocked and repaired bytes remain inert until restart.
+- A packaged recovery artifact may supply bytes to that update only when its exact
+  product-lock binding matches the inspected retired source, Plugin id, old version,
+  archive SHA-256/size, snapshot digest, and retired Host API major, and the candidate
+  matches the lock-derived current Official SourceKey. That exact one-way lineage is
+  the only admitted `InstallRecord` source migration. Never expose it to
+  preinstall/fresh install, scan for it, or infer a match from a directory.
 - Tool Plugin installation/update consent is part of the exact immutable closure and
   snapshot descriptor. Background refresh never expands execution authority.
   Builtin/preinstalled are provisioning sources, not runtime privilege classes; the
@@ -203,14 +209,18 @@ For any matching change, read the full routed reference before planning or editi
   local-owner bootstrap through the Project/node verifier; path presence alone is
   neither Team evidence nor permission to reset current collaboration state.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
-  Team control-plane state. This keeps the shell local-first, but it does not make
-  the frozen v2 kernel locally writable: without its selected signer authority the
-  Project remains `local-authority-unavailable`.
-- V3 local-owner authority-source adapters are successor-only seams. Do not compose
-  them into v2 document sessions or treat Project/node successor records as a
-  runtime selector. Production composition requires the complete sealed successor,
-  its verified pointer, dual-version dispatcher, and durable one-way sharing
-  handoff; missing or ambiguous sharing state stays fail-closed.
+  Team control-plane state. This keeps the shell local-first; mutation authority
+  still comes only from the verified V11/R1 selector or its pinned historical V2
+  dispatch, never from shell state.
+- Compose V3 local-owner authority adapters only through the active V11/R1 release,
+  its complete pinned V10/R5 dependency, and the verified dual-version dispatcher.
+  R1 permits only promotion of a verified pristine, unshared V10 ProjectIndex into
+  one local-owner V3 Project with one deterministic default Canvas. Direct-new V3,
+  additional V3 Canvases, sharing, and ambiguous promotion remain fail-closed;
+  Project/node record presence alone is not a runtime selector.
+- Retain the canonical Project root and local actor binding across zero-lease writer
+  disposal. Admit a changed binding only after the serialized close/reset operation
+  succeeds; failure keeps the prior binding and makes later acquisition fail closed.
 
 - Run `bun typecheck && bun test` from `packages/desktop`.
 - Run focused tests for the changed capability and its failure/recovery path.

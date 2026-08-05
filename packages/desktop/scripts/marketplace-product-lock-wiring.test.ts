@@ -27,10 +27,12 @@ test("stages every selected package as one deterministic artifact group", async 
   const source = await readFile(join(import.meta.dir, "stage-marketplace-product-lock.ts"), "utf8")
   expect(source).toContain("descriptor.registry.v1 !== undefined")
   expect(source).not.toContain("convax-plugins/registry/v1/index.json")
-  expect(source).toContain("`packages/${entry.id}/${entry.artifact.name}`")
-  expect(source).toContain("`packages/${entry.id}/skills/${skill.name}`")
+  expect(source).toContain('prefix: "packages"')
+  expect(source).toContain('prefix: "recovery-artifacts"')
+  expect(source).toContain("`${prefix}/${entry.id}/${entry.artifact.name}`")
+  expect(source).toContain("`${prefix}/${entry.id}/skills/${skill.name}`")
   expect(source).toContain(
-    "`packages/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`",
+    "`${prefix}/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`",
   )
   expect(source).toContain("staged.map(({ lock, path }) =>")
 })

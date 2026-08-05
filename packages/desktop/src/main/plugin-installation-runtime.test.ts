@@ -406,6 +406,7 @@ describe("PluginInstallationRuntime", () => {
       plugins: [
         {
           artifact: { sha256: sha256("legacy archive"), size: 2_048 },
+          hostApiMajor: 1,
           pluginId: "legacy",
           snapshotDigest: legacy.snapshot.digest,
           sourceIdentity: sha256("legacy:source"),
@@ -413,6 +414,7 @@ describe("PluginInstallationRuntime", () => {
         },
         {
           artifact: { sha256: sha256("legacy-other archive"), size: 2_048 },
+          hostApiMajor: 1,
           pluginId: "legacy-other",
           snapshotDigest: other.snapshot.digest,
           sourceIdentity: sha256("legacy-other:source"),
@@ -434,9 +436,35 @@ describe("PluginInstallationRuntime", () => {
         artifact: { ...recovery.plugins[0]!.artifact, size: 2_049 },
       }),
     ).rejects.toThrow("not eligible for retired Host API update recovery")
-    const repaired = await runtime.publishRetiredHostApiRecovery(
+    const replacementSource = sha256("replacement source")
+    const wrongPluginRuntime = new PluginInstallationRuntime(root, {
+      retiredSourceMigrations: [
+        {
+          fromSourceIdentity: recovery.plugins[0]!.sourceIdentity,
+          pluginId: "legacy-other",
+          toSourceIdentity: replacementSource,
+        },
+      ],
+    })
+    await expect(
+      wrongPluginRuntime.publishRetiredHostApiRecovery(
       1,
-      candidate("legacy", { version: "2.0.0" }),
+        { ...candidate("legacy", { version: "2.0.0" }), sourceIdentity: replacementSource },
+        recovery.plugins[0]!,
+      ),
+    ).rejects.toThrow("not eligible for retired Host API update recovery")
+    const migratedRuntime = new PluginInstallationRuntime(root, {
+      retiredSourceMigrations: [
+        {
+          fromSourceIdentity: recovery.plugins[0]!.sourceIdentity,
+          pluginId: "legacy",
+          toSourceIdentity: replacementSource,
+        },
+      ],
+    })
+    const repaired = await migratedRuntime.publishRetiredHostApiRecovery(
+      1,
+      { ...candidate("legacy", { version: "2.0.0" }), sourceIdentity: replacementSource },
       recovery.plugins[0]!,
     )
     expect(repaired.revision).toBe(2)
@@ -449,6 +477,35 @@ describe("PluginInstallationRuntime", () => {
     expect(
       await fs.readFile(path.join(root, "closures", other.snapshot.digest, "package", "manifest.json"), "utf8"),
     ).toBe(other.legacyManifest)
+  })
+
+  test("rejects malformed, self-referential, and duplicate retired source migrations", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-plugin-installation-runtime-"))
+    roots.push(root)
+    const fromSourceIdentity = sha256("retired source")
+    const toSourceIdentity = sha256("current source")
+
+    expect(
+      () =>
+        new PluginInstallationRuntime(root, {
+          retiredSourceMigrations: [{ fromSourceIdentity: "not-a-digest", pluginId: "legacy", toSourceIdentity }],
+        }),
+    ).toThrow("source migration origin")
+    expect(
+      () =>
+        new PluginInstallationRuntime(root, {
+          retiredSourceMigrations: [{ fromSourceIdentity, pluginId: "legacy", toSourceIdentity: fromSourceIdentity }],
+        }),
+    ).toThrow("must change source identity")
+    expect(
+      () =>
+        new PluginInstallationRuntime(root, {
+          retiredSourceMigrations: [
+            { fromSourceIdentity, pluginId: "legacy", toSourceIdentity },
+            { fromSourceIdentity, pluginId: "legacy", toSourceIdentity },
+          ],
+        }),
+    ).toThrow("must be unique")
   })
 
   test("requires exact CAS revisions and uninstall never exposes a mixed set", async () => {

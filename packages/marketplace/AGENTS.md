@@ -11,5 +11,9 @@ strict validation, catalog aggregation, and source-conflict decisions.
 - Builtin has one fixed product-defined source identity. Bundle release ids,
   product-lock revisions, artifact digests, and member lists are content state
   and must never enter its `SourceKey`; use `builtinSourceKey()`.
+- Keep product-lock `recoveryArtifacts` bounded and disjoint from preinstall.
+  Bind one exact retired source/id/version/archive/snapshot/Host-major tuple to one
+  immutable Official replacement closure and derive its sole target SourceKey from
+  the current fixed Official descriptor; an incomplete or ambiguous tuple fails.
 - Marketplace membership never grants execution authority.
 - Add a failing boundary test before changing a contract.

@@ -102,6 +102,7 @@ export interface RetiredHostApiPluginRecovery {
     readonly sha256: PluginSnapshotDigest
     readonly size: number
   }
+  readonly hostApiMajor: number
   readonly pluginId: string
   readonly snapshotDigest: PluginSnapshotDigest
   readonly sourceIdentity: PluginSnapshotDigest
@@ -117,6 +118,7 @@ export class PluginInstallationRuntime {
   readonly #closures: PluginInstallationClosureStore
   readonly #faultHook: PluginInstallationRuntimeOptions["faultHook"]
   readonly #observedBindings = new Map<string, ActivePluginRuntimeIdentity>()
+  readonly #retiredSourceMigrations: ReadonlySet<string>
   readonly #snapshots: PluginInstallationSnapshotStore
   #operations: Promise<void> = Promise.resolve()
 
@@ -128,6 +130,19 @@ export class PluginInstallationRuntime {
     this.#closures = new PluginInstallationClosureStore(path.join(resolvedRoot, "closures"), options)
     this.#snapshots = new PluginInstallationSnapshotStore(path.join(resolvedRoot, "state"))
     this.#faultHook = options.faultHook
+    const retiredSourceMigrations = (options.retiredSourceMigrations ?? []).map((migration) => {
+      const from = requireDigest(migration.fromSourceIdentity, "Retired Plugin source migration origin")
+      const to = requireDigest(migration.toSourceIdentity, "Retired Plugin source migration target")
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(migration.pluginId)) {
+        throw runtimeError("Retired Plugin source migration id is invalid")
+      }
+      if (from === to) throw runtimeError("Retired Plugin source migration must change source identity")
+      return `${migration.pluginId}\0${from}\0${to}`
+    })
+    if (new Set(retiredSourceMigrations).size !== retiredSourceMigrations.length) {
+      throw runtimeError("Retired Plugin source migrations must be unique")
+    }
+    this.#retiredSourceMigrations = new Set(retiredSourceMigrations)
   }
 
   async publish(
@@ -194,7 +209,10 @@ export class PluginInstallationRuntime {
       if (
         !currentRecovery ||
         pluginSnapshotCanonicalDigest(currentRecovery) !== pluginSnapshotCanonicalDigest(expectedRecovery) ||
-        candidate.sourceIdentity !== currentRecovery.sourceIdentity
+        (candidate.sourceIdentity !== currentRecovery.sourceIdentity &&
+          !this.#retiredSourceMigrations.has(
+            `${currentRecovery.pluginId}\0${currentRecovery.sourceIdentity}\0${candidate.sourceIdentity}`,
+          ))
       ) {
         throw runtimeError(`Plugin is not eligible for retired Host API update recovery: ${prepared.manifest.id}`)
       }
@@ -729,6 +747,7 @@ export class PluginInstallationRuntime {
           plugins.push(
             Object.freeze({
               artifact: Object.freeze({ ...snapshot.descriptor.package.artifact }),
+              hostApiMajor: recovery.retiredMajor,
               pluginId: plugin.id,
               snapshotDigest: snapshot.digest,
               sourceIdentity: snapshot.descriptor.sourceIdentity,

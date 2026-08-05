@@ -70,8 +70,17 @@ export type ProjectBlobReplicationStatusV2 =
   | "structure-replicated-blobs-pending"
   | "blob-replicated"
 
+export interface ProjectIndexCurrentResourceProjectionEntryV2 {
+  readonly materializedPath: string | null
+  readonly reference: ProjectResourceReferenceV2
+  readonly storageClass: "project-file" | "managed-blob"
+}
+
 /** Browser-safe ProjectIndex owner query used by native GC and blob bootstrap. */
 export interface ProjectIndexCurrentBlobReferencePortV2 {
+  queryCurrentResources(input: {
+    readonly projectId: ProjectIdV2
+  }): Promise<readonly ProjectIndexCurrentResourceProjectionEntryV2[]>
   queryCurrentBlobDigests(input: {
     readonly projectId: ProjectIdV2
   }): Promise<ReadonlySet<DigestV2>>

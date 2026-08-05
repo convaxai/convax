@@ -134,6 +134,8 @@ function fakeRuntime(
       queryCatalog: mock(async () => catalog),
       submitRouteCommand: mock(async () => routeResult),
       queryCurrentBlobDigests: mock(async () => new Set<DigestV2>()),
+      queryCurrentResources: mock(async () => []),
+      admitManagedBlob: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
       createDirectory: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
       publishFile: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
       relocateEntry: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),

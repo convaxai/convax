@@ -40,75 +40,73 @@ it does not duplicate hand-maintained Plugin source. No runtime semantic may dep
 on a concrete package id merely because a package was historically bundled here.
 
 The collaboration cutover uses Route F: the repository selects authority only via
-the global
-[`active pointer`](superpowers/specs/collaboration-v10-active-authority.json),
-never from a source constant, draft, old manifest, or caller-selected path. The
-pointer is separate from the release. It may activate the fixed
-[`R5 revision directory`](superpowers/specs/authorities/collaboration-v10/r5/)
-only when its exact fifteen-file snapshot validates: the seven whole-file members
-in [`authority.sha256`](superpowers/specs/authorities/collaboration-v10/r5/authority.sha256),
-the manifest, `review-evidence.json`, and the three fixed architecture-review
-report/receipt pairs. The manifest SHA-256 is
-`2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed`,
-the review-evidence SHA-256 is
-`9a781faaa3ed28963066ba3ef28eb4367611568042bb14929feab5c2c884d678`,
-the protocol-bundle whole-file SHA-256 is
-`163cabcd8ab5f45acd1fdf7309c747185a6132c9765585a310515f3c968ca786`,
-and `ProtocolSchemaBundleV2.coreDigest`/`protocolDigest` is
-`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`.
+the global V11
+[`active pointer`](superpowers/specs/collaboration-v11-active-authority.json), never
+from a source constant, draft, old manifest, directory presence, or caller-selected
+path. That pointer selects the fixed
+[`V11/R1 release`](superpowers/specs/authorities/collaboration-v11/r1/). Its manifest
+covers eight whole files, including the shared global-URI member; the reviewed
+release adds the manifest, `review-evidence.json`, and three fixed report/receipt
+pairs. The resulting closure has sixteen verified snapshot paths, fifteen below the
+R1 directory. The separate active pointer is never a release member.
 
-At the first valid activation tree (`T0`), the pointer and all fifteen snapshot
-members must be regular non-symlink Git blobs with mode `100644`. Descendant trees
-seal every snapshot path, byte, kind, and mode; a change is
+The active pointer SHA-256 is
+`2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6`;
+the manifest SHA-256 is
+`351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4`;
+the review-evidence SHA-256 is
+`ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2`;
+the protocol-bundle whole-file SHA-256 is
+`180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c`;
+and `ProtocolSchemaBundleV3.coreDigest`/`protocolDigest` is
+`5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f`.
+R1's `historical-v10-r5-pin.json` SHA-256 is
+`ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369`;
+it binds the complete sealed V10/R5 identity chain, including predecessor pointer
+SHA-256 `f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398`
+and historical protocol digest
+`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`.
+V10/R5 is therefore a required historical dependency for verified V2 dispatch, not
+a competing global selector or a fallback that can be reconstructed independently.
+
+At the first valid V11 activation tree (`T0`), the V11 pointer and all selected and
+pinned snapshot paths must be regular non-symlink Git blobs with mode `100644`.
+Descendant trees seal every path, byte, kind, and mode; a change is
 `activated-authority-mutation`. A missing, inactive, extra, reordered, or
 hash-mismatched identity-chain member is `protocol-schema-bundle-unavailable`; a
 real Main/owner-annex contradiction is `canonical-authority-conflict`. These states
-stop work. The revision-4 manifest is only initial-promotion CAS evidence through
-`previousSelection`; older drafts, reviews, code, and implementation snapshots are
-never fallback protocol authority.
+stop work. Older drafts, reviews, source constants, and implementation snapshots are
+evidence only and never fallback protocol authority.
 
 The product model is local-first: every Project is one local durable aggregate, and
 sharing adds collaborators to that same Project rather than converting it into a
 different Team Project kind. Project open and shell rendering therefore do not
 require Team creation, an invitation, membership bootstrap, a control-plane session,
-or PeerJS startup. Those sharing capabilities remain lazy behind an explicit user
-action. Under the currently selected frozen R5 authority, however, ordinary causal
-frames still require membership-shaped signer evidence. Code must report the absence
-of a valid local mutation authority as `local-authority-unavailable`; it must not
-fabricate membership digests, silently fall back to an owner-only signer, or present
-Team creation as recovery. The reviewed successor needed to admit an owner-local
-signer and its one-way sharing handoff is scoped in the explicitly non-active
-[`collaboration v11 design draft`](superpowers/specs/2026-08-05-local-first-collaboration-v11-design.md).
-That draft is neither a selector nor runtime authority.
+or PeerJS startup.
 
-Successor-shaped implementation seams do not change that status. Browser-safe V3
-DTO/codecs and verification ports in `@convax/collaboration`, Project/node durable
-local-owner records and device sharing tombstones, and Desktop Main authority-source
-adapters are inert compatibility work until a successor release is selected. They
-must not be passed to the selected v2 `DocumentOwnerKernel`, used to decode or sign
-frames, or treated as evidence that V11 is active. The currently selected codec
-strategy remains V2-only and is constructed from `VerifiedProtocolAuthorityV2`.
-Likewise, the Desktop activation path may avoid Team startup when no durable Team
-binding exists, but that shell-level behavior does not manufacture local mutation
-authority under R5.
+Active V11/R1 is deliberately narrow. It admits only promotion of a verified
+pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project with one
+deterministic default Canvas. Promotion validates the complete V2 durable head,
+proves the absence of Team binding and sharing handoff, publishes immutable V3
+bridges without rewriting any V2 byte, and selects V3 only through the verified dual
+authority dispatcher. Shared, non-pristine, incomplete, or ambiguous V10 Projects
+remain on the pinned V10/R5 runtime. Direct-new V3 Projects, a second V3 Canvas, V3
+sharing, and an active sharing handoff are unavailable in R1 and fail closed rather
+than widening the selected release.
 
-The inert handoff seam is closed and one-way: Collaboration binds the exact owner
-predecessor, ProjectIndex accepted head, sorted live-Canvas head set, Team artifact
-digests, and protocol into a two-signature receipt with byte-idempotent handoff-id
-submission. Project/node then installs that receipt and Team digest closure as one
-Project-private CAS before publishing the device tombstone. Either committed record
-closes owner signing; restart repairs only the missing tombstone from the same
-receipt and treats rollback or different bytes as recovery-required/equivocation.
+The V11 design draft remains design evidence only; the selected R1 bytes define the
+runtime boundary. Browser-safe V3 DTO/codecs, Project/node local-owner records, and
+Desktop authority adapters are usable only through the verified R1 selector and its
+historical pin. Directory presence, public exports, passing unit tests, or a durable
+successor-shaped record cannot activate or downgrade a Project. An unavailable or
+ambiguous promotion remains `local-authority-unavailable` or its closed recovery
+classification; Team creation is never presented as recovery.
 
-Activating those seams requires one indivisible successor change: a closed V3
-core/context/frame and new wire magic; complete incoming and local admission;
-dual-version dispatch selected only by verified protocol authority; Project-owned
-durable handoff/CAS and anti-rollback recovery; Desktop composition through that
-selected successor; independently generated schema/artifact identities; all
-required external review receipts; a sealed manifest and review evidence; and a
-new active-authority pointer with first-activation and descendant-mutation checks.
-Missing any item keeps V3 non-active and local mutation fail-closed as
-`local-authority-unavailable`.
+Project/node retains each Project's canonical-root/local-actor binding even after
+the last runtime lease closes. A changed root or actor can be admitted only after a
+successful serialized close/reset operation; a failed or interrupted barrier keeps
+the old binding and subsequent acquisition fails closed. This prevents lease churn
+from becoming an implicit identity reset.
 
 ### Architecture map
 
@@ -282,12 +280,13 @@ selects them into Workbench, connects or moves them, or adds them to history.
 closed static scheme grammar. It does not resolve resources, perform I/O or auth,
 read the current Project, or host a dynamic scheme registry.
 
-`@convax/collaboration` is the generic headless owner of shared v2 primitives/JCS,
-causal frames/frontiers, exact Yjs wire codecs, one local `replicaDoc`, isolated
-`candidateDoc` validation, checkpoint/floor primitives, journal ports, and session
-undo coordination. It may depend on external `yjs` but on no Convax package. Project
-and Canvas own their exact logical schemas and pure reducers; Desktop owns PeerJS,
-OS-vault/writer-lock adapters, lifecycle, and composition;
+`@convax/collaboration` is the generic headless owner of historical V2 and selected
+V3 primitives/JCS, causal frames/frontiers, exact Yjs wire codecs, protocol-authority
+validation and dispatch, one local `replicaDoc`, isolated `candidateDoc` validation,
+checkpoint/floor primitives, journal ports, and session undo coordination. It may
+depend on external `yjs` but on no Convax package. Project and Canvas own their exact
+logical schemas and pure reducers; Desktop owns PeerJS, OS-vault/writer-lock
+adapters, lifecycle, and composition;
 `@convax/project/node` implements native durability ports. There is no
 legacy multi-document promotion model or centralized edit-sequencing owner.
 
@@ -460,14 +459,14 @@ the Desktop-owned managed-stdio profile.
 ## 3. Packages and dependency graph
 
 | Package                     | Responsibility                                                                                                                                                                               |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                                                                   |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                              |
 | `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                                                           |
 | `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics             |
 | `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                                                             |
 | `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                                                          |
-| `@convax/collaboration`     | Generic v2 primitives/JCS, causal frames/frontiers, replica/candidate kernel, binary `CVXCAR02` checkpoint-carrier/checkpoint/floor primitives, journal ports, and session undo coordination |
+| `@convax/collaboration`     | Historical V2 and selected V3 primitives/JCS, authority validation and dispatch, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination |
 | `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                       |
 | `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                              |
 | `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                    |
@@ -536,7 +535,7 @@ ordinary control route. It parses the public `CVXCAR02` preamble/index, verifies
 bounded section length/hash while writing only to process-scoped ephemeral handles,
 and destroys those bytes on every terminal path. A certificate signer is reachable
 only after an injected artifact resolver returns a live
-`DocumentOwnerRuntimeV2` bound to the exact selected R5 authority and the carrier's
+`DocumentOwnerRuntimeV2` bound to the exact pinned historical R5 authority and the carrier's
 artifact-set digest. Missing executable artifacts, structural owner-port copies,
 cancellation, or cleanup/audit failure produce no certificate. The generic shell is
 implemented; a deployment still remains fail-closed until it supplies the exact
@@ -597,7 +596,7 @@ boundary checker fails closed until those admissions are complete.
 ## 4. Canonical state
 
 | State                                                                 | Canonical owner                                          | Notes                                                                                              |
-| --------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                             |
 | Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                     |
 | Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                 |
@@ -620,7 +619,7 @@ boundary checker fails closed until those admissions are complete.
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                 |
 | Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                          |
 | Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                              |
-| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; no cross-source update                                        |
+| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source |
 | MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                               |
 | Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                      |
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                       |
@@ -687,7 +686,7 @@ Electron userData/
   canvas-external-drags/                short-lived host-owned native drag copies
 
 Packaged app Resources/
-  marketplaces/                         product-lock-verified Builtin and Official immutable bytes
+  marketplaces/                         product-lock-verified Builtin, Official and retired-major recovery bytes
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
@@ -796,13 +795,40 @@ and now records this additional disposable projection; no dependency or trust ro
 changes.
 
 `marketplaces.lock.json` is the sole product input for packaged Marketplace bytes.
-Its policy declares Builtin/Official sources and `preinstalledPackages`; its resolved
-closure pins the Builtin bundle, Official descriptor/Registry/Showcase, package,
-owned-Skill, presentation, and target companion URLs, sizes, and SHA-256 values.
-Packaging consumes and verifies this closure without resolving “latest.” Startup
-installs every verified member of the Builtin bundle from its offline bytes, then
-applies the product preinstall policy. The v2 policy contains only
-`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup.
+Its `convax.marketplace-product-lock/2` policy declares Builtin/Official sources,
+`preinstalledPackages`, and a bounded `recoveryArtifacts` set; its resolved closure
+pins the Builtin bundle, Official descriptor/Registry/Showcase, package, owned-Skill,
+presentation, and target companion URLs, sizes, and SHA-256 values. Packaging
+consumes and verifies this closure without resolving “latest.” Startup installs
+every verified member of the Builtin bundle from its offline bytes, then applies the
+product preinstall policy. The current policy contains only
+`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup. Its
+recovery closure admits five exact retired Host API v1 snapshot bindings with their
+current Official Host API v3 Release bytes: `cutout-studio`, `nexus-service`,
+`storyai-3d-director-desk`, `storyboard-studio`, and `video-timeline`. Retired
+bindings without a current Official Registry replacement remain preserved and
+inactive; they are never recovered from source checkouts or mutable install files.
+
+A recovery artifact is not catalog membership, a preinstall, or execution authority.
+It binds one Official Plugin replacement closure to one exact already-installed
+retired binding: Plugin id, retired Official SourceKey, old version, old archive
+SHA-256/size, old immutable snapshot digest, and old Host API major. The product
+lock also derives the one target SourceKey from its current fixed Official
+descriptor. Only the existing explicit retired-major update path may read those
+packaged bytes, and only after the startup quarantine inspection reproduces the
+complete retired binding and the candidate matches that exact old-to-current source
+lineage.
+Fresh install/default provisioning cannot select the recovery byte path. A mismatch
+or absent entry falls back to the ordinary exact-source network update; while
+offline it changes neither the Marketplace install record nor the quarantined
+ActiveSet. A successful offline update uses the existing one-shot CAS, changes the
+matching `InstallRecord` from the locked retired SourceKey to the current Official
+SourceKey in the same durable transition, keeps the current process quarantined,
+and becomes executable only after restart validates the new ActiveSet. Every other
+cross-source install or update remains rejected. Recovery never scans installation
+directories, rewrites a major, chooses the first provider, or treats package
+presence as authority.
+
 Automatic setup remains an independent durable `CapabilityTransition` that
 publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
 only for the exact product-locked source, id, version, and target, and only for a
@@ -854,10 +880,13 @@ The Project asset single-source transition is one approved breaking cutover unde
 this rule. Its authoritative scope and safeguards are recorded in
 [the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
 Canvas owns generic resource-slot and application semantics. Project Canvas owns the
-concrete `project-file`, `project-directory` and `managed-asset` union stored in
-host-owned node metadata, plus Project validation, traversal and hydration. The new
-persistence rejects legacy path-only references, inline text and remote URLs instead
-of migrating them.
+concrete `project-file`, `project-directory` and `managed-asset` runtime union, plus
+Project validation, traversal and hydration. Durable Canvas resource nodes store only
+the pathless canonical `CanvasResourceRefV2` and its Project owner-proof digest. Main
+may reconstruct a concrete Project reference only as transient hydration metadata;
+it restores the canonical metadata before returning the hydrated document. The
+persistence boundary rejects legacy path-only references, inline text and remote URLs
+instead of migrating them.
 
 Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
 is a normal user-visible Project file below `Generated/`. Both flows publish the file
@@ -869,23 +898,34 @@ Managed assets are immutable SHA-256-addressed value copies. The original extern
 path is not persisted or watched after admission. Desktop composes one
 `ProjectManagedAssetStore` shared by preparation, repositories and GC; Project Node
 serializes import, reference admission and GC with its in-process per-Project asset
-mutex. GC derives liveness by scanning typed references in every supported Canvas document, records the
-first unreferenced time, waits seven days and completes another full scan before
-deletion. It atomically saves the next `gc.json` timing state before unlinking due
-blobs; stale records after a crash are removed by the next scan. Any unreadable Canvas
-document, corrupt state or digest mismatch stops deletion conservatively.
+mutex. External bytes cross a process-local streaming admission capability into the
+Project blob store, which verifies and fsyncs the exact stream before ProjectIndex
+commits a new unlocated `managed-blob` identity with `immutable` policy and
+`managed-admission` provenance. Canvas commits the resulting current owner proof only
+after that independent ProjectIndex commit. GC derives liveness from the validated
+ProjectIndex current-resource projection, records the first unreferenced time, waits
+seven days and completes another full scan before deletion. It atomically saves the
+next `gc.json` timing state before unlinking due blobs; stale records after a crash are
+removed by the next scan. Any unavailable owner projection, corrupt state or digest
+mismatch stops deletion conservatively.
 
 ProjectIndex current-resource projection is likewise the sole portable authority
 for current blob references, including active text conflict copies and the
 logical-counter/actor winner of overwritable binary families. The browser-safe
-Project surface owns `ProjectIndexCurrentBlobReferencePortV2`, deterministic
+Project surface owns `ProjectIndexCurrentBlobReferencePortV2`; its bounded entries
+contain the exact reference, `storageClass`, and an optional owner-projected
+materialized path. A `project-file` with no current materialized path remains missing
+and is never reinterpreted as a managed asset. A `managed-blob` has no path and may be
+temporarily mapped to the verified Project managed-object adapter by digest and MIME.
+Canvas current-resource fact verification consumes this complete projection rather
+than the file-only materialization plan. The same surface owns deterministic
 holder/bootstrap planning, the
 `BlobDurableAckV2` codec and the rule that one same current credential-bound remote
 replica must durably ACK the structural frame and every newly referenced blob.
 Main implements the query by delegating to the live ProjectIndex owner session's
 validated state; Desktop and native GC never receive the Y.Doc or infer currentness
-from paths. Unavailable or malformed owner projections fail closed before GC timing
-state changes.
+from paths. Unavailable or malformed owner projections fail closed before hydration,
+Canvas mutation, or GC timing state changes.
 `@convax/project/node` implements these ports through
 `ProjectBlobReplicationStoreV2`: restartable receive persists only one bounded
 contiguous-prefix cursor, verifies exact duplicate chunks from staged bytes, and
@@ -1044,6 +1084,15 @@ configuration and the narrowly admitted automatic product-lock preinstall. An
 integrity/authorization mismatch is not setup-required: the Installed projection
 routes it to an exact-source update/reinstall and never offers setup as a repair for
 missing or changed immutable Plugin bytes.
+
+When startup quarantine proves the narrow retired-Host-API case, the same explicit
+source-bound update may consume a product-locked offline recovery artifact only if
+its old source/package/version/archive/snapshot/Host-major binding is byte-exact and
+the candidate SourceKey is the current fixed Official source selected by that same
+product lock. The recovery artifact is never projected as a preinstall and cannot
+make a fresh Plugin installation happen in the background. Without an exact
+packaged match, the normal network update path remains the only candidate and
+offline failure leaves quarantine unchanged.
 
 Registry `ownerPluginId` provenance survives every source-qualified projection.
 Plugin-owned Skills are dependency artifacts of the immutable Plugin closure and are
@@ -1606,7 +1655,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   import, setup, enable, disable and uninstall stay blocked; corrupt bytes,
   topology drift, future majors and other manifest failures never enter this path.
   The quarantined process never begins executing repaired bytes and requires a
-  restart after updates.
+  restart after updates. A product-locked retired Official SourceKey may move to the
+  current fixed Official SourceKey only for the exact Plugin id and inspected
+  binding; arbitrary, reverse, Skill, Local, or user-added source migration remains
+  invalid.
 - Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
   typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
   never receives Plugin ids or ownership policy.
@@ -1631,6 +1683,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   Registry cache or presentation policy. Missing/corrupt locked data fails closed;
   it is never a checked-in source package, executable search path or second
   publication mechanism.
+- Product-lock recovery bytes are a separate bounded closure, not first-install
+  content. Main releases them only to an explicit retired-major update whose
+  inspected source, id, old version, archive identity, snapshot digest and Host API
+  major all match; absent/mismatched entries never bypass fetch or quarantine.
 - A Plugin `hooks` path names one self-contained JavaScript ESM OpenCode Plugin
   module. Explicit install/update snapshots and fingerprints the exact bytes in the
   private Hook authorization store before package publication. OpenCode receives

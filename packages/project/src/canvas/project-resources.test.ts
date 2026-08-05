@@ -922,7 +922,7 @@ describe("Project Canvas document hydration", () => {
     expect((document.nodes[1]!.data.resourceState as { status: string }).status).toBe("missing")
   })
 
-  test("hydrates only stale mutable Project references", async () => {
+  test("hydrates every stale typed Project reference while leaving ready nodes untouched", async () => {
     const references = {
       managed: { kind: "managed-asset", name: "fixed.png", sha256: "a".repeat(64) } as const,
       ready: { kind: "project-file", path: "Notes/ready.md" } as const,
@@ -970,11 +970,11 @@ describe("Project Canvas document hydration", () => {
       return { name: reference.kind === "project-directory" ? "media" : "stale.md", status: "ready" }
     })
 
-    expect(resolved).toEqual([references.staleFile, references.staleDirectory])
+    expect(resolved).toEqual([references.staleFile, references.staleDirectory, references.managed])
     expect(hydrated.nodes[0]!.data.resourceState).toEqual({ name: "stale.md", status: "ready" })
     expect(hydrated.nodes[1]!.data.resourceState).toEqual({ name: "media", status: "ready" })
     expect(hydrated.nodes[2]).toBe(document.nodes[2])
-    expect(hydrated.nodes[3]).toBe(document.nodes[3])
+    expect(hydrated.nodes[3]!.data.resourceState).toEqual({ name: "stale.md", status: "ready" })
     expect(hydrated.nodes[4]).toBe(document.nodes[4])
   })
 })

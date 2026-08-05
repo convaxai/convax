@@ -354,7 +354,10 @@ function harness(
   return {
     gc: new ProjectAssetGc({
       assets,
-      references: { queryCurrentBlobDigests: queryCurrentBlobDigests as never },
+      references: {
+        queryCurrentBlobDigests: queryCurrentBlobDigests as never,
+        async queryCurrentResources() { return [] },
+      },
       now: () => now,
       projects: roots,
     }),

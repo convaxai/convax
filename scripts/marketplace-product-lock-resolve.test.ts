@@ -28,7 +28,23 @@ const policy: MarketplaceProductPolicy = {
       targets: ["darwin-arm64"],
     },
   ],
-  revision: 2,
+  recoveryArtifacts: [
+    {
+      id: "legacy-tools",
+      kind: "plugin",
+      marketplaceId: "convax-official",
+      retired: {
+        artifact: { sha256: "c".repeat(64), size: 2_048 },
+        hostApiMajor: 2,
+        snapshotDigest: "d".repeat(64),
+        sourceKey: "e".repeat(64),
+        version: "1.0.0",
+      },
+      targets: [],
+      version: "2.0.0",
+    },
+  ],
+  revision: 3,
 }
 
 const unreachedOfficial: MarketplaceProductLockInput["official"] = {
@@ -98,6 +114,7 @@ describe("Marketplace product lock resolution", () => {
     const release = (name: string, tag: string) =>
       `https://github.com/convaxai/convax-plugins/releases/download/${tag}/${name}`
     const pluginBytes = Buffer.from("plugin")
+    const recoveryBytes = Buffer.from("recovery-plugin")
     const ownedSkillBytes = Buffer.from("owned-skill")
     const companionBytes = Buffer.from("companion")
     const descriptor = {
@@ -155,6 +172,26 @@ describe("Marketplace product lock resolution", () => {
         compatibility: { convax: ">=0.1.0" },
         delivery: {
           kind: "artifact",
+          sha256: sha256(recoveryBytes),
+          size: recoveryBytes.byteLength,
+          url: release("legacy-tools.zip", "plugin-legacy-tools-v2.0.0"),
+        },
+        id: "legacy-tools",
+        kind: "plugin",
+        manifest: {
+          contributes: {},
+          hostApi: { major: 3, optional: [], required: [] },
+          id: "legacy-tools",
+          schema: "convax.plugin/8",
+          version: "2.0.0",
+        },
+        presentation: { description: "Legacy recovery", name: "Legacy Tools" },
+        version: "2.0.0",
+      },
+      {
+        compatibility: { convax: ">=0.1.0" },
+        delivery: {
+          kind: "artifact",
           sha256: sha256(ownedSkillBytes),
           size: ownedSkillBytes.byteLength,
           url: release("ffmpeg-skill.zip", "skill-ffmpeg-canvas-v1.0.0"),
@@ -188,6 +225,7 @@ describe("Marketplace product lock resolution", () => {
       ["registry.json", `${JSON.stringify(registry)}\n`],
       ["showcase.json", `${JSON.stringify(showcase)}\n`],
       ["ffmpeg.zip", pluginBytes],
+      ["legacy-tools.zip", recoveryBytes],
       ["ffmpeg-skill.zip", ownedSkillBytes],
       ["ffmpeg-darwin-arm64", companionBytes],
       ["other.zip", "not-preinstalled"],
@@ -226,6 +264,19 @@ describe("Marketplace product lock resolution", () => {
           version: "1.0.0",
         },
         {
+          artifact: {
+            path: "legacy-tools.zip",
+            url: release("legacy-tools.zip", "plugin-legacy-tools-v2.0.0"),
+          },
+          companions: [],
+          id: "legacy-tools",
+          kind: "plugin",
+          marketplaceId: "convax-official",
+          ownedSkills: [],
+          setup: "explicit",
+          version: "2.0.0",
+        },
+        {
           artifact: { path: "other.zip", url: release("other.zip", "plugin-other-v1.0.0") },
           companions: [],
           id: "other",
@@ -246,6 +297,14 @@ describe("Marketplace product lock resolution", () => {
     expect(lock.policy.preinstalledPackages[0]!.setup).toBe("automatic")
     expect(lock.resolved.packages[0]!.setup).toBe("explicit")
     expect(lock.resolved.packages.map(({ id }) => id)).toEqual(["ffmpeg-tools"])
+    expect(lock.resolved.recoveryArtifacts).toEqual([
+      expect.objectContaining({
+        artifact: expect.objectContaining({ sha256: sha256(recoveryBytes), size: recoveryBytes.byteLength }),
+        id: "legacy-tools",
+        retired: policy.recoveryArtifacts[0]!.retired,
+        version: "2.0.0",
+      }),
+    ])
     expect(() => parseMarketplaceProductLock(lock)).not.toThrow()
 
     await expect(

@@ -170,6 +170,49 @@ describe("FileMarketplaceStateStore", () => {
     ).rejects.toThrow("Installed capability cannot change Marketplace source")
   })
 
+  test("admits only one exact product-locked Plugin source migration", async () => {
+    const root = await temporaryRoot()
+    const file = join(root, "index-v1.json")
+    const store = new FileMarketplaceStateStore(file, {
+      sourceMigrations: [
+        {
+          fromSourceKey: sourceA,
+          id: "example",
+          kind: "plugin",
+          toSourceKey: sourceB,
+        },
+      ],
+    })
+    await store.update((draft) => {
+      draft.installations.push(install({ kind: "plugin", sourceKey: sourceA }))
+    })
+    await store.update((draft) => {
+      draft.installations = [install({ kind: "plugin", sourceKey: sourceB, version: "2.0.0" })]
+    })
+    expect((await store.read()).installations).toMatchObject([
+      { id: "example", kind: "plugin", sourceKey: sourceB, version: "2.0.0" },
+    ])
+
+    const wrongIdentityStore = new FileMarketplaceStateStore(join(root, "wrong-index-v1.json"), {
+      sourceMigrations: [
+        {
+          fromSourceKey: sourceA,
+          id: "different-plugin",
+          kind: "plugin",
+          toSourceKey: sourceB,
+        },
+      ],
+    })
+    await wrongIdentityStore.update((draft) => {
+      draft.installations.push(install({ kind: "plugin", sourceKey: sourceA }))
+    })
+    await expect(
+      wrongIdentityStore.update((draft) => {
+        draft.installations = [install({ kind: "plugin", sourceKey: sourceB, version: "2.0.0" })]
+      }),
+    ).rejects.toThrow("Installed capability cannot change Marketplace source")
+  })
+
   test("preserves unknown bytes when schema validation fails", async () => {
     const root = await temporaryRoot()
     const file = join(root, "index-v1.json")

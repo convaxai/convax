@@ -138,7 +138,11 @@ export async function stageMarketplaceProductLock(options: {
   ) {
     throw new Error("Official locked metadata does not close its descriptor and policy")
   }
-  for (const entry of lock.resolved.packages) {
+  const lockedPluginPackages = [
+    ...lock.resolved.packages.map((entry) => ({ entry, prefix: "packages" })),
+    ...lock.resolved.recoveryArtifacts.map((entry) => ({ entry, prefix: "recovery-artifacts" })),
+  ]
+  for (const { entry, prefix } of lockedPluginPackages) {
     const registryEntry = registry.packages.find(
       (candidate) => candidate.kind === entry.kind && candidate.id === entry.id && candidate.version === entry.version,
     )
@@ -149,9 +153,9 @@ export async function stageMarketplaceProductLock(options: {
       registryEntry.delivery.size !== entry.artifact.size ||
       registryEntry.delivery.sha256 !== entry.artifact.sha256
     ) {
-      throw new Error("Locked preinstalled package does not match the Official Registry")
+      throw new Error("Locked product package does not match the Official Registry")
     }
-    const packageBytes = await add(entry.artifact, `packages/${entry.id}/${entry.artifact.name}`)
+    const packageBytes = await add(entry.artifact, `${prefix}/${entry.id}/${entry.artifact.name}`)
     const files = unpackSafeZip(packageBytes)
     if (entry.kind === "plugin") {
       const manifest = files["manifest.json"]
@@ -181,7 +185,7 @@ export async function stageMarketplaceProductLock(options: {
           candidate.delivery.sha256 === skill.sha256,
       )
       if (!ownedSkill) throw new Error("Locked owned Skill does not match the Official Registry")
-      const bytes = await add(skill, `packages/${entry.id}/skills/${skill.name}`)
+      const bytes = await add(skill, `${prefix}/${entry.id}/skills/${skill.name}`)
       const skillFiles = unpackSafeZip(bytes)
       const markdown = skillFiles["SKILL.md"]
       if (!markdown) throw new Error("Locked owned Skill is missing SKILL.md")
@@ -199,7 +203,7 @@ export async function stageMarketplaceProductLock(options: {
         ),
       )
       if (!matched) throw new Error("Locked companion does not match the Official Registry")
-      await add(companion, `packages/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`)
+      await add(companion, `${prefix}/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`)
     }
   }
   const reservation = {

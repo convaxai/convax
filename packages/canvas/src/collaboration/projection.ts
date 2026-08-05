@@ -124,20 +124,24 @@ function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
         ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
       }
     case "placeholder": {
-      const failed =
-        node.data.owner === "manual-pending"
-          ? node.data.state.phase === "failed"
-          : node.generationLifecycle === "failed" || node.generationLifecycle === "recovery-failed"
+      const manualPending = node.data.owner === "manual-pending"
+      const failed = manualPending
+        ? node.data.state.phase === "failed"
+        : node.generationLifecycle === "failed" || node.generationLifecycle === "recovery-failed"
       const publicMessage =
-        node.data.owner === "manual-pending" && node.data.state.phase === "failed"
-          ? node.data.state.publicMessage ?? node.data.state.failureCode
+        manualPending && node.data.state.phase === "failed"
+          ? (node.data.state.publicMessage ?? node.data.state.failureCode)
           : failed
             ? "Generation failed"
             : undefined
       return {
         kind: node.plugin === null ? node.data.expectedClass : kind,
         label: node.data.title,
-        status: failed ? "error" : "pending",
+        // A manual placeholder is an empty card awaiting an explicit Upload or
+        // Generate choice. It is not an active generation job. Preserve the
+        // pending status only for generation-owned placeholders so Renderer
+        // activity overlays cannot invent work that never started.
+        status: failed ? "error" : manualPending ? "idle" : "pending",
         ...(publicMessage === undefined ? {} : { error: publicMessage }),
         metadata: pluginMetadata,
       }
