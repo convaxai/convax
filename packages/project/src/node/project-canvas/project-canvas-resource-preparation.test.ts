@@ -3,14 +3,26 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
+import {
+  encodeBase64urlV2,
+  ordinarySha256V2,
+  parseId128V2,
+  parseProjectIdV2,
+  type DigestV2,
+} from "@convax/collaboration"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
+import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
+import type {
+  ProjectIndexFileApplicationPortV2,
+  ProjectIndexFileMaterializationProjectionPortV2,
+} from "../../canvas/project-index-file-application"
 import { getProjectResourceReference, type ProjectResourceReference } from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
   type ProjectCanvasFilePublisher,
   type ProjectCanvasResourceHost,
 } from "./project-canvas-resource-preparation"
-import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
+import { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 const requestRef = { canvasId: "canvas_main", scopeId: "project_one" }
 
@@ -439,7 +451,15 @@ describe("project canvas resource preparation", () => {
         return commit([reference])
       },
     } as unknown as ProjectManagedAssetStore
-    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "image/png", name: "local.png", path: input.path, size: 1 }
+        },
+      }),
+      unusedPublisher(),
+      assets,
+    )
 
     await preparation.withAdmittedLocalFiles(
       {
@@ -465,6 +485,177 @@ describe("project canvas resource preparation", () => {
         expect(JSON.stringify(items[0])).not.toContain("/native/project")
       },
     )
+  })
+
+  test("publishes explicitly selected Project-local bytes to ProjectIndex before returning a current proof", async () => {
+    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+    const reference = projectIndexReference(bytes, "image/png")
+    const directories: string[] = []
+    const publications: unknown[] = []
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        return { projectId: parseProjectIdV2("project_one"), entries: [] }
+      },
+      async createDirectory(input: { path: string }) {
+        directories.push(input.path)
+        return {
+          status: "committed" as const,
+          entryId: `pd_${directories.length.toString(16).padStart(64, "0")}` as never,
+          versionId: null,
+          reference: null,
+        }
+      },
+      async publishFile(input: { exactBytes: Readonly<Uint8Array>; path: string }) {
+        publications.push({ bytes: [...input.exactBytes], path: input.path })
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async relocateEntry() {
+        throw new Error("not used")
+      },
+      async tombstoneEntry() {
+        throw new Error("not used")
+      },
+    } as unknown as ProjectIndexFileApplicationPortV2 & ProjectIndexFileMaterializationProjectionPortV2
+    const assets = {
+      async withAdmittedLocalFiles(
+        _input: unknown,
+        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+      ) {
+        return commit([{ kind: "project-file", path: "assets/characters/bear/hero.png" }])
+      },
+    } as unknown as ProjectManagedAssetStore
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "image/png", name: "hero.png", path: input.path, size: bytes.byteLength }
+        },
+        async readFile(input) {
+          return {
+            dataUrl: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+            mimeType: "image/png",
+            name: "hero.png",
+            path: input.path,
+            size: bytes.byteLength,
+          }
+        },
+      }),
+      unusedPublisher(),
+      assets,
+      undefined,
+      indexFiles,
+    )
+
+    await preparation.withAdmittedLocalFiles(
+      {
+        files: [
+          {
+            mediaType: "image/png",
+            name: "hero.png",
+            sourceId: "local",
+            sourcePath: "/native/project/assets/characters/bear/hero.png",
+          },
+        ],
+        projectId: "project_one",
+      },
+      async ({ items }) => {
+        expect(items[0]).toMatchObject({
+          id: "local",
+          kind: "image",
+          metadata: {
+            convaxCanvasResourceProofV2: {
+              format: "convax.canvas-resource-proof-ref/2",
+              mode: "current-owner-state",
+              requireCurrentLiveVersion: true,
+              resource: {
+                byteLength: String(bytes.byteLength),
+                contentDigest: ordinarySha256V2(bytes),
+                mediaClass: "image",
+                mime: "image/png",
+                uri: reference.canonicalUri,
+              },
+            },
+            convaxProjectResource: { kind: "project-file", path: "assets/characters/bear/hero.png" },
+          },
+        })
+      },
+    )
+
+    expect(directories).toEqual(["assets", "assets/characters", "assets/characters/bear"])
+    expect(publications).toEqual([{ bytes: [...bytes], path: "assets/characters/bear/hero.png" }])
+  })
+
+  test("streams an external managed asset into ProjectIndex before returning a current Canvas proof", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-managed-proof-"))
+    const projectRoot = path.join(root, "project")
+    const outside = path.join(root, "outside.png")
+    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, ...new Array(128).fill(7)])
+    await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
+    await fs.writeFile(outside, bytes)
+    const assets = new ProjectManagedAssetStore(
+      { async resolveProjectRoot() { return projectRoot } },
+      { maximumBytes: 1024 },
+    )
+    const reference = projectIndexReference(bytes, "image/png")
+    let admitted: Uint8Array | undefined
+    const indexFiles = {
+      async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0]) {
+        const chunks: number[] = []
+        await input.admission.readChunks(async (chunk) => { chunks.push(...chunk) })
+        admitted = Uint8Array.from(chunks)
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async queryFileMaterializationPlan() {
+        return { projectId: parseProjectIdV2("project_one"), entries: [] }
+      },
+      async createDirectory() { throw new Error("not used") },
+      async publishFile() { throw new Error("not used") },
+      async relocateEntry() { throw new Error("not used") },
+      async tombstoneEntry() { throw new Error("not used") },
+    } as unknown as ProjectIndexFileApplicationPortV2 & ProjectIndexFileMaterializationProjectionPortV2
+    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets, undefined, indexFiles)
+
+    try {
+      await preparation.withAdmittedLocalFiles(
+        {
+          files: [{ mediaType: "image/png", name: "outside.png", sourceId: "external", sourcePath: outside }],
+          projectId: "project_one",
+        },
+        async ({ items }) => {
+          expect(admitted).toEqual(bytes)
+          expect(items[0]).toMatchObject({
+            id: "external",
+            kind: "image",
+            metadata: {
+              convaxCanvasResourceProofV2: {
+                mode: "current-owner-state",
+                resource: {
+                  contentDigest: ordinarySha256V2(bytes),
+                  mediaClass: "image",
+                  mime: "image/png",
+                },
+              },
+              convaxProjectResource: {
+                kind: "managed-asset",
+                name: "outside.png",
+                sha256: ordinarySha256V2(bytes),
+              },
+            },
+          })
+        },
+      )
+    } finally {
+      await fs.rm(root, { force: true, recursive: true })
+    }
   })
 
   test("classifies admitted managed Markdown and plain text without reading source bytes", async () => {
@@ -525,6 +716,15 @@ function host(overrides: Partial<ProjectCanvasResourceHost> = {}): ProjectCanvas
     async readFileInfo(input) {
       return { mimeType: "application/octet-stream", name: "file.bin", path: input.path, size: 1 }
     },
+    async readFile(input) {
+      return {
+        dataUrl: "data:application/octet-stream;base64,AA==",
+        mimeType: "application/octet-stream",
+        name: "file.bin",
+        path: input.path,
+        size: 1,
+      }
+    },
     async readTextFile(input) {
       return { content: "", contentRevision: "", exists: false, path: input.path }
     },
@@ -538,6 +738,30 @@ function unusedPublisher(): ProjectCanvasFilePublisher {
       throw new Error("Publisher must not be used")
     },
   }
+}
+
+function projectIndexReference(bytes: Uint8Array, mime: string): ProjectResourceReferenceV2 {
+  const projectId = parseProjectIdV2("project_one")
+  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256V2(bytes)
+  const fileId = `pf_${"a".repeat(64)}` as ProjectResourceReferenceV2["entryFileId"]
+  return Object.freeze({
+    format: "convax.project-resource-reference/2",
+    projectId,
+    projectEpoch,
+    entryFileId: fileId,
+    familyPrimaryFileId: fileId,
+    versionId: `pv_${"b".repeat(64)}`,
+    canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
+    blob: {
+      format: "convax.blob-ref/2" as const,
+      algorithm: "sha256" as const,
+      digest,
+      byteLength: String(bytes.byteLength) as never,
+      mime,
+    },
+    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode("version")) as DigestV2,
+  })
 }
 
 function unusedAssets() {

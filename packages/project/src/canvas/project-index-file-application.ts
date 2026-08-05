@@ -35,10 +35,23 @@ import type {
 } from "./project-index-application"
 
 export interface ProjectIndexBlobPublicationPortV2 {
+  admitManaged(input: {
+    readonly reference: ProjectResourceReferenceV2
+    readonly admission: ProjectIndexManagedBlobAdmissionV2
+  }): Promise<void>
   publish(input: {
     readonly reference: ProjectResourceReferenceV2
     readonly exactBytes: Readonly<Uint8Array>
   }): Promise<void>
+}
+
+/** Main-only, process-local verified byte source. It must never enter portable state. */
+export interface ProjectIndexManagedBlobAdmissionV2 {
+  readonly blob: ProjectBlobRefV2
+  readChunks(
+    consume: (chunk: Readonly<Uint8Array>) => Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<void>
 }
 
 export const projectIndexResourceReferenceDigestV2 = projectResourceReferenceDigestV2
@@ -57,6 +70,10 @@ export type ProjectIndexFileMutationResultV2 =
 
 export interface ProjectIndexFileApplicationPortV2 {
   createDirectory(input: { readonly projectId: ProjectIdV2; readonly path: string }): Promise<ProjectIndexFileMutationResultV2>
+  admitManagedBlob(input: {
+    readonly projectId: ProjectIdV2
+    readonly admission: ProjectIndexManagedBlobAdmissionV2
+  }): Promise<ProjectIndexFileMutationResultV2>
   publishFile(input: {
     readonly projectId: ProjectIdV2
     readonly path: string
@@ -228,6 +245,76 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
       return { status: "committed", entryId, versionId, reference: committedReference }
     } catch (error) {
       console.error("ProjectIndex file publish failed", error)
+      return rejectFileMutation(error)
+    }
+  }
+
+  async admitManagedBlob(
+    input: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0],
+  ): Promise<ProjectIndexFileMutationResultV2> {
+    this.requireProject(input.projectId)
+    const blob = input.admission.blob
+    const existing = await this.options.session.query((state) => {
+      const snapshot = requireSnapshot(state)
+      return projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2(state).find((reference) => {
+        const entry = snapshot.entries.get(reference.familyPrimaryFileId)
+        return (
+          entry?.storageClass === "managed-blob" &&
+          reference.blob.digest === blob.digest &&
+          reference.blob.byteLength === blob.byteLength &&
+          reference.blob.mime === blob.mime
+        )
+      })
+    })
+    if (existing) {
+      try {
+        await this.options.blobs.admitManaged({ reference: existing, admission: input.admission })
+      } catch (error) {
+        return rejectFileMutation(new FileApplicationError("blob-publication-failed", { cause: error }))
+      }
+      return {
+        status: "committed",
+        entryId: existing.entryFileId,
+        versionId: existing.versionId,
+        reference: existing,
+      }
+    }
+
+    let entryId: ProjectFileId | undefined
+    let versionId: string | undefined
+    let committedReference: ProjectResourceReferenceV2 | undefined
+    try {
+      await this.options.session.submit({
+        operationId: parseId128V2(this.options.createOperationId()),
+        prepare: async ({ base, context }) => {
+          const snapshot = requireSnapshot(base)
+          const constructed = constructProjectFileCreateIntentV2({
+            snapshot,
+            context,
+            parentDirectoryId: null,
+            basename: null,
+            blob,
+            contentPolicy: "immutable",
+            storageClass: "managed-blob",
+            provenance: "managed-admission",
+          })
+          if (constructed === "rejected") throw new FileApplicationError("index-commit-failed")
+          entryId = constructed.fileId
+          versionId = constructed.version.versionId
+          const reference = projectResourceReferenceForVersionV2(snapshot, constructed.version)
+          committedReference = reference
+          try {
+            await this.options.blobs.admitManaged({ reference, admission: input.admission })
+          } catch (error) {
+            throw new FileApplicationError("blob-publication-failed", { cause: error })
+          }
+          return this.prepare(context, constructed.intent)
+        },
+      })
+      if (!entryId || !versionId || !committedReference) throw new FileApplicationError("index-commit-failed")
+      return { status: "committed", entryId, versionId, reference: committedReference }
+    } catch (error) {
+      console.error("ProjectIndex managed blob publish failed", error)
       return rejectFileMutation(error)
     }
   }

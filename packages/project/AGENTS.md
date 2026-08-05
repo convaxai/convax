@@ -51,18 +51,27 @@ This package owns the durable Project aggregate and native Project adapters.
   and publishes the registry binding without adopting an existing directory.
 - Files inside the Project are referenced directly. Only files admitted from outside
   the Project are copied to deterministic content-addressed paths below
-  `.convax/assets/blobs/`; duplicate bytes share one blob.
+  `.convax/assets/blobs/`; duplicate bytes share one blob. Before Canvas can reference
+  one, Project/node streams it through a process-local admission capability into the
+  durable Project blob store and ProjectIndex commits one immutable, unlocated
+  `managed-blob` identity with `managed-admission` provenance. Do not replace this
+  path with a renderer-provided digest, a whole-file memory buffer, or a generic
+  caller-selectable provenance.
 - Managed-asset admission, reference admission and GC use one Desktop-composed
   `ProjectManagedAssetStore` and its Project-scoped in-process asset mutex. GC derives
-  liveness from typed Canvas references, waits
+  liveness from the validated ProjectIndex current-resource projection, waits
   through one seven-day grace period, atomically persists timing state before deleting
-  due blobs, and fails safe when it cannot scan every document. `gc.json` is
+  due blobs, and fails safe when that owner projection is unavailable. `gc.json` is
   rebuildable timing state, not a catalog.
 - ProjectIndex current-resource projection is the sole portable blob-currentness
   authority. Native GC calls the browser-safe
-  `ProjectIndexCurrentBlobReferencePortV2`; Desktop must delegate that query to the
-  live ProjectIndex owner session and must not inspect a Y.Doc or filesystem
-  projection. `ProjectBlobReplicationStoreV2` may cache exact bytes and rebuild a
+  `ProjectIndexCurrentBlobReferencePortV2`; each resource projection carries the
+  exact reference, storage class, and optional materialized path. Desktop must
+  delegate that query to the live ProjectIndex owner session and must not infer
+  managed-vs-project-file identity by subtracting the file materialization plan.
+  Project Canvas hydration may attach a concrete Project reference transiently, but
+  must restore canonical Canvas metadata before returning. `ProjectBlobReplicationStoreV2`
+  may cache exact bytes and rebuild a
   local presence index, but it cannot choose a version. Receive is one resumable
   contiguous transfer prefix; full length/SHA-256, create-new publication, file and
   directory fsync, then presence-index fsync must all finish before blob durability

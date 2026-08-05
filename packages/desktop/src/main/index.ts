@@ -886,6 +886,7 @@ function startApplication() {
       projectManager,
       projectAssets,
       createProjectResourceUrl,
+      { currentResources: collaborationFacade.projectIndexes },
     )
     const projectResourceReader = new ProjectResourceReader(projectManager, projectAssets)
     const canvasDocumentChanges = new CanvasDocumentChangeBus()

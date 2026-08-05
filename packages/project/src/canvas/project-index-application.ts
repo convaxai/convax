@@ -36,6 +36,7 @@ import {
   projectIndexIntentDigestV2,
   projectIndexIntentDependenciesV2,
   projectIndexSnapshotFromValidatedOwnerStateV2,
+  projectEntryLocationProjectionV2,
   projectProjectIndexSnapshotV2,
   type ProjectIndexSnapshotV2,
 } from "../collaboration/project-index"
@@ -252,9 +253,29 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
 
   async queryCurrentBlobDigests(input: { readonly projectId: ProjectIdV2 }): Promise<ReadonlySet<DigestV2>> {
     this.requireProject(input.projectId)
-    return this.options.session.query((state) => new Set(
-      projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2(state).map((reference) => reference.blob.digest),
-    ))
+    return new Set((await this.queryCurrentResources(input)).map(({ reference }) => reference.blob.digest))
+  }
+
+  async queryCurrentResources(input: {
+    readonly projectId: ProjectIdV2
+  }) {
+    this.requireProject(input.projectId)
+    return this.options.session.query((state) => {
+      const snapshot = requireProjectIndexSnapshotV2(state)
+      return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2(state).map((reference) => {
+        const entry = snapshot.entries.get(reference.entryFileId)
+        if (!entry || entry.kind !== "file" || entry.storageClass === null) {
+          throw new Error("Current Project resource has no live file owner")
+        }
+        const location = projectEntryLocationProjectionV2(snapshot, reference.entryFileId)
+        const materializedPath =
+          entry.storageClass === "project-file" &&
+          (location.state === "live-linked" || location.state === "conflict-path")
+            ? location.portablePath
+            : null
+        return Object.freeze({ materializedPath, reference, storageClass: entry.storageClass })
+      }))
+    })
   }
 
   async submitRouteCommand(

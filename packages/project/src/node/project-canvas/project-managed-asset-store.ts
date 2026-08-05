@@ -95,6 +95,17 @@ export class ProjectManagedAssetStore {
   }
 
   resolve(input: { projectId: string; reference: ManagedAssetReference }) {
+    const scope = this.#lockContext.getStore()
+    if (scope?.active && scope.root.projectId === input.projectId) {
+      return this.#runNestedVerification(
+        scope.root,
+        { projectId: input.projectId, references: [input.reference] },
+        async () => {
+          const layout = await this.#resolveLayout(input.projectId)
+          return this.#verifyReferenceUnlocked(layout, input.reference)
+        },
+      )
+    }
     return this.runExclusive(input.projectId, async () => {
       const layout = await this.#resolveLayout(input.projectId)
       return this.#verifyReferenceUnlocked(layout, input.reference)
@@ -106,6 +117,17 @@ export class ProjectManagedAssetStore {
     reference: ManagedAssetReference
     signal?: AbortSignal
   }): Promise<ProjectResourceReadHandle> {
+    const scope = this.#lockContext.getStore()
+    if (scope?.active && scope.root.projectId === input.projectId) {
+      return this.#runNestedVerification(
+        scope.root,
+        { projectId: input.projectId, references: [input.reference] },
+        async () => {
+          const layout = await this.#resolveLayout(input.projectId)
+          return (await this.#openVerifiedReferenceUnlocked(layout, input.reference, input.signal)).handle
+        },
+      )
+    }
     return this.runExclusive(input.projectId, async () => {
       const layout = await this.#resolveLayout(input.projectId)
       return (await this.#openVerifiedReferenceUnlocked(layout, input.reference, input.signal)).handle

@@ -252,8 +252,40 @@ export function adaptCanvasApplicationCommandV2(input: {
           }),
         })
       }
+      case "resources.relink": {
+        const node = nodeById.get(command.nodeId)
+        if (!node || node.role !== "file") return "rejected"
+        const metadata = command.item.metadata
+        if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return "rejected"
+        const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKeyV2]
+        assertResourceProofV2(proof, false)
+        if (proof.mode !== "current-owner-state") return "rejected"
+
+        const itemMediaClass = command.item.kind === "folder" ? null : command.item.kind
+        const expectedMediaClass =
+          node.data.kind === "placeholder"
+            ? node.data.expectedClass
+            : node.data.kind === "resource"
+              ? node.data.resource.mediaClass
+              : null
+        if (
+          itemMediaClass === null ||
+          proof.resource.mediaClass !== itemMediaClass ||
+          expectedMediaClass !== itemMediaClass
+        ) {
+          return "rejected"
+        }
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "resource-relink",
+            node: node.ref,
+            title: command.item.name ?? node.data.title,
+            proof,
+          }),
+        })
+      }
       case "resources.pending.fail":
-      case "resources.relink":
       case "resources.replace":
       case "resources.replace-generated":
       case "nodes.materialize-connected":

@@ -262,6 +262,7 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClientV2 {
   readonly authority = "project-collaboration-application" as const
   readonly undoModel = "project-yjs-semantic-history" as const
   private readonly listeners = new Set<() => void>()
+  private entityRevision = 0
 
   constructor(private projection: CanvasDocument) {}
 
@@ -284,11 +285,16 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClientV2 {
     for (const listener of this.listeners) listener()
   }
 
+  reincarnateNodes() {
+    this.entityRevision += 1
+    for (const listener of this.listeners) listener()
+  }
+
   async redo() {}
 
   resolveNodeEntity(nodeId: string) {
     return this.projection.nodes.some((node) => node.id === nodeId)
-      ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}` }
+      ? { kind: "node" as const, id: nodeId, incarnation: `incarnation-${nodeId}-${this.entityRevision}` }
       : undefined
   }
 
@@ -428,6 +434,145 @@ function createNodeEntryServices(session: NodeEntryCanvasSession) {
     },
   })
 }
+
+test("publishes hydrated resource state into the rendered transient document", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const canvasDocument = createCanvasDocument({
+    id: "resource-hydration",
+    nodes: [
+      createMediaNode({
+        id: "image",
+        position: { x: 20, y: 40 },
+        resource: {
+          id: "image-resource",
+          kind: "image",
+          metadata: {
+            convaxResource: {
+              format: "convax.canvas-resource-ref/2",
+              uri:
+                `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+                `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
+                `?blob=sha256%3A${"a".repeat(64)}&path=Generated%2Fimage.png`,
+              mediaClass: "image",
+              mime: "image/png",
+              byteLength: "12" as never,
+              contentDigest: "a".repeat(64),
+              ownerProofDigest: "b".repeat(64),
+            },
+          },
+          name: "image.png",
+          state: { status: "stale" },
+        },
+      }),
+    ],
+  })
+  const session = new NodeEntryCanvasSession(canvasDocument)
+  const hydrationRequests: Array<{
+    document: CanvasDocument
+    resolve(document: CanvasDocument): void
+    signal: AbortSignal
+  }> = []
+  const services = createCanvasServices({
+    hydration: {
+      hydrateStale({ document: stale, signal }) {
+        return new Promise<CanvasDocument>((resolve) => {
+          hydrationRequests.push({ document: stale, resolve, signal })
+        })
+      },
+      markStale: (current) => current,
+    },
+  })
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () =>
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={services}
+          session={session}
+          viewScopeId="project-one"
+        />,
+      ),
+    )
+    expect(hydrationRequests).toHaveLength(1)
+
+    await act(async () => session.reincarnateNodes())
+    expect(hydrationRequests[0]!.signal.aborted).toBeFalse()
+
+    await act(async () => {
+      const stale = hydrationRequests[0]!.document
+      hydrationRequests[0]!.resolve({
+        ...stale,
+        nodes: stale.nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: { status: "ready" as const, url: "convax-asset://project/image" },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://project/image",
+    })
+
+    await act(async () =>
+      session.publish({
+        ...canvasDocument,
+        nodes: canvasDocument.nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            metadata: {
+              ...node.data.metadata,
+              convaxResource: {
+                ...(node.data.metadata as Record<string, Record<string, unknown>>).convaxResource,
+                ownerProofDigest: "d".repeat(64),
+              },
+            },
+            resourceState: { status: "stale" as const },
+          },
+        })),
+      }),
+    )
+    expect(renderedNodes[0]?.data.resourceState).toEqual({ status: "stale" })
+    expect(hydrationRequests).toHaveLength(2)
+
+    await act(async () => {
+      const stale = hydrationRequests[1]!.document
+      hydrationRequests[1]!.resolve({
+        ...stale,
+        nodes: stale.nodes.map((node) => ({
+          ...node,
+          data: {
+            ...node.data,
+            resourceState: { status: "ready" as const, url: "convax-asset://project/relinked-image" },
+          },
+        })),
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes[0]?.data.resourceState).toEqual({
+      status: "ready",
+      url: "convax-asset://project/relinked-image",
+    })
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
 
 test("mounts rapid new nodes with one inner-shell entrance and never replays hydration or virtualization", async () => {
   const restoreWindow = installTestWindow()

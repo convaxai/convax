@@ -70,10 +70,9 @@ export async function createMainLocalProjectCollaborationPortsV3(input: {
         async verify({ request, signal }) {
           signal?.throwIfAborted()
           if (request.kind !== "current-resources") return "pending"
-          const plan = await projectIndexes!.queryFileMaterializationPlan({ projectId: input.projectId })
+          const resources = await projectIndexes!.queryCurrentResources({ projectId: input.projectId })
           signal?.throwIfAborted()
-          const references = plan.entries.flatMap((entry) => entry.reference === null ? [] : [entry.reference])
-          return request.proofs.every((proof) => references.some((reference) =>
+          return request.proofs.every((proof) => resources.some(({ reference }) =>
             reference.canonicalUri === proof.resource.uri &&
             reference.blob.mime === proof.resource.mime &&
             reference.blob.byteLength === proof.resource.byteLength &&

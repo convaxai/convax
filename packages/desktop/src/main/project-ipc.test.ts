@@ -157,6 +157,7 @@ test("publishes Project files before ProjectIndex and reports collaboration fail
     size: 7,
   }))
   const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+    admitManagedBlob: async () => ({ status: "partial-success", code: "index-commit-failed" }),
     createDirectory: async () => ({ status: "committed", entryId: `pd_${"a".repeat(64)}`, versionId: null }),
     publishFile: async (input) => {
       order.push("index")
@@ -215,6 +216,7 @@ test("uses the manager's exact relocation receipt instead of guessing source pat
     resolveEntryPath: unsupported, touch: unsupported, watchProject: () => () => undefined, writeTextFile: unsupported,
   } satisfies DesktopProjectManager
   const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+    admitManagedBlob: unsupported,
     createDirectory: unsupported,
     publishFile: unsupported,
     relocateEntry,
@@ -254,6 +256,7 @@ test("commits ProjectIndex tombstones before native deletion and preserves the f
     resolveEntryPath: unsupported, touch: unsupported, watchProject: () => () => undefined, writeTextFile: unsupported,
   } satisfies DesktopProjectManager
   const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+    admitManagedBlob: unsupported,
     createDirectory: unsupported, publishFile: unsupported, relocateEntry: unsupported, tombstoneEntry,
   }
   const { projectFilesIpcChannels, registerProjectIpc } = await import("./project-ipc")

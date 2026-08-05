@@ -368,9 +368,21 @@ export class MainProjectIndexRuntimeRegistryV2
     return queryMainProjectIndexCurrentBlobDigestsV2((await this.open(projectId)).application, { projectId })
   }
 
+  async queryCurrentResources(
+    input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentResources"]>[0],
+  ) {
+    const projectId = parseProjectIdV2(input.projectId)
+    return (await this.open(projectId)).application.queryCurrentResources({ projectId })
+  }
+
   async createDirectory(input: Parameters<ProjectIndexFileApplicationPortV2["createDirectory"]>[0]) {
     const projectId = parseProjectIdV2(input.projectId)
     return (await this.open(projectId)).fileApplication.createDirectory({ ...input, projectId })
+  }
+
+  async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0]) {
+    const projectId = parseProjectIdV2(input.projectId)
+    return (await this.open(projectId)).fileApplication.admitManagedBlob({ ...input, projectId })
   }
 
   async publishFile(input: Parameters<ProjectIndexFileApplicationPortV2["publishFile"]>[0]) {
@@ -490,6 +502,8 @@ export class MainProjectIndexRuntimeRegistryV2
         session,
         facts: descriptor.facts,
         blobs: {
+          admitManaged: ({ reference, admission }) =>
+            blobs.admitVerifiedStream(reference, admission).then(() => undefined),
           publish: ({ reference, exactBytes }) => blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined),
         },
         createOperationId: this.options.createOperationId,

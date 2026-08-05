@@ -129,6 +129,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
 
   test("propagates an unavailable owner query and never guesses from another projection", async () => {
     const application: ProjectIndexCurrentBlobReferencePortV2 = {
+      async queryCurrentResources() { return [] },
       async queryCurrentBlobDigests() {
         throw new Error("ProjectIndex session unavailable")
       },
@@ -142,6 +143,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     await expect(
       queryMainProjectIndexCurrentBlobDigestsV2(
         {
+          async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
             return [digest] as never
           },
@@ -152,6 +154,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     await expect(
       queryMainProjectIndexCurrentBlobDigestsV2(
         {
+          async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
             return new Set(["not-a-digest"]) as never
           },
@@ -165,6 +168,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
     const ownerValues = new Set([digest])
     const result = await queryMainProjectIndexCurrentBlobDigestsV2(
       {
+        async queryCurrentResources() { return [] },
         async queryCurrentBlobDigests() {
           return ownerValues as never
         },

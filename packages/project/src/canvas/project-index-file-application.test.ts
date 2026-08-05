@@ -23,7 +23,7 @@ import {
   type ProjectIndexIntentV2,
 } from "../collaboration/project-index"
 import { ProjectIndexFileApplicationV2 } from "./project-index-file-application"
-import type { ProjectIndexDocumentSessionPortV2 } from "./project-index-application"
+import { ProjectIndexCanvasApplicationV2, type ProjectIndexDocumentSessionPortV2 } from "./project-index-application"
 
 const projectId = "project-a" as ProjectIdV2
 const projectEpoch = id128(1)
@@ -74,10 +74,13 @@ describe("ProjectIndexFileApplicationV2", () => {
     const application = new ProjectIndexFileApplicationV2({
       session,
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
-      blobs: { async publish({ reference, exactBytes }) {
-        order.push("blob")
-        expect(reference.blob.digest).toBe(digestBytes(exactBytes))
-      } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish({ reference, exactBytes }) {
+          order.push("blob")
+          expect(reference.blob.digest).toBe(digestBytes(exactBytes))
+        },
+      },
       createOperationId: () => context.operationId,
     })
 
@@ -109,7 +112,10 @@ describe("ProjectIndexFileApplicationV2", () => {
     const application = new ProjectIndexFileApplicationV2({
       session: applyingSession(document, context, order),
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
-      blobs: { async publish() { throw new Error("disk full") } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() { throw new Error("disk full") },
+      },
       createOperationId: () => context.operationId,
     })
     expect(await application.publishFile({
@@ -121,6 +127,77 @@ describe("ProjectIndexFileApplicationV2", () => {
     })).toEqual({ status: "partial-success", code: "blob-publication-failed" })
     expect(order).toEqual([])
     expect(validateProjectIndexYDocV2(document).entries.size).toBe(1)
+  })
+
+  test("streams a managed admission before creating one immutable unlocated identity and re-admits existing bytes", async () => {
+    const document = genesis()
+    const order: string[] = []
+    const context = constructionContext(actor(1), id128(5), "1")
+    const bytes = new TextEncoder().encode("managed-media")
+    const blob = {
+      format: "convax.blob-ref/2" as const,
+      algorithm: "sha256" as const,
+      digest: digestBytes(bytes),
+      byteLength: String(bytes.byteLength) as never,
+      mime: "video/mp4",
+    }
+    let admissions = 0
+    const application = new ProjectIndexFileApplicationV2({
+      session: applyingSession(document, context, order),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged({ reference, admission }) {
+          admissions += 1
+          const received: number[] = []
+          await admission.readChunks(async (chunk) => { received.push(...chunk) })
+          expect(received).toEqual([...bytes])
+          expect(reference.blob).toEqual(blob)
+          order.push("managed-blob")
+        },
+        async publish() { throw new Error("not used") },
+      },
+      createOperationId: () => context.operationId,
+    })
+    const admission = () => ({
+      blob,
+      async readChunks(consume: (chunk: Readonly<Uint8Array>) => Promise<void>) {
+        await consume(bytes.subarray(0, 3))
+        await consume(bytes.subarray(3))
+      },
+    })
+
+    const first = await application.admitManagedBlob({ projectId, admission: admission() })
+    const second = await application.admitManagedBlob({ projectId, admission: admission() })
+
+    expect(first).toMatchObject({ status: "committed", reference: { blob } })
+    expect(second).toEqual(first)
+    expect(admissions).toBe(2)
+    expect(order).toEqual(["managed-blob", "commit", "managed-blob"])
+    const snapshot = validateProjectIndexYDocV2(document)
+    const managed = [...snapshot.entries.values()].filter((entry) => entry.storageClass === "managed-blob")
+    expect(managed).toHaveLength(1)
+    expect(managed[0]).toMatchObject({
+      contentPolicy: "immutable",
+      provenance: "managed-admission",
+      storageClass: "managed-blob",
+    })
+    const projection = new ProjectIndexCanvasApplicationV2({
+      session: applyingSession(document, context, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      genesis: {
+        async preflightCanvasGenesis() { return "pending" },
+        async stageCanvasGenesis() { return "pending" },
+      },
+      createOperationId: () => id128(6),
+      createShardEpoch: () => id128(7),
+    })
+    expect(await projection.queryCurrentResources({ projectId })).toEqual([
+      expect.objectContaining({
+        materializedPath: null,
+        reference: first.status === "committed" ? first.reference : null,
+        storageClass: "managed-blob",
+      }),
+    ])
   })
 })
 

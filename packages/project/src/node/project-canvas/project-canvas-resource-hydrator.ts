@@ -1,14 +1,23 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
+import {
+  assertResourceRefV2,
+  canvasProjectionResourceMetadataKeyV2,
+  type CanvasResourceRefV2,
+} from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
+import { parseProjectIdV2 } from "@convax/collaboration"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
+import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
 import {
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
+  projectResourceReferenceKey,
   requireProjectResourceReference,
   type ProjectResourceReference,
   type ProjectResourceSnapshot,
 } from "../../canvas/project-resources"
+import { projectResourceReferenceDigestV2 } from "../../collaboration/project-index"
 import { mimeTypeForPath } from "../project-manager-helpers"
 import { readStableProjectFile, readStableProjectUtf8File } from "../stable-project-file"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
@@ -29,6 +38,7 @@ export interface ProjectCanvasResourceUrlInput {
 export type ProjectCanvasResourceUrlFactory = (input: ProjectCanvasResourceUrlInput) => string
 
 export interface ProjectCanvasResourceHydratorOptions {
+  currentResources?: ProjectIndexCurrentBlobReferencePortV2
   maximumMediaBytes?: number
   maximumTextBytes?: number
 }
@@ -56,6 +66,7 @@ const defaultMaximumMediaBytes = 64 * 1024 * 1024
 const defaultMaximumTextBytes = 16 * 1024 * 1024
 
 export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort {
+  readonly #currentResources?: ProjectIndexCurrentBlobReferencePortV2
   readonly #maximumMediaBytes: number
   readonly #maximumTextBytes: number
 
@@ -75,18 +86,103 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     }
     this.#maximumMediaBytes = maximumMediaBytes
     this.#maximumTextBytes = maximumTextBytes
+    this.#currentResources = options.currentResources
   }
 
-  hydrate(input: { document: CanvasDocument; projectId: string }) {
-    return hydrateProjectCanvasDocument(input.document, (reference) =>
+  async hydrate(input: { document: CanvasDocument; projectId: string }) {
+    const attachment = await this.#attachCurrentProjectFileReferences(input)
+    const hydrated = await hydrateProjectCanvasDocument(attachment.document, (reference) =>
       this.resolve({ projectId: input.projectId, reference }),
+    )
+    return restoreUnavailableCanvasResourceStates(
+      attachment.document,
+      restoreCanvasResourceMetadata(input.document, hydrated),
+      attachment.unavailableNodeIds,
     )
   }
 
-  hydrateStale(input: { document: CanvasDocument; projectId: string }) {
-    return hydrateStaleProjectCanvasResources(input.document, (reference) =>
+  async hydrateStale(input: { document: CanvasDocument; projectId: string }) {
+    const attachment = await this.#attachCurrentProjectFileReferences(input)
+    const hydrated = await hydrateStaleProjectCanvasResources(attachment.document, (reference) =>
       this.resolve({ projectId: input.projectId, reference }),
     )
+    return restoreUnavailableCanvasResourceStates(
+      attachment.document,
+      restoreCanvasResourceMetadata(input.document, hydrated),
+      attachment.unavailableNodeIds,
+    )
+  }
+
+  async #attachCurrentProjectFileReferences(input: {
+    document: CanvasDocument
+    projectId: string
+  }): Promise<{ document: CanvasDocument; unavailableNodeIds: ReadonlySet<string> }> {
+    if (!this.#currentResources) return { document: input.document, unavailableNodeIds: new Set() }
+    const resources = new Map<number, CanvasResourceRefV2>()
+    input.document.nodes.forEach((node, index) => {
+      if (!node.data.metadata || typeof node.data.metadata !== "object" || Array.isArray(node.data.metadata)) return
+      const candidate = (node.data.metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+      try {
+        assertResourceRefV2(candidate)
+        resources.set(index, candidate)
+      } catch {
+        // The ordinary hydrator below projects a bounded corrupt state.
+      }
+    })
+    if (resources.size === 0) return { document: input.document, unavailableNodeIds: new Set() }
+
+    const projectId = parseProjectIdV2(input.projectId)
+    const currentResources = await this.#currentResources.queryCurrentResources({ projectId })
+    const currentByUri = new Map(
+      currentResources.map((entry) => [entry.reference.canonicalUri, entry] as const),
+    )
+    let changed = false
+    const unavailableNodeIds = new Set<string>()
+    const nodes = input.document.nodes.map((node, index) => {
+      const resource = resources.get(index)
+      if (!resource) return node
+      const current = currentByUri.get(resource.uri)
+      if (
+        !current ||
+        current.reference.blob.mime !== resource.mime ||
+        current.reference.blob.byteLength !== resource.byteLength ||
+        current.reference.blob.digest !== resource.contentDigest ||
+        projectResourceReferenceDigestV2(current.reference) !== resource.ownerProofDigest
+      ) {
+        return node
+      }
+      const runtimeReference: ProjectResourceReference | undefined =
+        current.storageClass === "managed-blob"
+          ? {
+              kind: "managed-asset",
+              mediaType: resource.mime,
+              name: node.data.label || resource.contentDigest,
+              sha256: resource.contentDigest,
+            }
+          : current.materializedPath === null
+            ? undefined
+            : { kind: "project-file", path: current.materializedPath }
+      if (runtimeReference === undefined) {
+        unavailableNodeIds.add(node.id)
+        changed = true
+        return { ...node, data: { ...node.data, resourceState: { status: "missing" as const } } }
+      }
+      changed = true
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          metadata: {
+            ...(node.data.metadata as Record<string, unknown>),
+            [projectResourceReferenceKey]: runtimeReference,
+          },
+        },
+      }
+    })
+    return {
+      document: changed ? { ...input.document, nodes } : input.document,
+      unavailableNodeIds,
+    }
   }
 
   async readImage(input: ProjectCanvasImageReadInput): Promise<ProjectCanvasImageRead> {
@@ -248,6 +344,39 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
       return { error: "Managed resource is corrupt", status: "corrupt" }
     }
   }
+}
+
+function restoreCanvasResourceMetadata(source: CanvasDocument, hydrated: CanvasDocument): CanvasDocument {
+  const sourceById = new Map(source.nodes.map((node) => [node.id, node] as const))
+  let changed = false
+  const nodes = hydrated.nodes.map((node) => {
+    const sourceNode = sourceById.get(node.id)
+    if (!sourceNode || node.data.metadata === sourceNode.data.metadata) return node
+    changed = true
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        metadata: sourceNode.data.metadata,
+      },
+    }
+  })
+  return changed ? { ...hydrated, nodes } : hydrated
+}
+
+function restoreUnavailableCanvasResourceStates(
+  attached: CanvasDocument,
+  hydrated: CanvasDocument,
+  unavailableNodeIds: ReadonlySet<string>,
+): CanvasDocument {
+  if (unavailableNodeIds.size === 0) return hydrated
+  const attachedById = new Map(attached.nodes.map((node) => [node.id, node] as const))
+  const nodes = hydrated.nodes.map((node) => {
+    if (!unavailableNodeIds.has(node.id)) return node
+    const state = attachedById.get(node.id)?.data.resourceState
+    return { ...node, data: { ...node.data, resourceState: state } }
+  })
+  return { ...hydrated, nodes }
 }
 
 function isEditableTextPath(value: string) {

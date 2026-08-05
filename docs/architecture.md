@@ -871,10 +871,13 @@ The Project asset single-source transition is one approved breaking cutover unde
 this rule. Its authoritative scope and safeguards are recorded in
 [the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
 Canvas owns generic resource-slot and application semantics. Project Canvas owns the
-concrete `project-file`, `project-directory` and `managed-asset` union stored in
-host-owned node metadata, plus Project validation, traversal and hydration. The new
-persistence rejects legacy path-only references, inline text and remote URLs instead
-of migrating them.
+concrete `project-file`, `project-directory` and `managed-asset` runtime union, plus
+Project validation, traversal and hydration. Durable Canvas resource nodes store only
+the pathless canonical `CanvasResourceRefV2` and its Project owner-proof digest. Main
+may reconstruct a concrete Project reference only as transient hydration metadata;
+it restores the canonical metadata before returning the hydrated document. The
+persistence boundary rejects legacy path-only references, inline text and remote URLs
+instead of migrating them.
 
 Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
 is a normal user-visible Project file below `Generated/`. Both flows publish the file
@@ -886,23 +889,34 @@ Managed assets are immutable SHA-256-addressed value copies. The original extern
 path is not persisted or watched after admission. Desktop composes one
 `ProjectManagedAssetStore` shared by preparation, repositories and GC; Project Node
 serializes import, reference admission and GC with its in-process per-Project asset
-mutex. GC derives liveness by scanning typed references in every supported Canvas document, records the
-first unreferenced time, waits seven days and completes another full scan before
-deletion. It atomically saves the next `gc.json` timing state before unlinking due
-blobs; stale records after a crash are removed by the next scan. Any unreadable Canvas
-document, corrupt state or digest mismatch stops deletion conservatively.
+mutex. External bytes cross a process-local streaming admission capability into the
+Project blob store, which verifies and fsyncs the exact stream before ProjectIndex
+commits a new unlocated `managed-blob` identity with `immutable` policy and
+`managed-admission` provenance. Canvas commits the resulting current owner proof only
+after that independent ProjectIndex commit. GC derives liveness from the validated
+ProjectIndex current-resource projection, records the first unreferenced time, waits
+seven days and completes another full scan before deletion. It atomically saves the
+next `gc.json` timing state before unlinking due blobs; stale records after a crash are
+removed by the next scan. Any unavailable owner projection, corrupt state or digest
+mismatch stops deletion conservatively.
 
 ProjectIndex current-resource projection is likewise the sole portable authority
 for current blob references, including active text conflict copies and the
 logical-counter/actor winner of overwritable binary families. The browser-safe
-Project surface owns `ProjectIndexCurrentBlobReferencePortV2`, deterministic
+Project surface owns `ProjectIndexCurrentBlobReferencePortV2`; its bounded entries
+contain the exact reference, `storageClass`, and an optional owner-projected
+materialized path. A `project-file` with no current materialized path remains missing
+and is never reinterpreted as a managed asset. A `managed-blob` has no path and may be
+temporarily mapped to the verified Project managed-object adapter by digest and MIME.
+Canvas current-resource fact verification consumes this complete projection rather
+than the file-only materialization plan. The same surface owns deterministic
 holder/bootstrap planning, the
 `BlobDurableAckV2` codec and the rule that one same current credential-bound remote
 replica must durably ACK the structural frame and every newly referenced blob.
 Main implements the query by delegating to the live ProjectIndex owner session's
 validated state; Desktop and native GC never receive the Y.Doc or infer currentness
-from paths. Unavailable or malformed owner projections fail closed before GC timing
-state changes.
+from paths. Unavailable or malformed owner projections fail closed before hydration,
+Canvas mutation, or GC timing state changes.
 `@convax/project/node` implements these ports through
 `ProjectBlobReplicationStoreV2`: restartable receive persists only one bounded
 contiguous-prefix cursor, verifies exact duplicate chunks from staged bytes, and

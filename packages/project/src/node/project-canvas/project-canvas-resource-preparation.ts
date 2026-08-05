@@ -1,10 +1,7 @@
 import path from "node:path"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { ordinarySha256V2, parseProjectIdV2 } from "@convax/collaboration"
 import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
-import {
-  canvasResourceProofMetadataKeyV2,
-  type CanvasResourceProofRefV2,
-} from "@convax/canvas/collaboration"
+import { canvasResourceProofMetadataKeyV2, type CanvasResourceProofRefV2 } from "@convax/canvas/collaboration"
 import type {
   CanvasResourcePreparationPort,
   CanvasResourcePreparationRequest,
@@ -12,12 +9,15 @@ import type {
   CanvasResourceSource,
 } from "@convax/canvas/application"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
+import type { ProjectContentPolicyV2 } from "../../collaboration/project-index"
 import type { ProjectFilesClient } from "@convax/project-files/contracts"
-import {
-  projectResourceReferenceDigestV2,
-  type ProjectResourceReferenceV2,
-} from "../../collaboration/project-index"
-import type { ProjectIndexFileApplicationPortV2 } from "../../canvas/project-index-file-application"
+import { projectResourceReferenceDigestV2, type ProjectResourceReferenceV2 } from "../../collaboration/project-index"
+import type {
+  ProjectIndexFileApplicationPortV2,
+  ProjectIndexFileMaterializationPlanV2,
+  ProjectIndexFileMaterializationProjectionPortV2,
+  ProjectIndexManagedBlobAdmissionV2,
+} from "../../canvas/project-index-file-application"
 import {
   projectResourceReferenceKey,
   requireProjectResourceReference,
@@ -27,7 +27,10 @@ import { readStableProjectUtf8File } from "../stable-project-file"
 import { defaultProjectTextPublicationMaximumBytes } from "./project-file-publisher"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
 
-export type ProjectCanvasResourceHost = Pick<ProjectFilesClient, "listDirectory" | "readFileInfo" | "readTextFile">
+export type ProjectCanvasResourceHost = Pick<
+  ProjectFilesClient,
+  "listDirectory" | "readFile" | "readFileInfo" | "readTextFile"
+>
 
 export interface ProjectCanvasFilePublisher {
   publishText(input: {
@@ -62,7 +65,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     private readonly publisher: ProjectCanvasFilePublisher,
     private readonly assets: ProjectManagedAssetStore,
     private readonly mediaInspector?: ProjectCanvasMediaInspector,
-    private readonly indexFiles?: ProjectIndexFileApplicationPortV2,
+    private readonly indexFiles?: ProjectIndexFileApplicationPortV2 & ProjectIndexFileMaterializationProjectionPortV2,
   ) {}
 
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
@@ -124,12 +127,19 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       projectId: input.projectId,
     })
     const publishedReference = requireProjectFileReference(published.path)
+    const proof = await this.publishProjectFileProof({
+      exactBytes: new TextEncoder().encode(contents.content),
+      mediaClass: "text",
+      mime: extension === ".md" ? "text/markdown" : "text/plain",
+      path: publishedReference.path,
+      projectId: input.projectId,
+    })
     return {
       items: [
         {
           id: input.sourceId,
           kind: "text",
-          metadata: metadataFor(publishedReference),
+          metadata: metadataFor(publishedReference, proof),
           mimeType: extension === ".md" ? "text/markdown" : "text/plain",
           name: path.posix.basename(publishedReference.path),
           state: {
@@ -176,14 +186,42 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         if (references.length !== input.files.length) {
           throw new Error("Managed asset admission returned an unexpected reference count")
         }
-        return commit({
-          items: references.map((reference, index) => {
-            if (reference.kind === "project-directory") {
-              throw new Error("Local Canvas file admission returned a directory reference")
-            }
-            return localPreparedItem(input.files[index]!.sourceId, input.files[index]!, reference)
-          }),
-        })
+        const items: CanvasUploadItem[] = []
+        for (const [index, reference] of references.entries()) {
+          if (reference.kind === "project-directory") {
+            throw new Error("Local Canvas file admission returned a directory reference")
+          }
+          const selectedFile = input.files[index]!
+          const projectFileInfo =
+            reference.kind === "project-file"
+              ? await this.project.readFileInfo({ path: reference.path, projectId: input.projectId })
+              : undefined
+          const file = projectFileInfo
+            ? { mediaType: projectFileInfo.mimeType, name: projectFileInfo.name }
+            : selectedFile
+          const mimeType = normalizeMimeType(
+            reference.kind === "managed-asset" ? reference.mediaType : file.mediaType,
+          )
+          const kind = getCanvasTextFileFormat({ mimeType, name: file.name })
+            ? "text"
+            : mediaKindForMimeType(mimeType)
+          const proof =
+            reference.kind === "project-file"
+              ? await this.publishProjectFileProof({
+                  mediaClass: kind,
+                  mime: mimeType || "application/octet-stream",
+                  path: reference.path,
+                  projectId: input.projectId,
+                })
+              : await this.publishManagedAssetProof({
+                  mediaClass: kind,
+                  mime: mimeType || "application/octet-stream",
+                  projectId: input.projectId,
+                  reference,
+                })
+          items.push(localPreparedItem(selectedFile.sourceId, file, reference, proof))
+        }
+        return commit({ items })
       },
     )
   }
@@ -256,11 +294,18 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       const text = await this.project.readTextFile({ path: reference.path, projectId })
       throwIfAborted(signal)
       if (!text.exists) throw new Error(`Project text file was not found: ${reference.path}`)
+      const proof = await this.publishProjectFileProof({
+        mediaClass: "text",
+        mime: mimeType || textMimeTypeFor(textFormat),
+        path: reference.path,
+        projectId,
+      })
+      throwIfAborted(signal)
       return {
         item: {
           id: source.sourceId,
           kind: "text",
-          metadata: metadataFor(reference),
+          metadata: metadataFor(reference, proof),
           mimeType: mimeType || textMimeTypeFor(textFormat),
           name: sourceInfo.name,
           state: {
@@ -273,6 +318,12 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     const kind = mediaKindForMimeType(mimeType)
+    const proof = await this.publishProjectFileProof({
+      mediaClass: kind,
+      mime: mimeType || "application/octet-stream",
+      path: reference.path,
+      projectId,
+    })
     const inspection =
       kind !== "file" && this.mediaInspector
         ? await this.mediaInspector.inspect({
@@ -290,7 +341,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         height: inspection?.height,
         id: source.sourceId,
         kind,
-        metadata: metadataFor(reference),
+        metadata: metadataFor(reference, proof),
         mimeType: mimeType || undefined,
         name: sourceInfo.name,
         state: {
@@ -310,19 +361,154 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
     if (!this.indexFiles) return undefined
     const projectId = parseProjectIdV2(input.projectId)
-    await this.indexFiles.createDirectory({ projectId, path: path.posix.dirname(input.path) })
+    return this.publishProjectFileProof({
+      exactBytes: new TextEncoder().encode(input.content),
+      mediaClass: "text",
+      mime: input.mime,
+      path: input.path,
+      projectId,
+    })
+  }
+
+  private async publishProjectFileProof(input: {
+    readonly exactBytes?: Uint8Array
+    readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
+    readonly mime: string
+    readonly path: string
+    readonly projectId: string
+  }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
+    if (!this.indexFiles) return undefined
+    const projectId = parseProjectIdV2(input.projectId)
+    const contents =
+      input.exactBytes === undefined
+        ? await this.project.readFile({ path: input.path, projectId: input.projectId })
+        : undefined
+    if (
+      contents &&
+      (contents.path !== input.path || contents.size < 0 || normalizeMimeType(contents.mimeType) !== input.mime)
+    ) {
+      throw new Error("Project file identity changed during Canvas resource preparation")
+    }
+    const bytes = input.exactBytes ?? decodeProjectFileDataUrl(contents!.dataUrl)
+    if (contents && contents.size !== bytes.byteLength) {
+      throw new Error("Project file size changed during Canvas resource preparation")
+    }
+    let plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    const existing = plan.entries.find((entry) => entry.path === input.path)
+    if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
+    if (
+      existing?.reference &&
+      existing.reference.blob.digest === ordinarySha256V2(bytes) &&
+      existing.reference.blob.byteLength === String(bytes.byteLength) &&
+      existing.reference.blob.mime === input.mime
+    ) {
+      return canvasProofForProjectReference(existing.reference, input.mediaClass)
+    }
+
+    await this.ensureProjectIndexDirectories(projectId, input.path, plan)
     const result = await this.indexFiles.publishFile({
       projectId,
       path: input.path,
-      exactBytes: new TextEncoder().encode(input.content),
+      exactBytes: bytes,
       mime: input.mime,
-      contentPolicy: "conflict-preserving-text",
-      provenance: "user",
+      contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
+      provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
     })
     if (result.status !== "committed" || result.reference == null) {
       throw new Error("ProjectIndex did not publish the Canvas resource")
     }
-    return canvasProofForProjectReference(result.reference, "text")
+    return canvasProofForProjectReference(result.reference, input.mediaClass)
+  }
+
+  private async publishManagedAssetProof(input: {
+    readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
+    readonly mime: string
+    readonly projectId: string
+    readonly reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>
+  }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
+    if (!this.indexFiles) return undefined
+    const handle = await this.assets.openForRead({ projectId: input.projectId, reference: input.reference })
+    const digest = await handle.digest()
+    if (digest !== input.reference.sha256) {
+      await handle.close()
+      throw new Error("Managed Canvas resource digest changed during owner publication")
+    }
+    let consumed = false
+    const admission: ProjectIndexManagedBlobAdmissionV2 = Object.freeze({
+      blob: Object.freeze({
+        format: "convax.blob-ref/2" as const,
+        algorithm: "sha256" as const,
+        digest: input.reference.sha256 as never,
+        byteLength: String(handle.size) as never,
+        mime: input.mime,
+      }),
+      async readChunks(
+        consume: Parameters<ProjectIndexManagedBlobAdmissionV2["readChunks"]>[0],
+        signal?: AbortSignal,
+      ) {
+        if (consumed) throw new Error("Managed Canvas resource admission was already consumed")
+        consumed = true
+        if (handle.size === 0) {
+          await handle.close()
+          return
+        }
+        const reader = handle.createReadStream({ start: 0, end: handle.size - 1, signal }).getReader()
+        try {
+          while (true) {
+            const next = await reader.read()
+            if (next.done) break
+            await consume(next.value)
+          }
+        } finally {
+          reader.releaseLock()
+          await handle.close()
+        }
+      },
+    })
+    try {
+      const result = await this.indexFiles.admitManagedBlob({
+        projectId: parseProjectIdV2(input.projectId),
+        admission,
+      })
+      if (result.status !== "committed" || result.reference == null) {
+        throw new Error("ProjectIndex did not publish the managed Canvas resource")
+      }
+      return canvasProofForProjectReference(result.reference, input.mediaClass)
+    } finally {
+      await handle.close()
+    }
+  }
+
+  private async ensureProjectIndexDirectories(
+    projectId: ReturnType<typeof parseProjectIdV2>,
+    filePath: string,
+    initialPlan: ProjectIndexFileMaterializationPlanV2,
+  ): Promise<ProjectIndexFileMaterializationPlanV2> {
+    if (!this.indexFiles) return initialPlan
+    let plan = initialPlan
+    let current = ""
+    for (const segment of path.posix.dirname(filePath).split("/").filter(Boolean)) {
+      current = current ? `${current}/${segment}` : segment
+      const existing = plan.entries.find((entry) => entry.path === current)
+      if (existing?.kind === "file") throw new Error("ProjectIndex parent path is a file")
+      if (existing?.kind === "directory") continue
+      const result = await this.indexFiles.createDirectory({ projectId, path: current })
+      if (result.status !== "committed") {
+        plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+        if (plan.entries.find((entry) => entry.path === current)?.kind !== "directory") {
+          throw new Error("ProjectIndex did not publish the Canvas resource directory")
+        }
+      } else {
+        plan = Object.freeze({
+          projectId,
+          entries: Object.freeze([
+            ...plan.entries,
+            Object.freeze({ entryId: result.entryId, kind: "directory" as const, path: current, reference: null }),
+          ]),
+        })
+      }
+    }
+    return plan
   }
 }
 
@@ -330,6 +516,7 @@ function localPreparedItem(
   sourceId: string,
   source: { mediaType?: string; name: string },
   reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
+  proof?: Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }>,
 ): CanvasUploadItem {
   const name = reference.kind === "managed-asset" ? reference.name : source.name
   const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : source.mediaType)
@@ -338,7 +525,7 @@ function localPreparedItem(
     return {
       id: sourceId,
       kind: "text",
-      metadata: metadataFor(reference),
+      metadata: metadataFor(reference, proof),
       mimeType: mimeType || textMimeTypeFor(textFormat),
       name,
       state: { status: "stale" },
@@ -347,11 +534,30 @@ function localPreparedItem(
   return {
     id: sourceId,
     kind: mediaKindForMimeType(mimeType),
-    metadata: metadataFor(reference),
+    metadata: metadataFor(reference, proof),
     mimeType: mimeType || undefined,
     name,
     state: { status: "stale" },
   }
+}
+
+function contentPolicyForProjectFile(
+  filePath: string,
+  mediaClass: "text" | "image" | "video" | "audio" | "file",
+): Exclude<ProjectContentPolicyV2, "none"> {
+  if (filePath === "Generated" || filePath.startsWith("Generated/")) return "immutable"
+  return mediaClass === "text" ? "conflict-preserving-text" : "overwritable-binary"
+}
+
+function decodeProjectFileDataUrl(dataUrl: string): Uint8Array {
+  const comma = dataUrl.indexOf(",")
+  if (comma < 0 || !dataUrl.slice(0, comma).endsWith(";base64")) {
+    throw new Error("Project file data URL is invalid")
+  }
+  const encoded = dataUrl.slice(comma + 1)
+  const bytes = Buffer.from(encoded, "base64")
+  if (bytes.toString("base64") !== encoded) throw new Error("Project file data URL is not canonical base64")
+  return Uint8Array.from(bytes)
 }
 
 function metadataFor(

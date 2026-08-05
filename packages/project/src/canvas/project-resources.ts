@@ -288,9 +288,7 @@ export async function hydrateStaleProjectCanvasResources(
   return hydrateProjectCanvasResources(
     document,
     resolve,
-    (_node, reference) => {
-      return reference.kind !== "managed-asset"
-    },
+    () => true,
     (node) => isStaleResourceNode(node),
   )
 }

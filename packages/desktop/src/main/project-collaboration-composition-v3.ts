@@ -93,8 +93,14 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     async queryCurrentBlobDigests(input) {
       return (await runtimeFor(input.projectId)).projectIndexes.queryCurrentBlobDigests(input)
     },
+    async queryCurrentResources(input) {
+      return (await runtimeFor(input.projectId)).projectIndexes.queryCurrentResources(input)
+    },
     async createDirectory(input) {
       return (await runtimeFor(input.projectId)).projectIndexes.createDirectory(input)
+    },
+    async admitManagedBlob(input) {
+      return (await runtimeFor(input.projectId)).projectIndexes.admitManagedBlob(input)
     },
     async publishFile(input) {
       return (await runtimeFor(input.projectId)).projectIndexes.publishFile(input)
