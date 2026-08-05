@@ -64,6 +64,22 @@ export class ProjectTeamCollaborationManagerV2 {
 
   constructor(private readonly factory: ProjectTeamPeerSessionFactoryV2) {}
 
+  /** Activates the Project shell without probing or starting any Team runtime. */
+  activateLocalProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
+    const projectId = parseProjectIdV2(projectIdInput)
+    return this.serialize(async () => {
+      this.requireLive()
+      this.activeGeneration = {}
+      this.activationAbort?.abort(new DOMException("Project collaboration activation was superseded", "AbortError"))
+      this.activationAbort = null
+      const previousProjectId = this.activeProjectId
+      await this.quiesceSession()
+      if (previousProjectId !== null && previousProjectId !== projectId) this.statuses.delete(previousProjectId)
+      this.activeProjectId = projectId
+      return this.publish(status(projectId, "local-only", false, 0, null))
+    })
+  }
+
   activateProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
     const projectId = parseProjectIdV2(projectIdInput)
     if (this.activeProjectId === projectId && this.session) return Promise.resolve(this.requireStatus(projectId))

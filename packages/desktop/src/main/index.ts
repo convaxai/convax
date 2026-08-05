@@ -26,6 +26,7 @@ import {
   createWebCryptoEd25519VerifierV2,
   parseDigestV2,
   parseId128V2,
+  parseProjectIdV2,
   parseValidationArtifactSetV2,
 } from "@convax/collaboration"
 import {
@@ -565,10 +566,15 @@ function startApplication() {
       collaborationCanvasSessions?.resumeProject(projectId)
       activeCollaborationProjectId = projectId
       try {
-        await projectTeamCollaboration?.activateProject(projectId)
+        const sharingBinding = await collaborationTeamStore.open(parseProjectIdV2(projectId))
+        if (sharingBinding === "missing") {
+          await projectTeamCollaboration?.activateLocalProject(projectId)
+        } else {
+          await projectTeamCollaboration?.activateProject(projectId)
+        }
       } catch (error) {
-        // A rendezvous outage never rolls back the already durable local Project.
-        console.warn("Could not start Project team collaboration; local editing remains available", error)
+        // A rendezvous outage never rolls back or closes the already durable local Project.
+        console.warn("Could not start Project sharing; the local Project remains open", error)
       }
     })
     const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinatorV2({

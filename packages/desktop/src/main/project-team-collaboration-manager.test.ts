@@ -55,10 +55,12 @@ function factory(overrides: Partial<ProjectTeamPeerSessionFactoryV2> = {}): Proj
 
 describe("ProjectTeamCollaborationManagerV2", () => {
   test("keeps an unteamed Project local-only without fabricating a session", async () => {
-    const manager = new ProjectTeamCollaborationManagerV2(factory())
-    await expect(manager.activateProject(projectOne)).resolves.toEqual(expect.objectContaining({
+    const openExisting = mock(async (): Promise<ProjectTeamPeerSessionOpenResultV2> => ({ status: "local-only" }))
+    const manager = new ProjectTeamCollaborationManagerV2(factory({ openExisting }))
+    await expect(manager.activateLocalProject(projectOne)).resolves.toEqual(expect.objectContaining({
       projectId: projectOne, state: "local-only", canEdit: false, connectedPeerCount: 0,
     }))
+    expect(openExisting).not.toHaveBeenCalled()
     await manager.dispose()
   })
 

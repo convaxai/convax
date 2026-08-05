@@ -11,7 +11,7 @@ export interface ProjectCanvasControllerSnapshot {
 const initialSnapshot: ProjectCanvasControllerSnapshot = {
   busy: false,
   canvases: [],
-  creationAvailability: "team-authority-pending",
+  creationAvailability: "local-authority-unavailable",
   error: null,
   projectId: null,
 }
@@ -51,7 +51,7 @@ export class ProjectCanvasController {
     this.update({
       busy: Boolean(projectId),
       canvases: [],
-      creationAvailability: "team-authority-pending",
+      creationAvailability: "local-authority-unavailable",
       error: null,
       projectId,
     })
@@ -96,8 +96,8 @@ export class ProjectCanvasController {
     if (!projectId || (this.activity && this.activity !== "refresh")) return
     if (this.snapshot.creationAvailability !== "available") {
       this.update({
-        error: this.snapshot.creationAvailability === "team-authority-pending"
-          ? "Canvas creation is waiting for team collaboration authority."
+        error: this.snapshot.creationAvailability === "local-authority-unavailable"
+          ? "Canvas creation is waiting for local Project authority."
           : "Canvas creation is unavailable while Project recovery is required.",
       })
       return

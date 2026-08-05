@@ -2,17 +2,30 @@ import { describe, expect, test } from "bun:test"
 import { renderToStaticMarkup } from "react-dom/server"
 import {
   ProjectCollaborationPendingState,
+  ProjectLocalAuthorityRecoveryState,
   ProjectLoadingState,
   ProjectRecoveryState,
   ProjectRegistryLoadingState,
 } from "./project-empty-state"
 
+describe("ProjectLocalAuthorityRecoveryState", () => {
+  test("keeps local authority recovery separate from sharing setup", () => {
+    const markup = renderToStaticMarkup(<ProjectLocalAuthorityRecoveryState />)
+
+    expect(markup).toContain('data-project-local-authority-recovery="true"')
+    expect(markup).toContain("Local Project editing is unavailable")
+    expect(markup).not.toContain("Retry local recovery")
+    expect(markup).not.toContain("Create team")
+    expect(markup).not.toContain("Join an existing team")
+  })
+})
+
 describe("ProjectCollaborationPendingState", () => {
-  test("explains why an empty local Project cannot create a Canvas", () => {
+  test("presents Team collaboration only as an explicit sharing action", () => {
     const markup = renderToStaticMarkup(<ProjectCollaborationPendingState />)
     expect(markup).toContain('data-project-collaboration-pending="true"')
-    expect(markup).toContain("Team collaboration authority required")
-    expect(markup).toContain("Creating or editing a Canvas requires team identity setup")
+    expect(markup).toContain("Share and collaborate")
+    expect(markup).toContain("stays local by default")
     expect(markup).not.toContain('data-project-collaboration-action="create"')
   })
 

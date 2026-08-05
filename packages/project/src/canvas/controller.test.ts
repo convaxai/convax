@@ -68,12 +68,12 @@ describe("ProjectCanvasController", () => {
     controller.dispose()
   })
 
-  test("surfaces pending team collaboration authority without inventing a Canvas", async () => {
+  test("surfaces unavailable local Project authority without inventing a Canvas", async () => {
     const { client } = harness()
-    client.getCanvasCatalog = mock(async ({ projectId }) => catalog(projectId, []))
-    client.createCanvas = mock(async () => {
-      throw new Error("Project Canvas route command was rejected: dependency-pending")
-    })
+    client.getCanvasCatalog = mock(async ({ projectId }): Promise<ProjectCanvasCatalog> => ({
+      ...catalog(projectId, []),
+      creationAvailability: "local-authority-unavailable",
+    }))
     const controller = new ProjectCanvasController(client)
 
     await controller.setProject("one")
@@ -81,9 +81,11 @@ describe("ProjectCanvasController", () => {
 
     expect(controller.getSnapshot()).toMatchObject({
       canvases: [],
-      error: "Project Canvas route command was rejected: dependency-pending",
+      creationAvailability: "local-authority-unavailable",
+      error: "Canvas creation is waiting for local Project authority.",
       projectId: "one",
     })
+    expect(client.createCanvas).not.toHaveBeenCalled()
     controller.dispose()
   })
 

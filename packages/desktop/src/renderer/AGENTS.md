@@ -23,6 +23,10 @@ or durable domain authority.
 - Switching Project synchronously resets Workbench scope and scopes Project Files
   and Project Canvas controllers. Guard asynchronous results so prior-scope
   responses cannot overwrite the current projection.
+- Project activation is local-first. A missing local Canvas mutation authority is a
+  bounded recovery state with an explicit retry; Renderer must not automatically
+  open Team creation/join UI, load sharing runtime, or imply that sharing is required.
+  Team collaboration UI is reached only through an explicit sharing action.
 - Browser storage contains renderer preferences, Workbench recovery choices, and
   bounded versioned Marketplace and Plugin Service display caches only. Loading a
   preference may choose an initial Input; Workbench is canonical afterward. Both
