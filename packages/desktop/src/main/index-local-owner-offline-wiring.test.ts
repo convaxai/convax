@@ -6,6 +6,11 @@ import { join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import * as ts from "typescript"
 
+import {
+  ProjectTeamCollaborationManagerV2,
+  type ProjectTeamPeerSessionFactoryV2,
+} from "./project-team-collaboration-manager"
+
 const mainPath = fileURLToPath(new URL("./index.ts", import.meta.url))
 const mainSource = readFileSync(mainPath, "utf8")
 
@@ -257,7 +262,6 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     expect(first.connectivityCalls).toEqual([false])
 
     await gate.activateProject("project-local", "v11-r1-local-owner")
-    expect(first.quiescedProjects).toEqual(["project-shared-a"])
     expect(first.unsubscribeCalls).toBe(1)
     expect(first.disposeCalls).toBe(1)
     expect(createRuntime).toHaveBeenCalledTimes(1)
@@ -280,7 +284,6 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
 
     unsubscribeGate()
     await gate.quiesceProject("project-shared-b")
-    expect(runtimes[1].quiescedProjects).toEqual(["project-shared-b"])
     expect(runtimes[1].disposeCalls).toBe(1)
     await gate.dispose()
   })
@@ -301,7 +304,6 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     expect(activationError).toBeInstanceOf(Error)
     expect(errorMessage(activationError)).toContain("rendezvous activation failed")
 
-    expect(failed.quiescedProjects).toEqual(["project-broken-team"])
     expect(failed.unsubscribeCalls).toBe(1)
     expect(failed.disposeCalls).toBe(1)
     expect(gate.service.getStatus("project-broken-team")).toEqual({
@@ -352,6 +354,54 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await gate.service.bootstrapTeam("project-race")
     expect(createRuntime).toHaveBeenCalledTimes(2)
     expect(runtimes[1].localActivatedProjects).toEqual(["project-race"])
+    await gate.dispose()
+  })
+
+  test("switching to V11 aborts a real queued V10 network activation before waiting for teardown", async () => {
+    let activationStarted!: () => void
+    const started = new Promise<void>((resolve) => { activationStarted = resolve })
+    let activationAborted = false
+    const openExisting: ProjectTeamPeerSessionFactoryV2["openExisting"] = ({ signal }) =>
+      new Promise((_, reject) => {
+        activationStarted()
+        signal.addEventListener("abort", () => {
+          activationAborted = true
+          reject(signal.reason)
+        }, { once: true })
+      })
+    const factory: ProjectTeamPeerSessionFactoryV2 = {
+      openExisting,
+      async bootstrapTeam() { throw new Error("bootstrap is not expected") },
+      async joinTeam() { throw new Error("join is not expected") },
+    }
+    const manager = new ProjectTeamCollaborationManagerV2(factory)
+    const runtime: TestRuntime = {
+      service: {
+        activateLocalProject: (projectId) => manager.activateLocalProject(projectId),
+        activateProject: (projectId) => manager.activateProject(projectId),
+        async bootstrapTeam(projectId) {
+          const result = await manager.bootstrapTeam(projectId)
+          return { invitation: null, status: result.status }
+        },
+        joinTeam: ({ projectId }) => manager.activateProject(projectId),
+        getStatus: (projectId) => manager.getStatus(projectId),
+        quiesceProject: (projectId) => manager.quiesceProject(projectId),
+        subscribe: (listener) => manager.subscribe(listener),
+      },
+      dispose: () => manager.dispose(),
+    }
+    const gate = createProtocolGate({
+      createRuntime: () => runtime,
+      activateV10Project: ({ projectId, service }) => service.activateProject(projectId),
+    })
+
+    const pendingV10 = gate.activateProject("project-shared", "v10-r5")
+    await started
+    await gate.activateProject("project-local", "v11-r1-local-owner")
+
+    expect(activationAborted).toBe(true)
+    await expect(pendingV10).rejects.toBeInstanceOf(Error)
+    expect(gate.service.getStatus("project-local")).toEqual(localOnlyStatus("project-local"))
     await gate.dispose()
   })
 

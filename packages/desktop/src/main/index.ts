@@ -322,9 +322,8 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
     })
     return created
   }
-  const destroyRuntime = async (fallbackProjectId?: string) => {
+  const destroyRuntime = async () => {
     const current = runtime
-    const projectId = runtimeProjectId ?? fallbackProjectId ?? null
     runtime = undefined
     runtimeProjectId = null
     const unsubscribe = unsubscribeRuntime
@@ -335,18 +334,14 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
       return
     }
     const teardown = (async () => {
-      const failures: unknown[] = []
       try {
-        if (projectId !== null) {
-          try { await current.service.quiesceProject(projectId) } catch (error) { failures.push(error) }
-        }
-        try { await current.dispose() } catch (error) { failures.push(error) }
+        // Runtime disposal synchronously aborts any queued Team activation
+        // before awaiting its serialized cleanup. Calling quiesceProject first
+        // would enqueue the abort behind the very bootstrap/network operation
+        // that teardown must cancel.
+        await current.dispose()
       } finally {
         runtimeProjectId = null
-      }
-      if (failures.length === 1) throw failures[0]
-      if (failures.length > 1) {
-        throw new AggregateError(failures, "Project Team collaboration runtime teardown failed")
       }
     })()
     runtimeTeardown = teardown
@@ -425,7 +420,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
       projectedStatus = null
       if (protocol !== "v10-r5") {
         try {
-          await destroyRuntime(previousProjectId ?? undefined)
+          await destroyRuntime()
         } finally {
           publish(localOnlyStatus(projectId))
         }
@@ -433,12 +428,12 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
       }
       try {
         if (runtime && previousProjectId !== null && previousProjectId !== projectId) {
-          await destroyRuntime(previousProjectId)
+          await destroyRuntime()
         }
         await input.activateV10Project({ projectId, service: activationService })
       } catch (activationError) {
         let teardownError: unknown
-        try { await destroyRuntime(projectId) } catch (error) { teardownError = error }
+        try { await destroyRuntime() } catch (error) { teardownError = error }
         if (activeProjectId === projectId && activeProtocol === "v10-r5") {
           publish(unavailableStatus(projectId))
         }
@@ -455,7 +450,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(input: Readonly<{
         activeProjectId = null
         activeProtocol = null
         projectedStatus = null
-        await destroyRuntime(projectId)
+        await destroyRuntime()
       }
     },
     async dispose() {
