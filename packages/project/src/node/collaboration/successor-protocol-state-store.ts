@@ -134,8 +134,16 @@ export class NodeSuccessorProjectProtocolStateStoreV3 {
         return Object.freeze({ status: "recovery-required" })
       }
       const device = await readOptional(this.deviceRecordPath(state.projectId, state.projectEpoch))
-      if (!device) return Object.freeze({ status: "promotion-recovery-required", claim })
-      requireDeviceRecord(device, state, claim.activeStateDigest)
+      if (!device) {
+        await ensurePlainDirectory(this.roots.deviceProtocolDirectory)
+        await writeCreateOrExact(
+          this.deviceRecordPath(state.projectId, state.projectEpoch),
+          encodeRestrictedJcsV2(deviceRecord(state, claim.activeStateDigest)),
+          "Device protocol high-water equivocation",
+        )
+      } else {
+        requireDeviceRecord(device, state, claim.activeStateDigest)
+      }
       await writeCreateOrExact(this.activePath(), encodeRestrictedJcsV2(activePointer(state, claim.activeStateDigest)), "Protocol active pointer equivocation")
       return this.open(state.projectId)
     } catch {

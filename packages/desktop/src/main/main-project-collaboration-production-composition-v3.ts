@@ -34,7 +34,11 @@ export interface MainSuccessorProjectCollaborationFactoryV3 {
  */
 export function createMainProjectCollaborationProductionCompositionV3(input: Readonly<{
   successorProtocolDigest: DigestV2
-  createPromotionId: () => Id128V2
+  createPromotionId: (input: Readonly<{
+    projectId: ProjectIdV2
+    projectEpoch: Id128V2
+    protocolDigest: DigestV2
+  }>) => Id128V2
   successor: MainSuccessorProjectCollaborationFactoryV3
   v10: Readonly<{
     projectIndexes: MainProjectIndexRuntimeRegistryV2
@@ -45,7 +49,28 @@ export function createMainProjectCollaborationProductionCompositionV3(input: Rea
   const resolver = createMainProjectCollaborationPortResolverV3({
     successorProtocolDigest: input.successorProtocolDigest,
     createPromotionId: input.createPromotionId,
-    resolveContext: (projectId) => input.successor.resolveContext(projectId),
+    resolveContext: async (projectId) => {
+      await input.v10.canvasSessions.quiesceProject(projectId)
+      await input.v10.canvasRoutes.quiesceProject(projectId)
+      await input.v10.projectIndexes.quiesceProject(projectId)
+      try {
+        return await input.successor.resolveContext(projectId)
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+        // A brand-new or never-registered local Project has no collaboration
+        // directory yet. Publish the existing atomic V10 empty genesis, fully
+        // quiesce that temporary writer, then let the successor inspect/promote
+        // the now-complete immutable bootstrap.
+        const bootstrap = await openMainSelectedV10CollaborationPortsV3({
+          projectId,
+          projectIndexes: input.v10.projectIndexes,
+          canvasSessions: input.v10.canvasSessions,
+          canvasRoutes: input.v10.canvasRoutes,
+        })
+        await bootstrap.quiesce?.()
+        return input.successor.resolveContext(projectId)
+      }
+    },
     openV3Local: (selected) => input.successor.openLocal(selected),
     openV10: ({ projectId }) => openMainSelectedV10CollaborationPortsV3({
       projectId,

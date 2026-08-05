@@ -33,7 +33,11 @@ export interface MainProjectCollaborationPortResolverDependenciesV3 {
   resolveContext(projectId: ProjectIdV2): Promise<MainProjectCollaborationSelectionContextV3>
   /** Digest from the already-verified, selected V11 authority. */
   readonly successorProtocolDigest: DigestV2
-  readonly createPromotionId: () => Id128V2
+  readonly createPromotionId: (input: Readonly<{
+    projectId: ProjectIdV2
+    projectEpoch: Id128V2
+    protocolDigest: DigestV2
+  }>) => Id128V2
   /** Opens the already-verified frozen V10 runtime, including shared/non-pristine Projects. */
   openV10(context: MainProjectCollaborationSelectionContextV3): Promise<MainSelectedProjectCollaborationPortsV3>
   /** Opens the V11 local-owner runtime selected by the exact persisted state. */
@@ -91,7 +95,11 @@ async function resolveUnselectedV10(
     // factory must close it over the verified V11 authority rather than accept it
     // from Renderer, IPC or a Project directory.
     protocolDigest: parseDigestV2(dependencies.successorProtocolDigest),
-    promotionId: parseId128V2(dependencies.createPromotionId()),
+    promotionId: parseId128V2(dependencies.createPromotionId({
+      projectId: context.projectId,
+      projectEpoch: context.projectEpoch,
+      protocolDigest: parseDigestV2(dependencies.successorProtocolDigest),
+    })),
   })
 
   if (promotion.status === "ready") {

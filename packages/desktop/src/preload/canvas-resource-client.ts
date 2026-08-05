@@ -87,8 +87,16 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
     async add(input) {
       const localFiles = Array.isArray(input.localFiles) ? input.localFiles : []
       const sources = Array.isArray(input.sources) ? input.sources : []
-      if (localFiles.length === 0 && sources.length === 0) {
+      if (localFiles.length === 0 && sources.length === 0 && input.pending === undefined) {
         throw new Error("At least one Canvas resource source is required")
+      }
+      if (
+        input.pending !== undefined &&
+        (localFiles.length > 0 || sources.length > 0 ||
+          (input.pending.kind !== "image" && input.pending.kind !== "video") ||
+          typeof input.pending.label !== "string" || !input.pending.label)
+      ) {
+        throw new Error("Pending Canvas resource request is invalid")
       }
 
       const sourceIds = new Set<string>()
@@ -127,6 +135,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
           commandId: input.commandId,
           externalFiles: resolved,
           ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+          ...(input.pending === undefined ? {} : { pending: input.pending }),
           projectId: input.projectId,
           ...(input.relation === undefined ? {} : { relation: input.relation }),
           sources,

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises"
 import path from "node:path"
 
 import {
@@ -27,8 +28,9 @@ import {
   ProjectBlobReplicationStoreV2,
   ProjectIndexFileMaterializerV2,
   SuccessorLocalProjectProvisionerV3,
-  createDeterministicEmptyProjectDefaultCanvasClaimSourceV3,
+  deriveEmptyProjectDefaultCanvasClaimV3,
   readProjectNativeStoreManifestV2,
+  type EmptyProjectDefaultCanvasClaimSourceV3,
   type ProjectCollaborationRuntimeLeaseV2,
   type OpenSuccessorProjectProtocolStateV3,
 } from "@convax/project/node"
@@ -89,6 +91,11 @@ export class NodePristineV10SuccessorProjectContextSourceV3
 
   async open(projectIdInput: ReturnType<typeof parseProjectIdV2>): Promise<PristineV10SuccessorProjectContextV3> {
     const projectId = parseProjectIdV2(projectIdInput)
+    await fs.mkdir(this.options.deviceRootDirectory, { recursive: true, mode: 0o700 })
+    const deviceRootStat = await fs.lstat(this.options.deviceRootDirectory)
+    if (!deviceRootStat.isDirectory() || deviceRootStat.isSymbolicLink()) {
+      throw new Error("Successor device root must be a plain directory")
+    }
     const projectRoot = await this.options.projects.resolveProjectRoot({ projectId })
     if (!path.isAbsolute(projectRoot) || path.resolve(projectRoot) !== projectRoot) {
       throw new Error("Successor Project root must be canonical and absolute")
@@ -128,7 +135,19 @@ export class NodePristineV10SuccessorProjectContextSourceV3
       owners: this.options.legacyOwners,
       teamAuthority: this.options.teamAuthority,
       successorOwner: ownerStore,
-      emptyProjectDefaultCanvas: createDeterministicEmptyProjectDefaultCanvasClaimSourceV3(),
+      emptyProjectDefaultCanvas: Object.freeze({
+        resolve: async (input: Parameters<EmptyProjectDefaultCanvasClaimSourceV3["resolve"]>[0]) => {
+          const identity = await signingVault.resolveIdentity({
+            claimDigest: parseDigestV2("0".repeat(64)),
+            projectId: input.projectId,
+            projectEpoch: input.projectEpoch,
+          })
+          return deriveEmptyProjectDefaultCanvasClaimV3({
+            ...input,
+            ownerActorId: identity.actorId,
+          })
+        },
+      }),
     })
     const provisioner = new SuccessorLocalProjectProvisionerV3({
       projectPrivateDirectory,
@@ -170,7 +189,9 @@ export class NodePristineV10SuccessorProjectContextSourceV3
           collaborationDirectory,
           projectId,
           projectEpoch,
-          protocolDigest: this.options.authority.protocolDigest,
+          // Blob presence is historical content evidence, not the active writer
+          // protocol. Reuse the already-installed V10 index during promotion.
+          protocolDigest: this.options.historicalAuthority.protocolDigest,
         })
         const facts = createLocalBlobProjectIndexFactPortsV2({
           factory: owner.externalFactPortFactory,
@@ -237,7 +258,7 @@ export class NodePristineV10SuccessorProjectContextSourceV3
           collaborationDirectory,
           projectId,
           projectEpoch,
-          protocolDigest: this.options.authority.protocolDigest,
+          protocolDigest: this.options.historicalAuthority.protocolDigest,
         })
         const facts = createLocalBlobProjectIndexFactPortsV2({
           factory: owner.externalFactPortFactory,

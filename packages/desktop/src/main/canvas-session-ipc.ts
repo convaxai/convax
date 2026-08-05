@@ -164,6 +164,7 @@ export function registerCanvasSessionIpcV2(
   async function requireActiveRef(event: IpcMainInvokeEvent, ref: CanvasDocumentRef): Promise<void> {
     const active = await options.resolveActiveCanvas(event)
     if (!active || active.projectId !== ref.scopeId || active.canvasId !== ref.canvasId) {
+      console.error("Canvas session Workbench scope mismatch", { active, requested: ref })
       throw new Error("Canvas session request does not match the invoking renderer's live Workbench scope")
     }
   }

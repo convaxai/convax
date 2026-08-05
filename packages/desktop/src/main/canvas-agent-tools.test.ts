@@ -149,6 +149,7 @@ function createProvider(overrides: {
       executeView: overrides.executeView ?? (async () => ({
         foundNodeIds: [], missingNodeIds: [], snapshot: viewSnapshot(),
       })),
+      getActiveWorkbenchRef: async () => null,
       getViewSnapshot: overrides.getViewSnapshot ?? (async () => viewSnapshot()),
       reloadDocument: overrides.reloadDocument ?? (async () => true),
     },

@@ -269,7 +269,7 @@ function mergeCanvasResourcePreparation(
 }
 
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addPreparedResources" | "addResources"> &
-  Partial<Pick<CanvasResourceBusinessService, "relinkPreparedResource">>
+  Partial<Pick<CanvasResourceBusinessService, "createPendingResource" | "relinkPreparedResource">>
 type CanvasLocalFilePreparationPort = Pick<ProjectCanvasResourcePreparation, "withAdmittedLocalFiles"> &
   Partial<Pick<ProjectCanvasResourcePreparation, "prepare" | "prepareManagedTextEditableCopy">>
 
@@ -284,6 +284,7 @@ interface CanvasResourceMainRequest {
     sourcePath: string
   }[]
   parentId?: string
+  pending?: { kind: "image" | "video"; label: string }
   projectId: string
   relation?: {
     anchorNodeIds: readonly string[]
@@ -354,7 +355,22 @@ export function registerCanvasResourceIpc(
             sources: input.sources,
           })
         }
-        result = input.externalFiles.length
+        result = input.pending
+          ? await (() => {
+              if (!resources.createPendingResource) throw new Error("Pending Canvas resource creation is unavailable")
+              return resources.createPendingResource({
+              actor: request.actor,
+              anchor: request.anchor,
+              canvasId: request.canvasId,
+              commandId: request.commandId,
+              kind: input.pending.kind,
+              label: input.pending.label,
+              ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
+              relation: request.relation,
+              scopeId: request.scopeId,
+              })
+            })()
+          : input.externalFiles.length
           ? await preparation.withAdmittedLocalFiles(
               { files: input.externalFiles, projectId: active.projectId },
               (localPrepared: CanvasResourcePreparationResult) =>
@@ -365,6 +381,7 @@ export function registerCanvasResourceIpc(
             )
           : await resources.addResources(request)
       } catch (error) {
+        console.error("Canvas resource mutation failed", error)
         const failure =
           error instanceof CanvasResourcePartialFailureError || !sourcePrepared?.retainedOnFailure
             ? error
@@ -883,6 +900,16 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
       sourcePath: requireNonEmptyString(item.sourcePath, "External source path"),
     }
   })
+  const pending: CanvasResourceMainRequest["pending"] = value.pending === undefined
+    ? undefined
+    : isRecord(value.pending) &&
+        (value.pending.kind === "image" || value.pending.kind === "video") &&
+        typeof value.pending.label === "string" && value.pending.label.length > 0
+      ? { kind: value.pending.kind, label: value.pending.label }
+      : (() => { throw new Error("Pending Canvas resource request is invalid") })()
+  if (pending && (value.sources.length > 0 || externalFiles.length > 0)) {
+    throw new Error("Pending Canvas resource cannot include admitted sources")
+  }
   return {
     anchor: { x: value.anchor.x as number, y: value.anchor.y as number },
     canvasId,
@@ -892,6 +919,7 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
       ? {}
       : { parentId: requireNonEmptyString(value.parentId, "Canvas resource parent id") }),
     projectId,
+    ...(pending === undefined ? {} : { pending }),
     relation: requireCanvasResourceRelation(value.relation),
     sources: value.sources as CanvasResourceSource[],
   }

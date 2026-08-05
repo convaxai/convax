@@ -19,6 +19,7 @@ export interface CanvasResourceMutationTransfer {
 export interface CanvasResourceMutationRequest {
   anchor: CanvasPoint
   files?: readonly File[]
+  pending?: { kind: "image" | "video"; label: string }
   /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */
   parentId?: string
   relation?: {

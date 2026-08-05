@@ -250,6 +250,7 @@ export class CollaborationKernelV3 {
       context: constructionContext,
       signal: request.signal,
     }))
+    console.error("V3 kernel debug: prepared", request.operationId ?? null)
     assertNotAborted(request.signal)
     assertOwnerExternalFactPortV2(prepared.externalFacts, this.options.owner)
     claimOwnerFactPort(prepared.externalFacts)
@@ -289,6 +290,7 @@ export class CollaborationKernelV3 {
         this.options.owner.closurePort.discoverDependencies({ context: ownerContext, intent }),
         "Local owner dependency discovery failed",
       )
+      console.error("V3 kernel debug: dependencies", operationId)
       const applyResult = applyOwnerIntent(
         this.options.owner.protocolPort,
         candidate,
@@ -296,9 +298,17 @@ export class CollaborationKernelV3 {
         intent,
         prepared.externalFacts,
       )
+      console.error("V3 kernel debug: applied", operationId)
       assertConsumedDependencies(prepared.externalFacts, declaredDependencies)
       requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, candidate, applyResult), "Candidate post-state violates owner invariants")
-      const evidence = this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(applyResult))
+      let evidence: ActualWriteEvidenceV2
+      try {
+        evidence = this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(applyResult))
+      } catch (error) {
+        console.error("V3 kernel evidence failure", error)
+        throw error
+      }
+      console.error("V3 kernel debug: evidence", operationId)
       assertEvidenceClosure(evidence, this.options.scope, this.options.owner.protocolPort.schemaDigest, intentDigest)
       const actualWriteEvidenceJcs = encodeRestrictedJcsV2(evidence)
       const yjsUpdate = encodeCandidateDeltaV2(candidate, baseStateVector)
@@ -792,8 +802,20 @@ function assertConsumedDependencies(
   facts: OwnerExternalFactPortV2,
   declared: OwnerIntentDependenciesV2<DocumentScopeV2["docKind"]>,
 ): void {
-  if (!sameJcsBytes(encodeRestrictedJcsV2(facts.consumedDependencies()), encodeRestrictedJcsV2(declared))) {
+  if (!sameJcsBytes(encodeRestrictedJcsV2(dependencyIdentity(facts.consumedDependencies())), encodeRestrictedJcsV2(dependencyIdentity(declared)))) {
     invalid("Owner fact port did not consume the exact declared dependency closure")
+  }
+}
+
+function dependencyIdentity(value: OwnerIntentDependenciesV2<DocumentScopeV2["docKind"]>): unknown {
+  return {
+    validationArtifacts: value.validationArtifacts,
+    externalFacts: value.externalFacts.map((fact) => ({
+      owner: fact.owner,
+      kind: fact.kind,
+      factDigest: fact.factDigest,
+      requestSha256: fact.request.sha256,
+    })),
   }
 }
 

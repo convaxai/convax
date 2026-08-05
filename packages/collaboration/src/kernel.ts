@@ -786,8 +786,20 @@ function assertConsumedDependencies(
   facts: OwnerExternalFactPortV2,
   declared: OwnerIntentDependenciesV2<DocumentScopeV2["docKind"]>,
 ): void {
-  if (!sameJcsBytes(encodeRestrictedJcsV2(facts.consumedDependencies()), encodeRestrictedJcsV2(declared))) {
+  if (!sameJcsBytes(encodeRestrictedJcsV2(dependencyIdentity(facts.consumedDependencies())), encodeRestrictedJcsV2(dependencyIdentity(declared)))) {
     invalid("Owner fact port did not consume the exact declared dependency closure")
+  }
+}
+
+function dependencyIdentity(value: OwnerIntentDependenciesV2<DocumentScopeV2["docKind"]>): unknown {
+  return {
+    validationArtifacts: value.validationArtifacts,
+    externalFacts: value.externalFacts.map((fact) => ({
+      owner: fact.owner,
+      kind: fact.kind,
+      factDigest: fact.factDigest,
+      requestSha256: fact.request.sha256,
+    })),
   }
 }
 

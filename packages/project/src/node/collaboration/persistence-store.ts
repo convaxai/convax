@@ -110,6 +110,8 @@ export interface NodeReplicaHeadMaterializerV2 {
     readonly ref: FrameObjectRefV2
     readonly exactBytes: Readonly<Uint8Array>
   }): Promise<NodeAcceptedReplicaHeadV2>
+  /** Updates disposable causal lookup state only after the frame is reachable from the durable head. */
+  observeAcceptedFrame?(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>): void
   /** Reconstructs the exact portable checkpoint payload without consulting native metadata order. */
   materializeCheckpoint?(input: {
     readonly scope: DocumentScopeV2
@@ -440,6 +442,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     private readonly checkpointPruneAuthority: NodeCheckpointPruneAuthorityV2 | undefined,
     private readonly checkpointPruneRootScanner: NodeCheckpointPruneRootScannerV2 | undefined,
     private readonly hooks: NodeCollaborationPersistenceFaultHooksV2,
+    private readonly ownsRootWriterLease = true,
   ) {}
 
   static async open(input: {
@@ -471,13 +474,31 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       input.checkpointPruneAuthority,
       input.checkpointPruneRootScanner,
       input.hooks ?? {},
+      true,
+    )
+  }
+
+  static async openReadOnly(input: Parameters<typeof NodeCollaborationPersistenceV2.open>[0]): Promise<NodeCollaborationPersistenceV2> {
+    if (!path.isAbsolute(input.collaborationDirectory)) invalid("Collaboration directory must be absolute")
+    await ensureTrustedDirectory(input.collaborationDirectory)
+    const real = await fs.realpath(input.collaborationDirectory)
+    return new NodeCollaborationPersistenceV2(
+      real,
+      input.localActorId,
+      input.materializer,
+      input.replicaDurableAckVerifier,
+      input.checkpointInstallationVerifier,
+      input.checkpointPruneAuthority,
+      input.checkpointPruneRootScanner,
+      input.hooks ?? {},
+      false,
     )
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    rootWriterLeases.delete(this.collaborationDirectory)
+    if (this.ownsRootWriterLease) rootWriterLeases.delete(this.collaborationDirectory)
   }
 
   async initializeShard(input: InitializeNativeCollaborationShardV2): Promise<NodeAcceptedReplicaHeadV2> {
@@ -1214,6 +1235,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
           acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
         }
         await replaceDurableRecord(layout.durableHead, head, this.hooks)
+        this.materializer.observeAcceptedFrame?.(input.ref, frame)
         return committedEvidence(input, localRecordDigest(head))
       } catch (error) {
         if (error instanceof NodeCollaborationPersistenceErrorV2 && error.code === "store-corrupt") {
@@ -1537,6 +1559,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
     }
     await replaceDurableRecord(layout.durableHead, head)
+    this.materializer.observeAcceptedFrame?.(ref, frame)
   }
 
   private async reconstructHead(
@@ -1575,6 +1598,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       const frame = await this.readFrame(layout, ref)
       current = freezeHead(await this.materializer.applyAcceptedFrame({ previous: current, ref, exactBytes: frame }), journal.digest)
       if (current.frontierDigest !== journal.record.resultingFrontierDigest) corrupt("Reopened frame produces a different frontier")
+      this.materializer.observeAcceptedFrame?.(ref, frame)
     }
     if (current.frontierDigest !== head.acceptedFrontierDigest) corrupt("Reopened frontier differs from durable head")
     if (this.materializer.actorHeadsDigest(current.actorHeads) !== head.acceptedActorHeadsDigest) corrupt("Reopened actor heads differ from durable head")

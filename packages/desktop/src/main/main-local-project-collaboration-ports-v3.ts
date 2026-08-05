@@ -6,6 +6,7 @@ import type {
   VerifiedProtocolAuthorityV3,
 } from "@convax/collaboration"
 import type { NodeProjectCollaborationRuntimeCoordinatorV2 } from "@convax/project/node"
+import { projectIndexResourceReferenceDigestV2 } from "@convax/project/canvas"
 
 import type { CanvasApplicationCommandAdapterV2 } from "./canvas-collaboration-session-owner"
 import {
@@ -65,6 +66,22 @@ export async function createMainLocalProjectCollaborationPortsV3(input: {
       createOperationId: input.createOperationId,
       createSessionId: input.createSessionId,
       createCursorToken: input.createCursorToken,
+      factAuthority: {
+        async verify({ request, signal }) {
+          signal?.throwIfAborted()
+          if (request.kind !== "current-resources") return "pending"
+          const plan = await projectIndexes!.queryFileMaterializationPlan({ projectId: input.projectId })
+          signal?.throwIfAborted()
+          const references = plan.entries.flatMap((entry) => entry.reference === null ? [] : [entry.reference])
+          return request.proofs.every((proof) => references.some((reference) =>
+            reference.canonicalUri === proof.resource.uri &&
+            reference.blob.mime === proof.resource.mime &&
+            reference.blob.byteLength === proof.resource.byteLength &&
+            reference.blob.digest === proof.resource.contentDigest &&
+            projectIndexResourceReferenceDigestV2(reference) === proof.ownerProofDigest
+          )) ? "verified" : "rejected"
+        },
+      },
     })
     await canvas.routes.switchProject(input.projectId)
     const selectedProjectIndexes = projectIndexes

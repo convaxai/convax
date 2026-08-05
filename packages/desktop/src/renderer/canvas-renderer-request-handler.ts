@@ -21,6 +21,9 @@ export function createCanvasRendererRequestHandler(
   options: CanvasRendererRequestHandlerOptions,
 ): Parameters<CanvasRendererClient["onRequest"]>[0] {
   return async (request) => {
+    if (request.type === "workbench.active-ref") {
+      return { ref: options.getActiveRef(), type: "workbench.active-ref" }
+    }
     if (request.type === "view.snapshot") {
       const snapshots = options.views.list().filter((snapshot) => snapshot.viewId === request.viewId)
       return { snapshot: snapshots.length === 1 ? snapshots[0] : null, type: "view.snapshot" }

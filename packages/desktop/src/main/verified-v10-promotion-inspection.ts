@@ -173,9 +173,10 @@ export class VerifiedV10PromotionInspectionAdapterV3
         documents: Object.freeze([document]),
         emptyProjectDefaultCanvas: checkedDefaultCanvas,
       })
-    } catch {
+    } catch (error) {
       // Native read, signature, manifest, inventory and exact-head failures are
       // invalid V10. Network availability is never consulted by this adapter.
+      console.error(`V10 promotion inspection failed for ${projectId}`, error)
       return invalid()
     }
   }
@@ -186,7 +187,7 @@ async function readExactProjectIndexHead(
   localActorId: Parameters<typeof NodeCollaborationPersistenceV2.open>[0]["localActorId"],
   scope: ProjectIndexScopeV2,
 ): Promise<NodeAcceptedReplicaHeadV2> {
-  const persistence = await NodeCollaborationPersistenceV2.open({
+  const persistence = await NodeCollaborationPersistenceV2.openReadOnly({
     collaborationDirectory,
     localActorId,
     materializer: Object.freeze({

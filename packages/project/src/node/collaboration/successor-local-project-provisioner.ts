@@ -309,6 +309,16 @@ export class SuccessorLocalProjectProvisionerV3 {
     const projectEpoch = parseId128V2(input.projectEpoch)
     const prior = await this.resolveExisting(projectId, projectEpoch)
     if (prior) return prior
+    const retryBytes = await readOptional(this.claimPath())
+    if (retryBytes) {
+      const retryClaim = parseClaim(decodeRestrictedJcsV2(retryBytes))
+      if (
+        retryClaim.projectId !== projectId || retryClaim.projectEpoch !== projectEpoch ||
+        retryClaim.protocolDigest !== parseDigestV2(input.protocolDigest) ||
+        retryClaim.origin.kind !== "v10-r5-unshared"
+      ) throw new Error("Prepared V10 promotion claim crossed its retry scope")
+      return Object.freeze({ status: "prepared", claimDigest: ordinarySha256V2(retryBytes) })
+    }
     const inspection = await this.options.v10.inspect({ projectId, projectEpoch })
     if (inspection.status !== "verified-unshared") {
       return Object.freeze({

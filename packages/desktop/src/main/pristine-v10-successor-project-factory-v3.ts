@@ -110,18 +110,23 @@ export function createPristineV10SuccessorProjectFactoryV3(input: Readonly<{
     request: PromoteVerifiedV10ProjectInputV3,
   ): Promise<SuccessorLocalProjectProvisionResultV3> {
     requirePromotionRequest(context, request, successorProtocolDigest)
-    const prepared: PreparedVerifiedV10PromotionV3 =
-      await context.provisioner.prepareVerifiedV10Promotion(request)
-    if (prepared.status !== "prepared") return prepared
-
-    const claimDigest = parseDigestV2(prepared.claimDigest)
-    const runtime = await context.openClaimBoundPromotion(claimDigest)
     try {
-      // This second call is intentional: Project/node reopens the exact installed
-      // claim and never repeats or substitutes the V10 inspection result.
-      return await context.provisioner.promoteVerifiedV10(request)
-    } finally {
-      await runtime.dispose()
+      const prepared: PreparedVerifiedV10PromotionV3 =
+        await context.provisioner.prepareVerifiedV10Promotion(request)
+      if (prepared.status !== "prepared") return prepared
+
+      const claimDigest = parseDigestV2(prepared.claimDigest)
+      const runtime = await context.openClaimBoundPromotion(claimDigest)
+      try {
+        // This second call is intentional: Project/node reopens the exact installed
+        // claim and never repeats or substitutes the V10 inspection result.
+        return await context.provisioner.promoteVerifiedV10(request)
+      } finally {
+        await runtime.dispose()
+      }
+    } catch (error) {
+      console.error(`V3 local promotion failed for ${context.projectId}`, error)
+      throw error
     }
   }
 }

@@ -648,6 +648,9 @@ function App() {
     activeCanvasId && projectCanvasSnapshot.projectId === activeProjectId
       ? projectCanvasSnapshot.canvases.find((canvas) => canvas.id === activeCanvasId)
       : undefined
+  const activeWorkbenchCanvasRef = useRef<{ canvasId: string; scopeId: string } | null>(null)
+  activeWorkbenchCanvasRef.current =
+    activeProjectId && activeCanvasId ? { canvasId: activeCanvasId, scopeId: activeProjectId } : null
   const canvasSurfaceAccess = resolveProjectLocalCanvasSurfaceAccess({
     activeCanvasId,
     creationAvailability: projectCanvasSnapshot.creationAvailability,
@@ -928,18 +931,19 @@ function App() {
   const canvasRendererRequestHandler = useMemo(
     () =>
       createCanvasRendererRequestHandler({
-        getActiveRef: () => {
-          const current = pluginHostContextRef.current
-          return current.activeProject && current.activeCanvas
-            ? { canvasId: current.activeCanvas.id, scopeId: current.activeProject.id }
-            : null
-        },
+        getActiveRef: () => activeWorkbenchCanvasRef.current,
         getEditor: () => canvasEditorRef.current,
         views: canvasViewRegistry,
       }),
     [canvasViewRegistry],
   )
-  useEffect(() => window.convax.canvas.renderer.onRequest(canvasRendererRequestHandler), [canvasRendererRequestHandler])
+  // Main verifies Canvas session opens against the renderer's live Workbench
+  // scope. Register the request bridge before passive session-opening effects
+  // run, otherwise first mount can race and appear to have no active Canvas.
+  useLayoutEffect(
+    () => window.convax.canvas.renderer.onRequest(canvasRendererRequestHandler),
+    [canvasRendererRequestHandler],
+  )
   const services = useMemo(() => {
     const generateService: CanvasGenerateService = {
       cancel(operationId) {
@@ -2268,6 +2272,13 @@ function App() {
                         key={`${activeProject.id}:${activeCanvasId}`}
                         clipboardScope={activeProject.id}
                         fileRendererRegistry={canvasFileRendererRegistry}
+                        executeCommand={async (command) => {
+                          await window.convax.canvas.documents.execute({
+                            command,
+                            commandId: crypto.randomUUID(),
+                            ref: { canvasId: activeCanvasId, scopeId: activeProject.id },
+                          })
+                        }}
                         session={activeCanvasSession}
                         nodeRegistry={canvasNodeRegistry}
                         onDocumentChange={publishActiveCanvasNodes}

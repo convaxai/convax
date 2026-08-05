@@ -8,11 +8,13 @@ export const canvasRendererChannels = {
 
 export type CanvasRendererRequest =
   | { type: "document.reload"; ref: CanvasDocumentRef }
+  | { type: "workbench.active-ref" }
   | { type: "view.snapshot"; viewId: string }
   | { type: "view.execute"; input: CanvasViewCommandRequest }
 
 export type CanvasRendererRequestResult =
   | { type: "document.reload"; reloaded: boolean }
+  | { type: "workbench.active-ref"; ref: CanvasDocumentRef | null }
   | { type: "view.snapshot"; snapshot: CanvasViewSnapshot | null }
   | { type: "view.execute"; result: CanvasViewCommandResult }
 

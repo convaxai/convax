@@ -71,6 +71,7 @@ export {
   SUCCESSOR_CAUSAL_EDIT_MAGIC_V3,
   decodeCausalEditFrameV3,
   decodeSelectedCausalEditFrame,
+  typedIntentDigestV3,
 } from "./successor-frame"
 export type {
   CausalContextV3,

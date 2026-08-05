@@ -252,7 +252,10 @@ export function createCanvasCollaborationSessionOwnerV2(
           const snapshot = requireCanvasSnapshot(base)
           beforeIds = new Set(projectCanvasV2(snapshot).nodes.map((node) => node.ref.id))
           const adapted = options.applicationCommands.construct({ request, snapshot, context })
-          if (adapted === "rejected") throw new Error("Canvas application command has no frozen authoritative mapping")
+          if (adapted === "rejected") {
+            console.error("Canvas application command mapping rejected", JSON.stringify(request.envelope.command))
+            throw new Error("Canvas application command has no frozen authoritative mapping")
+          }
           return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
         },
       })

@@ -116,6 +116,7 @@ import {
   applyCanvasBusinessCommand,
   findOpenCanvasPoint,
   queryCanvasNodes,
+  type CanvasApplicationCommand,
   type CanvasAutoLayoutStrategy,
 } from "../application"
 import { canvasAppearanceStyle, resolveCanvasAppearance, type CanvasAppearanceInput } from "../appearance"
@@ -549,6 +550,8 @@ export interface CanvasEditorProps {
   initialDocument?: CanvasDocument
   /** Required for editing. Host-owned Yjs projection, typed-intent, undo, and flush boundary. */
   session?: CanvasRendererCollaborationClientV2
+  /** Host-owned application-command bridge used by non-geometry Canvas UI mutations. */
+  executeCommand?: (command: CanvasApplicationCommand) => Promise<void>
   fileRendererRegistry?: CanvasFileRendererRegistry
   nodeRegistry?: CanvasNodeRegistry
   onlyRenderVisibleElements?: boolean
@@ -1381,10 +1384,12 @@ function CanvasEditorContent(
     [canonicalDocument, clearTransientGeometry, collaborationSession, projectionStore],
   )
   const rejectUnmappedCanvasMutation = useCallback(() => {
-    setSaveError(
-      "This Canvas operation has no frozen typed-intent mapping and was rejected before reaching collaboration state.",
-    )
-  }, [])
+    notificationService?.show({
+      kind: "warning",
+      title: "Canvas operation unavailable",
+      description: "This operation was rejected before changing collaboration state.",
+    })
+  }, [notificationService])
   const replaceRuntimeResourceStates = useCallback(
     (document: CanvasDocument) => {
       if (document.id !== canonicalDocument.id) return
@@ -3183,6 +3188,24 @@ function CanvasEditorContent(
         addTextResource(position, undefined, focusAfterCreate)
         return undefined
       }
+      if (type === "image" || type === "video") {
+        runResourceMutation(
+          {
+            anchor: position ?? (focusAfterCreate ? nextViewportInsertPoint() : nextInsertPoint()),
+            files: [],
+            pending: { kind: type, label: type === "image" ? "Image" : "Video" },
+            sources: [],
+          },
+          {
+            ...(focusAfterCreate ? { focusCreatedNodes: true } : {}),
+            parentGroupId: groupFocus.focusedGroupId,
+          },
+        )
+        setNodeMenuOpen(false)
+        setInsertPoint(null)
+        telemetryService?.track({ name: "canvas.node.added", properties: { type } })
+        return undefined
+      }
       const createdAt = position ?? insertPoint ?? pointAtCenter()
       const provisional = createNodeForType(type, createdAt)
       if (!provisional) return undefined
@@ -3231,12 +3254,14 @@ function CanvasEditorContent(
       groupFocus.focusedGroupId,
       insertPoint,
       nextViewportInsertPoint,
+      nextInsertPoint,
       pointAtCenter,
       presentNodeEntries,
       prepareFocusedNodeEntries,
       prefersReducedMotion,
       readOnly,
       rejectUnmappedCanvasMutation,
+      runResourceMutation,
       selectNodes,
       telemetryService,
     ],
@@ -3439,15 +3464,20 @@ function CanvasEditorContent(
     ],
   )
   const remove = useCallback(() => {
-    commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
+    if (props.executeCommand) {
+      void props.executeCommand({ type: "elements.remove", nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds })
+    } else {
+      commit((document) => removeCanvasElements(document, { nodeIds: selectedNodeIds, edgeIds: selectedEdgeIds }))
+    }
     updateSelection([])
-  }, [commit, selectedEdgeIds, selectedNodeIds, updateSelection])
+  }, [commit, props.executeCommand, selectedEdgeIds, selectedNodeIds, updateSelection])
   const removeNode = useCallback(
     (nodeId: string) => {
-      commit((document) => removeCanvasElements(document, { nodeIds: [nodeId] }))
+      if (props.executeCommand) void props.executeCommand({ type: "elements.remove", nodeIds: [nodeId] })
+      else commit((document) => removeCanvasElements(document, { nodeIds: [nodeId] }))
       updateSelection([])
     },
-    [commit, updateSelection],
+    [commit, props.executeCommand, updateSelection],
   )
   const group = useCallback(() => {
     if (!groupMenuCapabilities.canGroup || selectionContext.kind !== "multi-node") return

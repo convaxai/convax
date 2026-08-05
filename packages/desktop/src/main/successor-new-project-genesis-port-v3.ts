@@ -1,4 +1,6 @@
 import {
+  createSelectedDocumentOwnerArtifactFactoryV2,
+  ordinarySha256V2,
   parseDigestV2,
   parseDocumentScopeV2,
   parseId128V2,
@@ -9,6 +11,7 @@ import {
   type DocumentOwnerRuntimeV2,
   type Id128V2,
   type IncomingOwnerFactResolverPortV3,
+  type OwnerExternalFactRequirementV2,
   type LocalProjectOwnerBindingV3,
   type ReplicaSignerPortV2,
   type SignatureV2,
@@ -16,7 +19,10 @@ import {
   type VerifiedProtocolAuthorityV3,
 } from "@convax/collaboration"
 import {
+  createCanvasReconstructionYDocV2,
   createLocalOwnerCanvasGenesisCandidateV3,
+  requiredCanvasBlobDigestsV2,
+  selectedCanvasDocumentOwnerArtifactDefinitionV2,
   type LocalOwnerCanvasGenesisSignerPortV3,
 } from "@convax/canvas/collaboration"
 import {
@@ -26,6 +32,7 @@ import {
 } from "@convax/project/canvas"
 import {
   createProjectIndexReconstructionYDocV2,
+  decodeProjectIndexCanvasGenesisCurrentnessRequestV2,
   requiredProjectIndexBlobDigestsV2,
 } from "@convax/project"
 import {
@@ -78,7 +85,62 @@ export function createSuccessorNewProjectGenesisPortV3(input: Readonly<{
   let routePublication: ProjectIndexGenesisRoutePublicationV3 | undefined
   let projectIndexRuntime: Awaited<ReturnType<typeof input.runtime.openDocument<"project-index">>> | undefined
   let openedProjectIndexScope: ReturnType<typeof requireProjectIndexScope> | undefined
+  let publishedCanvasGenesis: Readonly<{
+    scope: ReturnType<typeof requireCanvasScope>
+    predecessorFrameDigest: DigestV2
+    stagedProjectIndexFrontierDigest: DigestV2
+    checkpointObjectDigest: DigestV2
+  }> | undefined
   let disposed = false
+
+  const projectIndexFacts: ProjectIndexFactResolutionPortV2 = Object.freeze({
+    async resolve(request: Parameters<ProjectIndexFactResolutionPortV2["resolve"]>[0]) {
+      if (!request.dependencies.externalFacts.some((fact) => fact.kind === "canvas-genesis-currentness")) {
+        return input.projectIndexFacts.resolve(request)
+      }
+      if (!publishedCanvasGenesis || request.dependencies.validationArtifacts.length !== 0) {
+        return Object.freeze({ status: "pending" as const })
+      }
+      const values = new Map<string, unknown>()
+      for (const requirement of request.dependencies.externalFacts) {
+        if (
+          requirement.kind !== "canvas-genesis-currentness" ||
+          ordinarySha256V2(requirement.request.exactJcs) !== requirement.request.sha256 ||
+          requirement.factDigest !== requirement.request.sha256
+        ) return Object.freeze({ status: "rejected" as const })
+        const decoded = decodeProjectIndexCanvasGenesisCurrentnessRequestV2(requirement.request.exactJcs)
+        if (
+          decoded === "rejected" || !sameScope(decoded.canvasScope, publishedCanvasGenesis.scope) ||
+          decoded.routeDependencyFrameDigest !== publishedCanvasGenesis.predecessorFrameDigest ||
+          decoded.stagedProjectIndexFrontierDigest !== publishedCanvasGenesis.stagedProjectIndexFrontierDigest ||
+          decoded.genesisCheckpointObjectDigest !== publishedCanvasGenesis.checkpointObjectDigest
+        ) return Object.freeze({ status: "rejected" as const })
+        values.set(requirement.factDigest, Object.freeze({
+          format: "convax.project-index-external-fact-result/2",
+          kind: requirement.kind,
+          requestSha256: requirement.request.sha256,
+          factDigest: requirement.factDigest,
+          decision: "verified",
+        }))
+      }
+      const created = input.projectIndexOwner.externalFactPortFactory.createAttemptPort({
+        declared: request.dependencies,
+        resolver: Object.freeze({
+          owner: "project-index" as const,
+          resolveArtifact: () => Object.freeze({ status: "rejected" as const, code: "artifact-not-declared" as const }),
+          resolveFact(requirement: OwnerExternalFactRequirementV2<"project-index">) {
+            const value = values.get(requirement.factDigest)
+            return value === undefined
+              ? Object.freeze({ status: "rejected" as const, code: "fact-not-declared" as const })
+              : Object.freeze({ status: "resolved" as const, requirement, value })
+          },
+        }),
+      })
+      return created.status === "created"
+        ? Object.freeze({ status: "resolved" as const, port: created.port })
+        : Object.freeze({ status: "rejected" as const })
+    },
+  })
 
   const port: SuccessorNewProjectGenesisPortV3 & Readonly<{ dispose(): Promise<void> }> = {
     async publishProjectIndexGenesis({ claimDigest, binding, authorization }) {
@@ -156,13 +218,37 @@ export function createSuccessorNewProjectGenesisPortV3(input: Readonly<{
         if (candidate.checkpoint.core.projectIndexRouteDependencyFrameDigest !== stagedRoute.predecessorFrameDigest) {
           throw new Error("Canvas genesis checkpoint crossed its accepted ProjectIndex route")
         }
-        const durable = await input.runtime.persistence.initializeShardWithGenesisProof(Object.freeze({
+        let durable: Awaited<ReturnType<typeof input.runtime.persistence.initializeShardWithGenesisProof>> | undefined
+        const selectedCanvasOwner = createSelectedDocumentOwnerArtifactFactoryV2(input.historicalAuthority, "canvas")
+          .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+        if ("status" in selectedCanvasOwner) throw new Error(`Canvas owner runtime is ${selectedCanvasOwner.code}`)
+        try {
+          await input.runtime.openDocument({
+            scope,
+            owner: selectedCanvasOwner,
+            incomingFacts: Object.freeze({ async resolve() { return Object.freeze({ status: "rejected" as const }) } }),
+            createDocument: createCanvasReconstructionYDocV2,
+            requiredBlobDigests: requiredCanvasBlobDigestsV2,
+            prepareShard: async () => {
+              durable = await input.runtime.persistence.initializeShardWithGenesisProof(Object.freeze({
+                scope,
+                checkpointObjectDigest: candidate.checkpointObjectDigest,
+                checkpointExactBytes: candidate.checkpointExactBytes,
+                proofCarrierExactBytes: candidate.proofExactBytes,
+                acceptedBase: candidate.acceptedBase,
+              }))
+            },
+          })
+        } finally {
+          await input.runtime.closeDocument(scope)
+        }
+        if (!durable) throw new Error("Canvas genesis durability did not complete")
+        publishedCanvasGenesis = Object.freeze({
           scope,
+          predecessorFrameDigest: parseDigestV2(stagedRoute.predecessorFrameDigest),
+          stagedProjectIndexFrontierDigest: parseDigestV2(stagedRoute.acceptedFrontierDigest),
           checkpointObjectDigest: candidate.checkpointObjectDigest,
-          checkpointExactBytes: candidate.checkpointExactBytes,
-          proofCarrierExactBytes: candidate.proofExactBytes,
-          acceptedBase: candidate.acceptedBase,
-        }))
+        })
         if (durable.frontierDigest !== candidate.acceptedBase.frontierDigest ||
           durable.canonicalStateDigest !== candidate.acceptedBase.canonicalStateDigest) {
           throw new Error("Durable Canvas genesis differs from its owner-authored candidate")
@@ -231,7 +317,7 @@ export function createSuccessorNewProjectGenesisPortV3(input: Readonly<{
     })
     routePublication = createProjectIndexGenesisRoutePublicationV3({
       session: projectIndexSession,
-      facts: input.projectIndexFacts,
+      facts: projectIndexFacts,
     })
     return routePublication
   }

@@ -139,7 +139,6 @@ describe("Canvas v2 application command adapter", () => {
       data: { kind: "image", label: "Image", metadata: {} },
     }
     const unsupported: readonly CanvasApplicationCommand[] = [
-      { type: "resources.pending.create", kind: "image", label: "Pending", nodeId: "node", placement: { anchor: { x: 0, y: 0 } } },
       { type: "resources.pending.fail", expectedTarget: target, message: "Failed", targetNodeId: "node" },
       { type: "resources.add", items: [{ item, nodeId: "node" }], placement: { anchor: { x: 0, y: 0 } } },
       { type: "resources.relink", item, nodeId: "node" },

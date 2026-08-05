@@ -4,6 +4,8 @@ import {
   localProjectOwnerBindingCoreDigestV3,
   localProjectOwnerBindingSignatureDigestV3,
   localProjectOwnerKeyIdV3,
+  encodeRestrictedJcsV2,
+  ordinarySha256V2,
   parseActorIdV2,
   parseDigestV2,
   parseId128V2,
@@ -25,7 +27,7 @@ import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
 
 /**
  * V3 local-owner adapter over the existing OS-encrypted replica vault. The full
- * Project/epoch/claim context deterministically chooses the initial replica, and
+ * Project/epoch context deterministically chooses the initial replica, and
  * every signing operation reopens and rechecks that exact identity before signing.
  */
 export class ElectronLocalOwnerSigningVaultV3 implements SuccessorOwnerSigningPortV3 {
@@ -37,7 +39,7 @@ export class ElectronLocalOwnerSigningVaultV3 implements SuccessorOwnerSigningPo
     projectEpoch: Id128V2
   }>): Promise<SuccessorOwnerKeyIdentityV3> {
     const context = normalizeContext(input)
-    const replicaId = replicaIdFromClaim(context.claimDigest)
+    const replicaId = replicaIdFromProject(context.projectId, context.projectEpoch)
     const key = await this.replicas.createReplicaKey({ ...context, replicaId })
     const ownerPublicKey = parsePublicKeyV2(key.publicKey)
     return Object.freeze({
@@ -138,7 +140,12 @@ function normalizeContext(input: {
   })
 }
 
-function replicaIdFromClaim(claimDigest: ReturnType<typeof parseDigestV2>) {
-  const first = claimDigest.slice(0, 8)
+function replicaIdFromProject(projectId: ProjectIdV2, projectEpoch: Id128V2) {
+  const digest = ordinarySha256V2(encodeRestrictedJcsV2(Object.freeze({
+    format: "convax.local-owner-replica-seed/3",
+    projectId,
+    projectEpoch,
+  })))
+  const first = digest.slice(0, 8)
   return parseReplicaIdV2(`replica_${first === "00000000" ? "00000001" : first}`)
 }

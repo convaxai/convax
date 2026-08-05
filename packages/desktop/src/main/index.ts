@@ -575,6 +575,7 @@ function startApplication() {
       if (previous && previous !== projectId) await collaborationFacade?.quiesceProject(previous)
       if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
       const selectedProtocol = await collaborationFacade.prepareProject(projectId)
+      console.warn(`Project ${projectId} selected collaboration protocol ${selectedProtocol}`)
       activeCollaborationProjectId = projectId
       activeCollaborationProtocol = selectedProtocol
       try {
@@ -710,7 +711,17 @@ function startApplication() {
     })
     collaborationFacade = createMainProjectCollaborationProductionCompositionV3({
       successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
-      createPromotionId: createCollaborationIdV2,
+      createPromotionId: ({ projectId, projectEpoch, protocolDigest }) =>
+        parseId128V2(createHash("sha256")
+          .update("convax.v3-promotion-id/1\0")
+          .update(projectId)
+          .update("\0")
+          .update(projectEpoch)
+          .update("\0")
+          .update(protocolDigest)
+          .digest()
+          .subarray(0, 16)
+          .toString("base64url")),
       successor: createPristineV10SuccessorProjectFactoryV3({
         successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
         contexts: successorContexts,
@@ -893,6 +904,8 @@ function startApplication() {
       projectManager,
       projectFilePublisher,
       projectAssets,
+      undefined,
+      collaborationFacade.projectIndexes,
     )
     const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
     const canvasGenerationRuns = new CanvasNodeGenerationRunBusinessService(canvasApplication)
@@ -1979,11 +1992,11 @@ function startApplication() {
       },
     })
     const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
-      const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
-      return snapshot
+      const ref = await canvasRenderer.getActiveWorkbenchRef(event.sender.id)
+      return ref
         ? {
-            canvasId: snapshot.documentId,
-            projectId: snapshot.scopeId,
+            canvasId: ref.canvasId,
+            projectId: ref.scopeId,
           }
         : null
     }

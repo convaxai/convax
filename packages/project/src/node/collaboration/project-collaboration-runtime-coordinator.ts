@@ -153,7 +153,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
           if (released) return
           released = true
           leasedRuntime.leaseCount -= 1
-          if (this.disposed && leasedRuntime.leaseCount === 0) {
+          if (leasedRuntime.leaseCount === 0) {
             leasedRuntime.persistence.dispose()
             if (this.openProjects.get(projectId) === leasedRuntime) {
               this.openProjects.delete(projectId)

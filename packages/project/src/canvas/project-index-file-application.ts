@@ -20,6 +20,7 @@ import {
   projectIndexIntentDependenciesV2,
   projectIndexIntentDigestV2,
   projectIndexSnapshotFromValidatedOwnerStateV2,
+  projectResourceReferenceDigestV2,
   projectResourceReferenceForVersionV2,
   type ProjectBlobRefV2,
   type ProjectContentPolicyV2,
@@ -40,8 +41,15 @@ export interface ProjectIndexBlobPublicationPortV2 {
   }): Promise<void>
 }
 
+export const projectIndexResourceReferenceDigestV2 = projectResourceReferenceDigestV2
+
 export type ProjectIndexFileMutationResultV2 =
-  | Readonly<{ status: "committed"; entryId: ProjectEntryId; versionId: string | null }>
+  | Readonly<{
+      status: "committed"
+      entryId: ProjectEntryId
+      versionId: string | null
+      reference?: ProjectResourceReferenceV2 | null
+    }>
   | Readonly<{
       status: "partial-success"
       code: "entry-not-found" | "parent-not-found" | "path-kind-mismatch" | "blob-publication-failed" | "index-commit-failed"
@@ -146,8 +154,11 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
         },
       })
       if (!directoryId) throw new FileApplicationError("index-commit-failed")
-      return { status: "committed", entryId: directoryId, versionId: null }
-    } catch (error) { return rejectFileMutation(error) }
+      return { status: "committed", entryId: directoryId, versionId: null, reference: null }
+    } catch (error) {
+      console.error("ProjectIndex directory create failed", error)
+      return rejectFileMutation(error)
+    }
   }
 
   async publishFile(input: Parameters<ProjectIndexFileApplicationPortV2["publishFile"]>[0]): Promise<ProjectIndexFileMutationResultV2> {
@@ -163,6 +174,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     })
     let entryId: ProjectFileId | undefined
     let versionId: string | undefined
+    let committedReference: ProjectResourceReferenceV2 | undefined
     try {
       await this.options.session.submit({
         operationId: parseId128V2(this.options.createOperationId()),
@@ -206,14 +218,18 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
             intent = constructed.intent
             reference = projectResourceReferenceForVersionV2(snapshot, constructed.version)
           }
+          committedReference = reference
           try { await this.options.blobs.publish({ reference, exactBytes }) }
           catch (error) { throw new FileApplicationError("blob-publication-failed", { cause: error }) }
           return this.prepare(context, intent)
         },
       })
-      if (!entryId || !versionId) throw new FileApplicationError("index-commit-failed")
-      return { status: "committed", entryId, versionId }
-    } catch (error) { return rejectFileMutation(error) }
+      if (!entryId || !versionId || !committedReference) throw new FileApplicationError("index-commit-failed")
+      return { status: "committed", entryId, versionId, reference: committedReference }
+    } catch (error) {
+      console.error("ProjectIndex file publish failed", error)
+      return rejectFileMutation(error)
+    }
   }
 
   async relocateEntry(input: Parameters<ProjectIndexFileApplicationPortV2["relocateEntry"]>[0]): Promise<ProjectIndexFileMutationResultV2> {
@@ -237,7 +253,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
         },
       })
       if (!entryId) throw new FileApplicationError("index-commit-failed")
-      return { status: "committed", entryId, versionId: null }
+      return { status: "committed", entryId, versionId: null, reference: null }
     } catch (error) { return rejectFileMutation(error) }
   }
 
@@ -259,7 +275,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
         },
       })
       if (!entryId) throw new FileApplicationError("index-commit-failed")
-      return { status: "committed", entryId, versionId: null }
+      return { status: "committed", entryId, versionId: null, reference: null }
     } catch (error) { return rejectFileMutation(error) }
   }
 

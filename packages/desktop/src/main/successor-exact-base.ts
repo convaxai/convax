@@ -34,6 +34,7 @@ export interface AcceptedClosureStoreV2 {
 export interface AcceptedCausalClosureIndexV3 extends CausalClosurePortV2 {
   warm(store: AcceptedClosureStoreV2): Promise<NodeAcceptedReplicaHeadV2>
   hydrate(store: AcceptedClosureStoreV2, frameDigest: DigestV2): Promise<boolean>
+  observeAccepted(ref: NodeAcceptedFrameObjectV2["ref"], exactFrameBytes: Readonly<Uint8Array>): void
   materializationOrder(frontier: DecodedCausalEditFrameV3["context"]["baseFrontier"]): readonly DecodedCausalEditFrameV3[] | "pending"
 }
 
@@ -95,6 +96,10 @@ export function createAcceptedCausalClosureIndexV3(input: {
         if (!append(parseDigestV2(head.frameDigest), emitted, ordered, new Set())) return "pending"
       }
       return Object.freeze(ordered)
+    },
+    observeAccepted(ref, exactFrameBytes) {
+      requireWarmed()
+      ingest({ ref, exactFrameBytes: new Uint8Array(exactFrameBytes) })
     },
   }
   return Object.freeze(index)
@@ -187,7 +192,7 @@ export function createProductionNodeReplicaHeadMaterializerV3(input: {
   readonly authority: VerifiedProtocolAuthorityV3
   readonly historicalAuthority: VerifiedProtocolAuthorityV2
   readonly owner: DocumentOwnerRuntimeV2
-  readonly causalClosure: CausalClosurePortV2
+  readonly causalClosure: AcceptedCausalClosureIndexV3
   readonly createDocument: YjsDocumentFactoryV2["createDocument"]
   readonly requiredBlobDigests: (frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3) => readonly DigestV2[]
 }): NodeReplicaHeadMaterializerV2 {
@@ -210,6 +215,9 @@ export function createProductionNodeReplicaHeadMaterializerV3(input: {
         causalClosure: input.causalClosure,
         createDocument: input.createDocument,
       })
+    },
+    observeAcceptedFrame(ref, exactBytes) {
+      input.causalClosure.observeAccepted(ref, exactBytes)
     },
     actorHeadsDigest: replicaActorHeadSetDigestV2,
   }

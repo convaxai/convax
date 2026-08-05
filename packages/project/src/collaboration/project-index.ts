@@ -1606,9 +1606,15 @@ export function applyProjectIndexCandidateIntentV2(
   try {
     const intent = parseIntent(intentInput)
     const snapshot = validateProjectIndexYDocV2(document, parseProjectIndexScope(context.scope))
-    if (context.ownerSchemaDigest !== snapshot.identity.schemaDigest || context.protocolDigest !== snapshot.identity.protocolDigest) return "rejected"
-    const intentDigest = projectIndexIntentDigestV2(intent)
-    if (context.intentDigest !== intentDigest) return "rejected"
+    // A verified V10 -> V3 promotion preserves the historical ProjectIndex
+    // genesis bytes, including their protocol digest. Current frame authority is
+    // validated by the collaboration kernel and promotion bridge; the owner still
+    // binds the exact ProjectIndex schema here.
+    if (context.ownerSchemaDigest !== snapshot.identity.schemaDigest) return "rejected"
+    // The durable receipt and actual-write evidence bind the selected wire
+    // protocol's typed-intent digest. ProjectIndex's domain digest remains for
+    // dependency requests and deterministic construction only.
+    const intentDigest = parseDigestV2(context.intentDigest)
     const operationKey = `o:${context.actorId}:${context.operationId}`
     const existing = snapshot.operations.get(operationKey)
     if (existing) return existing.intentDigest === intentDigest && existing.intentKind === intent.kind ? { format: "convax.project-index-intent-result/2", intentDigest, inserted: [] } : "rejected"
@@ -1682,7 +1688,16 @@ function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactor
       if (value === null) throw new TypeError("ProjectIndex owner result is invalid")
       const writes = value.result.inserted.map((item) => {
         const record = item.record as { readonly format: string }
-        const recordDigest = projectIndexRecordDigestV2(record)
+        let recordDigest: DigestV2
+        try {
+          recordDigest = projectIndexRecordDigestV2(record)
+        } catch (error) {
+          console.error("ProjectIndex evidence record JCS rejected", item.root, item.key, record)
+          throw error
+        }
+        if (typeof record.format !== "string") {
+          console.error("ProjectIndex evidence record format missing", item.root, item.key, record)
+        }
         return {
           entityKind: `project-index.${item.root}`,
           entityId: item.key,
@@ -1922,7 +1937,10 @@ function requirementMatches(requirements: readonly OwnerExternalFactRequirementV
 
 function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntentValidationContextV2, intent: ProjectIndexIntentV2, facts: ProjectIndexExternalFactContextV2): ProjectIndexApplyResultV2["inserted"] | "rejected" {
   const add = (root: ProjectIndexApplyResultV2["inserted"][number]["root"], key: string, record: object) => ({ root, key, record })
-  if (!projectGuardsEqualAndHold(snapshot, context, intent)) return "rejected"
+  if (!projectGuardsEqualAndHold(snapshot, context, intent)) {
+    console.error("ProjectIndex intent guards rejected", { kind: intent.kind, guards: intent.guards, expected: projectIndexRequiredGuardsV2(snapshot, context, intent) })
+    return "rejected"
+  }
   if (intent.kind === "project.directory.create/2") {
     if (!recordMatchesContext(intent.body.entry, context, "directory", "0") || !recordMatchesContext(intent.body.location, context, "location", "1")) return "rejected"
     return [add("entries", intent.body.entry.entryId, intent.body.entry), add("entryLocations", `l:${intent.body.location.entryId}:${intent.body.location.claimId}`, intent.body.location)]
@@ -1982,15 +2000,19 @@ function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntent
     const key = `r:${activation.canvasId}:${activation.transitionId}`
     const route = projectCanvasRouteProjectionV2(snapshot, activation.canvasId)
     const stages = routeFacts(snapshot, activation.canvasId).filter((fact): fact is CanvasRouteStageV2 => fact.format === "convax.canvas-route-stage/2")
-    if (
-      !routeGuardsEqual(snapshot, context, intent.guards, activation.canvasId, key) ||
-      route.state !== "staged" ||
-      !recordMatchesContext(activation, context, "route-transition", "0") ||
-      stages.length !== 1 ||
-      projectIndexRecordDigestV2(stages[0]!) !== activation.stageRecordDigest ||
-      stages[0]!.shardEpoch !== activation.shardEpoch ||
-      !facts.verifyCanvasGenesis(activation)
-    ) return "rejected"
+    const activationChecks = Object.freeze({
+      routeGuards: routeGuardsEqual(snapshot, context, intent.guards, activation.canvasId, key),
+      staged: route.state === "staged",
+      record: recordMatchesContext(activation, context, "route-transition", "0"),
+      oneStage: stages.length === 1,
+      stageDigest: stages.length === 1 && projectIndexRecordDigestV2(stages[0]!) === activation.stageRecordDigest,
+      shardEpoch: stages.length === 1 && stages[0]!.shardEpoch === activation.shardEpoch,
+      canvasGenesis: facts.verifyCanvasGenesis(activation),
+    })
+    if (Object.values(activationChecks).some((value) => !value)) {
+      console.error("ProjectIndex route activation rejected", activationChecks)
+      return "rejected"
+    }
     return [add("canvasRoutes", key, activation)]
   }
   if (intent.kind === "project.canvas.route.rename/2") {

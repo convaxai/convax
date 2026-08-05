@@ -13,6 +13,7 @@ import {
   effectivePluginDigestV2,
   edgeIdentityDigestV2,
   nodeIdentityDigestV2,
+  obstacleProjectionDigestV2,
 } from "./projection"
 import { materializeCanvasSemanticHistoryIntentV2 } from "./reducer"
 import { createCanvasExternalFactContextV2, discoverCanvasValueDependenciesV2 } from "./external-facts"
@@ -45,6 +46,24 @@ export type CanvasAuthoritativeCommandV2 =
       readonly instructions: string | null
       readonly position: Readonly<{ x: number; y: number }>
       readonly size: Readonly<{ width: number; height: number }>
+    }>
+  | Readonly<{
+      readonly kind: "resources-create"
+      readonly anchor: Readonly<{ x: number; y: number }>
+      readonly items: readonly Readonly<{
+        readonly title: string
+        readonly proof: Extract<CanvasResourceProofRefV2, { readonly mode: "current-owner-state" }>
+        readonly size: Readonly<{ width: number; height: number }>
+      }>[]
+    }>
+  | Readonly<{
+      readonly kind: "manual-resource-placeholders-create"
+      readonly anchor: Readonly<{ x: number; y: number }>
+      readonly items: readonly Readonly<{
+        readonly title: string
+        readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
+        readonly size: Readonly<{ width: number; height: number }>
+      }>[]
     }>
   | Readonly<{
       readonly kind: "edge-connect"
@@ -218,6 +237,76 @@ function constructIntent(
           }),
           plugin: null,
         }),
+      }),
+    })
+  }
+  if (command.kind === "resources-create") {
+    if (command.items.length < 1 || command.items.length > 85) throw new RangeError("Manual resource count is invalid")
+    const nodes = command.items.map((item, index) => {
+      const ordinal = parseUint32V2(String(index))
+      const node = derivedNodeRefV2(context, ordinal)
+      return Object.freeze({ ordinal, node, item })
+    })
+    return Object.freeze({
+      format: "convax.typed-intent/2",
+      kind: "canvas.resources.add/2",
+      guard: Object.freeze({
+        existingEndpoints: Object.freeze([]),
+        derivedNodes: Object.freeze(nodes.map(({ ordinal, node }) => Object.freeze({ ordinal, node, expectedAbsent: true }))),
+        derivedEdges: Object.freeze([]),
+        resourceProofs: Object.freeze(nodes.map(({ ordinal, item }) => Object.freeze({
+          createdNodeOrdinal: ordinal,
+          proof: item.proof,
+        }))),
+      }),
+      body: Object.freeze({
+        placement: Object.freeze({
+          anchor: Object.freeze({ ...command.anchor }),
+          gap: 24 as const,
+          obstacleProjectionDigest: obstacleProjectionDigestV2(snapshot),
+        }),
+        nodes: Object.freeze(nodes.map(({ ordinal, node, item }) => Object.freeze({
+          ordinal,
+          nodeId: node.id,
+          incarnation: node.incarnation,
+          size: Object.freeze({ ...item.size }),
+          title: item.title,
+          resource: item.proof.resource,
+        }))),
+        edges: Object.freeze([]),
+      }),
+    })
+  }
+  if (command.kind === "manual-resource-placeholders-create") {
+    if (command.items.length < 1 || command.items.length > 85) throw new RangeError("Manual resource count is invalid")
+    const nodes = command.items.map((item, index) => {
+      const ordinal = parseUint32V2(String(index))
+      const node = derivedNodeRefV2(context, ordinal)
+      return Object.freeze({ ordinal, node, item })
+    })
+    return Object.freeze({
+      format: "convax.typed-intent/2",
+      kind: "canvas.resources.pending.create/2",
+      guard: Object.freeze({
+        existingEndpoints: Object.freeze([]),
+        derivedNodes: Object.freeze(nodes.map(({ ordinal, node }) => Object.freeze({ ordinal, node, expectedAbsent: true }))),
+        derivedEdges: Object.freeze([]),
+      }),
+      body: Object.freeze({
+        placement: Object.freeze({
+          anchor: Object.freeze({ ...command.anchor }),
+          gap: 24 as const,
+          obstacleProjectionDigest: obstacleProjectionDigestV2(snapshot),
+        }),
+        nodes: Object.freeze(nodes.map(({ ordinal, node, item }) => Object.freeze({
+          ordinal,
+          nodeId: node.id,
+          incarnation: node.incarnation,
+          size: Object.freeze({ ...item.size }),
+          title: item.title,
+          expectedClass: item.expectedClass,
+        }))),
+        edges: Object.freeze([]),
       }),
     })
   }

@@ -1,5 +1,7 @@
 import {
+  encodeRestrictedJcsV2,
   parseId128V2,
+  typedIntentDigestV3,
   type CanvasIdV2,
   type DecodedCausalEditFrameV2,
   type DecodedCausalEditFrameV3,
@@ -135,11 +137,30 @@ export function createProjectIndexGenesisRoutePublicationV3(input: {
     typedIntent: Parameters<typeof projectIndexIntentDependenciesV2>[1],
     signal?: AbortSignal,
   ): Promise<PreparedLocalIntentV2> => {
-    const dependencies = projectIndexIntentDependenciesV2(
-      { ...context, intentDigest: projectIndexIntentDigestV2(typedIntent) },
-      typedIntent,
-    )
-    const resolved = await input.facts.resolve({ dependencies, signal })
+    let exactIntent: Uint8Array
+    try {
+      exactIntent = encodeRestrictedJcsV2(typedIntent)
+    } catch (error) {
+      console.error("ProjectIndex V3 intent JCS rejected", typedIntent)
+      throw error
+    }
+    let dependencies: OwnerIntentDependenciesV2<"project-index">
+    try {
+      dependencies = projectIndexIntentDependenciesV2(
+        { ...context, intentDigest: typedIntentDigestV3(exactIntent) },
+        typedIntent,
+      )
+    } catch (error) {
+      console.error("ProjectIndex V3 dependency construction failed", typedIntent, context)
+      throw error
+    }
+    let resolved: ProjectIndexFactResolutionResultV2
+    try {
+      resolved = await input.facts.resolve({ dependencies, signal })
+    } catch (error) {
+      console.error("ProjectIndex V3 fact resolution failed", dependencies)
+      throw error
+    }
     if (resolved.status !== "resolved") throw new Error(`ProjectIndex genesis route dependency is ${resolved.status}`)
     return Object.freeze({ typedIntent, externalFacts: resolved.port })
   }
