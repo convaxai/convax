@@ -110,6 +110,11 @@ This package owns the durable Project aggregate and native Project adapters.
   bytes. Before the exact user-confirmed
   destructive reset, preserve them without hydration, rewrite, compaction,
   migration, deletion, or GC; ordinary Project files and stable `projectId` remain.
+- ProjectIndex first registration must repeat the portable-cutover inspection before
+  creating owner or collaboration bytes. Recovery may classify an already-published
+  local bootstrap as unteamed only after Project/node proves its exact manifest-bound
+  empty genesis and closed native inventory; any frame, route, unknown path, Team
+  identity, or authority mismatch remains closed and requires rollover authority.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts in the
   root's sealed R5 authority release. A missing/mismatched artifact or genuine
   owner contradiction stops decode/reset/mutation rather than selecting an older

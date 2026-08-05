@@ -198,6 +198,11 @@ For any matching change, read the full routed reference before planning or editi
 
 ## Validation
 
+- Before local ProjectIndex first registration, repeat the Project-owned portable
+  cutover guard. A legacy recovery adapter may resolve only an exact pristine
+  local-owner bootstrap through the Project/node verifier; path presence alone is
+  neither Team evidence nor permission to reset current collaboration state.
+
 - Run `bun typecheck && bun test` from `packages/desktop`.
 - Run focused tests for the changed capability and its failure/recovery path.
 - Run `bun run build` for Main or IPC changes.

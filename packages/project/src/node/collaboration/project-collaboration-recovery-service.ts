@@ -28,6 +28,12 @@ export interface ProjectResetPreparedAuthorityV1 {
 
 /** Control-plane/Project owner seam. Native reset code does not mint team authority or fake genesis verification. */
 export interface ProjectResetAuthorityPortV1 {
+  inspectReset(input: {
+    readonly plan: PortableProjectResetPlanV1
+    readonly signal?: AbortSignal
+  }): Promise<
+    Readonly<{ status: "eligible" }> | Readonly<{ reason: "team-epoch-rollover-required"; status: "unavailable" }>
+  >
   prepareReset(input: {
     readonly plan: PortableProjectResetPlanV1
     readonly signal?: AbortSignal
@@ -75,6 +81,13 @@ export class NodeProjectCollaborationRecoveryServiceV1 implements ProjectCollabo
     if (plan.projectId !== projectId) {
       throw new PortableProjectResetError("INVALID_PROJECT", "Project binding does not match portable Project identity")
     }
+    const authority = await this.options.authority.inspectReset({ plan })
+    if (authority.status === "unavailable") {
+      throw new PortableProjectResetError(
+        "VERIFICATION_REJECTED",
+        "Project reset requires team epoch rollover authority",
+      )
+    }
     return Object.freeze({
       format: "convax.project-reset-preview/1",
       ordinaryProjectFilesPreserved: true,
@@ -86,7 +99,9 @@ export class NodeProjectCollaborationRecoveryServiceV1 implements ProjectCollabo
     })
   }
 
-  async confirmReset(input: Parameters<ProjectCollaborationRecoveryClient["confirmReset"]>[0]): Promise<ProjectResetOutcomeV1> {
+  async confirmReset(
+    input: Parameters<ProjectCollaborationRecoveryClient["confirmReset"]>[0],
+  ): Promise<ProjectResetOutcomeV1> {
     const projectRoot = await this.options.projects.resolveProjectRoot(input.projectId)
     return this.options.gate.runClosed({
       projectId: input.projectId,
@@ -94,7 +109,10 @@ export class NodeProjectCollaborationRecoveryServiceV1 implements ProjectCollabo
       operation: async () => {
         const plan = await planPortableProjectReset(projectRoot)
         if (plan.projectId !== input.projectId) {
-          throw new PortableProjectResetError("INVALID_PROJECT", "Project binding does not match portable Project identity")
+          throw new PortableProjectResetError(
+            "INVALID_PROJECT",
+            "Project binding does not match portable Project identity",
+          )
         }
         if (plan.token !== input.token) {
           throw new PortableProjectResetError("INVALID_CONFIRMATION", "Project reset preview is stale")
