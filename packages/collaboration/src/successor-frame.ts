@@ -55,7 +55,7 @@ const DOMAINS = Object.freeze({
   typedIntent: "convax.typed-intent/3",
 } as const)
 
-export type CausalDependencyKindV3 = CausalDependencyKindV2 | CausalAuthorityDependencyKindV3
+export type CausalDependencyKindV3 = CausalDependencyKindV2 | CausalAuthorityDependencyKindV3 | "protocol-promotion-bridge"
 export interface CausalDependencyRefV3 {
   readonly kind: CausalDependencyKindV3
   readonly digest: DigestV2
@@ -122,11 +122,52 @@ export interface DecodedCausalEditFrameV3 {
 }
 
 declare const candidateBrand: unique symbol
+declare const verifiedBrand: unique symbol
+export interface SuccessorProtocolAuthorityV3 {
+  readonly protocolDigest: DigestV2
+}
+export interface SuccessorProtocolSchemaArtifactRefV3 {
+  readonly name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence"
+  readonly format:
+    | "convax.canvas-protocol-schema/3"
+    | "convax.collaboration-kernel-protocol-schema/3"
+    | "convax.control-plane-protocol-schema/3"
+    | "convax.project-persistence-protocol-schema/3"
+  readonly artifactDigest: DigestV2
+}
+export interface HistoricalAuthoritySnapshotMemberV3 {
+  readonly path: string
+  readonly sha256: DigestV2
+}
+export interface HistoricalProtocolAuthorityClosureV3 {
+  readonly format: "convax.historical-authority-pin/1"
+  readonly authorityId: "collaboration-v10"
+  readonly revision: "r5"
+  readonly activePointerSha256: DigestV2
+  readonly manifestSha256: DigestV2
+  readonly evidenceSha256: DigestV2
+  readonly protocolBundleSha256: DigestV2
+  readonly protocolDigest: DigestV2
+  readonly snapshot: readonly HistoricalAuthoritySnapshotMemberV3[]
+}
 export interface CandidateSuccessorProtocolAuthorityV3 {
   readonly protocolDigest: DigestV2
   readonly [candidateBrand]: true
 }
+export interface VerifiedProtocolAuthorityV3 extends SuccessorProtocolAuthorityV3 {
+  readonly format: "convax.protocol-authority-verification/3"
+  readonly authorityId: "collaboration-v11"
+  readonly revision: "r1"
+  readonly sequence: "1"
+  readonly historicalAuthorityId: "collaboration-v10/r5"
+  readonly protocolBundleSha256: DigestV2
+  readonly artifactRefs: readonly SuccessorProtocolSchemaArtifactRefV3[]
+  readonly historicalAuthorityPinSha256: DigestV2
+  readonly historicalAuthority: HistoricalProtocolAuthorityClosureV3
+  readonly [verifiedBrand]: true
+}
 const candidates = new WeakSet<object>()
+const verified = new WeakSet<object>()
 
 /** Test/candidate construction only. Production dispatch never accepts this capability. */
 export function createCandidateSuccessorProtocolAuthorityV3(
@@ -137,9 +178,51 @@ export function createCandidateSuccessorProtocolAuthorityV3(
   return value as CandidateSuccessorProtocolAuthorityV3
 }
 
-function assertCandidate(value: CandidateSuccessorProtocolAuthorityV3): void {
-  if (!value || !candidates.has(value as object))
-    failFrame("Successor protocol authority is not a live candidate capability")
+/** Called only by the sealed V11 selector after complete release validation. */
+export function installVerifiedSuccessorProtocolAuthorityV3(input: {
+  readonly protocolDigest: DigestV2
+  readonly protocolBundleSha256: DigestV2
+  readonly artifactRefs: readonly SuccessorProtocolSchemaArtifactRefV3[]
+  readonly historicalAuthorityPinSha256: DigestV2
+  readonly historicalAuthority: HistoricalProtocolAuthorityClosureV3
+}): VerifiedProtocolAuthorityV3 {
+  const value = Object.freeze({
+    format: "convax.protocol-authority-verification/3" as const,
+    authorityId: "collaboration-v11" as const,
+    revision: "r1" as const,
+    sequence: "1" as const,
+    historicalAuthorityId: "collaboration-v10/r5" as const,
+    protocolDigest: parseDigestV2(input.protocolDigest),
+    protocolBundleSha256: parseDigestV2(input.protocolBundleSha256),
+    artifactRefs: Object.freeze(input.artifactRefs.map((artifact) => Object.freeze({
+      name: artifact.name,
+      format: artifact.format,
+      artifactDigest: parseDigestV2(artifact.artifactDigest),
+    }))),
+    historicalAuthorityPinSha256: parseDigestV2(input.historicalAuthorityPinSha256),
+    historicalAuthority: Object.freeze({
+      format: input.historicalAuthority.format,
+      authorityId: input.historicalAuthority.authorityId,
+      revision: input.historicalAuthority.revision,
+      activePointerSha256: parseDigestV2(input.historicalAuthority.activePointerSha256),
+      manifestSha256: parseDigestV2(input.historicalAuthority.manifestSha256),
+      evidenceSha256: parseDigestV2(input.historicalAuthority.evidenceSha256),
+      protocolBundleSha256: parseDigestV2(input.historicalAuthority.protocolBundleSha256),
+      protocolDigest: parseDigestV2(input.historicalAuthority.protocolDigest),
+      snapshot: Object.freeze(input.historicalAuthority.snapshot.map((member) => Object.freeze({
+        path: member.path,
+        sha256: parseDigestV2(member.sha256),
+      }))),
+    }),
+  })
+  verified.add(value)
+  return value as VerifiedProtocolAuthorityV3
+}
+
+export function assertSuccessorProtocolAuthorityV3(value: SuccessorProtocolAuthorityV3): void {
+  if (!value || (!candidates.has(value as object) && !verified.has(value as object))) {
+    failFrame("Successor protocol authority is not a live selected capability")
+  }
 }
 
 const NON_AUTHORITY_KINDS = new Set<CausalDependencyKindV2>([
@@ -184,7 +267,7 @@ export function parseCausalContextV3(value: unknown): CausalContextV3 {
       "replica-actor-credential",
       "replica-edit-authorization",
     ].includes(entry.kind)
-    if (!authorityKind && !NON_AUTHORITY_KINDS.has(entry.kind as CausalDependencyKindV2))
+    if (!authorityKind && entry.kind !== "protocol-promotion-bridge" && !NON_AUTHORITY_KINDS.has(entry.kind as CausalDependencyKindV2))
       failCodec("Causal dependency kind is invalid")
     return Object.freeze({ kind: entry.kind as CausalDependencyKindV3, digest: parseDigestV2(entry.digest) })
   })
@@ -311,11 +394,11 @@ export function causalEditSignatureDigestV3(coreDigest: DigestV2): Uint8Array {
 }
 
 export async function signCausalEditCoreV3(
-  authority: CandidateSuccessorProtocolAuthorityV3,
+  authority: SuccessorProtocolAuthorityV3,
   core: CausalEditCoreV3,
   signer: ReplicaSignerPortV2,
 ): Promise<CausalEditFrameHeaderV3> {
-  assertCandidate(authority)
+  assertSuccessorProtocolAuthorityV3(authority)
   const parsed = parseCausalEditCoreV3(core, authority.protocolDigest)
   const coreDigest = causalEditCoreDigestV3(parsed, authority.protocolDigest)
   return Object.freeze({
@@ -327,10 +410,10 @@ export async function signCausalEditCoreV3(
 }
 
 export function encodeCausalEditFrameV3(
-  authority: CandidateSuccessorProtocolAuthorityV3,
+  authority: SuccessorProtocolAuthorityV3,
   input: { readonly header: CausalEditFrameHeaderV3; readonly sections: CausalEditFrameSectionsV2 },
 ): Uint8Array {
-  assertCandidate(authority)
+  assertSuccessorProtocolAuthorityV3(authority)
   const header = parseHeader(input.header, authority.protocolDigest)
   const headerJcs = encodeRestrictedJcsV2(header)
   assertByteLengthV2(headerJcs, 1, KERNEL_LIMITS_V2.causalHeaderJcsBytes, "Causal edit header JCS")
@@ -355,10 +438,10 @@ export function encodeCausalEditFrameV3(
 }
 
 export function decodeCausalEditFrameV3(
-  authority: CandidateSuccessorProtocolAuthorityV3,
+  authority: SuccessorProtocolAuthorityV3,
   value: Uint8Array,
 ): DecodedCausalEditFrameV3 {
-  assertCandidate(authority)
+  assertSuccessorProtocolAuthorityV3(authority)
   assertUint8ArrayV2(value, "Successor causal edit envelope")
   if (value.byteLength < PREFIX_BYTES || value.byteLength > KERNEL_LIMITS_V2.causalEnvelopeBytes)
     failFrame("Successor causal edit envelope length is invalid")
@@ -429,7 +512,7 @@ function validateTypedIntent(bytes: Uint8Array) {
   const value = decodeRestrictedJcsV2(bytes)
   if (
     !isPlainDataObject(value) ||
-    value.format !== "convax.typed-intent/3" ||
+    value.format !== "convax.typed-intent/2" ||
     typeof value.kind !== "string" ||
     value.kind.length === 0 ||
     new TextEncoder().encode(value.kind).byteLength > 128 ||
@@ -438,11 +521,11 @@ function validateTypedIntent(bytes: Uint8Array) {
     failFrame("Successor typed intent is invalid")
   return value as { readonly kind: string }
 }
-function typedIntentDigest(bytes: Uint8Array): DigestV2 {
+export function typedIntentDigestV3(bytes: Uint8Array): DigestV2 {
   validateTypedIntent(bytes)
   return rawDigest(DOMAINS.typedIntent, bytes)
 }
-function evidenceDigest(value: ActualWriteEvidenceV2): DigestV2 {
+export function actualWriteEvidenceDigestV3(value: ActualWriteEvidenceV2): DigestV2 {
   return structuredDigest("convax.actual-write-evidence/2", parseActualWriteEvidenceV2(value))
 }
 function validateSections(value: CausalEditFrameSectionsV2): void {
@@ -540,7 +623,7 @@ function validateClosure(
     core.signerAuthorityKind !== context.signerAuthority.kind ||
     core.signerAuthorityDigest !== causalSignerAuthorityDigestV3(context.signerAuthority) ||
     core.intentKind !== intent.kind ||
-    core.intentDigest !== typedIntentDigest(sections.typedIntentJcs) ||
+    core.intentDigest !== typedIntentDigestV3(sections.typedIntentJcs) ||
     core.causalContextDigest !== causalContextDigestV3(context) ||
     core.baseFrontierDigest !== context.baseFrontierDigest ||
     core.baseFrontierDigest !== causalFrontierDigestV2(context.baseFrontier) ||
@@ -548,7 +631,7 @@ function validateClosure(
     core.baseStateVectorDigest !== stateVectorDigestV2(sections.baseStateVector) ||
     core.baseCanonicalStateDigest !== context.baseCanonicalStateDigest ||
     core.yjsUpdateDigest !== yjsUpdateDigestV2(sections.yjsUpdate) ||
-    core.actualWriteEvidenceDigest !== evidenceDigest(evidence) ||
+    core.actualWriteEvidenceDigest !== actualWriteEvidenceDigestV3(evidence) ||
     core.ownerSchemaDigest !== evidence.ownerSchemaDigest ||
     core.intentDigest !== evidence.intentDigest ||
     core.validationArtifactSetDigest !== context.validationArtifactSetDigest ||

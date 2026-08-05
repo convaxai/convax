@@ -1,6 +1,7 @@
 import {
   selectInstalledProtocolAuthorityV2,
   validateAuthorityReleaseSnapshotV1,
+  type ValidatedAuthorityReleaseV1,
 } from "./authority-selector"
 import type { VerifiedProtocolAuthorityV2 } from "./authority"
 
@@ -32,18 +33,23 @@ const releasePaths = Object.freeze([
 ])
 
 let verified: Promise<VerifiedProtocolAuthorityV2> | undefined
+let validated: Promise<ValidatedAuthorityReleaseV1> | undefined
 
 export function loadVerifiedTestAuthorityV2(): Promise<VerifiedProtocolAuthorityV2> {
-  verified ??= (async () => {
-    const validated = validateAuthorityReleaseSnapshotV1({
+  verified ??= loadValidatedTestAuthorityReleaseV2().then(selectInstalledProtocolAuthorityV2)
+  return verified
+}
+
+export function loadValidatedTestAuthorityReleaseV2(): Promise<ValidatedAuthorityReleaseV1> {
+  validated ??= (async () => {
+    return validateAuthorityReleaseSnapshotV1({
       activePointerBytes: await readTestAuthorityFileV2(activePointer),
       files: await Promise.all(
         releasePaths.map(async (path) => ({ path, bytes: await readTestAuthorityFileV2(path) })),
       ),
     })
-    return selectInstalledProtocolAuthorityV2(validated)
   })()
-  return verified
+  return validated
 }
 
 export async function readTestAuthorityFileV2(relativeFromRepository: string): Promise<Uint8Array> {

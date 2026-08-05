@@ -4,7 +4,10 @@ import {
   assertLocalOwnerAuthorityClosureV3,
   encodeRestrictedJcsV2,
   localOwnerEditAuthorizationCoreDigestV3,
+  localOwnerEditAuthorizationSignatureDigestV3,
   localProjectOwnerBindingCoreDigestV3,
+  localProjectOwnerBindingSignatureDigestV3,
+  localProjectOwnerKeyIdV3,
   ordinarySha256V2,
   parseActorIdV2,
   parseCanvasIdV2,
@@ -49,6 +52,16 @@ const team = Object.freeze({
 })
 
 describe("successor signer authority", () => {
+  test("exports exact owner key and signature-purpose digests for native signers", () => {
+    const publicKey = parsePublicKeyV2(encodeBase64urlV2(Uint8Array.from({ length: 32 }, () => 4)))
+    expect(localProjectOwnerKeyIdV3(publicKey)).toBe(structuredDigest("convax.local-project-owner-public-key/3", publicKey))
+    expect(localProjectOwnerBindingSignatureDigestV3(digest("binding"))).toHaveLength(32)
+    expect(localOwnerEditAuthorizationSignatureDigestV3(digest("authorization"))).toHaveLength(32)
+    expect(localProjectOwnerBindingSignatureDigestV3(digest("binding"))).not.toEqual(
+      localOwnerEditAuthorizationSignatureDigestV3(digest("binding")),
+    )
+  })
+
   test("parses a closed tagged union and binds the tag into its digest", () => {
     expect(parseCausalSignerAuthorityV3(local)).toEqual(local)
     expect(parseCausalSignerAuthorityV3(team)).toEqual(team)
@@ -90,7 +103,7 @@ describe("successor signer authority", () => {
     const bindingCore = Object.freeze({
       format: "convax.local-project-owner-binding-core/3" as const,
       projectId, projectEpoch, ownerKeyId, ownerPublicKey,
-      initialReplicaId: replica, initialActorId: actor, ownerSchemaDigest, protocolDigest,
+      initialReplicaId: replica, initialActorId: actor, protocolDigest,
       genesisAuthorizationPolicy: Object.freeze({
         format: "convax.local-owner-genesis-authorization-policy/3" as const,
         projectIndexScope,
@@ -103,7 +116,7 @@ describe("successor signer authority", () => {
     const authorizationCore = Object.freeze({
       format: "convax.local-owner-edit-authorization-core/3" as const,
       ownerBindingCoreDigest: binding.coreDigest, projectId, projectEpoch, scope: canvasScope,
-      replicaId: replica, actorId: actor,
+      replicaId: replica, actorId: actor, ownerSchemaDigest,
       actorSequenceAllocationPolicy: Object.freeze({ format: "convax.local-owner-actor-sequence-allocation-policy/3" as const, kind: "strict-durable-head-successor" as const, initialSequence: "1" as const }),
       protocolDigest, sharingGeneration: "0" as const, expiryPolicy: "none" as const,
     })

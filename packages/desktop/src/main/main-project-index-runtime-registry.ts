@@ -450,7 +450,7 @@ export class MainProjectIndexRuntimeRegistryV2
     try {
       if (project.projectRoot !== projectRoot)
         throw new Error("Project binding changed during ProjectIndex first-register")
-      const owner = requireProjectIndexOwner(this.options.authority)
+      const owner = createMainProjectIndexOwnerRuntimeV2(this.options.authority)
       const blobs = await ProjectBlobReplicationStoreV2.open({
         collaborationDirectory: project.collaborationDirectory,
         projectId,
@@ -577,7 +577,9 @@ export async function queryMainProjectIndexCurrentBlobDigestsV2(
   return result
 }
 
-function requireProjectIndexOwner(authority: VerifiedProtocolAuthorityV2): DocumentOwnerRuntimeV2<"project-index"> {
+export function createMainProjectIndexOwnerRuntimeV2(
+  authority: VerifiedProtocolAuthorityV2,
+): DocumentOwnerRuntimeV2<"project-index"> {
   const selected = createSelectedDocumentOwnerArtifactFactoryV2(authority, "project-index").createRuntime(
     selectedProjectIndexDocumentOwnerArtifactDefinitionV2,
   )

@@ -53,6 +53,7 @@ import {
 } from "./persistence-store"
 import { fsyncProjectDirectoryV2 } from "./directory-durability"
 import { deriveDocumentNativeKeyV2, deriveObjectNativeKeyV2 } from "./native-store-keys"
+import { readProjectResetRecordsV2 } from "./project-reset-store"
 
 const MANIFEST_MAGIC = Buffer.from("CVXPMV02", "ascii")
 const MANIFEST_HEADER_BYTES = 12
@@ -414,7 +415,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   }
   const manifest = parseProjectNativeStoreManifestV2(input.manifest)
   await requireExactManifest(input.collaborationDirectory, encodeProjectNativeStoreManifestV2(manifest))
-  const store = await NodeCollaborationPersistenceV2.open({
+  const store = await NodeCollaborationPersistenceV2.openReadOnly({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.localActorId,
     materializer: input.materializer,
@@ -461,7 +462,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   } finally {
     document.destroy()
   }
-  await requirePristineBootstrapInventory(input.collaborationDirectory, manifest.projectIndexScope)
+  await requirePristineBootstrapInventory(input.collaborationDirectory, manifest)
 }
 
 export async function resolveCurrentProjectIndexScopeV2(
@@ -612,8 +613,9 @@ async function verifyCompleteStore(
 
 async function requirePristineBootstrapInventory(
   collaborationDirectory: string,
-  scope: ProjectIndexDocumentScopeV2,
+  manifest: ProjectNativeStoreManifestV2,
 ): Promise<void> {
+  const scope = manifest.projectIndexScope
   const documentKey = deriveDocumentNativeKeyV2(scope)
   const documentRoot = `documents/${documentKey}`
   const allowedDirectories = new Set([
@@ -656,6 +658,7 @@ async function requirePristineBootstrapInventory(
   ])
   const counts = new Map([...singletonFamilies.keys()].map((key) => [key, 0]))
   let presenceIndexCount = 0
+  let resetRecordCount = 0
 
   const visit = async (directory: string): Promise<void> => {
     for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
@@ -675,14 +678,47 @@ async function requirePristineBootstrapInventory(
         presenceIndexCount += 1
         continue
       }
+      if (relative === "project-reset-records-v2.jcs") {
+        resetRecordCount += 1
+        continue
+      }
       const family = [...singletonFamilies].find(([, pattern]) => pattern.test(relative))?.[0]
       if (!family) throw new TypeError(`Pristine ProjectIndex bootstrap contains unexpected state: ${relative}`)
       counts.set(family, (counts.get(family) ?? 0) + 1)
     }
   }
   await visit(collaborationDirectory)
-  if ([...counts.values()].some((count) => count !== 1) || presenceIndexCount > 1) {
+  if ([...counts.values()].some((count) => count !== 1) || presenceIndexCount > 1 || resetRecordCount > 1) {
     throw new TypeError("Pristine ProjectIndex bootstrap inventory is incomplete or ambiguous")
+  }
+  if (resetRecordCount === 1) await requireMatchingLocalResetPublication(collaborationDirectory, manifest)
+}
+
+async function requireMatchingLocalResetPublication(
+  collaborationDirectory: string,
+  manifest: ProjectNativeStoreManifestV2,
+): Promise<void> {
+  const records = await readProjectResetRecordsV2(collaborationDirectory)
+  const reset = records.manifest
+  const principal = records.confirmation.core.confirmationPrincipal
+  if (
+    reset.projectId !== manifest.projectIndexScope.projectId ||
+    reset.oldProjectEpoch !== null ||
+    reset.newProjectEpoch !== manifest.projectIndexScope.projectEpoch ||
+    reset.newMembershipEpoch !== null ||
+    reset.newProjectIndexShardEpoch !== manifest.projectIndexScope.shardEpoch ||
+    reset.requestedProtocolDigest !== manifest.protocolDigest ||
+    reset.requestedSchemaDigest !== manifest.schemaDigest ||
+    reset.requestedUriProtocolDigest !== manifest.uriProtocolDigest ||
+    reset.projectResetApprovalCoreDigest !== null ||
+    reset.teamEpochRolloverRequestDigest !== null ||
+    reset.emptyProjectIndexGenesisAttestationCoreDigest !== null ||
+    reset.teamEpochRolloverReceiptCoreDigest !== null ||
+    (reset.state !== "reset-published" && reset.state !== "reset-retiring-old" && reset.state !== "reset-complete") ||
+    principal.kind !== "local-project-owner" ||
+    principal.localProjectBindingDigest !== manifest.initializationAuthorityDigest
+  ) {
+    throw new TypeError("Project reset record does not bind the exact unteamed empty bootstrap")
   }
 }
 

@@ -76,7 +76,6 @@ export interface LocalProjectOwnerBindingCoreV3 {
   readonly ownerPublicKey: PublicKeyV2
   readonly initialReplicaId: ReplicaIdV2
   readonly initialActorId: ActorIdV2
-  readonly ownerSchemaDigest: DigestV2
   readonly protocolDigest: DigestV2
   readonly genesisAuthorizationPolicy: LocalOwnerGenesisAuthorizationPolicyV3
   readonly sharingGeneration: "0"
@@ -110,6 +109,7 @@ export interface LocalOwnerEditAuthorizationCoreV3 {
   readonly scope: DocumentScopeV2
   readonly replicaId: ReplicaIdV2
   readonly actorId: ActorIdV2
+  readonly ownerSchemaDigest: DigestV2
   readonly actorSequenceAllocationPolicy: LocalOwnerActorSequenceAllocationPolicyV3
   readonly protocolDigest: DigestV2
   readonly sharingGeneration: "0"
@@ -211,7 +211,7 @@ export function parseCausalAuthorityDependenciesV3(
 export function parseLocalProjectOwnerBindingCoreV3(value: unknown): LocalProjectOwnerBindingCoreV3 {
   assertExactKeysV2(value, [
     "format", "projectId", "projectEpoch", "ownerKeyId", "ownerPublicKey",
-    "initialReplicaId", "initialActorId", "ownerSchemaDigest", "protocolDigest",
+    "initialReplicaId", "initialActorId", "protocolDigest",
     "genesisAuthorizationPolicy", "sharingGeneration", "creationNonce",
   ], "LocalProjectOwnerBindingCoreV3")
   if (value.format !== "convax.local-project-owner-binding-core/3" || value.sharingGeneration !== "0") failCodec("Local Project owner binding discriminator is invalid")
@@ -230,7 +230,6 @@ export function parseLocalProjectOwnerBindingCoreV3(value: unknown): LocalProjec
     ownerPublicKey: parsePublicKeyV2(value.ownerPublicKey),
     initialReplicaId: parseReplicaIdV2(value.initialReplicaId),
     initialActorId: parseActorIdV2(value.initialActorId),
-    ownerSchemaDigest: parseDigestV2(value.ownerSchemaDigest),
     protocolDigest: parseDigestV2(value.protocolDigest),
     genesisAuthorizationPolicy,
     sharingGeneration: value.sharingGeneration,
@@ -266,6 +265,14 @@ export function localProjectOwnerBindingCoreDigestV3(value: LocalProjectOwnerBin
   return structuredDigestV3(SUCCESSOR_AUTHORITY_DOMAINS_V3.localOwnerBindingCore, parseLocalProjectOwnerBindingCoreV3(value))
 }
 
+export function localProjectOwnerKeyIdV3(publicKey: PublicKeyV2): DigestV2 {
+  return structuredDigestV3("convax.local-project-owner-public-key/3", parsePublicKeyV2(publicKey))
+}
+
+export function localProjectOwnerBindingSignatureDigestV3(coreDigest: DigestV2): Uint8Array {
+  return successorSignaturePurposeV3("convax.local-project-owner-binding-signature/3", parseDigestV2(coreDigest))
+}
+
 export function parseLocalProjectOwnerBindingV3(value: unknown): LocalProjectOwnerBindingV3 {
   assertExactKeysV2(value, ["format", "core", "coreDigest", "ownerSignature"], "LocalProjectOwnerBindingV3")
   if (value.format !== "convax.local-project-owner-binding/3") failCodec("Local Project owner binding format is invalid")
@@ -276,7 +283,7 @@ export function parseLocalProjectOwnerBindingV3(value: unknown): LocalProjectOwn
 }
 
 export function parseLocalOwnerEditAuthorizationCoreV3(value: unknown): LocalOwnerEditAuthorizationCoreV3 {
-  assertExactKeysV2(value, ["format", "ownerBindingCoreDigest", "projectId", "projectEpoch", "scope", "replicaId", "actorId", "actorSequenceAllocationPolicy", "protocolDigest", "sharingGeneration", "expiryPolicy"], "LocalOwnerEditAuthorizationCoreV3")
+  assertExactKeysV2(value, ["format", "ownerBindingCoreDigest", "projectId", "projectEpoch", "scope", "replicaId", "actorId", "ownerSchemaDigest", "actorSequenceAllocationPolicy", "protocolDigest", "sharingGeneration", "expiryPolicy"], "LocalOwnerEditAuthorizationCoreV3")
   if (value.format !== "convax.local-owner-edit-authorization-core/3" || value.sharingGeneration !== "0" || value.expiryPolicy !== "none") failCodec("Local owner edit authorization discriminator is invalid")
   const projectId = parseProjectIdV2(value.projectId)
   const projectEpoch = parseId128V2(value.projectEpoch)
@@ -290,6 +297,7 @@ export function parseLocalOwnerEditAuthorizationCoreV3(value: unknown): LocalOwn
     scope,
     replicaId: parseReplicaIdV2(value.replicaId),
     actorId: parseActorIdV2(value.actorId),
+    ownerSchemaDigest: parseDigestV2(value.ownerSchemaDigest),
     actorSequenceAllocationPolicy: parseLocalOwnerActorSequenceAllocationPolicyV3(value.actorSequenceAllocationPolicy),
     protocolDigest: parseDigestV2(value.protocolDigest),
     sharingGeneration: value.sharingGeneration,
@@ -299,6 +307,10 @@ export function parseLocalOwnerEditAuthorizationCoreV3(value: unknown): LocalOwn
 
 export function localOwnerEditAuthorizationCoreDigestV3(value: LocalOwnerEditAuthorizationCoreV3): DigestV2 {
   return structuredDigestV3(SUCCESSOR_AUTHORITY_DOMAINS_V3.localOwnerEditAuthorizationCore, parseLocalOwnerEditAuthorizationCoreV3(value))
+}
+
+export function localOwnerEditAuthorizationSignatureDigestV3(coreDigest: DigestV2): Uint8Array {
+  return successorSignaturePurposeV3("convax.local-owner-edit-authorization-signature/3", parseDigestV2(coreDigest))
 }
 
 export function parseLocalOwnerEditAuthorizationV3(value: unknown): LocalOwnerEditAuthorizationV3 {
@@ -335,7 +347,7 @@ export function assertLocalOwnerAuthorityClosureV3(input: {
     binding.core.initialReplicaId !== authority.replicaId || binding.core.initialActorId !== authority.actorId ||
     binding.core.projectId !== projectId || authorization.core.projectId !== projectId ||
     binding.core.projectEpoch !== projectEpoch || authorization.core.projectEpoch !== projectEpoch ||
-    binding.core.ownerSchemaDigest !== ownerSchemaDigest || binding.core.protocolDigest !== protocolDigest ||
+    authorization.core.ownerSchemaDigest !== ownerSchemaDigest || binding.core.protocolDigest !== protocolDigest ||
     authorization.core.protocolDigest !== protocolDigest || !sameDocumentScopeV3(authorization.core.scope, scope)) {
     failCodec("Local owner authority graph crossed its exact Project, signer, or protocol binding")
   }

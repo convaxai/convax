@@ -11,7 +11,9 @@ import type {
 import type { OwnerIntentConstructionContextV2 } from "@convax/collaboration"
 import { buildCanvasProjectionIndexV2, projectCanvasDocumentV2 } from "./projection"
 import type { CanvasAuthoritativeCommandV2 } from "./command-construction"
-import { canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
+import { assertResourceProofV2, canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
+
+export const canvasResourceProofMetadataKeyV2 = "convaxCanvasResourceProofV2"
 
 export interface CanvasApplicationCommandAdaptationV2 {
   readonly caller: CanvasIntentCallerV2
@@ -208,9 +210,49 @@ export function adaptCanvasApplicationCommandV2(input: {
           ...(command.gap === undefined ? {} : { gap: command.gap }),
         }))
       }
-      case "resources.pending.create":
+      case "resources.add": {
+        if (command.items.length < 1 || command.items.length > 85 || command.placement.parentId !== undefined || command.relation?.mode === "connect") {
+          return "rejected"
+        }
+        const items = command.items.map(({ item }) => {
+          const metadata = item.metadata
+          if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+            throw new TypeError("Canvas resource proof metadata is missing")
+          }
+          const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKeyV2]
+          assertResourceProofV2(proof, false)
+          if (proof.mode !== "current-owner-state") throw new TypeError("Canvas resource proof is not current")
+          return Object.freeze({
+            title: item.name ?? (item.kind === "text" ? "Text" : item.kind === "folder" ? "Folder" : "Resource"),
+            proof,
+            size: Object.freeze(item.kind === "text" ? { width: 320, height: 180 } : { width: 240, height: 180 }),
+          })
+        })
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "resources-create",
+            anchor: Object.freeze({ ...command.placement.anchor }),
+            items: Object.freeze(items),
+          }),
+        })
+      }
+      case "resources.pending.create": {
+        if (command.placement.parentId !== undefined || command.relation?.mode === "connect") return "rejected"
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "manual-resource-placeholders-create",
+            anchor: Object.freeze({ ...command.placement.anchor }),
+            items: Object.freeze([Object.freeze({
+              title: command.label,
+              expectedClass: command.kind,
+              size: Object.freeze({ width: 240, height: 180 }),
+            })]),
+          }),
+        })
+      }
       case "resources.pending.fail":
-      case "resources.add":
       case "resources.relink":
       case "resources.replace":
       case "resources.replace-generated":

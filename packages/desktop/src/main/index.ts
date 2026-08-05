@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto"
+import { createHash, randomBytes, randomUUID } from "node:crypto"
 import { appendFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -197,7 +197,7 @@ import {
   projectResourceAccessControlAllowOrigin,
 } from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
-import { loadCollaborationAuthorityV2 } from "./collaboration-authority-loader"
+import { loadCollaborationAuthoritiesV3 } from "./collaboration-authority-loader-v3"
 import {
   createOfflineCurrentLocalReplicaAuthoritySourceV2,
   createProjectCollaborationMaterializerRegistryV2,
@@ -237,6 +237,11 @@ import {
 } from "./project-team-peer-session-factory"
 import { NodeProjectTeamMemberIdentityStoreV1 } from "./project-team-member-identity-store"
 import { createLocalTeamIncomingReplicaAuthoritySourceV2 } from "./team-incoming-replica-authority"
+import { NodePristineV10SuccessorProjectContextSourceV3 } from "./node-pristine-v10-successor-project-context-source-v3"
+import { createPristineV10SuccessorProjectFactoryV3 } from "./pristine-v10-successor-project-factory-v3"
+import { createMainProjectCollaborationProductionCompositionV3 } from "./main-project-collaboration-production-composition-v3"
+import type { MainProjectCollaborationCompositionFacadeV3, MainProjectProtocolSelectionV3 } from "./project-collaboration-composition-v3"
+import type { SuccessorGenesisIdFactoryV3 } from "./successor-new-project-genesis-port-v3"
 
 const trustedWebContents = new Set<number>()
 const agentHostToolInactivityTimeout = 60 * 60_000
@@ -479,9 +484,10 @@ function startApplication() {
     const collaborationAuthorityRoot = app.isPackaged
       ? join(process.resourcesPath, "collaboration-authority")
       : join(app.getAppPath(), ".packaging", "collaboration-authority")
-    const collaborationAuthority = await loadCollaborationAuthorityV2({
+    const collaborationAuthorities = await loadCollaborationAuthoritiesV3({
       explicitAuthorityRoot: collaborationAuthorityRoot,
     })
+    const collaborationAuthority = collaborationAuthorities.historicalV2
     const collaborationAuthorityCache = new NodeDurableLocalReplicaAuthorityCacheV2(
       join(userDataDirectory, "collaboration", "local-authority"),
       collaborationAuthority.protocolDigest,
@@ -542,10 +548,12 @@ function startApplication() {
     let collaborationCanvasRoutes: MainProjectCanvasRouteRuntimeRegistryV2 | undefined
     let collaborationProjectIndexes: MainProjectIndexRuntimeRegistryV2 | undefined
     let collaborationCanvasComposition: MainCanvasCollaborationCompositionV2 | undefined
+    let collaborationFacade: MainProjectCollaborationCompositionFacadeV3 | undefined
     let projectTeamCollaboration: ProjectTeamCollaborationManagerV2 | undefined
     let disposeCanvasSessionIpc: () => void = () => undefined
     let disposeProjectTeamCollaborationIpc: () => void = () => undefined
     let activeCollaborationProjectId: string | null = null
+    let activeCollaborationProtocol: MainProjectProtocolSelectionV3 | null = null
     let collaborationActivationLane: Promise<void> = Promise.resolve()
     const serializeCollaborationActivation = <Result,>(operation: () => Promise<Result>): Promise<Result> => {
       const current = collaborationActivationLane.catch(() => undefined).then(operation)
@@ -553,20 +561,25 @@ function startApplication() {
       return current
     }
     const quiesceCollaborationProject = (projectId: string) => serializeCollaborationActivation(async () => {
-      await projectTeamCollaboration?.quiesceProject(projectId)
-      await collaborationCanvasSessions?.quiesceProject(projectId)
-      await collaborationCanvasRoutes?.quiesceProject(projectId)
-      await collaborationProjectIndexes?.quiesceProject(projectId)
-      if (activeCollaborationProjectId === projectId) activeCollaborationProjectId = null
+      if (activeCollaborationProjectId === projectId && activeCollaborationProtocol === "v10-r5") {
+        await projectTeamCollaboration?.quiesceProject(projectId)
+      }
+      await collaborationFacade?.quiesceProject(projectId)
+      if (activeCollaborationProjectId === projectId) {
+        activeCollaborationProjectId = null
+        activeCollaborationProtocol = null
+      }
     })
     const activateCollaborationProject = (projectId: string) => serializeCollaborationActivation(async () => {
       const previous = activeCollaborationProjectId
-      if (previous && previous !== projectId) await collaborationCanvasSessions?.quiesceProject(previous)
-      await collaborationCanvasRoutes?.switchProject(projectId)
-      collaborationCanvasSessions?.resumeProject(projectId)
+      if (previous && previous !== projectId) await collaborationFacade?.quiesceProject(previous)
+      if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
+      const selectedProtocol = await collaborationFacade.prepareProject(projectId)
+      console.warn(`Project ${projectId} selected collaboration protocol ${selectedProtocol}`)
       activeCollaborationProjectId = projectId
+      activeCollaborationProtocol = selectedProtocol
       try {
-        if (projectTeamCollaboration) {
+        if (selectedProtocol === "v10-r5" && projectTeamCollaboration) {
           await activateProjectSharingFromDurableBindingV2({
             projectId,
             sharing: collaborationTeamStore,
@@ -676,6 +689,50 @@ function startApplication() {
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
     collaborationCanvasRoutes = collaborationCanvasComposition.routes
+    const successorContexts = new NodePristineV10SuccessorProjectContextSourceV3({
+      authority: collaborationAuthorities.successorV3,
+      historicalAuthority: collaborationAuthority,
+      deviceRootDirectory: join(userDataDirectory, "collaboration", "successor-v3"),
+      projects: projectManager,
+      legacyOwners: localProjectOwnerAuthority,
+      teamAuthority: collaborationTeamStore,
+      replicaVault: collaborationReplicaVault,
+      signatureVerifier: collaborationSignatureVerifier,
+      applicationCommands: createProductionCanvasApplicationCommandAdapterV2(),
+      createOperationId: createCollaborationIdV2,
+      createShardEpoch: createCollaborationIdV2,
+      createSessionId: createCollaborationIdV2,
+      createCursorToken: createCollaborationIdV2,
+      genesisIds: Object.freeze({
+        derive({ claimDigest, purpose }: Parameters<SuccessorGenesisIdFactoryV3["derive"]>[0]) {
+          return parseId128V2(createHash("sha256").update(`${claimDigest}:${purpose}`).digest().subarray(0, 16).toString("base64url"))
+        },
+      }),
+    })
+    collaborationFacade = createMainProjectCollaborationProductionCompositionV3({
+      successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
+      createPromotionId: ({ projectId, projectEpoch, protocolDigest }) =>
+        parseId128V2(createHash("sha256")
+          .update("convax.v3-promotion-id/1\0")
+          .update(projectId)
+          .update("\0")
+          .update(projectEpoch)
+          .update("\0")
+          .update(protocolDigest)
+          .digest()
+          .subarray(0, 16)
+          .toString("base64url")),
+      successor: createPristineV10SuccessorProjectFactoryV3({
+        successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
+        contexts: successorContexts,
+      }),
+      v10: {
+        projectIndexes: collaborationProjectIndexes,
+        canvasSessions: collaborationCanvasSessions,
+        canvasRoutes: collaborationCanvasRoutes,
+      },
+    })
+    collaborationCanvasSessions = collaborationFacade.canvasSessions
     const localReplicaEnrollment = createLocalReplicaEnrollmentVerifierFactoryV2({
       async verifyCurrent(candidate) {
         const record = await collaborationTeamStore.open(candidate.projectId)
@@ -748,11 +805,9 @@ function startApplication() {
       trustBundleDigest: collaborationTrustBundleDigest,
       createId: createCollaborationIdV2,
       async afterAuthorityChange(projectId) {
-        await collaborationCanvasSessions?.quiesceProject(projectId)
-        await collaborationCanvasRoutes?.quiesceProject(projectId)
-        await collaborationProjectIndexes?.quiesceProject(projectId)
-        await collaborationCanvasRoutes?.switchProject(projectId)
-        collaborationCanvasSessions?.resumeProject(projectId)
+        if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
+        await collaborationFacade.quiesceProject(projectId)
+        activeCollaborationProtocol = await collaborationFacade.prepareProject(projectId)
         activeCollaborationProjectId = projectId
       },
     })
@@ -800,12 +855,12 @@ function startApplication() {
     }
     const projectCanvases = new NodeProjectCanvasManager({
       queryCatalog(input) {
-        if (!collaborationProjectIndexes) throw new Error("ProjectIndex collaboration runtime is unavailable")
-        return collaborationProjectIndexes.queryCatalog(input)
+        if (!collaborationFacade) throw new Error("ProjectIndex collaboration runtime is unavailable")
+        return collaborationFacade.projectIndexes.queryCatalog(input)
       },
       submitRouteCommand(input) {
-        if (!collaborationProjectIndexes) throw new Error("ProjectIndex collaboration runtime is unavailable")
-        return collaborationProjectIndexes.submitRouteCommand(input)
+        if (!collaborationFacade) throw new Error("ProjectIndex collaboration runtime is unavailable")
+        return collaborationFacade.projectIndexes.submitRouteCommand(input)
       },
     })
     const projectAssets = new ProjectManagedAssetStore(projectManager)
@@ -813,7 +868,7 @@ function startApplication() {
     const projectAssetGcScheduler = new ProjectAssetGcScheduler({
       gc: new ProjectAssetGc({
         assets: projectAssets,
-        references: collaborationProjectIndexes,
+        references: collaborationFacade.projectIndexes,
         projects: projectManager,
       }),
     })
@@ -849,6 +904,8 @@ function startApplication() {
       projectManager,
       projectFilePublisher,
       projectAssets,
+      undefined,
+      collaborationFacade.projectIndexes,
     )
     const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
     const canvasGenerationRuns = new CanvasNodeGenerationRunBusinessService(canvasApplication)
@@ -1876,7 +1933,7 @@ function startApplication() {
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
       projectCreationDirectory,
-      projectIndexFiles: collaborationProjectIndexes,
+      projectIndexFiles: collaborationFacade.projectIndexes,
       async onForgot(projectId) {
         projectAssetGcScheduler.close(projectId)
         await quiesceCollaborationProject(projectId)
@@ -1935,11 +1992,11 @@ function startApplication() {
       },
     })
     const resolveActiveCanvas = async (event: IpcMainInvokeEvent) => {
-      const snapshot = await canvasRenderer.getViewSnapshot("desktop-main", event.sender.id)
-      return snapshot
+      const ref = await canvasRenderer.getActiveWorkbenchRef(event.sender.id)
+      return ref
         ? {
-            canvasId: snapshot.documentId,
-            projectId: snapshot.scopeId,
+            canvasId: ref.canvasId,
+            projectId: ref.scopeId,
           }
         : null
     }
@@ -2259,6 +2316,11 @@ function startApplication() {
           })
         },
         () => {
+          void collaborationFacade?.dispose().catch((error) => {
+            console.warn("Could not dispose Project collaboration facade", error)
+          })
+        },
+        () => {
           void collaborationCanvasComposition?.dispose().catch((error) => {
             console.warn("Could not dispose Canvas collaboration composition", error)
           })
@@ -2295,6 +2357,7 @@ function startApplication() {
           disposeProjectTeamConnectivity()
           await projectTeamCollaboration?.dispose()
           disposeCanvasSessionIpc()
+          await collaborationFacade?.dispose()
           await collaborationCanvasComposition?.dispose()
           await collaborationProjectIndexes?.dispose()
           await collaborationProjects.dispose()

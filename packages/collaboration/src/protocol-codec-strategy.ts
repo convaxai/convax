@@ -20,6 +20,21 @@ import type {
   CausalEditFrameHeaderV2,
   DecodedCausalEditFrameV2,
 } from "./contracts"
+import {
+  actualWriteEvidenceDigestV3,
+  causalContextDigestV3,
+  causalEditSignatureDigestV3,
+  decodeCausalEditFrameV3,
+  encodeCausalEditFrameV3,
+  parseCausalContextV3,
+  signCausalEditCoreV3,
+  typedIntentDigestV3,
+  type SuccessorProtocolAuthorityV3,
+  type CausalContextV3,
+  type CausalEditCoreV3,
+  type CausalEditFrameHeaderV3,
+  type DecodedCausalEditFrameV3,
+} from "./successor-frame"
 
 /** Internal only: implementations are selected by a live protocol authority. */
 export interface CausalProtocolCodecStrategy<
@@ -69,3 +84,30 @@ export type SelectedCausalProtocolCodecV2 = CausalProtocolCodecStrategy<
   DecodedCausalEditFrameV2,
   ActualWriteEvidenceV2
 > & Readonly<{ authority: VerifiedProtocolAuthorityV2 }>
+
+/** Non-active codec selected only by the candidate V3 kernel test/composition seam. */
+export function selectedCausalProtocolCodecV3(
+  authority: SuccessorProtocolAuthorityV3,
+): SelectedCausalProtocolCodecV3 {
+  return Object.freeze({
+    authority,
+    protocolDigest: authority.protocolDigest,
+    actualWriteEvidenceDigest: actualWriteEvidenceDigestV3,
+    causalContextDigest: causalContextDigestV3,
+    causalEditSignatureDigest: causalEditSignatureDigestV3,
+    decodeFrame: (bytes: Uint8Array) => decodeCausalEditFrameV3(authority, bytes),
+    encodeFrame: (input: Parameters<typeof encodeCausalEditFrameV3>[1]) => encodeCausalEditFrameV3(authority, input),
+    parseActualWriteEvidence: parseActualWriteEvidenceV2,
+    parseCausalContext: parseCausalContextV3,
+    signCore: (core: CausalEditCoreV3, signer: ReplicaSignerPortV2) => signCausalEditCoreV3(authority, core, signer),
+    typedIntentDigest: typedIntentDigestV3,
+  })
+}
+
+export type SelectedCausalProtocolCodecV3 = CausalProtocolCodecStrategy<
+  CausalContextV3,
+  CausalEditCoreV3,
+  CausalEditFrameHeaderV3,
+  DecodedCausalEditFrameV3,
+  ActualWriteEvidenceV2
+> & Readonly<{ authority: SuccessorProtocolAuthorityV3 }>

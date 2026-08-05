@@ -1,5 +1,10 @@
 import path from "node:path"
+import { parseProjectIdV2 } from "@convax/collaboration"
 import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
+import {
+  canvasResourceProofMetadataKeyV2,
+  type CanvasResourceProofRefV2,
+} from "@convax/canvas/collaboration"
 import type {
   CanvasResourcePreparationPort,
   CanvasResourcePreparationRequest,
@@ -8,6 +13,11 @@ import type {
 } from "@convax/canvas/application"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import type { ProjectFilesClient } from "@convax/project-files/contracts"
+import {
+  projectResourceReferenceDigestV2,
+  type ProjectResourceReferenceV2,
+} from "../../collaboration/project-index"
+import type { ProjectIndexFileApplicationPortV2 } from "../../canvas/project-index-file-application"
 import {
   projectResourceReferenceKey,
   requireProjectResourceReference,
@@ -52,6 +62,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     private readonly publisher: ProjectCanvasFilePublisher,
     private readonly assets: ProjectManagedAssetStore,
     private readonly mediaInspector?: ProjectCanvasMediaInspector,
+    private readonly indexFiles?: ProjectIndexFileApplicationPortV2,
   ) {}
 
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
@@ -192,6 +203,12 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         projectId,
       })
       const reference = requireProjectFileReference(published.path)
+      const proof = await this.publishTextProof({
+        content: source.text,
+        mime: "text/markdown",
+        path: reference.path,
+        projectId,
+      })
       if (signal?.aborted) {
         throw new CanvasResourcePartialFailureError(
           signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError"),
@@ -202,7 +219,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         item: {
           id: source.sourceId,
           kind: "text",
-          metadata: metadataFor(reference),
+          metadata: metadataFor(reference, proof),
           mimeType: "text/markdown",
           name: path.posix.basename(reference.path),
           state: {
@@ -284,6 +301,29 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       },
     }
   }
+
+  private async publishTextProof(input: {
+    readonly content: string
+    readonly mime: string
+    readonly path: string
+    readonly projectId: string
+  }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
+    if (!this.indexFiles) return undefined
+    const projectId = parseProjectIdV2(input.projectId)
+    await this.indexFiles.createDirectory({ projectId, path: path.posix.dirname(input.path) })
+    const result = await this.indexFiles.publishFile({
+      projectId,
+      path: input.path,
+      exactBytes: new TextEncoder().encode(input.content),
+      mime: input.mime,
+      contentPolicy: "conflict-preserving-text",
+      provenance: "user",
+    })
+    if (result.status !== "committed" || result.reference == null) {
+      throw new Error("ProjectIndex did not publish the Canvas resource")
+    }
+    return canvasProofForProjectReference(result.reference, "text")
+  }
 }
 
 function localPreparedItem(
@@ -314,8 +354,37 @@ function localPreparedItem(
   }
 }
 
-function metadataFor(reference: ProjectResourceReference) {
-  return { [projectResourceReferenceKey]: reference }
+function metadataFor(
+  reference: ProjectResourceReference,
+  proof?: Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }>,
+) {
+  return {
+    [projectResourceReferenceKey]: reference,
+    ...(proof === undefined ? {} : { [canvasResourceProofMetadataKeyV2]: proof }),
+  }
+}
+
+function canvasProofForProjectReference(
+  reference: ProjectResourceReferenceV2,
+  mediaClass: "text" | "image" | "video" | "audio" | "file",
+): Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> {
+  const ownerProofDigest = projectResourceReferenceDigestV2(reference)
+  const resource = Object.freeze({
+    format: "convax.canvas-resource-ref/2" as const,
+    uri: reference.canonicalUri,
+    mediaClass,
+    mime: reference.blob.mime,
+    byteLength: reference.blob.byteLength,
+    contentDigest: reference.blob.digest,
+    ownerProofDigest,
+  })
+  return Object.freeze({
+    format: "convax.canvas-resource-proof-ref/2" as const,
+    mode: "current-owner-state" as const,
+    resource,
+    ownerProofDigest,
+    requireCurrentLiveVersion: true as const,
+  })
 }
 
 function requireProjectFileReference(path: string): Extract<ProjectResourceReference, { kind: "project-file" }> {

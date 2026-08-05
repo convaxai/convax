@@ -26,6 +26,8 @@ export interface ProjectSharingHandoffCoreV3 {
   readonly serviceTrustBundleDigest: DigestV2
   readonly initialMembershipSnapshotDigest: DigestV2
   readonly initialOwnerMemberId: MemberIdV2
+  readonly initialMemberCredentialCoreDigest: DigestV2
+  readonly initialAdminCapabilityCoreDigest: DigestV2
   readonly initialOwnerReplicaId: ReplicaIdV2
   readonly initialOwnerActorId: ActorIdV2
   readonly initialReplicaActorCredentialCoreDigest: DigestV2
@@ -41,6 +43,13 @@ export interface ProjectSharingHandoffReceiptV3 {
   readonly serviceSigningPublicKey: PublicKeyV2
   readonly serviceSigningKeyId: DigestV2
   readonly serviceSignature: SignatureV2
+}
+
+export interface ProjectSharingHandoffProposalV3 {
+  readonly format: "convax.project-sharing-handoff-proposal/3"
+  readonly core: ProjectSharingHandoffCoreV3
+  readonly coreDigest: DigestV2
+  readonly ownerSignature: SignatureV2
 }
 
 export type ProjectSharingHandoffSubmitResultV3 =
@@ -61,7 +70,7 @@ const KEY_DOMAIN = "convax.project-sharing-service-public-key/3"
 const OWNER_KEY_DOMAIN = "convax.local-project-owner-public-key/3"
 
 export function parseProjectSharingHandoffCoreV3(value: unknown): ProjectSharingHandoffCoreV3 {
-  assertExactKeysV2(value, ["format", "handoffId", "projectId", "projectEpoch", "previousOwnerBindingCoreDigest", "previousOwnerKeyId", "sharingGeneration", "projectIndexHead", "liveCanvasHeads", "serviceTrustBundleDigest", "initialMembershipSnapshotDigest", "initialOwnerMemberId", "initialOwnerReplicaId", "initialOwnerActorId", "initialReplicaActorCredentialCoreDigest", "initialReplicaEditAuthorizationCoreDigest", "successorProtocolDigest"], "ProjectSharingHandoffCoreV3")
+  assertExactKeysV2(value, ["format", "handoffId", "projectId", "projectEpoch", "previousOwnerBindingCoreDigest", "previousOwnerKeyId", "sharingGeneration", "projectIndexHead", "liveCanvasHeads", "serviceTrustBundleDigest", "initialMembershipSnapshotDigest", "initialOwnerMemberId", "initialMemberCredentialCoreDigest", "initialAdminCapabilityCoreDigest", "initialOwnerReplicaId", "initialOwnerActorId", "initialReplicaActorCredentialCoreDigest", "initialReplicaEditAuthorizationCoreDigest", "successorProtocolDigest"], "ProjectSharingHandoffCoreV3")
   if (value.format !== CORE_DOMAIN || value.sharingGeneration !== "1") failCodec("Project sharing handoff discriminator is invalid")
   const projectId = parseProjectIdV2(value.projectId)
   const projectEpoch = parseId128V2(value.projectEpoch)
@@ -78,12 +87,45 @@ export function parseProjectSharingHandoffCoreV3(value: unknown): ProjectSharing
     previousOwnerBindingCoreDigest: parseDigestV2(value.previousOwnerBindingCoreDigest), previousOwnerKeyId: parseDigestV2(value.previousOwnerKeyId), sharingGeneration: value.sharingGeneration,
     projectIndexHead: projectIndexHead as ProjectSharingHandoffCoreV3["projectIndexHead"], liveCanvasHeads: Object.freeze(liveCanvasHeads),
     serviceTrustBundleDigest: parseDigestV2(value.serviceTrustBundleDigest), initialMembershipSnapshotDigest: parseDigestV2(value.initialMembershipSnapshotDigest),
-    initialOwnerMemberId: parseMemberIdV2(value.initialOwnerMemberId), initialOwnerReplicaId: parseReplicaIdV2(value.initialOwnerReplicaId), initialOwnerActorId: parseActorIdV2(value.initialOwnerActorId),
+    initialOwnerMemberId: parseMemberIdV2(value.initialOwnerMemberId), initialMemberCredentialCoreDigest: parseDigestV2(value.initialMemberCredentialCoreDigest), initialAdminCapabilityCoreDigest: parseDigestV2(value.initialAdminCapabilityCoreDigest), initialOwnerReplicaId: parseReplicaIdV2(value.initialOwnerReplicaId), initialOwnerActorId: parseActorIdV2(value.initialOwnerActorId),
     initialReplicaActorCredentialCoreDigest: parseDigestV2(value.initialReplicaActorCredentialCoreDigest), initialReplicaEditAuthorizationCoreDigest: parseDigestV2(value.initialReplicaEditAuthorizationCoreDigest), successorProtocolDigest: parseDigestV2(value.successorProtocolDigest),
   })
 }
 
 export function projectSharingHandoffCoreDigestV3(value: ProjectSharingHandoffCoreV3): DigestV2 { return digestDomain(CORE_DOMAIN, parseProjectSharingHandoffCoreV3(value)) }
+
+export function parseProjectSharingHandoffProposalV3(value: unknown): ProjectSharingHandoffProposalV3 {
+  assertExactKeysV2(value, ["format", "core", "coreDigest", "ownerSignature"], "ProjectSharingHandoffProposalV3")
+  if (value.format !== "convax.project-sharing-handoff-proposal/3") failCodec("Project sharing handoff proposal format is invalid")
+  const core = parseProjectSharingHandoffCoreV3(value.core)
+  const coreDigest = parseDigestV2(value.coreDigest)
+  if (coreDigest !== projectSharingHandoffCoreDigestV3(core)) failCodec("Project sharing handoff proposal digest closure is invalid")
+  return Object.freeze({ format: value.format, core, coreDigest, ownerSignature: parseSignatureV2(value.ownerSignature) })
+}
+
+export async function verifyProjectSharingHandoffProposalV3(input: Readonly<{
+  proposal: ProjectSharingHandoffProposalV3
+  ownerPublicKey: PublicKeyV2
+  expectedOwnerKeyId: DigestV2
+  verifier: Ed25519VerifierPortV2
+}>): Promise<ProjectSharingHandoffProposalV3 | "rejected"> {
+  try {
+    const proposal = parseProjectSharingHandoffProposalV3(input.proposal)
+    const ownerPublicKey = parsePublicKeyV2(input.ownerPublicKey)
+    if (
+      proposal.core.previousOwnerKeyId !== parseDigestV2(input.expectedOwnerKeyId) ||
+      proposal.core.previousOwnerKeyId !== digestDomain(OWNER_KEY_DOMAIN, ownerPublicKey)
+    ) return "rejected"
+    return await verifyExactEd25519V2(
+      input.verifier,
+      ownerPublicKey,
+      proposal.ownerSignature,
+      projectSharingHandoffSignatureDigestV3(proposal.coreDigest),
+    ) ? proposal : "rejected"
+  } catch {
+    return "rejected"
+  }
+}
 
 export function parseProjectSharingHandoffReceiptV3(value: unknown): ProjectSharingHandoffReceiptV3 {
   assertExactKeysV2(value, ["format", "core", "coreDigest", "ownerSignature", "serviceSigningPublicKey", "serviceSigningKeyId", "serviceSignature"], "ProjectSharingHandoffReceiptV3")
@@ -112,7 +154,7 @@ export async function verifyProjectSharingHandoffReceiptV3(input: Readonly<{
     const service = await input.serviceTrust.resolve({ trustBundleDigest: receipt.core.serviceTrustBundleDigest, serviceSigningKeyId: receipt.serviceSigningKeyId })
     if (service.status !== "verified") return service.status
     if (service.publicKey !== receipt.serviceSigningPublicKey) return "rejected"
-    const purpose = signaturePurpose(receipt.coreDigest)
+    const purpose = projectSharingHandoffSignatureDigestV3(receipt.coreDigest)
     if (!await verifyExactEd25519V2(input.verifier, ownerPublicKey, receipt.ownerSignature, purpose)) return "rejected"
     if (!await verifyExactEd25519V2(input.verifier, receipt.serviceSigningPublicKey, receipt.serviceSignature, purpose)) return "rejected"
     return "verified"
@@ -140,5 +182,5 @@ function parseHead(value: unknown, projectId: ProjectIdV2, projectEpoch: Id128V2
   return Object.freeze({ scope, acceptedFrontierDigest: parseDigestV2(value.acceptedFrontierDigest), acceptedHeadDigest: parseDigestV2(value.acceptedHeadDigest) })
 }
 function digestDomain(domain: string, value: unknown): DigestV2 { const d = new TextEncoder().encode(domain); const b = encodeRestrictedJcsV2(value); const p = new Uint8Array(d.length + 1 + b.length); p.set(d); p.set(b, d.length + 1); return ordinarySha256V2(p) }
-function signaturePurpose(digest: DigestV2): Uint8Array { const d = new TextEncoder().encode("convax.project-sharing-handoff-signature/3"); const b = Uint8Array.from(digest.match(/../gu)!.map((x) => Number.parseInt(x, 16))); const p = new Uint8Array(d.length + 1 + b.length); p.set(d); p.set(b, d.length + 1); return Uint8Array.from(ordinarySha256V2(p).match(/../gu)!.map((x) => Number.parseInt(x, 16))) }
+export function projectSharingHandoffSignatureDigestV3(digest: DigestV2): Uint8Array { const d = new TextEncoder().encode("convax.project-sharing-handoff-signature/3"); const b = Uint8Array.from(parseDigestV2(digest).match(/../gu)!.map((x) => Number.parseInt(x, 16))); const p = new Uint8Array(d.length + 1 + b.length); p.set(d); p.set(b, d.length + 1); return Uint8Array.from(ordinarySha256V2(p).match(/../gu)!.map((x) => Number.parseInt(x, 16))) }
 function equalBytes(a: Uint8Array, b: Uint8Array) { return a.length === b.length && a.every((v, i) => v === b[i]) }

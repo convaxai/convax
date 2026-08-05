@@ -4,6 +4,17 @@ export type {
   AuthorityReleaseSnapshotV1,
   ValidatedAuthorityReleaseV1,
 } from "./authority-selector"
+export {
+  selectInstalledProtocolAuthorityV3,
+  validateSuccessorAuthorityCandidateSnapshotV1,
+  validateSuccessorAuthorityReleaseSnapshotV1,
+} from "./authority-selector-v3"
+export type {
+  SuccessorAuthorityCandidateSnapshotV1,
+  SuccessorAuthorityReleaseSnapshotV1,
+  ValidatedSuccessorAuthorityCandidateV1,
+  ValidatedSuccessorAuthorityReleaseV1,
+} from "./authority-selector-v3"
 
 export type { VerifiedProtocolAuthorityV2 } from "./authority"
 export {
@@ -11,7 +22,10 @@ export {
   assertLocalOwnerAuthorityClosureV3,
   causalSignerAuthorityDigestV3,
   localOwnerEditAuthorizationCoreDigestV3,
+  localOwnerEditAuthorizationSignatureDigestV3,
   localProjectOwnerBindingCoreDigestV3,
+  localProjectOwnerBindingSignatureDigestV3,
+  localProjectOwnerKeyIdV3,
   parseCausalAuthorityDependenciesV3,
   parseCausalSignerAuthorityV3,
   parseLocalOwnerEditAuthorizationCoreV3,
@@ -25,19 +39,26 @@ export {
 export {
   InMemoryProjectSharingHandoffSubmissionV3,
   parseProjectSharingHandoffCoreV3,
+  parseProjectSharingHandoffProposalV3,
   parseProjectSharingHandoffReceiptV3,
   projectSharingHandoffCoreDigestV3,
+  projectSharingHandoffSignatureDigestV3,
+  verifyProjectSharingHandoffProposalV3,
   verifyProjectSharingHandoffReceiptV3,
 } from "./successor-handoff"
 export type {
   ProjectSharingHandoffCoreV3,
   ProjectSharingHandoffDocumentHeadV3,
+  ProjectSharingHandoffProposalV3,
   ProjectSharingHandoffReceiptV3,
   ProjectSharingHandoffSubmissionPortV3,
   ProjectSharingHandoffSubmitResultV3,
   ProjectSharingServiceTrustPortV3,
 } from "./successor-handoff"
-export { createCandidateIncomingFrameAdmissionStrategyV3 } from "./successor-admission"
+export {
+  createCandidateIncomingFrameAdmissionStrategyV3,
+  createSelectedIncomingAuthorityVerificationPortV3,
+} from "./successor-admission"
 export type {
   CandidateIncomingFrameAdmissionResultV3,
   CandidateIncomingFrameAdmissionStrategyV3,
@@ -46,7 +67,12 @@ export type {
   SuccessorIncomingAuthorityProofResolverPortV3,
   VerifiedTeamReplicaIncomingProofV3,
 } from "./successor-admission"
-export { SUCCESSOR_CAUSAL_EDIT_MAGIC_V3, decodeSelectedCausalEditFrame } from "./successor-frame"
+export {
+  SUCCESSOR_CAUSAL_EDIT_MAGIC_V3,
+  decodeCausalEditFrameV3,
+  decodeSelectedCausalEditFrame,
+  typedIntentDigestV3,
+} from "./successor-frame"
 export type {
   CausalContextV3,
   CausalDependencyKindV3,
@@ -54,6 +80,11 @@ export type {
   CausalEditCoreV3,
   CausalEditFrameHeaderV3,
   DecodedCausalEditFrameV3,
+  HistoricalAuthoritySnapshotMemberV3,
+  HistoricalProtocolAuthorityClosureV3,
+  SuccessorProtocolSchemaArtifactRefV3,
+  SuccessorProtocolAuthorityV3,
+  VerifiedProtocolAuthorityV3,
 } from "./successor-frame"
 export type {
   CausalAuthorityDependencyKindV3,
@@ -70,7 +101,31 @@ export type {
   TeamReplicaSignerAuthorityV3,
   VerifiedLocalOwnerAuthorityV3,
 } from "./successor-authority"
-export { createWebCryptoEd25519VerifierV2 } from "./crypto"
+export {
+  SUCCESSOR_PROMOTION_DOMAINS_V3,
+  parseProtocolPromotionBridgeCoreV3,
+  parseProtocolPromotionBridgeV3,
+  parseProtocolPromotionSourceV3,
+  protocolPromotionBridgeCoreDigestV3,
+  protocolPromotionBridgeSignatureDigestV3,
+  verifyProtocolPromotionBridgeV3,
+} from "./successor-promotion"
+export { CollaborationKernelV3 } from "./successor-kernel"
+export type {
+  CollaborationKernelOptionsV3,
+  IncomingFrameResultV3,
+  LocalCommitResultV3,
+  LocalIntentRequestV3,
+  PreparedLocalIntentV3,
+  ReplicaProjectionSnapshotV3,
+} from "./successor-kernel"
+export { selectedSuccessorValidationArtifactSetV3 } from "./successor-validation-artifacts"
+export type {
+  ProtocolPromotionBridgeCoreV3,
+  ProtocolPromotionBridgeV3,
+  ProtocolPromotionSourceV3,
+} from "./successor-promotion"
+export { createWebCryptoEd25519VerifierV2, verifyExactEd25519V2 } from "./crypto"
 export type { Ed25519VerifierPortV2, ReplicaSignerPortV2 } from "./crypto"
 export type { YjsDocumentFactoryV2 } from "./yjs-codec"
 
@@ -279,13 +334,18 @@ export type {
 
 export {
   causalHeadRefFromDecodedFrameV2,
+  causalHeadRefFromDecodedFrameV3,
   frameObjectRefFromDecodedFrameV2,
+  frameObjectRefFromDecodedFrameV3,
   incomingFrameClosureV2,
+  incomingFrameClosureV3,
   inspectAcceptedFrameObjectV2,
+  inspectAcceptedFrameObjectV3,
   materializeAcceptedFrameV2,
+  materializeAcceptedFrameV3,
   replicaActorHeadSetDigestV2,
 } from "./accepted-head"
-export type { MaterializeAcceptedFrameInputV2 } from "./accepted-head"
+export type { MaterializeAcceptedFrameInputV2, MaterializeAcceptedFrameInputV3 } from "./accepted-head"
 
 export { decodeCausalEditFrameV2 } from "./frame"
 export {
@@ -319,6 +379,13 @@ export type {
   PendingInboxPortV2,
   ProjectionInvalidationPortV2,
   ReferenceScanResultV2,
+  CollaborationKernelPortsV3,
+  ExactBaseResolverPortV3,
+  IncomingAuthorityVerificationPortV3,
+  IncomingOwnerFactResolverPortV3,
+  LocalAuthorityPortV3,
+  LocalFrameAuthorityV3,
+  PendingInboxPortV3,
 } from "./ports"
 
 export {

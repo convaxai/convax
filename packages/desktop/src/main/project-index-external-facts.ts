@@ -2,6 +2,7 @@ import type {
   DecodedCausalEditFrameV2,
   DocumentScopeV2,
   IncomingOwnerFactResolverPortV2,
+  IncomingOwnerFactResolverPortV3,
   OwnerExternalFactPortFactoryV2,
   OwnerExternalFactRequirementV2,
   OwnerIntentDependenciesV2,
@@ -10,7 +11,10 @@ import {
   ordinarySha256V2,
   parseDocumentScopeV2,
 } from "@convax/collaboration"
-import type { CanvasGenesisProofCarrierVerifierV2 } from "@convax/canvas/collaboration"
+import type {
+  CanvasGenesisProofCarrierVerifierV2,
+  LocalOwnerCanvasGenesisProofVerificationV3,
+} from "@convax/canvas/collaboration"
 import {
   decodeProjectIndexBlobPublicationCurrentnessRequestV2,
   decodeProjectIndexCanvasGenesisCurrentnessRequestV2,
@@ -82,6 +86,7 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
 }): Readonly<{
   facts: ProjectIndexFactResolutionPortV2
   incomingFacts: IncomingOwnerFactResolverPortV2
+  incomingFactsV3: IncomingOwnerFactResolverPortV3
   canvasGenesis: ProjectCanvasGenesisStagingPortV2
 }> {
   const scope = requireProjectIndexScope(input.scope)
@@ -134,6 +139,12 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
         return resolve(request.declaredDependencies as OwnerIntentDependenciesV2<"project-index">)
       },
     }),
+    incomingFactsV3: Object.freeze({
+      async resolve(request: Parameters<IncomingOwnerFactResolverPortV3["resolve"]>[0]) {
+        if (!sameScope(request.frame.header.core.scope, scope)) return Object.freeze({ status: "rejected" as const })
+        return resolve(request.declaredDependencies as OwnerIntentDependenciesV2<"project-index">)
+      },
+    }),
     canvasGenesis: Object.freeze({
       async preflightCanvasGenesis() { return "pending" as const },
       async stageCanvasGenesis() { return "pending" as const },
@@ -155,6 +166,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
   >
   readonly genesisVerifier: ProjectDocumentGenesisVerifierPortV2<"canvas">
   readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
+  readonly localOwnerProofVerifierV3?: (carrier: Uint8Array) => Promise<LocalOwnerCanvasGenesisProofVerificationV3>
   readonly preflightAuthor: (input: {
     readonly projectId: DocumentScopeV2["projectId"]
     readonly projectEpoch: DocumentScopeV2["projectEpoch"]
@@ -191,14 +203,28 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
         })
       }
       signal?.throwIfAborted()
-      const verified = input.proofVerifier(carrier)
-      if (verified.status !== "validated") {
-        return Object.freeze({ status: verified.status === "pending" ? "pending" as const : "rejected" as const })
-      }
-      if (
-        verified.identity.checkpointObjectDigest !== request.genesisCheckpointObjectDigest ||
-        !sameScope(verified.identity.scope, request.canvasScope) ||
-        verified.identity.identity.projectIndexRouteDependencyFrameDigest !== request.routeDependencyFrameDigest
+      const verifiedV2 = input.proofVerifier(carrier)
+      const verifiedV3 = verifiedV2.status === "rejected" && input.localOwnerProofVerifierV3
+        ? await input.localOwnerProofVerifierV3(carrier)
+        : undefined
+      if (verifiedV2.status === "pending") return Object.freeze({ status: "pending" as const })
+      const identity = verifiedV2.status === "validated"
+        ? Object.freeze({
+            checkpointObjectDigest: verifiedV2.identity.checkpointObjectDigest,
+            scope: verifiedV2.identity.scope,
+            routeDependencyFrameDigest: verifiedV2.identity.identity.projectIndexRouteDependencyFrameDigest,
+          })
+        : verifiedV3?.status === "validated"
+          ? Object.freeze({
+              checkpointObjectDigest: verifiedV3.checkpointObjectDigest,
+              scope: verifiedV3.scope,
+              routeDependencyFrameDigest: verifiedV3.projectIndexRouteDependencyFrameDigest,
+            })
+          : undefined
+      if (!identity ||
+        identity.checkpointObjectDigest !== request.genesisCheckpointObjectDigest ||
+        !sameScope(identity.scope, request.canvasScope) ||
+        identity.routeDependencyFrameDigest !== request.routeDependencyFrameDigest
       ) {
         return Object.freeze({ status: "rejected" as const })
       }

@@ -112,7 +112,7 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
   const open = mock(async ({ scope }: { scope: DocumentScopeV2 & { docKind: "canvas" } }): Promise<CanvasRouteRuntimeHandleV2> => {
     await options.beforeOpen?.()
     const session = fakeSession(scope)
-    return Object.freeze({ session, dispose() { runtimeDisposals += 1; session.dispose() } })
+    return Object.freeze({ protocol: "v2" as const, session, dispose() { runtimeDisposals += 1; session.dispose() } })
   })
   const fixture = {
     catalog: liveCatalog(), acquire, open,

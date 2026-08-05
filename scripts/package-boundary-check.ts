@@ -2,6 +2,11 @@ import { builtinModules } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 
 import { verifyCurrentCollaborationAuthorityReleaseV1 } from "./collaboration-authority-release"
+import {
+  generateSuccessorAuthorityReleaseV1,
+  verifyGeneratedSuccessorAuthorityReleaseV1,
+} from "./collaboration-authority-v11/generate"
+import { verifyCurrentSuccessorAuthorityGovernanceV1 } from "./collaboration-authority-v11-release"
 
 type PackageManifest = {
   dependencies?: Record<string, string>
@@ -235,6 +240,8 @@ if (
   throw new Error("Plugin-to-Host human review gate is missing from the architecture contract")
 }
 verifyCurrentCollaborationAuthorityReleaseV1({ repositoryRoot })
+verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
+verifyCurrentSuccessorAuthorityGovernanceV1({ repositoryRoot })
 requireContractMarkers("AGENTS.md", rootContract, [
   "## Frozen collaboration v10 authority",
   collaborationV10ActivePointerRelativePath,

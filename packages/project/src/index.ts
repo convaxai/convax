@@ -8,6 +8,7 @@ export {
   createProjectIndexReconstructionYDocV2,
   decodeProjectIndexBlobPublicationCurrentnessRequestV2,
   decodeProjectIndexCanvasGenesisCurrentnessRequestV2,
+  deriveProjectCanvasIdForOperationV2,
   projectIndexCurrentBlobReferencesV2,
   projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2,
   parseProjectResourceReferenceV2,

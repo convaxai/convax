@@ -33,6 +33,42 @@ describe("successor local-owner durable evidence", () => {
     await expect(fixture.store.installUnshared(crossed.authority)).rejects.toThrow("equivocation")
   })
 
+  test("appends and resolves the exact authorization for each document scope", async () => {
+    const fixture = await createFixture()
+    await fixture.store.installUnshared(fixture.authority)
+    const canvasScope = {
+      projectId: fixture.bindingCore.projectId,
+      projectEpoch: fixture.bindingCore.projectEpoch,
+      docKind: "canvas" as const,
+      docId: `cv_${"d".repeat(64)}` as never,
+      shardEpoch: parseId128V2(encodeBase64urlV2(Buffer.alloc(16, 8))),
+    }
+    const canvasCore = {
+      ...fixture.authority.authorizations[0]!.core,
+      scope: canvasScope,
+      ownerSchemaDigest: digest("canvas-schema"),
+    }
+    const canvasAuthorization = {
+      format: "convax.local-owner-edit-authorization/3" as const,
+      core: canvasCore,
+      coreDigest: localOwnerEditAuthorizationCoreDigestV3(canvasCore),
+      ownerSignature: signature(),
+    }
+    await fixture.store.installUnshared({ binding: fixture.authority.binding, authorizations: [canvasAuthorization] })
+    const resolved = await fixture.store.resolveExact({
+      projectId: fixture.bindingCore.projectId,
+      projectEpoch: fixture.bindingCore.projectEpoch,
+      scope: canvasScope,
+      ownerSchemaDigest: canvasCore.ownerSchemaDigest,
+      protocolDigest: fixture.bindingCore.protocolDigest,
+    })
+    expect(resolved).not.toBe("missing")
+    expect(resolved).not.toBe("rejected")
+    if (resolved !== "missing" && resolved !== "rejected") expect(resolved.authorization.coreDigest).toBe(canvasAuthorization.coreDigest)
+    const opened = await fixture.store.open(fixture.bindingCore.projectId, fixture.bindingCore.projectEpoch)
+    if (opened.status === "unshared") expect(opened.authority.authorizations).toHaveLength(2)
+  })
+
   test("device tombstone dominates a restored unshared Project and rejects rollback", async () => {
     const fixture = await createFixture()
     await fixture.store.installUnshared(fixture.authority)
@@ -138,7 +174,6 @@ function authority(overrides: { projectId?: LocalProjectOwnerBindingCoreV3["proj
     ownerPublicKey,
     initialReplicaId: parseReplicaIdV2("replica_00000001"),
     initialActorId: parseActorIdV2(encodeBase64urlV2(Buffer.alloc(32, 3))),
-    ownerSchemaDigest: digest("owner-schema"),
     protocolDigest: digest("protocol"),
     genesisAuthorizationPolicy: {
       format: "convax.local-owner-genesis-authorization-policy/3",
@@ -168,6 +203,7 @@ function authority(overrides: { projectId?: LocalProjectOwnerBindingCoreV3["proj
     scope: bindingCore.genesisAuthorizationPolicy.projectIndexScope,
     replicaId: bindingCore.initialReplicaId,
     actorId: bindingCore.initialActorId,
+    ownerSchemaDigest: digest("owner-schema"),
     actorSequenceAllocationPolicy: {
       format: "convax.local-owner-actor-sequence-allocation-policy/3",
       kind: "strict-durable-head-successor",
@@ -181,12 +217,12 @@ function authority(overrides: { projectId?: LocalProjectOwnerBindingCoreV3["proj
     bindingCore,
     authority: {
       binding,
-      authorization: {
+      authorizations: [{
         format: "convax.local-owner-edit-authorization/3" as const,
         core: authorizationCore,
         coreDigest: localOwnerEditAuthorizationCoreDigestV3(authorizationCore),
         ownerSignature: signature(),
-      },
+      }],
     },
   }
 }
@@ -204,13 +240,14 @@ function sharingHandoff(binding: LocalProjectOwnerBindingCoreV3) {
     previousOwnerBindingCoreDigest: localProjectOwnerBindingCoreDigestV3(binding), previousOwnerKeyId: binding.ownerKeyId, sharingGeneration: "1",
     projectIndexHead: { scope: binding.genesisAuthorizationPolicy.projectIndexScope, acceptedFrontierDigest: digest("frontier"), acceptedHeadDigest: digest("head") }, liveCanvasHeads: [],
     serviceTrustBundleDigest: digest("trust"), initialMembershipSnapshotDigest: membershipSnapshotDigest, initialOwnerMemberId: parseId128V2(encodeBase64urlV2(Buffer.alloc(16, 7))) as never,
+    initialMemberCredentialCoreDigest: digest("member-credential"), initialAdminCapabilityCoreDigest: digest("admin-capability"),
     initialOwnerReplicaId: binding.initialReplicaId, initialOwnerActorId: binding.initialActorId, initialReplicaActorCredentialCoreDigest: replicaActorCredentialCoreDigest,
     initialReplicaEditAuthorizationCoreDigest: replicaEditAuthorizationCoreDigest, successorProtocolDigest: binding.protocolDigest,
   }
   const serviceSigningPublicKey = parsePublicKeyV2(encodeBase64urlV2(Buffer.alloc(32, 9)))
   const domain = new TextEncoder().encode("convax.project-sharing-service-public-key/3"); const key = encodeRestrictedJcsV2(serviceSigningPublicKey); const preimage = new Uint8Array(domain.length + 1 + key.length); preimage.set(domain); preimage.set(key, domain.length + 1)
   const receipt = { format: "convax.project-sharing-handoff-receipt/3" as const, core, coreDigest: projectSharingHandoffCoreDigestV3(core), ownerSignature: signature(), serviceSigningPublicKey, serviceSigningKeyId: ordinarySha256V2(preimage), serviceSignature: signature() }
-  return { receipt, receiptDigest: ordinarySha256V2(encodeRestrictedJcsV2(receipt)), teamArtifacts: { membershipSnapshotDigest, replicaActorCredentialCoreDigest, replicaEditAuthorizationCoreDigest } }
+  return { receipt, receiptDigest: ordinarySha256V2(encodeRestrictedJcsV2(receipt)), teamArtifacts: { membershipSnapshotDigest, memberCredentialCoreDigest: core.initialMemberCredentialCoreDigest, adminCapabilityCoreDigest: core.initialAdminCapabilityCoreDigest, replicaActorCredentialCoreDigest, replicaEditAuthorizationCoreDigest } }
 }
 
 async function tombstoneFilename(projectId: string, projectEpoch: string) {

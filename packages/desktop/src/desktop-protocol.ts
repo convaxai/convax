@@ -34,6 +34,7 @@ export interface CanvasResourceAddInput {
   }[]
   projectId: string
   parentId?: string
+  pending?: { kind: "image" | "video"; label: string }
   relation?: {
     anchorNodeIds: readonly string[]
     direction?: "from-anchor" | "to-anchor"

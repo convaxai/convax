@@ -374,6 +374,9 @@ function setup(
         snapshot: { ...viewSnapshot },
       }
     },
+    async getActiveWorkbenchRef() {
+      return null
+    },
     async getViewSnapshot() {
       return { ...viewSnapshot }
     },

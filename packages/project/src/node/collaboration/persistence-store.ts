@@ -8,6 +8,7 @@ import type {
   CollaborationPersistencePortV2,
   CompareAndCommitReplicaHeadPortResultV2,
   DecodedCausalEditFrameV2,
+  DecodedCausalEditFrameV3,
   DigestV2,
   DocumentScopeV2,
   FrameObjectRefV2,
@@ -24,6 +25,7 @@ import type {
 } from "@convax/collaboration"
 import {
   frameObjectRefFromDecodedFrameV2,
+  frameObjectRefFromDecodedFrameV3,
   parseActorIdV2,
   parseDigestV2,
   parseMemberIdV2,
@@ -108,6 +110,8 @@ export interface NodeReplicaHeadMaterializerV2 {
     readonly ref: FrameObjectRefV2
     readonly exactBytes: Readonly<Uint8Array>
   }): Promise<NodeAcceptedReplicaHeadV2>
+  /** Updates disposable causal lookup state only after the frame is reachable from the durable head. */
+  observeAcceptedFrame?(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>): void
   /** Reconstructs the exact portable checkpoint payload without consulting native metadata order. */
   materializeCheckpoint?(input: {
     readonly scope: DocumentScopeV2
@@ -438,6 +442,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     private readonly checkpointPruneAuthority: NodeCheckpointPruneAuthorityV2 | undefined,
     private readonly checkpointPruneRootScanner: NodeCheckpointPruneRootScannerV2 | undefined,
     private readonly hooks: NodeCollaborationPersistenceFaultHooksV2,
+    private readonly ownsRootWriterLease = true,
   ) {}
 
   static async open(input: {
@@ -469,13 +474,31 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       input.checkpointPruneAuthority,
       input.checkpointPruneRootScanner,
       input.hooks ?? {},
+      true,
+    )
+  }
+
+  static async openReadOnly(input: Parameters<typeof NodeCollaborationPersistenceV2.open>[0]): Promise<NodeCollaborationPersistenceV2> {
+    if (!path.isAbsolute(input.collaborationDirectory)) invalid("Collaboration directory must be absolute")
+    await ensureTrustedDirectory(input.collaborationDirectory)
+    const real = await fs.realpath(input.collaborationDirectory)
+    return new NodeCollaborationPersistenceV2(
+      real,
+      input.localActorId,
+      input.materializer,
+      input.replicaDurableAckVerifier,
+      input.checkpointInstallationVerifier,
+      input.checkpointPruneAuthority,
+      input.checkpointPruneRootScanner,
+      input.hooks ?? {},
+      false,
     )
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
-    rootWriterLeases.delete(this.collaborationDirectory)
+    if (this.ownsRootWriterLease) rootWriterLeases.delete(this.collaborationDirectory)
   }
 
   async initializeShard(input: InitializeNativeCollaborationShardV2): Promise<NodeAcceptedReplicaHeadV2> {
@@ -1034,15 +1057,17 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   async retainExactFrame(
-    frame: DecodedCausalEditFrameV2,
+    frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3,
     reason: PendingFrameReasonV2,
   ): Promise<"retained" | "capacity-exceeded"> {
     this.requireLive()
     if (!isPendingReason(reason)) invalid("Pending frame reason is invalid")
-    const ref = frameObjectRefFromDecodedFrameV2(frame)
+    const ref = frame.header.format === "convax.causal-edit-frame/3"
+      ? frameObjectRefFromDecodedFrameV3(frame as DecodedCausalEditFrameV3)
+      : frameObjectRefFromDecodedFrameV2(frame as DecodedCausalEditFrameV2)
     validateFrameRef(ref)
     if (!(frame.bytes instanceof Uint8Array) || frame.bytes.byteLength < 1 || frame.bytes.byteLength > MAX_FRAME_BYTES) {
-      invalid("Pending frame bytes must be a non-empty CVXCOLL2 envelope within 2 MiB")
+      invalid("Pending frame bytes must be a non-empty causal envelope within 2 MiB")
     }
     const inspected = await this.materializer.inspectFrame(ref, frame.bytes)
     assertSameFrameRef(inspected.ref, ref)
@@ -1073,7 +1098,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     this.requireLive()
     validateFrameRef(ref)
     if (!(exactBytes instanceof Uint8Array) || exactBytes.byteLength < 1 || exactBytes.byteLength > MAX_FRAME_BYTES) {
-      invalid("Frame bytes must be a non-empty CVXCOLL2 envelope within 2 MiB")
+      invalid("Frame bytes must be a non-empty causal envelope within 2 MiB")
     }
     const layout = this.layout(ref.scope)
     await this.serial(layout.directory, async () => {
@@ -1210,6 +1235,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
           acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
         }
         await replaceDurableRecord(layout.durableHead, head, this.hooks)
+        this.materializer.observeAcceptedFrame?.(input.ref, frame)
         return committedEvidence(input, localRecordDigest(head))
       } catch (error) {
         if (error instanceof NodeCollaborationPersistenceErrorV2 && error.code === "store-corrupt") {
@@ -1533,6 +1559,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
     }
     await replaceDurableRecord(layout.durableHead, head)
+    this.materializer.observeAcceptedFrame?.(ref, frame)
   }
 
   private async reconstructHead(
@@ -1571,6 +1598,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       const frame = await this.readFrame(layout, ref)
       current = freezeHead(await this.materializer.applyAcceptedFrame({ previous: current, ref, exactBytes: frame }), journal.digest)
       if (current.frontierDigest !== journal.record.resultingFrontierDigest) corrupt("Reopened frame produces a different frontier")
+      this.materializer.observeAcceptedFrame?.(ref, frame)
     }
     if (current.frontierDigest !== head.acceptedFrontierDigest) corrupt("Reopened frontier differs from durable head")
     if (this.materializer.actorHeadsDigest(current.actorHeads) !== head.acceptedActorHeadsDigest) corrupt("Reopened actor heads differ from durable head")

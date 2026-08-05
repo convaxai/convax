@@ -20,6 +20,7 @@ interface PendingRequest {
 
 export interface CanvasRendererBridge {
   executeView(input: CanvasViewCommandRequest): Promise<CanvasViewCommandResult>
+  getActiveWorkbenchRef(targetWebContentsId?: number): Promise<CanvasDocumentRef | null>
   getViewSnapshot(viewId: string, targetWebContentsId?: number): Promise<CanvasViewSnapshot | null>
   reloadDocument(ref: CanvasDocumentRef): Promise<boolean>
 }
@@ -98,6 +99,11 @@ export function createCanvasRendererBridge(options: {
       const result = await request({ type: "view.execute", input })
       if (result.type !== "view.execute") throw new Error("Canvas renderer returned the wrong response")
       return result.result
+    },
+    async getActiveWorkbenchRef(targetWebContentsId) {
+      const result = await request({ type: "workbench.active-ref" }, undefined, targetWebContentsId)
+      if (result.type !== "workbench.active-ref") throw new Error("Canvas renderer returned the wrong response")
+      return result.ref
     },
     async getViewSnapshot(viewId, targetWebContentsId) {
       const result = await request({ type: "view.snapshot", viewId }, undefined, targetWebContentsId)

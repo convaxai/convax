@@ -1,11 +1,15 @@
 import {
+  encodeRestrictedJcsV2,
   parseId128V2,
+  typedIntentDigestV3,
   type CanvasIdV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type DigestV2,
   type DocumentScopeV2,
   type Id128V2,
   type LocalCommitResultV2,
+  type LocalCommitResultV3,
   type OwnerExternalFactPortV2,
   type OwnerIntentConstructionContextV2,
   type OwnerIntentDependenciesV2,
@@ -13,11 +17,20 @@ import {
   type PreparedLocalIntentV2,
   type ProjectIdV2,
 } from "@convax/collaboration"
+
+/**
+ * Protocol-neutral owner application result. Each member retains its decoded
+ * frame identity; callers must dispatch by the closed frame/header format and
+ * must never cast, transcode, or re-sign a V2 frame as V3.
+ */
+export type ProjectDecodedCausalEditFrameV2OrV3 = DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3
+export type ProjectLocalCommitResultV2OrV3 = LocalCommitResultV2 | LocalCommitResultV3
 import {
   constructProjectCanvasRouteActivationIntentV2,
   constructProjectCanvasRouteRenameIntentV2,
   constructProjectCanvasRouteStageIntentV2,
   constructProjectCanvasRouteTombstoneIntentV2,
+  projectCanvasRouteProjectionV2,
   projectCanvasRouteProjectionDigestV2,
   projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2,
   projectIndexIntentDigestV2,
@@ -46,7 +59,7 @@ export interface ProjectIndexDocumentSessionPortV2 {
       readonly signal?: AbortSignal
     }) => Promise<PreparedLocalIntentV2> | PreparedLocalIntentV2
     readonly signal?: AbortSignal
-  }): Promise<LocalCommitResultV2>
+  }): Promise<ProjectLocalCommitResultV2OrV3>
 }
 
 export type ProjectIndexFactResolutionResultV2 =
@@ -69,7 +82,7 @@ export interface ProjectCanvasGenesisStagingPortV2 {
   stageCanvasGenesis(input: {
     readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
     readonly predecessor: {
-      readonly frame: DecodedCausalEditFrameV2
+      readonly frame: ProjectDecodedCausalEditFrameV2OrV3
       readonly acceptedFrontierDigest: DigestV2
     }
     readonly signal?: AbortSignal
@@ -90,6 +103,118 @@ export interface CreateProjectIndexCanvasApplicationOptionsV2 {
   readonly genesis: ProjectCanvasGenesisStagingPortV2
   readonly createOperationId: () => Id128V2
   readonly createShardEpoch: () => Id128V2
+}
+
+export interface ProjectIndexGenesisRoutePublicationV3 {
+  inspect(input: {
+    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+  }): Promise<"absent" | "staged" | "live" | "rejected">
+  stage(input: {
+    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+    readonly operationId: Id128V2
+    readonly title: string
+  }): Promise<ProjectLocalCommitResultV2OrV3>
+  activate(input: {
+    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+    readonly operationId: Id128V2
+    readonly predecessorFrameDigest: DigestV2
+    readonly stagedProjectIndexFrontierDigest: DigestV2
+    readonly canvasGenesisCheckpointObjectDigest: DigestV2
+  }): Promise<ProjectLocalCommitResultV2OrV3 | "already-live">
+}
+
+/**
+ * Owner-defined exact stage/activate seam used by the V3 native provisioner.
+ * It exposes no Y.Doc and accepts no frame bytes; Desktop only supplies the
+ * precommitted scope and native durability identities.
+ */
+export function createProjectIndexGenesisRoutePublicationV3(input: {
+  readonly session: ProjectIndexDocumentSessionPortV2
+  readonly facts: ProjectIndexFactResolutionPortV2
+}): ProjectIndexGenesisRoutePublicationV3 {
+  const prepare = async (
+    context: OwnerIntentConstructionContextV2,
+    typedIntent: Parameters<typeof projectIndexIntentDependenciesV2>[1],
+    signal?: AbortSignal,
+  ): Promise<PreparedLocalIntentV2> => {
+    let exactIntent: Uint8Array
+    try {
+      exactIntent = encodeRestrictedJcsV2(typedIntent)
+    } catch (error) {
+      console.error("ProjectIndex V3 intent JCS rejected", typedIntent)
+      throw error
+    }
+    let dependencies: OwnerIntentDependenciesV2<"project-index">
+    try {
+      dependencies = projectIndexIntentDependenciesV2(
+        { ...context, intentDigest: typedIntentDigestV3(exactIntent) },
+        typedIntent,
+      )
+    } catch (error) {
+      console.error("ProjectIndex V3 dependency construction failed", typedIntent, context)
+      throw error
+    }
+    let resolved: ProjectIndexFactResolutionResultV2
+    try {
+      resolved = await input.facts.resolve({ dependencies, signal })
+    } catch (error) {
+      console.error("ProjectIndex V3 fact resolution failed", dependencies)
+      throw error
+    }
+    if (resolved.status !== "resolved") throw new Error(`ProjectIndex genesis route dependency is ${resolved.status}`)
+    return Object.freeze({ typedIntent, externalFacts: resolved.port })
+  }
+  const inspect: ProjectIndexGenesisRoutePublicationV3["inspect"] = async ({ scope }) => {
+    if (scope.projectId !== input.session.scope.projectId || scope.projectEpoch !== input.session.scope.projectEpoch) return "rejected"
+    return input.session.query((state) => {
+      const snapshot = requireProjectIndexSnapshotV2(state)
+      const projection = projectCanvasRouteProjectionV2(snapshot, scope.docId as CanvasIdV2)
+      if (projection.state === "absent") return "absent" as const
+      if (projection.currentShardEpoch !== scope.shardEpoch) return "rejected" as const
+      return projection.state === "staged" ? "staged" as const : projection.state === "live" ? "live" as const : "rejected" as const
+    })
+  }
+  return Object.freeze({
+    inspect,
+    async stage({ scope, operationId, title }: Parameters<ProjectIndexGenesisRoutePublicationV3["stage"]>[0]) {
+      if (await inspect({ scope }) !== "absent") throw new Error("ProjectIndex genesis route is not absent")
+      let derivedCanvasId: CanvasIdV2 | undefined
+      const committed = await input.session.submit({
+        operationId: parseId128V2(operationId),
+        prepare: async ({ base, context, signal }) => {
+          const constructed = constructProjectCanvasRouteStageIntentV2({
+            snapshot: requireProjectIndexSnapshotV2(base), context,
+            shardEpoch: scope.shardEpoch, title: validateProjectCanvasTitleV2(title),
+          })
+          if (constructed === "rejected") throw new Error("ProjectIndex default Canvas route stage was rejected")
+          derivedCanvasId = constructed.canvasId
+          if (constructed.canvasId !== scope.docId) throw new Error("Default Canvas claim does not match its stage operation")
+          return prepare(context, constructed.intent, signal)
+        },
+      })
+      if (derivedCanvasId !== scope.docId) throw new Error("ProjectIndex default Canvas route crossed its precommitted scope")
+      return committed
+    },
+    async activate({ scope, operationId, predecessorFrameDigest, stagedProjectIndexFrontierDigest, canvasGenesisCheckpointObjectDigest }: Parameters<ProjectIndexGenesisRoutePublicationV3["activate"]>[0]) {
+      const current = await inspect({ scope })
+      if (current === "live") return "already-live"
+      if (current !== "staged") throw new Error("ProjectIndex Canvas route is not staged")
+      return input.session.submit({
+        operationId: parseId128V2(operationId),
+        prepare: async ({ base, context, signal }) => {
+          const intent = constructProjectCanvasRouteActivationIntentV2({
+            snapshot: requireProjectIndexSnapshotV2(base), context,
+            canvasId: scope.docId as CanvasIdV2,
+            projectIndexRouteDependencyFrameDigest: predecessorFrameDigest,
+            canvasGenesisCheckpointObjectDigest,
+            stagedProjectIndexFrontierDigest,
+          })
+          if (intent === "rejected") throw new Error("ProjectIndex default Canvas route activation was rejected")
+          return prepare(context, intent, signal)
+        },
+      })
+    },
+  })
 }
 
 class ProjectCanvasApplicationAttemptErrorV2 extends Error {

@@ -3,7 +3,9 @@ import {
   parseDocumentScopeV2,
   type DocumentScopeV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type IncomingOwnerFactResolverPortV2,
+  type IncomingOwnerFactResolverPortV3,
   type OwnerExternalFactPortFactoryV2,
   type OwnerExternalFactRequirementV2,
   type OwnerIntentDependenciesV2,
@@ -108,6 +110,28 @@ export function createRouteScopedCanvasIncomingFactResolverV2(input: {
   return Object.freeze({
     async resolve(attempt: {
       readonly frame: DecodedCausalEditFrameV2
+      readonly declaredDependencies: OwnerIntentDependenciesV2<"canvas">
+      readonly signal?: AbortSignal
+    }) {
+      const frameScope = parseDocumentScopeV2(attempt.frame.header.core.scope)
+      if (!sameScope(frameScope, scope)) return Object.freeze({ status: "rejected" as const })
+      const result = await input.resolve({ scope, dependencies: attempt.declaredDependencies, signal: attempt.signal })
+      return result.status === "resolved"
+        ? Object.freeze({ status: "resolved" as const, port: result.port })
+        : Object.freeze({ status: result.status })
+    },
+  })
+}
+
+/** V3 counterpart keeps the decoded successor frame in its native protocol domain. */
+export function createRouteScopedCanvasIncomingFactResolverV3(input: {
+  readonly scope: CanvasScopeV2
+  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolverV2>
+}): IncomingOwnerFactResolverPortV3 {
+  const scope = requireCanvasScope(input.scope)
+  return Object.freeze({
+    async resolve(attempt: {
+      readonly frame: DecodedCausalEditFrameV3
       readonly declaredDependencies: OwnerIntentDependenciesV2<"canvas">
       readonly signal?: AbortSignal
     }) {

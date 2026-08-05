@@ -38,7 +38,6 @@ const bindingCore = Object.freeze({
   ownerPublicKey: publicKey,
   initialReplicaId: replicaId,
   initialActorId: actorId,
-  ownerSchemaDigest,
   protocolDigest,
   genesisAuthorizationPolicy: Object.freeze({
     format: "convax.local-owner-genesis-authorization-policy/3" as const,
@@ -62,6 +61,7 @@ const authorizationCore = Object.freeze({
   scope,
   replicaId,
   actorId,
+  ownerSchemaDigest,
   actorSequenceAllocationPolicy: Object.freeze({
     format: "convax.local-owner-actor-sequence-allocation-policy/3" as const,
     kind: "strict-durable-head-successor" as const,
