@@ -59,6 +59,12 @@ export interface PackagedRetiredPluginRecovery {
   readonly version: string
 }
 
+export interface PackagedRetiredPluginSourceMigration {
+  readonly fromSourceIdentity: string
+  readonly pluginId: string
+  readonly toSourceIdentity: string
+}
+
 function exactKeys(value: Record<string, unknown>, expected: readonly string[]) {
   const actual = Object.keys(value).sort()
   const wanted = [...expected].sort()
@@ -308,7 +314,7 @@ export class PackagedMarketplaceProduct {
     const retired = lockedPackage.retired
     if (
       recovery.pluginId !== lockedPackage.id ||
-      recovery.sourceIdentity !== this.#officialSourceKey() ||
+      recovery.sourceIdentity !== retired.sourceKey ||
       recovery.version !== retired.version ||
       artifactKey(recovery.artifact) !== artifactKey(retired.artifact) ||
       recovery.snapshotDigest !== retired.snapshotDigest ||
@@ -317,6 +323,19 @@ export class PackagedMarketplaceProduct {
       return null
     }
     return this.#verifiedLockedCandidate(item, lockedPackage)
+  }
+
+  retiredPluginSourceMigrations(): readonly PackagedRetiredPluginSourceMigration[] {
+    const toSourceIdentity = this.#officialSourceKey()
+    return Object.freeze(
+      this.lock.resolved.recoveryArtifacts.map((entry) =>
+        Object.freeze({
+          fromSourceIdentity: entry.retired.sourceKey,
+          pluginId: entry.id,
+          toSourceIdentity,
+        }),
+      ),
+    )
   }
 
   async #verifiedLockedCandidate(

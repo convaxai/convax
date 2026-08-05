@@ -411,11 +411,37 @@ function emptyState(): MarketplaceState {
   }
 }
 
-function assertSourceLocks(previous: MarketplaceState, next: MarketplaceState) {
+export interface MarketplaceInstalledSourceMigration {
+  readonly fromSourceKey: SourceKey
+  readonly id: string
+  readonly kind: "plugin"
+  readonly toSourceKey: SourceKey
+}
+
+function sourceMigrationKey(input: MarketplaceInstalledSourceMigration) {
+  return `${input.kind}\0${input.id}\0${input.fromSourceKey}\0${input.toSourceKey}`
+}
+
+function assertSourceLocks(
+  previous: MarketplaceState,
+  next: MarketplaceState,
+  allowedSourceMigrations: ReadonlySet<string>,
+) {
   const previousByIdentity = new Map(previous.installations.map((record) => [identityKey(record), record]))
   for (const record of next.installations) {
     const installed = previousByIdentity.get(identityKey(record))
-    if (installed && installed.sourceKey !== record.sourceKey) {
+    const migrationAllowed =
+      installed?.kind === "plugin" &&
+      record.kind === "plugin" &&
+      allowedSourceMigrations.has(
+        sourceMigrationKey({
+          fromSourceKey: installed.sourceKey,
+          id: record.id,
+          kind: "plugin",
+          toSourceKey: record.sourceKey,
+        }),
+      )
+    if (installed && installed.sourceKey !== record.sourceKey && !migrationAllowed) {
       throw new Error("Installed capability cannot change Marketplace source")
     }
   }
@@ -427,10 +453,32 @@ function stableState(value: MarketplaceState) {
 
 export class FileMarketplaceStateStore {
   readonly #file: string
+  readonly #sourceMigrations: ReadonlySet<string>
   #tail = Promise.resolve()
 
-  constructor(file: string) {
+  constructor(
+    file: string,
+    options: {
+      readonly sourceMigrations?: readonly MarketplaceInstalledSourceMigration[]
+    } = {},
+  ) {
     this.#file = file
+    const sourceMigrations = (options.sourceMigrations ?? []).map((migration) => {
+      if (
+        migration.kind !== "plugin" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(migration.id) ||
+        !/^[a-f0-9]{64}$/.test(migration.fromSourceKey) ||
+        !/^[a-f0-9]{64}$/.test(migration.toSourceKey) ||
+        migration.fromSourceKey === migration.toSourceKey
+      ) {
+        throw new Error("Marketplace installed source migration is invalid")
+      }
+      return sourceMigrationKey(migration)
+    })
+    if (new Set(sourceMigrations).size !== sourceMigrations.length) {
+      throw new Error("Marketplace installed source migrations must be unique")
+    }
+    this.#sourceMigrations = new Set(sourceMigrations)
   }
 
   async read(): Promise<MarketplaceState> {
@@ -461,7 +509,7 @@ export class FileMarketplaceStateStore {
       await mutate(next)
       next.revision = previous.revision + 1
       const validated = validateState(next)
-      assertSourceLocks(previous, validated)
+      assertSourceLocks(previous, validated, this.#sourceMigrations)
       await this.#write(validated)
       return structuredClone(validated)
     })

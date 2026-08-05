@@ -122,7 +122,13 @@ export interface MarketplaceApplicationServiceOptions {
   networkFetch: PinnedHttpsFetcher
   platform?: NodeJS.Platform
   pluginRuntimeState?: MarketplacePluginRuntimeState
-  pluginUpdateRecoveryIds?: ReadonlySet<string>
+  pluginUpdateRecoveryBindings?: ReadonlyMap<
+    string,
+    Readonly<{
+      fromSourceKey: SourceKey
+      toSourceKey: SourceKey
+    }>
+  >
   preinstalledPolicy?(identity: {
     id: string
     kind: MarketplaceCapabilityKind
@@ -311,6 +317,22 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
   subscribe(listener: () => void) {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
+  }
+
+  #isPluginUpdateSourceMigration(
+    installed: Pick<InstallRecord, "id" | "kind" | "sourceKey">,
+    candidate: Pick<SourceQualifiedItem, "id" | "kind" | "sourceKey">,
+  ) {
+    if (installed.kind !== "plugin" || candidate.kind !== "plugin" || installed.id !== candidate.id) return false
+    const binding = this.#options.pluginUpdateRecoveryBindings?.get(installed.id)
+    return binding?.fromSourceKey === installed.sourceKey && binding.toSourceKey === candidate.sourceKey
+  }
+
+  #isCurrentOrRecoverySource(
+    installed: Pick<InstallRecord, "id" | "kind" | "sourceKey">,
+    candidate: Pick<SourceQualifiedItem, "id" | "kind" | "sourceKey">,
+  ) {
+    return installed.sourceKey === candidate.sourceKey || this.#isPluginUpdateSourceMigration(installed, candidate)
   }
 
   #clearProvisioningDecision(
@@ -544,10 +566,11 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     const activePluginBindings = (await this.#activePluginBindings()).bindings
     const capabilities = await Promise.all(
       state.installations.map(async (record) => {
-        const sourceItem = catalog.find(
+        const sourceItem =
+          catalog.find(
           (candidate) =>
             candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
-        )
+          ) ?? catalog.find((candidate) => this.#isPluginUpdateSourceMigration(record, candidate))
         const grant = state.executionGrants.find(
           (candidate) =>
             identityKey(candidate.identity) === identityKey(record) && candidate.sourceKey === record.sourceKey,
@@ -582,7 +605,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
               isStandaloneMarketplaceCandidate(candidate) &&
               candidate.kind === record.kind &&
               candidate.id === record.id &&
-              candidate.sourceKey === record.sourceKey &&
+              this.#isCurrentOrRecoverySource(record, candidate) &&
               (candidate.version !== record.version ||
                 sha256Hex(canonicalJson(candidate.delivery)) !== record.artifactDigest),
           )
@@ -603,7 +626,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           sourceLabel: sourceItem?.marketplaceId ?? "Unavailable source",
           state: runtimeUnavailable || runtimeInactive || pluginOwnedSkill ? "attention" : projected.state,
           updateAvailable,
-          ...(runtimeUnavailable && updateAvailable && this.#options.pluginUpdateRecoveryIds?.has(record.id)
+          ...(runtimeUnavailable && updateAvailable && this.#options.pluginUpdateRecoveryBindings?.has(record.id)
             ? { updateRecoveryAvailable: true as const }
             : {}),
           version: record.version,
@@ -682,7 +705,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       (candidate) =>
         candidate.kind === expected.kind &&
         candidate.id === expected.id &&
-        candidate.sourceKey === expected.sourceKey &&
+        this.#isCurrentOrRecoverySource(expected, candidate) &&
         (installed
           ? candidate.version !== installed.version ||
             sha256Hex(canonicalJson(candidate.delivery)) !== installed.artifactDigest
@@ -794,7 +817,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         transition.next.version === candidate.version &&
         transition.next.artifactDigest === sha256Hex(canonicalJson(candidate.delivery)),
     )
-    if ((!installed && !orphaned) || (installed && installed.sourceKey !== candidate.sourceKey)) {
+    if ((!installed && !orphaned) || (installed && !this.#isCurrentOrRecoverySource(installed, candidate))) {
       throw new Error("Marketplace update source is stale")
     }
     if (
@@ -986,7 +1009,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
           const transition = draft.transitions.find((entry) => entry.id === transitionId)
           if (!transition) throw new Error("Capability transition disappeared before decision")
           const current = draft.installations.find((entry) => identityKey(entry) === identityKey(candidate))
-          if (current && current.sourceKey !== candidate.sourceKey) throw new Error("Installed source cannot change")
+          if (current && !this.#isCurrentOrRecoverySource(current, candidate)) {
+            throw new Error("Installed source cannot change")
+          }
           draft.installations = draft.installations.filter((entry) => identityKey(entry) !== identityKey(candidate))
           draft.installations.push(next)
           this.#clearProductLockProvisioningDecision(draft, candidate)
@@ -1350,7 +1375,7 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
         transition.next.version === candidate.version &&
         transition.next.artifactDigest === sha256Hex(canonicalJson(candidate.delivery)),
     )
-    if ((!installed && !orphaned) || (installed && installed.sourceKey !== candidate.sourceKey)) {
+    if ((!installed && !orphaned) || (installed && !this.#isCurrentOrRecoverySource(installed, candidate))) {
       throw new Error("Marketplace update source is stale")
     }
     if (
@@ -1557,7 +1582,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       },
       item,
     )
-    if (outcome === "source-conflict") throw new Error("Installed source cannot change")
+    if (outcome === "source-conflict" && (!installed || !this.#isPluginUpdateSourceMigration(installed, item))) {
+      throw new Error("Installed source cannot change")
+    }
   }
 
   async #mutatePreference(identity: { id: string; kind: MarketplaceCapabilityKind }, desired: "disabled" | "enabled") {

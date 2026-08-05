@@ -126,9 +126,11 @@ For any matching change, read the full routed reference before planning or editi
   authorization, topology, and retired-major-only incompatibility. All other
   mutations stay blocked and repaired bytes remain inert until restart.
 - A packaged recovery artifact may supply bytes to that update only when its exact
-  product-lock binding matches the inspected source, Plugin id, old version,
-  archive SHA-256/size, snapshot digest, and retired Host API major. Never expose it
-  to preinstall/fresh install, scan for it, or infer a match from a directory.
+  product-lock binding matches the inspected retired source, Plugin id, old version,
+  archive SHA-256/size, snapshot digest, and retired Host API major, and the candidate
+  matches the lock-derived current Official SourceKey. That exact one-way lineage is
+  the only admitted `InstallRecord` source migration. Never expose it to
+  preinstall/fresh install, scan for it, or infer a match from a directory.
 - Tool Plugin installation/update consent is part of the exact immutable closure and
   snapshot descriptor. Background refresh never expands execution authority.
   Builtin/preinstalled are provisioning sources, not runtime privilege classes; the

@@ -22,6 +22,7 @@ export type MarketplaceRetiredPluginBinding = {
   }
   hostApiMajor: number
   snapshotDigest: string
+  sourceKey: string
   version: string
 }
 
@@ -211,11 +212,12 @@ function parsePreinstalledPolicy(value: unknown, context: string): MarketplacePr
 
 function parseRetiredPluginBinding(value: unknown, context: string): MarketplaceRetiredPluginBinding {
   const input = record(value, context)
-  exactKeys(input, ["artifact", "hostApiMajor", "snapshotDigest", "version"], context)
+  exactKeys(input, ["artifact", "hostApiMajor", "snapshotDigest", "sourceKey", "version"], context)
   const artifact = record(input.artifact, `${context}.artifact`)
   exactKeys(artifact, ["sha256", "size"], `${context}.artifact`)
   const sha256 = nonEmptyString(artifact.sha256, `${context}.artifact.sha256`)
   const snapshotDigest = nonEmptyString(input.snapshotDigest, `${context}.snapshotDigest`)
+  const sourceKey = nonEmptyString(input.sourceKey, `${context}.sourceKey`)
   const version = nonEmptyString(input.version, `${context}.version`)
   if (
     !/^[a-f0-9]{64}$/.test(sha256) ||
@@ -226,14 +228,18 @@ function parseRetiredPluginBinding(value: unknown, context: string): Marketplace
     Number(input.hostApiMajor) < 1 ||
     Number(input.hostApiMajor) > 65_535 ||
     !/^[a-f0-9]{64}$/.test(snapshotDigest) ||
+    !/^[a-f0-9]{64}$/.test(sourceKey) ||
     !SEMVER.test(version)
   ) {
-    throw new Error(`${context} must bind one exact retired Plugin archive, snapshot, version, and Host API major`)
+    throw new Error(
+      `${context} must bind one exact retired Plugin archive, snapshot, source, version, and Host API major`,
+    )
   }
   return {
     artifact: { sha256, size: Number(artifact.size) },
     hostApiMajor: Number(input.hostApiMajor),
     snapshotDigest,
+    sourceKey,
     version,
   }
 }

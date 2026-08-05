@@ -11,7 +11,7 @@ describe("Desktop → Canvas motion preference wiring", () => {
     expect(indexSource).toContain("viewportInsets={canvasViewportInsets}")
     expect(indexSource).toContain('viewId="desktop-main"')
     expect(indexSource).toContain("viewScopeId={activeProject.id}")
-    expect(indexSource).toContain("key={`${activeProject.id}:${activeCanvas.id}`}")
+    expect(indexSource).toContain("key={`${activeProject.id}:${activeCanvasId}`}")
     expect(indexSource).toContain("workbenchSnapshot.changingInput ||")
     expect(indexSource).toContain("projectCanvasSnapshot.busy ||")
     expect(indexSource).toContain("projectSnapshot.changingActiveProject")

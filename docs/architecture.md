@@ -459,7 +459,7 @@ the Desktop-owned managed-stdio profile.
 ## 3. Packages and dependency graph
 
 | Package                     | Responsibility                                                                                                                                                                               |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                                                                   |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                              |
 | `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                                                           |
@@ -596,7 +596,7 @@ boundary checker fails closed until those admissions are complete.
 ## 4. Canonical state
 
 | State                                                                 | Canonical owner                                          | Notes                                                                                              |
-| --------------------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                             |
 | Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                     |
 | Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                 |
@@ -619,7 +619,7 @@ boundary checker fails closed until those admissions are complete.
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                 |
 | Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                          |
 | Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                              |
-| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; no cross-source update                                        |
+| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source |
 | MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                               |
 | Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                      |
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                       |
@@ -802,23 +802,32 @@ presentation, and target companion URLs, sizes, and SHA-256 values. Packaging
 consumes and verifies this closure without resolving “latest.” Startup installs
 every verified member of the Builtin bundle from its offline bytes, then applies the
 product preinstall policy. The current policy contains only
-`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup, and
-has no production recovery artifacts because no exact retired archive/snapshot and
-replacement Release byte identities have been admitted.
+`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup. Its
+recovery closure admits five exact retired Host API v1 snapshot bindings with their
+current Official Host API v3 Release bytes: `cutout-studio`, `nexus-service`,
+`storyai-3d-director-desk`, `storyboard-studio`, and `video-timeline`. Retired
+bindings without a current Official Registry replacement remain preserved and
+inactive; they are never recovered from source checkouts or mutable install files.
 
 A recovery artifact is not catalog membership, a preinstall, or execution authority.
 It binds one Official Plugin replacement closure to one exact already-installed
-retired binding: Plugin id, source-derived Official SourceKey, old version, old
-archive SHA-256/size, old immutable snapshot digest, and old Host API major. Only
-the existing explicit retired-major update path may read those packaged bytes, and
-only after the startup quarantine inspection reproduces that complete binding.
+retired binding: Plugin id, retired Official SourceKey, old version, old archive
+SHA-256/size, old immutable snapshot digest, and old Host API major. The product
+lock also derives the one target SourceKey from its current fixed Official
+descriptor. Only the existing explicit retired-major update path may read those
+packaged bytes, and only after the startup quarantine inspection reproduces the
+complete retired binding and the candidate matches that exact old-to-current source
+lineage.
 Fresh install/default provisioning cannot select the recovery byte path. A mismatch
 or absent entry falls back to the ordinary exact-source network update; while
 offline it changes neither the Marketplace install record nor the quarantined
-ActiveSet. A successful offline update uses the existing one-shot CAS, keeps the
-current process quarantined, and becomes executable only after restart validates
-the new ActiveSet. Recovery never scans installation directories, rewrites a major,
-chooses the first provider, or treats package presence as authority.
+ActiveSet. A successful offline update uses the existing one-shot CAS, changes the
+matching `InstallRecord` from the locked retired SourceKey to the current Official
+SourceKey in the same durable transition, keeps the current process quarantined,
+and becomes executable only after restart validates the new ActiveSet. Every other
+cross-source install or update remains rejected. Recovery never scans installation
+directories, rewrites a major, chooses the first provider, or treats package
+presence as authority.
 
 Automatic setup remains an independent durable `CapabilityTransition` that
 publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
@@ -1078,11 +1087,12 @@ missing or changed immutable Plugin bytes.
 
 When startup quarantine proves the narrow retired-Host-API case, the same explicit
 source-bound update may consume a product-locked offline recovery artifact only if
-its old package/version/archive/snapshot/Host-major binding is byte-exact. The
-recovery artifact is never projected as a preinstall and cannot make a fresh Plugin
-installation happen in the background. Without an exact packaged match, the normal
-network update path remains the only candidate and offline failure leaves quarantine
-unchanged.
+its old source/package/version/archive/snapshot/Host-major binding is byte-exact and
+the candidate SourceKey is the current fixed Official source selected by that same
+product lock. The recovery artifact is never projected as a preinstall and cannot
+make a fresh Plugin installation happen in the background. Without an exact
+packaged match, the normal network update path remains the only candidate and
+offline failure leaves quarantine unchanged.
 
 Registry `ownerPluginId` provenance survives every source-qualified projection.
 Plugin-owned Skills are dependency artifacts of the immutable Plugin closure and are
@@ -1645,7 +1655,10 @@ Neither Project nor Workbench imports the other to implement this flow.
   import, setup, enable, disable and uninstall stay blocked; corrupt bytes,
   topology drift, future majors and other manifest failures never enter this path.
   The quarantined process never begins executing repaired bytes and requires a
-  restart after updates.
+  restart after updates. A product-locked retired Official SourceKey may move to the
+  current fixed Official SourceKey only for the exact Plugin id and inspected
+  binding; arbitrary, reverse, Skill, Local, or user-added source migration remains
+  invalid.
 - Neither standalone nor Plugin-owned Skills gain extra Plugin permissions or bypass
   typed capabilities. `@convax/agent-runtime` sees only generic Skill directories and
   never receives Plugin ids or ownership policy.

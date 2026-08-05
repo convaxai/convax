@@ -33,9 +33,7 @@ function uint32(value: number) {
 }
 
 function concat(chunks: readonly Uint8Array[]) {
-  const output = new Uint8Array(
-    chunks.reduce((total, chunk) => total + chunk.byteLength, 0),
-  )
+  const output = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0))
   let offset = 0
   for (const chunk of chunks) {
     output.set(chunk, offset)
@@ -121,20 +119,12 @@ function deterministicZip(entriesValue: readonly ZipEntry[]) {
   ])
 }
 
-function manifest(
-  surface: "agent" | "canvas",
-  overrides: Record<string, unknown> = {},
-) {
+function manifest(surface: "agent" | "canvas", overrides: Record<string, unknown> = {}) {
   return {
     capabilities: [],
-    contributes:
-      surface === "canvas"
-        ? { canvas: { renderer: { create: true } } }
-        : {},
+    contributes: surface === "canvas" ? { canvas: { renderer: { create: true } } } : {},
     description: "Packaged Builtin Plugin fixture",
-    ...(surface === "canvas"
-      ? { entry: "index.html" }
-      : { hooks: "hook.mjs" }),
+    ...(surface === "canvas" ? { entry: "index.html" } : { hooks: "hook.mjs" }),
     hostApi: {
       major: 3,
       optional: [],
@@ -217,29 +207,22 @@ describe("Packaged Builtin Plugin runtime-surface projection", () => {
     ["agent", "agent"],
   ] as const)("reads a canonical v8 %s manifest from the member artifact", (surface, expected) => {
     const fixture = builtinFixture(manifest(surface))
-    const projected = projectPackagedBuiltinRuntimeSurfaces(
-      fixture.bundle,
-      fixture.archive,
-    )
+    const projected = projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)
     expect(projected.get(`builtin-fixture\0${"1.0.0"}`)).toBe(expected)
   })
 
   test("fails closed when the artifact manifest identity differs from the bundle member", () => {
-    const fixture = builtinFixture(
-      manifest("canvas", { id: "another-plugin" }),
+    const fixture = builtinFixture(manifest("canvas", { id: "another-plugin" }))
+    expect(() => projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)).toThrow(
+      "identity does not match",
     )
-    expect(() =>
-      projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive),
-    ).toThrow("identity does not match")
   })
 
   test("fails closed when the artifact contains a pre-v8 manifest", () => {
-    const fixture = builtinFixture(
-      manifest("canvas", { schema: "convax.plugin/7" }),
+    const fixture = builtinFixture(manifest("canvas", { schema: "convax.plugin/7" }))
+    expect(() => projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive)).toThrow(
+      "must use convax.plugin/8",
     )
-    expect(() =>
-      projectPackagedBuiltinRuntimeSurfaces(fixture.bundle, fixture.archive),
-    ).toThrow("must use convax.plugin/8")
   })
 })
 
@@ -320,6 +303,7 @@ test("exposes packaged recovery bytes only for one exact retired Plugin binding"
       artifact: { sha256: "c".repeat(64), size: 2_048 },
       hostApiMajor: 2,
       snapshotDigest: "d".repeat(64),
+      sourceKey: "e".repeat(64),
       version: "1.0.0",
     }
     const policy: MarketplaceProductLock["policy"] = {
@@ -412,18 +396,25 @@ test("exposes packaged recovery bytes only for one exact retired Plugin binding"
     const exactRecovery = {
       ...retired,
       pluginId: "legacy-tools",
-      sourceIdentity: computeSourceKey({
+      sourceIdentity: retired.sourceKey,
+    }
+    await expect(product.verifiedRecoveryCandidate(item, exactRecovery)).resolves.toMatchObject({
+      artifactBytes: pluginBytes,
+      item,
+    })
+    expect(product.retiredPluginSourceMigrations()).toEqual([
+      {
+        fromSourceIdentity: retired.sourceKey,
+        pluginId: "legacy-tools",
+        toSourceIdentity: computeSourceKey({
         deliveryPolicy: "github-pages-releases",
         descriptorUrl: policy.official.descriptorUrl,
         kind: "network",
         marketplaceId: "convax-official",
         repository: { name: "convax-plugins", owner: "convaxai" },
       }),
-    }
-    await expect(product.verifiedRecoveryCandidate(item, exactRecovery)).resolves.toMatchObject({
-      artifactBytes: pluginBytes,
-      item,
-    })
+      },
+    ])
     for (const mismatch of [
       { ...exactRecovery, artifact: { ...exactRecovery.artifact, sha256: "e".repeat(64) } },
       { ...exactRecovery, artifact: { ...exactRecovery.artifact, size: 2_049 } },

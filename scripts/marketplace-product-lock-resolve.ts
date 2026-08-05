@@ -1,5 +1,5 @@
 import { constants } from "node:fs"
-import { lstat, open, realpath, type FileHandle } from "node:fs/promises"
+import { lstat, open, realpath, writeFile, type FileHandle } from "node:fs/promises"
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path"
 
 import {
@@ -559,10 +559,14 @@ export async function resolveMarketplaceProductLock(
 }
 
 if (import.meta.main) {
-  const manifestPath = process.argv[2]
-  const policyPath = process.argv[3] ?? resolve("marketplaces.lock.json")
+  const write = process.argv.includes("--write")
+  const positionalArguments = process.argv.slice(2).filter((argument) => argument !== "--write")
+  const manifestPath = positionalArguments[0]
+  const policyPath = positionalArguments[1] ?? resolve("marketplaces.lock.json")
   if (!manifestPath) {
-    throw new Error("usage: marketplace-product-lock-resolve <product-lock-input.json> [marketplaces.lock.json]")
+    throw new Error(
+      "usage: marketplace-product-lock-resolve <product-lock-input.json> [marketplaces.lock.json] [--write]",
+    )
   }
   const absoluteManifestPath = resolve(manifestPath)
   const inputBytes = await lockArtifact(
@@ -585,5 +589,11 @@ if (import.meta.main) {
   )
   const policy = parseMarketplaceProductPolicy("policy" in policyInput ? policyInput.policy : policyInput)
   const lock = await resolveMarketplaceProductLock(policy, dirname(absoluteManifestPath), input)
-  process.stdout.write(`${JSON.stringify(lock, null, 2)}\n`)
+  const body = `${JSON.stringify(lock, null, 2)}\n`
+  if (write) {
+    await writeFile(absolutePolicyPath, body, { encoding: "utf8", mode: 0o600 })
+    console.log(`Marketplace product lock resolved: ${absolutePolicyPath}`)
+  } else {
+    process.stdout.write(body)
+  }
 }

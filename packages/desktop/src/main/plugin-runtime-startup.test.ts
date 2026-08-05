@@ -180,7 +180,16 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
     ]
     const before = await fileDigests(authorityFiles)
 
-    session = await openDesktopPluginRuntimeSession(userDataDirectory)
+    const replacementSource = sha256("replacement source")
+    session = await openDesktopPluginRuntimeSession(userDataDirectory, {
+      retiredSourceMigrations: [
+        {
+          fromSourceIdentity: sha256("legacy source"),
+          pluginId: "legacy",
+          toSourceIdentity: replacementSource,
+        },
+      ],
+    })
     if (!session) throw new Error("Expected a quarantined Plugin runtime session")
     const activeSession = session
 
@@ -208,6 +217,18 @@ test("quarantining a real legacy ActiveSet leaves its pointer, descriptors, and 
         sourceIdentity: sha256("legacy source"),
       }),
     ).not.toThrow()
+    expect(() =>
+      activeSession.assertUpdateMutable({
+        pluginId: "legacy",
+        sourceIdentity: replacementSource,
+      }),
+    ).not.toThrow()
+    expect(() =>
+      activeSession.assertUpdateMutable({
+        pluginId: "legacy",
+        sourceIdentity: sha256("unadmitted replacement source"),
+      }),
+    ).toThrow(pluginRuntimeUnavailableMessage)
     expect(() =>
       activeSession.assertUpdateMutable({
         pluginId: "other",

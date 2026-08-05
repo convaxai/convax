@@ -88,6 +88,7 @@ function recoveryLock(): MarketplaceProductLock {
     artifact: { sha256: "c".repeat(64), size: 2_048 },
     hostApiMajor: 2,
     snapshotDigest: "d".repeat(64),
+    sourceKey: "e".repeat(64),
     version: "1.0.0",
   }
   lock.policy.recoveryArtifacts.push({
