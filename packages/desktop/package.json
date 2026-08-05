@@ -10,7 +10,7 @@
   "main": "./out/main/index.cjs",
   "scripts": {
     "build:workspace-dependencies": "bun scripts/ensure-workspace-dependencies.ts",
-    "collaboration:prepare": "bun scripts/stage-collaboration-authority.ts",
+    "collaboration:prepare": "bun scripts/stage-collaboration-protocol.ts",
     "dev": "bun run build:workspace-dependencies && bun run collaboration:prepare && bun run marketplace:prepare:dev && bun scripts/ensure-electron-runtime.ts && electron-vite dev",
     "build": "bun run build:workspace-dependencies && bun run collaboration:prepare && electron-vite build",
     "marketplace:verify": "bun ../../scripts/marketplace-product-lock.ts ../../marketplaces.lock.json",

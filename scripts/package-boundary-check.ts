@@ -1,12 +1,7 @@
 import { builtinModules } from "node:module"
 import { dirname, join, relative, resolve, sep } from "node:path"
 
-import { verifyCurrentCollaborationAuthorityReleaseV1 } from "./collaboration-authority-release"
-import {
-  generateSuccessorAuthorityReleaseV1,
-  verifyGeneratedSuccessorAuthorityReleaseV1,
-} from "./collaboration-authority-v11/generate"
-import { verifyCurrentSuccessorAuthorityGovernanceV1 } from "./collaboration-authority-v11-release"
+import { verifyCurrentProtocolDescriptorFile } from "./collaboration-protocol/generate"
 
 type PackageManifest = {
   dependencies?: Record<string, string>
@@ -30,17 +25,18 @@ type WorkspacePackage = {
 const repositoryRoot = join(import.meta.dir, "..")
 const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
 const architectureContractPath = join(repositoryRoot, "docs", "architecture.md")
-const collaborationV11ActivePointerRelativePath = "docs/superpowers/specs/collaboration-v11-active-authority.json"
-const collaborationV11ReleaseDirectoryRelativePath = "docs/superpowers/specs/authorities/collaboration-v11/r1/"
-const collaborationV11PointerDigest = "2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6"
-const collaborationV11ManifestDigest = "351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4"
-const collaborationV11EvidenceDigest = "ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2"
-const collaborationV11BundleDigest = "180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c"
-const collaborationV11ProtocolDigest = "5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f"
-const collaborationV11HistoricalPinDigest = "ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369"
-const collaborationV10PointerDigest = "f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398"
-const collaborationV10ProtocolDigest = "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
+const archivedAuthorityTokens = [
+  "docs/superpowers/specs/authorities",
+  "collaboration-v10-active-authority",
+  "collaboration-v11-active-authority",
+]
+const runtimeAndPackagingGlobs = [
+  "packages/*/src/**/*.ts",
+  "packages/*/scripts/**/*.ts",
+  "packages/*/electron-builder.config.ts",
+  "apps/*/src/**/*.ts",
+]
 const desktopProcessInstructionPaths = ["src/main/AGENTS.md", "src/preload/AGENTS.md", "src/renderer/AGENTS.md"]
 const apiDirectory = join(repositoryRoot, "apps", "api")
 const apiManifestPath = join(apiDirectory, "package.json")
@@ -145,7 +141,7 @@ function normalizedSourcePath(sourcePath: string): string {
 function requireContractMarkers(path: string, source: string, markers: readonly string[]): void {
   const missing = markers.filter((marker) => !source.includes(marker))
   if (missing.length > 0) {
-    throw new Error(`${path}: active collaboration V11 governance markers are missing: ${missing.join(", ")}`)
+    throw new Error(`${path}: single current collaboration protocol markers are missing: ${missing.join(", ")}`)
   }
 }
 
@@ -243,44 +239,25 @@ if (
 ) {
   throw new Error("Plugin-to-Host human review gate is missing from the architecture contract")
 }
-verifyCurrentCollaborationAuthorityReleaseV1({ repositoryRoot })
-verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
-verifyCurrentSuccessorAuthorityGovernanceV1({ repositoryRoot })
+await verifyCurrentProtocolDescriptorFile(repositoryRoot)
 requireContractMarkers("AGENTS.md", rootContract, [
-  "## Frozen collaboration authority",
-  collaborationV11ActivePointerRelativePath,
-  collaborationV11ReleaseDirectoryRelativePath,
-  "sixteen verified snapshot paths",
-  collaborationV11PointerDigest,
-  collaborationV11ManifestDigest,
-  collaborationV11EvidenceDigest,
-  collaborationV11BundleDigest,
-  collaborationV11ProtocolDigest,
-  collaborationV11HistoricalPinDigest,
-  collaborationV10PointerDigest,
-  collaborationV10ProtocolDigest,
+  "## Single current collaboration protocol",
+  "current protocol descriptor whose exact `protocolDigest` is the only protocol",
+  "The packaged current protocol descriptor must equal the built descriptor digest",
+  "There is no authority selector, active/pinned release pair, dual-version",
+  "unsupported-project-data",
+  "### Frozen collaboration authority archive",
+  "non-runtime archive and review material",
   "activated-authority-mutation",
-  "selector or runtime fallback",
   "`replicaDoc`/isolated `candidateDoc` kernel",
   "ProjectIndexYDoc is the only Project route/tombstone and current `shardEpoch`",
   "Checkpoint pruning requires both a service content certificate",
   "React Flow document projection",
 ])
 requireContractMarkers("docs/architecture.md", architectureContract, [
-  "collaboration cutover uses Route F",
-  collaborationV11ActivePointerRelativePath.replace("docs/", ""),
-  collaborationV11ReleaseDirectoryRelativePath.replace("docs/", ""),
-  "sixteen verified snapshot paths",
-  collaborationV11PointerDigest,
-  collaborationV11ManifestDigest,
-  collaborationV11EvidenceDigest,
-  collaborationV11BundleDigest,
-  collaborationV11ProtocolDigest,
-  collaborationV11HistoricalPinDigest,
-  collaborationV10PointerDigest,
-  collaborationV10ProtocolDigest,
-  "activated-authority-mutation",
-  "never fallback protocol authority",
+  "one current protocol descriptor",
+  "`protocolDigest` is the only protocol identity",
+  "unsupported-project-data",
   "Main-owned `replicaDoc`",
   "Isolated `candidateDoc`",
   "Final offline/online edit object",
@@ -368,6 +345,18 @@ for await (const sourcePath of new Bun.Glob("packages/desktop/src/main/**/*.ts")
   const retiredToken = retiredRegistryTokens.find((token) => source.includes(token))
   if (retiredToken) {
     throw new Error(`${sourcePath}: production source revives retired Registry v1 ownership (${retiredToken})`)
+  }
+}
+for (const pattern of runtimeAndPackagingGlobs) {
+  for await (const sourcePath of new Bun.Glob(pattern).scan(repositoryRoot)) {
+    if (isTestSource(sourcePath) || sourcePath.includes(".test-support.")) continue
+    const source = await Bun.file(join(repositoryRoot, sourcePath)).text()
+    const archivedToken = archivedAuthorityTokens.find((token) => source.includes(token))
+    if (archivedToken) {
+      throw new Error(
+        `${sourcePath}: production and packaging source must not read the archived authority release (${archivedToken}); use the current protocol descriptor`,
+      )
+    }
   }
 }
 for await (const manifestPath of new Bun.Glob("packages/*/package.json").scan(repositoryRoot)) {

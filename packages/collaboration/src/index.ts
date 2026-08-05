@@ -1,20 +1,17 @@
-export { selectInstalledProtocolAuthorityV2, validateAuthorityReleaseSnapshotV1 } from "./authority-selector"
-export type {
-  AuthorityReleaseFileV1,
-  AuthorityReleaseSnapshotV1,
-  ValidatedAuthorityReleaseV1,
-} from "./authority-selector"
 export {
-  selectInstalledProtocolAuthorityV3,
-  validateSuccessorAuthorityCandidateSnapshotV1,
-  validateSuccessorAuthorityReleaseSnapshotV1,
-} from "./authority-selector-v3"
+  CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME,
+  CURRENT_PROTOCOL_DESCRIPTOR_FORMAT,
+  currentProtocolDescriptor,
+  encodeCurrentProtocolDescriptor,
+  installCurrentProtocolAuthority,
+  parseCurrentProtocolDescriptor,
+} from "./current-protocol"
 export type {
-  SuccessorAuthorityCandidateSnapshotV1,
-  SuccessorAuthorityReleaseSnapshotV1,
-  ValidatedSuccessorAuthorityCandidateV1,
-  ValidatedSuccessorAuthorityReleaseV1,
-} from "./authority-selector-v3"
+  CurrentProtocolArtifactDescriptor,
+  CurrentProtocolDescriptor,
+  CurrentProtocolTypeNamespaceDescriptor,
+  CurrentProtocolYjsWireCodecDescriptor,
+} from "./current-protocol"
 
 export type { VerifiedProtocolAuthorityV2 } from "./authority"
 export {

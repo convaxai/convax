@@ -14,8 +14,19 @@ import type {
 } from "@convax/project/node"
 
 import type { MainProjectCollaborationSelectionContextV3 } from "./main-project-collaboration-port-resolver-v3"
-import type { MainSuccessorProjectCollaborationFactoryV3 } from "./main-project-collaboration-production-composition-v3"
 import type { MainSelectedProjectCollaborationPortsV3 } from "./project-collaboration-composition-v3"
+
+/**
+ * Retired successor factory shape. Production composition no longer selects a
+ * protocol, so nothing in Main injects this; WP4 removes the family entirely.
+ */
+export interface MainSuccessorProjectCollaborationFactoryV3 {
+  resolveContext(projectId: ProjectIdV2): Promise<MainProjectCollaborationSelectionContextV3>
+  openLocal(input: Readonly<{
+    context: MainProjectCollaborationSelectionContextV3
+    state: Extract<OpenSuccessorProjectProtocolStateV3, { status: "v3-local" }>
+  }>): Promise<MainSelectedProjectCollaborationPortsV3>
+}
 
 export interface ClaimBoundPristineV10PromotionRuntimeV3 {
   dispose(): Promise<void>

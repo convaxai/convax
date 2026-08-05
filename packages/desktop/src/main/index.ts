@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { appendFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -197,7 +197,7 @@ import {
   projectResourceAccessControlAllowOrigin,
 } from "./project-resource-protocol"
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
-import { loadCollaborationAuthoritiesV3 } from "./collaboration-authority-loader-v3"
+import { loadCurrentCollaborationProtocol } from "./current-protocol-loader"
 import {
   createOfflineCurrentLocalReplicaAuthoritySourceV2,
   createProjectCollaborationMaterializerRegistryV2,
@@ -238,14 +238,11 @@ import {
 } from "./project-team-peer-session-factory"
 import { NodeProjectTeamMemberIdentityStoreV1 } from "./project-team-member-identity-store"
 import { createLocalTeamIncomingReplicaAuthoritySourceV2 } from "./team-incoming-replica-authority"
-import { NodePristineV10SuccessorProjectContextSourceV3 } from "./node-pristine-v10-successor-project-context-source-v3"
-import { createPristineV10SuccessorProjectFactoryV3 } from "./pristine-v10-successor-project-factory-v3"
 import { createMainProjectCollaborationProductionCompositionV3 } from "./main-project-collaboration-production-composition-v3"
 import type {
   MainProjectCollaborationCompositionFacadeV3,
   MainProjectProtocolSelectionV3,
 } from "./project-collaboration-composition-v3"
-import type { SuccessorGenesisIdFactoryV3 } from "./successor-new-project-genesis-port-v3"
 import type { ProjectTeamCollaborationStatusV2 } from "../project-team-collaboration-contracts"
 
 interface ProjectTeamCollaborationRuntimeV2 {
@@ -718,13 +715,12 @@ function startApplication() {
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
     })
-    const collaborationAuthorityRoot = app.isPackaged
-      ? join(process.resourcesPath, "collaboration-authority")
-      : join(app.getAppPath(), ".packaging", "collaboration-authority")
-    const collaborationAuthorities = await loadCollaborationAuthoritiesV3({
-      explicitAuthorityRoot: collaborationAuthorityRoot,
+    const collaborationProtocolRoot = app.isPackaged
+      ? join(process.resourcesPath, "collaboration-protocol")
+      : join(app.getAppPath(), ".packaging", "collaboration-protocol")
+    const collaborationAuthority = await loadCurrentCollaborationProtocol({
+      explicitProtocolRoot: collaborationProtocolRoot,
     })
-    const collaborationAuthority = collaborationAuthorities.historicalV2
     const collaborationAuthorityCache = new NodeDurableLocalReplicaAuthorityCacheV2(
       join(userDataDirectory, "collaboration", "local-authority"),
       collaborationAuthority.protocolDigest,
@@ -734,9 +730,8 @@ function startApplication() {
       safeStorage,
     )
     const collaborationSignatureVerifier = createWebCryptoEd25519VerifierV2()
-    // This local durable store is also the V11 promoter's fail-closed proof that
-    // no historical Team binding exists. It performs no control-plane or PeerJS
-    // startup; the actual V10 Team runtime remains behind the protocol gate below.
+    // This local durable store performs no control-plane or PeerJS startup; the
+    // Team runtime stays behind the protocol gate below.
     const collaborationTeamStore = new NodeDurableTeamAuthorityStoreV1(
       join(userDataDirectory, "collaboration", "team-authority"),
     )
@@ -887,52 +882,10 @@ function startApplication() {
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
     collaborationCanvasRoutes = collaborationCanvasComposition.routes
-    const successorContexts = new NodePristineV10SuccessorProjectContextSourceV3({
-      authority: collaborationAuthorities.successorV3,
-      historicalAuthority: collaborationAuthority,
-      deviceRootDirectory: join(userDataDirectory, "collaboration", "successor-v3"),
-      projects: projectManager,
-      legacyOwners: localProjectOwnerAuthority,
-      teamAuthority: collaborationTeamStore,
-      replicaVault: collaborationReplicaVault,
-      signatureVerifier: collaborationSignatureVerifier,
-      applicationCommands: createProductionCanvasApplicationCommandAdapterV2(),
-      createOperationId: createCollaborationIdV2,
-      createShardEpoch: createCollaborationIdV2,
-      createSessionId: createCollaborationIdV2,
-      createCursorToken: createCollaborationIdV2,
-      genesisIds: Object.freeze({
-        derive({ claimDigest, purpose }: Parameters<SuccessorGenesisIdFactoryV3["derive"]>[0]) {
-          return parseId128V2(
-            createHash("sha256").update(`${claimDigest}:${purpose}`).digest().subarray(0, 16).toString("base64url"),
-          )
-        },
-      }),
-    })
     collaborationFacade = createMainProjectCollaborationProductionCompositionV3({
-      successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
-      createPromotionId: ({ projectId, projectEpoch, protocolDigest }) =>
-        parseId128V2(
-          createHash("sha256")
-          .update("convax.v3-promotion-id/1\0")
-          .update(projectId)
-          .update("\0")
-          .update(projectEpoch)
-          .update("\0")
-          .update(protocolDigest)
-          .digest()
-          .subarray(0, 16)
-            .toString("base64url"),
-        ),
-      successor: createPristineV10SuccessorProjectFactoryV3({
-        successorProtocolDigest: collaborationAuthorities.successorV3.protocolDigest,
-        contexts: successorContexts,
-      }),
-      v10: {
-        projectIndexes: collaborationProjectIndexes,
-        canvasSessions: collaborationCanvasSessions,
-        canvasRoutes: collaborationCanvasRoutes,
-      },
+      projectIndexes: collaborationProjectIndexes,
+      canvasSessions: collaborationCanvasSessions,
+      canvasRoutes: collaborationCanvasRoutes,
     })
     collaborationCanvasSessions = collaborationFacade.canvasSessions
     projectTeamRuntimeGate = createProtocolGatedProjectTeamRuntimeV2({

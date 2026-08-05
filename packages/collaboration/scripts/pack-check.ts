@@ -1,37 +1,16 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import ts from "typescript"
-import {
-  generateSuccessorAuthorityReleaseV1,
-  verifyGeneratedSuccessorAuthorityReleaseV1,
-} from "../../../scripts/collaboration-authority-v11/generate"
-import { verifyActiveSuccessorAuthorityReleaseV1 } from "../../../scripts/collaboration-authority-v11-release"
 
 const packageRoot = join(import.meta.dir, "..")
-const repositoryRoot = join(packageRoot, "../..")
 const temporary = mkdtempSync(join(packageRoot, ".convax-collaboration-pack-"))
 const isolatedEnvironment = { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary }
-const authorityRoot = "docs/superpowers/specs/authorities/collaboration-v10/r5"
-const snapshotPaths = Object.freeze([
-  "docs/superpowers/specs/2026-07-31-global-uri-protocol.md",
-  `${authorityRoot}/appendices/canvas-schema.md`,
-  `${authorityRoot}/appendices/collaboration-kernel.md`,
-  `${authorityRoot}/appendices/control-plane.md`,
-  `${authorityRoot}/appendices/project-persistence.md`,
-  `${authorityRoot}/authority.sha256`,
-  `${authorityRoot}/main.md`,
-  `${authorityRoot}/protocol-schema-bundle-v2.json`,
-  `${authorityRoot}/review-evidence.json`,
-  `${authorityRoot}/reviews/canvas-intent-runtime/receipt.json`,
-  `${authorityRoot}/reviews/canvas-intent-runtime/report.md`,
-  `${authorityRoot}/reviews/collaboration-api/receipt.json`,
-  `${authorityRoot}/reviews/collaboration-api/report.md`,
-  `${authorityRoot}/reviews/project-store-reviewer/receipt.json`,
-  `${authorityRoot}/reviews/project-store-reviewer/report.md`,
-])
+const descriptorPath = join(packageRoot, "protocol", "current.json")
 const expectedRuntimeKeys = Object.freeze([
   "CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2",
   "CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES_V2",
+  "CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME",
+  "CURRENT_PROTOCOL_DESCRIPTOR_FORMAT",
   "CollaborationKernelV2",
   "TransientSessionUndoCoordinatorV2",
   "applyUpdateV1V2",
@@ -114,8 +93,10 @@ const expectedRuntimeKeys = Object.freeze([
   "replicaCheckpointObjectDigestV2",
   "replicaIdToYjsClientIdV2",
   "replicaActorHeadSetDigestV2",
-  "selectInstalledProtocolAuthorityV2",
-  "selectInstalledProtocolAuthorityV3",
+  "currentProtocolDescriptor",
+  "encodeCurrentProtocolDescriptor",
+  "installCurrentProtocolAuthority",
+  "parseCurrentProtocolDescriptor",
   "selectedSuccessorValidationArtifactSetV3",
   "stableCheckpointSetCoreDigestV2",
   "stateVectorDigestV2",
@@ -123,9 +104,6 @@ const expectedRuntimeKeys = Object.freeze([
   "typedIntentDigestV3",
   "uint32ToNumberV2",
   "uint64ToBigIntV2",
-  "validateAuthorityReleaseSnapshotV1",
-  "validateSuccessorAuthorityCandidateSnapshotV1",
-  "validateSuccessorAuthorityReleaseSnapshotV1",
   "yjsUpdateDigestV2",
   "CollaborationKernelV3",
   "InMemoryProjectSharingHandoffSubmissionV3",
@@ -172,9 +150,6 @@ const expectedRuntimeKeys = Object.freeze([
   "verifyProjectSharingHandoffReceiptV3",
   "verifyProtocolPromotionBridgeV3",
 ].sort())
-
-verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
-verifyActiveSuccessorAuthorityReleaseV1({ repositoryRoot })
 
 try {
   const pack = Bun.spawnSync({
@@ -227,18 +202,16 @@ try {
   })
   requireSuccess(install, "external consumer install")
 
-  await Promise.all(snapshotPaths.map(async (path, index) => {
-    await Bun.write(join(fixture, `${index}.bin`), await Bun.file(join(repositoryRoot, path)).bytes())
-  }))
-  await Bun.write(join(fixture, "pointer.bin"), activePointerBytes())
+  await Bun.write(join(fixture, "current.json"), await Bun.file(descriptorPath).bytes())
 
   await Bun.write(join(consumer, "index.ts"), `
 import {
-  selectInstalledProtocolAuthorityV2,
-  selectInstalledProtocolAuthorityV3,
-  validateAuthorityReleaseSnapshotV1,
-  validateSuccessorAuthorityCandidateSnapshotV1,
-  validateSuccessorAuthorityReleaseSnapshotV1,
+  CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME,
+  CURRENT_PROTOCOL_DESCRIPTOR_FORMAT,
+  currentProtocolDescriptor,
+  encodeCurrentProtocolDescriptor,
+  installCurrentProtocolAuthority,
+  parseCurrentProtocolDescriptor,
 } from "@convax/collaboration"
 import {
   canonicalStateDigestV2,
@@ -259,29 +232,24 @@ import {
   yjsUpdateDigestV2,
 } from "@convax/collaboration"
 import type {
-  AuthorityReleaseFileV1,
-  AuthorityReleaseSnapshotV1,
   CollaborationPersistencePortV2,
+  CurrentProtocolArtifactDescriptor,
+  CurrentProtocolDescriptor,
+  CurrentProtocolTypeNamespaceDescriptor,
+  CurrentProtocolYjsWireCodecDescriptor,
   DocumentOwnerRuntimeV2,
   RemoteIngressCapabilityFactoryV2,
   CheckpointValidationCarrierIndexV2,
   SelectedDocumentOwnerArtifactDefinitionV2,
-  ValidatedAuthorityReleaseV1,
-  SuccessorAuthorityCandidateSnapshotV1,
-  SuccessorAuthorityReleaseSnapshotV1,
-  ValidatedSuccessorAuthorityReleaseV1,
 } from "@convax/collaboration"
-declare const file: AuthorityReleaseFileV1
-declare const snapshot: AuthorityReleaseSnapshotV1
-declare const validated: ValidatedAuthorityReleaseV1
-void file
-void snapshot
-void validated
-void selectInstalledProtocolAuthorityV2
-void selectInstalledProtocolAuthorityV3
-void validateAuthorityReleaseSnapshotV1
-void validateSuccessorAuthorityCandidateSnapshotV1
-void validateSuccessorAuthorityReleaseSnapshotV1
+declare const descriptor: CurrentProtocolDescriptor
+void descriptor
+void CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME
+void CURRENT_PROTOCOL_DESCRIPTOR_FORMAT
+void currentProtocolDescriptor
+void encodeCurrentProtocolDescriptor
+void installCurrentProtocolAuthority
+void parseCurrentProtocolDescriptor
 void CollaborationKernelV2
 void canonicalStateDigestV2
 void checkpointContentCertificateObjectDigestV2
@@ -299,7 +267,7 @@ void structuredDigestV2
 void stateVectorDigestV2
 void yjsUpdateDigestV2
 void (undefined as CheckpointValidationCarrierIndexV2 | CollaborationPersistencePortV2 | DocumentOwnerRuntimeV2 | RemoteIngressCapabilityFactoryV2 | SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> | undefined)
-void (undefined as SuccessorAuthorityCandidateSnapshotV1 | SuccessorAuthorityReleaseSnapshotV1 | ValidatedSuccessorAuthorityReleaseV1 | undefined)
+void (undefined as CurrentProtocolArtifactDescriptor | CurrentProtocolTypeNamespaceDescriptor | CurrentProtocolYjsWireCodecDescriptor | undefined)
 `)
   await Bun.write(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { lib: ["ES2022", "DOM"], module: "ESNext", moduleResolution: "Bundler", noEmit: true, skipLibCheck: false, strict: true, target: "ES2022", types: [] },
@@ -326,31 +294,12 @@ void (undefined as CollaborationFailureCodeV2 | ProtocolAuthorityErrorV2 | undef
     if (!negativeOutput.includes(forbidden)) throw new Error(`Negative typecheck did not reject ${forbidden}`)
   }
 
-  await Bun.write(join(consumer, "runtime.mjs"), runtimeConsumerSource(snapshotPaths))
+  await Bun.write(join(consumer, "runtime.mjs"), runtimeConsumerSource())
   const runtime = Bun.spawnSync({ cmd: [process.execPath, "runtime.mjs"], cwd: consumer, env: isolatedEnvironment, stdout: "pipe", stderr: "pipe" })
   requireSuccess(runtime, "external consumer runtime")
-  console.log("collaboration authority-selector pack consumer passed")
+  console.log("collaboration current-protocol pack consumer passed")
 } finally {
   rmSync(temporary, { recursive: true, force: true })
-}
-
-function activePointerBytes(): Uint8Array {
-  const text = JSON.stringify({
-    authorityId: "collaboration-v10",
-    evidencePath: `${authorityRoot}/review-evidence.json`,
-    evidenceSha256: "9a781faaa3ed28963066ba3ef28eb4367611568042bb14929feab5c2c884d678",
-    format: "convax.collaboration-active-authority-pointer/1",
-    manifestPath: `${authorityRoot}/authority.sha256`,
-    manifestSha256: "2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed",
-    previousSelection: {
-      kind: "legacy-manifest",
-      manifestPath: "docs/superpowers/specs/2026-08-01-p2p-v10-authority.sha256",
-      manifestSha256: "68a78f5ffdf3222667aaa213a492c3b79db6133f2206da1067a4976138edbcde",
-    },
-    revision: "r5",
-    sequence: "1",
-  })
-  return new TextEncoder().encode(`${text}\n`)
 }
 
 function assertExactRootDeclaration(text: string): void {
@@ -380,44 +329,33 @@ function assertExactRootDeclaration(text: string): void {
   if (/\bexport\s*\*/u.test(text) || /\bdefault\b/u.test(text)) throw new Error("Packed root declaration contains wildcard or default exports")
 }
 
-function runtimeConsumerSource(paths: readonly string[]): string {
+function runtimeConsumerSource(): string {
   return `
 import * as collaboration from "@convax/collaboration"
 const expectedKeys = ${JSON.stringify(expectedRuntimeKeys)}
 if (JSON.stringify(Object.keys(collaboration).sort()) !== JSON.stringify(expectedKeys)) throw new Error("public runtime namespace is not exact")
-const paths = ${JSON.stringify(paths)}
-async function snapshot() {
-  const files = await Promise.all(paths.map(async (path, index) => ({ path, bytes: new Uint8Array(await Bun.file(new URL(\`./fixture/\${index}.bin\`, import.meta.url)).arrayBuffer()) })))
-  const activePointerBytes = new Uint8Array(await Bun.file(new URL("./fixture/pointer.bin", import.meta.url)).arrayBuffer())
-  return { activePointerBytes, files }
-}
-function clone(value) { return { activePointerBytes: Uint8Array.from(value.activePointerBytes), files: value.files.map((file) => ({ path: file.path, bytes: Uint8Array.from(file.bytes) })) } }
-function mustReject(value) {
-  try { collaboration.validateAuthorityReleaseSnapshotV1(value) } catch (error) {
+function mustReject(bytes) {
+  try { collaboration.parseCurrentProtocolDescriptor(bytes) } catch (error) {
     if (error?.code === "protocol-schema-bundle-unavailable") return
     throw error
   }
-  throw new Error("hostile snapshot was accepted")
+  throw new Error("drifted descriptor was accepted")
 }
-const golden = await snapshot()
-const validated = collaboration.validateAuthorityReleaseSnapshotV1(golden)
-if (!Object.isFrozen(validated) || validated.protocolDigest !== "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5") throw new Error("validated release is invalid")
-const authority = collaboration.selectInstalledProtocolAuthorityV2(validated)
-if (authority.revision !== "r5" || authority.protocolDigest !== validated.protocolDigest) throw new Error("Task 3 live authority selection failed")
-const missing = clone(golden); missing.files.pop(); mustReject(missing)
-const extra = clone(golden); extra.files.push(extra.files[0]); mustReject(extra)
-const unsorted = clone(golden); [unsorted.files[0], unsorted.files[1]] = [unsorted.files[1], unsorted.files[0]]; mustReject(unsorted)
-const alias = clone(golden); alias.files[0].path = \`./\${alias.files[0].path}\`; mustReject(alias)
-for (const index of [1, 5, 7, 8, 9, 10]) { const hostile = clone(golden); hostile.files[index].bytes[0] ^= 1; mustReject(hostile) }
-const hostilePointer = clone(golden); hostilePointer.activePointerBytes[0] ^= 1; mustReject(hostilePointer)
-const borrowed = clone(golden)
-const copyOwned = collaboration.validateAuthorityReleaseSnapshotV1(borrowed)
-const before = JSON.stringify(copyOwned)
-borrowed.activePointerBytes[0] = 0
-borrowed.files[0].bytes[0] = 0
-borrowed.files.reverse()
-if (JSON.stringify(copyOwned) !== before || !Object.isFrozen(copyOwned)) throw new Error("validation result retained borrowed input")
-for (const subpath of ["authority", "authority-selector", "checkpoint-carrier", "kernel", "owner-runtime", "remote-ingress", "ports", "frame", "yjs-codec", "undo", "dist/index.js"]) {
+const packaged = new Uint8Array(await Bun.file(new URL("./fixture/current.json", import.meta.url)).arrayBuffer())
+const descriptor = collaboration.parseCurrentProtocolDescriptor(packaged)
+if (!Object.isFrozen(descriptor) || descriptor.format !== collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FORMAT) throw new Error("packaged descriptor is invalid")
+if (descriptor.protocolDigest !== "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5") throw new Error("packaged descriptor digest is not the built digest")
+if (collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME !== "current.json") throw new Error("descriptor file name is not exact")
+const drifted = Uint8Array.from(packaged); drifted[3] ^= 1; mustReject(drifted)
+mustReject(packaged.slice(0, -1))
+mustReject(new Uint8Array(0))
+const authority = collaboration.installCurrentProtocolAuthority(descriptor)
+if (authority.protocolDigest !== descriptor.protocolDigest) throw new Error("current authority installation failed")
+if (collaboration.installCurrentProtocolAuthority(descriptor) !== authority) throw new Error("current authority is not process-stable")
+try { collaboration.installCurrentProtocolAuthority({ ...descriptor }); throw new Error("structural descriptor clone was accepted") } catch (error) {
+  if (error?.code !== "protocol-schema-bundle-unavailable") throw error
+}
+for (const subpath of ["authority", "current-protocol", "checkpoint-carrier", "kernel", "owner-runtime", "remote-ingress", "ports", "frame", "yjs-codec", "undo", "dist/index.js"]) {
   try { await import(\`@convax/collaboration/\${subpath}\`); throw new Error(\`deep subpath resolved: \${subpath}\`) } catch (error) {
     if (String(error).includes("deep subpath resolved")) throw error
   }
