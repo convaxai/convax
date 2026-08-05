@@ -91,6 +91,10 @@ import {
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { openDesktopCanvasRendererSessionV2, type DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import {
+  mountCanvasSessionWithBackgroundReconcile,
+  type CanvasSessionReconcileDiagnostic,
+} from "./canvas-session-mount"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
@@ -238,6 +242,8 @@ function App() {
   const settingsSkillName = settingsSurface?.initialSkillName
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
+  const localeRef = useRef(locale)
+  localeRef.current = locale
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
   const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
@@ -668,33 +674,26 @@ function App() {
     setMountedCanvasSession(null)
     setCanvasSessionFailure(null)
     if (!activeProjectId || !activeCanvasId) return
-    const controller = new AbortController()
     const key = `${activeProjectId}:${activeCanvasId}`
-    let opened: DesktopCanvasRendererSessionV2 | null = null
-    void openDesktopCanvasRendererSessionV2({
-      ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-      signal: controller.signal,
-      transport: window.convax.canvas.sessions,
+    const ref = { canvasId: activeCanvasId, scopeId: activeProjectId }
+    return mountCanvasSessionWithBackgroundReconcile({
+      onDiagnostic: (diagnostic) => {
+        console.warn("[convax] Background Canvas generation reconciliation did not complete", diagnostic)
+        setNotification(generationReconcileNotification(localeRef.current, diagnostic))
+      },
+      onMountFailure: (error) => {
+        setCanvasSessionFailure({ key, message: error instanceof Error ? error.message : String(error) })
+      },
+      onMounted: (session) => setMountedCanvasSession({ key, session }),
+      openSession: (signal) =>
+        openDesktopCanvasRendererSessionV2({
+          ref,
+          signal,
+          transport: window.convax.canvas.sessions,
+        }),
+      reconcileCanvas: (mountedRef) => window.convax.generation.reconcileCanvas({ ref: mountedRef }),
+      ref,
     })
-      .then(async (session) => {
-        opened = session
-        await window.convax.generation.reconcileCanvas({
-          ref: { canvasId: activeCanvasId, scopeId: activeProjectId },
-        })
-        await session.refresh(controller.signal)
-        if (controller.signal.aborted) return session.dispose()
-        setMountedCanvasSession({ key, session })
-      })
-      .catch((error) => {
-        opened?.dispose()
-        if (!controller.signal.aborted) {
-          setCanvasSessionFailure({ key, message: error instanceof Error ? error.message : String(error) })
-        }
-      })
-    return () => {
-      controller.abort(new DOMException("Canvas renderer scope changed", "AbortError"))
-      opened?.dispose()
-    }
   }, [activeCanvasId, activeProjectId])
   const activeCanvasSession = mountedCanvasSession?.key === canvasSessionScopeKey ? mountedCanvasSession.session : null
   const activeCanvasSessionFailure =
@@ -2497,6 +2496,26 @@ function Toast({ notification }: { notification: CanvasNotification }) {
       </div>
     </div>
   )
+}
+
+function generationReconcileNotification(
+  locale: "en" | "zh-CN",
+  diagnostic: CanvasSessionReconcileDiagnostic,
+): CanvasNotification {
+  const timedOut = diagnostic.code === "generation-reconcile-timed-out"
+  return locale === "zh-CN"
+    ? {
+        description: timedOut ? "画布已打开；后台生成任务恢复仍在继续。" : "画布已打开；后台生成任务恢复稍后可重试。",
+        kind: "warning",
+        title: timedOut ? "生成任务恢复耗时较长" : "生成任务恢复失败",
+      }
+    : {
+        description: timedOut
+          ? "The Canvas is open while generation recovery continues in the background."
+          : "The Canvas is open. Generation recovery can retry later.",
+        kind: "warning",
+        title: timedOut ? "Generation recovery is taking longer" : "Generation recovery failed",
+      }
 }
 
 const root = document.getElementById("app")
