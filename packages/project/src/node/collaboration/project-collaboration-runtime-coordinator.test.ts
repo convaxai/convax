@@ -117,6 +117,30 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
     await coordinator.dispose()
   })
 
+  test("retains the actor binding when the close/reset operation fails", async () => {
+    const projectRoot = await createProjectRoot()
+    let actorId = localActorId
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinatorV2({
+      identity: { async resolveLocalActorId() { return actorId } },
+      materializer: inertMaterializer(),
+      projects: { async resolveProjectRoot() { return projectRoot } },
+      quiescence: { async quiesceProject() {} },
+    })
+    const lease = await coordinator.acquire("project-a")
+    lease.release()
+
+    await expect(coordinator.runClosed({
+      projectId: "project-a",
+      projectRoot,
+      async operation() {
+        actorId = otherActorId
+        throw new Error("reset failed")
+      },
+    })).rejects.toThrow("reset failed")
+    await expect(coordinator.acquire("project-a")).rejects.toMatchObject({ code: "project-binding-changed" })
+    await coordinator.dispose()
+  })
+
   test("fails closed when host quiescence leaves a collaboration session active", async () => {
     const projectRoot = await createProjectRoot()
     const coordinator = createCoordinator(projectRoot, async () => undefined)

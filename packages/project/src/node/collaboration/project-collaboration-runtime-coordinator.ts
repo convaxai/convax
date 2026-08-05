@@ -81,6 +81,11 @@ interface OpenProjectRuntimeV2 {
   leaseCount: number
 }
 
+interface ProjectRuntimeBindingV2 {
+  readonly projectRoot: string
+  readonly localActorId: ActorIdV2
+}
+
 /**
  * Project-owned native collaboration lifecycle.
  *
@@ -92,6 +97,7 @@ interface OpenProjectRuntimeV2 {
 export class NodeProjectCollaborationRuntimeCoordinatorV2
   implements ProjectClosedMutationGateV1, ProjectRecoveryRootPortV1
 {
+  private readonly bindings = new Map<string, ProjectRuntimeBindingV2>()
   private readonly openProjects = new Map<string, OpenProjectRuntimeV2>()
   private readonly queues = new Map<string, Promise<void>>()
   private readonly writerFactory: ProjectCollaborationWriterFactoryV2
@@ -118,6 +124,13 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
       const projectRoot = await this.resolveCanonicalProjectRoot(projectId)
       const localActorId = parseActorIdV2(await this.options.identity.resolveLocalActorId({ projectId, projectRoot }))
       const collaborationDirectory = path.join(projectRoot, ".convax", "collaboration")
+      const binding = this.bindings.get(projectId)
+      if (binding && (binding.projectRoot !== projectRoot || binding.localActorId !== localActorId)) {
+        throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+          "project-binding-changed",
+          "Project root or local actor binding changed without a successful close/reset barrier",
+        )
+      }
       let runtime = this.openProjects.get(projectId)
       if (runtime && (runtime.projectRoot !== projectRoot || runtime.localActorId !== localActorId)) {
         throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
@@ -139,6 +152,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
           localActorId,
         }
         this.openProjects.set(projectId, runtime)
+        this.bindings.set(projectId, Object.freeze({ projectRoot, localActorId }))
       }
       runtime.leaseCount += 1
       let released = false
@@ -198,7 +212,9 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
         runtime.persistence.dispose()
         this.openProjects.delete(input.projectId)
       }
-      return input.operation()
+      const result = await input.operation()
+      this.bindings.delete(input.projectId)
+      return result
     })
   }
 

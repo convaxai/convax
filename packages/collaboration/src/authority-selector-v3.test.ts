@@ -7,11 +7,14 @@ import {
   type SuccessorAuthorityCandidateSnapshotV1,
 } from "./authority-selector-v3"
 import { validateAuthorityReleaseSnapshotV1 } from "./authority-selector"
-import { ordinarySha256V2 } from "./digest"
 import { encodeRestrictedJcsV2 } from "./jcs"
 
 const repositoryRoot = join(import.meta.dir, "../../..")
 const root = "docs/superpowers/specs/authorities/collaboration-v11/r1"
+const pointerPath = "docs/superpowers/specs/collaboration-v11-active-authority.json"
+const manifestSha256 = "351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4"
+const protocolBundleSha256 = "180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c"
+const protocolDigest = "5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f"
 const paths = [
   "docs/superpowers/specs/2026-07-31-global-uri-protocol.md",
   `${root}/appendices/canvas-schema.md`,
@@ -23,22 +26,32 @@ const paths = [
   `${root}/main.md`,
   `${root}/protocol-schema-bundle-v3.json`,
 ] as const
+const releasePaths = [
+  ...paths,
+  `${root}/review-evidence.json`,
+  `${root}/reviews/canvas-intent-runtime/receipt.json`,
+  `${root}/reviews/canvas-intent-runtime/report.md`,
+  `${root}/reviews/collaboration-control-protocol/receipt.json`,
+  `${root}/reviews/collaboration-control-protocol/report.md`,
+  `${root}/reviews/project-native-store/receipt.json`,
+  `${root}/reviews/project-native-store/report.md`,
+] as const
 
 describe("V11/R1 successor authority candidate", () => {
-  test("validates the exact inactive candidate and copies borrowed bytes", async () => {
+  test("validates the exact frozen candidate and copies borrowed bytes", async () => {
     const candidate = await fixture()
     const validated = validateSuccessorAuthorityCandidateSnapshotV1(candidate)
     expect(validated).toEqual({
       format: "convax.validated-authority-candidate/1",
       authorityId: "collaboration-v11",
       revision: "r1",
-      manifestSha256: "7d16f8d267869e317dca1bd2a1a2ee8bac95b4ca46cf952cf9dde6cab8170ab1",
-      protocolBundleSha256: "928bfc9f30ec3cc2c680879b4e893cb483b855b4d877125befbe1574097cb4e6",
-      protocolDigest: "471c7cc66bc89be61fd79d20aae46bb46cc5b737adc2b576f58423dafffc42e4",
+      manifestSha256,
+      protocolBundleSha256,
+      protocolDigest,
       historicalProtocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5",
     })
     candidate.files[0]!.bytes[0] ^= 1
-    expect(validated.protocolDigest).toBe("471c7cc66bc89be61fd79d20aae46bb46cc5b737adc2b576f58423dafffc42e4")
+    expect(validated.protocolDigest).toBe(protocolDigest)
   })
 
   test("rejects missing, extra, order, path alias and tampered bytes with one code", async () => {
@@ -63,7 +76,7 @@ describe("V11/R1 successor authority candidate", () => {
     }
   })
 
-  test("does not activate V3 without the future exact pointer and 3/3 evidence closure", async () => {
+  test("does not activate V3 without the exact active pointer and 3/3 evidence closure", async () => {
     const candidate = await fixture()
     expect(() => validateSuccessorAuthorityReleaseSnapshotV1({
       activePointerBytes: new TextEncoder().encode("{}\n"),
@@ -71,7 +84,7 @@ describe("V11/R1 successor authority candidate", () => {
     })).toThrow()
   })
 
-  test("accepts only the exact future pointer CAS and exact 3/3 evidence order", async () => {
+  test("accepts only the exact active pointer CAS and exact 3/3 evidence order", async () => {
     const release = await reviewedFixture()
     const { pointer, ...snapshot } = release
     const validated = validateSuccessorAuthorityReleaseSnapshotV1(snapshot)
@@ -106,7 +119,7 @@ describe("V11/R1 successor authority candidate", () => {
     expect(Object.isFrozen(authority.artifactRefs)).toBe(true)
     expect(Object.isFrozen(authority.historicalAuthority.snapshot)).toBe(true)
     snapshot.files[1]!.bytes.fill(0)
-    expect(String(authority.artifactRefs[0]!.artifactDigest)).toBe("b36c8ea5155b4d3c42bf6ee3bd588334631ad3e8ae3df4a9a19bd3db24d82955")
+    expect(String(authority.artifactRefs[0]!.artifactDigest)).toBe("f75341f2b4d6685ade2708c4a843dddc4cd4c573c981e8cfed0f54c4093533ee")
   })
 })
 
@@ -135,96 +148,29 @@ function swap(value: ReturnType<typeof clone>, left: number, right: number): Ret
   return value
 }
 
+function withLf(bytes: Uint8Array): Uint8Array {
+  return Uint8Array.from([...bytes, 0x0a])
+}
+
 function replacePath(value: ReturnType<typeof clone>, index: number, path: string): ReturnType<typeof clone> {
   value.files[index] = { ...value.files[index]!, path }
   return value
 }
 
 async function reviewedFixture() {
-  const candidate = await fixture()
-  const reviewers = [
-    { role: "canvas-intent-runtime", directory: "canvas-intent-runtime" },
-    { role: "collaboration-control-protocol", directory: "collaboration-control-protocol" },
-    { role: "project-native-store", directory: "project-native-store" },
-  ] as const
-  const reviews = reviewers.map(({ role, directory }, index) => {
-    const reportPath = `${root}/reviews/${directory}/report.md`
-    const receiptPath = `${root}/reviews/${directory}/receipt.json`
-    const reportBytes = new TextEncoder().encode(`# ${role}\n\nUNCONDITIONAL SIGN\n`)
-    const reportSha256 = ordinarySha256V2(reportBytes)
-    const receiptBytes = withLf(encodeRestrictedJcsV2({
-      authorityId: "collaboration-v11",
-      decision: "UNCONDITIONAL SIGN",
-      format: "convax.collaboration-authority-review-receipt/2",
-      manifestPath: `${root}/authority.sha256`,
-      manifestSha256: "7d16f8d267869e317dca1bd2a1a2ee8bac95b4ca46cf952cf9dde6cab8170ab1",
-      protocolBundlePath: `${root}/protocol-schema-bundle-v3.json`,
-      protocolBundleSha256: "928bfc9f30ec3cc2c680879b4e893cb483b855b4d877125befbe1574097cb4e6",
-      protocolDigest: "471c7cc66bc89be61fd79d20aae46bb46cc5b737adc2b576f58423dafffc42e4",
-      reportPath,
-      reportSha256,
-      reviewerRole: role,
-      revision: "r1",
-      scoreBasisPoints: 900 + index,
-    }))
-    return { role, reportPath, receiptPath, reportBytes, reportSha256, receiptBytes, receiptSha256: ordinarySha256V2(receiptBytes), scoreBasisPoints: 900 + index }
-  })
-  const evidenceBytes = withLf(encodeRestrictedJcsV2({
-    authorityId: "collaboration-v11",
-    decision: "UNCONDITIONAL 3/3 SIGN",
-    format: "convax.collaboration-authority-review-evidence/2",
-    manifestPath: `${root}/authority.sha256`,
-    manifestSha256: "7d16f8d267869e317dca1bd2a1a2ee8bac95b4ca46cf952cf9dde6cab8170ab1",
-    protocolBundleSha256: "928bfc9f30ec3cc2c680879b4e893cb483b855b4d877125befbe1574097cb4e6",
-    protocolDigest: "471c7cc66bc89be61fd79d20aae46bb46cc5b737adc2b576f58423dafffc42e4",
-    reviews: reviews.map((review) => ({
-      decision: "UNCONDITIONAL SIGN",
-      receiptPath: review.receiptPath,
-      receiptSha256: review.receiptSha256,
-      reportPath: review.reportPath,
-      reportSha256: review.reportSha256,
-      reviewerRole: review.role,
-      scoreBasisPoints: review.scoreBasisPoints,
-    })),
-    revision: "r1",
-  }))
-  const pointer = {
-    authorityId: "collaboration-v11",
-    evidencePath: `${root}/review-evidence.json`,
-    evidenceSha256: ordinarySha256V2(evidenceBytes),
-    format: "convax.collaboration-active-authority-pointer/1",
-    manifestPath: `${root}/authority.sha256`,
-    manifestSha256: "7d16f8d267869e317dca1bd2a1a2ee8bac95b4ca46cf952cf9dde6cab8170ab1",
-    previousSelection: {
-      authorityId: "collaboration-v10",
-      kind: "active-authority",
-      pointerPath: "docs/superpowers/specs/collaboration-v10-active-authority.json",
-      pointerSha256: "f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398",
-      revision: "r5",
-      sequence: "1",
-    },
-    revision: "r1",
-    sequence: "1",
+  const activePointerBytes = await readRepositoryFile(pointerPath)
+  const pointer = JSON.parse(new TextDecoder().decode(activePointerBytes)) as {
+    readonly previousSelection: { readonly pointerSha256: string }
   }
   return {
-    activePointerBytes: withLf(encodeRestrictedJcsV2(pointer)),
-    files: [
-      ...candidate.files,
-      { path: `${root}/review-evidence.json`, bytes: evidenceBytes },
-      ...reviews.flatMap((review) => [
-        { path: review.receiptPath, bytes: review.receiptBytes },
-        { path: review.reportPath, bytes: review.reportBytes },
-      ]),
-    ],
+    activePointerBytes,
+    files: await Promise.all(releasePaths.map(async (path) => ({ path, bytes: await readRepositoryFile(path) }))),
     pointer,
   }
 }
 
-function withLf(bytes: Uint8Array): Uint8Array {
-  const result = new Uint8Array(bytes.byteLength + 1)
-  result.set(bytes)
-  result[result.byteLength - 1] = 0x0a
-  return result
+async function readRepositoryFile(path: string): Promise<Uint8Array> {
+  return new Uint8Array(await Bun.file(join(repositoryRoot, path)).arrayBuffer())
 }
 
 async function historicalFixture() {

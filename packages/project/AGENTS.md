@@ -121,16 +121,18 @@ This package owns the durable Project aggregate and native Project adapters.
   empty genesis and closed native inventory; any frame, route, unknown path, Team
   identity, or authority mismatch remains closed and requires rollover authority.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts in the
-  root's sealed R5 authority release. A missing/mismatched artifact or genuine
-  owner contradiction stops decode/reset/mutation rather than selecting an older
-  draft or current implementation as fallback.
-- Project/node may persist and re-verify closed successor local-owner bindings,
-  edit authorizations, genesis evidence, and device-level sharing tombstones, but
-  those stores are non-activating. Their presence never selects V3, grants mutation
-  authority, or permits downgrade from a shared/ambiguous Project to local-owner
-  signing. Until a sealed successor is selected, callers must keep them outside the
-  v2 runtime and report `local-authority-unavailable`.
-- A non-active successor sharing transition publishes one exact Project-private
+  active V11/R1 release and its complete pinned V10/R5 dependency. A missing or
+  mismatched artifact or genuine owner contradiction stops dispatch, decode, reset,
+  or mutation rather than selecting an older draft or current implementation as
+  fallback.
+- Project/node may persist and re-verify closed V3 local-owner bindings, edit
+  authorizations, genesis evidence, and device-level sharing tombstones. Their
+  presence alone never selects V3 or permits downgrade from a shared/ambiguous
+  Project to local-owner signing. R1 admits them only through the verified promotion
+  of one pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project with
+  one deterministic default Canvas. Direct-new V3, additional V3 Canvases, and V3
+  sharing remain unavailable and fail closed.
+- The non-active V3 sharing transition publishes one exact Project-private
   receipt/Team-artifact-digest CAS before its device-level tombstone. Either durable
   record permanently dominates the local-owner predecessor; a crash between them
   is recovered only by replaying the same receipt, never by resuming owner signing.

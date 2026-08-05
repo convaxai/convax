@@ -4,8 +4,6 @@ import os from "node:os"
 import path from "node:path"
 
 import {
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
   type AuthorityReleaseSnapshotV1,
   type SuccessorAuthorityReleaseSnapshotV1,
 } from "@convax/collaboration"
@@ -16,7 +14,7 @@ import {
 } from "./collaboration-authority-loader-v3"
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..")
-const currentV10StagedRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority")
+const activeStagedRoot = path.resolve(import.meta.dir, "../..", ".packaging/collaboration-authority")
 const v10PointerPath = "docs/superpowers/specs/collaboration-v10-active-authority.json"
 const v11PointerPath = "docs/superpowers/specs/collaboration-v11-active-authority.json"
 const v10Root = "docs/superpowers/specs/authorities/collaboration-v10/r5"
@@ -41,7 +39,7 @@ const v10Paths = [
   `${v10Root}/reviews/project-store-reviewer/report.md`,
 ] as const
 
-const v11CandidatePaths = [
+const v11Paths = [
   "docs/superpowers/specs/2026-07-31-global-uri-protocol.md",
   `${v11Root}/appendices/canvas-schema.md`,
   `${v11Root}/appendices/collaboration-kernel.md`,
@@ -51,6 +49,13 @@ const v11CandidatePaths = [
   `${v11Root}/historical-v10-r5-pin.json`,
   `${v11Root}/main.md`,
   `${v11Root}/protocol-schema-bundle-v3.json`,
+  `${v11Root}/review-evidence.json`,
+  `${v11Root}/reviews/canvas-intent-runtime/receipt.json`,
+  `${v11Root}/reviews/canvas-intent-runtime/report.md`,
+  `${v11Root}/reviews/collaboration-control-protocol/receipt.json`,
+  `${v11Root}/reviews/collaboration-control-protocol/report.md`,
+  `${v11Root}/reviews/project-native-store/receipt.json`,
+  `${v11Root}/reviews/project-native-store/report.md`,
 ] as const
 
 afterEach(async () => {
@@ -58,9 +63,10 @@ afterEach(async () => {
 })
 
 describe("Desktop staged V11 authority loader", () => {
-  test("fails closed while the current staged product contains no V11 active pointer", async () => {
-    await expect(loadCollaborationAuthoritiesV3({ explicitAuthorityRoot: currentV10StagedRoot }))
-      .rejects.toThrow("wrong exact inventory")
+  test("loads the exact active V11 release and its pinned historical V10 closure", async () => {
+    const loaded = await loadCollaborationAuthoritiesV3({ explicitAuthorityRoot: activeStagedRoot })
+    expect(String(loaded.successorV3.protocolDigest)).toBe("5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f")
+    expect(String(loaded.historicalV2.protocolDigest)).toBe("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5")
   })
 
   test("validates and returns both the pinned historical V2 and reviewed V3 authorities", async () => {
@@ -70,7 +76,7 @@ describe("Desktop staged V11 authority loader", () => {
       source: { async loadSnapshots() { return snapshots } },
     })
     expect(String(loaded.historicalV2.protocolDigest)).toBe("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5")
-    expect(String(loaded.successorV3.protocolDigest)).toBe("57d00c135d15339963004535c71770b10a35e301631b96ffc172c265e276ec3f")
+    expect(String(loaded.successorV3.protocolDigest)).toBe("5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f")
     expect(loaded.successorV3.artifactRefs.map((artifact) => artifact.name)).toEqual([
       "canvas-schema", "collaboration-kernel", "control-plane", "project-persistence",
     ])
@@ -137,85 +143,12 @@ async function reviewedSnapshots(): Promise<CollaborationAuthoritySnapshotsV3> {
 }
 
 async function reviewedSuccessorFixture(): Promise<SuccessorAuthorityReleaseSnapshotV1> {
-  const candidate = await Promise.all(v11CandidatePaths.map(async (filePath) => ({
-    path: filePath,
-    bytes: await bytesFromRepository(filePath),
-  })))
-  const reviewers = [
-    { role: "canvas-intent-runtime", directory: "canvas-intent-runtime" },
-    { role: "collaboration-control-protocol", directory: "collaboration-control-protocol" },
-    { role: "project-native-store", directory: "project-native-store" },
-  ] as const
-  const reviews = reviewers.map(({ role, directory }, index) => {
-    const reportPath = `${v11Root}/reviews/${directory}/report.md`
-    const receiptPath = `${v11Root}/reviews/${directory}/receipt.json`
-    const reportBytes = new TextEncoder().encode(`# ${role}\n\nUNCONDITIONAL SIGN\n`)
-    const reportSha256 = ordinarySha256V2(reportBytes)
-    const scoreBasisPoints = 900 + index
-    const receiptBytes = withLf(encodeRestrictedJcsV2({
-      authorityId: "collaboration-v11",
-      decision: "UNCONDITIONAL SIGN",
-      format: "convax.collaboration-authority-review-receipt/2",
-      manifestPath: `${v11Root}/authority.sha256`,
-      manifestSha256: "a9215ca975a604f6ffa2aae6afd52730006ca54030a4350ecbdf0c2ab71b9cba",
-      protocolBundlePath: `${v11Root}/protocol-schema-bundle-v3.json`,
-      protocolBundleSha256: "176290fd43531506d8ab74592f4a8102835a9d50a77d4ae0571e2bd6557c4474",
-      protocolDigest: "57d00c135d15339963004535c71770b10a35e301631b96ffc172c265e276ec3f",
-      reportPath,
-      reportSha256,
-      reviewerRole: role,
-      revision: "r1",
-      scoreBasisPoints,
-    }))
-    return { receiptPath, receiptBytes, reportPath, reportBytes, reportSha256, role, scoreBasisPoints }
-  })
-  const evidenceBytes = withLf(encodeRestrictedJcsV2({
-    authorityId: "collaboration-v11",
-    decision: "UNCONDITIONAL 3/3 SIGN",
-    format: "convax.collaboration-authority-review-evidence/2",
-    manifestPath: `${v11Root}/authority.sha256`,
-    manifestSha256: "a9215ca975a604f6ffa2aae6afd52730006ca54030a4350ecbdf0c2ab71b9cba",
-    protocolBundleSha256: "176290fd43531506d8ab74592f4a8102835a9d50a77d4ae0571e2bd6557c4474",
-    protocolDigest: "57d00c135d15339963004535c71770b10a35e301631b96ffc172c265e276ec3f",
-    reviews: reviews.map((review) => ({
-      decision: "UNCONDITIONAL SIGN",
-      receiptPath: review.receiptPath,
-      receiptSha256: ordinarySha256V2(review.receiptBytes),
-      reportPath: review.reportPath,
-      reportSha256: review.reportSha256,
-      reviewerRole: review.role,
-      scoreBasisPoints: review.scoreBasisPoints,
-    })),
-    revision: "r1",
-  }))
-  const pointerBytes = withLf(encodeRestrictedJcsV2({
-    authorityId: "collaboration-v11",
-    evidencePath: `${v11Root}/review-evidence.json`,
-    evidenceSha256: ordinarySha256V2(evidenceBytes),
-    format: "convax.collaboration-active-authority-pointer/1",
-    manifestPath: `${v11Root}/authority.sha256`,
-    manifestSha256: "a9215ca975a604f6ffa2aae6afd52730006ca54030a4350ecbdf0c2ab71b9cba",
-    previousSelection: {
-      authorityId: "collaboration-v10",
-      kind: "active-authority",
-      pointerPath: v10PointerPath,
-      pointerSha256: "f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398",
-      revision: "r5",
-      sequence: "1",
-    },
-    revision: "r1",
-    sequence: "1",
-  }))
   return {
-    activePointerBytes: pointerBytes,
-    files: [
-      ...candidate,
-      { path: `${v11Root}/review-evidence.json`, bytes: evidenceBytes },
-      ...reviews.flatMap((review) => [
-        { path: review.receiptPath, bytes: review.receiptBytes },
-        { path: review.reportPath, bytes: review.reportBytes },
-      ]),
-    ],
+    activePointerBytes: await bytesFromRepository(v11PointerPath),
+    files: await Promise.all(v11Paths.map(async (filePath) => ({
+      path: filePath,
+      bytes: await bytesFromRepository(filePath),
+    }))),
   }
 }
 
@@ -253,13 +186,6 @@ function cloneSnapshots(value: CollaborationAuthoritySnapshotsV3): {
 
 async function bytesFromRepository(filePath: string): Promise<Uint8Array> {
   return new Uint8Array(await readFile(path.join(repositoryRoot, filePath)))
-}
-
-function withLf(bytes: Uint8Array): Uint8Array {
-  const result = new Uint8Array(bytes.byteLength + 1)
-  result.set(bytes)
-  result[result.byteLength - 1] = 0x0a
-  return result
 }
 
 function sameBytes(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>): boolean {

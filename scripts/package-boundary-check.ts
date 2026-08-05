@@ -30,11 +30,15 @@ type WorkspacePackage = {
 const repositoryRoot = join(import.meta.dir, "..")
 const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
 const architectureContractPath = join(repositoryRoot, "docs", "architecture.md")
-const collaborationV10ActivePointerRelativePath = "docs/superpowers/specs/collaboration-v10-active-authority.json"
-const collaborationV10ReleaseDirectoryRelativePath = "docs/superpowers/specs/authorities/collaboration-v10/r5/"
-const collaborationV10ManifestDigest = "2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed"
-const collaborationV10EvidenceDigest = "9a781faaa3ed28963066ba3ef28eb4367611568042bb14929feab5c2c884d678"
-const collaborationV10BundleDigest = "163cabcd8ab5f45acd1fdf7309c747185a6132c9765585a310515f3c968ca786"
+const collaborationV11ActivePointerRelativePath = "docs/superpowers/specs/collaboration-v11-active-authority.json"
+const collaborationV11ReleaseDirectoryRelativePath = "docs/superpowers/specs/authorities/collaboration-v11/r1/"
+const collaborationV11PointerDigest = "2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6"
+const collaborationV11ManifestDigest = "351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4"
+const collaborationV11EvidenceDigest = "ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2"
+const collaborationV11BundleDigest = "180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c"
+const collaborationV11ProtocolDigest = "5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f"
+const collaborationV11HistoricalPinDigest = "ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369"
+const collaborationV10PointerDigest = "f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398"
 const collaborationV10ProtocolDigest = "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
 const desktopProcessInstructionPaths = ["src/main/AGENTS.md", "src/preload/AGENTS.md", "src/renderer/AGENTS.md"]
@@ -141,7 +145,7 @@ function normalizedSourcePath(sourcePath: string): string {
 function requireContractMarkers(path: string, source: string, markers: readonly string[]): void {
   const missing = markers.filter((marker) => !source.includes(marker))
   if (missing.length > 0) {
-    throw new Error(`${path}: frozen collaboration v10 governance markers are missing: ${missing.join(", ")}`)
+    throw new Error(`${path}: active collaboration V11 governance markers are missing: ${missing.join(", ")}`)
   }
 }
 
@@ -243,16 +247,20 @@ verifyCurrentCollaborationAuthorityReleaseV1({ repositoryRoot })
 verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
 verifyCurrentSuccessorAuthorityGovernanceV1({ repositoryRoot })
 requireContractMarkers("AGENTS.md", rootContract, [
-  "## Frozen collaboration v10 authority",
-  collaborationV10ActivePointerRelativePath,
-  collaborationV10ReleaseDirectoryRelativePath,
-  "exact fifteen-file snapshot",
-  collaborationV10ManifestDigest,
-  collaborationV10EvidenceDigest,
-  collaborationV10BundleDigest,
+  "## Frozen collaboration authority",
+  collaborationV11ActivePointerRelativePath,
+  collaborationV11ReleaseDirectoryRelativePath,
+  "sixteen verified snapshot paths",
+  collaborationV11PointerDigest,
+  collaborationV11ManifestDigest,
+  collaborationV11EvidenceDigest,
+  collaborationV11BundleDigest,
+  collaborationV11ProtocolDigest,
+  collaborationV11HistoricalPinDigest,
+  collaborationV10PointerDigest,
   collaborationV10ProtocolDigest,
   "activated-authority-mutation",
-  "never a selector or runtime fallback",
+  "selector or runtime fallback",
   "`replicaDoc`/isolated `candidateDoc` kernel",
   "ProjectIndexYDoc is the only Project route/tombstone and current `shardEpoch`",
   "Checkpoint pruning requires both a service content certificate",
@@ -260,12 +268,16 @@ requireContractMarkers("AGENTS.md", rootContract, [
 ])
 requireContractMarkers("docs/architecture.md", architectureContract, [
   "collaboration cutover uses Route F",
-  collaborationV10ActivePointerRelativePath.replace("docs/", ""),
-  collaborationV10ReleaseDirectoryRelativePath.replace("docs/", ""),
-  "exact fifteen-file snapshot",
-  collaborationV10ManifestDigest,
-  collaborationV10EvidenceDigest,
-  collaborationV10BundleDigest,
+  collaborationV11ActivePointerRelativePath.replace("docs/", ""),
+  collaborationV11ReleaseDirectoryRelativePath.replace("docs/", ""),
+  "sixteen verified snapshot paths",
+  collaborationV11PointerDigest,
+  collaborationV11ManifestDigest,
+  collaborationV11EvidenceDigest,
+  collaborationV11BundleDigest,
+  collaborationV11ProtocolDigest,
+  collaborationV11HistoricalPinDigest,
+  collaborationV10PointerDigest,
   collaborationV10ProtocolDigest,
   "activated-authority-mutation",
   "never fallback protocol authority",
@@ -277,7 +289,7 @@ requireContractMarkers("docs/architecture.md", architectureContract, [
   "service registry is advisory only",
   "@convax/api",
 ])
-const collaborationV10GovernanceContracts = [
+const collaborationGovernanceContracts = [
   ["AGENTS.md", rootContract],
   ["docs/architecture.md", architectureContract],
   ["packages/collaboration/AGENTS.md", await Bun.file(join(repositoryRoot, "packages/collaboration/AGENTS.md")).text()],
@@ -305,33 +317,33 @@ const retiredCollaborationTokens = [
   ["central", " per-edit admission"].join(""),
   ["2026-07-31-", "collaboration-architecture-review.sha256"].join(""),
 ]
-for (const [path, source] of collaborationV10GovernanceContracts) {
+for (const [path, source] of collaborationGovernanceContracts) {
   const retiredToken = retiredCollaborationTokens.find((token) => source.includes(token))
   if (retiredToken) throw new Error(`${path}: retired collaboration state/order token remains: ${retiredToken}`)
 }
-requireContractMarkers("packages/collaboration/AGENTS.md", collaborationV10GovernanceContracts[2][1], [
+requireContractMarkers("packages/collaboration/AGENTS.md", collaborationGovernanceContracts[2][1], [
   "One Main-owned `replicaDoc` per shard",
   "one isolated `candidateDoc` per command",
   "Offline work uses the same final frame bytes",
   "Reconnect requests and validates",
 ])
-requireContractMarkers("packages/canvas/AGENTS.md", collaborationV10GovernanceContracts[3][1], [
+requireContractMarkers("packages/canvas/AGENTS.md", collaborationGovernanceContracts[3][1], [
   "Main's `replicaDoc` is the sole local durable Canvas authority",
   "React Flow selection, hover, measured size, camera, drag preview",
   "Project-owned route `shardEpoch`",
 ])
-requireContractMarkers("packages/project/AGENTS.md", collaborationV10GovernanceContracts[4][1], [
+requireContractMarkers("packages/project/AGENTS.md", collaborationGovernanceContracts[4][1], [
   "ProjectIndexYDoc is the sole Project catalog",
   "current `shardEpoch` authority",
   "`ProjectIndexLiveScopeManifestV2`",
   "state is advisory anti-rollback/discovery metadata",
 ])
-requireContractMarkers("packages/desktop/AGENTS.md", collaborationV10GovernanceContracts[6][1], [
+requireContractMarkers("packages/desktop/AGENTS.md", collaborationGovernanceContracts[6][1], [
   "Each offline/local commit is the final long-lived-replica-signed causal frame",
   "Reconnect transmits the same bytes",
   "both content certification and exact all-active-editor causal-floor",
 ])
-requireContractMarkers("apps/api/AGENTS.md", collaborationV10GovernanceContracts[7][1], [
+requireContractMarkers("apps/api/AGENTS.md", collaborationGovernanceContracts[7][1], [
   "The service never orders ordinary edits",
   "registered-scope service registry is bounded advisory anti-rollback/discovery",
   "both a content certificate",
