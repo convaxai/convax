@@ -153,7 +153,11 @@ export class MarketplaceLegacyMigration {
     const existing = before.installations.find((record) => identityKey(record) === identityKey(proof.record))
     if (existing) {
       if (canonicalJson(existing) !== canonicalJson(proof.record)) {
-        throw new Error("Legacy Marketplace claim conflicts with current installation state")
+        // Marketplace state is newer authority than the one-shot legacy
+        // inspection. A same-identity mismatch must remain on its current
+        // source-bound record; legacy evidence cannot replace it or repair a
+        // grant for a different artifact, source, version, or revision.
+        return
       }
       if (proof.authorizationContractDigest) {
         await this.#options.state.update((draft) => {
