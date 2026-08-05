@@ -126,6 +126,30 @@ declare const verifiedBrand: unique symbol
 export interface SuccessorProtocolAuthorityV3 {
   readonly protocolDigest: DigestV2
 }
+export interface SuccessorProtocolSchemaArtifactRefV3 {
+  readonly name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence"
+  readonly format:
+    | "convax.canvas-protocol-schema/3"
+    | "convax.collaboration-kernel-protocol-schema/3"
+    | "convax.control-plane-protocol-schema/3"
+    | "convax.project-persistence-protocol-schema/3"
+  readonly artifactDigest: DigestV2
+}
+export interface HistoricalAuthoritySnapshotMemberV3 {
+  readonly path: string
+  readonly sha256: DigestV2
+}
+export interface HistoricalProtocolAuthorityClosureV3 {
+  readonly format: "convax.historical-authority-pin/1"
+  readonly authorityId: "collaboration-v10"
+  readonly revision: "r5"
+  readonly activePointerSha256: DigestV2
+  readonly manifestSha256: DigestV2
+  readonly evidenceSha256: DigestV2
+  readonly protocolBundleSha256: DigestV2
+  readonly protocolDigest: DigestV2
+  readonly snapshot: readonly HistoricalAuthoritySnapshotMemberV3[]
+}
 export interface CandidateSuccessorProtocolAuthorityV3 {
   readonly protocolDigest: DigestV2
   readonly [candidateBrand]: true
@@ -136,6 +160,10 @@ export interface VerifiedProtocolAuthorityV3 extends SuccessorProtocolAuthorityV
   readonly revision: "r1"
   readonly sequence: "1"
   readonly historicalAuthorityId: "collaboration-v10/r5"
+  readonly protocolBundleSha256: DigestV2
+  readonly artifactRefs: readonly SuccessorProtocolSchemaArtifactRefV3[]
+  readonly historicalAuthorityPinSha256: DigestV2
+  readonly historicalAuthority: HistoricalProtocolAuthorityClosureV3
   readonly [verifiedBrand]: true
 }
 const candidates = new WeakSet<object>()
@@ -151,14 +179,41 @@ export function createCandidateSuccessorProtocolAuthorityV3(
 }
 
 /** Called only by the sealed V11 selector after complete release validation. */
-export function installVerifiedSuccessorProtocolAuthorityV3(protocolDigest: DigestV2): VerifiedProtocolAuthorityV3 {
+export function installVerifiedSuccessorProtocolAuthorityV3(input: {
+  readonly protocolDigest: DigestV2
+  readonly protocolBundleSha256: DigestV2
+  readonly artifactRefs: readonly SuccessorProtocolSchemaArtifactRefV3[]
+  readonly historicalAuthorityPinSha256: DigestV2
+  readonly historicalAuthority: HistoricalProtocolAuthorityClosureV3
+}): VerifiedProtocolAuthorityV3 {
   const value = Object.freeze({
     format: "convax.protocol-authority-verification/3" as const,
     authorityId: "collaboration-v11" as const,
     revision: "r1" as const,
     sequence: "1" as const,
     historicalAuthorityId: "collaboration-v10/r5" as const,
-    protocolDigest: parseDigestV2(protocolDigest),
+    protocolDigest: parseDigestV2(input.protocolDigest),
+    protocolBundleSha256: parseDigestV2(input.protocolBundleSha256),
+    artifactRefs: Object.freeze(input.artifactRefs.map((artifact) => Object.freeze({
+      name: artifact.name,
+      format: artifact.format,
+      artifactDigest: parseDigestV2(artifact.artifactDigest),
+    }))),
+    historicalAuthorityPinSha256: parseDigestV2(input.historicalAuthorityPinSha256),
+    historicalAuthority: Object.freeze({
+      format: input.historicalAuthority.format,
+      authorityId: input.historicalAuthority.authorityId,
+      revision: input.historicalAuthority.revision,
+      activePointerSha256: parseDigestV2(input.historicalAuthority.activePointerSha256),
+      manifestSha256: parseDigestV2(input.historicalAuthority.manifestSha256),
+      evidenceSha256: parseDigestV2(input.historicalAuthority.evidenceSha256),
+      protocolBundleSha256: parseDigestV2(input.historicalAuthority.protocolBundleSha256),
+      protocolDigest: parseDigestV2(input.historicalAuthority.protocolDigest),
+      snapshot: Object.freeze(input.historicalAuthority.snapshot.map((member) => Object.freeze({
+        path: member.path,
+        sha256: parseDigestV2(member.sha256),
+      }))),
+    }),
   })
   verified.add(value)
   return value as VerifiedProtocolAuthorityV3

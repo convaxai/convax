@@ -4,6 +4,17 @@ export type {
   AuthorityReleaseSnapshotV1,
   ValidatedAuthorityReleaseV1,
 } from "./authority-selector"
+export {
+  selectInstalledProtocolAuthorityV3,
+  validateSuccessorAuthorityCandidateSnapshotV1,
+  validateSuccessorAuthorityReleaseSnapshotV1,
+} from "./authority-selector-v3"
+export type {
+  SuccessorAuthorityCandidateSnapshotV1,
+  SuccessorAuthorityReleaseSnapshotV1,
+  ValidatedSuccessorAuthorityCandidateV1,
+  ValidatedSuccessorAuthorityReleaseV1,
+} from "./authority-selector-v3"
 
 export type { VerifiedProtocolAuthorityV2 } from "./authority"
 export {
@@ -11,7 +22,10 @@ export {
   assertLocalOwnerAuthorityClosureV3,
   causalSignerAuthorityDigestV3,
   localOwnerEditAuthorizationCoreDigestV3,
+  localOwnerEditAuthorizationSignatureDigestV3,
   localProjectOwnerBindingCoreDigestV3,
+  localProjectOwnerBindingSignatureDigestV3,
+  localProjectOwnerKeyIdV3,
   parseCausalAuthorityDependenciesV3,
   parseCausalSignerAuthorityV3,
   parseLocalOwnerEditAuthorizationCoreV3,
@@ -41,7 +55,10 @@ export type {
   ProjectSharingHandoffSubmitResultV3,
   ProjectSharingServiceTrustPortV3,
 } from "./successor-handoff"
-export { createCandidateIncomingFrameAdmissionStrategyV3 } from "./successor-admission"
+export {
+  createCandidateIncomingFrameAdmissionStrategyV3,
+  createSelectedIncomingAuthorityVerificationPortV3,
+} from "./successor-admission"
 export type {
   CandidateIncomingFrameAdmissionResultV3,
   CandidateIncomingFrameAdmissionStrategyV3,
@@ -62,6 +79,9 @@ export type {
   CausalEditCoreV3,
   CausalEditFrameHeaderV3,
   DecodedCausalEditFrameV3,
+  HistoricalAuthoritySnapshotMemberV3,
+  HistoricalProtocolAuthorityClosureV3,
+  SuccessorProtocolSchemaArtifactRefV3,
   SuccessorProtocolAuthorityV3,
   VerifiedProtocolAuthorityV3,
 } from "./successor-frame"
@@ -89,12 +109,22 @@ export {
   protocolPromotionBridgeSignatureDigestV3,
   verifyProtocolPromotionBridgeV3,
 } from "./successor-promotion"
+export { CollaborationKernelV3 } from "./successor-kernel"
+export type {
+  CollaborationKernelOptionsV3,
+  IncomingFrameResultV3,
+  LocalCommitResultV3,
+  LocalIntentRequestV3,
+  PreparedLocalIntentV3,
+  ReplicaProjectionSnapshotV3,
+} from "./successor-kernel"
+export { selectedSuccessorValidationArtifactSetV3 } from "./successor-validation-artifacts"
 export type {
   ProtocolPromotionBridgeCoreV3,
   ProtocolPromotionBridgeV3,
   ProtocolPromotionSourceV3,
 } from "./successor-promotion"
-export { createWebCryptoEd25519VerifierV2 } from "./crypto"
+export { createWebCryptoEd25519VerifierV2, verifyExactEd25519V2 } from "./crypto"
 export type { Ed25519VerifierPortV2, ReplicaSignerPortV2 } from "./crypto"
 export type { YjsDocumentFactoryV2 } from "./yjs-codec"
 

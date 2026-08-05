@@ -26,6 +26,8 @@ export interface ProjectSharingHandoffCoreV3 {
   readonly serviceTrustBundleDigest: DigestV2
   readonly initialMembershipSnapshotDigest: DigestV2
   readonly initialOwnerMemberId: MemberIdV2
+  readonly initialMemberCredentialCoreDigest: DigestV2
+  readonly initialAdminCapabilityCoreDigest: DigestV2
   readonly initialOwnerReplicaId: ReplicaIdV2
   readonly initialOwnerActorId: ActorIdV2
   readonly initialReplicaActorCredentialCoreDigest: DigestV2
@@ -68,7 +70,7 @@ const KEY_DOMAIN = "convax.project-sharing-service-public-key/3"
 const OWNER_KEY_DOMAIN = "convax.local-project-owner-public-key/3"
 
 export function parseProjectSharingHandoffCoreV3(value: unknown): ProjectSharingHandoffCoreV3 {
-  assertExactKeysV2(value, ["format", "handoffId", "projectId", "projectEpoch", "previousOwnerBindingCoreDigest", "previousOwnerKeyId", "sharingGeneration", "projectIndexHead", "liveCanvasHeads", "serviceTrustBundleDigest", "initialMembershipSnapshotDigest", "initialOwnerMemberId", "initialOwnerReplicaId", "initialOwnerActorId", "initialReplicaActorCredentialCoreDigest", "initialReplicaEditAuthorizationCoreDigest", "successorProtocolDigest"], "ProjectSharingHandoffCoreV3")
+  assertExactKeysV2(value, ["format", "handoffId", "projectId", "projectEpoch", "previousOwnerBindingCoreDigest", "previousOwnerKeyId", "sharingGeneration", "projectIndexHead", "liveCanvasHeads", "serviceTrustBundleDigest", "initialMembershipSnapshotDigest", "initialOwnerMemberId", "initialMemberCredentialCoreDigest", "initialAdminCapabilityCoreDigest", "initialOwnerReplicaId", "initialOwnerActorId", "initialReplicaActorCredentialCoreDigest", "initialReplicaEditAuthorizationCoreDigest", "successorProtocolDigest"], "ProjectSharingHandoffCoreV3")
   if (value.format !== CORE_DOMAIN || value.sharingGeneration !== "1") failCodec("Project sharing handoff discriminator is invalid")
   const projectId = parseProjectIdV2(value.projectId)
   const projectEpoch = parseId128V2(value.projectEpoch)
@@ -85,7 +87,7 @@ export function parseProjectSharingHandoffCoreV3(value: unknown): ProjectSharing
     previousOwnerBindingCoreDigest: parseDigestV2(value.previousOwnerBindingCoreDigest), previousOwnerKeyId: parseDigestV2(value.previousOwnerKeyId), sharingGeneration: value.sharingGeneration,
     projectIndexHead: projectIndexHead as ProjectSharingHandoffCoreV3["projectIndexHead"], liveCanvasHeads: Object.freeze(liveCanvasHeads),
     serviceTrustBundleDigest: parseDigestV2(value.serviceTrustBundleDigest), initialMembershipSnapshotDigest: parseDigestV2(value.initialMembershipSnapshotDigest),
-    initialOwnerMemberId: parseMemberIdV2(value.initialOwnerMemberId), initialOwnerReplicaId: parseReplicaIdV2(value.initialOwnerReplicaId), initialOwnerActorId: parseActorIdV2(value.initialOwnerActorId),
+    initialOwnerMemberId: parseMemberIdV2(value.initialOwnerMemberId), initialMemberCredentialCoreDigest: parseDigestV2(value.initialMemberCredentialCoreDigest), initialAdminCapabilityCoreDigest: parseDigestV2(value.initialAdminCapabilityCoreDigest), initialOwnerReplicaId: parseReplicaIdV2(value.initialOwnerReplicaId), initialOwnerActorId: parseActorIdV2(value.initialOwnerActorId),
     initialReplicaActorCredentialCoreDigest: parseDigestV2(value.initialReplicaActorCredentialCoreDigest), initialReplicaEditAuthorizationCoreDigest: parseDigestV2(value.initialReplicaEditAuthorizationCoreDigest), successorProtocolDigest: parseDigestV2(value.successorProtocolDigest),
   })
 }

@@ -1,6 +1,10 @@
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import ts from "typescript"
+import {
+  generateSuccessorAuthorityReleaseV1,
+  verifyGeneratedSuccessorAuthorityReleaseV1,
+} from "../../../scripts/collaboration-authority-v11/generate"
 
 const packageRoot = join(import.meta.dir, "..")
 const repositoryRoot = join(packageRoot, "../..")
@@ -110,14 +114,66 @@ const expectedRuntimeKeys = Object.freeze([
   "replicaIdToYjsClientIdV2",
   "replicaActorHeadSetDigestV2",
   "selectInstalledProtocolAuthorityV2",
+  "selectInstalledProtocolAuthorityV3",
+  "selectedSuccessorValidationArtifactSetV3",
   "stableCheckpointSetCoreDigestV2",
   "stateVectorDigestV2",
   "structuredDigestV2",
   "uint32ToNumberV2",
   "uint64ToBigIntV2",
   "validateAuthorityReleaseSnapshotV1",
+  "validateSuccessorAuthorityCandidateSnapshotV1",
+  "validateSuccessorAuthorityReleaseSnapshotV1",
   "yjsUpdateDigestV2",
+  "CollaborationKernelV3",
+  "InMemoryProjectSharingHandoffSubmissionV3",
+  "SUCCESSOR_AUTHORITY_DOMAINS_V3",
+  "SUCCESSOR_CAUSAL_EDIT_MAGIC_V3",
+  "SUCCESSOR_PROMOTION_DOMAINS_V3",
+  "assertLocalOwnerAuthorityClosureV3",
+  "causalHeadRefFromDecodedFrameV3",
+  "causalSignerAuthorityDigestV3",
+  "createCandidateIncomingFrameAdmissionStrategyV3",
+  "createSelectedIncomingAuthorityVerificationPortV3",
+  "decodeCausalEditFrameV3",
+  "decodeSelectedCausalEditFrame",
+  "frameObjectRefFromDecodedFrameV3",
+  "incomingFrameClosureV3",
+  "inspectAcceptedFrameObjectV3",
+  "localOwnerEditAuthorizationCoreDigestV3",
+  "localOwnerEditAuthorizationSignatureDigestV3",
+  "localProjectOwnerBindingCoreDigestV3",
+  "localProjectOwnerBindingSignatureDigestV3",
+  "localProjectOwnerKeyIdV3",
+  "materializeAcceptedFrameV3",
+  "parseCausalAuthorityDependenciesV3",
+  "parseCausalSignerAuthorityV3",
+  "parseLocalOwnerActorSequenceAllocationPolicyV3",
+  "parseLocalOwnerEditAuthorizationCoreV3",
+  "parseLocalOwnerEditAuthorizationV3",
+  "parseLocalOwnerGenesisAuthorizationPolicyV3",
+  "parseLocalProjectOwnerBindingCoreV3",
+  "parseLocalProjectOwnerBindingV3",
+  "parseProjectSharingHandoffCoreV3",
+  "parseProjectSharingHandoffProposalV3",
+  "parseProjectSharingHandoffReceiptV3",
+  "parseProtocolPromotionBridgeCoreV3",
+  "parseProtocolPromotionBridgeV3",
+  "parseProtocolPromotionSourceV3",
+  "projectSharingHandoffCoreDigestV3",
+  "projectSharingHandoffSignatureDigestV3",
+  "protocolPromotionBridgeCoreDigestV3",
+  "protocolPromotionBridgeSignatureDigestV3",
+  "verifyLocalOwnerAuthorityV3",
+  "verifyProjectSharingHandoffProposalV3",
+  "verifyProjectSharingHandoffReceiptV3",
+  "verifyProtocolPromotionBridgeV3",
 ].sort())
+
+verifyGeneratedSuccessorAuthorityReleaseV1(generateSuccessorAuthorityReleaseV1())
+if (await Bun.file(join(repositoryRoot, "docs/superpowers/specs/collaboration-v11-active-authority.json")).exists()) {
+  throw new Error("Packed collaboration cannot activate V11 before its exact reviewed pointer promotion")
+}
 
 try {
   const pack = Bun.spawnSync({
@@ -176,7 +232,13 @@ try {
   await Bun.write(join(fixture, "pointer.bin"), activePointerBytes())
 
   await Bun.write(join(consumer, "index.ts"), `
-import { selectInstalledProtocolAuthorityV2, validateAuthorityReleaseSnapshotV1 } from "@convax/collaboration"
+import {
+  selectInstalledProtocolAuthorityV2,
+  selectInstalledProtocolAuthorityV3,
+  validateAuthorityReleaseSnapshotV1,
+  validateSuccessorAuthorityCandidateSnapshotV1,
+  validateSuccessorAuthorityReleaseSnapshotV1,
+} from "@convax/collaboration"
 import {
   canonicalStateDigestV2,
   checkpointContentCertificateObjectDigestV2,
@@ -204,6 +266,9 @@ import type {
   CheckpointValidationCarrierIndexV2,
   SelectedDocumentOwnerArtifactDefinitionV2,
   ValidatedAuthorityReleaseV1,
+  SuccessorAuthorityCandidateSnapshotV1,
+  SuccessorAuthorityReleaseSnapshotV1,
+  ValidatedSuccessorAuthorityReleaseV1,
 } from "@convax/collaboration"
 declare const file: AuthorityReleaseFileV1
 declare const snapshot: AuthorityReleaseSnapshotV1
@@ -212,7 +277,10 @@ void file
 void snapshot
 void validated
 void selectInstalledProtocolAuthorityV2
+void selectInstalledProtocolAuthorityV3
 void validateAuthorityReleaseSnapshotV1
+void validateSuccessorAuthorityCandidateSnapshotV1
+void validateSuccessorAuthorityReleaseSnapshotV1
 void CollaborationKernelV2
 void canonicalStateDigestV2
 void checkpointContentCertificateObjectDigestV2
@@ -230,6 +298,7 @@ void structuredDigestV2
 void stateVectorDigestV2
 void yjsUpdateDigestV2
 void (undefined as CheckpointValidationCarrierIndexV2 | CollaborationPersistencePortV2 | DocumentOwnerRuntimeV2 | RemoteIngressCapabilityFactoryV2 | SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> | undefined)
+void (undefined as SuccessorAuthorityCandidateSnapshotV1 | SuccessorAuthorityReleaseSnapshotV1 | ValidatedSuccessorAuthorityReleaseV1 | undefined)
 `)
   await Bun.write(join(consumer, "tsconfig.json"), JSON.stringify({
     compilerOptions: { lib: ["ES2022", "DOM"], module: "ESNext", moduleResolution: "Bundler", noEmit: true, skipLibCheck: false, strict: true, target: "ES2022", types: [] },

@@ -30,6 +30,7 @@ import {
   type CanvasIdV2,
   type DigestV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type DocumentOwnerProtocolDefinitionV2,
   type DocumentScopeV2,
   type Id128V2,
@@ -1092,6 +1093,23 @@ export function deriveProjectIdentityV2(context: OwnerIntentConstructionContextV
   return `${prefix}${suffix}`
 }
 
+/** Exact precommit helper for Project-owned default-Canvas creation claims. */
+export function deriveProjectCanvasIdForOperationV2(input: Readonly<{
+  scope: DocumentScopeV2 & { readonly docKind: "project-index" }
+  actorId: ActorIdV2
+  operationId: Id128V2
+}>): CanvasIdV2 {
+  const core = Object.freeze({
+    format: "convax.project-derived-identity-core/2",
+    scope: parseProjectIndexScope(input.scope),
+    actorId: parseActorIdV2(input.actorId),
+    operationId: parseId128V2(input.operationId),
+    ordinal: parseUint32V2("0"),
+    kind: "canvas" as const,
+  })
+  return parseCanvasIdV2(`cv_${structuredDigestV2(DERIVED_DOMAIN, core)}`)
+}
+
 export function projectIndexSnapshotFromValidatedOwnerStateV2(
   base: OwnerValidatedStateV2<"project-index">,
 ): ProjectIndexSnapshotV2 | null {
@@ -1707,7 +1725,7 @@ export function projectIndexIntentDependenciesV2(context: OwnerIntentValidationC
 }
 
 /** Exact immutable blob closure for ProjectIndex persistence and replication ACK gating. */
-export function requiredProjectIndexBlobDigestsV2(frame: DecodedCausalEditFrameV2): readonly DigestV2[] {
+export function requiredProjectIndexBlobDigestsV2(frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3): readonly DigestV2[] {
   if (frame.header.core.scope.docKind !== "project-index") {
     throw new TypeError("ProjectIndex blob dependency extraction received another document owner")
   }

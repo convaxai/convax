@@ -19,7 +19,9 @@ import type {
 
 import {
   createKernelBackedMainCollaborationDocumentSessionV2,
+  createKernelBackedMainCollaborationDocumentSessionV3,
   type MainCollaborationDocumentSessionV2,
+  type MainCollaborationDocumentSessionV3,
 } from "./collaboration-document-session"
 import {
   createMainCollaborationProductionRuntimeV2,
@@ -36,16 +38,25 @@ export interface ProjectCanvasCatalogResolverV2 {
 }
 
 export interface CanvasRouteRuntimeHandleV2 {
+  readonly protocol: "v2"
   readonly session: MainCollaborationDocumentSessionV2<"canvas">
   dispose(): void
 }
+
+export interface CanvasRouteRuntimeHandleV3 {
+  readonly protocol: "v3"
+  readonly session: MainCollaborationDocumentSessionV3<"canvas">
+  dispose(): void
+}
+
+export type CanvasRouteRuntimeHandleV2OrV3 = CanvasRouteRuntimeHandleV2 | CanvasRouteRuntimeHandleV3
 
 export interface CanvasRouteRuntimeOpenerV2 {
   open(input: {
     readonly ref: CanvasDocumentRef
     readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
     readonly project: ProjectCollaborationRuntimeLeaseV2
-  }): Promise<CanvasRouteRuntimeHandleV2>
+  }): Promise<CanvasRouteRuntimeHandleV2OrV3>
 }
 
 export type ProjectCanvasRouteRuntimeErrorCodeV2 =
@@ -75,7 +86,7 @@ interface OpenRouteEntryV2 {
   readonly identity: ExactRouteIdentityV2
   readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
   readonly project: ProjectCollaborationRuntimeLeaseV2
-  readonly runtime: CanvasRouteRuntimeHandleV2
+  readonly runtime: CanvasRouteRuntimeHandleV2OrV3
   references: number
   revoked: boolean
 }
@@ -120,7 +131,9 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
    * Returns a lease-shaped session compatible with CanvasCollaborationSessionOwner.
    * Disposing an obsolete wrapper cannot close a newer reset incarnation.
    */
-  async openDocumentSession(ref: CanvasDocumentRef): Promise<MainCollaborationDocumentSessionV2<"canvas">> {
+  async openDocumentSession(
+    ref: CanvasDocumentRef,
+  ): Promise<MainCollaborationDocumentSessionV2<"canvas"> | MainCollaborationDocumentSessionV3<"canvas">> {
     this.requireLive()
     const projectId = parseProjectIdV2(ref.scopeId)
     const canvasId = parseCanvasIdV2(ref.canvasId)
@@ -137,7 +150,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
       }
       if (!entry) {
         const project = await this.options.projects.acquire(projectId)
-        let runtime: CanvasRouteRuntimeHandleV2 | undefined
+        let runtime: CanvasRouteRuntimeHandleV2OrV3 | undefined
         try {
           const scope = Object.freeze({
             projectId,
@@ -293,7 +306,7 @@ export function createProductionCanvasRouteRuntimeOpenerV2(input: {
           signatureVerifier: input.signatureVerifier,
           createOperationId: input.createOperationId,
         })
-        return Object.freeze({ session, dispose() { session.dispose(); runtime.dispose() } })
+        return Object.freeze({ protocol: "v2" as const, session, dispose() { session.dispose(); runtime.dispose() } })
       } catch (error) {
         runtime.dispose()
         throw error
@@ -332,6 +345,16 @@ function routeKey(projectId: string, canvasId: string): string {
 function leaseSession(
   entry: OpenRouteEntryV2,
   release: () => Promise<void>,
+): MainCollaborationDocumentSessionV2<"canvas"> | MainCollaborationDocumentSessionV3<"canvas"> {
+  return entry.runtime.protocol === "v2"
+    ? leaseSessionV2(entry, entry.runtime.session, release)
+    : leaseSessionV3(entry, entry.runtime.session, release)
+}
+
+function leaseSessionV2(
+  entry: OpenRouteEntryV2,
+  session: MainCollaborationDocumentSessionV2<"canvas">,
+  release: () => Promise<void>,
 ): MainCollaborationDocumentSessionV2<"canvas"> {
   let live = true
   const requireLive = () => {
@@ -340,14 +363,43 @@ function leaseSession(
   return Object.freeze({
     scope: entry.scope,
     query<T>(project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> {
-      requireLive(); return entry.runtime.session.query(project)
+      requireLive(); return session.query(project)
     },
     submit(input: Parameters<MainCollaborationDocumentSessionV2<"canvas">["submit"]>[0]) {
-      requireLive(); return entry.runtime.session.submit(input)
+      requireLive(); return session.submit(input)
     },
-    flush() { requireLive(); return entry.runtime.session.flush() },
+    flush() { requireLive(); return session.flush() },
     subscribe(listener: Parameters<MainCollaborationDocumentSessionV2<"canvas">["subscribe"]>[0]) {
-      requireLive(); return entry.runtime.session.subscribe(listener)
+      requireLive(); return session.subscribe(listener)
+    },
+    dispose() {
+      if (!live) return
+      live = false
+      void release()
+    },
+  })
+}
+
+function leaseSessionV3(
+  entry: OpenRouteEntryV2,
+  session: MainCollaborationDocumentSessionV3<"canvas">,
+  release: () => Promise<void>,
+): MainCollaborationDocumentSessionV3<"canvas"> {
+  let live = true
+  const requireLive = () => {
+    if (!live || entry.revoked) throw new ProjectCanvasRouteRuntimeErrorV2("route-changed", "Canvas route session was revoked")
+  }
+  return Object.freeze({
+    scope: entry.scope,
+    query<T>(project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> {
+      requireLive(); return session.query(project)
+    },
+    submit(input: Parameters<MainCollaborationDocumentSessionV3<"canvas">["submit"]>[0]) {
+      requireLive(); return session.submit(input)
+    },
+    flush() { requireLive(); return session.flush() },
+    subscribe(listener: Parameters<MainCollaborationDocumentSessionV3<"canvas">["subscribe"]>[0]) {
+      requireLive(); return session.subscribe(listener)
     },
     dispose() {
       if (!live) return

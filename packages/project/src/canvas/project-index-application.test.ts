@@ -3,6 +3,7 @@ import {
   parseDigestV2,
   type ActorIdV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type Id128V2,
   type OwnerExternalFactPortV2,
   type OwnerIntentConstructionContextV2,
@@ -75,6 +76,32 @@ describe("ProjectIndexCanvasApplicationV2", () => {
       "project.canvas.route.stage/2",
       "project.canvas.route.activate/2",
     ])
+  })
+
+  test("forwards a decoded V3 stage frame by identity without V2 casting or re-encoding", async () => {
+    const fixture = createFixture(3)
+    let observed: DecodedCausalEditFrameV3 | undefined
+    const application = fixture.application({
+      async stageCanvasGenesis(input) {
+        const latest = fixture.lastFrame()
+        if (!latest) throw new Error("missing submitted frame")
+        expect(input.predecessor.frame).toBe(latest)
+        expect(input.predecessor.frame.header.format).toBe("convax.causal-edit-frame/3")
+        if (!isDecodedV3(input.predecessor.frame)) throw new Error("expected V3 frame")
+        observed = input.predecessor.frame
+        return {
+          predecessorFrameDigest: input.predecessor.frame.frameDigest,
+          stagedProjectIndexFrontierDigest: input.predecessor.acceptedFrontierDigest,
+          checkpointObjectDigest: digest("canvas-v3-G"),
+        }
+      },
+    })
+    const result = await application.submitRouteCommand({
+      projectId,
+      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Local V3" },
+    })
+    expect(result.status).toBe("committed")
+    expect(observed).toBeDefined()
   })
 
   test("leaves a staged route invisible when genesis is pending", async () => {
@@ -182,11 +209,12 @@ describe("ProjectIndexCanvasApplicationV2", () => {
   })
 })
 
-function createFixture() {
+function createFixture(protocolMajor: 2 | 3 = 2) {
   const document = genesis()
   const submittedKinds: string[] = []
   let submission = 0
   let operation = 10
+  let latestFrame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3 | undefined
   const externalFacts = {
     resolveFact: () => ({ status: "rejected" as const }),
   } as unknown as OwnerExternalFactPortV2<"project-index">
@@ -222,19 +250,34 @@ function createFixture() {
       })
       if (applied === "rejected") throw new Error("fake ProjectIndex session rejected intent")
       const frameDigest = digest(`frame-${submission}`)
-      return {
-        status: "saved-locally",
-        acceptedFrontierDigest: digest(`frontier-${submission}`),
-        frame: {
+      if (protocolMajor === 2) {
+        const frame = {
           frameDigest,
-          header: { core: { scope: session.scope, operationId: context.operationId } },
-        } as unknown as DecodedCausalEditFrameV2,
+          header: { format: "convax.causal-edit-frame/2", core: { scope: session.scope, operationId: context.operationId } },
+        } as unknown as DecodedCausalEditFrameV2
+        latestFrame = frame
+        return {
+          status: "saved-locally" as const,
+          acceptedFrontierDigest: digest(`frontier-${submission}`),
+          frame,
+        }
+      }
+      const frame = {
+        frameDigest,
+        header: { format: "convax.causal-edit-frame/3", core: { scope: session.scope, operationId: context.operationId } },
+      } as unknown as DecodedCausalEditFrameV3
+      latestFrame = frame
+      return {
+        status: "saved-locally" as const,
+        acceptedFrontierDigest: digest(`frontier-${submission}`),
+        frame,
       }
     },
   }
   return {
     document,
     submittedKinds,
+    lastFrame: () => latestFrame,
     application(genesis: Pick<
       ConstructorParameters<typeof ProjectIndexCanvasApplicationV2>[0]["genesis"],
       "stageCanvasGenesis"
@@ -311,4 +354,8 @@ function actor(byte: number): ActorIdV2 {
 
 function digest(seed: string) {
   return parseDigestV2(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
+}
+
+function isDecodedV3(frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3): frame is DecodedCausalEditFrameV3 {
+  return frame.header.format === "convax.causal-edit-frame/3"
 }

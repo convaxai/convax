@@ -21,15 +21,21 @@ import {
 } from "@convax/collaboration"
 import {
   parseMembershipSnapshotV2,
+  parseMemberCredentialV2,
+  parseProjectAdminCapabilityV2,
   parseReplicaActorCredentialV2,
   parseReplicaEditAuthorizationV2,
   type MembershipSnapshotV2,
+  type MemberCredentialV2,
+  type ProjectAdminCapabilityV2,
   type ReplicaActorCredentialV2,
   type ReplicaEditAuthorizationV2,
 } from "@convax/project/collaboration-protocol"
 
 export interface ProjectSharingInitialTeamArtifactsV3 {
   readonly membershipSnapshot: MembershipSnapshotV2
+  readonly memberCredential: MemberCredentialV2
+  readonly adminCapability: ProjectAdminCapabilityV2
   readonly replicaActorCredential: ReplicaActorCredentialV2
   readonly replicaEditAuthorization: ReplicaEditAuthorizationV2
 }
@@ -183,19 +189,28 @@ function normalizeCommitted(input: CommittedProjectSharingHandoffV3): CommittedP
 function parseTeamArtifacts(input: ProjectSharingInitialTeamArtifactsV3, core: ProjectSharingHandoffCoreV3): ProjectSharingInitialTeamArtifactsV3 | "rejected" {
   try {
     const membershipSnapshot = parseMembershipSnapshotV2(input.membershipSnapshot)
+    const memberCredential = parseMemberCredentialV2(input.memberCredential)
+    const adminCapability = parseProjectAdminCapabilityV2(input.adminCapability)
     const replicaActorCredential = parseReplicaActorCredentialV2(input.replicaActorCredential)
     const replicaEditAuthorization = parseReplicaEditAuthorizationV2(input.replicaEditAuthorization)
     if (
       membershipSnapshot.coreDigest !== core.initialMembershipSnapshotDigest ||
+      memberCredential.coreDigest !== core.initialMemberCredentialCoreDigest ||
+      adminCapability.coreDigest !== core.initialAdminCapabilityCoreDigest ||
       replicaActorCredential.coreDigest !== core.initialReplicaActorCredentialCoreDigest ||
       replicaEditAuthorization.coreDigest !== core.initialReplicaEditAuthorizationCoreDigest ||
       membershipSnapshot.core.projectId !== core.projectId || membershipSnapshot.core.projectEpoch !== core.projectEpoch ||
+      memberCredential.core.projectId !== core.projectId || memberCredential.core.projectEpoch !== core.projectEpoch ||
+      adminCapability.core.projectId !== core.projectId || adminCapability.core.projectEpoch !== core.projectEpoch ||
+      memberCredential.core.memberId !== core.initialOwnerMemberId || adminCapability.core.adminMemberId !== core.initialOwnerMemberId ||
+      memberCredential.core.membershipSnapshotDigest !== membershipSnapshot.coreDigest || adminCapability.core.membershipSnapshotDigest !== membershipSnapshot.coreDigest ||
+      memberCredential.core.adminCapabilityDigest !== adminCapability.coreDigest ||
       replicaActorCredential.core.projectId !== core.projectId || replicaActorCredential.core.projectEpoch !== core.projectEpoch ||
       replicaEditAuthorization.core.projectId !== core.projectId || replicaEditAuthorization.core.projectEpoch !== core.projectEpoch ||
       replicaActorCredential.core.replicaId !== core.initialOwnerReplicaId || replicaActorCredential.core.actorId !== core.initialOwnerActorId ||
       replicaEditAuthorization.core.replicaId !== core.initialOwnerReplicaId || replicaEditAuthorization.core.actorId !== core.initialOwnerActorId
     ) return "rejected"
-    return Object.freeze({ membershipSnapshot, replicaActorCredential, replicaEditAuthorization })
+    return Object.freeze({ membershipSnapshot, memberCredential, adminCapability, replicaActorCredential, replicaEditAuthorization })
   } catch { return "rejected" }
 }
 

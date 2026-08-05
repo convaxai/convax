@@ -3,6 +3,7 @@ import {
   encodeRestrictedJcsV2,
   parseUint64V2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
 } from "@convax/collaboration"
 
 import { requiredCanvasBlobDigestsV2 } from "./blob-dependencies"
@@ -11,6 +12,12 @@ import { derivedNodeRefV2 } from "./validation"
 import { context, digest, U0 } from "./test-fixtures.test"
 
 describe("Canvas required blob dependency extraction", () => {
+  test("admits native V3 frames without a V2 transcode boundary", () => {
+    const successorExtractor: (frame: DecodedCausalEditFrameV3) => readonly string[] =
+      requiredCanvasBlobDigestsV2
+    expect(successorExtractor).toBe(requiredCanvasBlobDigestsV2)
+  })
+
   test("extracts, sorts and deduplicates Host resource content while ignoring opaque Plugin state", () => {
     const operation = context(4, 5, 6)
     const node = derivedNodeRefV2(operation, U0)

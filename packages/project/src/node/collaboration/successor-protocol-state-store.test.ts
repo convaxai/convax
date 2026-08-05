@@ -67,6 +67,25 @@ describe("successor Project protocol state", () => {
     const other = { ...state, origin: { ...state.origin, verifiedLegacyClosureDigest: digest("other-legacy") } } as SuccessorLocalProtocolStateV3
     await expect(fixture.store.installLocal({ state: other, promotionId: state.ownerBinding.core.creationNonce })).rejects.toThrow("equivocation")
   })
+
+  test("exposes device V3 high-water without treating it as a new-project fallback", async () => {
+    const fixture = await createFixture()
+    const state = localState("new-project")
+    const installed = await fixture.store.installLocal({ state, promotionId: state.ownerBinding.core.creationNonce })
+    expect(await fixture.store.inspectDeviceHighWater(state.projectId, state.projectEpoch)).toEqual({
+      status: "v3-observed",
+      stateDigest: installed.stateDigest,
+    })
+  })
+
+  test("fails closed on corrupt device protocol high-water", async () => {
+    const fixture = await createFixture()
+    const state = localState("new-project")
+    await fixture.store.installLocal({ state, promotionId: state.ownerBinding.core.creationNonce })
+    const files = await fs.readdir(path.join(path.dirname(fixture.projectPrivateDirectory), "device"))
+    await fs.writeFile(path.join(path.dirname(fixture.projectPrivateDirectory), "device", files[0]!), "corrupt")
+    expect(await fixture.store.inspectDeviceHighWater(state.projectId, state.projectEpoch)).toEqual({ status: "recovery-required" })
+  })
 })
 
 async function createFixture(faults?: ConstructorParameters<typeof NodeSuccessorProjectProtocolStateStoreV3>[0]["faults"]) {
@@ -99,7 +118,6 @@ function localState(originKind: "new-project" | "v10-r5-unshared"): SuccessorLoc
     ownerPublicKey,
     initialReplicaId: parseReplicaIdV2("replica_00000001"),
     initialActorId: parseActorIdV2(ownerPublicKey),
-    ownerSchemaDigest: digest("project-index-schema"),
     protocolDigest: digest("protocol-v3"),
     genesisAuthorizationPolicy: {
       format: "convax.local-owner-genesis-authorization-policy/3",
@@ -173,6 +191,7 @@ function authorization(
     scope,
     replicaId: binding.core.initialReplicaId,
     actorId: binding.core.initialActorId,
+    ownerSchemaDigest: scope.docKind === "project-index" ? digest("project-index-schema") : digest("canvas-schema"),
     actorSequenceAllocationPolicy: { format: "convax.local-owner-actor-sequence-allocation-policy/3", kind: "strict-durable-head-successor", initialSequence: "1" },
     protocolDigest: binding.core.protocolDigest,
     sharingGeneration: "0",

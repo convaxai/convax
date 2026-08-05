@@ -65,6 +65,11 @@ export type OpenSuccessorProjectProtocolStateV3 =
   | Readonly<{ status: "promotion-recovery-required"; claim: SuccessorPromotionClaimV3 }>
   | Readonly<{ status: "recovery-required" }>
 
+export type SuccessorDeviceProtocolHighWaterV3 =
+  | Readonly<{ status: "absent" }>
+  | Readonly<{ status: "v3-observed"; stateDigest: DigestV2 }>
+  | Readonly<{ status: "recovery-required" }>
+
 /**
  * Project/node owner for the one persisted protocol selection. Candidate V3 bytes
  * become usable only after the immutable closure, device high-water mark and
@@ -165,6 +170,25 @@ export class NodeSuccessorProjectProtocolStateStoreV3 {
     }
   }
 
+  /**
+   * Project-external anti-rollback evidence must be consulted before rebuilding an
+   * absent Project directory. A present V3 record cannot be interpreted as a fresh
+   * V10/new Project merely because its matching active pointer is missing.
+   */
+  async inspectDeviceHighWater(projectIdInput: ProjectIdV2, projectEpochInput: Id128V2): Promise<SuccessorDeviceProtocolHighWaterV3> {
+    const projectId = parseProjectIdV2(projectIdInput)
+    const projectEpoch = parseId128V2(projectEpochInput)
+    try {
+      const bytes = await readOptional(this.deviceRecordPath(projectId, projectEpoch))
+      if (!bytes) return Object.freeze({ status: "absent" })
+      const record = parseDeviceRecord(bytes)
+      if (record.projectId !== projectId || record.projectEpoch !== projectEpoch) return Object.freeze({ status: "recovery-required" })
+      return Object.freeze({ status: "v3-observed", stateDigest: record.stateDigest })
+    } catch {
+      return Object.freeze({ status: "recovery-required" })
+    }
+  }
+
   private stateDirectory() { return path.join(this.roots.projectPrivateDirectory, "protocol-v3") }
   private claimPath() { return path.join(this.stateDirectory(), "promotion-claim.jcs") }
   private activePath() { return path.join(this.stateDirectory(), "active.jcs") }
@@ -201,6 +225,7 @@ function parseLocalState(value: unknown): SuccessorLocalProtocolStateV3 {
   const bridges = value.bridges.map(parseProtocolPromotionBridgeV3)
   const bridgeScopeKeys = bridges.map((bridge) => scopeKey(bridge.core.scope))
   requireStrictlySorted(bridgeScopeKeys, "Successor promotion bridge scopes")
+  let promotedDefaultCanvasCount = 0
   for (let index = 0; index < authorizations.length; index += 1) {
     const authorization = authorizations[index]!
     const bridge = bridges[index]!
@@ -212,7 +237,14 @@ function parseLocalState(value: unknown): SuccessorLocalProtocolStateV3 {
       bridge.core.signerAuthority.ownerBindingCoreDigest !== ownerBinding.coreDigest
     ) throw new Error("Successor promotion bridge closure crossed its authorization")
     if (origin.kind === "new-project" && bridge.core.source.kind !== "new-project") throw new Error("New Project promotion source mismatches")
-    if (origin.kind === "v10-r5-unshared" && bridge.core.source.kind !== "v10-r5") throw new Error("R5 promotion source mismatches")
+    if (origin.kind === "v10-r5-unshared" && bridge.core.source.kind !== "v10-r5") {
+      if (bridge.core.source.kind !== "new-project" || authorization.authorization.core.scope.docKind !== "canvas" ||
+        authorization.proof.kind !== "accepted-project-index-route-genesis") throw new Error("R5 promotion source mismatches")
+      promotedDefaultCanvasCount += 1
+    }
+  }
+  if (promotedDefaultCanvasCount > 1 || (promotedDefaultCanvasCount === 1 && authorizations.filter((item) => item.authorization.core.scope.docKind === "canvas").length !== 1)) {
+    throw new Error("R5 empty Project promotion may create only one default Canvas")
   }
   return Object.freeze({
     format: value.format,
@@ -316,13 +348,25 @@ function deviceRecord(state: SuccessorLocalProtocolStateV3, stateDigest: DigestV
 }
 
 function requireDeviceRecord(bytes: Uint8Array, state: SuccessorLocalProtocolStateV3, stateDigest: DigestV2) {
+  const value = parseDeviceRecord(bytes)
+  if (
+    value.projectId !== state.projectId || value.projectEpoch !== state.projectEpoch ||
+    value.stateDigest !== stateDigest
+  ) throw new Error("Device protocol high-water mismatches active Project state")
+}
+
+function parseDeviceRecord(bytes: Uint8Array) {
   const value = decodeRestrictedJcsV2(bytes)
   exactObject(value, ["format", "projectId", "projectEpoch", "protocolMajor", "sharingGeneration", "stateDigest"], "Device protocol high-water")
   if (
     value.format !== "convax.device-project-protocol-high-water/3" ||
-    parseProjectIdV2(value.projectId) !== state.projectId || parseId128V2(value.projectEpoch) !== state.projectEpoch ||
-    value.protocolMajor !== "3" || value.sharingGeneration !== "0" || parseDigestV2(value.stateDigest) !== stateDigest
-  ) throw new Error("Device protocol high-water mismatches active Project state")
+    value.protocolMajor !== "3" || value.sharingGeneration !== "0"
+  ) throw new Error("Device protocol high-water is invalid")
+  return Object.freeze({
+    projectId: parseProjectIdV2(value.projectId),
+    projectEpoch: parseId128V2(value.projectEpoch),
+    stateDigest: parseDigestV2(value.stateDigest),
+  })
 }
 
 function scopeKey(scope: LocalOwnerEditAuthorizationV3["core"]["scope"]): string {

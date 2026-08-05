@@ -105,6 +105,21 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     })
   })
 
+  test("activates an exact V3 local-owner Canvas proof when the frozen V2 verifier rejects it", async () => {
+    const fixture = productionFixture({ localOwnerV3: true })
+    await fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest)
+
+    const resolved = await fixture.ports.facts.resolve({ dependencies: fixture.dependencies })
+
+    expect(resolved.status).toBe("resolved")
+    expect(fixture.localOwnerProofVerifierV3).toHaveBeenCalledTimes(1)
+    if (resolved.status !== "resolved") throw new Error("expected resolved V3 Canvas genesis fact")
+    expect(resolved.port.resolveFact(fixture.requirement)).toMatchObject({
+      status: "resolved",
+      value: { kind: "canvas-genesis-currentness", decision: "verified" },
+    })
+  })
+
   test("leaves a missing durable G pending and rejects F or scope substitution", async () => {
     const missing = productionFixture({ missingProof: true })
     await expect(missing.ports.facts.resolve({ dependencies: missing.dependencies }))
@@ -160,6 +175,7 @@ function productionFixture(options: {
   readonly proofFrameDigest?: DigestV2
   readonly failFirstInitialization?: boolean
   readonly authorPending?: boolean
+  readonly localOwnerV3?: boolean
 } = {}) {
   const projectIndexScope = scope()
   const canvasScope = {
@@ -222,6 +238,7 @@ function productionFixture(options: {
   }
   const proofVerifier = ((exactBytes: Readonly<Uint8Array>) => {
     expect(exactBytes).toEqual(carrierBytes)
+    if (options.localOwnerV3) return Object.freeze({ status: "rejected" as const })
     return Object.freeze({
       status: "validated" as const,
       exactBytesSha256: ordinarySha256V2(exactBytes),
@@ -237,6 +254,16 @@ function productionFixture(options: {
       }),
     })
   }) as unknown as CanvasGenesisProofCarrierVerifierV2
+  const localOwnerProofVerifierV3 = mock(async (exactBytes: Uint8Array) => {
+    expect(exactBytes).toEqual(carrierBytes)
+    return Object.freeze({
+      status: "validated" as const,
+      proofDigest: digest("v3-proof"),
+      checkpointObjectDigest,
+      scope: canvasScope,
+      projectIndexRouteDependencyFrameDigest: options.proofFrameDigest ?? stageFrameDigest,
+    })
+  })
   const factory = attemptFactory()
   const ports = createProjectIndexCanvasGenesisFactPortsV2({
     factory,
@@ -244,6 +271,7 @@ function productionFixture(options: {
     persistence,
     genesisVerifier,
     proofVerifier,
+    ...(options.localOwnerV3 ? { localOwnerProofVerifierV3 } : {}),
     preflightAuthor: async () => options.authorPending ? "pending" : "ready",
   })
   const stageFrame = {
@@ -288,6 +316,7 @@ function productionFixture(options: {
     dependencies,
     initializeShardWithGenesisProof,
     prepareGenesis,
+    localOwnerProofVerifierV3,
   }
 }
 

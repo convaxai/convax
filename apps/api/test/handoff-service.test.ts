@@ -17,7 +17,9 @@ import {
   type ProjectSharingHandoffProposalV3,
 } from "@convax/collaboration"
 import type {
+  MemberCredentialV2,
   MembershipSnapshotV2,
+  ProjectAdminCapabilityV2,
   ReplicaActorCredentialV2,
   ReplicaEditAuthorizationV2,
 } from "@convax/project/collaboration-protocol"
@@ -117,6 +119,8 @@ function handoffProposal(artifacts: ProjectSharingInitialTeamArtifactsV3, overri
     serviceTrustBundleDigest: TRUST,
     initialMembershipSnapshotDigest: artifacts.membershipSnapshot.coreDigest,
     initialOwnerMemberId: MEMBER,
+    initialMemberCredentialCoreDigest: artifacts.memberCredential.coreDigest,
+    initialAdminCapabilityCoreDigest: artifacts.adminCapability.coreDigest,
     initialOwnerReplicaId: REPLICA,
     initialOwnerActorId: ACTOR,
     initialReplicaActorCredentialCoreDigest: artifacts.replicaActorCredential.coreDigest,
@@ -148,11 +152,15 @@ function teamArtifacts(): ProjectSharingInitialTeamArtifactsV3 {
     ...serviceFields,
   }
   const membershipSnapshot: MembershipSnapshotV2 = { format: "convax.membership-snapshot/2", core: membershipCore, coreDigest: structuredDigestV2("convax.membership-snapshot-core/2", membershipCore), serviceSignature: SIGNATURE }
+  const adminCore = { format: "convax.project-admin-capability-core/2" as const, projectId: PROJECT, projectEpoch: ID, membershipEpoch: ID, membershipSnapshotDigest: membershipSnapshot.coreDigest, adminMemberId: MEMBER, adminMemberAuthorizationEpoch: ID, grants: ["membership-admin"] as const, ...serviceFields }
+  const adminCapability: ProjectAdminCapabilityV2 = { format: "convax.project-admin-capability/2", core: adminCore, coreDigest: structuredDigestV2("convax.project-admin-capability-core/2", adminCore), serviceSignature: SIGNATURE }
+  const memberCore = { format: "convax.member-credential-core/2" as const, projectId: PROJECT, projectEpoch: ID, membershipEpoch: ID, membershipSnapshotDigest: membershipSnapshot.coreDigest, memberId: MEMBER, memberSigningPublicKey: OWNER_KEY, role: "editor" as const, memberAuthorizationEpoch: ID, adminCapabilityDigest: adminCapability.coreDigest, ...serviceFields }
+  const memberCredential: MemberCredentialV2 = { format: "convax.member-credential/2", core: memberCore, coreDigest: structuredDigestV2("convax.member-credential-core/2", memberCore), serviceSignature: SIGNATURE }
   const actorCore = { format: "convax.replica-actor-credential-core/2" as const, projectId: PROJECT, projectEpoch: ID, memberId: MEMBER, replicaId: REPLICA, replicaIdReservationReceiptDigest: reservation, actorId: ACTOR, replicaSigningPublicKey: OWNER_KEY, replicaAuthorizationEpoch: ID, ...serviceFields }
   const replicaActorCredential: ReplicaActorCredentialV2 = { format: "convax.replica-actor-credential/2", core: actorCore, coreDigest: structuredDigestV2("convax.replica-actor-credential-core/2", actorCore), serviceSignature: SIGNATURE }
   const editCore = { format: "convax.replica-edit-authorization-core/2" as const, projectId: PROJECT, projectEpoch: ID, membershipEpoch: ID, membershipSnapshotDigest: membershipSnapshot.coreDigest, membershipSequence: parseUint64V2("1"), memberId: MEMBER, memberAuthorizationEpoch: ID, replicaId: REPLICA, replicaIdReservationReceiptDigest: reservation, actorId: ACTOR, replicaAuthorizationEpoch: ID, role: "editor" as const, editState: "active-editor" as const, installedFloorSetDigest: digest("floor"), schemaDigest: digest("schema"), validationArtifactSetDigest: digest("artifacts"), ...serviceFields }
   const replicaEditAuthorization: ReplicaEditAuthorizationV2 = { format: "convax.replica-edit-authorization/2", core: editCore, coreDigest: structuredDigestV2("convax.replica-edit-authorization-core/2", editCore), serviceSignature: SIGNATURE }
-  return Object.freeze({ membershipSnapshot, replicaActorCredential, replicaEditAuthorization })
+  return Object.freeze({ membershipSnapshot, memberCredential, adminCapability, replicaActorCredential, replicaEditAuthorization })
 }
 
 function domainDigest(domain: string, value: unknown) {

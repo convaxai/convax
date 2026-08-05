@@ -11,7 +11,7 @@ import { maxCausalFrontierV2, nextLamportV2 } from "./causal"
 import { assertDocumentOwnerBindingV2, validateOwnerCanonicalStateBytesV2 } from "./canonicalizer"
 import type { DigestV2, Id128V2, StateVectorV2 } from "./codecs"
 import { parseDigestV2, parseId128V2, parseUint64V2 } from "./codecs"
-import { KERNEL_DIGEST_DOMAINS_V2, PROTOCOL_SCHEMA_ARTIFACTS_V2 } from "./constants"
+import { KERNEL_DIGEST_DOMAINS_V2 } from "./constants"
 import type {
   ActualWriteEvidenceV2,
   CausalFrontierV2,
@@ -30,14 +30,15 @@ import type {
 } from "./contracts"
 import {
   actualWriteEvidenceDigestV3,
-  type SuccessorProtocolAuthorityV3,
   type CausalContextV3,
   type CausalDependencyRefV3,
   type CausalEditCoreV3,
   type DecodedCausalEditFrameV3,
+  type VerifiedProtocolAuthorityV3,
 } from "./successor-frame"
 import { causalSignerAuthorityDigestV3 } from "./successor-authority"
 import { selectedCausalProtocolCodecV3, type SelectedCausalProtocolCodecV3 } from "./protocol-codec-strategy"
+import { selectedSuccessorValidationArtifactSetV3 } from "./successor-validation-artifacts"
 import { canonicalStateDigestV2, structuredDigestV2 } from "./digest"
 import { CollaborationKernelErrorV2 } from "./errors"
 import { verifyExactEd25519V2, type Ed25519VerifierPortV2 } from "./crypto"
@@ -63,7 +64,7 @@ import {
 const claimedOwnerFactPortsV2 = new WeakSet<object>()
 
 export interface CollaborationKernelOptionsV3 {
-  readonly authority: SuccessorProtocolAuthorityV3
+  readonly authority: VerifiedProtocolAuthorityV3
   /** R5 remains the immutable owner-artifact verifier for unchanged owner schemas. */
   readonly historicalAuthority: VerifiedProtocolAuthorityV2
   readonly scope: DocumentScopeV2
@@ -226,7 +227,7 @@ export class CollaborationKernelV3 {
     if (authority === "rejected") invalid("Local edit authority rejected the mutation")
     if (authority.actorId !== localActorId || authority.actorId !== authority.signerAuthority.actorId) invalid("Local authority actor binding mismatches")
     const artifacts = parseValidationArtifactSetV2(authority.validationArtifacts)
-    assertRequiredProtocolArtifacts(artifacts)
+    assertRequiredProtocolArtifacts(artifacts, this.options.authority, this.options.historicalAuthority)
     const validationArtifactSetDigest = validationArtifactSetDigestV2(artifacts)
     const baseStateVector = encodeStateVectorV2(this.replicaDoc)
     const baseCanonicalStateDigest = assertOwnerCanonical(this.options.owner.protocolPort, this.replicaDoc, this.head.canonicalStateDigest)
@@ -754,17 +755,14 @@ function validationArtifactSetDigestV2(value: ValidationArtifactSetV2): DigestV2
   return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.validationArtifactSet, value)
 }
 
-function assertRequiredProtocolArtifacts(value: ValidationArtifactSetV2): void {
-  const required = [
-    { owner: "canvas", ...PROTOCOL_SCHEMA_ARTIFACTS_V2[0] },
-    { owner: "kernel", ...PROTOCOL_SCHEMA_ARTIFACTS_V2[1] },
-    { owner: "control-plane", ...PROTOCOL_SCHEMA_ARTIFACTS_V2[2] },
-    { owner: "project-index", ...PROTOCOL_SCHEMA_ARTIFACTS_V2[3] },
-  ].map(({ owner, format, artifactDigest }) => ({ owner, format, artifactDigest }))
-  for (const artifact of required) {
-    if (!value.artifacts.some((candidate) => candidate.owner === artifact.owner && candidate.format === artifact.format && candidate.artifactDigest === artifact.artifactDigest)) {
-      invalid("Validation artifact set omits a frozen protocol owner artifact")
-    }
+function assertRequiredProtocolArtifacts(
+  value: ValidationArtifactSetV2,
+  authority: CollaborationKernelOptionsV3["authority"],
+  historicalAuthority: VerifiedProtocolAuthorityV2,
+): void {
+  const required = selectedSuccessorValidationArtifactSetV3(authority, historicalAuthority)
+  if (!sameJcsBytes(encodeRestrictedJcsV2(value), encodeRestrictedJcsV2(required))) {
+    invalid("Validation artifact set differs from the exact V11 plus historical R5 closure")
   }
 }
 

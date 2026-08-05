@@ -6,6 +6,7 @@ import {
   encodeRestrictedJcsV2,
   ordinarySha256V2,
   parseDigestV2,
+  parseDocumentScopeV2,
   parseId128V2,
   parseLocalOwnerEditAuthorizationV3,
   parseLocalProjectOwnerBindingV3,
@@ -16,6 +17,8 @@ import {
   type LocalOwnerEditAuthorizationV3,
   type LocalOwnerSharingStatePortV3,
   type LocalProjectOwnerBindingV3,
+  type LocalProjectOwnerSignerAuthorityV3,
+  type DocumentScopeV2,
   type ProjectIdV2,
   type ProjectSharingHandoffReceiptV3,
 } from "@convax/collaboration"
@@ -25,7 +28,7 @@ const MAX_RECORD_BYTES = 128 * 1024
 
 export interface DurableSuccessorLocalOwnerAuthorityV3 {
   readonly binding: LocalProjectOwnerBindingV3
-  readonly authorization: LocalOwnerEditAuthorizationV3
+  readonly authorizations: readonly LocalOwnerEditAuthorizationV3[]
 }
 
 export interface DurableProjectSharingHandoffV3 {
@@ -33,6 +36,8 @@ export interface DurableProjectSharingHandoffV3 {
   readonly receiptDigest: DigestV2
   readonly teamArtifacts: Readonly<{
     readonly membershipSnapshotDigest: DigestV2
+    readonly memberCredentialCoreDigest: DigestV2
+    readonly adminCapabilityCoreDigest: DigestV2
     readonly replicaActorCredentialCoreDigest: DigestV2
     readonly replicaEditAuthorizationCoreDigest: DigestV2
   }>
@@ -70,11 +75,52 @@ export class NodeSuccessorLocalOwnerAuthorityStoreV3 implements LocalOwnerSharin
     }
     await requirePlainDirectory(this.roots.projectPrivateDirectory)
     const target = this.projectRecordPath()
-    await writeCreateOrExact(target, encodeRestrictedJcsV2({
+    const existingBytes = await readOptional(target)
+    const merged = existingBytes ? mergeAuthorities(parseRecord(existingBytes), parsed) : parsed
+    const bytes = encodeRestrictedJcsV2({
       format: "convax.project-local-owner-authority-record/3",
-      binding: parsed.binding,
-      authorization: parsed.authorization,
-    }))
+      binding: merged.binding,
+      authorizations: merged.authorizations,
+    })
+    if (existingBytes && sameBytes(existingBytes, bytes)) return
+    await writeReplaceExact(target, bytes)
+  }
+
+  async resolveExact(input: {
+    readonly projectId: ProjectIdV2
+    readonly projectEpoch: Id128V2
+    readonly scope: DocumentScopeV2
+    readonly ownerSchemaDigest: DigestV2
+    readonly protocolDigest: DigestV2
+  }): Promise<Readonly<{
+    readonly authority: LocalProjectOwnerSignerAuthorityV3
+    readonly binding: LocalProjectOwnerBindingV3
+    readonly authorization: LocalOwnerEditAuthorizationV3
+  }> | "missing" | "rejected"> {
+    const opened = await this.open(input.projectId, input.projectEpoch)
+    if (opened.status === "missing") return "missing"
+    if (opened.status !== "unshared") return "rejected"
+    try {
+      const scope = parseDocumentScopeV2(input.scope)
+      const schema = parseDigestV2(input.ownerSchemaDigest)
+      const protocol = parseDigestV2(input.protocolDigest)
+      const authorization = opened.authority.authorizations.find((candidate) =>
+        sameBytes(encodeRestrictedJcsV2(candidate.core.scope), encodeRestrictedJcsV2(scope)))
+      if (!authorization || authorization.core.ownerSchemaDigest !== schema ||
+        authorization.core.protocolDigest !== protocol || opened.authority.binding.core.protocolDigest !== protocol) return "rejected"
+      return Object.freeze({
+        binding: opened.authority.binding,
+        authorization,
+        authority: Object.freeze({
+          kind: "local-project-owner",
+          ownerKeyId: opened.authority.binding.core.ownerKeyId,
+          replicaId: opened.authority.binding.core.initialReplicaId,
+          actorId: opened.authority.binding.core.initialActorId,
+          ownerBindingCoreDigest: opened.authority.binding.coreDigest,
+          ownerEditAuthorizationCoreDigest: authorization.coreDigest,
+        }),
+      })
+    } catch { return "rejected" }
   }
 
   async recordSharingTombstone(input: {
@@ -196,10 +242,14 @@ function parseSharingHandoff(input: DurableProjectSharingHandoffV3): DurableProj
   if (receiptDigest !== ordinarySha256V2(encodeRestrictedJcsV2(receipt))) throw new Error("Project sharing handoff receipt digest mismatches exact bytes")
   const teamArtifacts = Object.freeze({
     membershipSnapshotDigest: parseDigestV2(input.teamArtifacts.membershipSnapshotDigest),
+    memberCredentialCoreDigest: parseDigestV2(input.teamArtifacts.memberCredentialCoreDigest),
+    adminCapabilityCoreDigest: parseDigestV2(input.teamArtifacts.adminCapabilityCoreDigest),
     replicaActorCredentialCoreDigest: parseDigestV2(input.teamArtifacts.replicaActorCredentialCoreDigest),
     replicaEditAuthorizationCoreDigest: parseDigestV2(input.teamArtifacts.replicaEditAuthorizationCoreDigest),
   })
   if (teamArtifacts.membershipSnapshotDigest !== receipt.core.initialMembershipSnapshotDigest ||
+    teamArtifacts.memberCredentialCoreDigest !== receipt.core.initialMemberCredentialCoreDigest ||
+    teamArtifacts.adminCapabilityCoreDigest !== receipt.core.initialAdminCapabilityCoreDigest ||
     teamArtifacts.replicaActorCredentialCoreDigest !== receipt.core.initialReplicaActorCredentialCoreDigest ||
     teamArtifacts.replicaEditAuthorizationCoreDigest !== receipt.core.initialReplicaEditAuthorizationCoreDigest) throw new Error("Project sharing Team artifact closure mismatches receipt")
   return Object.freeze({ receipt, receiptDigest, teamArtifacts })
@@ -214,26 +264,41 @@ function parseSharingRecord(bytes: Uint8Array): DurableProjectSharingHandoffV3 {
 
 function parseAuthority(input: DurableSuccessorLocalOwnerAuthorityV3): DurableSuccessorLocalOwnerAuthorityV3 {
   const binding = parseLocalProjectOwnerBindingV3(input.binding)
-  const authorization = parseLocalOwnerEditAuthorizationV3(input.authorization)
-  if (
-    authorization.core.ownerBindingCoreDigest !== binding.coreDigest ||
-    authorization.core.projectId !== binding.core.projectId ||
-    authorization.core.projectEpoch !== binding.core.projectEpoch ||
-    authorization.core.scope.projectId !== binding.core.projectId ||
-    authorization.core.scope.projectEpoch !== binding.core.projectEpoch ||
-    authorization.core.replicaId !== binding.core.initialReplicaId ||
-    authorization.core.actorId !== binding.core.initialActorId ||
-    authorization.core.protocolDigest !== binding.core.protocolDigest
-  ) throw new Error("Local owner authority record crossed its binding")
-  return Object.freeze({ binding, authorization })
+  if (!Array.isArray(input.authorizations) || input.authorizations.length < 1 || input.authorizations.length > 257) throw new Error("Local owner authority authorization closure is invalid")
+  const authorizations = Object.freeze(input.authorizations.map(parseLocalOwnerEditAuthorizationV3).sort((left, right) =>
+    scopeKey(left.core.scope).localeCompare(scopeKey(right.core.scope))))
+  for (let index = 0; index < authorizations.length; index += 1) {
+    const authorization = authorizations[index]!
+    if (index > 0 && scopeKey(authorizations[index - 1]!.core.scope) === scopeKey(authorization.core.scope)) throw new Error("Local owner authority scope is duplicated")
+    if (authorization.core.ownerBindingCoreDigest !== binding.coreDigest || authorization.core.projectId !== binding.core.projectId ||
+      authorization.core.projectEpoch !== binding.core.projectEpoch || authorization.core.scope.projectId !== binding.core.projectId ||
+      authorization.core.scope.projectEpoch !== binding.core.projectEpoch || authorization.core.replicaId !== binding.core.initialReplicaId ||
+      authorization.core.actorId !== binding.core.initialActorId || authorization.core.protocolDigest !== binding.core.protocolDigest) {
+      throw new Error("Local owner authority record crossed its binding")
+    }
+  }
+  return Object.freeze({ binding, authorizations })
 }
 
 function parseRecord(bytes: Uint8Array): DurableSuccessorLocalOwnerAuthorityV3 {
   const value = decodeRestrictedJcsV2(bytes) as Record<string, unknown>
-  if (!value || Object.keys(value).sort().join(",") !== "authorization,binding,format" ||
+  if (!value || Object.keys(value).sort().join(",") !== "authorizations,binding,format" ||
     value.format !== "convax.project-local-owner-authority-record/3") throw new Error("Local owner authority record is invalid")
-  return parseAuthority({ binding: value.binding as LocalProjectOwnerBindingV3, authorization: value.authorization as LocalOwnerEditAuthorizationV3 })
+  return parseAuthority({ binding: value.binding as LocalProjectOwnerBindingV3, authorizations: value.authorizations as LocalOwnerEditAuthorizationV3[] })
 }
+
+function mergeAuthorities(current: DurableSuccessorLocalOwnerAuthorityV3, candidate: DurableSuccessorLocalOwnerAuthorityV3) {
+  if (!sameBytes(encodeRestrictedJcsV2(current.binding), encodeRestrictedJcsV2(candidate.binding))) throw new Error("Local owner authority installation equivocation")
+  const byScope = new Map(current.authorizations.map((authorization) => [scopeKey(authorization.core.scope), authorization]))
+  for (const authorization of candidate.authorizations) {
+    const key = scopeKey(authorization.core.scope); const prior = byScope.get(key)
+    if (prior && !sameBytes(encodeRestrictedJcsV2(prior), encodeRestrictedJcsV2(authorization))) throw new Error("Local owner authority installation equivocation")
+    byScope.set(key, authorization)
+  }
+  return parseAuthority({ binding: current.binding, authorizations: [...byScope.values()] })
+}
+
+function scopeKey(scope: DocumentScopeV2) { return new TextDecoder().decode(encodeRestrictedJcsV2(scope)) }
 
 function parseTombstone(bytes: Uint8Array) {
   const value = decodeRestrictedJcsV2(bytes) as Record<string, unknown>
@@ -266,6 +331,19 @@ async function writeCreateOrExact(target: string, bytes: Uint8Array) {
   }
   const handle = await fs.open(target, "wx", 0o600)
   try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
+  await fsyncProjectDirectoryV2(path.dirname(target))
+}
+
+async function writeReplaceExact(target: string, bytes: Uint8Array) {
+  const temporary = `${target}.staging`
+  const staged = await readOptional(temporary)
+  if (staged) {
+    if (!sameBytes(staged, bytes)) throw new Error("Local owner authority staging equivocation")
+  } else {
+    const handle = await fs.open(temporary, "wx", 0o600)
+    try { await handle.writeFile(bytes); await handle.sync() } finally { await handle.close() }
+  }
+  await fs.rename(temporary, target)
   await fsyncProjectDirectoryV2(path.dirname(target))
 }
 

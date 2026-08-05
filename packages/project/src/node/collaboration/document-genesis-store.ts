@@ -3,6 +3,7 @@ import {
   parseDigestV2,
   parseDocumentScopeV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type DigestV2,
   type DocumentOwnerKindV2,
   type DocumentScopeV2,
@@ -13,7 +14,7 @@ import type {
 } from "./persistence-store"
 
 export interface ProjectDocumentGenesisPredecessorV2 {
-  readonly frame: DecodedCausalEditFrameV2
+  readonly frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3
   readonly acceptedFrontierDigest: DigestV2
 }
 

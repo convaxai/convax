@@ -3,17 +3,20 @@ import {
   decodeCausalEditFrameV3,
   frameObjectRefFromDecodedFrameV3,
   inspectAcceptedFrameObjectV3,
+  inspectAcceptedFrameObjectV2,
   materializeAcceptedFrameV3,
   parseDigestV2,
   parseDocumentScopeV2,
   replicaActorHeadSetDigestV2,
   type CausalClosurePortV2,
   type DecodedCausalEditFrameV3,
+  type DecodedCausalEditFrameV2,
   type DigestV2,
   type DocumentOwnerRuntimeV2,
   type DocumentScopeV2,
   type ExactBaseResolverPortV3,
   type VerifiedProtocolAuthorityV3,
+  type VerifiedProtocolAuthorityV2,
   type YjsDocumentFactoryV2,
 } from "@convax/collaboration"
 import type {
@@ -40,6 +43,7 @@ export interface AcceptedCausalClosureIndexV3 extends CausalClosurePortV2 {
  */
 export function createAcceptedCausalClosureIndexV3(input: {
   readonly authority: VerifiedProtocolAuthorityV3
+  readonly historicalAuthority: VerifiedProtocolAuthorityV2
   readonly scope: DocumentScopeV2
 }): AcceptedCausalClosureIndexV3 {
   const scope = parseDocumentScopeV2(input.scope)
@@ -68,7 +72,15 @@ export function createAcceptedCausalClosureIndexV3(input: {
       assertSameScope(base.scope, scope)
       for (const head of base.frontier.heads) roots.add(parseDigestV2(head.frameDigest))
       warmed = true
-      for (const object of await store.listAcceptedFrames(scope)) ingest(object)
+      for (const object of await store.listAcceptedFrames(scope)) {
+        if (isV3Frame(object.exactFrameBytes)) ingest(object)
+        else {
+          // Promotion installs the complete validated V10 state as the V3 base.
+          // Historical suffix bytes remain immutable evidence, but are not replayed
+          // into that base or decoded by the V3 codec.
+          inspectAcceptedFrameObjectV2(input.historicalAuthority, object.ref, object.exactFrameBytes)
+        }
+      }
       return cloneHead(base)
     },
     async hydrate(store, digestInput) {
@@ -173,19 +185,20 @@ export function createAcceptedCausalClosureIndexV3(input: {
 
 export function createProductionNodeReplicaHeadMaterializerV3(input: {
   readonly authority: VerifiedProtocolAuthorityV3
+  readonly historicalAuthority: VerifiedProtocolAuthorityV2
   readonly owner: DocumentOwnerRuntimeV2
   readonly causalClosure: CausalClosurePortV2
   readonly createDocument: YjsDocumentFactoryV2["createDocument"]
-  readonly requiredBlobDigests: (frame: DecodedCausalEditFrameV3) => readonly DigestV2[]
+  readonly requiredBlobDigests: (frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3) => readonly DigestV2[]
 }): NodeReplicaHeadMaterializerV2 {
   const materializer: NodeReplicaHeadMaterializerV2 = {
     async inspectFrame(ref, exactBytes) {
-      const frame = inspectAcceptedFrameObjectV3(input.authority, ref, exactBytes)
-      const requiredBlobDigests = [...input.requiredBlobDigests(frame)].map(parseDigestV2).sort()
-      for (let index = 1; index < requiredBlobDigests.length; index += 1) {
-        if (requiredBlobDigests[index - 1] === requiredBlobDigests[index]) throw new Error("Required blob digest set contains a duplicate")
+      if (!isV3Frame(exactBytes)) {
+        const frame = inspectAcceptedFrameObjectV2(input.historicalAuthority, ref, exactBytes)
+        return Object.freeze({ ref, requiredBlobDigests: normalizeBlobDigests(input.requiredBlobDigests(frame)) })
       }
-      return Object.freeze({ ref, requiredBlobDigests: Object.freeze(requiredBlobDigests) })
+      const frame = inspectAcceptedFrameObjectV3(input.authority, ref, exactBytes)
+      return Object.freeze({ ref, requiredBlobDigests: normalizeBlobDigests(input.requiredBlobDigests(frame)) })
     },
     async applyAcceptedFrame({ previous, ref, exactBytes }) {
       return materializeAcceptedFrameV3({
@@ -273,4 +286,18 @@ function sameBytes(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>): boo
   if (left.byteLength !== right.byteLength) return false
   for (let index = 0; index < left.byteLength; index += 1) if (left[index] !== right[index]) return false
   return true
+}
+
+function normalizeBlobDigests(values: readonly DigestV2[]): readonly DigestV2[] {
+  const requiredBlobDigests = [...values].map(parseDigestV2).sort()
+  for (let index = 1; index < requiredBlobDigests.length; index += 1) {
+    if (requiredBlobDigests[index - 1] === requiredBlobDigests[index]) throw new Error("Required blob digest set contains a duplicate")
+  }
+  return Object.freeze(requiredBlobDigests)
+}
+
+function isV3Frame(value: Readonly<Uint8Array>): boolean {
+  return value.byteLength >= 8 &&
+    value[0] === 0x43 && value[1] === 0x56 && value[2] === 0x58 && value[3] === 0x43 &&
+    value[4] === 0x4f && value[5] === 0x4c && value[6] === 0x4c && value[7] === 0x33
 }

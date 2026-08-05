@@ -3,6 +3,7 @@ import {
   encodeRestrictedJcsV2,
   parseDigestV2,
   type DecodedCausalEditFrameV2,
+  type DecodedCausalEditFrameV3,
   type DigestV2,
 } from "@convax/collaboration"
 
@@ -15,7 +16,9 @@ const MAX_REQUIRED_BLOBS_PER_FRAME = 256
  * Derives the immutable blob closure from one already decoded Canvas frame.
  * Plugin state is opaque and is never scanned as Host resource metadata.
  */
-export function requiredCanvasBlobDigestsV2(frame: DecodedCausalEditFrameV2): readonly DigestV2[] {
+export function requiredCanvasBlobDigestsV2(
+  frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3,
+): readonly DigestV2[] {
   if (frame.header.core.scope.docKind !== "canvas") {
     throw new TypeError("Canvas blob dependency extraction received another document owner")
   }

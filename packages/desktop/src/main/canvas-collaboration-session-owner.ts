@@ -35,7 +35,10 @@ import {
   type OwnerValidatedStateV2,
 } from "@convax/collaboration"
 
-import type { MainCollaborationDocumentSessionV2 } from "./collaboration-document-session"
+import type {
+  MainCollaborationDocumentSessionV2,
+  MainCollaborationDocumentSessionV3,
+} from "./collaboration-document-session"
 import type {
   CanvasRendererSessionMutationResultV2,
   CanvasSessionInvalidationDtoV2,
@@ -79,7 +82,7 @@ export interface CreateCanvasCollaborationSessionOwnerOptionsV2 {
   readonly createCursorToken: () => Id128V2
   readonly openDocumentSession: (
     ref: CanvasDocumentRef,
-  ) => Promise<MainCollaborationDocumentSessionV2<"canvas">>
+  ) => Promise<MainCanvasCollaborationDocumentSessionV2OrV3>
   readonly resolveFacts: (input: {
     readonly ref: CanvasDocumentRef
     readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
@@ -122,9 +125,13 @@ export interface CanvasCollaborationSessionOwnerV2 extends CanvasCollaborationAp
   dispose(): void
 }
 
+export type MainCanvasCollaborationDocumentSessionV2OrV3 =
+  | MainCollaborationDocumentSessionV2<"canvas">
+  | MainCollaborationDocumentSessionV3<"canvas">
+
 interface CanvasDocumentEntryV2 {
   readonly ref: CanvasDocumentRef
-  readonly document: MainCollaborationDocumentSessionV2<"canvas">
+  readonly document: MainCanvasCollaborationDocumentSessionV2OrV3
   readonly leases: Map<Id128V2, CanvasRendererLeaseV2>
   readonly unsubscribe: () => void
 }

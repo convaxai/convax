@@ -13,9 +13,13 @@ import {
   localOwnerEditAuthorizationCoreDigestV3, localProjectOwnerBindingCoreDigestV3,
   causalSignerAuthorityDigestV3, type CausalSignerAuthorityV3,
 } from "./successor-authority"
-import { createCandidateIncomingFrameAdmissionStrategyV3 } from "./successor-admission"
+import {
+  createCandidateIncomingFrameAdmissionStrategyV3,
+  createSelectedIncomingAuthorityVerificationPortV3,
+} from "./successor-admission"
 import {
   causalContextDigestV3, causalEditCoreDigestV3, createCandidateSuccessorProtocolAuthorityV3,
+  decodeCausalEditFrameV3,
   encodeCausalEditFrameV3,
 } from "./successor-frame"
 import { encodeStateVectorV2, stateVectorDigestV2, yjsUpdateDigestV2 } from "./yjs-codec"
@@ -40,7 +44,7 @@ function localProof() {
   const bindingCore = Object.freeze({
     format: "convax.local-project-owner-binding-core/3" as const,
     projectId: PROJECT, projectEpoch: EPOCH, ownerKeyId, ownerPublicKey: PUBLIC_KEY,
-    initialReplicaId: REPLICA, initialActorId: ACTOR, ownerSchemaDigest: SCHEMA, protocolDigest: PROTOCOL,
+    initialReplicaId: REPLICA, initialActorId: ACTOR, protocolDigest: PROTOCOL,
     genesisAuthorizationPolicy: Object.freeze({
       format: "convax.local-owner-genesis-authorization-policy/3" as const,
       projectIndexScope: Object.freeze({ ...scope, docKind: "project-index" as const, docId: "project-index" as const }),
@@ -52,7 +56,7 @@ function localProof() {
   const authorizationCore = Object.freeze({
     format: "convax.local-owner-edit-authorization-core/3" as const,
     ownerBindingCoreDigest: binding.coreDigest, projectId: PROJECT, projectEpoch: EPOCH, scope,
-    replicaId: REPLICA, actorId: ACTOR,
+    replicaId: REPLICA, actorId: ACTOR, ownerSchemaDigest: SCHEMA,
     actorSequenceAllocationPolicy: Object.freeze({ format: "convax.local-owner-actor-sequence-allocation-policy/3" as const, kind: "strict-durable-head-successor" as const, initialSequence: "1" as const }),
     protocolDigest: PROTOCOL, sharingGeneration: "0" as const, expiryPolicy: "none" as const,
   })
@@ -136,6 +140,31 @@ function strategy(overrides: { sharing?: "unshared" | "shared" | "ambiguous"; lo
 }
 
 describe("candidate successor incoming admission", () => {
+  test("selected decoded-frame port reuses exact local and Team proof admission without decoding bytes", async () => {
+    const local = localProof(), team = teamAuthority()
+    const localResolverCalls: string[] = []
+    const selected = createSelectedIncomingAuthorityVerificationPortV3({
+      verifier: { async verify() { return true } },
+      resolver: {
+        async resolveLocalOwner() {
+          localResolverCalls.push("local")
+          return { status: "resolved" as const, proof: { binding: local.binding, authorization: local.authorization, ownerSchemaDigest: SCHEMA, sharingState: { async resolve() { return "unshared" as const } } } }
+        },
+        async resolveTeamReplica() {
+          localResolverCalls.push("team")
+          return { status: "resolved" as const, proof: { authority: team, scope, replicaPublicKey: PUBLIC_KEY } }
+        },
+      },
+    })
+    const authority = createCandidateSuccessorProtocolAuthorityV3(PROTOCOL)
+    const localFrame = decodeCausalEditFrameV3(authority, frameBytes(local.authority))
+    await expect(selected.verifyFrameAuthority(localFrame)).resolves.toEqual({ replicaPublicKey: PUBLIC_KEY })
+    expect(localResolverCalls).toEqual(["local"])
+    const teamFrame = decodeCausalEditFrameV3(authority, frameBytes(team))
+    await expect(selected.verifyFrameAuthority(teamFrame)).resolves.toEqual({ replicaPublicKey: PUBLIC_KEY })
+    expect(localResolverCalls).toEqual(["local", "team"])
+  })
+
   test("preserves pending and rejected proof states without trying the other signer kind", async () => {
     const bytes = frameBytes(localProof().authority)
     await expect(strategy({ localStatus: "pending" }).verifyExactFrame(bytes)).resolves.toEqual({ status: "pending" })

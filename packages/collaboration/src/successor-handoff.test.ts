@@ -20,6 +20,7 @@ function fixture(): ProjectSharingHandoffCoreV3 {
     projectIndexHead: { scope: projectIndexScope, acceptedFrontierDigest: digest("p-frontier"), acceptedHeadDigest: digest("p-head") },
     liveCanvasHeads: [{ scope: canvasScope, acceptedFrontierDigest: digest("c-frontier"), acceptedHeadDigest: digest("c-head") }],
     serviceTrustBundleDigest: digest("trust"), initialMembershipSnapshotDigest: digest("membership"), initialOwnerMemberId: parseMemberIdV2(encodeBase64urlV2(new Uint8Array(16).fill(3))),
+    initialMemberCredentialCoreDigest: digest("member-credential"), initialAdminCapabilityCoreDigest: digest("admin-capability"),
     initialOwnerReplicaId: parseReplicaIdV2("replica_00000001"), initialOwnerActorId: parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(2))),
     initialReplicaActorCredentialCoreDigest: digest("credential"), initialReplicaEditAuthorizationCoreDigest: digest("edit"), successorProtocolDigest: digest("protocol"),
   }

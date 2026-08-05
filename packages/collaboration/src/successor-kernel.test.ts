@@ -27,7 +27,6 @@ import type {
 } from "./contracts"
 import { canonicalStateDigestV2, ordinarySha256V2 } from "./digest"
 import {
-  createCandidateSuccessorProtocolAuthorityV3,
   decodeCausalEditFrameV3,
   type DecodedCausalEditFrameV3,
 } from "./successor-frame"
@@ -43,6 +42,8 @@ import type {
 } from "./ports"
 import { encodeFullUpdateV2, encodeStateVectorV2 } from "./yjs-codec"
 import { loadVerifiedTestAuthorityV2 } from "./authority.test-support"
+import { loadVerifiedTestAuthorityV3 } from "./successor-authority.test-support"
+import { selectedSuccessorValidationArtifactSetV3 } from "./successor-validation-artifacts"
 
 const encoder = new TextEncoder()
 const factPortFactories = new WeakMap<CollaborationKernelV3, () => OwnerExternalFactPortV2<"canvas">>()
@@ -67,13 +68,13 @@ const CANONICALIZER = ownerCanonicalizerDescriptorDigestV2(CANONICALIZER_DESCRIP
 const D1 = ordinarySha256V2(encoder.encode("membership"))
 const D2 = ordinarySha256V2(encoder.encode("actor-credential"))
 const D3 = ordinarySha256V2(encoder.encode("edit-authorization"))
-const V3_PROTOCOL = ordinarySha256V2(encoder.encode("candidate-v3-protocol"))
 const BRIDGE = ordinarySha256V2(encoder.encode("signed-promotion-bridge"))
-const V3_AUTHORITY = createCandidateSuccessorProtocolAuthorityV3(V3_PROTOCOL)
+const V2_AUTHORITY = await loadVerifiedTestAuthorityV2()
+const V3_AUTHORITY = await loadVerifiedTestAuthorityV3()
 const SCOPE: DocumentScopeV2 = Object.freeze({ projectId: parseProjectIdV2("project"), projectEpoch: ID, docKind: "canvas", docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`), shardEpoch: ID })
 
 function authority(): Promise<VerifiedProtocolAuthorityV2> {
-  return loadVerifiedTestAuthorityV2()
+  return Promise.resolve(V2_AUTHORITY)
 }
 
 function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArtifactDefinitionV2<"canvas">["createDefinitions"]>>): SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> {
@@ -341,7 +342,7 @@ describe("R5 owner boundary", () => {
     kernel.dispose()
   })
 
-  test("rejects a local authority that omits the frozen four-owner artifact set", async () => {
+  test("rejects a local authority that omits the exact V11 plus historical R5 artifact closure", async () => {
     const persistence = new MemoryPersistence()
     const base = ports(persistence)
     const prepare = base.localAuthority.prepareFinalFrameAuthority.bind(base.localAuthority)
@@ -354,7 +355,7 @@ describe("R5 owner boundary", () => {
         },
       },
     })
-    await expect(commit(kernel, "missing-artifacts")).rejects.toThrow("omits a frozen protocol owner artifact")
+    await expect(commit(kernel, "missing-artifacts")).rejects.toThrow("differs from the exact V11 plus historical R5 closure")
     expect(persistence.events).toEqual([])
     kernel.dispose()
   })
@@ -596,15 +597,7 @@ function canonicalStateDigestFor(value: unknown) {
 }
 
 function requiredValidationArtifacts() {
-  return {
-    format: "convax.validation-artifact-set/2" as const,
-    artifacts: [
-      { owner: "canvas" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[0].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[0].artifactDigest) },
-      { owner: "control-plane" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[2].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[2].artifactDigest) },
-      { owner: "kernel" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[1].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[1].artifactDigest) },
-      { owner: "project-index" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[3].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[3].artifactDigest) },
-    ],
-  }
+  return selectedSuccessorValidationArtifactSetV3(V3_AUTHORITY, V2_AUTHORITY)
 }
 
 function id(seed: number): Id128V2 {
