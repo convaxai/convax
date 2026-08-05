@@ -67,6 +67,20 @@ stop work. The revision-4 manifest is only initial-promotion CAS evidence throug
 `previousSelection`; older drafts, reviews, code, and implementation snapshots are
 never fallback protocol authority.
 
+The product model is local-first: every Project is one local durable aggregate, and
+sharing adds collaborators to that same Project rather than converting it into a
+different Team Project kind. Project open and shell rendering therefore do not
+require Team creation, an invitation, membership bootstrap, a control-plane session,
+or PeerJS startup. Those sharing capabilities remain lazy behind an explicit user
+action. Under the currently selected frozen R5 authority, however, ordinary causal
+frames still require membership-shaped signer evidence. Code must report the absence
+of a valid local mutation authority as `local-authority-unavailable`; it must not
+fabricate membership digests, silently fall back to an owner-only signer, or present
+Team creation as recovery. The reviewed successor needed to admit an owner-local
+signer and its one-way sharing handoff is scoped in the explicitly non-active
+[`collaboration v11 design draft`](superpowers/specs/2026-08-05-local-first-collaboration-v11-design.md).
+That draft is neither a selector nor runtime authority.
+
 ### Architecture map
 
 This diagram is part of the canonical architecture, not a generated illustration.
@@ -567,6 +581,7 @@ boundary checker fails closed until those admissions are complete.
 | Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                       |
 | Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                             |
 | Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                              |
+| Project sharing activation                                             | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                 |
 | React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                             |
 | Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                          |
 | Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                               |

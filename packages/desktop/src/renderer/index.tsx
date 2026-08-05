@@ -37,6 +37,7 @@ import {
   MessageSquarePlus,
   PanelLeftClose,
   TriangleAlert,
+  Users,
   XCircle,
 } from "lucide-react"
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
@@ -130,6 +131,7 @@ import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import {
   ProjectCollaborationPendingState,
+  ProjectLocalAuthorityRecoveryState,
   ProjectLoadingState,
   ProjectRecoveryState,
   ProjectRegistryLoadingState,
@@ -211,6 +213,7 @@ function App() {
   const [workspaceUtilityDrawer, setWorkspaceUtilityDrawer] =
     useState<WorkspaceUtilityDrawerState>(closedWorkspaceUtilityDrawer)
   const [mediaOperationDialog, setMediaOperationDialog] = useState<MediaOperationDialogRequest | null>(null)
+  const [sharingProjectId, setSharingProjectId] = useState<string | null>(null)
   const [modelCatalogEpoch, setModelCatalogEpoch] = useState(0)
   const [startupEntryAttempt, setStartupEntryAttempt] = useState(0)
   const [startupEntryFailure, setStartupEntryFailure] = useState<{
@@ -386,12 +389,12 @@ function App() {
     projectCanvasController.getSnapshot,
     projectCanvasController.getSnapshot,
   )
-  const canvasAuthorityPending = Boolean(
+  const canvasCreationUnavailable = Boolean(
     activeProject &&
       projectCanvasSnapshot.projectId === activeProject.id &&
       !projectCanvasSnapshot.busy &&
       !projectCanvasSnapshot.error &&
-      projectCanvasSnapshot.creationAvailability === "team-authority-pending",
+      projectCanvasSnapshot.creationAvailability !== "available",
   )
   const workbenchSnapshot = useSyncExternalStore(
     workbenchController.subscribe,
@@ -1904,10 +1907,10 @@ function App() {
             filteredKinds={projectCanvasFilteredKinds}
             loadNodes={loadProjectCanvasNodes}
             creationUnavailableReason={
-              canvasAuthorityPending
+              canvasCreationUnavailable
                 ? locale === "zh-CN"
-                  ? "需要团队协同授权后才能创建画布。"
-                  : "Team collaboration authority is required to create a Canvas."
+                  ? "当前本地项目不可创建画布。"
+                  : "This local Project cannot create a Canvas in its current state."
                 : undefined
             }
             navigationBusy={workbenchSnapshot.changingInput}
@@ -1918,7 +1921,7 @@ function App() {
             query={query}
           />
         ),
-        createLabel: canvasAuthorityPending ? "Team setup required" : "New canvas",
+        createLabel: canvasCreationUnavailable ? "Local recovery required" : "New canvas",
         header: (
           <ProjectCanvasSwitcher
             activeCanvasId={activeCanvasId ?? null}
@@ -1929,23 +1932,35 @@ function App() {
           />
         ),
         label: "Canvases",
-        onCreate: canvasAuthorityPending ? undefined : () => void projectCanvasWorkbench.createCanvas(activeProject.id),
+        onCreate: canvasCreationUnavailable ? undefined : () => void projectCanvasWorkbench.createCanvas(activeProject.id),
       }}
       filesController={projectFilesController}
       footerActions={
         <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
       }
       headerActions={
-        <button
-          aria-label={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
-          className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
-          data-project-sidebar-close=""
-          onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
-          title={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
-          type="button"
-        >
-          <PanelLeftClose className="size-3.5" />
-        </button>
+        <div className="flex items-center gap-1">
+          <button
+            aria-label={locale === "zh-CN" ? "分享项目" : "Share Project"}
+            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+            data-project-share=""
+            onClick={() => setSharingProjectId(activeProject.id)}
+            title={locale === "zh-CN" ? "分享项目" : "Share Project"}
+            type="button"
+          >
+            <Users className="size-3.5" />
+          </button>
+          <button
+            aria-label={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+            className="grid size-6 shrink-0 place-items-center rounded text-muted-foreground outline-none transition-colors duration-100 hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/40 motion-reduce:transition-none"
+            data-project-sidebar-close=""
+            onClick={() => workbenchLayoutController.setPartVisible(WorkbenchLayoutParts.PrimarySidebar, false)}
+            title={locale === "zh-CN" ? "折叠项目侧栏" : "Collapse project sidebar"}
+            type="button"
+          >
+            <PanelLeftClose className="size-3.5" />
+          </button>
+        </div>
       }
       hideWhenNoProject
       onFileActivate={handleProjectFileActivate}
@@ -2150,7 +2165,7 @@ function App() {
               </div>
             ) : (
               <WorkspaceShell
-                blocked={Boolean(settingsSection || activeMediaOperationDialog)}
+                blocked={Boolean(settingsSection || activeMediaOperationDialog || sharingProjectId)}
                 resizing={Boolean(workbenchLayoutSnapshot.resize)}
                 utilityMode={workspaceUtilityDrawer.mode}
                 workspaceRef={workspaceShellRef}
@@ -2190,33 +2205,10 @@ function App() {
                     <div className="grid size-full place-items-center text-sm text-muted-foreground">
                       File surface is not available yet.
                     </div>
-                  ) : canvasAuthorityPending ? (
-                    <ProjectCollaborationPendingState
+                  ) : canvasCreationUnavailable ? (
+                    <ProjectLocalAuthorityRecoveryState
                       locale={locale}
-                      onCreateTeam={async (projectId) => {
-                        const result = await window.convax.projects.collaboration.bootstrapTeam({ projectId })
-                        return {
-                          invitation: result.invitation === null ? null : JSON.stringify(result.invitation),
-                        }
-                      }}
-                      onJoinTeam={async ({ invitation, projectId }) => {
-                        let candidate: unknown
-                        try {
-                          candidate = JSON.parse(invitation)
-                        } catch {
-                          throw new Error("Team invitation is not valid JSON")
-                        }
-                        await window.convax.projects.collaboration.joinTeam({
-                          invitation: parseProjectTeamInvitationV2(candidate),
-                          projectId,
-                        })
-                      }}
-                      onReady={async (projectId) => {
-                        if (projectCanvasController.getSnapshot().projectId !== projectId) return
-                        await projectCanvasController.refresh()
-                      }}
-                      projectId={activeProject?.id}
-                      reducedMotion={appearancePreferences.reducedMotion}
+                      readOnly={projectCanvasSnapshot.creationAvailability === "read-only-recovery-required"}
                     />
                   ) : activeCanvasSessionFailure ? (
                     <div className="grid size-full place-items-center bg-background p-8" role="alert">
@@ -2403,6 +2395,36 @@ function App() {
                 onConfirm={(input, signal) => runMediaOperation(activeMediaOperationDialog, input, signal)}
                 request={activeMediaOperationDialog}
               />
+            ) : null}
+            {sharingProjectId && activeProject?.id === sharingProjectId && !settingsSection ? (
+              <div className="absolute inset-0 z-[90] grid place-items-center bg-background/80 p-6 backdrop-blur-sm">
+                <div className="relative w-full max-w-2xl">
+                  <button
+                    aria-label={locale === "zh-CN" ? "关闭分享" : "Close sharing"}
+                    className="absolute right-4 top-4 z-10 rounded px-2 py-1 text-sm text-muted-foreground hover:text-foreground"
+                    onClick={() => setSharingProjectId(null)}
+                    type="button"
+                  >
+                    {locale === "zh-CN" ? "关闭" : "Close"}
+                  </button>
+                  <ProjectCollaborationPendingState
+                    locale={locale}
+                    onCreateTeam={async (projectId) => {
+                      const result = await window.convax.projects.collaboration.bootstrapTeam({ projectId })
+                      return { invitation: result.invitation ? JSON.stringify(result.invitation) : null }
+                    }}
+                    onJoinTeam={async ({ invitation, projectId }) => {
+                      await window.convax.projects.collaboration.joinTeam({
+                        invitation: parseProjectTeamInvitationV2(JSON.parse(invitation)),
+                        projectId,
+                      })
+                    }}
+                    onReady={() => setSharingProjectId(null)}
+                    projectId={sharingProjectId}
+                    reducedMotion={appearancePreferences.reducedMotion}
+                  />
+                </div>
+              </div>
             ) : null}
             {settingsSection ? (
               <SettingsView

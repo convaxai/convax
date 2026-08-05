@@ -30,6 +30,11 @@ This package owns the durable Project aggregate and native Project adapters.
   Project instead of restoring or projecting the removed one.
 - `ProjectCanvasController` never owns `activeCanvasId`. Legacy active selection may
   be exposed only as a transient migration hint for a user-side Workbench preference.
+- Every Project is a local durable aggregate first. Sharing is an optional capability,
+  not a Project kind and not a prerequisite for opening the Project shell. A missing
+  local mutation authority is reported as `local-authority-unavailable`; Project
+  code must not translate that condition into Team creation, invitation, membership,
+  or control-plane bootstrap.
 - ProjectIndexYDoc is the sole Project catalog, file identity/location/content,
   Canvas route/tombstone, and current `shardEpoch` authority. A service registry,
   JSON catalog, filesystem enumeration, or controller projection cannot add, remove,

@@ -9,7 +9,7 @@ export interface ProjectCanvas {
 
 export interface ProjectCanvasCatalog {
   canvases: ProjectCanvas[]
-  creationAvailability: "available" | "team-authority-pending" | "read-only-recovery-required"
+  creationAvailability: "available" | "local-authority-unavailable" | "read-only-recovery-required"
   projectId: string
 }
 

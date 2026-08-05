@@ -114,6 +114,7 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     expect(stagingCalled).toBe(false)
     expect(fixture.submittedKinds).toEqual([])
     expect(projectProjectIndexV2(fixture.document).canvasRoutes).toEqual([])
+    expect((await application.queryCatalog({ projectId })).creationAvailability).toBe("local-authority-unavailable")
   })
 
   test("cancellation after durable genesis does not falsely activate the staged route", async () => {

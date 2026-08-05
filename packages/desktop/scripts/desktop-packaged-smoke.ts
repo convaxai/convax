@@ -546,15 +546,15 @@ try {
         )
       }
       const linuxSecureStorageMayBeUnavailable = ${JSON.stringify(process.platform === "linux")}
-      let collaborationState = "team-authority-pending"
+      let collaborationState = "local-authority-unavailable"
       try {
         const catalog = await window.convax.projects.canvases.getCanvasCatalog({ projectId: project.id })
-        if (catalog.creationAvailability !== "team-authority-pending" || catalog.canvases.length !== 0) {
+        if (catalog.creationAvailability !== "local-authority-unavailable" || catalog.canvases.length !== 0) {
           throw new Error("The packaged Project did not preserve its empty pending-authority catalog: " + JSON.stringify(catalog))
         }
         await waitFor(
-          () => document.querySelector('[data-project-collaboration-pending="true"]'),
-          "the packaged collaboration authority gate",
+          () => document.querySelector('[data-project-local-authority-recovery="true"]'),
+          "the packaged local Project authority recovery surface",
         )
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
@@ -564,7 +564,7 @@ try {
         collaborationState = "secure-vault-unavailable"
       }
       if (document.querySelector(".convax-canvas")) {
-        throw new Error("The packaged Desktop exposed a Canvas without admitted team authority")
+        throw new Error("The packaged Desktop exposed a Canvas without admitted local authority")
       }
       if (document.querySelector('[data-project-home="true"]')) {
         throw new Error("The packaged Desktop showed first-run onboarding despite having a seeded Project")
@@ -652,7 +652,7 @@ try {
     protocol?: string
   }
   const expectedCollaborationState =
-    seeded.collaborationState === "team-authority-pending" ||
+    seeded.collaborationState === "local-authority-unavailable" ||
     (process.platform === "linux" && seeded.collaborationState === "secure-vault-unavailable")
   if (
     !expectedCollaborationState ||

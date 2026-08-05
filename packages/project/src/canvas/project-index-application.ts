@@ -117,7 +117,11 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     })
     return projectCanvasCatalogFromSnapshotV2(
       snapshot,
-      preflight === "ready" ? "available" : preflight === "pending" ? "team-authority-pending" : "read-only-recovery-required",
+      preflight === "ready"
+        ? "available"
+        : preflight === "pending"
+          ? "local-authority-unavailable"
+          : "read-only-recovery-required",
     )
   }
 

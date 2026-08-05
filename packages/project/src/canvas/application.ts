@@ -22,7 +22,7 @@ export interface ProjectCanvasRouteViewV2 {
 /** Authoritative ProjectIndex route projection; visibleCanvases is derived. */
 export interface ProjectCanvasCatalogProjectionV2 {
   readonly format: "convax.project-canvas-catalog-projection/2"
-  readonly creationAvailability: "available" | "team-authority-pending" | "read-only-recovery-required"
+  readonly creationAvailability: "available" | "local-authority-unavailable" | "read-only-recovery-required"
   readonly projectId: ProjectIdV2
   readonly projectEpoch: Id128V2
   readonly routes: readonly ProjectCanvasRouteViewV2[]
@@ -79,7 +79,7 @@ export function parseProjectCanvasCatalogProjectionV2(
     parseId128V2(value.projectEpoch) !== value.projectEpoch ||
     !Array.isArray(value.routes) ||
     !Array.isArray(value.visibleCanvases) ||
-    (value.creationAvailability !== "available" && value.creationAvailability !== "team-authority-pending" &&
+    (value.creationAvailability !== "available" && value.creationAvailability !== "local-authority-unavailable" &&
       value.creationAvailability !== "read-only-recovery-required")
   ) {
     throw new TypeError("ProjectIndex Canvas catalog projection is invalid")

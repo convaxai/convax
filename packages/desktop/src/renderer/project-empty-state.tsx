@@ -13,6 +13,39 @@ export interface ProjectCollaborationPendingStateProps {
   reducedMotion?: boolean
 }
 
+export function ProjectLocalAuthorityRecoveryState({
+  locale = "en",
+  readOnly = false,
+}: {
+  locale?: "en" | "zh-CN"
+  readOnly?: boolean
+}) {
+  const copy = locale === "zh-CN"
+    ? {
+        description: readOnly
+          ? "项目内容仍保存在本机，但当前数据需要受支持的恢复流程。Convax 不会自动重置或切换到团队模式。"
+          : "项目内容仍保存在本机，但当前协议尚不能签发个人项目的本地编辑授权。Convax 不会自动创建团队或伪造授权。",
+        title: readOnly ? "本地项目需要恢复" : "本地项目编辑暂不可用",
+      }
+    : {
+        description: readOnly
+          ? "Your Project remains stored locally, but its data needs a supported recovery flow. Convax will not reset it or switch to Team mode automatically."
+          : "Your Project remains stored locally, but the active protocol cannot yet issue its personal local editing authority. Convax will not create a Team or fabricate authority.",
+        title: readOnly ? "Local Project recovery is required" : "Local Project editing is unavailable",
+      }
+  return (
+    <div className="grid size-full place-items-center bg-background p-8" data-project-local-authority-recovery="true">
+      <section aria-labelledby="project-local-authority-recovery-title" className="w-full max-w-md rounded-lg border border-border-subtle bg-card p-5 text-center shadow-sm">
+        <TriangleAlert aria-hidden className="mx-auto size-6 text-status-warning" />
+        <h2 className="mt-3 text-base font-semibold text-card-foreground" id="project-local-authority-recovery-title">
+          {copy.title}
+        </h2>
+        <p className="mt-2 text-sm leading-6 text-muted-foreground">{copy.description}</p>
+      </section>
+    </div>
+  )
+}
+
 export function ProjectCollaborationPendingState({
   locale = "en",
   onCreateTeam,
@@ -47,12 +80,12 @@ export function ProjectCollaborationPendingState({
         copied: "已复制",
         createdDescription: "团队已创建。请先保存或分享这个一次性邀请，然后继续进入项目。",
         createdInvitation: "团队邀请",
-        description: "项目结构已安全保存在本机。创建和编辑画布需要先完成团队身份初始化，或连接一位持有当前团队授权的成员。",
+        description: "项目默认保存在本机。仅当你选择共享时，才创建协同身份或使用邀请加入已有协同。",
         invitation: "邀请凭证",
         invitationPlaceholder: "粘贴团队邀请凭证",
         join: "加入已有团队",
         joinSubmit: "验证并加入",
-        title: "等待团队协同授权",
+        title: "分享与协同",
       }
     : {
         create: "Create team and enable collaboration",
@@ -62,12 +95,12 @@ export function ProjectCollaborationPendingState({
         copied: "Copied",
         createdDescription: "The team is ready. Save or share this one-time invitation before continuing to the Project.",
         createdInvitation: "Team invitation",
-        description: "The Project structure is safely stored locally. Creating or editing a Canvas requires team identity setup or a connection to a member holding current team authority.",
+        description: "The Project stays local by default. Create a collaboration identity or use an invitation only when you choose to share it.",
         invitation: "Invitation credential",
         invitationPlaceholder: "Paste a team invitation credential",
         join: "Join an existing team",
         joinSubmit: "Verify and join",
-        title: "Team collaboration authority required",
+        title: "Share and collaborate",
       }
 
   const execute = async (action: CollaborationSetupAction) => {
