@@ -78,7 +78,7 @@ This package owns the durable Project aggregate and native Project adapters.
   evidence can be signed. A remote blob ACK is audit/status evidence only and marks
   a new reference replicated only together with a frame ACK from that same current
   credential-bound replica.
-- Collaboration v1 durable publication is supported by the current Project/node
+- Durable collaboration publication is supported by the current Project/node
   adapter on macOS and Linux only. Ordinary Node/Bun directory `fsync` reports
   `EPERM` on Windows and is normalized solely to
   `NodeDirectoryDurabilityUnavailableErrorV2`; it is never success, never a durable
@@ -111,40 +111,47 @@ This package owns the durable Project aggregate and native Project adapters.
   new route is sole current and the old shard is recovery-only. Once any durable
   route-frame ref exists, retry only the same claim/operation/frame/genesis; never
   abandon, re-sign, or invent a `docEpoch`.
-- `project.json` stores stable `projectId` only. The exact private v10 tree and
+- `project.json` stores stable `projectId` only. The exact current private tree and
   native-key hashing belong exclusively to `@convax/project/node`; durable head is
   the sole accepted local pointer and directory scans are recovery evidence only.
+  Store filenames are literal on-disk names and never select a protocol.
 - The pending-editor required floor is the content-certified ProjectIndex scope plus
   every current live route in the exact `ProjectIndexLiveScopeManifestV2`. Registry
   state is advisory anti-rollback/discovery metadata and never grants, denies, adds,
   removes, or blocks a floor scope.
-- Schema changes include versioned migration tests by default. The frozen v10
-  breaking cutover instead rejects legacy JSON, multi-document promotion stores,
-  centralized edit-sequencing stores, Merkle edit logs, and global revision-token
-  bytes. Before the exact user-confirmed
+- Schema changes include versioned migration tests by default. The current
+  collaboration cutover instead rejects legacy JSON, multi-document promotion stores,
+  centralized edit-sequencing stores, Merkle edit logs, global revision-token bytes,
+  and every retired experimental collaboration tree. Before the exact user-confirmed
   destructive reset, preserve them without hydration, rewrite, compaction,
   migration, deletion, or GC; ordinary Project files and stable `projectId` remain.
+  A completed reset keeps a recoverable backup of the previous private tree until the
+  user deletes it, and no migration helper may retain an old decoder in production.
 - ProjectIndex first registration must repeat the portable-cutover inspection before
   creating owner or collaboration bytes. Recovery may classify an already-published
   local bootstrap as unteamed only after Project/node proves its exact manifest-bound
   empty genesis and closed native inventory; any frame, route, unknown path, Team
   identity, or authority mismatch remains closed and requires rollover authority.
-- Consume only the exact Project, control-plane, kernel, and Canvas artifacts in the
-  active V11/R1 release and its complete pinned V10/R5 dependency. A missing or
-  mismatched artifact or genuine owner contradiction stops dispatch, decode, reset,
-  or mutation rather than selecting an older draft or current implementation as
-  fallback.
-- Project/node may persist and re-verify closed V3 local-owner bindings, edit
-  authorizations, genesis evidence, and device-level sharing tombstones. Their
-  presence alone never selects V3 or permits downgrade from a shared/ambiguous
-  Project to local-owner signing. R1 admits them only through the verified promotion
-  of one pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project with
-  one deterministic default Canvas. Direct-new V3, additional V3 Canvases, and V3
-  sharing remain unavailable and fail closed.
-- The non-active V3 sharing transition publishes one exact Project-private
-  receipt/Team-artifact-digest CAS before its device-level tombstone. Either durable
-  record permanently dominates the local-owner predecessor; a crash between them
-  is recovered only by replaying the same receipt, never by resuming owner signing.
+- Consume only the exact Project, control-plane, kernel, and Canvas artifacts named by
+  the one current protocol descriptor. A missing or mismatched artifact or genuine
+  owner contradiction stops decode, reset, or mutation rather than selecting an
+  archived release, an older draft, or current implementation bytes as fallback.
+  `docs/superpowers/specs/authorities/**` is non-runtime archive material and is never
+  read by this package.
+- A new Project creates its current ProjectIndex genesis once and each new Canvas
+  creates its current Canvas genesis once. There is no earlier genesis, protocol
+  promotion, bridge, historical head, or successor claim, and sharing uses the same
+  current Project and Canvas scopes without switching protocol.
+- Local-owner bindings, edit authorizations, genesis evidence, and device-level
+  sharing tombstones are durable records of that one protocol. Their presence never
+  selects a protocol, downgrades signing authority, or authorizes a downgrade from a
+  shared Project.
+- The resolver reports only `current`, `unsupported-project-data`, or
+  `recovery-required`. There is no legacy, successor, or promoted state and no
+  runtime dispatcher that chooses between protocols. Version-suffixed identifiers
+  such as `ProjectIndexLiveScopeManifestV2` are legacy names of that one current
+  implementation; renaming them is mechanical cleanup and never admits a second
+  protocol.
 
 Run `bun typecheck && bun test`. Run root `bun run pack:check` for public/storage
 changes and Desktop `bun run smoke:open-project` for creation, migration, or breaking

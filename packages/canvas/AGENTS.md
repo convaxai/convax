@@ -6,9 +6,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
 
 - `core`: pure schema and document primitives; no host I/O and no global shard
   renderer history.
-- `collaboration`: exact v2 eleven-root Yjs schema, canonical projection, closed `/2`
-  typed intents, pure reducer/write-evidence validation, and owner ports into the
-  generic replica/candidate kernel.
+- `collaboration`: the current eleven-root Yjs schema, canonical projection, closed
+  unversioned typed intents, one pure reducer plus write-evidence validation, and
+  owner ports into the generic replica/candidate kernel.
 - `application`: business/primitive commands, queries, semantic guards, resource
   orchestration, and host-neutral document/view ports. Its `application/errors`
   export is the lightweight browser-safe error contract for sandbox adapters that
@@ -29,7 +29,7 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Renderer and public callers submit frozen, bounded typed intents to the owning
   Main application service. They must not transport `CanvasDocument` patches,
   expected revisions, raw Yjs updates, caller-selected identities, or private
-  application commands. Missing intent mappings fail closed until the exact v2
+  application commands. Missing intent mappings fail closed until the one current
   owner reducer owns them.
 - `CanvasDocument` has no global revision counter. Internal durable storage tokens,
   accepted causal frontiers, entity incarnation guards, content digests,
@@ -83,8 +83,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Model-generation text selections are prompt-context node ids, not typed model
   references. Hosts read their authoritative text and compose the final prompt;
   media selections alone participate in `acceptedInputs` compatibility.
-- Public node roles remain `file` and `agent`; structural grouping is an internal file
-  rendering kind. A new Canvas document is empty.
+- Public node roles remain `file` and `agent`; structural grouping and the generic
+  Plugin surface are internal file data kinds. A new Canvas document is empty.
 - Folder-resource browsing enters a transient read-only focus projection supplied
   through a host-neutral service. Opaque folder-entry ids may be passed back only to
   that service; projected entries never enter the Canvas document, selection,
@@ -102,34 +102,50 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web
   packages, permissions, iframe transport, Project/Agent calls and package storage
-  belong to the host. A Web Plugin renderer still produces a `file` node and must
-  mutate the document through the same editor/application APIs as built-in UI.
+  belong to the host. A Web Plugin renderer renders an existing `file` node and
+  mutates the document through the same editor/application APIs as built-in UI; it
+  never registers a local node factory or creates a Plugin surface in the renderer.
+- Canvas owns the generic host-neutral plugin-surface capability: one `plugin-surface`
+  `file` data kind, one business command, and one atomic typed intent. That intent
+  creates exactly one independent top-level node with a Canvas-derived id and
+  incarnation, a Canvas-computed deterministic position, one candidate transaction,
+  one durable frame, and one semantic history root. It carries no source, edge,
+  parent, creation group, caller-selected id, raw Yjs, actor, or digest, and the
+  generic connected-materialization command must not create this root instead.
+- The host supplies the Plugin requirement and initial state envelope bound to one
+  exact Plugin snapshot, schema digest, and validation artifact. A missing artifact or
+  invalid state writes nothing. Adding another Plugin changes only a validated
+  manifest and schema-valid state; Canvas never gains a Plugin-specific intent, node
+  kind, role, or reducer branch and never learns a concrete Plugin id.
+- Uninstalling or unloading a Plugin retains its node and portable state. Projection
+  falls back to the unknown-file presentation and never resets that data.
 - Main's `replicaDoc` is the sole local durable Canvas authority. Every command
   clones it into one isolated `candidateDoc`, applies one closed typed intent, and
   can affect authority only through the exact final replica-signed frame after the
   durable head barrier. `initialDocument` and renderer state are immutable/read-only
   projections, never editable or persistent fallbacks.
-- Undo/redo is session-only selection in the collaboration-owned
-  `SessionUndoCoordinatorV2`; Canvas materializes a fresh closed semantic
+- Undo/redo is session-only selection in the collaboration-owned session undo
+  coordinator; Canvas materializes a fresh closed semantic
   inverse/forward intent against the latest `replicaDoc`. Remote/bootstrap/recovery
   frames and projection rebuilds never enter or reorder the stack, and raw
   Y.UndoManager updates never cross the authoritative boundary.
 - React Flow selection, hover, measured size, camera, drag preview, menus and
   Awareness are transient Canvas-owned view state. `onNodesChange`/`onEdgesChange`
   must not mutate the canonical projection. Drag stop resolves entity incarnations
-  and submits exactly one `canvas.nodes.set-geometry/2` typed intent for the complete
+  and submits exactly one `canvas.nodes.set-geometry` typed intent for the complete
   gesture. Desktop must not own a competing React Flow document store, gesture
   reducer, incarnation resolver, or view-command policy.
 - Canvas identity is the Project-derived `cv_<64 lowercase hex>` carried
-  byte-identically by route, shared `DocumentScopeV2`, and Canvas genesis. The
+  byte-identically by route, the shared document scope, and Canvas genesis. The
   Project-owned route `shardEpoch` is outside Canvas content and Canvas never creates
-  a `docEpoch`.
-- This package consumes only the selector-installed R5 Canvas artifact and the
-  Kernel-created runtime admitted from the matching four-artifact protocol bundle.
-  The Canvas owner schema digest is the bundle's domain-separated artifact digest,
-  never the annex file SHA. Missing selector members, digest mismatch, or a
-  cross-artifact runtime fails closed; revision-4 drafts and live implementation
-  never provide fallback semantics.
+  a `docEpoch`. A new Canvas writes its current genesis once; there is no earlier
+  genesis followed by a promotion.
+- This package consumes only the one current protocol descriptor and the Canvas owner
+  artifact it names. The Canvas owner schema digest is that descriptor's
+  domain-separated artifact digest. A missing artifact, digest mismatch, or
+  cross-artifact runtime fails closed as unsupported data; archived authority
+  releases, drafts, and live implementation bytes never provide fallback semantics,
+  and Canvas never selects a second schema, codec, or reducer.
 - Application and resource requests may carry `AbortSignal`. Check it after every
   awaited preparation/load/conflict step and immediately before persistence; caller
   cancellation must never become a late durable write.

@@ -145,6 +145,16 @@ For any matching change, read the full routed reference before planning or editi
   Plugin-to-Plugin imports/exports from the exact ActiveSet through the typed broker;
   validate caller/provider principals and schemas, propagate cancellation, bound
   depth/re-entry, and never inherit caller grants.
+- Plugin surface creation accepts only Project, Canvas, and Plugin ids from a trusted
+  sender. Main resolves one exact current ActiveSet lease and derives the renderer,
+  size, Plugin requirement, schema, validation artifact, snapshot digest, and initial
+  state from that leased manifest alone, then rechecks the same lease immediately
+  before the durable commit. A stale lease, missing validation artifact, or invalid
+  initial state writes nothing. Main calls the Canvas business command and never
+  assembles a complete Canvas node, chooses a node id or position, reuses a generic
+  node-insert or connected-materialization path for this root, or branches on a
+  concrete Plugin id. A failed renderer refresh never rolls back a durable creation,
+  and uninstalling the Plugin leaves the node and its portable state intact.
 - Generation has one Main-owned executor shared by Agent, UI, and Plugin callers.
   OpenCode is an Agent-side client, not the execution owner. Model/control display
   snapshots never authorize execution; reload and validate the live tool/service
@@ -210,14 +220,15 @@ For any matching change, read the full routed reference before planning or editi
   neither Team evidence nor permission to reset current collaboration state.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
   Team control-plane state. This keeps the shell local-first; mutation authority
-  still comes only from the verified V11/R1 selector or its pinned historical V2
-  dispatch, never from shell state.
-- Compose V3 local-owner authority adapters only through the active V11/R1 release,
-  its complete pinned V10/R5 dependency, and the verified dual-version dispatcher.
-  R1 permits only promotion of a verified pristine, unshared V10 ProjectIndex into
-  one local-owner V3 Project with one deterministic default Canvas. Direct-new V3,
-  additional V3 Canvases, sharing, and ambiguous promotion remain fail-closed;
-  Project/node record presence alone is not a runtime selector.
+  still comes only from the validated current protocol descriptor, never from shell
+  state.
+- Compose local-owner authority adapters only through the one packaged current
+  protocol descriptor. Load it once, verify its exact digest against the build, and
+  build one kernel, one codec, and one document session type from it. Never load an
+  archived authority release, keep a predecessor decoder, dispatch between protocol
+  versions, or select a protocol from a directory, filename, or durable record shape;
+  new, open, recover, and share all use that same composition, and unsupported bytes
+  return `unsupported-project-data`.
 - Retain the canonical Project root and local actor binding across zero-lease writer
   disposal. Admit a changed binding only after the serialized close/reset operation
   succeeds; failure keeps the prior binding and makes later acquisition fail closed.

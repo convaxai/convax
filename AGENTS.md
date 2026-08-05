@@ -83,7 +83,7 @@ the contract instead of choosing the more convenient interpretation.
 | Plugin document styling, semantic tokens, sandbox-safe UI foundations                    | [`packages/plugin-ui/AGENTS.md`](packages/plugin-ui/AGENTS.md) and the Plugin SDK contract                                                                                                                                                                                           |
 | Agent, OpenCode, Skill, Hook, Agent tool, protected path                                 | [`docs/architecture.md` §§7–8](docs/architecture.md#7-agent-tools-and-skills), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and [`packages/agent-runtime/AGENTS.md`](packages/agent-runtime/AGENTS.md)                                                          |
 | MCP, Agent MCP, remote server, OAuth, managed stdio                                      | [`docs/architecture.md` “MCP Server runtime boundary”](docs/architecture.md#mcp-server-runtime-boundary), §§7–8, and the Agent Runtime/Desktop Main contracts                                                                                                                        |
-| Collaboration, Yjs, ProjectIndex, Canvas shard, PeerJS, checkpoint, causal floor         | [`docs/architecture.md` §§2–6](docs/architecture.md#2-terms), the active V11/R1 authority with its pinned historical V10/R5 dependency, and the Canvas/Collaboration/Project/Desktop/API contracts                                                                                     |
+| Collaboration, Yjs, ProjectIndex, Canvas shard, PeerJS, checkpoint, causal floor         | [`docs/architecture.md` §§2–6](docs/architecture.md#2-terms), the single current protocol descriptor, and the Canvas/Collaboration/Project/Desktop/API contracts                                                                                                                       |
 | Marketplace, Registry, SourceKey, install, snapshot, ActiveSet, provisioning, recovery   | [`docs/architecture.md` §§5–6](docs/architecture.md#5-persistence-map), [`docs/plugin-skill-platform.md`](docs/plugin-skill-platform.md), and the Marketplace/Desktop Main contracts                                                                                                 |
 | Plugin Host, iframe, broker, MessageChannel, Project/Canvas grant                        | [`docs/architecture.md` §8](docs/architecture.md#8-plugin-host-boundary), [`docs/plugin-canvas-capabilities.md`](docs/plugin-canvas-capabilities.md), and the Desktop process contracts touched                                                                                      |
 | Generation, model selection, sidecar, service, LRO, `operationId`, `taskId`              | [`docs/architecture.md` “Generation tool boundary”](docs/architecture.md#generation-tool-boundary), [`docs/generation-tool-plugins.md`](docs/generation-tool-plugins.md), and [`docs/canvas-node-generation-state-persistence.md`](docs/canvas-node-generation-state-persistence.md) |
@@ -109,48 +109,85 @@ the contract instead of choosing the more convenient interpretation.
 6. Run focused checks during iteration, then the required package and repository
    checks before handoff.
 
-## Frozen collaboration authority
+## Single current collaboration protocol
 
-The global collaboration selector is
-[`docs/superpowers/specs/collaboration-v11-active-authority.json`](docs/superpowers/specs/collaboration-v11-active-authority.json).
-It selects only the fixed V11
-[`R1 release`](docs/superpowers/specs/authorities/collaboration-v11/r1/), whose
-manifest covers eight whole files (including the shared global-URI member). The
-reviewed release adds the manifest, `review-evidence.json`, and three fixed
-report/receipt pairs: sixteen verified snapshot paths in total, fifteen below the
-R1 directory. The active pointer is separate from and never a release member.
+Convax ships exactly one current collaboration protocol. `@convax/collaboration`
+owns one kernel, one frame codec, one restricted JCS canonicalization, and one
+current protocol descriptor whose exact `protocolDigest` is the only protocol
+identity. Canvas owns one Canvas schema and reducer, Project owns one ProjectIndex
+schema and reducer, and Desktop packages and loads that one descriptor.
 
-The frozen V11/R1 identities are:
+- There is no authority selector, active/pinned release pair, dual-version
+  dispatcher, promotion bridge, successor runtime, or predecessor decoder.
+  Production runtime, build, and packaging never derive protocol behavior from a
+  release directory, a pointer file, a durable record shape, or directory presence.
+- A new Project creates its current ProjectIndex genesis directly and each new
+  Canvas creates its current Canvas genesis directly. There is no earlier genesis
+  followed by a later promotion, and sharing does not change protocol.
+- Frame magic, wire format, and `protocolDigest` must equal the built descriptor.
+  Anything else is `unsupported-project-data`; never try a second decoder, guess a
+  layout, or reinterpret unknown bytes.
+- Unsupported collaboration data may only be archived unchanged, exported as
+  user-visible resources, or replaced by a new current genesis after an explicit
+  user confirmation that retains a recoverable backup. Startup, checkpoint, and GC
+  never reset, delete, re-sign, renumber, or rewrite it.
+- Version-suffixed identifiers still present in this repository are legacy names of
+  that one current implementation. Renaming them is mechanical cleanup and never
+  admits a second protocol, decoder, kernel, or reducer.
+- Independent contracts such as `convax.plugin/8`, `convax.package/2`, the
+  `@convax/plugin-api` Catalog SemVer, Marketplace Registry v2, and
+  `desktopProtocolVersion` are separate release lines. This rule neither renumbers
+  them nor lets them become collaboration decoders.
 
-- active pointer SHA-256
-  `2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6`;
-- `authority.sha256` SHA-256
-  `351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4`;
-- `review-evidence.json` SHA-256
-  `ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2`;
-- `protocol-schema-bundle-v3.json` SHA-256
-  `180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c`;
-- `ProtocolSchemaBundleV3.coreDigest` and `protocolDigest`
-  `5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f`.
+### Frozen collaboration authority archive
 
-R1's `historical-v10-r5-pin.json` (SHA-256
-`ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369`)
-binds the complete sealed V10/R5 identity chain, including V10 pointer SHA-256
-`f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398`
-and historical protocol digest
-`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`.
-That V10 pointer is a pinned predecessor identity, not a competing global selector
-or a fallback chosen from directory presence.
+[`docs/superpowers/specs/collaboration-v11-active-authority.json`](docs/superpowers/specs/collaboration-v11-active-authority.json)
+and every release below `docs/superpowers/specs/authorities/**`, including
+[`R1`](docs/superpowers/specs/authorities/collaboration-v11/r1/) with its
+sixteen verified snapshot paths and its pinned predecessor chain, are
+**non-runtime archive and review material**. They record a retired multi-release
+model. Production runtime, build scripts, and packaging must not read, stage, copy,
+or import them, and no code may select behavior from their presence.
 
-At the first valid V11 activation tree (`T0`), the pointer, all sixteen V11 snapshot
-paths, and every pinned V10/R5 path must be regular non-symlink Git blobs with mode
-`100644`. Their paths, bytes, kinds, and modes are sealed in every descendant tree;
-changing one is `activated-authority-mutation`. A missing, inactive, extra,
-reordered, or hash-mismatched identity-chain member is
-`protocol-schema-bundle-unavailable`; a genuine Main/owner-annex contradiction is
-`canonical-authority-conflict`. Stop in all three states. Drafts, prior reviews,
-source constants, and current implementation bytes are evidence only and never a
+Their sealed bytes stay unchanged. The archived identities remain recorded so a
+reviewer can recognize tampering: pointer SHA-256
+`2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6`, manifest
+SHA-256 `351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4`,
+`review-evidence.json` SHA-256
+`ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2`, protocol-bundle
+SHA-256 `180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c`, its
+recorded protocol digest
+`5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f`, pin SHA-256
+`ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369`, predecessor
+pointer SHA-256 `f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398`,
+and predecessor protocol digest
+`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`. Editing an
+archived byte is `activated-authority-mutation` and is rejected as archive
+tampering. None of these files, digests, drafts, or prior reviews is a protocol
 selector or runtime fallback.
+
+## Generic Plugin Canvas surface ownership
+
+- `@convax/canvas` owns the host-neutral plugin-surface node kind, its business
+  command, and the one atomic typed intent that creates it. Adding a Plugin changes
+  only a validated manifest and schema-valid state; it never adds a Plugin-specific
+  intent, node kind, role, or reducer branch.
+- One intent creates one independent top-level `file` node with Canvas-derived id
+  and incarnation, a Canvas-computed deterministic position, one candidate
+  transaction, one durable frame, and one semantic history root. It carries no
+  source, edge, parent, creation group, caller-selected id, raw Yjs, actor, or
+  digest.
+- Desktop Main derives the Plugin requirement, renderer, size, schema, validation
+  artifact, snapshot, and initial state from one exact current ActiveSet lease and
+  rechecks that lease immediately before the durable commit. A missing artifact or
+  invalid state writes nothing.
+- Renderer and Preload submit only Project, Canvas, and Plugin ids through a narrow
+  trusted IPC method. They never send a version, snapshot or schema digest, node
+  id, position, complete node, or initial state, and no caller outside the owner
+  builds a full Canvas node.
+- Host behavior never branches on a concrete Plugin id, vendor, or model.
+- Uninstalling or unloading a Plugin retains its node and portable state. The
+  projection degrades to the unknown-file fallback and never resets that data.
 
 ## Plugin-to-Host change gate
 
@@ -181,7 +218,7 @@ selector or runtime fallback.
 | `@convax/canvas`            | Canvas schema/core, reducers, typed intents, business/view operations, editor/plugin contracts, React Flow projection and transient gesture semantics                                                  | Project paths/registry, Workbench selection, OpenCode implementation, native persistence               |
 | `@convax/bounded-value`     | Stateless closed portable bounded-value schema codec, canonical bytes, digest input, and payload validation                                                                                            | Plugin identity/lifecycle, Canvas state, persistence, I/O, authorization, executable validators        |
 | `@convax/uri`               | Stateless Convax URI components, codec, canonicalization, and closed static scheme grammar                                                                                                             | Resolution, I/O, authorization, current Project state, or a dynamic scheme registry                    |
-| `@convax/collaboration`     | Historical V2 and selected V3 envelopes/JCS, authority validation/dispatch, causal frames/frontiers, `replicaDoc`/isolated `candidateDoc` kernel, checkpoint/floor primitives, journal ports, and session undo coordination | Project/Canvas schema, PeerJS, membership/auth policy, Electron, filesystem, or native I/O             |
+| `@convax/collaboration`     | One current protocol descriptor/digest, one envelope+JCS codec, one causal frame/frontier model, one `replicaDoc`/isolated `candidateDoc` kernel, checkpoint/floor primitives, journal ports, and session undo coordination | Project/Canvas schema, PeerJS, membership/auth policy, Electron, filesystem, native I/O, or a second decoder/kernel |
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                                   |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters                  |
 | `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins            |
@@ -316,10 +353,14 @@ user directory.
   and case-insensitive `.convax`.
 - Use Electron/OS directories and `pathToFileURL`; never concatenate file URLs or
   hard-code `/home`, `/tmp`, drive letters, or `/` as a native separator.
-- The selected frozen V11/R1 release and its complete pinned V10/R5 dependency must
-  validate before dispatch, decode, sign, reset, or mutation. Missing, drifted,
-  extra, or contradictory authority fails closed; drafts and prior implementations
-  are never runtime fallbacks.
+- The packaged current protocol descriptor must equal the built descriptor digest
+  before decode, sign, reset, or mutation. A missing, drifted, or contradictory
+  descriptor fails closed as `unsupported-project-data`; archives, drafts, and prior
+  implementations are never runtime fallbacks.
+- Canvas owns the generic plugin-surface node and its atomic creation intent, Main
+  derives every Plugin-bound fact from one exact ActiveSet lease, and Renderer sends
+  only Project/Canvas/Plugin ids. No caller outside the owner assembles a Canvas
+  node, and no Host branch names a concrete Plugin.
 - Preserve user changes and generated/local Project data. Never commit root
   `.convax/` runtime state.
 
