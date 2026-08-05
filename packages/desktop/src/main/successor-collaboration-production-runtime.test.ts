@@ -19,6 +19,7 @@ import {
   createCurrentLocalOwnerAuthorityPortV3,
   openSelectedProjectCollaborationRuntimeV3,
 } from "./successor-collaboration-production-runtime"
+import { createProjectCollaborationMaterializerRegistryV2 } from "./collaboration-production-runtime"
 import type { CurrentLocalOwnerAuthorityEvidenceV3 } from "./local-owner-authority-source-v3"
 
 const DIGEST_A = parseDigestV2("a".repeat(64))
@@ -121,6 +122,33 @@ describe("V3 local Project production composition", () => {
     }
     expect(openV10).not.toHaveBeenCalled()
     expect(openV3Local).not.toHaveBeenCalled()
+  })
+
+  test("durable accepted-frame observation reaches the scope materializer", () => {
+    const observeAcceptedFrame = mock(() => undefined)
+    const registry = createProjectCollaborationMaterializerRegistryV2()
+    registry.register({
+      scope: SCOPE,
+      materializer: {
+        async inspectFrame() { throw new Error("unused") },
+        async applyAcceptedFrame() { throw new Error("unused") },
+        observeAcceptedFrame,
+        actorHeadsDigest() { throw new Error("unused") },
+      },
+    })
+    const ref = {
+      scope: SCOPE,
+      frameDigest: DIGEST_A,
+      actorId: ACTOR,
+      actorSequence: parseUint64V2("1"),
+      operationId: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(6))),
+    }
+    const exactBytes = new Uint8Array([1, 2, 3])
+
+    registry.observeAcceptedFrame?.(ref, exactBytes)
+
+    expect(observeAcceptedFrame).toHaveBeenCalledTimes(1)
+    expect(observeAcceptedFrame).toHaveBeenCalledWith(ref, exactBytes)
   })
 })
 

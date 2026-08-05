@@ -67,7 +67,14 @@ export function createMainProjectCollaborationProductionCompositionV3(input: Rea
           canvasSessions: input.v10.canvasSessions,
           canvasRoutes: input.v10.canvasRoutes,
         })
-        await bootstrap.quiesce?.()
+        try {
+          // switchProject only installs the route-revocation scope. Opening the
+          // ProjectIndex is what runs the existing V10 first-registration port
+          // and durably publishes the empty genesis required by R1 promotion.
+          await bootstrap.projectIndexes.queryCatalog({ projectId })
+        } finally {
+          await bootstrap.quiesce?.()
+        }
         return input.successor.resolveContext(projectId)
       }
     },

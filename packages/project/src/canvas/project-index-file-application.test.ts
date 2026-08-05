@@ -13,8 +13,11 @@ import * as Y from "yjs"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
   applyProjectIndexCandidateIntentV2,
+  constructProjectFileCreateIntentV2,
   createProjectIndexYDocV2,
+  decodeProjectIndexBlobPublicationCurrentnessRequestV2,
   projectIndexIntentDigestV2,
+  projectIndexIntentDependenciesV2,
   validateProjectIndexYDocV2,
   type ProjectEntryRecordV2,
   type ProjectIndexIntentV2,
@@ -30,6 +33,39 @@ const uriProtocolDigest = digest("uri")
 const rootDirectoryId = `pd_${"a".repeat(64)}` as const
 
 describe("ProjectIndexFileApplicationV2", () => {
+  test("keeps blob fact request identity stable when successor framing uses a wire intent digest", () => {
+    const context = constructionContext(actor(1), id128(10), "1")
+    const snapshot = validateProjectIndexYDocV2(genesis())
+    const blob = {
+      format: "convax.blob-ref/2" as const,
+      algorithm: "sha256" as const,
+      digest: digest("blob"),
+      byteLength: "5" as never,
+      mime: "text/markdown",
+    }
+    const constructed = constructProjectFileCreateIntentV2({
+      snapshot,
+      context,
+      parentDirectoryId: rootDirectoryId,
+      basename: "notes.md",
+      blob,
+      contentPolicy: "conflict-preserving-text",
+      storageClass: "project-file",
+      provenance: "user",
+    })
+    if (constructed === "rejected") throw new Error("ProjectIndex file intent construction rejected")
+
+    const dependencies = projectIndexIntentDependenciesV2(
+      { ...context, intentDigest: digest("successor-wire-intent") },
+      constructed.intent,
+    )
+    const requirement = dependencies.externalFacts[0]
+    expect(requirement).toBeDefined()
+    const request = decodeProjectIndexBlobPublicationCurrentnessRequestV2(requirement!.request.exactJcs)
+    expect(request).not.toBe("rejected")
+    expect(request === "rejected" ? null : request.intentDigest).toBe(projectIndexIntentDigestV2(constructed.intent))
+  })
+
   test("admits bytes before committing a stable file identity and projects the hash-pinned materialization plan", async () => {
     const document = genesis()
     const order: string[] = []

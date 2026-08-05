@@ -1862,7 +1862,15 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequestV2(
 
 function externalFactRequest(context: OwnerIntentValidationContextV2, intent: ProjectIndexIntentV2): ProjectIndexExternalFactRequestV2 | null {
   const projectIndexScope = parseProjectIndexScope(context.scope)
-  const base = { format: "convax.project-index-external-fact-request/2", projectIndexScope, operationId: context.operationId, intentDigest: context.intentDigest }
+  // The successor frame context binds the selected wire protocol's digest.
+  // External facts are ProjectIndex-domain facts, so their request identity
+  // must remain stable across V2 and V3 framing.
+  const base = {
+    format: "convax.project-index-external-fact-request/2",
+    projectIndexScope,
+    operationId: context.operationId,
+    intentDigest: projectIndexIntentDigestV2(intent),
+  }
   if (intent.kind === "project.file.create/2" || intent.kind === "project.file.write-text/2" || intent.kind === "project.file.overwrite-binary/2") {
     const version = intent.kind === "project.file.create/2" ? intent.body.initialVersion : intent.body.version
     return { ...base, kind: "blob-publication-currentness", versionRecordDigest: projectIndexRecordDigestV2(version), blob: version.blob }
