@@ -390,6 +390,22 @@ interface CanvasTransientGeometry {
   size?: CanvasSize
 }
 
+interface CanvasPendingGeometryValue<Value> {
+  token: symbol
+  value: Value
+}
+
+/**
+ * Optimistic geometry is acknowledged per entity and field. Independent
+ * gestures must coexist until their own canonical values arrive, while an old
+ * submission failure may clear only the values published by its token.
+ */
+interface CanvasPendingNodeGeometry {
+  entity: CanvasEntityRefV2
+  position?: CanvasPendingGeometryValue<CanvasPoint>
+  size?: CanvasPendingGeometryValue<CanvasSize>
+}
+
 interface CanvasTransientMeasurement {
   canonicalSize: CanvasSize
   entity?: CanvasEntityRefV2
@@ -1117,25 +1133,28 @@ function CanvasEditorContent(
   const gestureEntitiesRef = useRef(new Map<string, CanvasEntityRefV2>())
   const gestureGeometryRef = useRef(new Map<string, CanvasTransientGeometry>())
   const [gestureGeometry, setGestureGeometry] = useState(() => new Map<string, CanvasTransientGeometry>())
+  const pendingGeometryRef = useRef(new Map<string, CanvasPendingNodeGeometry>())
+  const [pendingGeometry, setPendingGeometry] = useState(() => new Map<string, CanvasPendingNodeGeometry>())
   const [reactFlowMeasurements, setReactFlowMeasurements] = useState(
     () => new Map<string, CanvasTransientMeasurement>(),
   )
   const [resourceStates, setResourceStates] = useState(() => new Map<string, CanvasTransientResourceState>())
   const renderedDocument = useMemo(() => {
     let document =
-      gestureGeometry.size === 0
+      gestureGeometry.size === 0 && pendingGeometry.size === 0
         ? canonicalDocument
         : {
             ...canonicalDocument,
             nodes: canonicalDocument.nodes.map((node) => {
-              const geometry = gestureGeometry.get(node.id)
-              if (!geometry) return node
+              const gesture = gestureGeometry.get(node.id)
+              const pending = pendingGeometry.get(node.id)
+              const position = gesture?.position ?? pending?.position?.value
+              const size = gesture?.size ?? pending?.size?.value
+              if (!position && !size) return node
               return {
                 ...node,
-                ...(geometry.position === undefined ? {} : { position: geometry.position }),
-                ...(geometry.size === undefined
-                  ? {}
-                  : { style: { ...node.style, height: geometry.size.height, width: geometry.size.width } }),
+                ...(position === undefined ? {} : { position }),
+                ...(size === undefined ? {} : { style: { ...node.style, height: size.height, width: size.width } }),
               }
             }),
           }
@@ -1147,7 +1166,7 @@ function CanvasEditorContent(
       document = replaceCanvasNodeResourceState(document, nodeId, transient.state)
     }
     return document
-  }, [canonicalDocument, gestureGeometry, projectionStore, resourceStates])
+  }, [canonicalDocument, gestureGeometry, pendingGeometry, projectionStore, resourceStates])
   const history = useMemo(
     () => ({
       document: renderedDocument,
@@ -1344,6 +1363,8 @@ function CanvasEditorContent(
     gestureEntitiesRef.current = new Map()
     gestureGeometryRef.current = new Map()
     setGestureGeometry(new Map())
+    pendingGeometryRef.current = new Map()
+    setPendingGeometry(new Map())
     setGestureStart(undefined)
     setReactFlowMeasurements(new Map())
     setResourceStates(new Map())
@@ -1372,6 +1393,21 @@ function CanvasEditorContent(
     setGestureGeometry(new Map())
     setGestureStart(undefined)
   }, [])
+  const clearPendingGeometry = useCallback((token: symbol) => {
+    const next = new Map(pendingGeometryRef.current)
+    let changed = false
+    for (const [nodeId, pending] of next) {
+      const position = pending.position?.token === token ? undefined : pending.position
+      const size = pending.size?.token === token ? undefined : pending.size
+      if (position === pending.position && size === pending.size) continue
+      changed = true
+      if (!position && !size) next.delete(nodeId)
+      else next.set(nodeId, { ...pending, position, size })
+    }
+    if (!changed) return
+    pendingGeometryRef.current = next
+    setPendingGeometry(next)
+  }, [])
   useLayoutEffect(() => {
     if (!gestureStartRef.current || gestureGeometryRef.current.size === 0) return
     for (const nodeId of gestureGeometryRef.current.keys()) {
@@ -1383,6 +1419,36 @@ function CanvasEditorContent(
       break
     }
   }, [canonicalDocument, clearTransientGeometry, projectionStore])
+  useLayoutEffect(() => {
+    if (pendingGeometryRef.current.size === 0) return
+    const next = new Map(pendingGeometryRef.current)
+    let changed = false
+    for (const [nodeId, pending] of next) {
+      const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
+      if (!node || !sameCanvasEntity(pending.entity, projectionStore.resolveNodeEntity(nodeId))) {
+        next.delete(nodeId)
+        changed = true
+        continue
+      }
+      const position =
+        pending.position && node.position.x === pending.position.value.x && node.position.y === pending.position.value.y
+          ? undefined
+          : pending.position
+      const canonicalSize = pending.size ? getCanvasNodeSize(node) : undefined
+      const size =
+        pending.size && canonicalSize && sameCanvasSize(canonicalSize, pending.size.value) ? undefined : pending.size
+      if (position === pending.position && size === pending.size) continue
+      changed = true
+      if (!position && !size) {
+        next.delete(nodeId)
+      } else {
+        next.set(nodeId, { ...pending, position, size })
+      }
+    }
+    if (!changed) return
+    pendingGeometryRef.current = next
+    setPendingGeometry(next)
+  }, [canonicalDocument, projectionStore])
   const dispatch = useCallback(
     (action: CanvasEditorTransientAction) => {
       if (leavingRef.current || hydratingRef.current) return
@@ -1412,11 +1478,31 @@ function CanvasEditorContent(
         clearTransientGeometry()
         if (!start) return
         if (collaborationSession) {
+          const token = Symbol("canvas-pending-geometry")
+          const nextPending = new Map(pendingGeometryRef.current)
+          for (const [nodeId, transient] of geometry) {
+            const entity = entities.get(nodeId)
+            if (!entity) continue
+            const previous = nextPending.get(nodeId)
+            const sameEntity = previous && sameCanvasEntity(previous.entity, entity) ? previous : undefined
+            nextPending.set(nodeId, {
+              entity,
+              position: transient.position ? { token, value: { ...transient.position } } : sameEntity?.position,
+              size: transient.size ? { token, value: { ...transient.size } } : sameEntity?.size,
+            })
+          }
+          pendingGeometryRef.current = nextPending
+          setPendingGeometry(nextPending)
           const onSubmissionError = (error: unknown) => {
+            clearPendingGeometry(token)
             setSaveError(error instanceof Error ? error.message : "Canvas geometry submission failed")
           }
           try {
-            void submitCanvasTransientGeometry(collaborationSession, start, geometry, entities).catch(onSubmissionError)
+            void submitCanvasTransientGeometry(collaborationSession, start, geometry, entities)
+              .then((submitted) => {
+                if (!submitted) clearPendingGeometry(token)
+              })
+              .catch(onSubmissionError)
           } catch (error) {
             onSubmissionError(error)
           }
@@ -1431,7 +1517,7 @@ function CanvasEditorContent(
         if (collaborationSession) void collaborationSession.redo()
       }
     },
-    [canonicalDocument, clearTransientGeometry, collaborationSession, projectionStore],
+    [canonicalDocument, clearPendingGeometry, clearTransientGeometry, collaborationSession, projectionStore],
   )
   const rejectUnmappedCanvasMutation = useCallback(() => {
     notificationService?.show({

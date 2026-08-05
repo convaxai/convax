@@ -215,7 +215,9 @@ mock.module("@xyflow/react", () => ({
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
-const { createCanvasDocument, createFolderNode, createGroupNode, createTextNode } = await import("../document")
+const { createCanvasDocument, createFolderNode, createGroupNode, createMediaNode, createTextNode } = await import(
+  "../document"
+)
 const { getCanvasFolderFocusEntry } = await import("../directory-focus")
 const { setCanvasGroupFolded } = await import("../group-fold")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
@@ -232,6 +234,7 @@ class TestCanvasSession implements CanvasRendererCollaborationClientV2 {
   readonly commands: CanvasRendererCommandV2[] = []
   readonly undoModel = "project-yjs-semantic-history" as const
   flushRequest: (signal?: AbortSignal) => Promise<void> = async () => undefined
+  submitRequest: (command: CanvasRendererCommandV2) => Promise<void> = async () => undefined
   private readonly listeners = new Set<() => void>()
   private readonly nodeIncarnations = new Map<string, string>()
 
@@ -278,6 +281,7 @@ class TestCanvasSession implements CanvasRendererCollaborationClientV2 {
 
   async submit(command: CanvasRendererCommandV2) {
     this.commands.push(command)
+    await this.submitRequest(command)
   }
 
   subscribe(listener: () => void) {
@@ -483,6 +487,16 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     ])
     expect(session.commands[0]).not.toHaveProperty("expectedRevision")
     expect(session.getProjection().nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === interactionNode.id ? { ...node, position: { x: 16, y: 24 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
     await act(async () => getObservedEditor()?.selectNodes([]))
 
     await act(async () => {
@@ -503,7 +517,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
         { id: interactionNode.id, selected: true, type: "select" },
       ])
     })
-    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
     expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
     expect(session.commands).toHaveLength(1)
@@ -530,7 +544,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
         { id: interactionNode.id, selected: true, type: "select" },
       ])
     })
-    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 0, y: 0 })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 16, y: 24 })
     expect(getObservedEditor()?.document.nodes[0]?.measured).toBeUndefined()
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
     expect(session.commands).toHaveLength(1)
@@ -567,6 +581,242 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(canvas?.dataset.canvasTool).toBe("hand")
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("keeps independently submitted image and video positions stable until each authority update arrives", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const image = createMediaNode({
+      id: "optimistic-image",
+      position: { x: 0, y: 0 },
+      resource: { id: "image-resource", kind: "image", metadata: {}, state: { status: "ready" } },
+    })
+    const video = createMediaNode({
+      id: "optimistic-video",
+      position: { x: 400, y: 0 },
+      resource: { id: "video-resource", kind: "video", metadata: {}, state: { status: "ready" } },
+    })
+    const session = new TestCanvasSession(createCanvasDocument({ id: "independent-geometry", nodes: [image, video] }))
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, image, [image])
+      observedReactFlowProps?.onNodesChange?.([{ id: image.id, position: { x: 80, y: 120 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 120 },
+      { x: 400, y: 0 },
+    ])
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, video, [video])
+      observedReactFlowProps?.onNodesChange?.([{ id: video.id, position: { x: 520, y: 160 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 120 },
+      { x: 520, y: 160 },
+    ])
+
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === image.id ? { ...node, position: { x: 80, y: 120 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 120 },
+      { x: 520, y: 160 },
+    ])
+
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === video.id ? { ...node, position: { x: 520, y: 160 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 120 },
+      { x: 520, y: 160 },
+    ])
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, image, [image])
+      observedReactFlowProps?.onNodesChange?.([{ id: image.id, position: { x: 160, y: 200 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, image, [image])
+      observedReactFlowProps?.onNodesChange?.([{ id: image.id, position: { x: 240, y: 280 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === image.id ? { ...node, position: { x: 160, y: 200 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 240, y: 280 })
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === image.id ? { ...node, position: { x: 240, y: 280 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[0]?.position).toEqual({ x: 240, y: 280 })
+
+    await act(async () => {
+      getObservedEditor()?.beginGesture()
+      observedReactFlowProps?.onNodesChange?.([
+        { dimensions: { height: 360, width: 640 }, id: video.id, resizing: true, type: "dimensions" },
+      ])
+      getObservedEditor()?.endGesture()
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, video, [video])
+      observedReactFlowProps?.onNodesChange?.([{ id: video.id, position: { x: 640, y: 240 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.document.nodes[1]).toMatchObject({
+      position: { x: 640, y: 240 },
+      style: { height: 360, width: 640 },
+    })
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) =>
+            node.id === video.id ? { ...node, style: { ...node.style, height: 360, width: 640 } } : node,
+          ),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[1]).toMatchObject({
+      position: { x: 640, y: 240 },
+      style: { height: 360, width: 640 },
+    })
+    await act(async () => {
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === video.id ? { ...node, position: { x: 640, y: 240 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[1]).toMatchObject({
+      position: { x: 640, y: 240 },
+      style: { height: 360, width: 640 },
+    })
+    expect(session.commands).toHaveLength(6)
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedReactFlowProps = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("isolates a failed node geometry submission from another node still awaiting authority", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  EditorProbe = EditorStateProbe
+  observedEditor = undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const image = createMediaNode({
+      id: "failed-image-move",
+      position: { x: 0, y: 0 },
+      resource: { id: "failed-image-resource", kind: "image", metadata: {}, state: { status: "ready" } },
+    })
+    const video = createMediaNode({
+      id: "pending-video-move",
+      position: { x: 400, y: 0 },
+      resource: { id: "pending-video-resource", kind: "video", metadata: {}, state: { status: "ready" } },
+    })
+    const session = new TestCanvasSession(
+      createCanvasDocument({ id: "isolated-geometry-failure", nodes: [image, video] }),
+    )
+    let rejectImageSubmission: (reason: unknown) => void = () => undefined
+    let resolveVideoSubmission: () => void = () => undefined
+    const imageSubmission = new Promise<void>((_resolve, reject) => {
+      rejectImageSubmission = reject
+    })
+    const videoSubmission = new Promise<void>((resolve) => {
+      resolveVideoSubmission = resolve
+    })
+    session.submitRequest = (command) => {
+      if (command.kind !== "canvas.nodes.set-geometry/2") return Promise.resolve()
+      return command.body.updates[0]?.node.id === image.id ? imageSubmission : videoSubmission
+    }
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, image, [image])
+      observedReactFlowProps?.onNodesChange?.([{ id: image.id, position: { x: 80, y: 120 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, video, [video])
+      observedReactFlowProps?.onNodesChange?.([{ id: video.id, position: { x: 520, y: 160 }, type: "position" }])
+      observedReactFlowProps?.onNodeDragStop?.()
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 80, y: 120 },
+      { x: 520, y: 160 },
+    ])
+
+    await act(async () => {
+      rejectImageSubmission(new Error("image geometry rejected"))
+      await imageSubmission.catch(() => undefined)
+      await Promise.resolve()
+    })
+    expect(getObservedEditor()?.document.nodes.map((node) => node.position)).toEqual([
+      { x: 0, y: 0 },
+      { x: 520, y: 160 },
+    ])
+
+    await act(async () => {
+      resolveVideoSubmission()
+      await videoSubmission
+      session.publish({
+        ...session.getProjection(),
+        nodes: session
+          .getProjection()
+          .nodes.map((node) => (node.id === video.id ? { ...node, position: { x: 520, y: 160 } } : node)),
+      })
+    })
+    expect(getObservedEditor()?.document.nodes[1]?.position).toEqual({ x: 520, y: 160 })
+  } finally {
+    EditorProbe = undefined
+    observedEditor = undefined
+    observedReactFlowProps = undefined
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

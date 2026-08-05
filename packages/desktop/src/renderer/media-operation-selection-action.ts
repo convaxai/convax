@@ -7,7 +7,12 @@ import {
   type CanvasPoint,
   type CanvasSelectionActionContext,
 } from "@convax/canvas"
+import {
+  assertResourceRefV2,
+  canvasProjectionResourceMetadataKeyV2,
+} from "@convax/canvas/collaboration"
 import { getProjectResourceReference } from "@convax/project/canvas"
+import { parseProjectUri } from "@convax/uri"
 import type { GenerationCanvasRequest } from "../generation-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
@@ -372,6 +377,32 @@ function requireRequestMediaNode(request: MediaOperationDialogRequest) {
 
 function projectMediaReferenceIdentity(node: CanvasNode, output: CanvasGenerationOutput) {
   if (node.type !== "file" || node.data.kind !== output) return undefined
+  const metadata = node.data.metadata
+  if (
+    metadata &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    Object.hasOwn(metadata, canvasProjectionResourceMetadataKeyV2)
+  ) {
+    const resource = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+    try {
+      assertResourceRefV2(resource)
+      parseProjectUri(resource.uri)
+    } catch {
+      return undefined
+    }
+    if (resource.mediaClass !== output) return undefined
+    return [
+      "canvas-resource",
+      resource.format,
+      resource.uri,
+      resource.mediaClass,
+      resource.mime,
+      resource.byteLength,
+      resource.contentDigest,
+      resource.ownerProofDigest,
+    ].join("\u0000")
+  }
   const reference = getProjectResourceReference(node.data.metadata)
   if (!reference || reference.kind === "project-directory") return undefined
   return reference.kind === "project-file" ? `project-file:${reference.path}` : `managed-asset:${reference.sha256}`

@@ -3,10 +3,24 @@ import type {
   CanvasApplicationCommandResult,
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import {
+  canvasProjectionResourceMetadataKeyV2,
+  type BoundedOperationReceiptV2,
+} from "@convax/canvas/collaboration"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
-import { parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
-import { projectResourceReferenceKey } from "@convax/project/canvas"
+import {
+  encodeBase64urlV2,
+  ordinarySha256V2,
+  parseActorIdV2,
+  parseDigestV2,
+  parseId128V2,
+  parseProjectIdV2,
+} from "@convax/collaboration"
+import { parseProjectResourceReferenceV2 } from "@convax/project"
+import {
+  projectIndexResourceReferenceDigestV2,
+  projectResourceReferenceKey,
+} from "@convax/project/canvas"
 import { ProjectTextFileConflictError } from "@convax/project-files"
 
 import { canvasTextResourceConflictKind } from "../canvas-resource-private-contract"
@@ -216,56 +230,166 @@ describe("Canvas resource IPC", () => {
 })
 
 describe("Canvas text resource IPC", () => {
-  test("uses content hash CAS while Canvas itself has no document revision", async () => {
+  test("resolves the canonical Canvas resource, publishes its new Project version, and relinks the same node", async () => {
+    const fixture = canonicalTextResource("before")
     const textDocument = createCanvasDocument({
       id: "canvas-main",
       nodes: [createTextNode({
         id: "text-node",
         position: { x: 0, y: 0 },
-        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/a.md" } },
+        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
         name: "a.md",
         resourceState: { status: "ready" },
       })],
     })
-    const compareAndReplaceTextFile = mock(async () => ({ contentRevision: "b".repeat(64) }))
+    const nextContent = "after"
+    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const compareAndReplaceTextFile = mock(async () => ({ contentRevision: nextRevision }))
+    const prepared = {
+      items: [{
+        id: "text-save",
+        kind: "text" as const,
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
+        mimeType: "text/markdown",
+        name: "a.md",
+        state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
+      }],
+    }
+    const prepare = mock(async () => prepared)
+    const relinkPreparedResource = mock(async () => commandResult())
     registerCanvasTextResourceIpc(
       { compareAndReplaceTextFile },
       { query: async () => ({ nodes: [], projection: textDocument }) },
       {
+        currentResources: {
+          queryCurrentResources: async () => [{
+            materializedPath: "Notes/a.md",
+            reference: fixture.reference,
+            storageClass: "project-file" as const,
+          }],
+        },
         isTrustedSender: () => true,
-        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        preparation: { prepare },
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
+        resources: { relinkPreparedResource },
       },
     )
     await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
-      content: "new", contentRevision: "a".repeat(64), nodeId: "text-node",
-    })).resolves.toEqual({ contentRevision: "b".repeat(64) })
+      content: nextContent, contentRevision: fixture.reference.blob.digest, nodeId: "text-node",
+    })).resolves.toEqual({ contentRevision: nextRevision })
     expect(compareAndReplaceTextFile).toHaveBeenCalledWith({
-      content: "new",
-      expectedRevision: "a".repeat(64),
+      content: nextContent,
+      expectedRevision: fixture.reference.blob.digest,
       path: "Notes/a.md",
-      projectId: "project-one",
+      projectId: fixture.projectId,
     })
+    expect(prepare).toHaveBeenCalledWith({
+      canvasId: "canvas-main",
+      scopeId: fixture.projectId,
+      sources: [{ kind: "host-file", path: "Notes/a.md", sourceId: "text-save" }],
+    })
+    expect(relinkPreparedResource).toHaveBeenCalledWith({
+      actor: { id: "desktop:renderer:7", kind: "renderer" },
+      canvasId: "canvas-main",
+      commandId: expect.stringMatching(/^canvas-text-save:[a-f0-9]{64}$/),
+      metadataKeysToRemove: ["convaxProjectResourceBindings"],
+      nodeId: "text-node",
+      scopeId: fixture.projectId,
+    }, prepared)
   })
 
   test("returns only the typed text conflict without leaking native errors", async () => {
+    const fixture = canonicalTextResource("before")
     const textDocument = createCanvasDocument({
       id: "canvas-main",
       nodes: [createTextNode({
         id: "text-node", position: { x: 0, y: 0 }, name: "a.md", resourceState: { status: "ready" },
-        metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/a.md" } },
+        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
       })],
     })
+    const prepare = mock()
+    const relinkPreparedResource = mock()
     registerCanvasTextResourceIpc(
-      { compareAndReplaceTextFile: async () => { throw new ProjectTextFileConflictError("a".repeat(64), "c".repeat(64)) } },
+      {
+        compareAndReplaceTextFile: async () => {
+          throw new ProjectTextFileConflictError(fixture.reference.blob.digest, "c".repeat(64))
+        },
+      },
       { query: async () => ({ nodes: [], projection: textDocument }) },
       {
+        currentResources: {
+          queryCurrentResources: async () => [{
+            materializedPath: "Notes/a.md",
+            reference: fixture.reference,
+            storageClass: "project-file" as const,
+          }],
+        },
         isTrustedSender: () => true,
-        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        preparation: { prepare },
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
+        resources: { relinkPreparedResource },
       },
     )
     await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
-      content: "new", contentRevision: "a".repeat(64), nodeId: "text-node",
+      content: "new", contentRevision: fixture.reference.blob.digest, nodeId: "text-node",
     })).resolves.toEqual({ actualRevision: "c".repeat(64), kind: canvasTextResourceConflictKind })
+    expect(prepare).not.toHaveBeenCalled()
+    expect(relinkPreparedResource).not.toHaveBeenCalled()
+  })
+
+  test("finishes ProjectIndex and Canvas publication when retry observes the exact already-written bytes", async () => {
+    const fixture = canonicalTextResource("before")
+    const nextContent = "after"
+    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const textDocument = createCanvasDocument({
+      id: "canvas-main",
+      nodes: [createTextNode({
+        id: "text-node",
+        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
+        name: "a.md",
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready" },
+      })],
+    })
+    const prepared = {
+      items: [{
+        id: "text-save",
+        kind: "text" as const,
+        metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
+        mimeType: "text/markdown",
+        name: "a.md",
+        state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
+      }],
+    }
+    const relinkPreparedResource = mock(async () => commandResult())
+    registerCanvasTextResourceIpc(
+      {
+        compareAndReplaceTextFile: async () => {
+          throw new ProjectTextFileConflictError(fixture.reference.blob.digest, nextRevision)
+        },
+      },
+      { query: async () => ({ nodes: [], projection: textDocument }) },
+      {
+        currentResources: {
+          queryCurrentResources: async () => [{
+            materializedPath: "Notes/a.md",
+            reference: fixture.reference,
+            storageClass: "project-file" as const,
+          }],
+        },
+        isTrustedSender: () => true,
+        preparation: { prepare: async () => prepared },
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
+        resources: { relinkPreparedResource },
+      },
+    )
+
+    await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
+      content: nextContent,
+      contentRevision: fixture.reference.blob.digest,
+      nodeId: "text-node",
+    })).resolves.toEqual({ contentRevision: nextRevision })
+    expect(relinkPreparedResource).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -277,5 +401,42 @@ function commandResult(): CanvasApplicationCommandResult {
     document,
     operationReceipt: receipt,
     warnings: ["normalized"],
+  }
+}
+
+function canonicalTextResource(content: string) {
+  const projectId = parseProjectIdV2("project_0123456789abcdef0123456789abcdef")
+  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256V2(new TextEncoder().encode(content))
+  const fileId = `pf_${"a".repeat(64)}`
+  const reference = parseProjectResourceReferenceV2({
+    format: "convax.project-resource-reference/2",
+    projectId,
+    projectEpoch,
+    entryFileId: fileId,
+    familyPrimaryFileId: fileId,
+    versionId: `pv_${"b".repeat(64)}`,
+    canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
+    blob: {
+      format: "convax.blob-ref/2",
+      algorithm: "sha256",
+      digest,
+      byteLength: String(new TextEncoder().encode(content).byteLength) as never,
+      mime: "text/markdown",
+    },
+    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode(`version:${digest}`)),
+  })
+  return {
+    projectId,
+    reference,
+    resource: {
+      format: "convax.canvas-resource-ref/2" as const,
+      uri: reference.canonicalUri,
+      mediaClass: "text" as const,
+      mime: reference.blob.mime,
+      byteLength: reference.blob.byteLength,
+      contentDigest: reference.blob.digest,
+      ownerProofDigest: projectIndexResourceReferenceDigestV2(reference),
+    },
   }
 }

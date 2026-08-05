@@ -5,7 +5,9 @@ import {
   createGroupNode,
   createMediaNode,
   createTextNode,
+  type CanvasNode,
 } from "@convax/canvas"
+import { canvasProjectionResourceMetadataKeyV2 } from "@convax/canvas/collaboration"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
@@ -75,6 +77,32 @@ const managedImage = createMediaNode({
     width: 1_280,
   },
 })
+const canonicalImage = createMediaNode({
+  id: "canonical-image",
+  position: { x: 20, y: 30 },
+  resource: {
+    height: 720,
+    id: "canonical-image-resource",
+    kind: "image",
+    metadata: {
+      [canvasProjectionResourceMetadataKeyV2]: {
+        format: "convax.canvas-resource-ref/2",
+        uri:
+          `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
+          `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
+          `?blob=sha256%3A${"b".repeat(64)}&path=Generated%2Fcanonical.png`,
+        mediaClass: "image",
+        mime: "image/png",
+        byteLength: "12",
+        contentDigest: "b".repeat(64),
+        ownerProofDigest: "c".repeat(64),
+      },
+    },
+    mimeType: "image/png",
+    state: { status: "ready", url: "convax-asset://project/canonical.png" },
+    width: 1_280,
+  },
+})
 const remoteVideo = createMediaNode({
   id: "remote-video",
   position: { x: 0, y: 0 },
@@ -95,11 +123,16 @@ const text = createTextNode({
 function selection(nodeIds: string[], edgeIds: string[] = []) {
   const document = createCanvasDocument({ id: "canvas", title: "Canvas" })
   return createCanvasSelectionActionContext(
-    { ...document, nodes: [managedImage, managedVideo, projectFileVideo, remoteVideo, text] },
+    { ...document, nodes: [managedImage, canonicalImage, managedVideo, projectFileVideo, remoteVideo, text] },
     nodeIds,
     edgeIds,
     signal,
   )
+}
+
+function singleNodeSelection(node: CanvasNode) {
+  const document = createCanvasDocument({ id: "canvas", title: "Canvas", nodes: [node] })
+  return createCanvasSelectionActionContext(document, [node.id], [], signal)
 }
 
 function operationPlugin(withSkill = false): InstalledWebPluginSummary {
@@ -324,7 +357,54 @@ describe("manifest-driven media operation visibility", () => {
       target: "image",
     })
     expect(canRunMediaOperation(selection([managedImage.id]), action)).toBe(true)
+    expect(canRunMediaOperation(selection([canonicalImage.id]), action)).toBe(true)
     expect(canRunMediaOperation(selection([managedVideo.id]), action)).toBe(false)
+  })
+
+  test("fails closed for malformed, non-Project, or media-mismatched canonical resource metadata", () => {
+    const action = listInstalledMediaOperationActions([immediateImageOperationPlugin()])[0]!
+    const legacyReference = (managedImage.data.metadata as Record<string, unknown>)[projectResourceReferenceKey]
+    const malformed = {
+      ...canonicalImage,
+      id: "malformed-canonical-image",
+      data: {
+        ...canonicalImage.data,
+        metadata: {
+          [projectResourceReferenceKey]: legacyReference,
+          [canvasProjectionResourceMetadataKeyV2]: { format: "convax.canvas-resource-ref/2" },
+        },
+      },
+    }
+    const canonicalResource = (canonicalImage.data.metadata as Record<string, unknown>)[
+      canvasProjectionResourceMetadataKeyV2
+    ] as Record<string, unknown>
+    const mismatched = {
+      ...canonicalImage,
+      id: "mismatched-canonical-image",
+      data: {
+        ...canonicalImage.data,
+        metadata: {
+          [canvasProjectionResourceMetadataKeyV2]: { ...canonicalResource, mediaClass: "video" },
+        },
+      },
+    }
+    const nonProject = {
+      ...canonicalImage,
+      id: "non-project-canonical-image",
+      data: {
+        ...canonicalImage.data,
+        metadata: {
+          [canvasProjectionResourceMetadataKeyV2]: {
+            ...canonicalResource,
+            uri: "convax-asset://project/canonical.png",
+          },
+        },
+      },
+    }
+
+    expect(canRunMediaOperation(singleNodeSelection(malformed), action)).toBe(false)
+    expect(canRunMediaOperation(singleNodeSelection(mismatched), action)).toBe(false)
+    expect(canRunMediaOperation(singleNodeSelection(nonProject), action)).toBe(false)
   })
 
   test("hides executable actions unless Main currently admits their exact operation tools", () => {
@@ -398,7 +478,7 @@ describe("manifest-driven media operation requests", () => {
   })
 
   test("creates an adjacent pending image request from the selected image", () => {
-    const context = selection([managedImage.id])
+    const context = selection([canonicalImage.id])
     const action = listInstalledMediaOperationActions([immediateImageOperationPlugin()])[0]!
     const request = createMediaOperationGenerateRequest(
       { action, canvasId: "canvas", context, projectId: "project" },
@@ -407,15 +487,15 @@ describe("manifest-driven media operation requests", () => {
     expect(request).toMatchObject({
       context: {
         documentId: "canvas",
-        selectedNodeIds: [managedImage.id],
+        selectedNodeIds: [canonicalImage.id],
         source: "desktop:plugin-selection-action:cutout-studio/remove-background",
       },
       output: "image",
-      references: [{ nodeId: managedImage.id, role: "reference_image" }],
+      references: [{ nodeId: canonicalImage.id, role: "reference_image" }],
       resultMode: { type: "create-pending-node" },
       toolId: "cutout-studio/background.remove",
     })
-    expect(request.anchor.x).toBeGreaterThan(managedImage.position.x)
+    expect(request.anchor.x).toBeGreaterThan(canonicalImage.position.x)
     expect(request.toolInput).toBeUndefined()
   })
 

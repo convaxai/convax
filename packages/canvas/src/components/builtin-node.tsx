@@ -1867,7 +1867,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           const nextData = { ...dataRef.current, resourceState }
           dataRef.current = nextData
           appliedFingerprintRef.current = textDataFingerprint(nextData)
-          canvasEditor.replaceResourceState(props.id, resourceState)
+          canvasEditorRef.current.replaceResourceState(props.id, resourceState)
           setEditing(false)
         } catch (error) {
           if (!mountedRef.current || controller.signal.aborted || generation !== saveGenerationRef.current) throw error
@@ -1887,7 +1887,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
           }
         }
       }),
-    [canvasEditor, editing, expandedOpen, props.id, textEditor, textResources],
+    [editing, expandedOpen, props.id, textEditor, textResources],
   )
 
   const closeAndSaveTextEditor = useCallback(() => {

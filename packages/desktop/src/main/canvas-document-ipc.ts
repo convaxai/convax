@@ -6,6 +6,10 @@ import {
   type CanvasResourceSource,
 } from "@convax/canvas/application"
 import {
+  assertResourceRefV2,
+  canvasProjectionResourceMetadataKeyV2,
+} from "@convax/canvas/collaboration"
+import {
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasEmptyImageNodeData,
   type CanvasNode,
@@ -14,12 +18,15 @@ import {
 import {
   getProjectResourceReference,
   markProjectCanvasResourcesStale,
+  projectIndexResourceReferenceDigestV2,
   projectResourceBindingsKey,
   requireProjectResourceReference,
 } from "@convax/project/canvas"
 import type { ProjectResourceReference } from "@convax/project/canvas"
+import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
 import type { ProjectCanvasResourceHydrator, ProjectCanvasResourcePreparation } from "@convax/project/node"
 import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
+import { ordinarySha256V2, parseProjectIdV2 } from "@convax/collaboration"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import {
   canvasResourcePartialFailureKind,
@@ -174,8 +181,11 @@ export function registerCanvasTextResourceIpc(
   files: ProjectTextFileCompareAndReplacePort,
   application: Pick<CanvasApplicationService, "query">,
   options: {
+    currentResources: Pick<ProjectIndexCurrentBlobReferencePortV2, "queryCurrentResources">
     isTrustedSender(event: IpcMainInvokeEvent): boolean
+    preparation: Pick<ProjectCanvasResourcePreparation, "prepare">
     resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
+    resources: Pick<CanvasResourceBusinessService, "relinkPreparedResource">
   },
 ) {
   ipcMain.handle(canvasTextResourceIpcChannel, async (event, value: unknown) => {
@@ -187,13 +197,21 @@ export function registerCanvasTextResourceIpc(
       const document = (await application.query({ canvasId: active.canvasId, scopeId: active.projectId })).projection
       const matches = document.nodes.filter((node) => node.id === input.nodeId)
       const node = matches.length === 1 ? matches[0] : undefined
-      const reference = node ? getProjectResourceReference(node.data.metadata) : null
-      if (
-        !node ||
-        node.data.kind !== "text" ||
-        reference?.kind !== "project-file" ||
-        !isEditableProjectTextPath(reference.path)
-      ) {
+      const resource = node ? canonicalCanvasTextResource(node) : null
+      if (!node || !resource) {
+        throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
+      }
+
+      const currentResources = await options.currentResources.queryCurrentResources({ projectId: parseProjectIdV2(active.projectId) })
+      const resourceEntry = currentResources.find(({ reference }) =>
+        reference.canonicalUri === resource.uri &&
+        reference.blob.digest === resource.contentDigest &&
+        reference.blob.mime === resource.mime &&
+        reference.blob.byteLength === resource.byteLength &&
+        projectIndexResourceReferenceDigestV2(reference) === resource.ownerProofDigest
+      )
+      const path = resourceEntry?.storageClass === "project-file" ? resourceEntry.materializedPath : null
+      if (!path || !isEditableProjectTextPath(path)) {
         throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
       }
 
@@ -204,12 +222,44 @@ export function registerCanvasTextResourceIpc(
         )
       }
 
-      return await files.compareAndReplaceTextFile({
-        content: input.content,
-        expectedRevision: input.contentRevision,
-        path: reference.path,
-        projectId: active.projectId,
+      const contentRevision = ordinarySha256V2(new TextEncoder().encode(input.content))
+      try {
+        const saved = await files.compareAndReplaceTextFile({
+          content: input.content,
+          expectedRevision: input.contentRevision,
+          path,
+          projectId: active.projectId,
+        })
+        if (saved.contentRevision !== contentRevision) {
+          throw new CanvasTextResourceRequestError("Canvas text resource write returned an unexpected revision")
+        }
+      } catch (error) {
+        if (!(error instanceof ProjectTextFileConflictError) || error.actualRevision !== contentRevision) throw error
+      }
+
+      const prepared = await options.preparation.prepare({
+        canvasId: active.canvasId,
+        scopeId: active.projectId,
+        sources: [{ kind: "host-file", path, sourceId: "text-save" }],
       })
+      if (prepared.items.length !== 1) {
+        throw new CanvasTextResourceRequestError("Canvas text resource preparation did not return one file")
+      }
+      const latest = await options.resolveActiveCanvas(event)
+      if (!sameActiveCanvasScope(active, latest)) {
+        throw new CanvasTextResourceRequestError(
+          "Canvas text resource request does not match the invoking window's live Workbench scope",
+        )
+      }
+      await options.resources.relinkPreparedResource({
+        actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
+        canvasId: active.canvasId,
+        commandId: `canvas-text-save:${ordinarySha256V2(new TextEncoder().encode(`${input.nodeId}\0${contentRevision}`))}`,
+        metadataKeysToRemove: [projectResourceBindingsKey],
+        nodeId: input.nodeId,
+        scopeId: active.projectId,
+      }, prepared)
+      return { contentRevision }
     } catch (error) {
       if (error instanceof ProjectTextFileConflictError) {
         return { actualRevision: error.actualRevision, kind: canvasTextResourceConflictKind }
@@ -219,6 +269,19 @@ export function registerCanvasTextResourceIpc(
     }
   })
   return () => ipcMain.removeHandler(canvasTextResourceIpcChannel)
+}
+
+function canonicalCanvasTextResource(node: CanvasNode) {
+  if (node.type !== "file" || node.data.kind !== "text") return null
+  const metadata = node.data.metadata
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
+  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+  try {
+    assertResourceRefV2(value)
+  } catch {
+    return null
+  }
+  return value.mediaClass === "text" ? value : null
 }
 
 class CanvasTextResourceRequestError extends Error {}

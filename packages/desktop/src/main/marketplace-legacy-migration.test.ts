@@ -52,6 +52,33 @@ test("claims only an exact proven legacy tree and is idempotent", async () => {
   })
 })
 
+test("keeps a conflicting current installation authoritative without blocking startup", async () => {
+  const { defaults, state } = await harness()
+  const current: InstallRecord = {
+    ...storyboard(),
+    artifact: { sha256: "b".repeat(64), size: 4_096 },
+    artifactDigest: "c".repeat(64),
+    revision: 3,
+    version: "2.0.0",
+  }
+  await state.update((draft) => {
+    draft.installations.push(current)
+  })
+
+  await new MarketplaceLegacyMigration({
+    defaultCapabilitiesFile: defaults,
+    preinstalledPolicies: [],
+    proveInstallations: async () => [{ record: storyboard() }],
+    state,
+  }).run()
+
+  expect(await state.read()).toMatchObject({
+    executionGrants: [],
+    installations: [current],
+    transitions: [],
+  })
+})
+
 test("leaves ambiguous direct imports legacy-unbound without executable grants", async () => {
   const { defaults, state } = await harness()
   await new MarketplaceLegacyMigration({
