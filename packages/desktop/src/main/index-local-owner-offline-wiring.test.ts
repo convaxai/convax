@@ -87,6 +87,72 @@ function localOnlyStatus(projectId: string): TestStatus {
   })
 }
 
+function onlineStatus(projectId: string): TestStatus {
+  return Object.freeze({
+    format: "convax.project-team-collaboration-status/2" as const,
+    projectId,
+    state: "online" as const,
+    canEdit: true,
+    connectedPeerCount: 1,
+    reason: null,
+  })
+}
+
+function createRuntimeHarness(options: { failActivation?: boolean } = {}) {
+  let currentStatus = localOnlyStatus("inactive")
+  let statusListener: ((status: TestStatus) => void) | undefined
+  let staleStatusListener: ((status: TestStatus) => void) | undefined
+  let connectivityListener: ((online: boolean) => void) | undefined = (online) => {
+    harness.connectivityCalls.push(online)
+  }
+  const harness = {
+    activatedProjects: [] as string[],
+    connectivityCalls: [] as boolean[],
+    disposeCalls: 0,
+    quiescedProjects: [] as string[],
+    unsubscribeCalls: 0,
+    emitConnectivity(online: boolean) { connectivityListener?.(online) },
+    emitStaleStatus(status: TestStatus) { staleStatusListener?.(status) },
+  }
+  const service: TestService = {
+    async activateLocalProject(projectId) {
+      currentStatus = localOnlyStatus(projectId)
+      return currentStatus
+    },
+    async activateProject(projectId) {
+      harness.activatedProjects.push(projectId)
+      currentStatus = onlineStatus(projectId)
+      statusListener?.(currentStatus)
+      if (options.failActivation) throw new Error("rendezvous activation failed")
+      return currentStatus
+    },
+    async bootstrapTeam(projectId) {
+      return { invitation: null, status: localOnlyStatus(projectId) }
+    },
+    async joinTeam({ projectId }) {
+      return localOnlyStatus(projectId)
+    },
+    getStatus() { return currentStatus },
+    async quiesceProject(projectId) { harness.quiescedProjects.push(projectId) },
+    subscribe(listener) {
+      statusListener = listener
+      staleStatusListener = listener
+      return () => {
+        harness.unsubscribeCalls += 1
+        statusListener = undefined
+      }
+    },
+  }
+  const runtime: TestRuntime = {
+    service,
+    async dispose() {
+      harness.disposeCalls += 1
+      connectivityListener = undefined
+    },
+  }
+  return Object.assign(harness, { runtime })
+}
+
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : ""
 }
@@ -125,14 +191,7 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await openProject()
     await editNode()
 
-    expect(gate.service.getStatus("project-a")).toEqual({
-      format: "convax.project-team-collaboration-status/2",
-      projectId: "project-a",
-      state: "attention",
-      canEdit: false,
-      connectedPeerCount: 0,
-      reason: "service-unavailable",
-    })
+    expect(gate.service.getStatus("project-a")).toEqual(localOnlyStatus("project-a"))
     const bootstrapError = await gate.service.bootstrapTeam("project-a").then(
       () => null,
       (error: unknown) => error,
@@ -145,6 +204,7 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     expect(errorMessage(bootstrapError)).toContain("Sharing and collaboration are unavailable")
     expect(joinError).toBeInstanceOf(Error)
     expect(errorMessage(joinError)).toContain("Sharing and collaboration are unavailable")
+    expect(gate.service.getStatus("project-a")).toEqual(localOnlyStatus("project-a"))
 
     expect(restoreProject).toHaveBeenCalledTimes(1)
     expect(openProject).toHaveBeenCalledTimes(3)
@@ -173,36 +233,87 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await gate.dispose()
   })
 
-  test("only durable or explicit V10 sharing demand constructs one runtime and Project switch quiesces it", async () => {
-    let listener: ((status: TestStatus) => void) | undefined
-    const service = {
-      activateLocalProject: mock(async (projectId: string) => localOnlyStatus(projectId)),
-      activateProject: mock(async (projectId: string) => localOnlyStatus(projectId)),
-      bootstrapTeam: mock(async (projectId: string) => ({ invitation: null, status: localOnlyStatus(projectId) })),
-      joinTeam: mock(async ({ projectId }: { projectId: string }) => localOnlyStatus(projectId)),
-      getStatus: mock((projectId: string) => localOnlyStatus(projectId)),
-      quiesceProject: mock(async () => undefined),
-      subscribe: mock((next: (status: TestStatus) => void) => {
-        listener = next
-        return () => { listener = undefined }
-      }),
-    }
-    const dispose = mock(async () => undefined)
-    const createRuntime = mock(() => ({ dispose, service }))
+  test("V10 shared to V11 local destroys the runtime, ignores old events and reconstructs only for later V10", async () => {
+    const runtimes: ReturnType<typeof createRuntimeHarness>[] = []
+    const createRuntime = mock(() => {
+      const next = createRuntimeHarness()
+      runtimes.push(next)
+      return next.runtime
+    })
     const activateV10Project = mock(async ({ projectId, service: activation }: TestActivationRequest) =>
       activation.activateProject(projectId))
     const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const forwarded: TestStatus[] = []
+    const unsubscribeGate = gate.service.subscribe((status) => forwarded.push(status))
 
-    await gate.activateProject("project-shared", "v10-r5")
+    await gate.activateProject("project-shared-a", "v10-r5")
     expect(createRuntime).toHaveBeenCalledTimes(1)
-    expect(service.activateProject).toHaveBeenCalledWith("project-shared")
+    const first = runtimes[0]
+    expect(first.activatedProjects).toEqual(["project-shared-a"])
+    first.emitConnectivity(false)
+    expect(first.connectivityCalls).toEqual([false])
 
     await gate.activateProject("project-local", "v11-r1-local-owner")
-    expect(service.quiesceProject).toHaveBeenCalledWith("project-shared")
+    expect(first.quiescedProjects).toEqual(["project-shared-a"])
+    expect(first.unsubscribeCalls).toBe(1)
+    expect(first.disposeCalls).toBe(1)
     expect(createRuntime).toHaveBeenCalledTimes(1)
+    expect(gate.service.getStatus("project-local")).toEqual(localOnlyStatus("project-local"))
+
+    first.emitConnectivity(true)
+    expect(first.connectivityCalls).toEqual([false])
+    const forwardedAfterDispose = forwarded.length
+    first.emitStaleStatus(onlineStatus("project-shared-a"))
+    expect(forwarded).toHaveLength(forwardedAfterDispose)
+
+    await gate.quiesceProject("project-local")
+    await gate.activateProject("project-local", "v11-r1-local-owner")
+    expect(createRuntime).toHaveBeenCalledTimes(1)
+    expect(gate.service.getStatus("project-local")).toEqual(localOnlyStatus("project-local"))
+
+    await gate.activateProject("project-shared-b", "v10-r5")
+    expect(createRuntime).toHaveBeenCalledTimes(2)
+    expect(runtimes[1].activatedProjects).toEqual(["project-shared-b"])
+
+    unsubscribeGate()
+    await gate.quiesceProject("project-shared-b")
+    expect(runtimes[1].quiescedProjects).toEqual(["project-shared-b"])
+    expect(runtimes[1].disposeCalls).toBe(1)
     await gate.dispose()
-    expect(dispose).toHaveBeenCalledTimes(1)
-    expect(listener).toBeUndefined()
+  })
+
+  test("a failed V10 activation destroys the partial runtime and cannot project an active Team", async () => {
+    const failed = createRuntimeHarness({ failActivation: true })
+    const createRuntime = mock(() => failed.runtime)
+    const activateV10Project = mock(async ({ projectId, service }: TestActivationRequest) =>
+      service.activateProject(projectId))
+    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const forwarded: TestStatus[] = []
+    gate.service.subscribe((status) => forwarded.push(status))
+
+    const activationError = await gate.activateProject("project-broken-team", "v10-r5").then(
+      () => null,
+      (error: unknown) => error,
+    )
+    expect(activationError).toBeInstanceOf(Error)
+    expect(errorMessage(activationError)).toContain("rendezvous activation failed")
+
+    expect(failed.quiescedProjects).toEqual(["project-broken-team"])
+    expect(failed.unsubscribeCalls).toBe(1)
+    expect(failed.disposeCalls).toBe(1)
+    expect(gate.service.getStatus("project-broken-team")).toEqual({
+      format: "convax.project-team-collaboration-status/2",
+      projectId: "project-broken-team",
+      state: "attention",
+      canEdit: false,
+      connectedPeerCount: 0,
+      reason: "service-unavailable",
+    })
+    const forwardedAfterFailure = forwarded.length
+    failed.emitStaleStatus(onlineStatus("project-broken-team"))
+    expect(forwarded).toHaveLength(forwardedAfterFailure)
+    expect(forwarded.at(-1)?.state).toBe("attention")
+    await gate.dispose()
   })
 
   test("keeps every Team/control constructor inside the protocol-gated createRuntime closure", () => {
@@ -223,12 +334,15 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
       "new ProjectTeamCollaborationManagerV2(",
       "net.isOnline()",
       'powerMonitor.on("resume"',
+      'powerMonitor.removeListener("resume"',
+      'app.removeListener("browser-window-focus"',
     ]) {
       expect(runtimeSource).toContain(constructor)
       expect(mainSource.slice(compositionStart, runtimeStart)).not.toContain(constructor)
     }
     expect(mainSource).toContain("await projectTeamRuntimeGate.activateProject(projectId, selectedProtocol)")
     expect(mainSource).toContain('if (protocol !== "v10-r5")')
+    expect(mainSource).toContain("publish(localOnlyStatus(projectId))")
     expect(mainSource).toContain('unavailableStatus(projectId)')
   })
 })
