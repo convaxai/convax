@@ -1,5 +1,6 @@
 import {
   encodeRestrictedJcs,
+  ordinarySha256,
   parseDocumentScope,
   type DocumentScope,
   type DecodedCausalEditFrame,
@@ -14,6 +15,10 @@ import {
   decodeCanvasExternalFactRequest,
   type CanvasExternalFactRequest,
 } from "@convax/canvas/collaboration"
+import {
+  projectIndexResourceReferenceDigest,
+  type ProjectIndexCurrentBlobReferencePort,
+} from "@convax/project"
 import { parseProjectUri } from "@convax/uri"
 
 import type { CanvasFactResolution } from "./canvas-collaboration-session-owner"
@@ -61,8 +66,17 @@ export function createRouteScopedCanvasFactResolver(input: {
 
     const facts = new Map<string, unknown>()
     for (const requirement of inputAttempt.dependencies.externalFacts) {
-      const request = decodeCanvasExternalFactRequest(new Uint8Array(requirement.request.exactJcs))
-      if (request === "rejected" || !requestBelongsToScope(request, scope)) {
+      const exactJcs = new Uint8Array(requirement.request.exactJcs)
+      const request = decodeCanvasExternalFactRequest(exactJcs)
+      if (
+        request === "rejected" ||
+        requirement.owner !== "canvas" ||
+        requirement.kind !== request.kind ||
+        ordinarySha256(exactJcs) !== requirement.request.sha256 ||
+        ((request.kind === "current-resources" || request.kind === "retained-resources") &&
+          requirement.factDigest !== requirement.request.sha256) ||
+        !requestBelongsToScope(request, scope)
+      ) {
         return Object.freeze({ status: "rejected" })
       }
       if (!input.facts) return Object.freeze({ status: "pending" })
@@ -97,6 +111,33 @@ export function createRouteScopedCanvasFactResolver(input: {
       ? Object.freeze({ status: "resolved", port: created.port })
       : Object.freeze({ status: "rejected" })
   }
+}
+
+/** Current Canvas resource facts resolve only from ProjectIndex's live owner projection. */
+export function createProjectIndexBackedCanvasExternalFactAuthority(input: {
+  readonly currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
+}): CanvasRouteExternalFactAuthority {
+  return Object.freeze({
+    async verify(request: Parameters<CanvasRouteExternalFactAuthority["verify"]>[0]) {
+      request.signal?.throwIfAborted()
+      if (request.request.kind !== "current-resources") return "pending"
+      const current = await input.currentResources.queryCurrentResources({
+        projectId: request.scope.projectId,
+      })
+      request.signal?.throwIfAborted()
+      return request.request.proofs.every((proof) => current.some((entry) => {
+        const reference = entry.reference
+        const digest = projectIndexResourceReferenceDigest(reference)
+        return proof.ownerProofDigest === digest &&
+          proof.resource.ownerProofDigest === digest &&
+          proof.resource.uri === reference.canonicalUri &&
+          proof.resource.contentDigest === reference.blob.digest &&
+          proof.resource.byteLength === reference.blob.byteLength &&
+          proof.resource.mime === reference.blob.mime &&
+          proof.resource.mediaClass === mediaClassForMime(reference.blob.mime)
+      })) ? "verified" : "rejected"
+    },
+  })
 }
 
 /** Incoming frames use the same exact route-scoped authority and never trust their peer/session identity. */
@@ -142,6 +183,15 @@ function requestBelongsToScope(request: CanvasExternalFactRequest, scope: Canvas
   } catch {
     return false
   }
+}
+
+function mediaClassForMime(mime: string): "text" | "image" | "video" | "audio" | "file" {
+  const normalized = mime.split(";", 1)[0]!.trim().toLowerCase()
+  if (normalized.startsWith("text/")) return "text"
+  if (normalized.startsWith("image/")) return "image"
+  if (normalized.startsWith("video/")) return "video"
+  if (normalized.startsWith("audio/")) return "audio"
+  return "file"
 }
 
 function sameScope(left: DocumentScope, right: DocumentScope): boolean {

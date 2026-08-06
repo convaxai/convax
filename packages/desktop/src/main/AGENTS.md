@@ -218,15 +218,30 @@ For any matching change, read the full routed reference before planning or editi
   cutover guard. A legacy recovery adapter may resolve only an exact pristine
   local-owner bootstrap through the Project/node verifier; path presence alone is
   neither Team evidence nor permission to reset current collaboration state.
-- The explicit retired-V3 local reset branch requires both frozen local marker files,
-  no sharing-handoff or Team/control namespace, and `missing` from the durable Team
-  authority store. It never decodes old frames. Prepare a fresh owner binding, keep
-  it inert through genesis publication and byte-exact `.convax-archive-*` verification,
-  then activate it; interruption keeps the old binding or recovery marker fail-closed.
+- The explicit user-confirmed unshared-local reset branch requires no
+  sharing-handoff or Team/control namespace and exact `missing` from the durable
+  Team authority store. It never decodes unsupported bytes or requires an empty
+  bootstrap. Prepare a fresh owner binding, keep it inert through genesis publication
+  and byte-exact `.convax-archive-*` verification, then activate it; interruption
+  keeps the old binding or recovery state fail-closed. Any active or rejected Team
+  state requires control-plane rollover.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
   Team control-plane state. This keeps the shell local-first; mutation authority
-  still comes only from the validated current protocol descriptor, never from shell
-  state.
+  comes from the exact durable local-owner binding under the validated current
+  protocol descriptor, never from shell state. That owner must authorize ProjectIndex
+  edits, Canvas edits, and Canvas genesis without network or Team state.
+- Compose one local-first authority source: durable Team state selects Team signing;
+  only an exact `missing` Team state permits local-owner signing. Rejected or
+  ambiguous Team state fails closed, and UI adapters never synthesize authorization.
+- When an editable Project has no live Canvas, Desktop coordination may invoke the
+  Project-owned typed Canvas-create command and open its committed result. It must
+  not fabricate a route or document projection. Register the exact Canvas owner
+  materializer before genesis durability, release it after the barrier, and observe
+  each accepted frame in the live causal index before accepting dependent frames.
+- Resolve Canvas `current-resources` facts only from the live ProjectIndex
+  current-resource projection and verify the exact URI, blob tuple, owner-proof
+  digest, and MIME-derived media class. A native path, prepared UI item, or retained
+  file alone is not current-owner authority.
 - Compose local-owner authority adapters only through the one packaged current
   protocol descriptor. Load it once, verify its exact digest against the build, and
   build one kernel, one codec, and one document session type from it. Never load an

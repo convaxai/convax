@@ -1,6 +1,8 @@
 import {
   buildCanvasGenesisProofCarrier,
+  createCanvasReconstructionYDoc,
   installCanvasGenesisProofCarrierVerifierFactory,
+  requiredCanvasBlobDigests,
   type CanvasGenesisBuildAuthor,
   type CanvasGenesisHistoricalAuthorVerifierPort,
   type CanvasGenesisProofCarrierVerifier,
@@ -14,9 +16,14 @@ import {
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import type {
+  NodeReplicaHeadMaterializer,
   ProjectDocumentGenesisVerifierPort,
   PrepareProjectDocumentGenesisResult,
 } from "@convax/project/node"
+import {
+  createAcceptedCausalClosureIndex,
+  createProductionNodeReplicaHeadMaterializer,
+} from "./collaboration-exact-base"
 
 export type PrepareCanvasGenesisAuthorResult =
   | Readonly<{ status: "prepared"; author: CanvasGenesisBuildAuthor }>
@@ -40,6 +47,25 @@ export interface CanvasDocumentGenesisAuthority {
   readonly proofVerifier: CanvasGenesisProofCarrierVerifier
   readonly genesisVerifier: ProjectDocumentGenesisVerifierPort<"canvas">
   readonly preflight: CanvasGenesisAuthorProviderPort["preflight"]
+}
+
+/**
+ * Exact Canvas materializer used only while its genesis shard crosses the
+ * Project persistence barrier. The normal route runtime replaces this bounded
+ * registration after ProjectIndex publishes the live route.
+ */
+export function createCanvasGenesisNodeReplicaHeadMaterializer(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
+  readonly scope: DocumentScope & { readonly docKind: "canvas" }
+}): NodeReplicaHeadMaterializer {
+  return createProductionNodeReplicaHeadMaterializer({
+    authority: input.authority,
+    owner: input.runtime,
+    causalClosure: createAcceptedCausalClosureIndex({ authority: input.authority, scope: input.scope }),
+    createDocument: createCanvasReconstructionYDoc,
+    requiredBlobDigests: requiredCanvasBlobDigests,
+  })
 }
 
 /** One selected Canvas runtime produces both G and the fact verifier that consumes G. */

@@ -9,10 +9,10 @@ import {
   encodeRestrictedJcs,
   ordinarySha256,
   parseActorId,
+  parseCausalSignerAuthority,
   parseDigest,
   parseDocumentScope,
   parseId128,
-  parseMemberId,
   parseProjectId,
   parsePublicKey,
   parseReplicaId,
@@ -22,7 +22,7 @@ import {
   type ActorId,
   type CausalDependencyKind,
   type CausalDependencyRef,
-  type CausalSignerAuthority,
+  type TeamReplicaSignerAuthority,
   type Digest,
   type Id128,
   type ProjectId,
@@ -59,7 +59,7 @@ export interface LocalReplicaAuthorityCacheRecord {
   readonly role: "editor"
   readonly editState: "active-editor"
   readonly replicaSigningPublicKey: PublicKey
-  readonly signerAuthority: CausalSignerAuthority
+  readonly signerAuthority: TeamReplicaSignerAuthority
   readonly dependencies: readonly CausalDependencyRef[]
   readonly validationArtifacts: ValidationArtifactSet
 }
@@ -366,21 +366,12 @@ function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecord {
   })
 }
 
-function parseSignerAuthority(value: unknown): CausalSignerAuthority {
-  assertExactKeys(value, [
-    "memberId", "replicaId", "actorId", "memberAuthorizationEpoch", "replicaAuthorizationEpoch",
-    "membershipSnapshotDigest", "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
-  ], "local authority signer authority")
-  return Object.freeze({
-    memberId: parseMemberId(value.memberId),
-    replicaId: parseReplicaId(value.replicaId),
-    actorId: parseActorId(value.actorId),
-    memberAuthorizationEpoch: parseId128(value.memberAuthorizationEpoch),
-    replicaAuthorizationEpoch: parseId128(value.replicaAuthorizationEpoch),
-    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
-  })
+function parseSignerAuthority(value: unknown): TeamReplicaSignerAuthority {
+  const parsed = parseCausalSignerAuthority(value)
+  if (parsed.kind !== "team-replica") {
+    throw new TypeError("Local authority cache accepts only Team replica authority")
+  }
+  return parsed
 }
 
 function parseDependency(value: unknown): CausalDependencyRef {

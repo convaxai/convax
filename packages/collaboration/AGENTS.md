@@ -22,6 +22,9 @@ added back.
   and external-fact ports.
 - The final long-lived-replica-signed causal frame and its object/outbox/journal/head
   ordering contract. Replication outboxes and ACKs are metadata, never another doc.
+- One closed signer-authority union for the current protocol: unshared
+  `local-project-owner` and shared `team-replica`. The core commits the authority
+  kind and structured digest; each branch requires its exact dependency subset.
 - Transaction-origin separation, typed persistence/journal ports without an I/O
   implementation, and one transient session undo coordinator.
 
@@ -70,5 +73,8 @@ added back.
   review material and must not be read, staged, or imported by this package.
 - Schema changes change the descriptor digest. They never add a second codec, a
   migration decoder, or a compatibility branch.
+- Local-owner authorization is scope-, epoch-, schema-, and protocol-exact. It is
+  not a Team credential surrogate, and a durable Team handoff may disable future
+  local signing without invalidating retained current-protocol history.
 
 Run `bun typecheck && bun test`.

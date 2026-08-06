@@ -76,13 +76,13 @@ function carrierFixture(): Readonly<{
     validationArtifactSetDigest: digest("artifact-set"),
     sections,
     totalSectionBytes: String(offset) as never,
-    protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993" as Digest,
+    protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9" as Digest,
   }
   return { carrier: encodeCheckpointValidationCarrier(index, sectionBytes), index }
 }
 
 function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
-  const schemaDigest = "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36" as Digest
+  const schemaDigest = "09d5f8748d91474de45eb3a88fe6d3054adb79e8a44dd311c9024ab95b27250a" as Digest
   const descriptor = Object.freeze({
     format: "convax.owner-canonicalizer-descriptor" as const,
     owner: "canvas" as const,

@@ -1,9 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
   causalFrontierDigest,
+  CURRENT_PROTOCOL_IDENTITIES,
   ordinarySha256,
   parseActorId,
   parseCanvasId,
+  parseDigest,
   parseId128,
   parseMemberId,
   parseProjectId,
@@ -18,6 +20,10 @@ import {
   createIncomingReplicaAuthorityVerificationPort,
   type CurrentLocalReplicaAuthoritySource,
 } from "./collaboration-authority-ports"
+import {
+  createLocalFirstCurrentLocalReplicaAuthoritySource,
+  createLocalProjectOwnerCurrentLocalReplicaAuthoritySource,
+} from "./collaboration-production-runtime"
 
 const encoder = new TextEncoder()
 const digest = (value: string) => ordinarySha256(encoder.encode(value))
@@ -44,6 +50,7 @@ describe("production collaboration authority adapters", () => {
           baseFrontierDigest: causalFrontierDigest(frontier),
           ownerSchemaDigest,
           signerAuthority: {
+            kind: "team-replica" as const,
             memberId: parseMemberId(id(4)),
             replicaId: parseReplicaId("replica_0000002a"),
             actorId: actor,
@@ -90,13 +97,68 @@ describe("production collaboration authority adapters", () => {
           scope,
           frameDigest: digest("other-frame"),
           actorId: actor,
-          membershipSnapshotDigest: frame.header.core.membershipSnapshotDigest,
-          replicaActorCredentialCoreDigest: frame.header.core.replicaActorCredentialCoreDigest,
-          replicaEditAuthorizationCoreDigest: frame.header.core.replicaEditAuthorizationCoreDigest,
+          signerAuthority: {
+            kind: "team-replica" as const,
+            memberId: parseMemberId(id(4)),
+            replicaId: parseReplicaId("replica_0000002a"),
+            actorId: actor,
+            memberAuthorizationEpoch: id(5),
+            replicaAuthorizationEpoch: id(6),
+            membershipSnapshotDigest: digest("membership"),
+            replicaActorCredentialCoreDigest: digest("credential"),
+            replicaEditAuthorizationCoreDigest: digest("edit"),
+          },
           replicaPublicKey: parsePublicKey(Buffer.alloc(32, 3).toString("base64url")),
         }
       },
     })
     await expect(port.verifyFrameAuthority(frame)).rejects.toThrow("another frame")
+  })
+
+  test("authorizes an unshared local Project and switches to Team only after a durable Team state", async () => {
+    const operationId = id(7)
+    const ownerSchemaDigest = digest("canvas-schema")
+    const replicaId = parseReplicaId("replica_0000002a")
+    const local = createLocalProjectOwnerCurrentLocalReplicaAuthoritySource({
+      protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest),
+      async resolveOwner() {
+        return {
+          binding: {
+            projectId: scope.projectId,
+            projectEpoch: scope.projectEpoch,
+            replicaId,
+            actorId: actor,
+            bindingDigest: digest("owner-binding"),
+            protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest),
+          },
+          validationArtifacts: { format: "convax.validation-artifact-set", artifacts: [] },
+          signer: { async sign() { throw new Error("not invoked by source") } },
+        }
+      },
+    })
+    let shared = false
+    let teamCalls = 0
+    const selected = createLocalFirstCurrentLocalReplicaAuthoritySource({
+      localOwner: local,
+      team: {
+        async resolveCurrent() {
+          teamCalls += 1
+          return "pending"
+        },
+      },
+      async teamState() { return shared ? "active" : "missing" },
+    })
+    const request = { scope, actorId: actor, operationId, baseFrontierDigest: causalFrontierDigest(frontier), ownerSchemaDigest }
+    const localEvidence = await selected.resolveCurrent(request)
+    if (typeof localEvidence === "string") throw new Error("local owner should authorize")
+    expect(localEvidence.signerAuthority.kind).toBe("local-project-owner")
+    expect(localEvidence.dependencies.map((entry) => entry.kind)).toEqual([
+      "local-owner-binding",
+      "local-owner-edit-authorization",
+    ])
+    expect(teamCalls).toBe(0)
+    shared = true
+    expect(await selected.resolveCurrent(request)).toBe("pending")
+    expect(teamCalls).toBe(1)
   })
 })

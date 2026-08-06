@@ -55,13 +55,12 @@ import {
   validateCanvasYDoc,
 } from "./ydoc"
 
-const MAGIC = new TextEncoder().encode("CVXCGP02")
+const MAGIC = new TextEncoder().encode("CVXCGP03")
 const MAX_CARRIER_BYTES = 335_544_320
 const INDEX_KEYS = [
   "format", "scope", "checkpointObjectDigest", "fullUpdateDigest", "stateVectorDigest",
-  "canonicalStateDigest", "checkpointAuthorCredentialCoreDigest",
-  "checkpointAuthorReservationReceiptCoreDigest", "checkpointAuthorMembershipSnapshotCoreDigest",
-  "serviceTrustBundleCoreDigest", "ownerSchemaDigest", "canonicalizerDigest",
+  "canonicalStateDigest", "authorAuthorityKind", "authorAuthorityDigest",
+  "ownerSchemaDigest", "canonicalizerDigest",
   "validationArtifactSetDigest", "validationArtifacts", "sections", "totalSectionBytes", "protocolDigest",
 ] as const
 
@@ -74,14 +73,11 @@ export interface CanvasGenesisProofCarrierSectionLocation {
 }
 
 type SingletonSectionKind =
-  | "checkpoint-author-credential"
-  | "checkpoint-author-membership-snapshot"
-  | "checkpoint-author-reservation-receipt"
+  | "checkpoint-author-authority"
   | "checkpoint-canonical-state"
   | "checkpoint-full-update"
   | "checkpoint-state-vector"
   | "checkpoint-wrapper"
-  | "service-trust-bundle"
 
 export type CanvasGenesisProofCarrierSection = CanvasGenesisProofCarrierSectionLocation & Readonly<{
   kind: SingletonSectionKind | "validation-artifact"
@@ -96,10 +92,8 @@ export interface CanvasGenesisProofCarrierIndex {
   readonly fullUpdateDigest: Digest
   readonly stateVectorDigest: Digest
   readonly canonicalStateDigest: Digest
-  readonly checkpointAuthorCredentialCoreDigest: Digest
-  readonly checkpointAuthorReservationReceiptCoreDigest: Digest
-  readonly checkpointAuthorMembershipSnapshotCoreDigest: Digest
-  readonly serviceTrustBundleCoreDigest: Digest
+  readonly authorAuthorityKind: "local-project-owner" | "team-replica"
+  readonly authorAuthorityDigest: Digest
   readonly ownerSchemaDigest: Digest
   readonly canonicalizerDigest: Digest
   readonly validationArtifactSetDigest: Digest
@@ -114,7 +108,7 @@ export interface ValidatedCanvasGenesisIdentity {
   readonly scope: DocumentScope
   readonly identity: CanvasIdentity
   readonly authorActorId: ActorId
-  readonly authorCredentialCoreDigest: Digest
+  readonly authorAuthorityDigest: Digest
 }
 
 export type ValidateCanvasGenesisProofCarrierResult =
@@ -146,10 +140,9 @@ export type ValidateCanvasGenesisProofCarrierResult =
 export interface CanvasGenesisHistoricalAuthorVerificationInput {
   readonly scope: DocumentScope
   readonly checkpoint: ReplicaCheckpoint
-  readonly checkpointAuthorCredentialExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorMembershipSnapshotExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorReservationReceiptExactBytes: Readonly<Uint8Array>
-  readonly serviceTrustBundleExactBytes: Readonly<Uint8Array>
+  readonly authorAuthorityKind: "local-project-owner" | "team-replica"
+  readonly authorAuthorityDigest: Digest
+  readonly authorAuthorityExactBytes: Readonly<Uint8Array>
   readonly validationArtifacts: readonly Readonly<{
     artifact: ValidationArtifactRef
     exactBytes: Readonly<Uint8Array>
@@ -161,7 +154,7 @@ export type CanvasGenesisHistoricalAuthorVerificationResult =
       status: "verified"
       authorActorId: ActorId
       authorReplicaId: ReplicaId
-      authorCredentialCoreDigest: Digest
+      authorAuthorityDigest: Digest
     }>
   | Readonly<{ status: "pending" }>
   | Readonly<{ status: "rejected" }>
@@ -237,14 +230,9 @@ export interface CanvasGenesisBuildAuthor {
   readonly authorReplicaId: ReplicaId
   readonly authorActorId: ActorId
   readonly authorAuthorizationDigest: Digest
-  readonly checkpointAuthorCredentialCoreDigest: Digest
-  readonly checkpointAuthorCredentialExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorMembershipSnapshotCoreDigest: Digest
-  readonly checkpointAuthorMembershipSnapshotExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorReservationReceiptCoreDigest: Digest
-  readonly checkpointAuthorReservationReceiptExactBytes: Readonly<Uint8Array>
-  readonly serviceTrustBundleCoreDigest: Digest
-  readonly serviceTrustBundleExactBytes: Readonly<Uint8Array>
+  readonly authorAuthorityKind: "local-project-owner" | "team-replica"
+  readonly authorAuthorityDigest: Digest
+  readonly authorAuthorityExactBytes: Readonly<Uint8Array>
   readonly validationArtifacts: readonly Readonly<{
     artifact: ValidationArtifactRef
     exactBytes: Readonly<Uint8Array>
@@ -418,7 +406,7 @@ function createVerifier(
     }
     let checkpoint: ReplicaCheckpoint
     try {
-      checkpoint = parseReplicaCheckpoint(decodeExactJcs(decoded.sections[6]!))
+      checkpoint = parseReplicaCheckpoint(decodeExactJcs(decoded.sections[4]!))
       if (
         replicaCheckpointObjectDigest(checkpoint) !== decoded.index.checkpointObjectDigest ||
         !sameScope(checkpoint.core.scope, decoded.index.scope) ||
@@ -429,7 +417,7 @@ function createVerifier(
         checkpoint.core.fullUpdateDigest !== decoded.index.fullUpdateDigest ||
         checkpoint.core.stateVectorDigest !== decoded.index.stateVectorDigest ||
         checkpoint.core.canonicalStateDigest !== decoded.index.canonicalStateDigest ||
-        checkpoint.core.fullUpdateByteLength !== String(decoded.sections[4]!.byteLength) ||
+        checkpoint.core.fullUpdateByteLength !== String(decoded.sections[2]!.byteLength) ||
         checkpoint.core.directParentCheckpointDigests.length !== 0
       ) return reject("canvas-genesis-proof-section-invalid")
     } catch {
@@ -440,13 +428,12 @@ function createVerifier(
       authorResult = authorVerifier.verifyHistoricalAuthor({
         scope: decoded.index.scope,
         checkpoint,
-        checkpointAuthorCredentialExactBytes: new Uint8Array(decoded.sections[0]!),
-        checkpointAuthorMembershipSnapshotExactBytes: new Uint8Array(decoded.sections[1]!),
-        checkpointAuthorReservationReceiptExactBytes: new Uint8Array(decoded.sections[2]!),
-        serviceTrustBundleExactBytes: new Uint8Array(decoded.sections[7]!),
+        authorAuthorityKind: decoded.index.authorAuthorityKind,
+        authorAuthorityDigest: decoded.index.authorAuthorityDigest,
+        authorAuthorityExactBytes: new Uint8Array(decoded.sections[0]!),
         validationArtifacts: decoded.index.validationArtifacts.map((artifact, index) => Object.freeze({
           artifact,
-          exactBytes: new Uint8Array(decoded.sections[index + 8]!),
+          exactBytes: new Uint8Array(decoded.sections[index + 5]!),
         })),
       })
     } catch {
@@ -462,13 +449,13 @@ function createVerifier(
       authorResult.status !== "verified" ||
       parseActorId(authorResult.authorActorId) !== checkpoint.core.authorActorId ||
       parseReplicaId(authorResult.authorReplicaId) !== checkpoint.core.authorReplicaId ||
-      parseDigest(authorResult.authorCredentialCoreDigest) !== decoded.index.checkpointAuthorCredentialCoreDigest
+      parseDigest(authorResult.authorAuthorityDigest) !== decoded.index.authorAuthorityDigest
     ) return reject("canvas-genesis-proof-authority-invalid")
 
     const document = createCanvasReconstructionYDoc()
     try {
-      const fullUpdate = decoded.sections[4]!
-      const stateVector = decoded.sections[5]!
+      const fullUpdate = decoded.sections[2]!
+      const stateVector = decoded.sections[3]!
       applyYjsUpdate(document, fullUpdate, Object.freeze({ format: "convax.canvas-genesis-proof-origin" }))
       if (!sameBytes(encodeFullUpdate(document), fullUpdate) || !sameBytes(encodeStateVector(document), stateVector)) {
         return reject("canvas-genesis-proof-state-invalid")
@@ -483,7 +470,7 @@ function createVerifier(
       const canonicalState = runtime.protocolPort.canonicalStateBytes(document)
       if (
         canonicalState === "rejected" ||
-        !sameBytes(canonicalState, decoded.sections[3]!) ||
+        !sameBytes(canonicalState, decoded.sections[1]!) ||
         computeCanonicalStateDigest(canvasArtifactDigest, canonicalState) !== decoded.index.canonicalStateDigest ||
         yjsUpdateDigest(fullUpdate) !== decoded.index.fullUpdateDigest ||
         stateVectorDigest(stateVector) !== decoded.index.stateVectorDigest
@@ -500,7 +487,7 @@ function createVerifier(
         scope: cloneScope(decoded.index.scope),
         identity: Object.freeze({ ...snapshot.identity }),
         authorActorId: authorResult.authorActorId,
-        authorCredentialCoreDigest: authorResult.authorCredentialCoreDigest,
+        authorAuthorityDigest: authorResult.authorAuthorityDigest,
       })
       return Object.freeze({ status: "validated", exactBytesSha256, canvasArtifactDigest, identity })
     } catch {
@@ -526,14 +513,9 @@ function parseBuildAuthor(author: CanvasGenesisBuildAuthor): ParsedBuildAuthor {
     authorReplicaId: parseReplicaId(author.authorReplicaId),
     authorActorId: parseActorId(author.authorActorId),
     authorAuthorizationDigest: parseDigest(author.authorAuthorizationDigest),
-    checkpointAuthorCredentialCoreDigest: parseDigest(author.checkpointAuthorCredentialCoreDigest),
-    checkpointAuthorCredentialExactBytes: cloneBytes(author.checkpointAuthorCredentialExactBytes),
-    checkpointAuthorMembershipSnapshotCoreDigest: parseDigest(author.checkpointAuthorMembershipSnapshotCoreDigest),
-    checkpointAuthorMembershipSnapshotExactBytes: cloneBytes(author.checkpointAuthorMembershipSnapshotExactBytes),
-    checkpointAuthorReservationReceiptCoreDigest: parseDigest(author.checkpointAuthorReservationReceiptCoreDigest),
-    checkpointAuthorReservationReceiptExactBytes: cloneBytes(author.checkpointAuthorReservationReceiptExactBytes),
-    serviceTrustBundleCoreDigest: parseDigest(author.serviceTrustBundleCoreDigest),
-    serviceTrustBundleExactBytes: cloneBytes(author.serviceTrustBundleExactBytes),
+    authorAuthorityKind: parseAuthorAuthorityKind(author.authorAuthorityKind),
+    authorAuthorityDigest: parseDigest(author.authorAuthorityDigest),
+    authorAuthorityExactBytes: cloneBytes(author.authorAuthorityExactBytes),
     validationArtifacts: Object.freeze(author.validationArtifacts.map((entry) => Object.freeze({
       artifact: parseValidationArtifactSet({ format: "convax.validation-artifact-set", artifacts: [entry.artifact] }).artifacts[0]!,
       exactBytes: cloneBytes(entry.exactBytes),
@@ -552,36 +534,30 @@ function encodeCarrier(input: {
   validationArtifacts: readonly ValidationArtifactRef[]
 }): Uint8Array {
   const sectionBytes = [
-    input.author.checkpointAuthorCredentialExactBytes,
-    input.author.checkpointAuthorMembershipSnapshotExactBytes,
-    input.author.checkpointAuthorReservationReceiptExactBytes,
+    input.author.authorAuthorityExactBytes,
     input.canonicalState,
     input.fullUpdate,
     input.stateVector,
     encodeRestrictedJcs(input.checkpoint),
-    input.author.serviceTrustBundleExactBytes,
     ...input.author.validationArtifacts.map((entry) => entry.exactBytes),
   ].map((bytes) => new Uint8Array(bytes))
   const singleton = [
-    ["checkpoint-author-credential", { kind: "replica-actor-credential-core", coreDigest: input.author.checkpointAuthorCredentialCoreDigest }],
-    ["checkpoint-author-membership-snapshot", { kind: "membership-snapshot-core", coreDigest: input.author.checkpointAuthorMembershipSnapshotCoreDigest }],
-    ["checkpoint-author-reservation-receipt", { kind: "replica-id-reservation-receipt-core", coreDigest: input.author.checkpointAuthorReservationReceiptCoreDigest }],
+    ["checkpoint-author-authority", { kind: "canvas-genesis-author-authority", authorityKind: input.author.authorAuthorityKind, authorityDigest: input.author.authorAuthorityDigest }],
     ["checkpoint-canonical-state", { kind: "canonical-state", canonicalStateDigest: input.checkpoint.core.canonicalStateDigest }],
     ["checkpoint-full-update", { kind: "yjs-update", fullUpdateDigest: input.checkpoint.core.fullUpdateDigest }],
     ["checkpoint-state-vector", { kind: "state-vector", stateVectorDigest: input.checkpoint.core.stateVectorDigest }],
     ["checkpoint-wrapper", { kind: "replica-checkpoint-object", checkpointObjectDigest: input.checkpointObjectDigest }],
-    ["service-trust-bundle", { kind: "service-trust-bundle-core", coreDigest: input.author.serviceTrustBundleCoreDigest }],
   ] as const
   let offset = 0n
   const sections: CanvasGenesisProofCarrierSection[] = []
   for (let index = 0; index < sectionBytes.length; index += 1) {
     const bytes = sectionBytes[index]!
-    const semantic = index < 8
+    const semantic = index < 5
       ? singleton[index]!
-      : ["validation-artifact", { kind: "validation-artifact", artifact: input.validationArtifacts[index - 8]! }] as const
+      : ["validation-artifact", { kind: "validation-artifact", artifact: input.validationArtifacts[index - 5]! }] as const
     sections.push(Object.freeze({
       kind: semantic[0],
-      ordinal: parseUint32(String(index < 8 ? 0 : index - 8)),
+      ordinal: parseUint32(String(index < 5 ? 0 : index - 5)),
       subject: Object.freeze(semantic[1]),
       byteOffset: parseUint64(offset.toString()),
       byteLength: parseUint64(String(bytes.byteLength)),
@@ -596,10 +572,8 @@ function encodeCarrier(input: {
     fullUpdateDigest: input.checkpoint.core.fullUpdateDigest,
     stateVectorDigest: input.checkpoint.core.stateVectorDigest,
     canonicalStateDigest: input.checkpoint.core.canonicalStateDigest,
-    checkpointAuthorCredentialCoreDigest: input.author.checkpointAuthorCredentialCoreDigest,
-    checkpointAuthorReservationReceiptCoreDigest: input.author.checkpointAuthorReservationReceiptCoreDigest,
-    checkpointAuthorMembershipSnapshotCoreDigest: input.author.checkpointAuthorMembershipSnapshotCoreDigest,
-    serviceTrustBundleCoreDigest: input.author.serviceTrustBundleCoreDigest,
+    authorAuthorityKind: input.author.authorAuthorityKind,
+    authorAuthorityDigest: input.author.authorAuthorityDigest,
     ownerSchemaDigest: input.checkpoint.core.schemaDigest,
     canonicalizerDigest: input.checkpoint.core.canonicalizerDigest,
     validationArtifactSetDigest: input.checkpoint.core.validationArtifactSetDigest,
@@ -659,7 +633,7 @@ function parseCarrierIndex(value: unknown): CanvasGenesisProofCarrierIndex {
   }).artifacts
   if (artifacts.length < 4) throw new TypeError("Canvas genesis artifact set is incomplete")
   assertDenseArray(value.sections, "Canvas genesis sections")
-  if (value.sections.length !== 8 + artifacts.length) throw new TypeError("Canvas genesis section count is invalid")
+  if (value.sections.length !== 5 + artifacts.length) throw new TypeError("Canvas genesis section count is invalid")
   const sections = value.sections.map(parseSection)
   let offset = 0n
   for (const section of sections) {
@@ -679,10 +653,8 @@ function parseCarrierIndex(value: unknown): CanvasGenesisProofCarrierIndex {
     fullUpdateDigest: parseDigest(value.fullUpdateDigest),
     stateVectorDigest: parseDigest(value.stateVectorDigest),
     canonicalStateDigest: parseDigest(value.canonicalStateDigest),
-    checkpointAuthorCredentialCoreDigest: parseDigest(value.checkpointAuthorCredentialCoreDigest),
-    checkpointAuthorReservationReceiptCoreDigest: parseDigest(value.checkpointAuthorReservationReceiptCoreDigest),
-    checkpointAuthorMembershipSnapshotCoreDigest: parseDigest(value.checkpointAuthorMembershipSnapshotCoreDigest),
-    serviceTrustBundleCoreDigest: parseDigest(value.serviceTrustBundleCoreDigest),
+    authorAuthorityKind: parseAuthorAuthorityKind(value.authorAuthorityKind),
+    authorAuthorityDigest: parseDigest(value.authorAuthorityDigest),
     ownerSchemaDigest: parseDigest(value.ownerSchemaDigest),
     canonicalizerDigest: parseDigest(value.canonicalizerDigest),
     validationArtifactSetDigest,
@@ -696,9 +668,8 @@ function parseCarrierIndex(value: unknown): CanvasGenesisProofCarrierIndex {
 function parseSection(value: unknown): CanvasGenesisProofCarrierSection {
   assertExactKeys(value, ["kind", "ordinal", "subject", "byteOffset", "byteLength", "sha256"], "Canvas genesis section")
   const kinds = new Set<string>([
-    "checkpoint-author-credential", "checkpoint-author-membership-snapshot",
-    "checkpoint-author-reservation-receipt", "checkpoint-canonical-state", "checkpoint-full-update",
-    "checkpoint-state-vector", "checkpoint-wrapper", "service-trust-bundle", "validation-artifact",
+    "checkpoint-author-authority", "checkpoint-canonical-state", "checkpoint-full-update",
+    "checkpoint-state-vector", "checkpoint-wrapper", "validation-artifact",
   ])
   if (typeof value.kind !== "string" || !kinds.has(value.kind)) throw new TypeError("unknown section kind")
   return Object.freeze({
@@ -712,16 +683,14 @@ function parseSection(value: unknown): CanvasGenesisProofCarrierSection {
 }
 
 function parseSubject(kind: string, value: unknown): Readonly<Record<string, unknown>> {
-  const coreKind = {
-    "checkpoint-author-credential": "replica-actor-credential-core",
-    "checkpoint-author-membership-snapshot": "membership-snapshot-core",
-    "checkpoint-author-reservation-receipt": "replica-id-reservation-receipt-core",
-    "service-trust-bundle": "service-trust-bundle-core",
-  }[kind]
-  if (coreKind !== undefined) {
-    assertExactKeys(value, ["kind", "coreDigest"], "Canvas genesis core subject")
-    if (value.kind !== coreKind) throw new TypeError("wrong core subject kind")
-    return Object.freeze({ kind: value.kind, coreDigest: parseDigest(value.coreDigest) })
+  if (kind === "checkpoint-author-authority") {
+    assertExactKeys(value, ["kind", "authorityKind", "authorityDigest"], "Canvas genesis authority subject")
+    if (value.kind !== "canvas-genesis-author-authority") throw new TypeError("wrong authority subject kind")
+    return Object.freeze({
+      kind: value.kind,
+      authorityKind: parseAuthorAuthorityKind(value.authorityKind),
+      authorityDigest: parseDigest(value.authorityDigest),
+    })
   }
   const key = {
     "checkpoint-canonical-state": ["canonical-state", "canonicalStateDigest"],
@@ -742,33 +711,39 @@ function parseSubject(kind: string, value: unknown): Readonly<Record<string, unk
 
 function validateSectionSubjects(decoded: DecodedCarrier): void {
   const expectedKinds = [
-    "checkpoint-author-credential", "checkpoint-author-membership-snapshot",
-    "checkpoint-author-reservation-receipt", "checkpoint-canonical-state", "checkpoint-full-update",
-    "checkpoint-state-vector", "checkpoint-wrapper", "service-trust-bundle",
+    "checkpoint-author-authority", "checkpoint-canonical-state", "checkpoint-full-update",
+    "checkpoint-state-vector", "checkpoint-wrapper",
   ] as const
   expectedKinds.forEach((kind, index) => {
     const section = decoded.index.sections[index]!
     if (section.kind !== kind || section.ordinal !== "0") throw new TypeError("singleton order mismatch")
   })
   const mirrors: readonly [number, string, Digest][] = [
-    [0, "coreDigest", decoded.index.checkpointAuthorCredentialCoreDigest],
-    [1, "coreDigest", decoded.index.checkpointAuthorMembershipSnapshotCoreDigest],
-    [2, "coreDigest", decoded.index.checkpointAuthorReservationReceiptCoreDigest],
-    [3, "canonicalStateDigest", decoded.index.canonicalStateDigest],
-    [4, "fullUpdateDigest", decoded.index.fullUpdateDigest],
-    [5, "stateVectorDigest", decoded.index.stateVectorDigest],
-    [6, "checkpointObjectDigest", decoded.index.checkpointObjectDigest],
-    [7, "coreDigest", decoded.index.serviceTrustBundleCoreDigest],
+    [0, "authorityDigest", decoded.index.authorAuthorityDigest],
+    [1, "canonicalStateDigest", decoded.index.canonicalStateDigest],
+    [2, "fullUpdateDigest", decoded.index.fullUpdateDigest],
+    [3, "stateVectorDigest", decoded.index.stateVectorDigest],
+    [4, "checkpointObjectDigest", decoded.index.checkpointObjectDigest],
   ]
   for (const [index, key, digest] of mirrors) if (decoded.index.sections[index]!.subject[key] !== digest) throw new TypeError("subject mirror mismatch")
+  if (decoded.index.sections[0]!.subject.authorityKind !== decoded.index.authorAuthorityKind) {
+    throw new TypeError("authority kind mirror mismatch")
+  }
   decoded.index.validationArtifacts.forEach((artifact, ordinal) => {
-    const section = decoded.index.sections[ordinal + 8]!
+    const section = decoded.index.sections[ordinal + 5]!
     if (
       section.kind !== "validation-artifact" ||
       section.ordinal !== String(ordinal) ||
       !sameJcs(section.subject.artifact, artifact)
     ) throw new TypeError("validation artifact section mismatch")
   })
+}
+
+function parseAuthorAuthorityKind(value: unknown): "local-project-owner" | "team-replica" {
+  if (value !== "local-project-owner" && value !== "team-replica") {
+    throw new TypeError("Canvas genesis author authority kind is invalid")
+  }
+  return value
 }
 
 function selectedCanvasArtifact(authority: CurrentProtocolAuthority): Digest {

@@ -201,9 +201,15 @@ import {
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 import { loadCurrentCollaborationProtocol } from "./current-protocol-loader"
 import {
+  createLocalFirstCurrentLocalReplicaAuthoritySource,
+  createLocalProjectOwnerCurrentLocalReplicaAuthoritySource,
   createOfflineCurrentLocalReplicaAuthoritySource,
   createProjectCollaborationMaterializerRegistry,
 } from "./collaboration-production-runtime"
+import {
+  createCurrentIncomingReplicaAuthoritySource,
+  createLocalProjectOwnerIncomingReplicaAuthoritySource,
+} from "./local-project-owner-incoming-authority"
 import {
   createLocalReplicaEnrollmentVerifierFactory,
   NodeDurableLocalReplicaAuthorityCache,
@@ -220,10 +226,20 @@ import {
 import type { MainProjectCanvasRouteRuntimeRegistry } from "./project-canvas-route-runtime-registry"
 import {
   createMainCanvasCollaborationComposition,
+  createMainCanvasOwnerRuntime,
   type MainCanvasCollaborationComposition,
 } from "./main-canvas-collaboration-composition"
-import { createLocalBlobProjectIndexFactPorts } from "./project-index-external-facts"
+import {
+  createLocalBlobProjectIndexFactPorts,
+  createProjectIndexCanvasGenesisFactPorts,
+} from "./project-index-external-facts"
+import {
+  createCanvasDocumentGenesisAuthority,
+  createCanvasGenesisNodeReplicaHeadMaterializer,
+} from "./canvas-document-genesis"
+import { createLocalProjectOwnerCanvasGenesisAuthority } from "./local-project-owner-canvas-genesis"
 import { createProductionCanvasApplicationCommandAdapter } from "./canvas-application-command-adapter"
+import { createProjectIndexBackedCanvasExternalFactAuthority } from "./canvas-route-external-facts"
 import { registerCanvasSessionIpc } from "./canvas-session-ipc"
 import {
   registerProjectTeamCollaborationIpc,
@@ -819,11 +835,60 @@ function startApplication() {
       gate: collaborationProjects,
       projects: collaborationProjects,
     })
-    const localCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySource({
+    const teamLocalCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySource({
       cache: collaborationAuthorityCache,
       vault: collaborationReplicaVault,
     })
-    const incomingCollaborationAuthority = createLocalTeamIncomingReplicaAuthoritySource(collaborationTeamStore)
+    const resolveLocalProjectOwner = async (identity: {
+      readonly projectId: import("@convax/collaboration").ProjectId
+      readonly projectEpoch: import("@convax/collaboration").Id128
+    }) => {
+      const projectRoot = await projectManager.resolveProjectRoot({ projectId: identity.projectId })
+      const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
+        protocolDigest: collaborationAuthority.protocolDigest,
+        schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+        uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
+      })
+      if (
+        manifest.projectIndexScope.projectId !== identity.projectId ||
+        manifest.projectIndexScope.projectEpoch !== identity.projectEpoch
+      ) return "rejected" as const
+      return localProjectOwnerAuthority.resolveExact({
+        projectId: identity.projectId,
+        projectEpoch: identity.projectEpoch,
+        initializationAuthorityDigest: manifest.initializationAuthorityDigest,
+      })
+    }
+    const localOwnerCollaborationAuthority = createLocalProjectOwnerCurrentLocalReplicaAuthoritySource({
+      protocolDigest: collaborationAuthority.protocolDigest,
+      resolveOwner: resolveLocalProjectOwner,
+    })
+    const localCollaborationAuthority = createLocalFirstCurrentLocalReplicaAuthoritySource({
+      team: teamLocalCollaborationAuthority,
+      localOwner: localOwnerCollaborationAuthority,
+      async teamState(projectId) {
+        const state = await collaborationTeamStore.open(projectId)
+        return state === "missing" ? "missing" : state === "rejected" ? "rejected" : "active"
+      },
+    })
+    const incomingCollaborationAuthority = createCurrentIncomingReplicaAuthoritySource({
+      localOwner: createLocalProjectOwnerIncomingReplicaAuthoritySource({
+        protocolDigest: collaborationAuthority.protocolDigest,
+        resolveOwner: resolveLocalProjectOwner,
+      }),
+      team: createLocalTeamIncomingReplicaAuthoritySource(collaborationTeamStore),
+    })
+    const canvasOwner = createMainCanvasOwnerRuntime(collaborationAuthority)
+    const localCanvasGenesisAuthor = createLocalProjectOwnerCanvasGenesisAuthority({
+      authority: collaborationAuthority,
+      resolveOwner: resolveLocalProjectOwner,
+    })
+    const canvasGenesisAuthority = createCanvasDocumentGenesisAuthority({
+      authority: collaborationAuthority,
+      runtime: canvasOwner,
+      historicalAuthorVerifier: localCanvasGenesisAuthor.historicalAuthorVerifier,
+      authorProvider: localCanvasGenesisAuthor.authorProvider,
+    })
     collaborationProjectIndexes = new MainProjectIndexRuntimeRegistry({
       authority: collaborationAuthority,
       projects: collaborationProjects,
@@ -837,18 +902,54 @@ function startApplication() {
       signatureVerifier: collaborationSignatureVerifier,
       createOperationId: createCollaborationId,
       createShardEpoch: createCollaborationId,
-      describeProjectIndex({ scope, owner, blobs }) {
-        const factPorts = createLocalBlobProjectIndexFactPorts({
+      describeProjectIndex({ scope, owner, project, blobs }) {
+        const blobFactPorts = createLocalBlobProjectIndexFactPorts({
           factory: owner.externalFactPortFactory,
           scope,
           blobs,
         })
+        const genesisFactPorts = createProjectIndexCanvasGenesisFactPorts({
+          factory: owner.externalFactPortFactory,
+          scope,
+          persistence: project.persistence,
+          genesisVerifier: canvasGenesisAuthority.genesisVerifier,
+          proofVerifier: canvasGenesisAuthority.proofVerifier,
+          preflightAuthor: canvasGenesisAuthority.preflight,
+          async withGenesisMaterializer(scope, operation) {
+            const release = collaborationMaterializers.register({
+              scope,
+              materializer: createCanvasGenesisNodeReplicaHeadMaterializer({
+                authority: collaborationAuthority,
+                runtime: canvasOwner,
+                scope,
+              }),
+            })
+            try {
+              return await operation()
+            } finally {
+              release()
+            }
+          },
+        })
+        const selectFacts = (dependencies: import("@convax/collaboration").OwnerIntentDependencies<"project-index">) =>
+          dependencies.externalFacts.every((fact) => fact.kind === "canvas-genesis-currentness")
+            ? genesisFactPorts
+            : blobFactPorts
         return {
           createDocument: createProjectIndexReconstructionYDoc,
-          incomingFacts: factPorts.incomingFacts,
+          incomingFacts: Object.freeze({
+            resolve(request: Parameters<typeof genesisFactPorts.incomingFacts.resolve>[0]) {
+              return selectFacts(request.declaredDependencies as import("@convax/collaboration").OwnerIntentDependencies<"project-index">)
+                .incomingFacts.resolve(request)
+            },
+          }),
           requiredBlobDigests: requiredProjectIndexBlobDigests,
-          facts: factPorts.facts,
-          canvasGenesis: factPorts.canvasGenesis,
+          facts: Object.freeze({
+            resolve(request: Parameters<typeof genesisFactPorts.facts.resolve>[0]) {
+              return selectFacts(request.dependencies).facts.resolve(request)
+            },
+          }),
+          canvasGenesis: genesisFactPorts.canvasGenesis,
         }
       },
     })
@@ -857,6 +958,7 @@ function startApplication() {
     } = {}
     collaborationCanvasComposition = createMainCanvasCollaborationComposition({
       authority: collaborationAuthority,
+      canvasOwner,
       projects: collaborationProjects,
       projectIndexes: collaborationProjectIndexes,
       materializers: collaborationMaterializers,
@@ -876,6 +978,9 @@ function startApplication() {
           return authority.resolveArtifact(ref)
         },
       },
+      factAuthority: createProjectIndexBackedCanvasExternalFactAuthority({
+        currentResources: collaborationProjectIndexes,
+      }),
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
     collaborationCanvasRoutes = collaborationCanvasComposition.routes

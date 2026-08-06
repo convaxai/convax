@@ -133,10 +133,12 @@ This package owns the durable Project aggregate and native Project adapters.
   local bootstrap as unteamed only after Project/node proves its exact manifest-bound
   empty genesis and closed native inventory; any frame, route, unknown path, Team
   identity, or authority mismatch remains closed and requires rollover authority.
-  A frozen retired V3 local tree is a separate explicit-reset case: detect its two
-  exact local marker files without decoding old frames, require the Desktop Team
-  authority store to report `missing`, and stage a fresh epoch whose owner binding
-  becomes current only after the new tree and old-tree archive are both verified.
+  An explicit user-confirmed unshared-local reset never decodes unsupported private
+  bytes or requires an empty bootstrap. It requires exact `missing` from the Desktop
+  Team authority store and no Team/control or sharing-handoff namespace in the
+  inventoried Project tree, then stages a fresh epoch whose owner binding becomes
+  current only after the new tree and old-tree archive are both verified. Any Team
+  record, rejected Team state, or Team namespace requires control-plane rollover.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts named by
   the one current protocol descriptor. A missing or mismatched artifact or genuine
   owner contradiction stops decode, reset, or mutation rather than selecting an
@@ -147,6 +149,10 @@ This package owns the durable Project aggregate and native Project adapters.
   creates its current Canvas genesis once. There is no earlier genesis, protocol
   promotion, bridge, historical head, or successor claim, and sharing uses the same
   current Project and Canvas scopes without switching protocol.
+- For an unshared Project, ProjectIndex mutation and the atomic Canvas route command
+  use the durable local-owner authority. Canvas genesis preflight/staging must be
+  available from that same owner; absence of Team state is not a pending enrollment
+  condition.
 - Local-owner bindings, edit authorizations, genesis evidence, and device-level
   sharing tombstones are durable records of that one protocol. Their presence never
   selects a protocol, downgrades signing authority, or authorizes a downgrade from a

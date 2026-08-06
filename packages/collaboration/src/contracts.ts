@@ -111,6 +111,8 @@ export interface ReplicaActorHeadSet {
 }
 
 export type CausalDependencyKind =
+  | "local-owner-binding"
+  | "local-owner-edit-authorization"
   | "membership-snapshot"
   | "replica-actor-credential"
   | "replica-edit-authorization"
@@ -128,7 +130,33 @@ export interface CausalDependencyRef {
   readonly digest: Digest
 }
 
-export interface CausalSignerAuthority {
+export interface LocalProjectOwnerSignerAuthority {
+  readonly kind: "local-project-owner"
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly ownerBindingDigest: Digest
+  readonly ownerEditAuthorizationCoreDigest: Digest
+}
+
+/**
+ * Scope-exact authorization derived from the durable local Project owner
+ * binding. The frame signature by the bound owner key is the authorization
+ * signature; this core prevents that authority from being replayed across a
+ * Project epoch, shard, owner schema, or protocol.
+ */
+export interface LocalOwnerEditAuthorizationCore {
+  readonly format: "convax.local-owner-edit-authorization-core"
+  readonly scope: DocumentScope
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly ownerBindingDigest: Digest
+  readonly protocolDigest: Digest
+  readonly ownerSchemaDigest: Digest
+  readonly expiryPolicy: "none"
+}
+
+export interface TeamReplicaSignerAuthority {
+  readonly kind: "team-replica"
   readonly memberId: MemberId
   readonly replicaId: ReplicaId
   readonly actorId: ActorId
@@ -138,6 +166,10 @@ export interface CausalSignerAuthority {
   readonly replicaActorCredentialCoreDigest: Digest
   readonly replicaEditAuthorizationCoreDigest: Digest
 }
+
+export type CausalSignerAuthority =
+  | LocalProjectOwnerSignerAuthority
+  | TeamReplicaSignerAuthority
 
 export interface CausalContext {
   readonly format: "convax.causal-context"
@@ -222,9 +254,8 @@ export interface CausalEditCore {
   readonly ownerSchemaDigest: Digest
   readonly canonicalizerDigest: Digest
   readonly validationArtifactSetDigest: Digest
-  readonly membershipSnapshotDigest: Digest
-  readonly replicaActorCredentialCoreDigest: Digest
-  readonly replicaEditAuthorizationCoreDigest: Digest
+  readonly signerAuthorityKind: CausalSignerAuthority["kind"]
+  readonly signerAuthorityDigest: Digest
 }
 
 export interface CausalEditFrameHeader {

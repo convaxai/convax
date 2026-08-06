@@ -49,6 +49,7 @@ import {
   assertSameScope,
   parseActualWriteEvidence,
   parseCausalContext,
+  causalSignerAuthorityDigest,
   parseCausalFrontier,
   parseDocumentScope,
   parseReplicaActorHeadSet,
@@ -375,9 +376,8 @@ export class CollaborationKernel {
           ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
           canonicalizerDigest: this.options.owner.protocolPort.canonicalizerDigest,
           validationArtifactSetDigest,
-          membershipSnapshotDigest: authority.signerAuthority.membershipSnapshotDigest,
-          replicaActorCredentialCoreDigest: authority.signerAuthority.replicaActorCredentialCoreDigest,
-          replicaEditAuthorizationCoreDigest: authority.signerAuthority.replicaEditAuthorizationCoreDigest,
+          signerAuthorityKind: authority.signerAuthority.kind,
+          signerAuthorityDigest: causalSignerAuthorityDigest(authority.signerAuthority),
         })
         const header = await this.codec.signCore(core, authority.signer)
         const bytes = this.codec.encodeFrame({

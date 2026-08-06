@@ -143,7 +143,7 @@ export function createLocalBlobProjectIndexFactPorts(input: {
 
 /**
  * Exact local ProjectIndex -> Canvas genesis bridge. It owns no Canvas schema:
- * CVXCGP02 build/validation stays behind the Canvas verifier, while Project owns
+ * Current carrier build/validation stays behind the Canvas verifier, while Project owns
  * the request codec and native Project persistence owns the sole durable bytes.
  */
 export function createProjectIndexCanvasGenesisFactPorts(input: {
@@ -160,6 +160,10 @@ export function createProjectIndexCanvasGenesisFactPorts(input: {
     readonly projectEpoch: DocumentScope["projectEpoch"]
     readonly signal?: AbortSignal
   }) => Promise<"ready" | "pending" | "rejected">
+  readonly withGenesisMaterializer: <Result>(
+    scope: DocumentScope & { readonly docKind: "canvas" },
+    operation: () => Promise<Result>,
+  ) => Promise<Result>
 }): Readonly<{
   facts: ProjectIndexFactResolutionPort
   incomingFacts: IncomingOwnerFactResolverPort
@@ -263,13 +267,14 @@ export function createProjectIndexCanvasGenesisFactPorts(input: {
     },
     async stageCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPort["stageCanvasGenesis"]>[0]) {
       if (!sameProjectEpoch(request.scope, projectIndexScope)) return "rejected"
-      const staged = await stageDurableProjectDocumentGenesis({
-        scope: request.scope,
-        predecessor: request.predecessor,
-        verifier: input.genesisVerifier,
-        store: input.persistence,
-        signal: request.signal,
-      })
+      const staged = await input.withGenesisMaterializer(request.scope, () =>
+        stageDurableProjectDocumentGenesis({
+          scope: request.scope,
+          predecessor: request.predecessor,
+          verifier: input.genesisVerifier,
+          store: input.persistence,
+          signal: request.signal,
+        }))
       if (typeof staged === "string") return staged
       return Object.freeze({
         predecessorFrameDigest: staged.predecessorFrameDigest,

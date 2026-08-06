@@ -58,6 +58,7 @@ export interface DurableLocalProjectOwnerBinding extends Omit<LocalProjectOwnerC
 
 export interface ResolvedLocalProjectOwnerAuthority {
   readonly binding: DurableLocalProjectOwnerBinding
+  readonly bindingExactBytes: Readonly<Uint8Array>
   readonly signer: ReplicaSignerPort
   readonly validationArtifacts: ValidationArtifactSet
 }
@@ -311,7 +312,12 @@ export class NodeDurableLocalProjectOwnerAuthority
     if (signer === "missing" || signer === "unavailable" || signer === "rejected") {
       throw new Error(`Local Project owner vault is ${signer}`)
     }
-    return Object.freeze({ binding, signer, validationArtifacts: this.validationArtifacts })
+    return Object.freeze({
+      binding,
+      bindingExactBytes: new Uint8Array(bytes),
+      signer,
+      validationArtifacts: this.validationArtifacts,
+    })
   }
 
   private async assertDurableProjectRoot(projectId: ProjectId, projectRoot: string): Promise<void> {
@@ -421,6 +427,30 @@ export class NodeDurableLocalProjectOwnerAuthority
 }
 
 type ExpectedAuthority = ReturnType<NodeDurableLocalProjectOwnerAuthority["expectedAuthority"]>
+
+export function parseDurableLocalProjectOwnerBindingExact(
+  bytes: Uint8Array,
+  expected: Readonly<{
+    projectId: ProjectId
+    projectEpoch: Id128
+    protocolDigest: Digest
+    schemaDigest: Digest
+    uriProtocolDigest: Digest
+    validationArtifactSetDigest: Digest
+  }>,
+): DurableLocalProjectOwnerBinding {
+  const binding = parseBindingExact(bytes, {
+    projectId: parseProjectId(expected.projectId),
+    protocolDigest: parseDigest(expected.protocolDigest),
+    schemaDigest: parseDigest(expected.schemaDigest),
+    uriProtocolDigest: parseDigest(expected.uriProtocolDigest),
+    validationArtifactSetDigest: parseDigest(expected.validationArtifactSetDigest),
+  })
+  if (binding.projectEpoch !== parseId128(expected.projectEpoch)) {
+    throw new Error("Local Project owner binding crossed Project epoch")
+  }
+  return binding
+}
 
 function parseClaimExact(bytes: Uint8Array, expected: ExpectedAuthority): LocalProjectOwnerClaim {
   const value = decodeRestrictedJcs(bytes)

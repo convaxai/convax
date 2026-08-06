@@ -1,4 +1,11 @@
-import { documentScopeDigest } from "@convax/collaboration"
+import {
+  documentScopeDigest,
+  localOwnerEditAuthorizationCoreDigest,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
+  parseReplicaId,
+} from "@convax/collaboration"
 import type {
   ActorId,
   CollaborationKernelPorts,
@@ -9,6 +16,7 @@ import type {
   DocumentScope,
   IncomingOwnerFactResolverPort,
   PublicKey,
+  ProjectId,
   ReplicaSignerPort,
   CurrentProtocolAuthority,
   YjsDocumentFactory,
@@ -75,6 +83,90 @@ export function createOfflineCurrentLocalReplicaAuthoritySource(input: {
     },
   }
   return Object.freeze(source)
+}
+
+export interface LocalProjectOwnerMutationAuthority {
+  readonly binding: Readonly<{
+    readonly projectId: ProjectId
+    readonly projectEpoch: DocumentScope["projectEpoch"]
+    readonly replicaId: CurrentLocalReplicaAuthorityEvidence["signerAuthority"]["replicaId"]
+    readonly actorId: ActorId
+    readonly bindingDigest: Digest
+    readonly protocolDigest: Digest
+  }>
+  readonly signer: ReplicaSignerPort
+  readonly validationArtifacts: CurrentLocalReplicaAuthorityEvidence["validationArtifacts"]
+}
+
+/** Unshared Projects authorize edits directly from their durable local owner. */
+export function createLocalProjectOwnerCurrentLocalReplicaAuthoritySource(input: {
+  readonly protocolDigest: Digest
+  resolveOwner(scope: DocumentScope): Promise<
+    LocalProjectOwnerMutationAuthority | "missing" | "rejected"
+  >
+}): CurrentLocalReplicaAuthoritySource {
+  const protocolDigest = parseDigest(input.protocolDigest)
+  return Object.freeze({
+    async resolveCurrent(request: Parameters<CurrentLocalReplicaAuthoritySource["resolveCurrent"]>[0]) {
+      const scope = parseDocumentScope(request.scope)
+      const owner = await input.resolveOwner(scope)
+      if (owner === "missing" || owner === "rejected") return owner === "missing" ? "pending" : owner
+      const binding = owner.binding
+      if (
+        binding.projectId !== scope.projectId ||
+        binding.projectEpoch !== scope.projectEpoch ||
+        parseActorId(binding.actorId) !== parseActorId(request.actorId) ||
+        parseDigest(binding.protocolDigest) !== protocolDigest
+      ) return "rejected"
+      const authorizationCore = Object.freeze({
+        format: "convax.local-owner-edit-authorization-core" as const,
+        scope,
+        replicaId: parseReplicaId(binding.replicaId),
+        actorId: parseActorId(binding.actorId),
+        ownerBindingDigest: parseDigest(binding.bindingDigest),
+        protocolDigest,
+        ownerSchemaDigest: parseDigest(request.ownerSchemaDigest),
+        expiryPolicy: "none" as const,
+      })
+      const authorizationDigest = localOwnerEditAuthorizationCoreDigest(authorizationCore)
+      return Object.freeze({
+        scope,
+        operationId: request.operationId,
+        baseFrontierDigest: request.baseFrontierDigest,
+        ownerSchemaDigest: request.ownerSchemaDigest,
+        signerAuthority: Object.freeze({
+          kind: "local-project-owner" as const,
+          replicaId: authorizationCore.replicaId,
+          actorId: authorizationCore.actorId,
+          ownerBindingDigest: authorizationCore.ownerBindingDigest,
+          ownerEditAuthorizationCoreDigest: authorizationDigest,
+        }),
+        dependencies: Object.freeze([
+          Object.freeze({ kind: "local-owner-binding" as const, digest: authorizationCore.ownerBindingDigest }),
+          Object.freeze({ kind: "local-owner-edit-authorization" as const, digest: authorizationDigest }),
+        ]),
+        validationArtifacts: owner.validationArtifacts,
+        signer: owner.signer,
+      })
+    },
+  })
+}
+
+/** A durable Team binding disables new local-owner writes; absence keeps local-first editing. */
+export function createLocalFirstCurrentLocalReplicaAuthoritySource(input: {
+  readonly team: CurrentLocalReplicaAuthoritySource
+  readonly localOwner: CurrentLocalReplicaAuthoritySource
+  teamState(projectId: ProjectId): Promise<"missing" | "active" | "rejected">
+}): CurrentLocalReplicaAuthoritySource {
+  return Object.freeze({
+    async resolveCurrent(request: Parameters<CurrentLocalReplicaAuthoritySource["resolveCurrent"]>[0]) {
+      const state = await input.teamState(request.scope.projectId)
+      if (state === "rejected") return "rejected"
+      return state === "active"
+        ? input.team.resolveCurrent(request)
+        : input.localOwner.resolveCurrent(request)
+    },
+  })
 }
 
 export interface MainCollaborationProductionRuntime<K extends DocumentOwnerKind> {

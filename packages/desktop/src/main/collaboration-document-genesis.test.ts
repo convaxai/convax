@@ -58,7 +58,7 @@ const predecessor = Object.freeze({
 })
 
 describe("Desktop wiring to the Project-owned document genesis barrier", () => {
-  test("stages the exact Canvas CVXCGP02 candidate through the real Node sole-writer barrier", async () => {
+  test("stages the exact current Canvas genesis candidate through the real Node sole-writer barrier", async () => {
     const authority = await loadHistoricalTestAuthority()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
       .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
@@ -71,7 +71,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
           status: "verified",
           authorActorId: author.authorActorId,
           authorReplicaId: author.authorReplicaId,
-          authorCredentialCoreDigest: author.checkpointAuthorCredentialCoreDigest,
+          authorAuthorityDigest: author.authorAuthorityDigest,
         }),
       },
     })
@@ -109,7 +109,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
       if (typeof result === "string") return
       expect(result.predecessorFrameDigest).toBe(predecessor.frame.frameDigest)
       const retained = await store.readGenesisProof(canvasScope, result.checkpointObjectDigest)
-      expect(new TextDecoder().decode(retained.slice(0, 8))).toBe("CVXCGP02")
+      expect(new TextDecoder().decode(retained.slice(0, 8))).toBe("CVXCGP03")
       expect(await store.loadReplicaHead(canvasScope)).toMatchObject({ headDigest: result.durableHeadDigest })
     } finally {
       store.dispose()
@@ -119,7 +119,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
 
   test("copies verified bytes and returns only the sole-writer durable identity", async () => {
     const checkpoint = bytes.encode("checkpoint-wrapper")
-    const carrier = bytes.encode("CVXCGP02-carrier")
+    const carrier = bytes.encode("CVXCGP03-carrier")
     const acceptedBase = base(canvasScope)
     let installedCheckpoint: Uint8Array | undefined
     let installedCarrier: Uint8Array | undefined
@@ -209,14 +209,9 @@ function canvasGenesisAuthor(authority: import("@convax/collaboration").CurrentP
     authorReplicaId: parseReplicaId("replica_00000001"),
     authorActorId: parseActorId(encodedIdentity(13, 32)),
     authorAuthorizationDigest: digest("authorization"),
-    checkpointAuthorCredentialCoreDigest: digest("credential-core"),
-    checkpointAuthorCredentialExactBytes: bytes.encode("credential"),
-    checkpointAuthorMembershipSnapshotCoreDigest: digest("membership-core"),
-    checkpointAuthorMembershipSnapshotExactBytes: bytes.encode("membership"),
-    checkpointAuthorReservationReceiptCoreDigest: digest("reservation-core"),
-    checkpointAuthorReservationReceiptExactBytes: bytes.encode("reservation"),
-    serviceTrustBundleCoreDigest: digest("trust-core"),
-    serviceTrustBundleExactBytes: bytes.encode("trust"),
+    authorAuthorityKind: "team-replica",
+    authorAuthorityDigest: digest("authority"),
+    authorAuthorityExactBytes: bytes.encode("authority"),
     validationArtifacts: Object.freeze([
       artifact("canvas", "canvas-schema"),
       artifact("control-plane", "control-plane"),

@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto"
-import fs from "node:fs/promises"
 import path from "node:path"
 import {
   encodeRestrictedJcs,
@@ -29,10 +28,7 @@ import {
   type ProjectResetPreparedAuthority,
 } from "@convax/project/node"
 
-import {
-  initializeLocalOwnerProjectIndexNativeStore,
-  verifyPristineLocalOwnerProjectIndexNativeStore,
-} from "./main-project-index-runtime-registry"
+import { initializeLocalOwnerProjectIndexNativeStore } from "./main-project-index-runtime-registry"
 import {
   type NodeDurableLocalProjectOwnerAuthority,
   type PreparedLocalProjectOwnerReset,
@@ -50,9 +46,9 @@ export class TeamProjectResetUnavailableError extends Error {
 }
 
 /**
- * Desktop edge for the frozen unteamed reset branch. It supplies only the
- * pre-bound OS-vault principal and native composition; Project owns the reset
- * record codec, tree swap, and empty ProjectIndex schema.
+ * Desktop edge for the explicit unshared-local reset branch. It supplies only a
+ * freshly prepared OS-vault principal and native composition; Project owns the
+ * reset record codec, tree swap, and empty ProjectIndex schema.
  */
 export class LocalProjectResetAuthority implements ProjectResetAuthorityPort {
   constructor(
@@ -200,59 +196,22 @@ export class LocalProjectResetAuthority implements ProjectResetAuthorityPort {
     assertNoTeamNamespaces(plan)
     throwIfAborted(signal)
     const projectId = parseProjectId(plan.projectId)
-    if (await hasRetiredLocalProtocolMarkers(plan)) {
-      const team = await this.options.teams.open(projectId)
-      if (team !== "missing") throw new TeamProjectResetUnavailableError()
-      throwIfAborted(signal)
-      if (!createIfMissing) return undefined
-      const preparedReset = await this.options.owners.prepareResetForDurableProject({
-        projectId,
-        projectRoot: plan.projectRoot,
-        resetId: plan.token,
-      })
-      return Object.freeze({ owner: preparedReset.owner, preparedReset })
-    }
-    const hasCollaborationStore = plan.preview.some(
-      ({ path: candidate }) => candidate === ".convax/collaboration" || candidate.startsWith(".convax/collaboration/"),
-    )
-    if (!hasCollaborationStore) {
-      return createIfMissing
-        ? Object.freeze({
-            owner: await this.options.owners.ensureForDurableProject({ projectId, projectRoot: plan.projectRoot }),
-          })
-        : undefined
-    }
+    const team = await this.options.teams.open(projectId)
+    if (team !== "missing") throw new TeamProjectResetUnavailableError()
+    throwIfAborted(signal)
+    if (!createIfMissing) return undefined
 
-    try {
-      const collaborationDirectory = path.join(plan.projectRoot, ".convax", "collaboration")
-      const manifest = await this.readNativeManifest(collaborationDirectory)
-      if (manifest.projectIndexScope.projectId !== projectId) throw new Error("ProjectIndex manifest crossed Project")
-      const owner = await this.options.owners.resolveExact({
-        projectId,
-        projectEpoch: manifest.projectIndexScope.projectEpoch,
-        initializationAuthorityDigest: manifest.initializationAuthorityDigest,
-      })
-      if (
-        owner === "missing" ||
-        owner === "rejected" ||
-        owner.binding.projectIndexShardEpoch !== manifest.projectIndexScope.shardEpoch
-      ) {
-        throw new Error("ProjectIndex bootstrap does not resolve to the exact local owner")
-      }
-      await verifyPristineLocalOwnerProjectIndexNativeStore({
-        authority: this.options.authority,
-        collaborationDirectory,
-        owner,
-        verifyCheckpointSignature: (binding, coreDigest, signature) =>
-          this.options.owners.verifyCheckpointSignature(binding, coreDigest, signature),
-      })
-      throwIfAborted(signal)
-      return Object.freeze({ owner })
-    } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error
-      if (error instanceof TeamProjectResetUnavailableError) throw error
-      throw new TeamProjectResetUnavailableError({ cause: error })
-    }
+    // Unsupported bytes are deliberately not decoded to recover authority. The
+    // explicit user confirmation, exact absence of durable Team authority and
+    // absence of Team/control namespaces admit a fresh current local owner. It
+    // stays inert until Project/node verifies both the published genesis and the
+    // byte-exact archive, so a failed reset cannot change the current binding.
+    const preparedReset = await this.options.owners.prepareResetForDurableProject({
+      projectId,
+      projectRoot: plan.projectRoot,
+      resetId: plan.token,
+    })
+    return Object.freeze({ owner: preparedReset.owner, preparedReset })
   }
 
   private async createConfirmation(
@@ -446,21 +405,6 @@ function assertNoTeamNamespaces(plan: PortableProjectResetPlan): void {
     teamNamespaces.some((namespace) => candidate === namespace || candidate.startsWith(`${namespace}/`)),
   )
   if (hasTeamEvidence) throw new TeamProjectResetUnavailableError()
-}
-
-async function hasRetiredLocalProtocolMarkers(plan: PortableProjectResetPlan): Promise<boolean> {
-  const expected = [
-    ".convax/local-owner-authority-v3.jcs",
-    ".convax/protocol-v3/active.jcs",
-  ] as const
-  const present = expected.filter((candidate) => plan.preview.some(({ path }) => path === candidate))
-  if (present.length === 0) return false
-  if (present.length !== expected.length) throw new TeamProjectResetUnavailableError()
-  for (const candidate of expected) {
-    const stat = await fs.lstat(path.join(plan.projectRoot, candidate))
-    if (!stat.isFile() || stat.isSymbolicLink()) throw new TeamProjectResetUnavailableError()
-  }
-  return true
 }
 
 function assertStageInput(

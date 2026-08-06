@@ -4,15 +4,21 @@ import os from "node:os"
 import path from "node:path"
 import {
   createWebCryptoEd25519Verifier,
+  ordinarySha256,
+  parseCanvasId,
   parseId128,
   parseProjectId,
   parseReplicaId,
 } from "@convax/collaboration"
+import { buildCanvasGenesisProofCarrier } from "@convax/canvas/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "@convax/project"
 
 import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVault, type ElectronSafeStoragePort } from "./electron-replica-signing-vault"
 import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
+import { createMainCanvasOwnerRuntime } from "./main-canvas-collaboration-composition"
+import { createCanvasDocumentGenesisAuthority } from "./canvas-document-genesis"
+import { createLocalProjectOwnerCanvasGenesisAuthority } from "./local-project-owner-canvas-genesis"
 
 const roots: string[] = []
 
@@ -101,6 +107,55 @@ describe("durable local Project owner authority", () => {
     ])
     expect((await authority.ensureForDurableProject(fixture.input)).binding).toEqual(prepared.owner.binding)
   })
+
+  test("builds and verifies Canvas genesis directly from the unshared local owner", async () => {
+    const fixture = await createFixture()
+    const ownerAuthority = fixture.owner()
+    const owner = await ownerAuthority.ensureForDurableProject(fixture.input)
+    const provider = createLocalProjectOwnerCanvasGenesisAuthority({
+      authority: fixture.authority,
+      async resolveOwner({ projectId, projectEpoch }) {
+        return ownerAuthority.resolveExact({
+          projectId,
+          projectEpoch,
+          initializationAuthorityDigest: owner.binding.bindingDigest,
+        })
+      },
+    })
+    const runtime = createMainCanvasOwnerRuntime(fixture.authority)
+    const genesis = createCanvasDocumentGenesisAuthority({
+      authority: fixture.authority,
+      runtime,
+      historicalAuthorVerifier: provider.historicalAuthorVerifier,
+      authorProvider: provider.authorProvider,
+    })
+    const scope = Object.freeze({
+      projectId: owner.binding.projectId,
+      projectEpoch: owner.binding.projectEpoch,
+      docKind: "canvas" as const,
+      docId: parseCanvasId(`cv_${ordinarySha256(new TextEncoder().encode("local-canvas"))}`),
+      shardEpoch: parseId128(Buffer.alloc(16, 44).toString("base64url")),
+    })
+    expect(await provider.authorProvider.preflight({
+      projectId: scope.projectId,
+      projectEpoch: scope.projectEpoch,
+    })).toBe("ready")
+    const prepared = await provider.authorProvider.prepareAuthor({
+      scope,
+      projectIndexRouteDependencyFrameDigest: ordinarySha256(new TextEncoder().encode("route")),
+    })
+    if (prepared.status !== "prepared") throw new Error("local Canvas author was not prepared")
+    const built = await buildCanvasGenesisProofCarrier({
+      authority: fixture.authority,
+      runtime,
+      verifier: genesis.proofVerifier,
+      scope,
+      projectIndexRouteDependencyFrameDigest: ordinarySha256(new TextEncoder().encode("route")),
+      author: prepared.author,
+    })
+    expect(built.status).toBe("built")
+    if (built.status === "built") expect(genesis.proofVerifier(built.proofCarrierExactBytes).status).toBe("validated")
+  })
 })
 
 async function createFixture(options: { safeStorage?: ElectronSafeStoragePort } = {}) {
@@ -118,6 +173,7 @@ async function createFixture(options: { safeStorage?: ElectronSafeStoragePort } 
   let idByte = 1
   let replica = 1
   return {
+    authority,
     userData,
     input: { projectId, projectRoot },
     owner: (faults?: ConstructorParameters<typeof NodeDurableLocalProjectOwnerAuthority>[0]["faults"]) =>

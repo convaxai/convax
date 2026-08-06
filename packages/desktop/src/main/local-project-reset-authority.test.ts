@@ -193,11 +193,10 @@ describe("local Project reset authority", () => {
     expect(await service.inspectProject("project_test")).toEqual({ status: "current" })
   })
 
-  test("refuses retired local reset when a durable Team record is ambiguous", async () => {
+  test("refuses every local reset when the durable Team record is ambiguous", async () => {
     const fixture = await createFixture({ teamStatus: "rejected" })
-    await fs.mkdir(path.join(fixture.projectRoot, ".convax", "protocol-v3"))
-    await fs.writeFile(path.join(fixture.projectRoot, ".convax", "protocol-v3", "active.jcs"), "retired-active")
-    await fs.writeFile(path.join(fixture.projectRoot, ".convax", "local-owner-authority-v3.jcs"), "retired-owner")
+    const legacyCatalog = path.join(fixture.projectRoot, ".convax", "canvases", "catalog.json")
+    const before = await fs.readFile(legacyCatalog)
     const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
       gate: { async runClosed({ operation }) { return operation() } },
@@ -205,12 +204,25 @@ describe("local Project reset authority", () => {
     })
 
     await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
-    expect(await fs.readFile(path.join(fixture.projectRoot, ".convax", "protocol-v3", "active.jcs"), "utf8")).toBe(
-      "retired-active",
-    )
+    expect(await fs.readFile(legacyCatalog)).toEqual(before)
   })
 
-  test("refuses local authority during preview when collaboration state is not the exact pristine bootstrap", async () => {
+  test("refuses local reset when the Project tree retains Team authority evidence", async () => {
+    const fixture = await createFixture()
+    const teamEvidence = path.join(fixture.projectRoot, ".convax", "team", "membership.jcs")
+    await fs.mkdir(path.dirname(teamEvidence))
+    await fs.writeFile(teamEvidence, "retained-team-evidence")
+    const service = new NodeProjectCollaborationRecoveryService({
+      authority: fixture.resets,
+      gate: { async runClosed({ operation }) { return operation() } },
+      projects: { async resolveProjectRoot() { return fixture.projectRoot } },
+    })
+
+    await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
+    expect(await fs.readFile(teamEvidence, "utf8")).toBe("retained-team-evidence")
+  })
+
+  test("resets arbitrary unsupported local collaboration bytes without decoding them", async () => {
     const fixture = await createFixture()
     const collaboration = path.join(fixture.projectRoot, ".convax", "collaboration")
     await fs.mkdir(collaboration)
@@ -229,11 +241,18 @@ describe("local Project reset authority", () => {
       },
     })
 
-    await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
-    expect(await fs.readdir(collaboration)).toEqual(["legacy-membership.bin"])
+    const before = await fs.readFile(path.join(collaboration, "legacy-membership.bin"))
+    const preview = await service.previewReset("project_test")
+    expect(await service.confirmReset({ projectId: "project_test", token: preview.token })).toEqual({
+      projectId: "project_test",
+      status: "published",
+    })
+    const archive = await onlyMatchingEntry(fixture.projectRoot, ".convax-archive-")
+    expect(await fs.readFile(path.join(fixture.projectRoot, archive, "collaboration", "legacy-membership.bin")))
+      .toEqual(before)
   })
 
-  test("rejects a formerly pristine bootstrap after any collaboration state appears", async () => {
+  test("resets a local Project after collaboration frames appear and activates a fresh owner", async () => {
     const fixture = await createFixture()
     const owner = await fixture.owners.ensureForDurableProject({
       projectId: parseProjectId("project_test"),
@@ -270,8 +289,29 @@ describe("local Project reset authority", () => {
       },
     })
 
-    await expect(service.previewReset("project_test")).rejects.toMatchObject({ code: "VERIFICATION_REJECTED" })
-    expect(await fs.readFile(path.join(frames, `${"a".repeat(64)}.bin`))).toEqual(before)
+    const preview = await service.previewReset("project_test")
+    expect(await service.confirmReset({ projectId: "project_test", token: preview.token })).toEqual({
+      projectId: "project_test",
+      status: "published",
+    })
+    const current = await readProjectNativeStoreManifest(path.join(fixture.projectRoot, ".convax", "collaboration"), {
+      protocolDigest: fixture.authority.protocolDigest,
+      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+      uriProtocolDigest: fixture.authority.protocolSchemaBundle.core.uriProtocolDigest,
+    })
+    expect(current.projectIndexScope.projectEpoch).not.toBe(owner.binding.projectEpoch)
+    const archive = await onlyMatchingEntry(fixture.projectRoot, ".convax-archive-")
+    const archivedFrame = path.join(
+      fixture.projectRoot,
+      archive,
+      "collaboration",
+      "documents",
+      await onlyEntry(path.join(fixture.projectRoot, archive, "collaboration", "documents")),
+      "objects",
+      "frames",
+      `${"a".repeat(64)}.bin`,
+    )
+    expect(await fs.readFile(archivedFrame)).toEqual(before)
   })
 })
 
