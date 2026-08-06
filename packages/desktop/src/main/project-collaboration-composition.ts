@@ -14,138 +14,119 @@ import type {
   CanvasCollaborationSessionOwnerV2,
   CanvasSessionInvalidationDtoV2,
 } from "./canvas-collaboration-session-owner"
+import type { MainProjectIndexRuntimeRegistryV2 } from "./main-project-index-runtime-registry"
+import type { MainProjectCanvasRouteRuntimeRegistryV2 } from "./project-canvas-route-runtime-registry"
 
-export type MainProjectProtocolSelectionV3 = "v10-r5" | "v11-r1-local-owner" | "v11-r1-team-replica"
-
-export interface MainSelectedProjectCollaborationPortsV3 {
+/** Owner ports of one Project runtime in the single current collaboration protocol. */
+export interface MainProjectCollaborationPorts {
   readonly projectId: ProjectId
-  readonly protocol: MainProjectProtocolSelectionV3
   readonly projectIndexes: ProjectIndexCanvasApplicationPortV2 &
     ProjectIndexCurrentBlobReferencePortV2 &
     ProjectIndexFileApplicationPortV2 &
     ProjectIndexFileMaterializationProjectionPortV2
   readonly canvasSessions: CanvasCollaborationSessionOwnerV2
   /** Flushes ProjectIndex and Canvas runtime state before a writer transition. */
-  quiesce?(): Promise<void>
-  /** Releases only this resolved Project runtime. */
-  dispose?(): Promise<void> | void
+  quiesce(): Promise<void>
 }
 
-export type MainProjectCollaborationResolutionV3 =
-  | Readonly<{ status: "ready"; ports: MainSelectedProjectCollaborationPortsV3 }>
-  | Readonly<{
-      status: "unavailable"
-      reason: "owner-key-missing" | "evidence-corrupt" | "promotion-ambiguous" | "protocol-unavailable"
-    }>
-
-export interface MainProjectCollaborationPortResolverV3 {
-  /** Selection must use only Project-owned persisted protocol state. */
-  resolve(projectId: ProjectId): Promise<MainProjectCollaborationResolutionV3>
-}
-
-export class MainProjectCollaborationUnavailableErrorV3 extends Error {
-  readonly code = "local-authority-unavailable" as const
-
-  constructor(readonly reason: Extract<MainProjectCollaborationResolutionV3, { status: "unavailable" }>["reason"]) {
-    super(`Project collaboration runtime is unavailable: ${reason}`)
-    this.name = "MainProjectCollaborationUnavailableErrorV3"
-  }
-}
-
-export interface MainProjectCollaborationCompositionFacadeV3 {
-  readonly projectIndexes: MainSelectedProjectCollaborationPortsV3["projectIndexes"]
+export interface MainProjectCollaborationComposition {
+  readonly projectIndexes: MainProjectCollaborationPorts["projectIndexes"]
   readonly canvasSessions: CanvasCollaborationSessionOwnerV2
-  /** Resolve and resume the persisted protocol selection before renderer access. */
-  prepareProject(projectId: string): Promise<MainProjectProtocolSelectionV3>
+  /** Open and resume the Project runtime before renderer access. */
+  prepareProject(projectId: string): Promise<void>
   /** Stop new opens, flush both document families and release session bindings. */
   quiesceProject(projectId: string): Promise<void>
   dispose(): Promise<void>
 }
 
-interface BoundSessionV3 {
+interface BoundSession {
   readonly ref: CanvasDocumentRef
   readonly owner: CanvasCollaborationSessionOwnerV2
 }
 
 /**
- * Protocol-neutral Main routing facade. It never decodes frames, creates an
- * authority, or manufactures an operation receipt. Every result is returned by
- * the already-selected V10/V11 owner port unchanged.
+ * The one Main collaboration composition. New, open, recover and share resolve
+ * through these same owner ports: there is no protocol selection, release pair,
+ * promotion bridge, successor runtime, or caller-selected authority. It never
+ * decodes frames, creates an authority, or manufactures an operation receipt;
+ * every result is returned by the owner port unchanged.
  */
-export function createMainProjectCollaborationCompositionFacadeV3(
-  resolver: MainProjectCollaborationPortResolverV3,
-): MainProjectCollaborationCompositionFacadeV3 {
-  const runtimes = new Map<ProjectId, Promise<MainSelectedProjectCollaborationPortsV3>>()
-  const ready = new Map<ProjectId, MainSelectedProjectCollaborationPortsV3>()
-  const sessions = new Map<Id128, BoundSessionV3>()
+export function createMainProjectCollaborationComposition(input: Readonly<{
+  projectIndexes: MainProjectIndexRuntimeRegistryV2
+  canvasSessions: CanvasCollaborationSessionOwnerV2
+  canvasRoutes: Pick<MainProjectCanvasRouteRuntimeRegistryV2, "switchProject" | "quiesceProject">
+}>): MainProjectCollaborationComposition {
+  const runtimes = new Map<ProjectId, Promise<MainProjectCollaborationPorts>>()
+  const ready = new Map<ProjectId, MainProjectCollaborationPorts>()
+  const sessions = new Map<Id128, BoundSession>()
   const listeners = new Set<(event: CanvasSessionInvalidationDtoV2) => void>()
   const ownerSubscriptions = new Map<CanvasCollaborationSessionOwnerV2, () => void>()
   const quiescing = new Set<ProjectId>()
   let disposed = false
 
-  const projectIndexes: MainSelectedProjectCollaborationPortsV3["projectIndexes"] = {
-    async queryCatalog(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.queryCatalog(input)
+  const projectIndexes: MainProjectCollaborationPorts["projectIndexes"] = {
+    async queryCatalog(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.queryCatalog(request)
     },
-    async submitRouteCommand(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.submitRouteCommand(input)
+    async submitRouteCommand(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.submitRouteCommand(request)
     },
-    async queryCurrentBlobDigests(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.queryCurrentBlobDigests(input)
+    async queryCurrentBlobDigests(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.queryCurrentBlobDigests(request)
     },
-    async queryCurrentResources(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.queryCurrentResources(input)
+    async queryCurrentResources(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.queryCurrentResources(request)
     },
-    async createDirectory(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.createDirectory(input)
+    async createDirectory(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.createDirectory(request)
     },
-    async admitManagedBlob(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.admitManagedBlob(input)
+    async admitManagedBlob(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.admitManagedBlob(request)
     },
-    async publishFile(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.publishFile(input)
+    async publishFile(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.publishFile(request)
     },
-    async relocateEntry(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.relocateEntry(input)
+    async relocateEntry(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.relocateEntry(request)
     },
-    async tombstoneEntry(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.tombstoneEntry(input)
+    async tombstoneEntry(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.tombstoneEntry(request)
     },
-    async queryFileMaterializationPlan(input) {
-      return (await runtimeFor(input.projectId)).projectIndexes.queryFileMaterializationPlan(input)
+    async queryFileMaterializationPlan(request) {
+      return (await runtimeFor(request.projectId)).projectIndexes.queryFileMaterializationPlan(request)
     },
   }
   Object.freeze(projectIndexes)
 
   const canvasSessions: CanvasCollaborationSessionOwnerV2 = {
-    async open(input) {
-      const runtime = await runtimeFor(parseProjectId(input.ref.scopeId))
+    async open(request) {
+      const runtime = await runtimeFor(parseProjectId(request.ref.scopeId))
       subscribeOwner(runtime.canvasSessions)
-      const projection = await runtime.canvasSessions.open(input)
+      const projection = await runtime.canvasSessions.open(request)
       const sessionId = parseId128(projection.sessionId)
       if (sessions.has(sessionId)) {
-        runtime.canvasSessions.close({ ref: input.ref, sessionId })
-        throw new Error("Selected Canvas owner reused a live session identity")
+        runtime.canvasSessions.close({ ref: request.ref, sessionId })
+        throw new Error("Canvas owner reused a live session identity")
       }
-      sessions.set(sessionId, Object.freeze({ ref: normalizeRef(input.ref), owner: runtime.canvasSessions }))
+      sessions.set(sessionId, Object.freeze({ ref: normalizeRef(request.ref), owner: runtime.canvasSessions }))
       return projection
     },
-    close(input) {
-      const bound = requireSession(input.ref, input.sessionId)
-      sessions.delete(parseId128(input.sessionId))
-      bound.owner.close(input)
+    close(request) {
+      const bound = requireSession(request.ref, request.sessionId)
+      sessions.delete(parseId128(request.sessionId))
+      bound.owner.close(request)
     },
     queryRenderer(ref, sessionId) {
       return requireSession(ref, sessionId).owner.queryRenderer(ref, sessionId)
     },
-    submitRenderer(input) {
-      return requireSession(input.ref, input.sessionId).owner.submitRenderer(input)
+    submitRenderer(request) {
+      return requireSession(request.ref, request.sessionId).owner.submitRenderer(request)
     },
-    undo(input) {
-      return requireSession(input.ref, input.sessionId).owner.undo(input)
+    undo(request) {
+      return requireSession(request.ref, request.sessionId).owner.undo(request)
     },
-    redo(input) {
-      return requireSession(input.ref, input.sessionId).owner.redo(input)
+    redo(request) {
+      return requireSession(request.ref, request.sessionId).owner.redo(request)
     },
     flush(ref, sessionId) {
       return sessionId === undefined
@@ -161,8 +142,8 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     async queryAuthoritative(ref) {
       return (await runtimeFor(parseProjectId(ref.scopeId))).canvasSessions.queryAuthoritative(ref)
     },
-    async submitAuthoritative(input) {
-      return (await runtimeFor(parseProjectId(input.ref.scopeId))).canvasSessions.submitAuthoritative(input)
+    async submitAuthoritative(request) {
+      return (await runtimeFor(parseProjectId(request.ref.scopeId))).canvasSessions.submitAuthoritative(request)
     },
     async quiesceProject(projectId) {
       await quiesceProject(projectId)
@@ -194,19 +175,18 @@ export function createMainProjectCollaborationCompositionFacadeV3(
       const projectId = parseProjectId(projectIdInput)
       const runtime = await runtimeFor(projectId)
       runtime.canvasSessions.resumeProject(projectId)
-      return runtime.protocol
     },
     quiesceProject,
     dispose,
   })
 
-  async function runtimeFor(projectIdInput: ProjectId): Promise<MainSelectedProjectCollaborationPortsV3> {
+  async function runtimeFor(projectIdInput: ProjectId): Promise<MainProjectCollaborationPorts> {
     requireLive()
     const projectId = parseProjectId(projectIdInput)
     if (quiescing.has(projectId)) throw new Error("Project collaboration runtime is quiescing")
     let promised = runtimes.get(projectId)
     if (!promised) {
-      promised = resolveRuntime(projectId)
+      promised = openProjectPorts(projectId)
       runtimes.set(projectId, promised)
       void promised.then(
         (runtime) => ready.set(projectId, runtime),
@@ -216,13 +196,22 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     return promised
   }
 
-  async function resolveRuntime(projectId: ProjectId): Promise<MainSelectedProjectCollaborationPortsV3> {
-    const resolved = await resolver.resolve(projectId)
-    if (resolved.status === "unavailable") throw new MainProjectCollaborationUnavailableErrorV3(resolved.reason)
-    if (parseProjectId(resolved.ports.projectId) !== projectId) {
-      throw new Error("Resolved collaboration runtime crossed its Project binding")
-    }
-    return Object.freeze(resolved.ports)
+  /** Selects the Project route before publication and binds the owner ports. */
+  async function openProjectPorts(projectId: ProjectId): Promise<MainProjectCollaborationPorts> {
+    await input.canvasRoutes.switchProject(projectId)
+    let quiesced = false
+    return Object.freeze({
+      projectId,
+      projectIndexes: input.projectIndexes,
+      canvasSessions: input.canvasSessions,
+      async quiesce() {
+        if (quiesced) return
+        quiesced = true
+        await input.canvasSessions.quiesceProject(projectId)
+        await input.canvasRoutes.quiesceProject(projectId)
+        await input.projectIndexes.quiesceProject(projectId)
+      },
+    })
   }
 
   async function quiesceProject(projectIdInput: string): Promise<void> {
@@ -233,20 +222,18 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     try {
       const runtime = ready.get(projectId) ?? await runtimes.get(projectId)
       if (!runtime) return
-      await runtime.canvasSessions.quiesceProject(projectId)
-      await runtime.quiesce?.()
+      await runtime.quiesce()
       for (const [sessionId, bound] of sessions) {
         if (bound.ref.scopeId === projectId) sessions.delete(sessionId)
       }
       runtimes.delete(projectId)
       ready.delete(projectId)
-      await runtime.dispose?.()
     } finally {
       quiescing.delete(projectId)
     }
   }
 
-  function requireSession(refInput: CanvasDocumentRef, sessionIdInput: Id128): BoundSessionV3 {
+  function requireSession(refInput: CanvasDocumentRef, sessionIdInput: Id128): BoundSession {
     requireLive()
     const ref = normalizeRef(refInput)
     const sessionId = parseId128(sessionIdInput)
@@ -273,12 +260,9 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     sessions.clear()
     for (const unsubscribe of ownerSubscriptions.values()) unsubscribe()
     ownerSubscriptions.clear()
-    const settled = await Promise.allSettled(runtimes.values())
+    await Promise.allSettled(runtimes.values())
     runtimes.clear()
     ready.clear()
-    const unique = new Set<MainSelectedProjectCollaborationPortsV3>()
-    for (const result of settled) if (result.status === "fulfilled") unique.add(result.value)
-    for (const runtime of unique) await runtime.dispose?.()
   }
 
   function requireLive(): void {

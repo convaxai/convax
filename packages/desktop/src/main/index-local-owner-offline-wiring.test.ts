@@ -14,7 +14,6 @@ import {
 const mainPath = fileURLToPath(new URL("./index.ts", import.meta.url))
 const mainSource = readFileSync(mainPath, "utf8")
 
-type TestProtocol = "v10-r5" | "v11-r1-local-owner" | "v11-r1-team-replica"
 interface TestStatus {
   format: "convax.project-team-collaboration-status/2"
   projectId: string
@@ -42,20 +41,20 @@ interface TestActivationRequest {
 }
 interface TestGate {
   service: Pick<TestService, "bootstrapTeam" | "joinTeam" | "getStatus" | "subscribe">
-  activateProject(projectId: string, protocol: TestProtocol): Promise<void>
+  activateProject(projectId: string): Promise<void>
   quiesceProject(projectId: string): Promise<void>
   dispose(): Promise<void>
 }
-type ProtocolGateFactory = (input: {
+type TeamRuntimeGateFactory = (input: {
   createRuntime(): TestRuntime
-  activateV10Project(input: TestActivationRequest): Promise<TestStatus>
+  activateProjectSharing(input: TestActivationRequest): Promise<TestStatus>
 }) => TestGate
 
-async function loadProtocolGateFactory(): Promise<ProtocolGateFactory> {
+async function loadTeamRuntimeGateFactory(): Promise<TeamRuntimeGateFactory> {
   const sourceFile = ts.createSourceFile(mainPath, mainSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const declaration = sourceFile.statements.find((statement): statement is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(statement) && statement.name?.text === "createProtocolGatedProjectTeamRuntimeV2")
-  if (!declaration) throw new Error("Protocol-gated Project Team runtime factory is missing from Main")
+    ts.isFunctionDeclaration(statement) && statement.name?.text === "createProjectTeamRuntimeGateV2")
+  if (!declaration) throw new Error("Project Team runtime gate factory is missing from Main")
   const source = declaration.getText(sourceFile)
   const javascript = ts.transpileModule(source, {
     compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
@@ -65,21 +64,21 @@ async function loadProtocolGateFactory(): Promise<ProtocolGateFactory> {
   try {
     await writeFile(modulePath, javascript, "utf8")
     const loaded: unknown = await import(pathToFileURL(modulePath).href)
-    if (!isProtocolGateModule(loaded)) throw new Error("Transpiled protocol gate module is invalid")
-    return loaded.createProtocolGatedProjectTeamRuntimeV2
+    if (!isTeamRuntimeGateModule(loaded)) throw new Error("Transpiled Team runtime gate module is invalid")
+    return loaded.createProjectTeamRuntimeGateV2
   } finally {
     await rm(directory, { force: true, recursive: true })
   }
 }
 
-function isProtocolGateModule(value: unknown): value is {
-  createProtocolGatedProjectTeamRuntimeV2: ProtocolGateFactory
+function isTeamRuntimeGateModule(value: unknown): value is {
+  createProjectTeamRuntimeGateV2: TeamRuntimeGateFactory
 } {
   return typeof value === "object" && value !== null &&
-    typeof Reflect.get(value, "createProtocolGatedProjectTeamRuntimeV2") === "function"
+    typeof Reflect.get(value, "createProjectTeamRuntimeGateV2") === "function"
 }
 
-const createProtocolGate = await loadProtocolGateFactory()
+const createTeamRuntimeGate = await loadTeamRuntimeGateFactory()
 
 function localOnlyStatus(projectId: string): TestStatus {
   return Object.freeze({
@@ -101,6 +100,14 @@ function onlineStatus(projectId: string): TestStatus {
     connectedPeerCount: 1,
     reason: null,
   })
+}
+
+/** Activates only Projects with a durable Team binding, exactly like Main's sharing port. */
+function sharingActivation(sharedProjects: ReadonlySet<string>) {
+  return mock(async ({ projectId, service }: TestActivationRequest) =>
+    sharedProjects.has(projectId)
+      ? service.activateProject(projectId)
+      : service.activateLocalProject(projectId))
 }
 
 function createRuntimeHarness(options: { failActivation?: boolean; waitForLocalActivation?: Promise<void> } = {}) {
@@ -165,7 +172,7 @@ function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : ""
 }
 
-describe("Desktop Main V11 local-owner offline wiring", () => {
+describe("Desktop Main local-first Team runtime wiring", () => {
   test("startup recovery, node editing, Project switch and reopen construct no Team or network runtime", async () => {
     const teamControlFactory = mock(() => undefined)
     const apiSessionFactory = mock(() => undefined)
@@ -178,47 +185,41 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
       peerJsFactory()
       throw new Error("network is unavailable")
     })
-    const activateV10Project = mock(async () => localOnlyStatus("unexpected-v10"))
-    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const activateProjectSharing = sharingActivation(new Set())
+    const gate = createTeamRuntimeGate({ activateProjectSharing, createRuntime })
     const restoreProject = mock(async () => undefined)
     const openProject = mock(async () => undefined)
     const editNode = mock(async () => undefined)
     const closeProject = mock(async () => undefined)
 
-    await gate.activateProject("project-a", "v11-r1-local-owner")
+    await gate.activateProject("project-a")
     await restoreProject()
     await openProject()
     await editNode()
     await gate.quiesceProject("project-a")
     await closeProject()
-    await gate.activateProject("project-b", "v11-r1-local-owner")
+    await gate.activateProject("project-b")
     await openProject()
     await editNode()
     await gate.quiesceProject("project-b")
-    await gate.activateProject("project-a", "v11-r1-local-owner")
+    await gate.activateProject("project-a")
     await openProject()
     await editNode()
 
     expect(gate.service.getStatus("project-a")).toEqual(localOnlyStatus("project-a"))
-    const bootstrapError = await gate.service.bootstrapTeam("project-a").then(
+    const staleError = await gate.service.bootstrapTeam("project-b").then(
       () => null,
       (error: unknown) => error,
     )
-    const joinError = await gate.service.joinTeam({ projectId: "project-a", invitation: {} }).then(
-      () => null,
-      (error: unknown) => error,
-    )
-    expect(bootstrapError).toBeInstanceOf(Error)
-    expect(errorMessage(bootstrapError)).toContain("Sharing and collaboration are unavailable")
-    expect(joinError).toBeInstanceOf(Error)
-    expect(errorMessage(joinError)).toContain("Sharing and collaboration are unavailable")
+    expect(staleError).toBeInstanceOf(Error)
+    expect(errorMessage(staleError)).toContain("stale")
     expect(gate.service.getStatus("project-a")).toEqual(localOnlyStatus("project-a"))
 
     expect(restoreProject).toHaveBeenCalledTimes(1)
     expect(openProject).toHaveBeenCalledTimes(3)
     expect(editNode).toHaveBeenCalledTimes(3)
     expect(closeProject).toHaveBeenCalledTimes(1)
-    expect(activateV10Project).not.toHaveBeenCalled()
+    expect(activateProjectSharing).toHaveBeenCalledTimes(3)
     expect(createRuntime).not.toHaveBeenCalled()
     expect(teamControlFactory).not.toHaveBeenCalled()
     expect(apiSessionFactory).not.toHaveBeenCalled()
@@ -227,41 +228,39 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await gate.dispose()
   })
 
-  test("an unshared V10 selector read remains local without constructing the legacy network closure", async () => {
+  test("an unshared Project activation stays local without constructing the network closure", async () => {
     const createRuntime = mock(() => { throw new Error("network is unavailable") })
-    const activateV10Project = mock(async ({ projectId, service }: TestActivationRequest) =>
-      service.activateLocalProject(projectId))
-    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const activateProjectSharing = sharingActivation(new Set())
+    const gate = createTeamRuntimeGate({ activateProjectSharing, createRuntime })
 
-    await gate.activateProject("project-v10-local", "v10-r5")
+    await gate.activateProject("project-unshared")
 
-    expect(activateV10Project).toHaveBeenCalledTimes(1)
+    expect(activateProjectSharing).toHaveBeenCalledTimes(1)
     expect(createRuntime).not.toHaveBeenCalled()
-    expect(gate.service.getStatus("project-v10-local")).toEqual(localOnlyStatus("project-v10-local"))
+    expect(gate.service.getStatus("project-unshared")).toEqual(localOnlyStatus("project-unshared"))
     await gate.dispose()
   })
 
-  test("V10 shared to V11 local destroys the runtime, ignores old events and reconstructs only for later V10", async () => {
+  test("leaving a shared Project destroys the runtime, ignores old events and rebuilds only when shared again", async () => {
     const runtimes: ReturnType<typeof createRuntimeHarness>[] = []
     const createRuntime = mock(() => {
       const next = createRuntimeHarness()
       runtimes.push(next)
       return next.runtime
     })
-    const activateV10Project = mock(async ({ projectId, service: activation }: TestActivationRequest) =>
-      activation.activateProject(projectId))
-    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const activateProjectSharing = sharingActivation(new Set(["project-shared-a", "project-shared-b"]))
+    const gate = createTeamRuntimeGate({ activateProjectSharing, createRuntime })
     const forwarded: TestStatus[] = []
     const unsubscribeGate = gate.service.subscribe((status) => forwarded.push(status))
 
-    await gate.activateProject("project-shared-a", "v10-r5")
+    await gate.activateProject("project-shared-a")
     expect(createRuntime).toHaveBeenCalledTimes(1)
     const first = runtimes[0]
     expect(first.activatedProjects).toEqual(["project-shared-a"])
     first.emitConnectivity(false)
     expect(first.connectivityCalls).toEqual([false])
 
-    await gate.activateProject("project-local", "v11-r1-local-owner")
+    await gate.activateProject("project-local")
     expect(first.unsubscribeCalls).toBe(1)
     expect(first.disposeCalls).toBe(1)
     expect(createRuntime).toHaveBeenCalledTimes(1)
@@ -274,11 +273,11 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     expect(forwarded).toHaveLength(forwardedAfterDispose)
 
     await gate.quiesceProject("project-local")
-    await gate.activateProject("project-local", "v11-r1-local-owner")
+    await gate.activateProject("project-local")
     expect(createRuntime).toHaveBeenCalledTimes(1)
     expect(gate.service.getStatus("project-local")).toEqual(localOnlyStatus("project-local"))
 
-    await gate.activateProject("project-shared-b", "v10-r5")
+    await gate.activateProject("project-shared-b")
     expect(createRuntime).toHaveBeenCalledTimes(2)
     expect(runtimes[1].activatedProjects).toEqual(["project-shared-b"])
 
@@ -288,16 +287,15 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await gate.dispose()
   })
 
-  test("a failed V10 activation destroys the partial runtime and cannot project an active Team", async () => {
+  test("a failed Team activation destroys the partial runtime and cannot project an active Team", async () => {
     const failed = createRuntimeHarness({ failActivation: true })
     const createRuntime = mock(() => failed.runtime)
-    const activateV10Project = mock(async ({ projectId, service }: TestActivationRequest) =>
-      service.activateProject(projectId))
-    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const activateProjectSharing = sharingActivation(new Set(["project-broken-team"]))
+    const gate = createTeamRuntimeGate({ activateProjectSharing, createRuntime })
     const forwarded: TestStatus[] = []
     gate.service.subscribe((status) => forwarded.push(status))
 
-    const activationError = await gate.activateProject("project-broken-team", "v10-r5").then(
+    const activationError = await gate.activateProject("project-broken-team").then(
       () => null,
       (error: unknown) => error,
     )
@@ -321,7 +319,7 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     await gate.dispose()
   })
 
-  test("a V11 switch prevents a stale V10 activation from restoring cleared runtime state", async () => {
+  test("a Project switch prevents a stale activation from restoring cleared runtime state", async () => {
     let releaseLocalActivation: () => void = () => undefined
     const waitForLocalActivation = new Promise<void>((resolve) => { releaseLocalActivation = resolve })
     const runtimes: ReturnType<typeof createRuntimeHarness>[] = []
@@ -330,11 +328,10 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
       runtimes.push(next)
       return next.runtime
     })
-    const activateV10Project = mock(async ({ projectId, service }: TestActivationRequest) =>
-      service.activateLocalProject(projectId))
-    const gate = createProtocolGate({ activateV10Project, createRuntime })
+    const activateProjectSharing = sharingActivation(new Set())
+    const gate = createTeamRuntimeGate({ activateProjectSharing, createRuntime })
 
-    await gate.activateProject("project-race", "v10-r5")
+    await gate.activateProject("project-race")
     const staleBootstrap = gate.service.bootstrapTeam("project-race").then(
       () => null,
       (error: unknown) => error,
@@ -342,22 +339,22 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
     expect(createRuntime).toHaveBeenCalledTimes(1)
     expect(runtimes[0].localActivatedProjects).toEqual(["project-race"])
 
-    await gate.activateProject("project-v11", "v11-r1-local-owner")
+    await gate.activateProject("project-other")
     expect(runtimes[0].disposeCalls).toBe(1)
     releaseLocalActivation()
     const staleError = await staleBootstrap
     expect(staleError).toBeInstanceOf(Error)
     expect(errorMessage(staleError)).toContain("became stale")
-    expect(gate.service.getStatus("project-v11")).toEqual(localOnlyStatus("project-v11"))
+    expect(gate.service.getStatus("project-other")).toEqual(localOnlyStatus("project-other"))
 
-    await gate.activateProject("project-race", "v10-r5")
+    await gate.activateProject("project-race")
     await gate.service.bootstrapTeam("project-race")
     expect(createRuntime).toHaveBeenCalledTimes(2)
     expect(runtimes[1].localActivatedProjects).toEqual(["project-race"])
     await gate.dispose()
   })
 
-  test("switching to V11 aborts a real queued V10 network activation before waiting for teardown", async () => {
+  test("switching Projects aborts a real queued network activation before waiting for teardown", async () => {
     let activationStarted!: () => void
     const started = new Promise<void>((resolve) => { activationStarted = resolve })
     let activationAborted = false
@@ -390,23 +387,23 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
       },
       dispose: () => manager.dispose(),
     }
-    const gate = createProtocolGate({
+    const gate = createTeamRuntimeGate({
       createRuntime: () => runtime,
-      activateV10Project: ({ projectId, service }) => service.activateProject(projectId),
+      activateProjectSharing: sharingActivation(new Set(["project-shared"])),
     })
 
-    const pendingV10 = gate.activateProject("project-shared", "v10-r5")
+    const pendingShared = gate.activateProject("project-shared")
     await started
-    await gate.activateProject("project-local", "v11-r1-local-owner")
+    await gate.activateProject("project-local")
 
     expect(activationAborted).toBe(true)
-    await expect(pendingV10).rejects.toBeInstanceOf(Error)
+    await expect(pendingShared).rejects.toBeInstanceOf(Error)
     expect(gate.service.getStatus("project-local")).toEqual(localOnlyStatus("project-local"))
     await gate.dispose()
   })
 
-  test("keeps every Team/control constructor inside the protocol-gated createRuntime closure", () => {
-    const compositionStart = mainSource.indexOf("projectTeamRuntimeGate = createProtocolGatedProjectTeamRuntimeV2({")
+  test("keeps every Team/control constructor inside the lazily created runtime closure", () => {
+    const compositionStart = mainSource.indexOf("projectTeamRuntimeGate = createProjectTeamRuntimeGateV2({")
     const runtimeStart = mainSource.indexOf("createRuntime: () => {", compositionStart)
     const compositionEnd = mainSource.indexOf("const petAssetInspector", runtimeStart)
     expect(compositionStart).toBeGreaterThan(0)
@@ -429,9 +426,15 @@ describe("Desktop Main V11 local-owner offline wiring", () => {
       expect(runtimeSource).toContain(constructor)
       expect(mainSource.slice(compositionStart, runtimeStart)).not.toContain(constructor)
     }
-    expect(mainSource).toContain("await projectTeamRuntimeGate.activateProject(projectId, selectedProtocol)")
-    expect(mainSource).toContain('if (protocol !== "v10-r5")')
+    expect(mainSource).toContain("await projectTeamRuntimeGate.activateProject(projectId)")
     expect(mainSource).toContain("publish(localOnlyStatus(projectId))")
-    expect(mainSource).toContain('unavailableStatus(projectId)')
+    expect(mainSource).toContain("unavailableStatus(projectId)")
+  })
+
+  test("Main composes one collaboration runtime and never selects a protocol version", () => {
+    expect(mainSource).toContain("createMainProjectCollaborationComposition({")
+    expect(mainSource).not.toContain("v10-r5")
+    expect(mainSource).not.toContain("v11-r1")
+    expect(mainSource).not.toMatch(/selectedProtocol|activeProtocol|MainProjectProtocolSelection/)
   })
 })

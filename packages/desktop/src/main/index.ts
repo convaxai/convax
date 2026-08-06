@@ -238,11 +238,10 @@ import {
 } from "./project-team-peer-session-factory"
 import { NodeProjectTeamMemberIdentityStoreV1 } from "./project-team-member-identity-store"
 import { createLocalTeamIncomingReplicaAuthoritySourceV2 } from "./team-incoming-replica-authority"
-import { createMainProjectCollaborationProductionCompositionV3 } from "./main-project-collaboration-production-composition-v3"
-import type {
-  MainProjectCollaborationCompositionFacadeV3,
-  MainProjectProtocolSelectionV3,
-} from "./project-collaboration-composition-v3"
+import {
+  createMainProjectCollaborationComposition,
+  type MainProjectCollaborationComposition,
+} from "./project-collaboration-composition"
 import type { ProjectTeamCollaborationStatusV2 } from "../project-team-collaboration-contracts"
 
 interface ProjectTeamCollaborationRuntimeV2 {
@@ -256,15 +255,15 @@ interface ProjectTeamCollaborationRuntimeV2 {
 }
 
 /**
- * Keeps the V10 Team/control/data-plane closure absent until persisted protocol
- * selection and an explicit V10 sharing path require it. V11/R1 local-owner is a
- * closed production capability: leaving the final V10 Project destroys the whole
- * legacy runtime, while create/join cannot instantiate it as an accidental fallback.
+ * Keeps the Team/control/data-plane closure absent until a durable Team binding
+ * requires it. Local-first editing is the ordinary path: leaving the last shared
+ * Project destroys the whole network runtime, and an unshared Project never
+ * instantiates it as an accidental fallback. The gate observes no protocol.
  */
-export function createProtocolGatedProjectTeamRuntimeV2(
+export function createProjectTeamRuntimeGateV2(
   input: Readonly<{
   createRuntime(): ProjectTeamCollaborationRuntimeV2
-    activateV10Project(
+    activateProjectSharing(
       input: Readonly<{
     projectId: string
     service: Pick<ProjectTeamCollaborationRuntimeV2["service"], "activateLocalProject" | "activateProject">
@@ -273,7 +272,6 @@ export function createProtocolGatedProjectTeamRuntimeV2(
   }>,
 ) {
   let activeProjectId: string | null = null
-  let activeProtocol: MainProjectProtocolSelectionV3 | null = null
   let runtime: ProjectTeamCollaborationRuntimeV2 | undefined
   let runtimeProjectId: string | null = null
   let unsubscribeRuntime: (() => void) | undefined
@@ -311,12 +309,9 @@ export function createProtocolGatedProjectTeamRuntimeV2(
   const requireLive = () => {
     if (disposed) throw new Error("Project Team collaboration runtime gate is disposed")
   }
-  const requireActiveV10Project = (projectId: string) => {
+  const requireActiveProject = (projectId: string) => {
     requireLive()
     if (activeProjectId !== projectId) throw new Error("Project Team collaboration request is stale")
-    if (activeProtocol !== "v10-r5") {
-      throw new Error("Sharing and collaboration are unavailable for the selected V11/R1 Project protocol")
-    }
   }
   const ensureRuntime = () => {
     requireLive()
@@ -325,7 +320,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(
     const created = input.createRuntime()
     runtime = created
     unsubscribeRuntime = created.service.subscribe((status) => {
-      if (runtime !== created || activeProtocol !== "v10-r5" || activeProjectId !== status.projectId) return
+      if (runtime !== created || activeProjectId !== status.projectId) return
       publish(status)
     })
     return created
@@ -360,7 +355,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(
     }
   }
   const requireCurrentRuntimeProject = (created: ProjectTeamCollaborationRuntimeV2, projectId: string) => {
-    if (runtime !== created || activeProjectId !== projectId || activeProtocol !== "v10-r5") {
+    if (runtime !== created || activeProjectId !== projectId) {
       throw new Error("Project Team collaboration runtime activation became stale")
     }
   }
@@ -395,18 +390,17 @@ export function createProtocolGatedProjectTeamRuntimeV2(
   })
   const service: ProjectTeamCollaborationMainServiceV2 = Object.freeze({
     getStatus(projectId: string) {
-      if (activeProjectId === projectId && activeProtocol !== "v10-r5") return localOnlyStatus(projectId)
       if (activeProjectId === projectId && projectedStatus?.projectId === projectId) return projectedStatus
       return runtime?.service.getStatus(projectId) ?? localOnlyStatus(projectId)
     },
     async bootstrapTeam(projectId: string) {
-      requireActiveV10Project(projectId)
+      requireActiveProject(projectId)
       const created = await ensureRuntimeProject(projectId)
       requireCurrentRuntimeProject(created, projectId)
       return created.service.bootstrapTeam(projectId)
     },
     async joinTeam(request: Parameters<ProjectTeamCollaborationMainServiceV2["joinTeam"]>[0]) {
-      requireActiveV10Project(request.projectId)
+      requireActiveProject(request.projectId)
       const created = await ensureRuntimeProject(request.projectId)
       requireCurrentRuntimeProject(created, request.projectId)
       return created.service.joinTeam(request)
@@ -420,25 +414,16 @@ export function createProtocolGatedProjectTeamRuntimeV2(
 
   return Object.freeze({
     service,
-    async activateProject(projectId: string, protocol: MainProjectProtocolSelectionV3) {
+    async activateProject(projectId: string) {
       requireLive()
       const previousProjectId = activeProjectId
       activeProjectId = projectId
-      activeProtocol = protocol
       projectedStatus = null
-      if (protocol !== "v10-r5") {
-        try {
-          await destroyRuntime()
-        } finally {
-          publish(localOnlyStatus(projectId))
-        }
-        return
-      }
       try {
         if (runtime && previousProjectId !== null && previousProjectId !== projectId) {
           await destroyRuntime()
         }
-        await input.activateV10Project({ projectId, service: activationService })
+        await input.activateProjectSharing({ projectId, service: activationService })
       } catch (activationError) {
         let teardownError: unknown
         try {
@@ -446,7 +431,7 @@ export function createProtocolGatedProjectTeamRuntimeV2(
         } catch (error) {
           teardownError = error
         }
-        if (activeProjectId === projectId && activeProtocol === "v10-r5") {
+        if (activeProjectId === projectId) {
           publish(unavailableStatus(projectId))
         }
         if (teardownError !== undefined) {
@@ -460,7 +445,6 @@ export function createProtocolGatedProjectTeamRuntimeV2(
       requireLive()
       if (activeProjectId === projectId) {
         activeProjectId = null
-        activeProtocol = null
         projectedStatus = null
         await destroyRuntime()
       }
@@ -469,7 +453,6 @@ export function createProtocolGatedProjectTeamRuntimeV2(
       if (disposed) return
       disposed = true
       activeProjectId = null
-      activeProtocol = null
       projectedStatus = null
       listeners.clear()
       await destroyRuntime()
@@ -748,8 +731,8 @@ function startApplication() {
     let collaborationCanvasRoutes: MainProjectCanvasRouteRuntimeRegistryV2 | undefined
     let collaborationProjectIndexes: MainProjectIndexRuntimeRegistryV2 | undefined
     let collaborationCanvasComposition: MainCanvasCollaborationCompositionV2 | undefined
-    let collaborationFacade: MainProjectCollaborationCompositionFacadeV3 | undefined
-    let projectTeamRuntimeGate: ReturnType<typeof createProtocolGatedProjectTeamRuntimeV2> | undefined
+    let collaborationFacade: MainProjectCollaborationComposition | undefined
+    let projectTeamRuntimeGate: ReturnType<typeof createProjectTeamRuntimeGateV2> | undefined
     let disposeCanvasSessionIpc: () => void = () => undefined
     let disposeProjectTeamCollaborationIpc: () => void = () => undefined
     let activeCollaborationProjectId: string | null = null
@@ -778,12 +761,11 @@ function startApplication() {
         await collaborationFacade?.quiesceProject(previous)
       }
       if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
-      const selectedProtocol = await collaborationFacade.prepareProject(projectId)
-      console.warn(`Project ${projectId} selected collaboration protocol ${selectedProtocol}`)
+      await collaborationFacade.prepareProject(projectId)
       activeCollaborationProjectId = projectId
       try {
         if (!projectTeamRuntimeGate) throw new Error("Project Team collaboration runtime gate is unavailable")
-        await projectTeamRuntimeGate.activateProject(projectId, selectedProtocol)
+        await projectTeamRuntimeGate.activateProject(projectId)
       } catch (error) {
         // A rendezvous outage never rolls back or closes the already durable local Project.
         console.warn("Could not start Project sharing; the local Project remains open", error)
@@ -882,14 +864,14 @@ function startApplication() {
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
     collaborationCanvasRoutes = collaborationCanvasComposition.routes
-    collaborationFacade = createMainProjectCollaborationProductionCompositionV3({
+    collaborationFacade = createMainProjectCollaborationComposition({
       projectIndexes: collaborationProjectIndexes,
       canvasSessions: collaborationCanvasSessions,
       canvasRoutes: collaborationCanvasRoutes,
     })
     collaborationCanvasSessions = collaborationFacade.canvasSessions
-    projectTeamRuntimeGate = createProtocolGatedProjectTeamRuntimeV2({
-      activateV10Project: ({ projectId, service }) =>
+    projectTeamRuntimeGate = createProjectTeamRuntimeGateV2({
+      activateProjectSharing: ({ projectId, service }) =>
         activateProjectSharingFromDurableBindingV2({
         projectId,
         sharing: collaborationTeamStore,
@@ -1015,10 +997,7 @@ function startApplication() {
           async afterAuthorityChange(projectId) {
             if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
             await collaborationFacade.quiesceProject(projectId)
-            const selectedProtocol = await collaborationFacade.prepareProject(projectId)
-            if (selectedProtocol !== "v10-r5") {
-              throw new Error("V10 Team authority change selected a non-V10 Project runtime")
-            }
+            await collaborationFacade.prepareProject(projectId)
             activeCollaborationProjectId = projectId
           },
         })
