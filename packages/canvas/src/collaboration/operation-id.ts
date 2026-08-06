@@ -6,14 +6,14 @@ import {
   type Id128,
 } from "@convax/collaboration"
 
-const canvasCommandOperationIdDomain = new TextEncoder().encode("convax.canvas-command-operation-id/2\0")
+const canvasCommandOperationIdDomain = new TextEncoder().encode("convax.canvas-command-operation-id\0")
 const maximumCanvasCommandIdentityBytes = 256
 
 /**
  * Derives the protocol operation identity from host-bound authority and a
  * caller-stable correlation id. The caller never selects an Id128 directly.
  */
-export function deriveCanvasCommandOperationIdV2(input: {
+export function deriveCanvasCommandOperationId(input: {
   readonly ref: Readonly<{ readonly canvasId: string; readonly scopeId: string }>
   readonly actor: Readonly<{ readonly kind: string; readonly id: string }>
   readonly commandId: string

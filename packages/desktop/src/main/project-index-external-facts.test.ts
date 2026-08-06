@@ -13,13 +13,13 @@ import {
   type OwnerExternalFactPort,
   type StateVector,
 } from "@convax/collaboration"
-import type { CanvasGenesisProofCarrierVerifierV2 } from "@convax/canvas/collaboration"
+import type { CanvasGenesisProofCarrierVerifier } from "@convax/canvas/collaboration"
 
 import type { ProjectDocumentGenesisVerifierPort } from "@convax/project/node"
 import {
-  createFailClosedProjectIndexFactPortsV2,
-  createLocalBlobProjectIndexFactPortsV2,
-  createProjectIndexCanvasGenesisFactPortsV2,
+  createFailClosedProjectIndexFactPorts,
+  createLocalBlobProjectIndexFactPorts,
+  createProjectIndexCanvasGenesisFactPorts,
 } from "./project-index-external-facts"
 
 describe("ProjectIndex fail-closed production fact ports", () => {
@@ -28,7 +28,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     const factory = {
       createAttemptPort() { return { status: "created" as const, port } },
     } as unknown as OwnerExternalFactPortFactory<"project-index">
-    const adapters = createFailClosedProjectIndexFactPortsV2({ factory, scope: scope() })
+    const adapters = createFailClosedProjectIndexFactPorts({ factory, scope: scope() })
     await expect(adapters.facts.resolve({ dependencies: { validationArtifacts: [], externalFacts: [] } }))
       .resolves.toEqual({ status: "resolved", port })
     await expect(adapters.canvasGenesis.stageCanvasGenesis({} as never)).resolves.toBe("pending")
@@ -38,7 +38,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
 
   test("keeps authority-bearing ProjectIndex mutation pending and rejects cross-scope incoming frames", async () => {
     const factory = { createAttemptPort() { throw new Error("must not create") } } as unknown as OwnerExternalFactPortFactory<"project-index">
-    const adapters = createFailClosedProjectIndexFactPortsV2({ factory, scope: scope() })
+    const adapters = createFailClosedProjectIndexFactPorts({ factory, scope: scope() })
     const requirement = {
       owner: "project-index" as const, kind: "blob-publication-currentness", factDigest: "a".repeat(64) as never,
       request: { sha256: "b".repeat(64) as never, exactJcs: new Uint8Array([1]) },
@@ -52,13 +52,13 @@ describe("ProjectIndex fail-closed production fact ports", () => {
 
   test("resolves blob publication only from exact durable presence", async () => {
     const request = {
-      format: "convax.project-index-external-fact-request/2",
+      format: "convax.project-index-external-fact-request",
       kind: "blob-publication-currentness",
       projectIndexScope: scope(),
       operationId: id(3),
       intentDigest: digest("intent"),
       versionRecordDigest: digest("version"),
-      blob: { format: "convax.blob-ref/2", algorithm: "sha256", digest: digest("blob"), byteLength: "7", mime: "text/plain" },
+      blob: { format: "convax.blob-ref", algorithm: "sha256", digest: digest("blob"), byteLength: "7", mime: "text/plain" },
     } as const
     const exactJcs = encodeRestrictedJcs(request)
     const factDigest = ordinarySha256(exactJcs)
@@ -69,7 +69,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
       },
     } as unknown as OwnerExternalFactPortFactory<"project-index">
     const queryHave = mock(async () => [{ blobSha256: request.blob.digest, byteLength: request.blob.byteLength }])
-    const ports = createLocalBlobProjectIndexFactPortsV2({ factory, scope: scope(), blobs: { queryHave } as never })
+    const ports = createLocalBlobProjectIndexFactPorts({ factory, scope: scope(), blobs: { queryHave } as never })
     const resolved = await ports.facts.resolve({ dependencies: { validationArtifacts: [], externalFacts: [requirement] } })
     expect(resolved.status).toBe("resolved")
     if (resolved.status !== "resolved") throw new Error("expected local blob fact")
@@ -96,7 +96,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
       status: "resolved",
       requirement: fixture.requirement,
       value: {
-        format: "convax.project-index-external-fact-result/2",
+        format: "convax.project-index-external-fact-result",
         kind: "canvas-genesis-currentness",
         requestSha256: fixture.requirement.request.sha256,
         factDigest: fixture.requirement.factDigest,
@@ -175,10 +175,10 @@ function productionFixture(options: {
   const checkpointObjectDigest = digest("canvas-genesis")
   const acceptedBase = Object.freeze({
     scope: canvasScope,
-    frontier: Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) }),
+    frontier: Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) }),
     frontierDigest: digest("empty-frontier"),
     actorHeads: Object.freeze({
-      format: "convax.replica-actor-head-set/2" as const,
+      format: "convax.replica-actor-head-set" as const,
       scope: canvasScope,
       heads: Object.freeze([]),
     }),
@@ -202,7 +202,7 @@ function productionFixture(options: {
   let initializationAttempt = 0
   let installed = false
   const initializeShardWithGenesisProof = mock(async (input: Parameters<
-    import("@convax/project/node").NodeCollaborationPersistenceV2["initializeShardWithGenesisProof"]
+    import("@convax/project/node").NodeCollaborationPersistence["initializeShardWithGenesisProof"]
   >[0]) => {
     initializationAttempt += 1
     if (options.failFirstInitialization && initializationAttempt === 1) throw new Error("simulated crash")
@@ -237,9 +237,9 @@ function productionFixture(options: {
         authorCredentialCoreDigest: digest("credential"),
       }),
     })
-  }) as unknown as CanvasGenesisProofCarrierVerifierV2
+  }) as unknown as CanvasGenesisProofCarrierVerifier
   const factory = attemptFactory()
-  const ports = createProjectIndexCanvasGenesisFactPortsV2({
+  const ports = createProjectIndexCanvasGenesisFactPorts({
     factory,
     scope: projectIndexScope,
     persistence,
@@ -256,7 +256,7 @@ function productionFixture(options: {
     predecessor: Object.freeze({ frame: stageFrame, acceptedFrontierDigest: stageFrontierDigest }),
   })
   const request = Object.freeze({
-    format: "convax.project-index-external-fact-request/2",
+    format: "convax.project-index-external-fact-request",
     kind: "canvas-genesis-currentness",
     projectIndexScope,
     operationId: id(10),

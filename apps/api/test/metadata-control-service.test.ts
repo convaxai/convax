@@ -13,7 +13,7 @@ import {
   type CheckpointContentCertificateCore,
   type StableCheckpointSetCore,
 } from "@convax/collaboration"
-import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2 } from "@convax/project/collaboration-protocol"
+import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES } from "@convax/project/collaboration-protocol"
 import {
   CollaborationMembershipServiceV2,
   CollaborationMetadataControlServiceV2,
@@ -31,7 +31,7 @@ const id = (value: number) => parseId128(encodeBase64url(new Uint8Array(16).fill
 const digest = (value: string) => parseDigest(value.repeat(64))
 const projectId = parseProjectId("metadata-project")
 const ownerMemberId = parseMemberId(id(2))
-const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest)
 
 const controlSignatures: ControlDigestSignaturePortV2 = {
   serviceKeyId: (purpose) => `${purpose}-key`,
@@ -75,7 +75,7 @@ describe("checkpoint/floor metadata control", () => {
     const service = new CollaborationMetadataControlServiceV2(store, metadataSignatures)
     const scope = Object.freeze({ projectId, projectEpoch: bootstrap.membershipSnapshot.core.projectEpoch, docKind: "project-index" as const, docId: "project-index" as const, shardEpoch: id(9) })
     const certificateCore: CheckpointContentCertificateCore = Object.freeze({
-      format: "convax.checkpoint-content-certificate-core/2",
+      format: "convax.checkpoint-content-certificate-core",
       scope,
       checkpointDigest: digest("5"),
       parentCertificateDigests: [],
@@ -93,7 +93,7 @@ describe("checkpoint/floor metadata control", () => {
       serviceKeyPurpose: "content-attestation",
       serviceKeyId: "content-key",
     })
-    const certificate = Object.freeze({ format: "convax.checkpoint-content-certificate/2" as const, core: certificateCore, coreDigest: checkpointContentCertificateCoreDigest(certificateCore), serviceSignature: signature })
+    const certificate = Object.freeze({ format: "convax.checkpoint-content-certificate" as const, core: certificateCore, coreDigest: checkpointContentCertificateCoreDigest(certificateCore), serviceSignature: signature })
     const admissionFactory = createCheckpointAttestationAdmissionFactoryV2({ verify: async ({ evidence }) => evidence === "isolated-attester-receipt" })
     expect(await admissionFactory.authorize({ certificate, evidence: "forged" })).toBe("rejected")
     const admission = await admissionFactory.authorize({ certificate, evidence: "isolated-attester-receipt" })
@@ -102,7 +102,7 @@ describe("checkpoint/floor metadata control", () => {
     await expect(service.admitCheckpointCertificate(projectId, certificate, admission)).rejects.toMatchObject({ code: "invalid-proof" })
 
     const stableSetCore: StableCheckpointSetCore = Object.freeze({
-      format: "convax.stable-checkpoint-set-core/2",
+      format: "convax.stable-checkpoint-set-core",
       scope,
       priorSetDigest: null,
       contentCertificateDigests: [certificate.coreDigest],

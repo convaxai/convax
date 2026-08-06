@@ -18,9 +18,9 @@ import {
   CanvasResourceBusinessService,
 } from "@convax/canvas/application"
 import {
-  createProjectIndexReconstructionYDocV2,
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  requiredProjectIndexBlobDigestsV2,
+  createProjectIndexReconstructionYDoc,
+  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  requiredProjectIndexBlobDigests,
 } from "@convax/project"
 import {
   createWebCryptoEd25519Verifier,
@@ -29,14 +29,14 @@ import {
   parseValidationArtifactSet,
 } from "@convax/collaboration"
 import {
-  createPinnedControlServiceVerifierV2,
-  createWebCryptoEd25519Verifier as createProjectControlEd25519VerifierV2,
+  createPinnedControlServiceVerifier,
+  createWebCryptoEd25519Verifier as createProjectControlEd25519Verifier,
 } from "@convax/project/collaboration-protocol"
-import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import type { ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 import {
   NodeProjectManager,
   NodeProjectCollaborationRecoveryService,
-  NodeProjectCollaborationRuntimeCoordinatorV2,
+  NodeProjectCollaborationRuntimeCoordinator,
   ProjectAssetGc,
   ProjectCanvasDocumentService,
   ProjectFilePublisher,
@@ -201,56 +201,56 @@ import {
 import { ProjectAssetGcScheduler } from "./project-asset-gc-scheduler"
 import { loadCurrentCollaborationProtocol } from "./current-protocol-loader"
 import {
-  createOfflineCurrentLocalReplicaAuthoritySourceV2,
-  createProjectCollaborationMaterializerRegistryV2,
+  createOfflineCurrentLocalReplicaAuthoritySource,
+  createProjectCollaborationMaterializerRegistry,
 } from "./collaboration-production-runtime"
 import {
-  createLocalReplicaEnrollmentVerifierFactoryV2,
-  NodeDurableLocalReplicaAuthorityCacheV2,
+  createLocalReplicaEnrollmentVerifierFactory,
+  NodeDurableLocalReplicaAuthorityCache,
 } from "./durable-local-authority-cache"
-import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
-import { ElectronTeamIdentityVaultV1 } from "./electron-team-identity-vault"
-import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
-import { LocalProjectResetAuthorityV2 } from "./local-project-reset-authority"
-import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
+import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
+import { ElectronTeamIdentityVault } from "./electron-team-identity-vault"
+import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
+import { LocalProjectResetAuthority } from "./local-project-reset-authority"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 import {
-  createLocalProjectOwnerIndexRegistrationPortV2,
-  MainProjectIndexRuntimeRegistryV2,
+  createLocalProjectOwnerIndexRegistrationPort,
+  MainProjectIndexRuntimeRegistry,
 } from "./main-project-index-runtime-registry"
-import type { MainProjectCanvasRouteRuntimeRegistryV2 } from "./project-canvas-route-runtime-registry"
+import type { MainProjectCanvasRouteRuntimeRegistry } from "./project-canvas-route-runtime-registry"
 import {
-  createMainCanvasCollaborationCompositionV2,
-  type MainCanvasCollaborationCompositionV2,
+  createMainCanvasCollaborationComposition,
+  type MainCanvasCollaborationComposition,
 } from "./main-canvas-collaboration-composition"
-import { createLocalBlobProjectIndexFactPortsV2 } from "./project-index-external-facts"
-import { createProductionCanvasApplicationCommandAdapterV2 } from "./canvas-application-command-adapter"
-import { registerCanvasSessionIpcV2 } from "./canvas-session-ipc"
+import { createLocalBlobProjectIndexFactPorts } from "./project-index-external-facts"
+import { createProductionCanvasApplicationCommandAdapter } from "./canvas-application-command-adapter"
+import { registerCanvasSessionIpc } from "./canvas-session-ipc"
 import {
-  registerProjectTeamCollaborationIpcV2,
-  type ProjectTeamCollaborationMainServiceV2,
+  registerProjectTeamCollaborationIpc,
+  type ProjectTeamCollaborationMainService,
 } from "./project-team-collaboration-ipc"
-import { ProjectTeamCollaborationManagerV2 } from "./project-team-collaboration-manager"
-import { activateProjectSharingFromDurableBindingV2 } from "./project-sharing-activation"
-import { createDesktopCollaborationControlHttpClientV2 } from "./collaboration-control-http-client"
-import { parseDesktopCollaborationControlRuntimeConfigV1 } from "./collaboration-control-runtime-config"
-import { createDesktopTeamAuthorityAdmissionV1, NodeDurableTeamAuthorityStoreV1 } from "./durable-team-authority-store"
+import { ProjectTeamCollaborationManager } from "./project-team-collaboration-manager"
+import { activateProjectSharingFromDurableBinding } from "./project-sharing-activation"
+import { createDesktopCollaborationControlHttpClient } from "./collaboration-control-http-client"
+import { parseDesktopCollaborationControlRuntimeConfig } from "./collaboration-control-runtime-config"
+import { createDesktopTeamAuthorityAdmission, NodeDurableTeamAuthorityStore } from "./durable-team-authority-store"
 import {
-  DesktopProjectTeamReplicaProvisionerV2,
-  ProductionProjectTeamPeerSessionFactoryV2,
+  DesktopProjectTeamReplicaProvisioner,
+  ProductionProjectTeamPeerSessionFactory,
 } from "./project-team-peer-session-factory"
-import { NodeProjectTeamMemberIdentityStoreV1 } from "./project-team-member-identity-store"
-import { createLocalTeamIncomingReplicaAuthoritySourceV2 } from "./team-incoming-replica-authority"
+import { NodeProjectTeamMemberIdentityStore } from "./project-team-member-identity-store"
+import { createLocalTeamIncomingReplicaAuthoritySource } from "./team-incoming-replica-authority"
 import {
   createMainProjectCollaborationComposition,
   type MainProjectCollaborationComposition,
 } from "./project-collaboration-composition"
-import type { ProjectTeamCollaborationStatusV2 } from "../project-team-collaboration-contracts"
+import type { ProjectTeamCollaborationStatus } from "../project-team-collaboration-contracts"
 
-interface ProjectTeamCollaborationRuntimeV2 {
-  readonly service: ProjectTeamCollaborationMainServiceV2 &
+interface ProjectTeamCollaborationRuntime {
+  readonly service: ProjectTeamCollaborationMainService &
     Readonly<{
-    activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatusV2>
-    activateProject(projectId: string): Promise<ProjectTeamCollaborationStatusV2>
+    activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
+    activateProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
     quiesceProject(projectId: string): Promise<void>
   }>
   dispose(): Promise<void>
@@ -262,27 +262,27 @@ interface ProjectTeamCollaborationRuntimeV2 {
  * Project destroys the whole network runtime, and an unshared Project never
  * instantiates it as an accidental fallback. The gate observes no protocol.
  */
-export function createProjectTeamRuntimeGateV2(
+export function createProjectTeamRuntimeGate(
   input: Readonly<{
-  createRuntime(): ProjectTeamCollaborationRuntimeV2
+  createRuntime(): ProjectTeamCollaborationRuntime
     activateProjectSharing(
       input: Readonly<{
     projectId: string
-    service: Pick<ProjectTeamCollaborationRuntimeV2["service"], "activateLocalProject" | "activateProject">
+    service: Pick<ProjectTeamCollaborationRuntime["service"], "activateLocalProject" | "activateProject">
       }>,
-    ): Promise<ProjectTeamCollaborationStatusV2>
+    ): Promise<ProjectTeamCollaborationStatus>
   }>,
 ) {
   let activeProjectId: string | null = null
-  let runtime: ProjectTeamCollaborationRuntimeV2 | undefined
+  let runtime: ProjectTeamCollaborationRuntime | undefined
   let runtimeProjectId: string | null = null
   let unsubscribeRuntime: (() => void) | undefined
-  let projectedStatus: ProjectTeamCollaborationStatusV2 | null = null
+  let projectedStatus: ProjectTeamCollaborationStatus | null = null
   let runtimeTeardown: Promise<void> | null = null
   let disposed = false
-  const listeners = new Set<(status: ProjectTeamCollaborationStatusV2) => void>()
+  const listeners = new Set<(status: ProjectTeamCollaborationStatus) => void>()
 
-  const publish = (status: ProjectTeamCollaborationStatusV2) => {
+  const publish = (status: ProjectTeamCollaborationStatus) => {
     if (activeProjectId === status.projectId) projectedStatus = status
     for (const listener of listeners) {
       try {
@@ -295,11 +295,11 @@ export function createProjectTeamRuntimeGateV2(
   }
   const status = (
     projectId: string,
-    state: ProjectTeamCollaborationStatusV2["state"],
-    reason: ProjectTeamCollaborationStatusV2["reason"],
-  ): ProjectTeamCollaborationStatusV2 =>
+    state: ProjectTeamCollaborationStatus["state"],
+    reason: ProjectTeamCollaborationStatus["reason"],
+  ): ProjectTeamCollaborationStatus =>
     Object.freeze({
-    format: "convax.project-team-collaboration-status/2",
+    format: "convax.project-team-collaboration-status",
     projectId,
     state,
     canEdit: false,
@@ -356,7 +356,7 @@ export function createProjectTeamRuntimeGateV2(
       if (runtimeTeardown === teardown) runtimeTeardown = null
     }
   }
-  const requireCurrentRuntimeProject = (created: ProjectTeamCollaborationRuntimeV2, projectId: string) => {
+  const requireCurrentRuntimeProject = (created: ProjectTeamCollaborationRuntime, projectId: string) => {
     if (runtime !== created || activeProjectId !== projectId) {
       throw new Error("Project Team collaboration runtime activation became stale")
     }
@@ -390,7 +390,7 @@ export function createProjectTeamRuntimeGateV2(
       return next
     },
   })
-  const service: ProjectTeamCollaborationMainServiceV2 = Object.freeze({
+  const service: ProjectTeamCollaborationMainService = Object.freeze({
     getStatus(projectId: string) {
       if (activeProjectId === projectId && projectedStatus?.projectId === projectId) return projectedStatus
       return runtime?.service.getStatus(projectId) ?? localOnlyStatus(projectId)
@@ -401,13 +401,13 @@ export function createProjectTeamRuntimeGateV2(
       requireCurrentRuntimeProject(created, projectId)
       return created.service.bootstrapTeam(projectId)
     },
-    async joinTeam(request: Parameters<ProjectTeamCollaborationMainServiceV2["joinTeam"]>[0]) {
+    async joinTeam(request: Parameters<ProjectTeamCollaborationMainService["joinTeam"]>[0]) {
       requireActiveProject(request.projectId)
       const created = await ensureRuntimeProject(request.projectId)
       requireCurrentRuntimeProject(created, request.projectId)
       return created.service.joinTeam(request)
     },
-    subscribe(listener: Parameters<ProjectTeamCollaborationMainServiceV2["subscribe"]>[0]) {
+    subscribe(listener: Parameters<ProjectTeamCollaborationMainService["subscribe"]>[0]) {
       requireLive()
       listeners.add(listener)
       return () => listeners.delete(listener)
@@ -693,7 +693,7 @@ function startApplication() {
         trustedWebContents.has(event.sender.id) &&
         Boolean(event.senderFrame && isTrustedRendererUrl(event.senderFrame.url)),
     }
-    const createCollaborationIdV2 = () => parseId128(randomBytes(16).toString("base64url"))
+    const createCollaborationId = () => parseId128(randomBytes(16).toString("base64url"))
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
     const projectCreationDirectory = desktopProjectWorkspaceDirectory(app.getPath("documents"))
     const projectManager = new NodeProjectManager({
@@ -706,35 +706,35 @@ function startApplication() {
     const collaborationAuthority = await loadCurrentCollaborationProtocol({
       explicitProtocolRoot: collaborationProtocolRoot,
     })
-    const collaborationAuthorityCache = new NodeDurableLocalReplicaAuthorityCacheV2(
+    const collaborationAuthorityCache = new NodeDurableLocalReplicaAuthorityCache(
       join(userDataDirectory, "collaboration", "local-authority"),
       collaborationAuthority.protocolDigest,
     )
-    const collaborationReplicaVault = new ElectronReplicaSigningVaultV2(
+    const collaborationReplicaVault = new ElectronReplicaSigningVault(
       join(userDataDirectory, "collaboration", "replica-vault"),
       safeStorage,
     )
     const collaborationSignatureVerifier = createWebCryptoEd25519Verifier()
     // This local durable store performs no control-plane or PeerJS startup; the
     // Team runtime stays behind the protocol gate below.
-    const collaborationTeamStore = new NodeDurableTeamAuthorityStoreV1(
+    const collaborationTeamStore = new NodeDurableTeamAuthorityStore(
       join(userDataDirectory, "collaboration", "team-authority"),
     )
-    const localProjectOwnerAuthority = new NodeDurableLocalProjectOwnerAuthorityV2({
+    const localProjectOwnerAuthority = new NodeDurableLocalProjectOwnerAuthority({
       rootDirectory: join(userDataDirectory, "collaboration", "local-project-owner"),
       authority: collaborationAuthority,
-      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
       projects: projectManager,
       vault: collaborationReplicaVault,
       verifier: collaborationSignatureVerifier,
     })
-    const collaborationMaterializers = createProjectCollaborationMaterializerRegistryV2()
-    let collaborationCanvasSessions: CanvasCollaborationSessionOwnerV2 | undefined
-    let collaborationCanvasRoutes: MainProjectCanvasRouteRuntimeRegistryV2 | undefined
-    let collaborationProjectIndexes: MainProjectIndexRuntimeRegistryV2 | undefined
-    let collaborationCanvasComposition: MainCanvasCollaborationCompositionV2 | undefined
+    const collaborationMaterializers = createProjectCollaborationMaterializerRegistry()
+    let collaborationCanvasSessions: CanvasCollaborationSessionOwner | undefined
+    let collaborationCanvasRoutes: MainProjectCanvasRouteRuntimeRegistry | undefined
+    let collaborationProjectIndexes: MainProjectIndexRuntimeRegistry | undefined
+    let collaborationCanvasComposition: MainCanvasCollaborationComposition | undefined
     let collaborationFacade: MainProjectCollaborationComposition | undefined
-    let projectTeamRuntimeGate: ReturnType<typeof createProjectTeamRuntimeGateV2> | undefined
+    let projectTeamRuntimeGate: ReturnType<typeof createProjectTeamRuntimeGate> | undefined
     let disposeCanvasSessionIpc: () => void = () => undefined
     let disposeProjectTeamCollaborationIpc: () => void = () => undefined
     let activeCollaborationProjectId: string | null = null
@@ -773,14 +773,14 @@ function startApplication() {
         console.warn("Could not start Project sharing; the local Project remains open", error)
       }
     })
-    const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinatorV2({
+    const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinator({
       materializer: collaborationMaterializers,
       projects: projectManager,
       identity: {
         async resolveLocalActorId({ projectId, projectRoot }) {
           const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
               protocolDigest: collaborationAuthority.protocolDigest,
-              schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+              schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
               uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
           })
           if (manifest.projectIndexScope.projectId !== projectId) {
@@ -811,22 +811,23 @@ function startApplication() {
       },
     })
     const projectRecovery = new NodeProjectCollaborationRecoveryService({
-      authority: new LocalProjectResetAuthorityV2({
+      authority: new LocalProjectResetAuthority({
         authority: collaborationAuthority,
         owners: localProjectOwnerAuthority,
+        teams: collaborationTeamStore,
       }),
       gate: collaborationProjects,
       projects: collaborationProjects,
     })
-    const localCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySourceV2({
+    const localCollaborationAuthority = createOfflineCurrentLocalReplicaAuthoritySource({
       cache: collaborationAuthorityCache,
       vault: collaborationReplicaVault,
     })
-    const incomingCollaborationAuthority = createLocalTeamIncomingReplicaAuthoritySourceV2(collaborationTeamStore)
-    collaborationProjectIndexes = new MainProjectIndexRuntimeRegistryV2({
+    const incomingCollaborationAuthority = createLocalTeamIncomingReplicaAuthoritySource(collaborationTeamStore)
+    collaborationProjectIndexes = new MainProjectIndexRuntimeRegistry({
       authority: collaborationAuthority,
       projects: collaborationProjects,
-      firstRegistration: createLocalProjectOwnerIndexRegistrationPortV2(
+      firstRegistration: createLocalProjectOwnerIndexRegistrationPort(
         collaborationAuthority,
         localProjectOwnerAuthority,
       ),
@@ -834,18 +835,18 @@ function startApplication() {
       localAuthority: localCollaborationAuthority,
       incomingAuthority: incomingCollaborationAuthority,
       signatureVerifier: collaborationSignatureVerifier,
-      createOperationId: createCollaborationIdV2,
-      createShardEpoch: createCollaborationIdV2,
+      createOperationId: createCollaborationId,
+      createShardEpoch: createCollaborationId,
       describeProjectIndex({ scope, owner, blobs }) {
-        const factPorts = createLocalBlobProjectIndexFactPortsV2({
+        const factPorts = createLocalBlobProjectIndexFactPorts({
           factory: owner.externalFactPortFactory,
           scope,
           blobs,
         })
         return {
-          createDocument: createProjectIndexReconstructionYDocV2,
+          createDocument: createProjectIndexReconstructionYDoc,
           incomingFacts: factPorts.incomingFacts,
-          requiredBlobDigests: requiredProjectIndexBlobDigestsV2,
+          requiredBlobDigests: requiredProjectIndexBlobDigests,
           facts: factPorts.facts,
           canvasGenesis: factPorts.canvasGenesis,
         }
@@ -854,7 +855,7 @@ function startApplication() {
     const pluginStateSchemaArtifactAuthority: {
       current?: Pick<PluginStateSchemaAuthorityV1, "resolveArtifact">
     } = {}
-    collaborationCanvasComposition = createMainCanvasCollaborationCompositionV2({
+    collaborationCanvasComposition = createMainCanvasCollaborationComposition({
       authority: collaborationAuthority,
       projects: collaborationProjects,
       projectIndexes: collaborationProjectIndexes,
@@ -862,10 +863,10 @@ function startApplication() {
       localAuthority: localCollaborationAuthority,
       incomingAuthority: incomingCollaborationAuthority,
       signatureVerifier: collaborationSignatureVerifier,
-      applicationCommands: createProductionCanvasApplicationCommandAdapterV2(),
-      createOperationId: createCollaborationIdV2,
-      createSessionId: createCollaborationIdV2,
-      createCursorToken: createCollaborationIdV2,
+      applicationCommands: createProductionCanvasApplicationCommandAdapter(),
+      createOperationId: createCollaborationId,
+      createSessionId: createCollaborationId,
+      createCursorToken: createCollaborationId,
       artifactAuthority: {
         async resolve({ ref }) {
           const authority = pluginStateSchemaArtifactAuthority.current
@@ -884,21 +885,21 @@ function startApplication() {
       canvasRoutes: collaborationCanvasRoutes,
     })
     collaborationCanvasSessions = collaborationFacade.canvasSessions
-    projectTeamRuntimeGate = createProjectTeamRuntimeGateV2({
+    projectTeamRuntimeGate = createProjectTeamRuntimeGate({
       activateProjectSharing: ({ projectId, service }) =>
-        activateProjectSharingFromDurableBindingV2({
+        activateProjectSharingFromDurableBinding({
         projectId,
         sharing: collaborationTeamStore,
         service,
       }),
       createRuntime: () => {
-        const collaborationControlConfig = parseDesktopCollaborationControlRuntimeConfigV1(
+        const collaborationControlConfig = parseDesktopCollaborationControlRuntimeConfig(
           process.env.CONVAX_COLLABORATION_CONTROL_RUNTIME,
         )
         const collaborationControlVerifier = collaborationControlConfig
-          ? createPinnedControlServiceVerifierV2({
+          ? createPinnedControlServiceVerifier({
               keys: collaborationControlConfig.keys,
-              verifier: createProjectControlEd25519VerifierV2(),
+              verifier: createProjectControlEd25519Verifier(),
             })
           : Object.freeze({
               async verify() {
@@ -907,24 +908,24 @@ function startApplication() {
             })
         const collaborationTrustBundleDigest =
           collaborationControlConfig?.trustBundleDigest ?? parseDigest("0".repeat(64))
-        const collaborationControl = createDesktopCollaborationControlHttpClientV2({
+        const collaborationControl = createDesktopCollaborationControlHttpClient({
           serviceBaseUrl: collaborationControlConfig?.serviceBaseUrl,
           verifier: collaborationControlVerifier,
         })
-        const collaborationTeamAdmission = createDesktopTeamAuthorityAdmissionV1({
+        const collaborationTeamAdmission = createDesktopTeamAuthorityAdmission({
           verifier: collaborationControlVerifier,
           protocolDigest: collaborationAuthority.protocolDigest,
           trustBundleDigest: collaborationTrustBundleDigest,
         })
-        const collaborationTeamIdentityVault = new ElectronTeamIdentityVaultV1(
+        const collaborationTeamIdentityVault = new ElectronTeamIdentityVault(
           join(userDataDirectory, "collaboration", "team-identity-vault"),
           safeStorage,
         )
-        const collaborationMemberIdentities = new NodeProjectTeamMemberIdentityStoreV1(
+        const collaborationMemberIdentities = new NodeProjectTeamMemberIdentityStore(
           join(userDataDirectory, "collaboration", "member-identities"),
         )
         const collaborationValidationArtifacts = parseValidationArtifactSet({
-          format: "convax.validation-artifact-set/2",
+          format: "convax.validation-artifact-set",
           artifacts: collaborationAuthority.protocolSchemaBundle.core.artifacts
             .map((artifact, index) => ({
             owner: (["canvas", "kernel", "control-plane", "project-index"] as const)[index],
@@ -933,7 +934,7 @@ function startApplication() {
             }))
             .sort((left, right) => String(left.owner).localeCompare(String(right.owner))),
         })
-        const localReplicaEnrollment = createLocalReplicaEnrollmentVerifierFactoryV2({
+        const localReplicaEnrollment = createLocalReplicaEnrollmentVerifierFactory({
           async verifyCurrent(candidate) {
             const record = await collaborationTeamStore.open(candidate.projectId)
             if (typeof record === "string") return false
@@ -954,7 +955,7 @@ function startApplication() {
             )
           },
         })
-        const teamReplicaProvisioner = new DesktopProjectTeamReplicaProvisionerV2({
+        const teamReplicaProvisioner = new DesktopProjectTeamReplicaProvisioner({
           control: collaborationControl,
           teamAdmission: collaborationTeamAdmission,
           teamStore: collaborationTeamStore,
@@ -971,9 +972,9 @@ function startApplication() {
           localEnrollment: localReplicaEnrollment,
           localAuthority: collaborationAuthorityCache,
           validationArtifacts: collaborationValidationArtifacts,
-          createId: createCollaborationIdV2,
+          createId: createCollaborationId,
         })
-        const productionTeamFactory = new ProductionProjectTeamPeerSessionFactoryV2({
+        const productionTeamFactory = new ProductionProjectTeamPeerSessionFactory({
           control: collaborationControl,
           teamAdmission: collaborationTeamAdmission,
           teamStore: collaborationTeamStore,
@@ -984,7 +985,7 @@ function startApplication() {
               const projectRoot = await projectManager.resolveProjectRoot({ projectId })
               const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
                   protocolDigest: collaborationAuthority.protocolDigest,
-                  schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+                  schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
                   uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
               })
               return Object.freeze({
@@ -1007,7 +1008,7 @@ function startApplication() {
           },
           protocolDigest: collaborationAuthority.protocolDigest,
           trustBundleDigest: collaborationTrustBundleDigest,
-          createId: createCollaborationIdV2,
+          createId: createCollaborationId,
           async afterAuthorityChange(projectId) {
             if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
             await collaborationFacade.quiesceProject(projectId)
@@ -1015,7 +1016,7 @@ function startApplication() {
             activeCollaborationProjectId = projectId
           },
         })
-        const service = new ProjectTeamCollaborationManagerV2(productionTeamFactory)
+        const service = new ProjectTeamCollaborationManager(productionTeamFactory)
         service.setOnline(net.isOnline())
         const refreshConnectivity = () => service.setOnline(net.isOnline())
         powerMonitor.on("resume", refreshConnectivity)
@@ -2189,7 +2190,7 @@ function startApplication() {
       },
     })
     if (!projectTeamRuntimeGate) throw new Error("Project Team collaboration runtime gate is unavailable")
-    const projectTeamIpcRegistration = registerProjectTeamCollaborationIpcV2({
+    const projectTeamIpcRegistration = registerProjectTeamCollaborationIpc({
       ipcMain,
       service: projectTeamRuntimeGate.service,
       getActiveProjectId: () => activeCollaborationProjectId,
@@ -2243,7 +2244,7 @@ function startApplication() {
           }
         : null
     }
-    disposeCanvasSessionIpc = registerCanvasSessionIpcV2(collaborationCanvasSessions, {
+    disposeCanvasSessionIpc = registerCanvasSessionIpc(collaborationCanvasSessions, {
       ipcMain,
       isTrustedSender: ipcSecurity.isTrustedSender,
       resolveActiveCanvas,
@@ -2646,7 +2647,7 @@ function startApplication() {
   })
 }
 
-function projectCanvasUiCatalog(projection: ProjectCanvasCatalogProjectionV2) {
+function projectCanvasUiCatalog(projection: ProjectCanvasCatalogProjection) {
   return {
     projectId: projection.projectId,
     creationAvailability: projection.creationAvailability,

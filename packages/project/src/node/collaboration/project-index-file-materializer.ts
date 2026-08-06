@@ -3,27 +3,27 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import { parseProjectId, type Digest, type ProjectId } from "@convax/collaboration"
 import type {
-  ProjectIndexFileMaterializationEntryV2,
-  ProjectIndexFileMaterializationPlanV2,
-  ProjectIndexFileMaterializationProjectionPortV2,
+  ProjectIndexFileMaterializationEntry,
+  ProjectIndexFileMaterializationPlan,
+  ProjectIndexFileMaterializationProjectionPort,
 } from "../../canvas/project-index-file-application"
-import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
+import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
 import {
-  fsyncProjectDirectoryV2,
-  isNodeDirectoryDurabilityErrorV2,
+  fsyncProjectDirectory,
+  isNodeDirectoryDurabilityError,
 } from "./directory-durability"
 
-export interface ProjectIndexMaterializationBlobPortV2 {
-  copyVerifiedBytesTo(reference: ProjectResourceReferenceV2, stagingPath: string): Promise<void>
+export interface ProjectIndexMaterializationBlobPort {
+  copyVerifiedBytesTo(reference: ProjectIndexResourceReference, stagingPath: string): Promise<void>
 }
 
-export interface ProjectIndexFileMaterializationResultV2 {
+export interface ProjectIndexFileMaterializationResult {
   readonly materializedPaths: readonly string[]
   readonly removedPaths: readonly string[]
   readonly pendingPaths: readonly Readonly<{ path: string; code: "blob-unavailable" | "native-path-conflict" }> []
 }
 
-interface MaterializedEntryV2 {
+interface MaterializedEntry {
   readonly entryId: string
   readonly kind: "directory" | "file"
   readonly path: string
@@ -36,19 +36,19 @@ interface MaterializedEntryV2 {
  * Losing it on crash may leave an invisible physical orphan, as permitted by the
  * protocol, but can never revive or overwrite a logical entry.
  */
-export class ProjectIndexFileMaterializerV2 {
+export class ProjectIndexFileMaterializer {
   readonly #projectId: ProjectId
   readonly #projectRoot: string
-  readonly #projection: ProjectIndexFileMaterializationProjectionPortV2
-  readonly #blobs: ProjectIndexMaterializationBlobPortV2
-  #previous = new Map<string, MaterializedEntryV2>()
+  readonly #projection: ProjectIndexFileMaterializationProjectionPort
+  readonly #blobs: ProjectIndexMaterializationBlobPort
+  #previous = new Map<string, MaterializedEntry>()
   #queue: Promise<void> = Promise.resolve()
 
   private constructor(input: {
     projectId: ProjectId
     projectRoot: string
-    projection: ProjectIndexFileMaterializationProjectionPortV2
-    blobs: ProjectIndexMaterializationBlobPortV2
+    projection: ProjectIndexFileMaterializationProjectionPort
+    blobs: ProjectIndexMaterializationBlobPort
   }) {
     this.#projectId = input.projectId
     this.#projectRoot = input.projectRoot
@@ -59,21 +59,21 @@ export class ProjectIndexFileMaterializerV2 {
   static async open(input: {
     readonly projectId: ProjectId
     readonly projectRoot: string
-    readonly projection: ProjectIndexFileMaterializationProjectionPortV2
-    readonly blobs: ProjectIndexMaterializationBlobPortV2
-  }): Promise<ProjectIndexFileMaterializerV2> {
+    readonly projection: ProjectIndexFileMaterializationProjectionPort
+    readonly blobs: ProjectIndexMaterializationBlobPort
+  }): Promise<ProjectIndexFileMaterializer> {
     const projectId = parseProjectId(input.projectId)
     if (!path.isAbsolute(input.projectRoot)) throw new TypeError("Project materialization root must be absolute")
     const projectRoot = await fs.realpath(input.projectRoot)
     const stat = await fs.lstat(projectRoot)
     if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Project materialization root is not a real directory")
-    return new ProjectIndexFileMaterializerV2({ ...input, projectId, projectRoot })
+    return new ProjectIndexFileMaterializer({ ...input, projectId, projectRoot })
   }
 
-  reconcile(): Promise<ProjectIndexFileMaterializationResultV2> {
-    let resolveResult!: (value: ProjectIndexFileMaterializationResultV2) => void
+  reconcile(): Promise<ProjectIndexFileMaterializationResult> {
+    let resolveResult!: (value: ProjectIndexFileMaterializationResult) => void
     let rejectResult!: (reason: unknown) => void
-    const result = new Promise<ProjectIndexFileMaterializationResultV2>((resolve, reject) => {
+    const result = new Promise<ProjectIndexFileMaterializationResult>((resolve, reject) => {
       resolveResult = resolve
       rejectResult = reject
     })
@@ -85,13 +85,13 @@ export class ProjectIndexFileMaterializerV2 {
     return result
   }
 
-  async #reconcile(): Promise<ProjectIndexFileMaterializationResultV2> {
+  async #reconcile(): Promise<ProjectIndexFileMaterializationResult> {
     const plan = await this.#projection.queryFileMaterializationPlan({ projectId: this.#projectId })
     this.#validatePlan(plan)
     const materializedPaths: string[] = []
     const removedPaths: string[] = []
     const pendingPaths: Array<{ path: string; code: "blob-unavailable" | "native-path-conflict" }> = []
-    const next = new Map<string, MaterializedEntryV2>()
+    const next = new Map<string, MaterializedEntry>()
 
     for (const entry of plan.entries.filter((candidate) => candidate.kind === "directory")) {
       try {
@@ -99,7 +99,7 @@ export class ProjectIndexFileMaterializerV2 {
         next.set(entry.entryId, tracked(entry))
         materializedPaths.push(entry.path)
       } catch (error) {
-        if (isNodeDirectoryDurabilityErrorV2(error)) throw error
+        if (isNodeDirectoryDurabilityError(error)) throw error
         pendingPaths.push({ path: entry.path, code: "native-path-conflict" })
       }
     }
@@ -111,7 +111,7 @@ export class ProjectIndexFileMaterializerV2 {
         next.set(entry.entryId, tracked(entry))
         materializedPaths.push(entry.path)
       } catch (error) {
-        if (isNodeDirectoryDurabilityErrorV2(error)) throw error
+        if (isNodeDirectoryDurabilityError(error)) throw error
         pendingPaths.push({ path: entry.path, code: isBlobUnavailable(error) ? "blob-unavailable" : "native-path-conflict" })
         if (previous) next.set(previous.entryId, previous)
       }
@@ -136,7 +136,7 @@ export class ProjectIndexFileMaterializerV2 {
     })
   }
 
-  #validatePlan(plan: ProjectIndexFileMaterializationPlanV2): void {
+  #validatePlan(plan: ProjectIndexFileMaterializationPlan): void {
     if (plan.projectId !== this.#projectId) throw new Error("ProjectIndex materialization plan crossed Project identity")
     const ids = new Set<string>()
     const paths = new Set<string>()
@@ -149,7 +149,7 @@ export class ProjectIndexFileMaterializerV2 {
     }
   }
 
-  async #materializeFile(entry: ProjectIndexFileMaterializationEntryV2, previous?: MaterializedEntryV2): Promise<void> {
+  async #materializeFile(entry: ProjectIndexFileMaterializationEntry, previous?: MaterializedEntry): Promise<void> {
     if (entry.reference === null) throw new Error("ProjectIndex file reference is absent")
     const target = this.#absolute(entry.path)
     await this.#ensureDirectory(parentOf(entry.path))
@@ -175,20 +175,20 @@ export class ProjectIndexFileMaterializerV2 {
         await fs.rename(staging, target)
       }
       await fsyncFile(target)
-      await fsyncProjectDirectoryV2(path.dirname(target))
+      await fsyncProjectDirectory(path.dirname(target))
     } finally {
       await fs.rm(staging, { force: true }).catch(() => undefined)
     }
   }
 
-  async #removeTrackedFile(entry: MaterializedEntryV2): Promise<boolean> {
+  async #removeTrackedFile(entry: MaterializedEntry): Promise<boolean> {
     if (entry.blobDigest === null) return false
     const target = this.#absolute(entry.path)
     const current = await digestRegularFile(target)
     if (current === null) return true
     if (current !== entry.blobDigest) return false
     await fs.unlink(target)
-    await fsyncProjectDirectoryV2(path.dirname(target))
+    await fsyncProjectDirectory(path.dirname(target))
     return true
   }
 
@@ -196,10 +196,10 @@ export class ProjectIndexFileMaterializerV2 {
     const target = this.#absolute(portablePath)
     try {
       await fs.rmdir(target)
-      await fsyncProjectDirectoryV2(path.dirname(target))
+      await fsyncProjectDirectory(path.dirname(target))
       return true
     } catch (error) {
-      if (isNodeDirectoryDurabilityErrorV2(error)) throw error
+      if (isNodeDirectoryDurabilityError(error)) throw error
       if (isNodeError(error) && (error.code === "ENOENT" || error.code === "ENOTEMPTY")) return error.code === "ENOENT"
       return false
     }
@@ -238,7 +238,7 @@ class BlobUnavailableError extends Error {
   constructor(options: ErrorOptions) { super("Project blob is not locally durable", options); this.name = "BlobUnavailableError" }
 }
 
-function tracked(entry: ProjectIndexFileMaterializationEntryV2): MaterializedEntryV2 {
+function tracked(entry: ProjectIndexFileMaterializationEntry): MaterializedEntry {
   return Object.freeze({ entryId: entry.entryId, kind: entry.kind, path: entry.path, blobDigest: entry.reference?.blob.digest ?? null })
 }
 

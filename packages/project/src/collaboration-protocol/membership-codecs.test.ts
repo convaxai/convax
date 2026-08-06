@@ -10,12 +10,12 @@ import {
   parseUint64,
 } from "@convax/collaboration"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  membershipMutationProofCoreDigestV2,
-  parseMembershipMutationProofCoreV2,
-  parseMembershipMutationProofV2,
-  parseReplicaIdReservationRequestV2,
-  replicaIdReservationRequestCoreDigestV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  membershipMutationProofCoreDigest,
+  parseMembershipMutationProofCore,
+  parseMembershipMutationProof,
+  parseReplicaIdReservationRequest,
+  replicaIdReservationRequestCoreDigest,
 } from "../collaboration-protocol"
 
 const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
@@ -23,12 +23,12 @@ const member = (byte: number) => parseMemberId(id(byte))
 const key = (byte: number) => parsePublicKey(encodeBase64url(new Uint8Array(32).fill(byte)))
 const digest = (digit: string) => parseDigest(digit.repeat(64))
 const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
-const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest)
 
 describe("Membership codecs", () => {
   test("closes reservation and member-add proof over exact current fields", () => {
     const reservationCore = {
-      format: "convax.replica-id-reservation-request-core/2" as const,
+      format: "convax.replica-id-reservation-request-core" as const,
       allocationRequestId: id(1),
       projectId: parseProjectId("project-a"),
       projectEpoch: id(2),
@@ -44,11 +44,11 @@ describe("Membership codecs", () => {
       requestedEditState: "pending-editor" as const,
       protocolDigest,
     }
-    const reservation = { format: "convax.replica-id-reservation-request/2" as const, core: reservationCore, coreDigest: replicaIdReservationRequestCoreDigestV2(reservationCore), memberSignature: signature }
-    expect(parseReplicaIdReservationRequestV2(reservation)).toEqual(reservation)
+    const reservation = { format: "convax.replica-id-reservation-request" as const, core: reservationCore, coreDigest: replicaIdReservationRequestCoreDigest(reservationCore), memberSignature: signature }
+    expect(parseReplicaIdReservationRequest(reservation)).toEqual(reservation)
 
     const proofCore = {
-      format: "convax.mutation-proof-core/2" as const,
+      format: "convax.mutation-proof-core" as const,
       mutationId: id(6),
       challengeDigest: digest("2"),
       projectId: reservationCore.projectId,
@@ -64,20 +64,20 @@ describe("Membership codecs", () => {
       initialRole: "editor" as const,
       adminCapabilityDigest: digest("3"),
     }
-    const proof = { format: "convax.mutation-proof/2" as const, core: proofCore, requestDigest: membershipMutationProofCoreDigestV2(proofCore), signatures: { purpose: "member-add" as const, adminSignature: signature, targetMemberPossessionSignature: signature } }
-    expect(parseMembershipMutationProofCoreV2(proofCore)).toEqual(proofCore)
-    expect(parseMembershipMutationProofV2(proof)).toEqual(proof)
+    const proof = { format: "convax.mutation-proof" as const, core: proofCore, requestDigest: membershipMutationProofCoreDigest(proofCore), signatures: { purpose: "member-add" as const, adminSignature: signature, targetMemberPossessionSignature: signature } }
+    expect(parseMembershipMutationProofCore(proofCore)).toEqual(proofCore)
+    expect(parseMembershipMutationProof(proof)).toEqual(proof)
   })
 
   test("rejects digest tampering, unknown fields, and signature-branch substitution", () => {
     const core = {
-      format: "convax.mutation-proof-core/2" as const,
+      format: "convax.mutation-proof-core" as const,
       mutationId: id(1), challengeDigest: digest("1"), projectId: parseProjectId("project-a"), projectEpoch: id(2), membershipEpoch: id(3), expectedMembershipSequence: parseUint64("1"), requesterMemberId: member(4), targetMemberId: member(5), targetMemberMutationCounter: parseUint64("1"), serverNonce: id(6), purpose: "member-add" as const, targetMemberSigningPublicKey: key(5), initialRole: "viewer" as const, adminCapabilityDigest: digest("2"),
     }
-    const proof = { format: "convax.mutation-proof/2" as const, core, requestDigest: membershipMutationProofCoreDigestV2(core), signatures: { purpose: "member-add" as const, adminSignature: signature, targetMemberPossessionSignature: signature } }
-    expect(() => parseMembershipMutationProofV2({ ...proof, requestDigest: digest("f") })).toThrow()
-    expect(() => parseMembershipMutationProofV2({ ...proof, extra: true })).toThrow()
-    expect(() => parseMembershipMutationProofV2({ ...proof, signatures: { purpose: "replica-enroll", memberSignature: signature } })).toThrow()
-    expect(() => parseMembershipMutationProofCoreV2({ ...core, extra: true })).toThrow()
+    const proof = { format: "convax.mutation-proof" as const, core, requestDigest: membershipMutationProofCoreDigest(core), signatures: { purpose: "member-add" as const, adminSignature: signature, targetMemberPossessionSignature: signature } }
+    expect(() => parseMembershipMutationProof({ ...proof, requestDigest: digest("f") })).toThrow()
+    expect(() => parseMembershipMutationProof({ ...proof, extra: true })).toThrow()
+    expect(() => parseMembershipMutationProof({ ...proof, signatures: { purpose: "replica-enroll", memberSignature: signature } })).toThrow()
+    expect(() => parseMembershipMutationProofCore({ ...core, extra: true })).toThrow()
   })
 })

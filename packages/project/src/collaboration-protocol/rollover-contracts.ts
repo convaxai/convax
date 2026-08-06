@@ -7,16 +7,16 @@ import type {
   Signature,
   Uint64,
 } from "@convax/collaboration"
-import type { ProjectResetReasonV2 } from "./project-reset"
+import type { ProjectResetReason } from "./project-reset"
 
-export interface ProjectResetApprovalCoreV2 {
-  readonly format: "convax.project-reset-approval-core/2"
+export interface ProjectResetApprovalCore {
+  readonly format: "convax.project-reset-approval-core"
   readonly resetId: Id128
   readonly approvalId: Id128
   readonly confirmationCoreDigest: Digest
   readonly projectId: ProjectId
   readonly oldProjectEpoch: Id128
-  readonly reason: ProjectResetReasonV2
+  readonly reason: ProjectResetReason
   readonly observedOldPrivateTreeDigest: Digest
   readonly unsupportedInventoryDigest: Digest
   readonly privateDeletionSetDigest: Digest
@@ -30,15 +30,15 @@ export interface ProjectResetApprovalCoreV2 {
   readonly protocolDigest: Digest
 }
 
-export interface ProjectResetApprovalV2 {
-  readonly format: "convax.project-reset-approval/2"
-  readonly core: ProjectResetApprovalCoreV2
+export interface ProjectResetApproval {
+  readonly format: "convax.project-reset-approval"
+  readonly core: ProjectResetApprovalCore
   readonly coreDigest: Digest
   readonly adminMemberSignature: Signature
 }
 
-export interface TeamEpochRolloverChallengeCoreV2 {
-  readonly format: "convax.team-epoch-rollover-challenge-core/2"
+export interface TeamEpochRolloverChallengeCore {
+  readonly format: "convax.team-epoch-rollover-challenge-core"
   readonly challengeId: Id128
   readonly resetId: Id128
   readonly projectId: ProjectId
@@ -62,15 +62,15 @@ export interface TeamEpochRolloverChallengeCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface TeamEpochRolloverChallengeV2 {
-  readonly format: "convax.team-epoch-rollover-challenge/2"
-  readonly core: TeamEpochRolloverChallengeCoreV2
+export interface TeamEpochRolloverChallenge {
+  readonly format: "convax.team-epoch-rollover-challenge"
+  readonly core: TeamEpochRolloverChallengeCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface TeamEpochRolloverProofCoreV2 {
-  readonly format: "convax.team-epoch-rollover-proof-core/2"
+export interface TeamEpochRolloverProofCore {
+  readonly format: "convax.team-epoch-rollover-proof-core"
   readonly challengeDigest: Digest
   readonly resetId: Id128
   readonly projectId: ProjectId
@@ -94,15 +94,15 @@ export interface TeamEpochRolloverProofCoreV2 {
   readonly uriProtocolDigest: Digest
 }
 
-export interface TeamEpochRolloverProofV2 {
-  readonly format: "convax.team-epoch-rollover-proof/2"
-  readonly core: TeamEpochRolloverProofCoreV2
+export interface TeamEpochRolloverProof {
+  readonly format: "convax.team-epoch-rollover-proof"
+  readonly core: TeamEpochRolloverProofCore
   readonly requestDigest: Digest
   readonly requesterAdminMemberSignature: Signature
 }
 
-export interface EmptyProjectIndexGenesisAttestationCoreV2 {
-  readonly format: "convax.empty-project-index-genesis-attestation-core/2"
+export interface EmptyProjectIndexGenesisAttestationCore {
+  readonly format: "convax.empty-project-index-genesis-attestation-core"
   readonly projectId: ProjectId
   readonly newProjectEpoch: Id128
   readonly newMembershipEpoch: Id128
@@ -122,15 +122,15 @@ export interface EmptyProjectIndexGenesisAttestationCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface EmptyProjectIndexGenesisAttestationV2 {
-  readonly format: "convax.empty-project-index-genesis-attestation/2"
-  readonly core: EmptyProjectIndexGenesisAttestationCoreV2
+export interface EmptyProjectIndexGenesisAttestation {
+  readonly format: "convax.empty-project-index-genesis-attestation"
+  readonly core: EmptyProjectIndexGenesisAttestationCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface TeamEpochRolloverReceiptCoreV2 {
-  readonly format: "convax.team-epoch-rollover-receipt-core/2"
+export interface TeamEpochRolloverReceiptCore {
+  readonly format: "convax.team-epoch-rollover-receipt-core"
   readonly resetId: Id128
   readonly requestDigest: Digest
   readonly projectId: ProjectId
@@ -160,9 +160,9 @@ export interface TeamEpochRolloverReceiptCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface TeamEpochRolloverReceiptV2 {
-  readonly format: "convax.team-epoch-rollover-receipt/2"
-  readonly core: TeamEpochRolloverReceiptCoreV2
+export interface TeamEpochRolloverReceipt {
+  readonly format: "convax.team-epoch-rollover-receipt"
+  readonly core: TeamEpochRolloverReceiptCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }

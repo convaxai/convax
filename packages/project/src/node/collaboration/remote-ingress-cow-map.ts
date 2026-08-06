@@ -18,12 +18,12 @@ import {
   type Uint32,
   type Uint64,
 } from "@convax/collaboration"
-import { deriveObjectNativeKeyV2 } from "./native-store-keys"
-import { fsyncProjectDirectoryV2 } from "./directory-durability"
+import { deriveObjectNativeKey } from "./native-store-keys"
+import { fsyncProjectDirectory } from "./directory-durability"
 
-export type RemoteIngressEvidenceMapKindV2 = "stable-key-state" | "member-quota"
+export type RemoteIngressEvidenceMapKind = "stable-key-state" | "member-quota"
 
-export type RemoteIngressEvidenceMapLeafEntryV2 =
+export type RemoteIngressEvidenceMapLeafEntry =
   | Readonly<{
       mapKind: "stable-key-state"
       keyDigest: Digest
@@ -37,11 +37,11 @@ export type RemoteIngressEvidenceMapLeafEntryV2 =
       valueRecordDigest: Digest
     }>
 
-export interface RemoteIngressEvidenceMapRootRecordV2 {
-  readonly format: "convax.remote-ingress-evidence-map-root-record/2"
+export interface RemoteIngressEvidenceMapRootRecord {
+  readonly format: "convax.remote-ingress-evidence-map-root-record"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
-  readonly mapKind: RemoteIngressEvidenceMapKindV2
+  readonly mapKind: RemoteIngressEvidenceMapKind
   readonly generation: Uint64
   readonly rootPageDigest: Digest | null
   readonly entryCount: Uint64
@@ -49,43 +49,43 @@ export interface RemoteIngressEvidenceMapRootRecordV2 {
   readonly mapCommitment: Digest
 }
 
-type BoundaryV2 =
+type Boundary =
   | Readonly<{ mapKind: "stable-key-state"; keyDigest: Digest; stableKey: StableRemoteTransferKey }>
   | Readonly<{ mapKind: "member-quota"; keyDigest: Digest; sourceMemberId: MemberId }>
 
-interface ChildV2 {
-  readonly firstKey: BoundaryV2
-  readonly lastKey: BoundaryV2
+interface Child {
+  readonly firstKey: Boundary
+  readonly lastKey: Boundary
   readonly childPageRecordDigest: Digest
   readonly childSubtreeEntryCount: Uint64
 }
 
-interface LeafPageV2 {
-  readonly format: "convax.remote-ingress-evidence-map-leaf-page-record/2"
+interface LeafPage {
+  readonly format: "convax.remote-ingress-evidence-map-leaf-page-record"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
-  readonly mapKind: RemoteIngressEvidenceMapKindV2
+  readonly mapKind: RemoteIngressEvidenceMapKind
   readonly height: "0"
-  readonly entries: readonly RemoteIngressEvidenceMapLeafEntryV2[]
+  readonly entries: readonly RemoteIngressEvidenceMapLeafEntry[]
   readonly subtreeEntryCount: Uint64
 }
 
-interface InternalPageV2 {
-  readonly format: "convax.remote-ingress-evidence-map-internal-page-record/2"
+interface InternalPage {
+  readonly format: "convax.remote-ingress-evidence-map-internal-page-record"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
-  readonly mapKind: RemoteIngressEvidenceMapKindV2
+  readonly mapKind: RemoteIngressEvidenceMapKind
   readonly height: Uint32
-  readonly children: readonly ChildV2[]
+  readonly children: readonly Child[]
   readonly subtreeEntryCount: Uint64
 }
 
-type PageV2 = LeafPageV2 | InternalPageV2
+type Page = LeafPage | InternalPage
 
-interface BuiltPageV2 {
+interface BuiltPage {
   readonly digest: Digest
-  readonly first: BoundaryV2
-  readonly last: BoundaryV2
+  readonly first: Boundary
+  readonly last: Boundary
   readonly count: bigint
   readonly height: number
 }
@@ -98,17 +98,17 @@ const INTERNAL_MIN = 37
 const MAX_HEIGHT = 9
 
 /** Fixed-geometry immutable COW74 map used only by the Project-epoch admission head. */
-export class ProjectRemoteIngressCowMapV2 {
+export class ProjectRemoteIngressCowMap {
   readonly #projectId: ProjectId
   readonly #projectEpoch: Id128
-  readonly #mapKind: RemoteIngressEvidenceMapKindV2
+  readonly #mapKind: RemoteIngressEvidenceMapKind
   readonly #pages: string
   readonly #roots: string
 
   private constructor(input: {
     projectId: ProjectId
     projectEpoch: Id128
-    mapKind: RemoteIngressEvidenceMapKindV2
+    mapKind: RemoteIngressEvidenceMapKind
     pages: string
     roots: string
   }) {
@@ -123,8 +123,8 @@ export class ProjectRemoteIngressCowMapV2 {
     readonly admissionDirectory: string
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
-    readonly mapKind: RemoteIngressEvidenceMapKindV2
-  }): Promise<ProjectRemoteIngressCowMapV2> {
+    readonly mapKind: RemoteIngressEvidenceMapKind
+  }): Promise<ProjectRemoteIngressCowMap> {
     if (!path.isAbsolute(input.admissionDirectory)) throw new TypeError("Admission directory must be absolute")
     const projectId = parseProjectId(input.projectId)
     const projectEpoch = parseId128(input.projectEpoch)
@@ -134,24 +134,24 @@ export class ProjectRemoteIngressCowMapV2 {
     const roots = path.join(root, "roots")
     await ensureRealDirectory(pages)
     await ensureRealDirectory(roots)
-    return new ProjectRemoteIngressCowMapV2({ projectId, projectEpoch, mapKind, pages, roots })
+    return new ProjectRemoteIngressCowMap({ projectId, projectEpoch, mapKind, pages, roots })
   }
 
   async publish(
-    inputEntries: readonly RemoteIngressEvidenceMapLeafEntryV2[],
+    inputEntries: readonly RemoteIngressEvidenceMapLeafEntry[],
     generationInput: Uint64,
-  ): Promise<Readonly<{ record: RemoteIngressEvidenceMapRootRecordV2; digest: Digest }>> {
+  ): Promise<Readonly<{ record: RemoteIngressEvidenceMapRootRecord; digest: Digest }>> {
     const generation = parseUint64(generationInput)
     const entries = inputEntries.map((entry) => parseEntry(entry, this.#projectId, this.#projectEpoch, this.#mapKind))
       .sort(compareEntry)
     for (let index = 1; index < entries.length; index += 1) {
       if (compareEntry(entries[index - 1]!, entries[index]!) === 0) throw new Error("COW map contains a duplicate canonical key")
     }
-    let level: BuiltPageV2[] = []
+    let level: BuiltPage[] = []
     if (entries.length > 0) {
       for (const group of distribute(entries, LEAF_MAX, LEAF_MIN)) {
-        const page: LeafPageV2 = Object.freeze({
-          format: "convax.remote-ingress-evidence-map-leaf-page-record/2",
+        const page: LeafPage = Object.freeze({
+          format: "convax.remote-ingress-evidence-map-leaf-page-record",
           projectId: this.#projectId,
           projectEpoch: this.#projectEpoch,
           mapKind: this.#mapKind,
@@ -164,9 +164,9 @@ export class ProjectRemoteIngressCowMapV2 {
       }
       while (level.length > 1) {
         if (level[0]!.height >= MAX_HEIGHT) throw new Error("COW map exceeds height 9")
-        const next: BuiltPageV2[] = []
+        const next: BuiltPage[] = []
         for (const group of distribute(level, INTERNAL_MAX, INTERNAL_MIN)) {
-          const children = group.map((child): ChildV2 => Object.freeze({
+          const children = group.map((child): Child => Object.freeze({
             firstKey: child.first,
             lastKey: child.last,
             childPageRecordDigest: child.digest,
@@ -174,8 +174,8 @@ export class ProjectRemoteIngressCowMapV2 {
           }))
           const count = group.reduce((sum, child) => sum + child.count, 0n)
           const height = group[0]!.height + 1
-          const page: InternalPageV2 = Object.freeze({
-            format: "convax.remote-ingress-evidence-map-internal-page-record/2",
+          const page: InternalPage = Object.freeze({
+            format: "convax.remote-ingress-evidence-map-internal-page-record",
             projectId: this.#projectId,
             projectEpoch: this.#projectEpoch,
             mapKind: this.#mapKind,
@@ -193,7 +193,7 @@ export class ProjectRemoteIngressCowMapV2 {
     const treeHeight = String(level[0]?.height ?? 0) as Uint32
     const entryCount = String(entries.length) as Uint64
     const mapCommitment = localDigest({
-      format: "convax.remote-ingress-evidence-map-commitment/2",
+      format: "convax.remote-ingress-evidence-map-commitment",
       projectId: this.#projectId,
       projectEpoch: this.#projectEpoch,
       mapKind: this.#mapKind,
@@ -201,8 +201,8 @@ export class ProjectRemoteIngressCowMapV2 {
       entryCount,
       treeHeight,
     })
-    const record: RemoteIngressEvidenceMapRootRecordV2 = Object.freeze({
-      format: "convax.remote-ingress-evidence-map-root-record/2",
+    const record: RemoteIngressEvidenceMapRootRecord = Object.freeze({
+      format: "convax.remote-ingress-evidence-map-root-record",
       projectId: this.#projectId,
       projectEpoch: this.#projectEpoch,
       mapKind: this.#mapKind,
@@ -218,8 +218,8 @@ export class ProjectRemoteIngressCowMapV2 {
   }
 
   async load(rootDigestInput: Digest): Promise<Readonly<{
-    record: RemoteIngressEvidenceMapRootRecordV2
-    entries: readonly RemoteIngressEvidenceMapLeafEntryV2[]
+    record: RemoteIngressEvidenceMapRootRecord
+    entries: readonly RemoteIngressEvidenceMapLeafEntry[]
   }>> {
     const rootDigest = parseDigest(rootDigestInput)
     const record = parseRoot(
@@ -238,7 +238,7 @@ export class ProjectRemoteIngressCowMapV2 {
     return Object.freeze({ record, entries: Object.freeze(loaded.entries) })
   }
 
-  async #putPage(page: PageV2): Promise<Digest> {
+  async #putPage(page: Page): Promise<Digest> {
     const bytes = encodeRestrictedJcs(page)
     if (bytes.byteLength > MAX_PAGE_BYTES) throw new Error("COW page exceeds 65,536 bytes")
     const digest = localDigest(page)
@@ -246,19 +246,19 @@ export class ProjectRemoteIngressCowMapV2 {
     return digest
   }
 
-  async #loadPage(digest: Digest, expectedHeight: number, isRoot: boolean): Promise<{ entries: RemoteIngressEvidenceMapLeafEntryV2[]; first: BoundaryV2; last: BoundaryV2 }> {
+  async #loadPage(digest: Digest, expectedHeight: number, isRoot: boolean): Promise<{ entries: RemoteIngressEvidenceMapLeafEntry[]; first: Boundary; last: Boundary }> {
     const bytes = await readImmutable(this.#pages, "remote-ingress-map-page", digest)
     if (bytes.byteLength > MAX_PAGE_BYTES) throw new Error("COW page exceeds 65,536 bytes")
     const page = parsePage(decodeRestrictedJcs(bytes), this.#projectId, this.#projectEpoch, this.#mapKind)
     if (localDigest(page) !== digest) throw new Error("COW page digest mismatches its pointer")
     if (Number(page.height) !== expectedHeight) throw new Error("COW page height mismatches its parent")
-    if (page.format === "convax.remote-ingress-evidence-map-leaf-page-record/2") {
+    if (page.format === "convax.remote-ingress-evidence-map-leaf-page-record") {
       if (page.entries.length > LEAF_MAX || page.entries.length < (isRoot ? 1 : LEAF_MIN)) throw new Error("COW leaf geometry is invalid")
       return { entries: [...page.entries], first: boundary(page.entries[0]!), last: boundary(page.entries.at(-1)!) }
     }
     if (page.children.length > INTERNAL_MAX || page.children.length < (isRoot ? 2 : INTERNAL_MIN)) throw new Error("COW internal geometry is invalid")
-    const entries: RemoteIngressEvidenceMapLeafEntryV2[] = []
-    let prior: BoundaryV2 | null = null
+    const entries: RemoteIngressEvidenceMapLeafEntry[] = []
+    let prior: Boundary | null = null
     for (const child of page.children) {
       if (prior !== null && compareBoundary(prior, child.firstKey) >= 0) throw new Error("COW child boundaries are not canonical")
       const loaded = await this.#loadPage(child.childPageRecordDigest, expectedHeight - 1, false)
@@ -273,7 +273,7 @@ export class ProjectRemoteIngressCowMapV2 {
   }
 }
 
-function parseEntry(value: RemoteIngressEvidenceMapLeafEntryV2, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKindV2): RemoteIngressEvidenceMapLeafEntryV2 {
+function parseEntry(value: RemoteIngressEvidenceMapLeafEntry, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKind): RemoteIngressEvidenceMapLeafEntry {
   if (!isObject(value) || value.mapKind !== mapKind) throw new Error("COW entry map kind is invalid")
   const keyDigest = parseDigest(value.keyDigest)
   const valueRecordDigest = parseDigest(value.valueRecordDigest)
@@ -288,23 +288,23 @@ function parseEntry(value: RemoteIngressEvidenceMapLeafEntryV2, projectId: Proje
   throw new Error("COW entry discriminator is invalid")
 }
 
-function parseRoot(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKindV2): RemoteIngressEvidenceMapRootRecordV2 {
+function parseRoot(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKind): RemoteIngressEvidenceMapRootRecord {
   assertKeys(value, ["entryCount", "format", "generation", "mapCommitment", "mapKind", "projectEpoch", "projectId", "rootPageDigest", "treeHeight"])
-  const record = value as unknown as RemoteIngressEvidenceMapRootRecordV2
-  if (record.format !== "convax.remote-ingress-evidence-map-root-record/2" || record.projectId !== projectId || record.projectEpoch !== projectEpoch || record.mapKind !== mapKind) throw new Error("COW root scope is invalid")
+  const record = value as unknown as RemoteIngressEvidenceMapRootRecord
+  if (record.format !== "convax.remote-ingress-evidence-map-root-record" || record.projectId !== projectId || record.projectEpoch !== projectEpoch || record.mapKind !== mapKind) throw new Error("COW root scope is invalid")
   parseUint64(record.generation); parseUint64(record.entryCount); parseUint32(record.treeHeight); parseDigest(record.mapCommitment)
   if (Number(record.treeHeight) > MAX_HEIGHT) throw new Error("COW root exceeds height 9")
   if (record.rootPageDigest !== null) parseDigest(record.rootPageDigest)
-  const expectedCommitment = localDigest({ format: "convax.remote-ingress-evidence-map-commitment/2", projectId, projectEpoch, mapKind, rootPageDigest: record.rootPageDigest, entryCount: record.entryCount, treeHeight: record.treeHeight })
+  const expectedCommitment = localDigest({ format: "convax.remote-ingress-evidence-map-commitment", projectId, projectEpoch, mapKind, rootPageDigest: record.rootPageDigest, entryCount: record.entryCount, treeHeight: record.treeHeight })
   if (record.mapCommitment !== expectedCommitment) throw new Error("COW root commitment mismatches")
   return Object.freeze(record)
 }
 
-function parsePage(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKindV2): PageV2 {
+function parsePage(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKind): Page {
   if (!isObject(value)) throw new Error("COW page is invalid")
-  if (value.format === "convax.remote-ingress-evidence-map-leaf-page-record/2") {
+  if (value.format === "convax.remote-ingress-evidence-map-leaf-page-record") {
     assertKeys(value, ["entries", "format", "height", "mapKind", "projectEpoch", "projectId", "subtreeEntryCount"])
-    const page = value as unknown as LeafPageV2
+    const page = value as unknown as LeafPage
     if (page.projectId !== projectId || page.projectEpoch !== projectEpoch || page.mapKind !== mapKind || page.height !== "0" || !Array.isArray(page.entries)) throw new Error("COW leaf scope is invalid")
     const entries = page.entries.map((entry) => parseEntry(entry, projectId, projectEpoch, mapKind))
     if (entries.some((entry, index) => index > 0 && compareEntry(entries[index - 1]!, entry) >= 0)) throw new Error("COW leaf entries are not canonical")
@@ -312,8 +312,8 @@ function parsePage(value: unknown, projectId: ProjectId, projectEpoch: Id128, ma
     return Object.freeze({ ...page, entries: Object.freeze(entries) })
   }
   assertKeys(value, ["children", "format", "height", "mapKind", "projectEpoch", "projectId", "subtreeEntryCount"])
-  const page = value as unknown as InternalPageV2
-  if (page.format !== "convax.remote-ingress-evidence-map-internal-page-record/2" || page.projectId !== projectId || page.projectEpoch !== projectEpoch || page.mapKind !== mapKind || !Array.isArray(page.children)) throw new Error("COW internal scope is invalid")
+  const page = value as unknown as InternalPage
+  if (page.format !== "convax.remote-ingress-evidence-map-internal-page-record" || page.projectId !== projectId || page.projectEpoch !== projectEpoch || page.mapKind !== mapKind || !Array.isArray(page.children)) throw new Error("COW internal scope is invalid")
   const height = parseUint32(page.height)
   if (height === "0" || Number(height) > MAX_HEIGHT) throw new Error("COW internal height is invalid")
   const children = page.children.map((child) => parseChild(child, projectId, projectEpoch, mapKind))
@@ -322,22 +322,22 @@ function parsePage(value: unknown, projectId: ProjectId, projectEpoch: Id128, ma
   return Object.freeze({ ...page, height, children: Object.freeze(children) })
 }
 
-function parseChild(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKindV2): ChildV2 {
+function parseChild(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKind): Child {
   assertKeys(value, ["childPageRecordDigest", "childSubtreeEntryCount", "firstKey", "lastKey"])
-  const child = value as unknown as ChildV2
+  const child = value as unknown as Child
   const firstKey = parseBoundary(child.firstKey, projectId, projectEpoch, mapKind)
   const lastKey = parseBoundary(child.lastKey, projectId, projectEpoch, mapKind)
   if (compareBoundary(firstKey, lastKey) > 0) throw new Error("COW child boundary is inverted")
   return Object.freeze({ firstKey, lastKey, childPageRecordDigest: parseDigest(child.childPageRecordDigest), childSubtreeEntryCount: parseUint64(child.childSubtreeEntryCount) })
 }
 
-function boundary(entry: RemoteIngressEvidenceMapLeafEntryV2): BoundaryV2 {
+function boundary(entry: RemoteIngressEvidenceMapLeafEntry): Boundary {
   return entry.mapKind === "stable-key-state"
     ? Object.freeze({ mapKind: entry.mapKind, keyDigest: entry.keyDigest, stableKey: entry.stableKey })
     : Object.freeze({ mapKind: entry.mapKind, keyDigest: entry.keyDigest, sourceMemberId: entry.sourceMemberId })
 }
 
-function parseBoundary(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKindV2): BoundaryV2 {
+function parseBoundary(value: unknown, projectId: ProjectId, projectEpoch: Id128, mapKind: RemoteIngressEvidenceMapKind): Boundary {
   if (!isObject(value) || value.mapKind !== mapKind) throw new Error("COW boundary kind is invalid")
   const keyDigest = parseDigest(value.keyDigest)
   if (mapKind === "stable-key-state" && "stableKey" in value) {
@@ -349,11 +349,11 @@ function parseBoundary(value: unknown, projectId: ProjectId, projectEpoch: Id128
   throw new Error("COW boundary discriminator is invalid")
 }
 
-function compareEntry(left: RemoteIngressEvidenceMapLeafEntryV2, right: RemoteIngressEvidenceMapLeafEntryV2): number {
+function compareEntry(left: RemoteIngressEvidenceMapLeafEntry, right: RemoteIngressEvidenceMapLeafEntry): number {
   return compareBoundary(boundary(left), boundary(right))
 }
 
-function compareBoundary(left: BoundaryV2, right: BoundaryV2): number {
+function compareBoundary(left: Boundary, right: Boundary): number {
   return Buffer.compare(Buffer.from(encodeRestrictedJcs(left)), Buffer.from(encodeRestrictedJcs(right)))
 }
 
@@ -378,20 +378,20 @@ function parseStableKey(value: StableRemoteTransferKey): StableRemoteTransferKey
   return Object.freeze({ projectId: parseProjectId(value.projectId), projectEpoch: parseId128(value.projectEpoch), sourceMemberId: parseMemberId(value.sourceMemberId), transferId: parseId128(value.transferId) })
 }
 
-function parseMapKind(value: unknown): RemoteIngressEvidenceMapKindV2 {
+function parseMapKind(value: unknown): RemoteIngressEvidenceMapKind {
   if (value !== "stable-key-state" && value !== "member-quota") throw new TypeError("Remote ingress map kind is invalid")
   return value
 }
 
 function localDigest<T extends { readonly format: string }>(value: T): Digest {
   const hash = createHash("sha256")
-  hash.update("convax.local-project-store-record-digest/2\0")
+  hash.update("convax.local-project-store-record-digest\0")
   hash.update(encodeRestrictedJcs(value))
   return parseDigest(hash.digest("hex"))
 }
 
 async function putImmutable(directory: string, kind: string, digest: Digest, bytes: Uint8Array): Promise<void> {
-  const target = path.join(directory, `${deriveObjectNativeKeyV2(kind, digest)}.bin`)
+  const target = path.join(directory, `${deriveObjectNativeKey(kind, digest)}.bin`)
   const existing = await fs.readFile(target).catch((error) => isEnoent(error) ? null : Promise.reject(error))
   if (existing !== null) {
     if (!Buffer.from(existing).equals(Buffer.from(bytes))) throw new Error("Immutable COW object equivocation")
@@ -405,11 +405,11 @@ async function putImmutable(directory: string, kind: string, digest: Digest, byt
     const winner = await fs.readFile(target)
     if (!Buffer.from(winner).equals(Buffer.from(bytes))) throw new Error("Immutable COW object equivocation")
   } finally { await fs.unlink(temporary).catch(() => undefined) }
-  await fsyncProjectDirectoryV2(directory)
+  await fsyncProjectDirectory(directory)
 }
 
 async function readImmutable(directory: string, kind: string, digest: Digest): Promise<Uint8Array> {
-  const target = path.join(directory, `${deriveObjectNativeKeyV2(kind, digest)}.bin`)
+  const target = path.join(directory, `${deriveObjectNativeKey(kind, digest)}.bin`)
   const stat = await fs.lstat(target)
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("COW object is not a regular file")
   return Uint8Array.from(await fs.readFile(target))

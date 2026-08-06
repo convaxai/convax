@@ -1,9 +1,9 @@
 import { expect, test } from "bun:test"
-import { adaptCanvasApplicationCommandV2 } from "@convax/canvas/collaboration"
-import { createProductionCanvasApplicationCommandAdapterV2 } from "./canvas-application-command-adapter"
+import { adaptCanvasApplicationCommand } from "@convax/canvas/collaboration"
+import { createProductionCanvasApplicationCommandAdapter } from "./canvas-application-command-adapter"
 
 test("Desktop composes the exact Canvas-owned application command adapter", () => {
-  const adapter = createProductionCanvasApplicationCommandAdapterV2()
+  const adapter = createProductionCanvasApplicationCommandAdapter()
   expect(Object.isFrozen(adapter)).toBeTrue()
-  expect(adapter.construct).toBe(adaptCanvasApplicationCommandV2)
+  expect(adapter.construct).toBe(adaptCanvasApplicationCommand)
 })

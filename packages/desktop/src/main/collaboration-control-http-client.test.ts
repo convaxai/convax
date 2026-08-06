@@ -15,24 +15,24 @@ import {
   structuredDigest,
 } from "@convax/collaboration"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  membershipMutationProofCoreDigestV2,
-  peerTicketRequestCoreDigestV2,
-  replicaIdReservationRequestCoreDigestV2,
-  sessionProofCoreDigestV2,
-  type ActivePeerDirectoryV2,
-  type MemberCredentialV2,
-  type MembershipSnapshotV2,
-  type PeerFreshnessTicketV2,
-  type PeerTicketRequestV2,
-  type ProjectAdminCapabilityV2,
-  type ReplicaIdReservationRequestV2,
-  type SessionChallengeV2,
-  type SessionCredentialV2,
-  type SessionProofV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  membershipMutationProofCoreDigest,
+  peerTicketRequestCoreDigest,
+  replicaIdReservationRequestCoreDigest,
+  sessionProofCoreDigest,
+  type ActivePeerDirectory,
+  type MemberCredential,
+  type MembershipSnapshot,
+  type PeerFreshnessTicket,
+  type PeerTicketRequest,
+  type ProjectAdminCapability,
+  type ReplicaIdReservationRequest,
+  type SessionChallenge,
+  type SessionCredential,
+  type SessionProof,
 } from "@convax/project/collaboration-protocol"
 
-import { createDesktopCollaborationControlHttpClientV2 } from "./collaboration-control-http-client"
+import { createDesktopCollaborationControlHttpClient } from "./collaboration-control-http-client"
 
 const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
 const digest = (digit: string) => parseDigest(digit.repeat(64))
@@ -45,7 +45,7 @@ const responderReplicaId = parseReplicaId("replica_00000002")
 const responderPeerId = parsePeerId("peer_aeaqcaibaeaqcaibaeaqcaibae")
 const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
 const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(4)))
-const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest)
 
 describe("Desktop collaboration control HTTP client", () => {
   test("calls all four exact routes and verifies pinned purpose/key-id artifacts", async () => {
@@ -61,7 +61,7 @@ describe("Desktop collaboration control HTTP client", () => {
       return Response.json(value)
     })
     const verified: string[] = []
-    const client = createDesktopCollaborationControlHttpClientV2({
+    const client = createDesktopCollaborationControlHttpClient({
       serviceBaseUrl: "https://control.example/ignored/path",
       fetch: fetch as unknown as typeof globalThis.fetch,
       nowUnixMs: () => 5_000n,
@@ -82,7 +82,7 @@ describe("Desktop collaboration control HTTP client", () => {
       request: artifacts.ticketRequest,
       requesterCredential: artifacts.credential,
       responderCredential: artifacts.responderCredential,
-      expectedChannelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest),
+      expectedChannelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.channelContractDigest),
     })).resolves.toMatchObject({ status: "ok" })
 
     expect(requests.map(({ url }) => url)).toEqual([
@@ -106,7 +106,7 @@ describe("Desktop collaboration control HTTP client", () => {
 
   test("missing service URL reports online-disabled without touching local/network state", async () => {
     const fetch = mock(async () => { throw new Error("must not fetch") })
-    const client = createDesktopCollaborationControlHttpClientV2({
+    const client = createDesktopCollaborationControlHttpClient({
       fetch: fetch as unknown as typeof globalThis.fetch,
       verifier: { async verify() { return true } },
     })
@@ -136,7 +136,7 @@ describe("Desktop collaboration control HTTP client", () => {
   })
 
   test("contains network AbortError as online unavailability", async () => {
-    const client = createDesktopCollaborationControlHttpClientV2({
+    const client = createDesktopCollaborationControlHttpClient({
       serviceBaseUrl: "https://control.example",
       fetch: (async () => { throw new DOMException("aborted", "AbortError") }) as unknown as typeof globalThis.fetch,
       verifier: { async verify() { return true } },
@@ -176,9 +176,9 @@ describe("Desktop collaboration control HTTP client", () => {
     const bodies: unknown[] = []
     const fetch = mock(async (request: RequestInfo | URL, init?: RequestInit) => {
       urls.push(String(request)); bodies.push(JSON.parse(String(init?.body)))
-      return Response.json({ format: "convax.api-error/2", code: "not-active" }, { status: 403 })
+      return Response.json({ format: "convax.api-error", code: "not-active" }, { status: 403 })
     })
-    const client = createDesktopCollaborationControlHttpClientV2({
+    const client = createDesktopCollaborationControlHttpClient({
       serviceBaseUrl: "https://control.example",
       fetch: fetch as unknown as typeof globalThis.fetch,
       nowUnixMs: () => 5_000n,
@@ -214,15 +214,15 @@ describe("Desktop collaboration control HTTP client", () => {
   })
 
   test("does not convert malformed or server-failure responses into authority rejection", async () => {
-    const malformed = createDesktopCollaborationControlHttpClientV2({
+    const malformed = createDesktopCollaborationControlHttpClient({
       serviceBaseUrl: "https://control.example", verifier: { async verify() { return true } },
       fetch: (async () => Response.json({ code: "not-active" }, { status: 403 })) as unknown as typeof fetch,
     })
     await expect(malformed.createInvitation({ projectId, requesterCredentialDigest: digest("1"), adminCapabilityDigest: digest("2"), initialRole: "viewer" }))
       .resolves.toEqual({ status: "rejected", code: "invalid-service-artifact" })
-    const unavailable = createDesktopCollaborationControlHttpClientV2({
+    const unavailable = createDesktopCollaborationControlHttpClient({
       serviceBaseUrl: "https://control.example", verifier: { async verify() { return true } },
-      fetch: (async () => Response.json({ format: "convax.api-error/2", code: "adapter-unavailable" }, { status: 503 })) as unknown as typeof fetch,
+      fetch: (async () => Response.json({ format: "convax.api-error", code: "adapter-unavailable" }, { status: 503 })) as unknown as typeof fetch,
     })
     await expect(unavailable.createInvitation({ projectId, requesterCredentialDigest: digest("1"), adminCapabilityDigest: digest("2"), initialRole: "viewer" }))
       .resolves.toEqual({ status: "unavailable", code: "http-error" })
@@ -230,7 +230,7 @@ describe("Desktop collaboration control HTTP client", () => {
 })
 
 function clientReturning(value: unknown, now: bigint) {
-  return createDesktopCollaborationControlHttpClientV2({
+  return createDesktopCollaborationControlHttpClient({
     serviceBaseUrl: "https://control.example",
     fetch: (async () => Response.json(value)) as unknown as typeof globalThis.fetch,
     nowUnixMs: () => now,
@@ -238,9 +238,9 @@ function clientReturning(value: unknown, now: bigint) {
   })
 }
 
-function challenge(): SessionChallengeV2 {
+function challenge(): SessionChallenge {
   const core = {
-    format: "convax.session-challenge-core/2" as const,
+    format: "convax.session-challenge-core" as const,
     challengeId: id(1), projectId, projectEpoch: id(2), membershipEpoch: id(3),
     membershipSnapshotDigest: digest("1"), memberId, replicaId, actorId,
     expectedReplicaSessionCounter: parseUint64("1"), serverNonce: id(6),
@@ -249,13 +249,13 @@ function challenge(): SessionChallengeV2 {
     protocolDigest, trustBundleDigest: digest("2"), serviceKeyPurpose: "membership" as const,
     serviceKeyId: "membership-1",
   }
-  return { format: "convax.session-challenge/2", core,
-    coreDigest: structuredDigest("convax.session-challenge-core/2", core), serviceSignature: signature }
+  return { format: "convax.session-challenge", core,
+    coreDigest: structuredDigest("convax.session-challenge-core", core), serviceSignature: signature }
 }
 
-function proof(source = challenge()): SessionProofV2 {
+function proof(source = challenge()): SessionProof {
   const core = {
-    format: "convax.session-proof-core/2" as const,
+    format: "convax.session-proof-core" as const,
     challengeDigest: source.coreDigest, projectId, projectEpoch: source.core.projectEpoch,
     membershipEpoch: source.core.membershipEpoch, membershipSnapshotDigest: source.core.membershipSnapshotDigest,
     memberId, memberAuthorizationEpoch: id(9), replicaId, actorId,
@@ -263,15 +263,15 @@ function proof(source = challenge()): SessionProofV2 {
     serverNonce: source.core.serverNonce, sessionId: source.core.sessionId, leaseId: source.core.leaseId,
     peerId, sessionSigningPublicKey: publicKey, requestedExpiresAtUnixMs: parseUint64("902000"), protocolDigest,
   }
-  return { format: "convax.session-proof/2", core, coreDigest: sessionProofCoreDigestV2(core), replicaSignature: signature }
+  return { format: "convax.session-proof", core, coreDigest: sessionProofCoreDigest(core), replicaSignature: signature }
 }
 
-function credential(source = challenge(), sessionProof = proof(source), responder = false): SessionCredentialV2 {
+function credential(source = challenge(), sessionProof = proof(source), responder = false): SessionCredential {
   const selectedReplica = responder ? responderReplicaId : replicaId
   const selectedPeer = responder ? responderPeerId : peerId
   const selectedActor = responder ? parseActorId(encodeBase64url(new Uint8Array(32).fill(8))) : actorId
   const core = {
-    format: "convax.session-credential-core/2" as const,
+    format: "convax.session-credential-core" as const,
     projectId, projectEpoch: source.core.projectEpoch, membershipEpoch: source.core.membershipEpoch,
     membershipSequence: parseUint64("1"), membershipSnapshotDigest: source.core.membershipSnapshotDigest,
     registrySequence: parseUint64("1"), registryRootDigest: digest("3"), memberId,
@@ -285,13 +285,13 @@ function credential(source = challenge(), sessionProof = proof(source), responde
     protocolDigest, schemaDigest: digest("5"), validationArtifactSetDigest: digest("6"),
     trustBundleDigest: source.core.trustBundleDigest, serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  return { format: "convax.session-credential/2", core,
-    coreDigest: structuredDigest("convax.session-credential-core/2", core), serviceSignature: signature }
+  return { format: "convax.session-credential", core,
+    coreDigest: structuredDigest("convax.session-credential-core", core), serviceSignature: signature }
 }
 
-function directory(source: SessionCredentialV2): ActivePeerDirectoryV2 {
+function directory(source: SessionCredential): ActivePeerDirectory {
   const core = {
-    format: "convax.active-peer-directory-core/2" as const,
+    format: "convax.active-peer-directory-core" as const,
     projectId, projectEpoch: source.core.projectEpoch, membershipEpoch: source.core.membershipEpoch,
     membershipSnapshotDigest: source.core.membershipSnapshotDigest, directorySequence: parseUint64("1"),
     peers: [{ credentialDigest: source.coreDigest, memberId, replicaId: source.core.replicaId,
@@ -301,8 +301,8 @@ function directory(source: SessionCredentialV2): ActivePeerDirectoryV2 {
     protocolDigest, trustBundleDigest: source.core.trustBundleDigest,
     serviceKeyPurpose: "rendezvous" as const, serviceKeyId: "rendezvous-1",
   }
-  return { format: "convax.active-peer-directory/2", core,
-    coreDigest: structuredDigest("convax.active-peer-directory-core/2", core), serviceSignature: signature }
+  return { format: "convax.active-peer-directory", core,
+    coreDigest: structuredDigest("convax.active-peer-directory-core", core), serviceSignature: signature }
 }
 
 function fixtureArtifacts() {
@@ -311,30 +311,30 @@ function fixtureArtifacts() {
   const requester = credential(challengeValue, proofValue)
   const responder = credential(challengeValue, proofValue, true)
   const requestCore = {
-    format: "convax.peer-ticket-request-core/2" as const,
+    format: "convax.peer-ticket-request-core" as const,
     requestId: id(20), connectionId: id(21), requesterCredentialDigest: requester.coreDigest,
     responderCredentialDigest: responder.coreDigest, requesterPeerId: requester.core.peerId,
     responderPeerId: responder.core.peerId, requesterNonce: id(22), protocolDigest,
   }
-  const ticketRequest: PeerTicketRequestV2 = {
-    format: "convax.peer-ticket-request/2", core: requestCore,
-    coreDigest: peerTicketRequestCoreDigestV2(requestCore), requesterSessionSignature: signature,
+  const ticketRequest: PeerTicketRequest = {
+    format: "convax.peer-ticket-request", core: requestCore,
+    coreDigest: peerTicketRequestCoreDigest(requestCore), requesterSessionSignature: signature,
   }
   const ticketCore = {
-    format: "convax.peer-freshness-ticket-core/2" as const,
+    format: "convax.peer-freshness-ticket-core" as const,
     ticketId: id(23), requestDigest: ticketRequest.coreDigest, connectionId: ticketRequest.core.connectionId,
     projectId, projectEpoch: requester.core.projectEpoch, membershipEpoch: requester.core.membershipEpoch,
     membershipSnapshotDigest: requester.core.membershipSnapshotDigest,
     requesterCredentialDigest: requester.coreDigest, responderCredentialDigest: responder.coreDigest,
     requesterPeerId: requester.core.peerId, responderPeerId: responder.core.peerId,
     issuedAtUnixMs: parseUint64("4000"), expiresAtUnixMs: parseUint64("64000"),
-    channelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest),
+    channelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.channelContractDigest),
     protocolDigest, trustBundleDigest: requester.core.trustBundleDigest,
     serviceKeyPurpose: "rendezvous" as const, serviceKeyId: "rendezvous-1",
   }
-  const ticket: PeerFreshnessTicketV2 = {
-    format: "convax.peer-freshness-ticket/2", core: ticketCore,
-    coreDigest: structuredDigest("convax.peer-freshness-ticket-core/2", ticketCore), serviceSignature: signature,
+  const ticket: PeerFreshnessTicket = {
+    format: "convax.peer-freshness-ticket", core: ticketCore,
+    coreDigest: structuredDigest("convax.peer-freshness-ticket-core", ticketCore), serviceSignature: signature,
   }
   return { challenge: challengeValue, proof: proofValue, credential: requester,
     responderCredential: responder, directory: directory(requester), ticketRequest, ticket }
@@ -348,15 +348,15 @@ function expectedChallenge() {
 }
 
 function teamBootstrapArtifacts(): {
-  membershipSnapshot: MembershipSnapshotV2
-  ownerCredential: MemberCredentialV2
-  ownerAdminCapability: ProjectAdminCapabilityV2
+  membershipSnapshot: MembershipSnapshot
+  ownerCredential: MemberCredential
+  ownerAdminCapability: ProjectAdminCapability
   invitation: { invitationToken: string; projectId: typeof projectId; initialRole: "editor"; expiresAtUnixMs: ReturnType<typeof parseUint64> }
   initialization: ReturnType<typeof bootstrapInitialization> & { readonly projectId: typeof projectId }
 } {
   const memberAuthorizationEpoch = id(29)
   const snapshotCore = {
-    format: "convax.membership-snapshot-core/2" as const,
+    format: "convax.membership-snapshot-core" as const,
     projectId,
     projectEpoch: id(2),
     membershipEpoch: id(3),
@@ -370,33 +370,33 @@ function teamBootstrapArtifacts(): {
     serviceKeyPurpose: "membership" as const,
     serviceKeyId: "membership-1",
   }
-  const membershipSnapshot: MembershipSnapshotV2 = {
-    format: "convax.membership-snapshot/2", core: snapshotCore,
-    coreDigest: structuredDigest("convax.membership-snapshot-core/2", snapshotCore), serviceSignature: signature,
+  const membershipSnapshot: MembershipSnapshot = {
+    format: "convax.membership-snapshot", core: snapshotCore,
+    coreDigest: structuredDigest("convax.membership-snapshot-core", snapshotCore), serviceSignature: signature,
   }
   const adminCore = {
-    format: "convax.project-admin-capability-core/2" as const,
+    format: "convax.project-admin-capability-core" as const,
     projectId, projectEpoch: snapshotCore.projectEpoch, membershipEpoch: snapshotCore.membershipEpoch,
     membershipSnapshotDigest: membershipSnapshot.coreDigest, adminMemberId: memberId,
     adminMemberAuthorizationEpoch: memberAuthorizationEpoch, grants: ["membership-admin"] as const,
     protocolDigest, trustBundleDigest: snapshotCore.trustBundleDigest,
     serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  const ownerAdminCapability: ProjectAdminCapabilityV2 = {
-    format: "convax.project-admin-capability/2", core: adminCore,
-    coreDigest: structuredDigest("convax.project-admin-capability-core/2", adminCore), serviceSignature: signature,
+  const ownerAdminCapability: ProjectAdminCapability = {
+    format: "convax.project-admin-capability", core: adminCore,
+    coreDigest: structuredDigest("convax.project-admin-capability-core", adminCore), serviceSignature: signature,
   }
   const credentialCore = {
-    format: "convax.member-credential-core/2" as const,
+    format: "convax.member-credential-core" as const,
     projectId, projectEpoch: snapshotCore.projectEpoch, membershipEpoch: snapshotCore.membershipEpoch,
     membershipSnapshotDigest: membershipSnapshot.coreDigest, memberId, memberSigningPublicKey: publicKey,
     role: "editor" as const, memberAuthorizationEpoch, adminCapabilityDigest: ownerAdminCapability.coreDigest,
     protocolDigest, trustBundleDigest: snapshotCore.trustBundleDigest,
     serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  const ownerCredential: MemberCredentialV2 = {
-    format: "convax.member-credential/2", core: credentialCore,
-    coreDigest: structuredDigest("convax.member-credential-core/2", credentialCore), serviceSignature: signature,
+  const ownerCredential: MemberCredential = {
+    format: "convax.member-credential", core: credentialCore,
+    coreDigest: structuredDigest("convax.member-credential-core", credentialCore), serviceSignature: signature,
   }
   return {
     membershipSnapshot, ownerCredential, ownerAdminCapability,
@@ -420,27 +420,27 @@ function bootstrapInitialization() {
   })
 }
 
-function reservationRequest(): ReplicaIdReservationRequestV2 {
+function reservationRequest(): ReplicaIdReservationRequest {
   const core = {
-    format: "convax.replica-id-reservation-request-core/2" as const,
+    format: "convax.replica-id-reservation-request-core" as const,
     allocationRequestId: id(40), projectId, projectEpoch: id(2), membershipEpoch: id(3), purpose: "replica-enroll" as const,
     expectedMembershipSequence: parseUint64("1"), requesterMemberId: memberId, targetMemberId: memberId,
     expectedTargetMemberMutationCounter: parseUint64("1"), requesterCredentialDigest: digest("1"), currentReplicaId: null,
     newReplicaSigningPublicKey: publicKey, requestedEditState: "pending-editor" as const, protocolDigest,
   }
-  return { format: "convax.replica-id-reservation-request/2", core, coreDigest: replicaIdReservationRequestCoreDigestV2(core), memberSignature: signature }
+  return { format: "convax.replica-id-reservation-request", core, coreDigest: replicaIdReservationRequestCoreDigest(core), memberSignature: signature }
 }
 
 function memberAddProof() {
   const core = {
-    format: "convax.mutation-proof-core/2" as const,
+    format: "convax.mutation-proof-core" as const,
     mutationId: id(41), challengeDigest: digest("4"), projectId, projectEpoch: id(2), membershipEpoch: id(3),
     expectedMembershipSequence: parseUint64("1"), requesterMemberId: memberId, targetMemberId: parseMemberId(id(42)),
     targetMemberMutationCounter: parseUint64("1"), serverNonce: id(43), purpose: "member-add" as const,
     targetMemberSigningPublicKey: publicKey, initialRole: "viewer" as const, adminCapabilityDigest: digest("5"),
   }
   return {
-    format: "convax.mutation-proof/2" as const, core, requestDigest: membershipMutationProofCoreDigestV2(core),
+    format: "convax.mutation-proof" as const, core, requestDigest: membershipMutationProofCoreDigest(core),
     signatures: { purpose: "member-add" as const, adminSignature: signature, targetMemberPossessionSignature: signature },
   }
 }

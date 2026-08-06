@@ -62,7 +62,7 @@ function carrierFixture(): Readonly<{
     return section
   })
   const index: CheckpointValidationCarrierIndex = {
-    format: "convax.checkpoint-validation-carrier-index/2",
+    format: "convax.checkpoint-validation-carrier-index",
     scope: {
       projectId: parseProjectId("project"),
       projectEpoch: id(1),
@@ -76,7 +76,7 @@ function carrierFixture(): Readonly<{
     validationArtifactSetDigest: digest("artifact-set"),
     sections,
     totalSectionBytes: String(offset) as never,
-    protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5" as Digest,
+    protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993" as Digest,
   }
   return { carrier: encodeCheckpointValidationCarrier(index, sectionBytes), index }
 }
@@ -84,10 +84,10 @@ function carrierFixture(): Readonly<{
 function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
   const schemaDigest = "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36" as Digest
   const descriptor = Object.freeze({
-    format: "convax.owner-canonicalizer-descriptor/2" as const,
+    format: "convax.owner-canonicalizer-descriptor" as const,
     owner: "canvas" as const,
     ownerSchemaDigest: schemaDigest,
-    canonicalStateFormat: "convax.canvas-canonical-state/2",
+    canonicalStateFormat: "convax.canvas-canonical-state",
     canonicalStateCodec: "restricted-jcs-utf8" as const,
     exactBytePolicy: "parse-reencode-byte-equal" as const,
     unknownStatePolicy: "reject" as const,
@@ -220,7 +220,7 @@ describe("isolated CVXCAR02 checkpoint attester", () => {
 
     expect(response.status).toBe(200)
     const certificate = await response.json() as Record<string, unknown>
-    expect(certificate.format).toBe("convax.checkpoint-content-certificate/2")
+    expect(certificate.format).toBe("convax.checkpoint-content-certificate")
     expect((certificate.core as Record<string, unknown>).checkpointDigest).toBe(fixture.index.proposalCheckpointDigest)
     expect((certificate.core as Record<string, unknown>).schemaDigest).toBe(setup.value.protocolAuthority.artifactDigests[0])
     expect(setup.signCalls.value).toBe(1)

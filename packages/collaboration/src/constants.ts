@@ -1,4 +1,4 @@
-export const COLLABORATION_PROTOCOL_MAJOR = 2 as const
+export const COLLABORATION_PROTOCOL_MAJOR = 1 as const
 export const CAUSAL_EDIT_KIND_CODE = 1 as const
 export const CAUSAL_EDIT_MAGIC = "CVXCOLL" as const
 export const CAUSAL_EDIT_PREFIX_BYTES = 88 as const

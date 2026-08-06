@@ -8,11 +8,11 @@ import {
   parseProjectId,
   parseReplicaId,
 } from "@convax/collaboration"
-import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
+import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "@convax/project"
 
-import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
-import { ElectronReplicaSigningVaultV2, type ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
-import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
+import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
+import { ElectronReplicaSigningVault, type ElectronSafeStoragePort } from "./electron-replica-signing-vault"
+import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
 
 const roots: string[] = []
 
@@ -65,17 +65,53 @@ describe("durable local Project owner authority", () => {
     )
     expect(await fs.readdir(path.join(fixture.userData, "owners", "bindings"))).toEqual([])
   })
+
+  test("keeps a reset binding inert until activation and then retires the prior binding", async () => {
+    const fixture = await createFixture()
+    const authority = fixture.owner()
+    const previous = await authority.ensureForDurableProject(fixture.input)
+    const prepared = await authority.prepareResetForDurableProject({
+      ...fixture.input,
+      resetId: `reset-host-${"a".repeat(64)}`,
+    })
+
+    expect(prepared.owner.binding.projectEpoch).not.toBe(previous.binding.projectEpoch)
+    expect(await authority.resolveExact({
+      projectId: prepared.owner.binding.projectId,
+      projectEpoch: prepared.owner.binding.projectEpoch,
+      initializationAuthorityDigest: prepared.owner.binding.bindingDigest,
+    })).toBe("rejected")
+    const message = Buffer.alloc(32, 7)
+    const signature = await prepared.owner.signer.sign(message)
+    expect(await authority.verifyPreparedSignature(prepared, message, signature)).toBeTrue()
+
+    await authority.activatePreparedReset(prepared)
+    await expect(authority.resolveExact({
+      projectId: prepared.owner.binding.projectId,
+      projectEpoch: prepared.owner.binding.projectEpoch,
+      initializationAuthorityDigest: prepared.owner.binding.bindingDigest,
+    })).resolves.toMatchObject({ binding: prepared.owner.binding })
+    expect(await authority.resolveExact({
+      projectId: previous.binding.projectId,
+      projectEpoch: previous.binding.projectEpoch,
+      initializationAuthorityDigest: previous.binding.bindingDigest,
+    })).toBe("rejected")
+    expect(await fs.readdir(path.join(fixture.userData, "owners", "retired-bindings"))).toEqual([
+      `${previous.binding.bindingDigest}.jcs`,
+    ])
+    expect((await authority.ensureForDurableProject(fixture.input)).binding).toEqual(prepared.owner.binding)
+  })
 })
 
-async function createFixture(options: { safeStorage?: ElectronSafeStoragePortV2 } = {}) {
+async function createFixture(options: { safeStorage?: ElectronSafeStoragePort } = {}) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-local-owner-"))
   roots.push(root)
   const userData = path.join(root, "user-data")
   const projectRoot = path.join(root, "project")
   await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
-  const authority = await loadHistoricalTestAuthorityV2()
+  const authority = await loadHistoricalTestAuthority()
   const projectId = parseProjectId("project-local-owner")
-  const vault = new ElectronReplicaSigningVaultV2(
+  const vault = new ElectronReplicaSigningVault(
     path.join(userData, "vault"),
     options.safeStorage ?? availableStorage,
   )
@@ -84,11 +120,11 @@ async function createFixture(options: { safeStorage?: ElectronSafeStoragePortV2 
   return {
     userData,
     input: { projectId, projectRoot },
-    owner: (faults?: ConstructorParameters<typeof NodeDurableLocalProjectOwnerAuthorityV2>[0]["faults"]) =>
-      new NodeDurableLocalProjectOwnerAuthorityV2({
+    owner: (faults?: ConstructorParameters<typeof NodeDurableLocalProjectOwnerAuthority>[0]["faults"]) =>
+      new NodeDurableLocalProjectOwnerAuthority({
         rootDirectory: path.join(userData, "owners"),
         authority,
-        schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+        schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
         projects: { async resolveProjectRoot({ projectId: requested }) {
           if (requested !== projectId) throw new Error("unknown Project")
           return projectRoot
@@ -102,14 +138,14 @@ async function createFixture(options: { safeStorage?: ElectronSafeStoragePortV2 
   }
 }
 
-const availableStorage: ElectronSafeStoragePortV2 = Object.freeze({
+const availableStorage: ElectronSafeStoragePort = Object.freeze({
   isEncryptionAvailable: () => true,
   getSelectedStorageBackend: () => "keychain",
   encryptString: (value: string) => Buffer.from(value, "utf8"),
   decryptString: (value: Buffer) => value.toString("utf8"),
 })
 
-const unavailableStorage: ElectronSafeStoragePortV2 = Object.freeze({
+const unavailableStorage: ElectronSafeStoragePort = Object.freeze({
   isEncryptionAvailable: () => false,
   getSelectedStorageBackend: () => "basic_text",
   encryptString: () => { throw new Error("unavailable") },

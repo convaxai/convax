@@ -1,22 +1,22 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
-import type { CanvasRendererCommandV2 } from "@convax/canvas/collaboration"
+import type { CanvasRendererCommand } from "@convax/canvas/collaboration"
 import { parseId128, type Id128 } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
 
 import {
   canvasSessionIpcChannels,
-  type CanvasRendererSessionScopeV2,
+  type CanvasRendererSessionScope,
 } from "../canvas-session-contracts"
-import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 
 const maximumRendererSessionsPerWebContents = 128
 
-interface CanvasSessionIpcMainV2 {
+interface CanvasSessionIpcMain {
   handle(channel: string, handler: (event: IpcMainInvokeEvent, input: unknown) => unknown): void
   removeHandler(channel: string): void
 }
 
-interface RendererBindingV2 {
+interface RendererBinding {
   readonly ref: CanvasDocumentRef
   readonly sessionId: Id128
   readonly sender: IpcMainInvokeEvent["sender"]
@@ -27,10 +27,10 @@ interface RendererBindingV2 {
  * from trusted WebContents; renderer bytes can never select authority, Id128,
  * Yjs updates, owner facts, or a full document replacement.
  */
-export function registerCanvasSessionIpcV2(
-  owner: CanvasCollaborationSessionOwnerV2,
+export function registerCanvasSessionIpc(
+  owner: CanvasCollaborationSessionOwner,
   options: {
-    readonly ipcMain: CanvasSessionIpcMainV2
+    readonly ipcMain: CanvasSessionIpcMain
     readonly isTrustedSender: (event: IpcMainInvokeEvent) => boolean
     readonly resolveActiveCanvas: (event: IpcMainInvokeEvent) => Promise<Readonly<{
       readonly canvasId: string
@@ -39,7 +39,7 @@ export function registerCanvasSessionIpcV2(
     readonly prepareProject: (projectId: string) => Promise<void>
   },
 ): () => void {
-  const bindings = new Map<Id128, RendererBindingV2>()
+  const bindings = new Map<Id128, RendererBinding>()
   const senderSessions = new Map<number, Set<Id128>>()
   const watchedSenders = new Set<number>()
 
@@ -139,7 +139,7 @@ export function registerCanvasSessionIpcV2(
     watchedSenders.clear()
   }
 
-  function requireBinding(event: IpcMainInvokeEvent, scope: CanvasRendererSessionScopeV2): RendererBindingV2 {
+  function requireBinding(event: IpcMainInvokeEvent, scope: CanvasRendererSessionScope): RendererBinding {
     const binding = bindings.get(scope.sessionId)
     if (!binding || binding.sender.id !== event.sender.id || !sameRef(binding.ref, scope.ref)) {
       throw new Error("Canvas renderer session is stale or belongs to another renderer")
@@ -149,8 +149,8 @@ export function registerCanvasSessionIpcV2(
 
   async function requireActiveBinding(
     event: IpcMainInvokeEvent,
-    scope: CanvasRendererSessionScopeV2,
-  ): Promise<RendererBindingV2> {
+    scope: CanvasRendererSessionScope,
+  ): Promise<RendererBinding> {
     const binding = requireBinding(event, scope)
     try {
       await requireActiveRef(event, binding.ref)
@@ -191,13 +191,13 @@ export function registerCanvasSessionIpcV2(
   }
 }
 
-function requireHistory(value: unknown): CanvasRendererSessionScopeV2 & { readonly commandId: string } {
+function requireHistory(value: unknown): CanvasRendererSessionScope & { readonly commandId: string } {
   const record = exactRecord(value, ["commandId", "ref", "sessionId"], "Canvas history request")
   return Object.freeze({ ...requireScopeFields(record), commandId: requireCommandId(record.commandId) })
 }
 
-function requireSubmit(value: unknown): CanvasRendererSessionScopeV2 & {
-  readonly command: CanvasRendererCommandV2
+function requireSubmit(value: unknown): CanvasRendererSessionScope & {
+  readonly command: CanvasRendererCommand
   readonly commandId: string
 } {
   const record = exactRecord(value, ["command", "commandId", "ref", "sessionId"], "Canvas submit request")
@@ -208,11 +208,11 @@ function requireSubmit(value: unknown): CanvasRendererSessionScopeV2 & {
   })
 }
 
-function requireScope(value: unknown): CanvasRendererSessionScopeV2 {
+function requireScope(value: unknown): CanvasRendererSessionScope {
   return Object.freeze(requireScopeFields(exactRecord(value, ["ref", "sessionId"], "Canvas session scope")))
 }
 
-function requireScopeFields(record: Record<string, unknown>): CanvasRendererSessionScopeV2 {
+function requireScopeFields(record: Record<string, unknown>): CanvasRendererSessionScope {
   return { ref: requireRef(record.ref), sessionId: parseId128(record.sessionId) }
 }
 
@@ -224,9 +224,9 @@ function requireRef(value: unknown): CanvasDocumentRef {
   })
 }
 
-function requireRendererCommand(value: unknown): CanvasRendererCommandV2 {
+function requireRendererCommand(value: unknown): CanvasRendererCommand {
   const record = exactRecord(value, ["body", "format", "kind"], "Canvas renderer command")
-  if (record.format !== "convax.canvas-renderer-command/2" || record.kind !== "canvas.nodes.set-geometry/2") {
+  if (record.format !== "convax.canvas-renderer-command" || record.kind !== "canvas.nodes.set-geometry") {
     throw new Error("Canvas renderer command kind is unsupported")
   }
   const body = exactRecord(record.body, ["updates"], "Canvas renderer command body")
@@ -255,8 +255,8 @@ function requireRendererCommand(value: unknown): CanvasRendererCommandV2 {
     return Object.freeze(normalized)
   })
   return Object.freeze({
-    format: "convax.canvas-renderer-command/2",
-    kind: "canvas.nodes.set-geometry/2",
+    format: "convax.canvas-renderer-command",
+    kind: "canvas.nodes.set-geometry",
     body: Object.freeze({ updates: Object.freeze(updates) }),
   })
 }

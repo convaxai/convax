@@ -1,19 +1,19 @@
 import path from "node:path"
 import { parseActorId, type ActorId } from "@convax/collaboration"
 import {
-  NodeCollaborationPersistenceV2,
-  type NodeReplicaHeadMaterializerV2,
+  NodeCollaborationPersistence,
+  type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
 import type {
   ProjectClosedMutationGate,
   ProjectRecoveryRootPort,
 } from "./project-collaboration-recovery-service"
 
-export interface ProjectCollaborationRuntimeRootPortV2 {
+export interface ProjectCollaborationRuntimeRootPort {
   resolveProjectRoot(input: { readonly projectId: string }): Promise<string>
 }
 
-export interface ProjectCollaborationRuntimeQuiescencePortV2 {
+export interface ProjectCollaborationRuntimeQuiescencePort {
   /**
    * Synchronously withdraw new Project UI/Agent/Plugin work, cancel in-flight
    * sessions, and release every lease returned by this coordinator before the
@@ -25,7 +25,7 @@ export interface ProjectCollaborationRuntimeQuiescencePortV2 {
   }): Promise<void>
 }
 
-export interface ProjectCollaborationRuntimeIdentityPortV2 {
+export interface ProjectCollaborationRuntimeIdentityPort {
   /** Resolves the exact local replica actor for this bound Project/epoch. */
   resolveLocalActorId(input: {
     readonly projectId: string
@@ -33,55 +33,55 @@ export interface ProjectCollaborationRuntimeIdentityPortV2 {
   }): Promise<ActorId>
 }
 
-export interface ProjectCollaborationWriterFactoryV2 {
+export interface ProjectCollaborationWriterFactory {
   open(input: {
     readonly collaborationDirectory: string
     readonly localActorId: ActorId
-    readonly materializer: NodeReplicaHeadMaterializerV2
-  }): Promise<NodeCollaborationPersistenceV2>
+    readonly materializer: NodeReplicaHeadMaterializer
+  }): Promise<NodeCollaborationPersistence>
 }
 
-export interface ProjectCollaborationRuntimeLeaseV2 {
+export interface ProjectCollaborationRuntimeLease {
   readonly projectId: string
   readonly projectRoot: string
   readonly collaborationDirectory: string
-  readonly persistence: NodeCollaborationPersistenceV2
+  readonly persistence: NodeCollaborationPersistence
   readonly localActorId: ActorId
   release(): void
 }
 
-export type ProjectCollaborationRuntimeCoordinatorErrorCodeV2 =
+export type ProjectCollaborationRuntimeCoordinatorErrorCode =
   | "project-binding-changed"
   | "project-sessions-still-active"
   | "runtime-disposed"
 
-export class ProjectCollaborationRuntimeCoordinatorErrorV2 extends Error {
+export class ProjectCollaborationRuntimeCoordinatorError extends Error {
   constructor(
-    readonly code: ProjectCollaborationRuntimeCoordinatorErrorCodeV2,
+    readonly code: ProjectCollaborationRuntimeCoordinatorErrorCode,
     message: string,
   ) {
     super(message)
-    this.name = "ProjectCollaborationRuntimeCoordinatorErrorV2"
+    this.name = "ProjectCollaborationRuntimeCoordinatorError"
   }
 }
 
-export interface NodeProjectCollaborationRuntimeCoordinatorOptionsV2 {
-  readonly identity: ProjectCollaborationRuntimeIdentityPortV2
-  readonly materializer: NodeReplicaHeadMaterializerV2
-  readonly projects: ProjectCollaborationRuntimeRootPortV2
-  readonly quiescence: ProjectCollaborationRuntimeQuiescencePortV2
-  readonly writerFactory?: ProjectCollaborationWriterFactoryV2
+export interface NodeProjectCollaborationRuntimeCoordinatorOptions {
+  readonly identity: ProjectCollaborationRuntimeIdentityPort
+  readonly materializer: NodeReplicaHeadMaterializer
+  readonly projects: ProjectCollaborationRuntimeRootPort
+  readonly quiescence: ProjectCollaborationRuntimeQuiescencePort
+  readonly writerFactory?: ProjectCollaborationWriterFactory
 }
 
-interface OpenProjectRuntimeV2 {
+interface OpenProjectRuntime {
   readonly collaborationDirectory: string
-  readonly persistence: NodeCollaborationPersistenceV2
+  readonly persistence: NodeCollaborationPersistence
   readonly projectRoot: string
   readonly localActorId: ActorId
   leaseCount: number
 }
 
-interface ProjectRuntimeBindingV2 {
+interface ProjectRuntimeBinding {
   readonly projectRoot: string
   readonly localActorId: ActorId
 }
@@ -94,21 +94,21 @@ interface ProjectRuntimeBindingV2 {
  * the only legal bridge into Project reset. The host may quiesce product surfaces,
  * but it cannot choose the collaboration directory or dispose a writer directly.
  */
-export class NodeProjectCollaborationRuntimeCoordinatorV2
+export class NodeProjectCollaborationRuntimeCoordinator
   implements ProjectClosedMutationGate, ProjectRecoveryRootPort
 {
-  private readonly bindings = new Map<string, ProjectRuntimeBindingV2>()
-  private readonly openProjects = new Map<string, OpenProjectRuntimeV2>()
+  private readonly bindings = new Map<string, ProjectRuntimeBinding>()
+  private readonly openProjects = new Map<string, OpenProjectRuntime>()
   private readonly queues = new Map<string, Promise<void>>()
-  private readonly writerFactory: ProjectCollaborationWriterFactoryV2
+  private readonly writerFactory: ProjectCollaborationWriterFactory
   private disposed = false
 
-  constructor(private readonly options: NodeProjectCollaborationRuntimeCoordinatorOptionsV2) {
+  constructor(private readonly options: NodeProjectCollaborationRuntimeCoordinatorOptions) {
     this.writerFactory =
       options.writerFactory ??
       Object.freeze({
-        open: (input: Parameters<typeof NodeCollaborationPersistenceV2.open>[0]) =>
-          NodeCollaborationPersistenceV2.open(input),
+        open: (input: Parameters<typeof NodeCollaborationPersistence.open>[0]) =>
+          NodeCollaborationPersistence.open(input),
       })
   }
 
@@ -117,7 +117,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
     return this.options.projects.resolveProjectRoot({ projectId })
   }
 
-  acquire(projectId: string): Promise<ProjectCollaborationRuntimeLeaseV2> {
+  acquire(projectId: string): Promise<ProjectCollaborationRuntimeLease> {
     this.requireLive()
     return this.serialize(projectId, async () => {
       this.requireLive()
@@ -126,14 +126,14 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
       const collaborationDirectory = path.join(projectRoot, ".convax", "collaboration")
       const binding = this.bindings.get(projectId)
       if (binding && (binding.projectRoot !== projectRoot || binding.localActorId !== localActorId)) {
-        throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+        throw new ProjectCollaborationRuntimeCoordinatorError(
           "project-binding-changed",
           "Project root or local actor binding changed without a successful close/reset barrier",
         )
       }
       let runtime = this.openProjects.get(projectId)
       if (runtime && (runtime.projectRoot !== projectRoot || runtime.localActorId !== localActorId)) {
-        throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+        throw new ProjectCollaborationRuntimeCoordinatorError(
           "project-binding-changed",
           "Project root or local actor binding changed while its collaboration runtime exists",
         )
@@ -192,7 +192,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
         path.resolve(input.projectRoot) !== input.projectRoot ||
         projectRoot !== input.projectRoot
       ) {
-        throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+        throw new ProjectCollaborationRuntimeCoordinatorError(
           "project-binding-changed",
           "Project reset root no longer matches the bound Project",
         )
@@ -203,7 +203,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
       })
       const runtime = this.openProjects.get(input.projectId)
       if (runtime?.leaseCount) {
-        throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+        throw new ProjectCollaborationRuntimeCoordinatorError(
           "project-sessions-still-active",
           "Project reset cannot start while collaboration sessions remain active",
         )
@@ -225,7 +225,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
     for (const [projectId, runtime] of this.openProjects) {
       if (runtime.leaseCount > 0) {
         failures.push(
-          new ProjectCollaborationRuntimeCoordinatorErrorV2(
+          new ProjectCollaborationRuntimeCoordinatorError(
             "project-sessions-still-active",
             `Project ${projectId} still has active collaboration sessions`,
           ),
@@ -243,7 +243,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
   private async resolveCanonicalProjectRoot(projectId: string): Promise<string> {
     const resolved = await this.options.projects.resolveProjectRoot({ projectId })
     if (!path.isAbsolute(resolved) || path.resolve(resolved) !== resolved) {
-      throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+      throw new ProjectCollaborationRuntimeCoordinatorError(
         "project-binding-changed",
         "Project root must be an absolute canonical path",
       )
@@ -253,7 +253,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
 
   private requireLive(): void {
     if (this.disposed) {
-      throw new ProjectCollaborationRuntimeCoordinatorErrorV2(
+      throw new ProjectCollaborationRuntimeCoordinatorError(
         "runtime-disposed",
         "Project collaboration runtime is disposed",
       )

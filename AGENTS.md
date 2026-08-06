@@ -317,7 +317,10 @@ user directory.
   edit `.convax` JSON.
 - Unsupported portable data is never silently reset, overwritten, migrated, deleted,
   or garbage-collected. Breaking cutovers require an explicit schema/protocol bump,
-  preserved bytes, and rejection tests.
+  preserved bytes, and rejection tests. After an explicit confirmed reset, the exact
+  retired `.convax` tree remains in the inert sibling
+  `.convax-archive-<reset-token-suffix>` until the user explicitly removes it; runtime
+  open and mutation paths never inspect that archive as authority.
 - File publication and Canvas mutation are not one transaction. Publish without
   clobbering first; if Canvas commit fails, retain the file and report partial
   success rather than inventing a cross-file WAL.

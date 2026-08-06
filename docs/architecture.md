@@ -97,7 +97,10 @@ creation is never presented as recovery.
 Existing experimental collaboration trees written by the retired multi-release model
 are unsupported. They may be archived unchanged, exported as user-visible resources,
 or replaced by a new current genesis after an explicit user confirmation that retains
-a recoverable backup of the old bytes. Open, checkpoint, and GC never reset, delete,
+a recoverable backup of the old bytes. A completed local reset moves the exact prior
+`.convax` tree to the inert sibling `.convax-archive-<reset-token-suffix>`; runtime
+resolution ignores that archive, and only an explicit later user action may delete
+it. Open, checkpoint, and GC never reset, delete,
 re-sign, renumber, or reinterpret them, and no migration helper keeps an old decoder
 inside the production bundle.
 
@@ -863,8 +866,10 @@ deletes ordinary Project files, including conflict copies, `Notes/`, `Generated/
 or other user-visible content. Unsupported bytes may be retired only by the
 explicit reset policy after confirmation, never by open, checkpoint, or GC. A
 completed reset retains a recoverable backup of the previous private tree until the
-user deletes it, so the only admitted handling of unsupported collaboration data is
-archive, export, or confirmed new-epoch genesis.
+user deletes it. The backup is the byte-exact inert sibling
+`.convax-archive-<reset-token-suffix>` and is never a runtime authority, so the only
+admitted handling of unsupported collaboration data is archive, export, or confirmed
+new-epoch genesis.
 The Node open guard runs before registry publication or recency mutation. Its
 host-local reset planner inventories and digests the exact private deletion set;
 ProjectIndex first registration independently repeats that cutover guard before it
@@ -877,9 +882,17 @@ frame, Canvas route, Team/control identity, reset evidence, or unknown native st
 This recognition treats the tree only as a rejected bootstrap artifact; it does not
 authorize reset of a current Project or reuse an old epoch. Any mismatch requires
 the control-plane rollover path and keeps the Project closed.
-publication requires the exact control/Project verifier to persist and approve the
+An explicitly retired V3 local tree may instead use the same unteamed reset surface
+without decoding its old frames only when both frozen local markers are exact plain
+files, no sharing handoff or Team/control namespace exists, and the durable Team
+authority store reports `missing`. Reset prepares a fresh owner binding and Project
+epoch, keeps that binding inert while staging and publishing the new genesis, verifies
+the byte-exact archive, and only then atomically makes the new binding current. Any
+missing marker, Team record, rejected Team record, or interrupted finalization keeps
+the Project closed as recovery-required.
+Publication requires the exact control/Project verifier to persist and approve the
 frozen confirmation/approval/rollover evidence, then re-verifies the complete
-published tree before retiring the old private tree. Stale plans, symlink changes,
+published tree before archiving the old private tree. Stale plans, symlink changes,
 receipt rejection, service unavailability, or ambiguous rename recovery keep the
 Project closed and retain the old bytes.
 

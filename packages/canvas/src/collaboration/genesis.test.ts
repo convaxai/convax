@@ -14,22 +14,22 @@ import {
   type ValidationArtifactRef,
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
-import { selectedCanvasDocumentOwnerArtifactDefinitionV2 } from "./session"
+import { selectedCanvasDocumentOwnerArtifactDefinition } from "./session"
 import {
-  buildCanvasGenesisProofCarrierV2,
-  installCanvasGenesisProofCarrierVerifierFactoryV2,
-  type CanvasGenesisBuildAuthorV2,
-  type CanvasGenesisHistoricalAuthorVerifierPortV2,
+  buildCanvasGenesisProofCarrier,
+  installCanvasGenesisProofCarrierVerifierFactory,
+  type CanvasGenesisBuildAuthor,
+  type CanvasGenesisHistoricalAuthorVerifierPort,
 } from "./genesis"
 
-describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
+describe("current CVXCGP02 Canvas genesis proof carrier", () => {
   test("builds exact checkpoint/carrier bytes and validates the closed Canvas identity", async () => {
     const authority = await loadAuthority()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = buildAuthor(authority)
-    const historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2 = {
+    const historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPort = {
       verifyHistoricalAuthor(input) {
         if (
           input.checkpoint.core.authorReplicaId !== author.authorReplicaId ||
@@ -43,7 +43,7 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
         })
       },
     }
-    const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({ authority, historicalAuthorVerifier })
+    const factory = installCanvasGenesisProofCarrierVerifierFactory({ authority, historicalAuthorVerifier })
     const created = factory.createVerifier(runtimeResult)
     if (created.status !== "created") throw new Error(created.code)
     const scope = Object.freeze({
@@ -53,7 +53,7 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
       docId: parseCanvasId(`cv_${"2".repeat(64)}`),
       shardEpoch: id128(2),
     })
-    const result = await buildCanvasGenesisProofCarrierV2({
+    const result = await buildCanvasGenesisProofCarrier({
       authority,
       runtime: runtimeResult,
       verifier: created.verifier,
@@ -73,10 +73,10 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
   test("rejects a tampered section and never exposes a partial identity", async () => {
     const authority = await loadAuthority()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = buildAuthor(authority)
-    const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({
+    const factory = installCanvasGenesisProofCarrierVerifierFactory({
       authority,
       historicalAuthorVerifier: {
         verifyHistoricalAuthor: () => ({
@@ -89,7 +89,7 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
     })
     const created = factory.createVerifier(runtimeResult)
     if (created.status !== "created") throw new Error(created.code)
-    const built = await buildCanvasGenesisProofCarrierV2({
+    const built = await buildCanvasGenesisProofCarrier({
       authority,
       runtime: runtimeResult,
       verifier: created.verifier,
@@ -109,7 +109,7 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
   })
 })
 
-function buildAuthor(authority: CurrentProtocolAuthority): CanvasGenesisBuildAuthorV2 {
+function buildAuthor(authority: CurrentProtocolAuthority): CanvasGenesisBuildAuthor {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
   const artifact = (
     owner: ValidationArtifactRef["owner"],

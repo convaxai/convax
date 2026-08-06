@@ -3,35 +3,35 @@ import type {
   CanvasDocumentRef,
 } from "@convax/canvas/application"
 import { parseId128, parseProjectId, type Id128, type ProjectId } from "@convax/collaboration"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
+import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import type {
-  ProjectIndexCanvasApplicationPortV2,
-  ProjectIndexFileApplicationPortV2,
-  ProjectIndexFileMaterializationProjectionPortV2,
+  ProjectIndexCanvasApplicationPort,
+  ProjectIndexFileApplicationPort,
+  ProjectIndexFileMaterializationProjectionPort,
 } from "@convax/project/canvas"
 
 import type {
-  CanvasCollaborationSessionOwnerV2,
-  CanvasSessionInvalidationDtoV2,
+  CanvasCollaborationSessionOwner,
+  CanvasSessionInvalidationDto,
 } from "./canvas-collaboration-session-owner"
-import type { MainProjectIndexRuntimeRegistryV2 } from "./main-project-index-runtime-registry"
-import type { MainProjectCanvasRouteRuntimeRegistryV2 } from "./project-canvas-route-runtime-registry"
+import type { MainProjectIndexRuntimeRegistry } from "./main-project-index-runtime-registry"
+import type { MainProjectCanvasRouteRuntimeRegistry } from "./project-canvas-route-runtime-registry"
 
 /** Owner ports of one Project runtime in the single current collaboration protocol. */
 export interface MainProjectCollaborationPorts {
   readonly projectId: ProjectId
-  readonly projectIndexes: ProjectIndexCanvasApplicationPortV2 &
-    ProjectIndexCurrentBlobReferencePortV2 &
-    ProjectIndexFileApplicationPortV2 &
-    ProjectIndexFileMaterializationProjectionPortV2
-  readonly canvasSessions: CanvasCollaborationSessionOwnerV2
+  readonly projectIndexes: ProjectIndexCanvasApplicationPort &
+    ProjectIndexCurrentBlobReferencePort &
+    ProjectIndexFileApplicationPort &
+    ProjectIndexFileMaterializationProjectionPort
+  readonly canvasSessions: CanvasCollaborationSessionOwner
   /** Flushes ProjectIndex and Canvas runtime state before a writer transition. */
   quiesce(): Promise<void>
 }
 
 export interface MainProjectCollaborationComposition {
   readonly projectIndexes: MainProjectCollaborationPorts["projectIndexes"]
-  readonly canvasSessions: CanvasCollaborationSessionOwnerV2
+  readonly canvasSessions: CanvasCollaborationSessionOwner
   /** Open and resume the Project runtime before renderer access. */
   prepareProject(projectId: string): Promise<void>
   /** Stop new opens, flush both document families and release session bindings. */
@@ -41,26 +41,26 @@ export interface MainProjectCollaborationComposition {
 
 interface BoundSession {
   readonly ref: CanvasDocumentRef
-  readonly owner: CanvasCollaborationSessionOwnerV2
+  readonly owner: CanvasCollaborationSessionOwner
 }
 
 /**
  * The one Main collaboration composition. New, open, recover and share resolve
  * through these same owner ports: there is no protocol selection, release pair,
- * promotion bridge, successor runtime, or caller-selected authority. It never
+ * conflictCopy bridge, parallel runtime, or caller-selected authority. It never
  * decodes frames, creates an authority, or manufactures an operation receipt;
  * every result is returned by the owner port unchanged.
  */
 export function createMainProjectCollaborationComposition(input: Readonly<{
-  projectIndexes: MainProjectIndexRuntimeRegistryV2
-  canvasSessions: CanvasCollaborationSessionOwnerV2
-  canvasRoutes: Pick<MainProjectCanvasRouteRuntimeRegistryV2, "switchProject" | "quiesceProject">
+  projectIndexes: MainProjectIndexRuntimeRegistry
+  canvasSessions: CanvasCollaborationSessionOwner
+  canvasRoutes: Pick<MainProjectCanvasRouteRuntimeRegistry, "switchProject" | "quiesceProject">
 }>): MainProjectCollaborationComposition {
   const runtimes = new Map<ProjectId, Promise<MainProjectCollaborationPorts>>()
   const ready = new Map<ProjectId, MainProjectCollaborationPorts>()
   const sessions = new Map<Id128, BoundSession>()
-  const listeners = new Set<(event: CanvasSessionInvalidationDtoV2) => void>()
-  const ownerSubscriptions = new Map<CanvasCollaborationSessionOwnerV2, () => void>()
+  const listeners = new Set<(event: CanvasSessionInvalidationDto) => void>()
+  const ownerSubscriptions = new Map<CanvasCollaborationSessionOwner, () => void>()
   const quiescing = new Set<ProjectId>()
   let disposed = false
 
@@ -98,7 +98,7 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
   }
   Object.freeze(projectIndexes)
 
-  const canvasSessions: CanvasCollaborationSessionOwnerV2 = {
+  const canvasSessions: CanvasCollaborationSessionOwner = {
     async open(request) {
       const runtime = await runtimeFor(parseProjectId(request.ref.scopeId))
       subscribeOwner(runtime.canvasSessions)
@@ -242,7 +242,7 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     return bound
   }
 
-  function subscribeOwner(owner: CanvasCollaborationSessionOwnerV2): void {
+  function subscribeOwner(owner: CanvasCollaborationSessionOwner): void {
     if (ownerSubscriptions.has(owner)) return
     ownerSubscriptions.set(owner, owner.subscribe((event) => {
       const bound = sessions.get(parseId128(event.sessionId))

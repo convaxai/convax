@@ -14,9 +14,9 @@ import {
 } from "@convax/collaboration"
 
 import {
-  createCurrentLocalReplicaAuthorityPortV2,
-  createIncomingReplicaAuthorityVerificationPortV2,
-  type CurrentLocalReplicaAuthoritySourceV2,
+  createCurrentLocalReplicaAuthorityPort,
+  createIncomingReplicaAuthorityVerificationPort,
+  type CurrentLocalReplicaAuthoritySource,
 } from "./collaboration-authority-ports"
 
 const encoder = new TextEncoder()
@@ -30,13 +30,13 @@ const scope = Object.freeze({
   docId: parseCanvasId(`cv_${"a".repeat(64)}`),
   shardEpoch: id(2),
 })
-const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
 
 describe("production collaboration authority adapters", () => {
   test("derives actor sequence only from the accepted actor head", async () => {
     const operationId = id(3)
     const ownerSchemaDigest = digest("canvas-schema")
-    const source: CurrentLocalReplicaAuthoritySourceV2 = {
+    const source: CurrentLocalReplicaAuthoritySource = {
       async resolveCurrent() {
         return {
           scope,
@@ -54,19 +54,19 @@ describe("production collaboration authority adapters", () => {
             replicaEditAuthorizationCoreDigest: digest("edit-authorization"),
           },
           dependencies: [],
-          validationArtifacts: { format: "convax.validation-artifact-set/2" as const, artifacts: [] },
+          validationArtifacts: { format: "convax.validation-artifact-set" as const, artifacts: [] },
           signer: { async sign() { throw new Error("not invoked by adapter") } },
         }
       },
     }
-    const port = createCurrentLocalReplicaAuthorityPortV2({ actorId: actor, source })
+    const port = createCurrentLocalReplicaAuthorityPort({ actorId: actor, source })
     const first = await port.prepareFinalFrameAuthority({ scope, operationId, baseFrontier: frontier, previousActorHead: null, ownerSchemaDigest })
     expect(first).not.toBe("pending")
     expect(first).not.toBe("rejected")
     if (typeof first === "string") throw new Error("unexpected")
     expect(String(first.actorSequence)).toBe("1")
     expect(first.predecessorFrameDigest).toBeNull()
-    const prior = Object.freeze({ format: "convax.causal-head-ref/2" as const, actorId: actor, actorSequence: parseUint64("8"), frameDigest: digest("prior"), lamport: parseUint64("9") })
+    const prior = Object.freeze({ format: "convax.causal-head-ref" as const, actorId: actor, actorSequence: parseUint64("8"), frameDigest: digest("prior"), lamport: parseUint64("9") })
     const next = await port.prepareFinalFrameAuthority({ scope, operationId, baseFrontier: frontier, previousActorHead: prior, ownerSchemaDigest })
     if (typeof next === "string") throw new Error("unexpected")
     expect(String(next.actorSequence)).toBe("9")
@@ -84,7 +84,7 @@ describe("production collaboration authority adapters", () => {
         replicaEditAuthorizationCoreDigest: digest("edit"),
       } },
     } as unknown as DecodedCausalEditFrame
-    const port = createIncomingReplicaAuthorityVerificationPortV2({
+    const port = createIncomingReplicaAuthorityVerificationPort({
       async verify() {
         return {
           scope,

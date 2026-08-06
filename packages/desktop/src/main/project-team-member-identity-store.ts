@@ -17,14 +17,14 @@ import {
 
 const FORMAT = "convax.desktop-project-member-identity/1" as const
 
-interface ProjectMemberIdentityRecordV1 {
+interface ProjectMemberIdentityRecord {
   readonly format: typeof FORMAT
   readonly projectId: ProjectId
   readonly memberId: MemberId
 }
 
 /** Main/userData owner for one stable local member identity per Project. */
-export class NodeProjectTeamMemberIdentityStoreV1 {
+export class NodeProjectTeamMemberIdentityStore {
   constructor(
     private readonly rootDirectory: string,
     private readonly createMemberId: () => MemberId = () =>
@@ -56,7 +56,7 @@ export class NodeProjectTeamMemberIdentityStoreV1 {
   }
 }
 
-async function readRecord(target: string, projectId: ProjectId): Promise<ProjectMemberIdentityRecordV1> {
+async function readRecord(target: string, projectId: ProjectId): Promise<ProjectMemberIdentityRecord> {
   const stat = await fs.lstat(target)
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Project member identity entry is untrusted")
   const bytes = new Uint8Array(await fs.readFile(target))
@@ -65,7 +65,7 @@ async function readRecord(target: string, projectId: ProjectId): Promise<Project
   return record
 }
 
-function parseRecord(value: unknown, expectedProjectId: ProjectId): ProjectMemberIdentityRecordV1 {
+function parseRecord(value: unknown, expectedProjectId: ProjectId): ProjectMemberIdentityRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Project member identity record is invalid")
   const record = value as Record<string, unknown>
   if (Object.keys(record).sort().join("\0") !== ["format", "memberId", "projectId"].join("\0") || record.format !== FORMAT) {
@@ -77,8 +77,8 @@ function parseRecord(value: unknown, expectedProjectId: ProjectId): ProjectMembe
 }
 
 function selector(projectId: ProjectId): string {
-  return structuredDigest("convax.desktop-project-member-identity-selector/2", {
-    format: "convax.desktop-project-member-identity-selector/2",
+  return structuredDigest("convax.desktop-project-member-identity-selector", {
+    format: "convax.desktop-project-member-identity-selector",
     projectId,
   })
 }

@@ -24,57 +24,57 @@ import {
   type Uint64,
 } from "@convax/collaboration"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  membershipMutationProofCoreDigestV2,
-  authorizationMutationCoreDigestV2,
-  parseEmptyProjectIndexGenesisAttestationV2,
-  parseProjectResetApprovalV2,
-  parseProjectResetConfirmationV2,
-  parseRegistryCutoffCoveragePageV2,
-  registryCutoffCoverageRootCoreDigestV2,
-  parseMembershipMutationProofV2,
-  parseReplicaIdReservationRequestV2,
-  parseTeamEpochRolloverProofV2,
-  registryEntrySetDigestV2,
-  registrySnapshotCoreDigestV2,
-  teamEpochRolloverChallengeCoreDigestV2,
-  teamEpochRolloverReceiptCoreDigestV2,
-  type CollaborationRoleV2,
-  type MemberCredentialCoreV2,
-  type MemberCredentialV2,
-  type MembershipMemberV2,
-  type MembershipMutationProofV2,
-  type MembershipReplicaV2,
-  type MembershipSnapshotCoreV2,
-  type MembershipSnapshotV2,
-  type MutationChallengeCoreV2,
-  type MutationChallengeV2,
-  type MutationReceiptCoreV2,
-  type MutationReceiptV2,
-  type ProjectAdminCapabilityCoreV2,
-  type ProjectAdminCapabilityV2,
-  type ReplicaActorCredentialCoreV2,
-  type ReplicaActorCredentialV2,
-  type ReplicaEditAuthorizationCoreV2,
-  type ReplicaEditAuthorizationV2,
-  type ReplicaIdReservationReceiptCoreV2,
-  type ReplicaIdReservationReceiptV2,
-  type ReplicaIdReservationRequestV2,
-  type AuthorizationMutationCoreV2,
-  type AuthorizationMutationV2,
-  type RegistryCutoffCoveragePageV2,
-  type RegistryCutoffCoverageRootCoreV2,
-  type RegistryCutoffCoverageRootV2,
-  type RegistryCutoffTargetV2,
-  type EmptyProjectIndexGenesisAttestationV2,
-  type ProjectResetApprovalV2,
-  type ProjectResetConfirmationV2,
-  type RegistrySnapshotCoreV2,
-  type RegistrySnapshotV2,
-  type TeamEpochRolloverChallengeCoreV2,
-  type TeamEpochRolloverChallengeV2,
-  type TeamEpochRolloverReceiptCoreV2,
-  type TeamEpochRolloverReceiptV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  membershipMutationProofCoreDigest,
+  authorizationMutationCoreDigest,
+  parseEmptyProjectIndexGenesisAttestation,
+  parseProjectResetApproval,
+  parseProjectResetConfirmation,
+  parseRegistryCutoffCoveragePage,
+  registryCutoffCoverageRootCoreDigest,
+  parseMembershipMutationProof,
+  parseReplicaIdReservationRequest,
+  parseTeamEpochRolloverProof,
+  registryEntrySetDigest,
+  registrySnapshotCoreDigest,
+  teamEpochRolloverChallengeCoreDigest,
+  teamEpochRolloverReceiptCoreDigest,
+  type CollaborationRole,
+  type MemberCredentialCore,
+  type MemberCredential,
+  type MembershipMember,
+  type MembershipMutationProof,
+  type MembershipReplica,
+  type MembershipSnapshotCore,
+  type MembershipSnapshot,
+  type MutationChallengeCore,
+  type MutationChallenge,
+  type MutationReceiptCore,
+  type MutationReceipt,
+  type ProjectAdminCapabilityCore,
+  type ProjectAdminCapability,
+  type ReplicaActorCredentialCore,
+  type ReplicaActorCredential,
+  type ReplicaEditAuthorizationCore,
+  type ReplicaEditAuthorization,
+  type ReplicaIdReservationReceiptCore,
+  type ReplicaIdReservationReceipt,
+  type ReplicaIdReservationRequest,
+  type AuthorizationMutationCore,
+  type AuthorizationMutation,
+  type RegistryCutoffCoveragePage,
+  type RegistryCutoffCoverageRootCore,
+  type RegistryCutoffCoverageRoot,
+  type RegistryCutoffTarget,
+  type EmptyProjectIndexGenesisAttestation,
+  type ProjectResetApproval,
+  type ProjectResetConfirmation,
+  type RegistrySnapshotCore,
+  type RegistrySnapshot,
+  type TeamEpochRolloverChallengeCore,
+  type TeamEpochRolloverChallenge,
+  type TeamEpochRolloverReceiptCore,
+  type TeamEpochRolloverReceipt,
 } from "@convax/project/collaboration-protocol"
 
 import type { AtomicControlStateStore, AtomicControlStateTransaction, ControlClock, ControlRandomSource } from "./contracts"
@@ -152,9 +152,9 @@ export function createProjectBootstrapAuthorizationFactoryV2(verifier: {
 }
 
 export interface TeamBootstrapResultV2 {
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly ownerCredential: MemberCredentialV2
-  readonly ownerAdminCapability: ProjectAdminCapabilityV2
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly ownerCredential: MemberCredential
+  readonly ownerAdminCapability: ProjectAdminCapability
   readonly invitation: TeamInvitationV1
   readonly initialization: ProjectBootstrapInitializationV2
 }
@@ -177,7 +177,7 @@ export interface MemberAddChallengeIntentV2 {
   readonly adminCapabilityDigest: Digest
   readonly targetMemberId: MemberId
   readonly targetMemberSigningPublicKey: PublicKey
-  readonly initialRole: CollaborationRoleV2
+  readonly initialRole: CollaborationRole
   readonly invitationToken?: string
 }
 
@@ -211,7 +211,7 @@ export type CutoffMutationChallengeIntentV2 =
       requesterCredentialDigest: Digest
       currentReplicaId: ReplicaId
       replicaIdReservationReceiptDigest: Digest
-      pages: readonly RegistryCutoffCoveragePageV2[]
+      pages: readonly RegistryCutoffCoveragePage[]
     }>
   | Readonly<{
       purpose: "replica-revoke"
@@ -219,7 +219,7 @@ export type CutoffMutationChallengeIntentV2 =
       cutoffId: Id128
       requesterCredentialDigest: Digest
       currentReplicaId: ReplicaId
-      pages: readonly RegistryCutoffCoveragePageV2[]
+      pages: readonly RegistryCutoffCoveragePage[]
     }>
   | Readonly<{
       purpose: "member-role-change"
@@ -229,7 +229,7 @@ export type CutoffMutationChallengeIntentV2 =
       adminCapabilityDigest: Digest
       targetMemberId: MemberId
       nextRole: "viewer"
-      pages: readonly RegistryCutoffCoveragePageV2[]
+      pages: readonly RegistryCutoffCoveragePage[]
     }>
   | Readonly<{
       purpose: "member-revoke"
@@ -238,12 +238,12 @@ export type CutoffMutationChallengeIntentV2 =
       requesterCredentialDigest: Digest
       adminCapabilityDigest: Digest
       targetMemberId: MemberId
-      pages: readonly RegistryCutoffCoveragePageV2[]
+      pages: readonly RegistryCutoffCoveragePage[]
     }>
 
 interface ReservationStateRecordV2 {
-  readonly request: ReplicaIdReservationRequestV2
-  readonly receipt: ReplicaIdReservationReceiptV2
+  readonly request: ReplicaIdReservationRequest
+  readonly receipt: ReplicaIdReservationReceipt
   readonly state: "reserved" | "consumed" | "abandoned"
   readonly consumedMutationId: Id128 | null
   readonly consumedMutationReceiptCoreDigest: Digest | null
@@ -251,19 +251,19 @@ interface ReservationStateRecordV2 {
 }
 
 interface MutationChallengeStateRecordV2 {
-  readonly challenge: MutationChallengeV2
-  readonly preparedAfterCore: MembershipSnapshotCoreV2
+  readonly challenge: MutationChallenge
+  readonly preparedAfterCore: MembershipSnapshotCore
   readonly intent: SupportedMutationChallengeIntentV2
   readonly consumedRequestDigest: Digest | null
   readonly invitationToken: string | null
 }
 
 interface CutoffChallengeStateRecordV2 {
-  readonly challenge: MutationChallengeV2
+  readonly challenge: MutationChallenge
   readonly intent: CutoffMutationChallengeIntentV2
-  readonly preparedAfterCore: MembershipSnapshotCoreV2
-  readonly preparedPages: readonly RegistryCutoffCoveragePageV2[]
-  readonly preparedRootCore: RegistryCutoffCoverageRootCoreV2
+  readonly preparedAfterCore: MembershipSnapshotCore
+  readonly preparedPages: readonly RegistryCutoffCoveragePage[]
+  readonly preparedRootCore: RegistryCutoffCoverageRootCore
   readonly consumedRequestDigest: Digest | null
 }
 
@@ -276,20 +276,20 @@ interface MemberAddSignatureHalvesV2 {
 }
 
 interface TeamEpochRolloverChallengeRecordV2 {
-  readonly challenge: TeamEpochRolloverChallengeV2
-  readonly confirmation: ProjectResetConfirmationV2
-  readonly approval: ProjectResetApprovalV2
-  readonly preparedMembershipSnapshotCore: MembershipSnapshotCoreV2
-  readonly preparedEmptyRegistrySnapshotCore: RegistrySnapshotCoreV2
+  readonly challenge: TeamEpochRolloverChallenge
+  readonly confirmation: ProjectResetConfirmation
+  readonly approval: ProjectResetApproval
+  readonly preparedMembershipSnapshotCore: MembershipSnapshotCore
+  readonly preparedEmptyRegistrySnapshotCore: RegistrySnapshotCore
   readonly consumedRequestDigest: Digest | null
 }
 
 export interface TeamEpochRolloverResultV2 {
-  readonly receipt: TeamEpochRolloverReceiptV2
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly requesterCredential: MemberCredentialV2
-  readonly requesterAdminCapability: ProjectAdminCapabilityV2
-  readonly emptyRegistrySnapshot: RegistrySnapshotV2
+  readonly receipt: TeamEpochRolloverReceipt
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly requesterCredential: MemberCredential
+  readonly requesterAdminCapability: ProjectAdminCapability
+  readonly emptyRegistrySnapshot: RegistrySnapshot
 }
 
 interface TeamEpochRolloverResultRecordV2 {
@@ -303,11 +303,11 @@ export interface EmptyProjectIndexGenesisAttestationAdmissionV2 { readonly [empt
 const liveEmptyGenesisAdmissionsV2 = new WeakMap<object, Digest>()
 
 export function createEmptyProjectIndexGenesisAttestationAdmissionFactoryV2(verifier: {
-  verify(input: { readonly attestation: EmptyProjectIndexGenesisAttestationV2; readonly evidence: unknown }): Promise<boolean>
-}): { authorize(input: { readonly attestation: EmptyProjectIndexGenesisAttestationV2; readonly evidence: unknown }): Promise<EmptyProjectIndexGenesisAttestationAdmissionV2 | "rejected"> } {
+  verify(input: { readonly attestation: EmptyProjectIndexGenesisAttestation; readonly evidence: unknown }): Promise<boolean>
+}): { authorize(input: { readonly attestation: EmptyProjectIndexGenesisAttestation; readonly evidence: unknown }): Promise<EmptyProjectIndexGenesisAttestationAdmissionV2 | "rejected"> } {
   return Object.freeze({
     async authorize(input) {
-      const attestation = parseEmptyProjectIndexGenesisAttestationV2(input.attestation)
+      const attestation = parseEmptyProjectIndexGenesisAttestation(input.attestation)
       if (!await verifier.verify({ attestation, evidence: input.evidence })) return "rejected"
       const capability = Object.freeze({}) as EmptyProjectIndexGenesisAttestationAdmissionV2
       liveEmptyGenesisAdmissionsV2.set(capability, attestation.coreDigest)
@@ -319,7 +319,7 @@ export function createEmptyProjectIndexGenesisAttestationAdmissionFactoryV2(veri
 export interface TeamInvitationV1 {
   readonly invitationToken: string
   readonly projectId: ProjectId
-  readonly initialRole: CollaborationRoleV2
+  readonly initialRole: CollaborationRole
   readonly expiresAtUnixMs: Uint64
 }
 
@@ -333,8 +333,8 @@ interface TeamInvitationStateV1 extends TeamInvitationV1 {
 
 export interface PreparedTeamInvitationV1 {
   readonly invitation: TeamInvitationV1
-  readonly challenge: MutationChallengeV2
-  readonly proofCore: Extract<MembershipMutationProofV2["core"], { readonly purpose: "member-add" }>
+  readonly challenge: MutationChallenge
+  readonly proofCore: Extract<MembershipMutationProof["core"], { readonly purpose: "member-add" }>
   readonly requestDigest: Digest
 }
 
@@ -370,20 +370,20 @@ export function createTeamInvitationAuthorizationFactoryV1(verifier: { verify(in
 }
 
 export interface MembershipMutationResultV2 {
-  readonly receipt: MutationReceiptV2
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly requesterCredential: MemberCredentialV2
-  readonly requesterAdminCapability: ProjectAdminCapabilityV2 | null
-  readonly targetMemberCredential: MemberCredentialV2
-  readonly replicaActorCredential: ReplicaActorCredentialV2 | null
-  readonly replicaEditAuthorization: ReplicaEditAuthorizationV2 | null
+  readonly receipt: MutationReceipt
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly requesterCredential: MemberCredential
+  readonly requesterAdminCapability: ProjectAdminCapability | null
+  readonly targetMemberCredential: MemberCredential
+  readonly replicaActorCredential: ReplicaActorCredential | null
+  readonly replicaEditAuthorization: ReplicaEditAuthorization | null
 }
 
 export interface OwnerMemberAddInvitationProjectionV1 {
   readonly invitation: TeamInvitationV1
   readonly status: "open" | "prepared" | "consumed" | "revoked" | "expired"
-  readonly challenge: MutationChallengeV2 | null
-  readonly proofCore: Extract<MembershipMutationProofV2["core"], { readonly purpose: "member-add" }> | null
+  readonly challenge: MutationChallenge | null
+  readonly proofCore: Extract<MembershipMutationProof["core"], { readonly purpose: "member-add" }> | null
   readonly requestDigest: Digest | null
 }
 
@@ -394,15 +394,15 @@ interface MutationResultRecordV2 {
 }
 
 export interface CutoffMembershipMutationResultV2 {
-  readonly receipt: MutationReceiptV2
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly requesterCredential: MemberCredentialV2
-  readonly requesterAdminCapability: ProjectAdminCapabilityV2 | null
-  readonly targetMemberCredential: MemberCredentialV2 | null
-  readonly coverageRoot: RegistryCutoffCoverageRootV2
-  readonly authorizationMutation: AuthorizationMutationV2
-  readonly replicaActorCredential: ReplicaActorCredentialV2 | null
-  readonly replicaEditAuthorization: ReplicaEditAuthorizationV2 | null
+  readonly receipt: MutationReceipt
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly requesterCredential: MemberCredential
+  readonly requesterAdminCapability: ProjectAdminCapability | null
+  readonly targetMemberCredential: MemberCredential | null
+  readonly coverageRoot: RegistryCutoffCoverageRoot
+  readonly authorizationMutation: AuthorizationMutation
+  readonly replicaActorCredential: ReplicaActorCredential | null
+  readonly replicaEditAuthorization: ReplicaEditAuthorization | null
 }
 
 interface CutoffMutationResultRecordV2 {
@@ -412,14 +412,14 @@ interface CutoffMutationResultRecordV2 {
 }
 
 export interface CollaborationTeamAuthorityStateV2 {
-  readonly format: "convax.team-authority-state/2"
+  readonly format: "convax.team-authority-state"
   readonly bootstrapInitialization: ProjectBootstrapInitializationV2
-  readonly currentSnapshot: MembershipSnapshotV2
-  readonly snapshots: readonly MembershipSnapshotV2[]
-  readonly memberCredentials: readonly MemberCredentialV2[]
-  readonly adminCapabilities: readonly ProjectAdminCapabilityV2[]
-  readonly actorCredentials: readonly ReplicaActorCredentialV2[]
-  readonly editAuthorizations: readonly ReplicaEditAuthorizationV2[]
+  readonly currentSnapshot: MembershipSnapshot
+  readonly snapshots: readonly MembershipSnapshot[]
+  readonly memberCredentials: readonly MemberCredential[]
+  readonly adminCapabilities: readonly ProjectAdminCapability[]
+  readonly actorCredentials: readonly ReplicaActorCredential[]
+  readonly editAuthorizations: readonly ReplicaEditAuthorization[]
   readonly reservations: readonly ReservationStateRecordV2[]
   readonly mutationChallenges: readonly MutationChallengeStateRecordV2[]
   readonly mutationResults: readonly MutationResultRecordV2[]
@@ -436,9 +436,9 @@ export interface CollaborationTeamAuthorityStateV2 {
 export interface EditorFloorAuthorizationPortV2 {
   verifyInstalledCurrentFloor(input: {
     readonly projectId: ProjectId
-    readonly membershipSnapshot: MembershipSnapshotV2
-    readonly member: MembershipMemberV2
-    readonly replica: MembershipReplicaV2
+    readonly membershipSnapshot: MembershipSnapshot
+    readonly member: MembershipMember
+    readonly replica: MembershipReplica
     readonly installedFloorSetDigest: Digest
   }): Promise<boolean>
 }
@@ -487,7 +487,7 @@ export class CollaborationMembershipServiceV2 {
       const membershipEpoch = this.randomId128()
       const memberAuthorizationEpoch = this.randomId128()
       const serviceKeyId = serviceKeyIdV2(this.signatures)
-      const member: MembershipMemberV2 = Object.freeze({
+      const member: MembershipMember = Object.freeze({
         memberId: normalized.ownerMemberId,
         memberSigningPublicKey: normalized.ownerMemberSigningPublicKey,
         role: "editor",
@@ -496,7 +496,7 @@ export class CollaborationMembershipServiceV2 {
         memberMutationCounter: parseUint64("1"),
       })
       const snapshot = await this.signSnapshot({
-        format: "convax.membership-snapshot-core/2",
+        format: "convax.membership-snapshot-core",
         projectId: normalized.projectId,
         projectEpoch,
         membershipEpoch,
@@ -514,7 +514,7 @@ export class CollaborationMembershipServiceV2 {
       const credential = await this.signMemberCredential(snapshot, member, adminCapability.coreDigest)
       const invitation: TeamInvitationV1 = Object.freeze({ invitationToken: this.randomInvitationToken(), projectId: normalized.projectId, initialRole: "editor", expiresAtUnixMs: addU64(nowU64(this.clock), 15n * 60_000n) })
       const team: CollaborationTeamAuthorityStateV2 = Object.freeze({
-        format: "convax.team-authority-state/2",
+        format: "convax.team-authority-state",
         bootstrapInitialization: Object.freeze({ projectId: normalized.projectId, projectEpoch, projectIndexShardEpoch: normalized.projectIndexShardEpoch, initializationAuthorityDigest: normalized.initializationAuthorityDigest, initialProjectIndexCheckpointDigest: normalized.initialProjectIndexCheckpointDigest, initialProjectIndexFullUpdateDigest: normalized.initialProjectIndexFullUpdateDigest, initialProjectIndexStateVectorDigest: normalized.initialProjectIndexStateVectorDigest, initialProjectIndexCanonicalStateDigest: normalized.initialProjectIndexCanonicalStateDigest }),
         currentSnapshot: snapshot,
         snapshots: [snapshot],
@@ -535,7 +535,7 @@ export class CollaborationMembershipServiceV2 {
         invitations: [{ ...invitation, requesterCredentialDigest: credential.coreDigest, adminCapabilityDigest: adminCapability.coreDigest, state: "open" as const, challengeDigest: null, requestDigest: null }],
       })
       transaction.write({
-        format: "convax.control-project-state/2",
+        format: "convax.control-project-state",
         seed: seedFromTeam(team, this.configuration, null),
         challenges: [],
         sessions: [],
@@ -552,7 +552,7 @@ export class CollaborationMembershipServiceV2 {
     readonly projectId: ProjectId
     readonly requesterCredentialDigest: Digest
     readonly adminCapabilityDigest: Digest
-    readonly initialRole: CollaborationRoleV2
+    readonly initialRole: CollaborationRole
   }, authorization: TeamInvitationAuthorizationV1): Promise<TeamInvitationV1> {
     const normalized = Object.freeze({ projectId: parseProjectId(input.projectId), requesterCredentialDigest: parseDigest(input.requesterCredentialDigest), adminCapabilityDigest: parseDigest(input.adminCapabilityDigest), initialRole: role(input.initialRole) })
     const authority = liveInvitationAuthorizations.get(authorization)
@@ -591,7 +591,7 @@ export class CollaborationMembershipServiceV2 {
           const record = invitation.challengeDigest ? state.team.mutationChallenges.find((candidate) => candidate.challenge.coreDigest === invitation.challengeDigest && candidate.intent.purpose === "member-add") : undefined
           if (!record || !invitation.requestDigest) return Object.freeze({ invitation: projectInvitation(invitation), status, challenge: null, proofCore: null, requestDigest: null })
           const proofCore = memberAddProofCoreV2(record.challenge, record.intent as MemberAddChallengeIntentV2)
-          if (membershipMutationProofCoreDigestV2(proofCore) !== invitation.requestDigest) fail("invalid-proof", "Stored invitation proof material is inconsistent")
+          if (membershipMutationProofCoreDigest(proofCore) !== invitation.requestDigest) fail("invalid-proof", "Stored invitation proof material is inconsistent")
           return Object.freeze({ invitation: projectInvitation(invitation), status, challenge: record.challenge, proofCore, requestDigest: invitation.requestDigest })
         }))
     })
@@ -623,7 +623,7 @@ export class CollaborationMembershipServiceV2 {
       initialRole: invitation.initialRole,
       adminCapabilityDigest: invitation.adminCapabilityDigest,
     })
-    const requestDigest = membershipMutationProofCoreDigestV2(proofCore)
+    const requestDigest = membershipMutationProofCoreDigest(proofCore)
     await this.store.transact(projectId, (transaction) => {
       const current = requireTeamState(transaction.read())
       const index = current.team.invitations.findIndex((value) => value.invitationToken === invitationToken)
@@ -653,8 +653,8 @@ export class CollaborationMembershipServiceV2 {
     })
   }
 
-  async reserveReplicaId(requestInput: ReplicaIdReservationRequestV2): Promise<ReplicaIdReservationReceiptV2> {
-    const request = parseReplicaIdReservationRequestV2(requestInput)
+  async reserveReplicaId(requestInput: ReplicaIdReservationRequest): Promise<ReplicaIdReservationReceipt> {
+    const request = parseReplicaIdReservationRequest(requestInput)
     return this.store.transact(request.core.projectId, async (transaction) => {
       const state = requireTeamState(transaction.read())
       const team = state.team
@@ -676,8 +676,8 @@ export class CollaborationMembershipServiceV2 {
       if (team.reservations.length >= MAX_ALLOCATIONS_PER_PROJECT) fail("capacity-exceeded", "Project replica allocation lifetime cap is exhausted")
       const assignedReplicaId = nextReplicaId(team.lastAllocatedReplicaId)
       const now = nowU64(this.clock)
-      const core: ReplicaIdReservationReceiptCoreV2 = Object.freeze({
-        format: "convax.replica-id-reservation-receipt-core/2",
+      const core: ReplicaIdReservationReceiptCore = Object.freeze({
+        format: "convax.replica-id-reservation-receipt-core",
         allocationRequestId: request.core.allocationRequestId,
         reservationRequestCoreDigest: request.coreDigest,
         projectId: snapshot.core.projectId,
@@ -699,7 +699,7 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const receipt: ReplicaIdReservationReceiptV2 = await signArtifact("convax.replica-id-reservation-receipt/2", "convax.replica-id-reservation-receipt-core/2", core, this.signatures)
+      const receipt: ReplicaIdReservationReceipt = await signArtifact("convax.replica-id-reservation-receipt", "convax.replica-id-reservation-receipt-core", core, this.signatures)
       const nextTeam: CollaborationTeamAuthorityStateV2 = Object.freeze({
         ...team,
         lastAllocatedReplicaId: assignedReplicaId,
@@ -710,7 +710,7 @@ export class CollaborationMembershipServiceV2 {
     })
   }
 
-  async issueMutationChallenge(projectIdInput: ProjectId, intentInput: SupportedMutationChallengeIntentV2): Promise<MutationChallengeV2> {
+  async issueMutationChallenge(projectIdInput: ProjectId, intentInput: SupportedMutationChallengeIntentV2): Promise<MutationChallenge> {
     const projectId = parseProjectId(projectIdInput)
     const intent = normalizeIntent(intentInput)
     return this.store.transact(projectId, async (transaction) => {
@@ -732,8 +732,8 @@ export class CollaborationMembershipServiceV2 {
         ? parseUint64("0")
         : requireMember(snapshot, requester.memberId).memberMutationCounter
       const now = nowU64(this.clock)
-      const core: MutationChallengeCoreV2 = Object.freeze({
-        format: "convax.mutation-challenge-core/2",
+      const core: MutationChallengeCore = Object.freeze({
+        format: "convax.mutation-challenge-core",
         purpose: intent.purpose,
         challengeId: this.randomId128(),
         mutationId: intent.mutationId,
@@ -747,7 +747,7 @@ export class CollaborationMembershipServiceV2 {
         requesterCredentialDigest: intent.requesterCredentialDigest,
         replicaIdReservationReceiptDigest: intent.purpose === "replica-enroll" ? intent.replicaIdReservationReceiptDigest : null,
         requiredFloorSetDigest: intent.purpose === "replica-activate-editor" ? intent.installedFloorSetDigest : null,
-        preparedAfterMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core/2", preparedAfterCore),
+        preparedAfterMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core", preparedAfterCore),
         preparedCutoffCoverageRootCoreDigest: null,
         serverNonce: this.randomId128(),
         issuedAtUnixMs: now,
@@ -757,7 +757,7 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const challenge: MutationChallengeV2 = await signArtifact("convax.mutation-challenge/2", "convax.mutation-challenge-core/2", core, this.signatures)
+      const challenge: MutationChallenge = await signArtifact("convax.mutation-challenge", "convax.mutation-challenge-core", core, this.signatures)
       const invitations = invitationIndex < 0 ? team.invitations : team.invitations.map((value, index) => index === invitationIndex ? { ...value, state: "prepared" as const, challengeDigest: challenge.coreDigest } : value)
       const nextTeam: CollaborationTeamAuthorityStateV2 = Object.freeze({
         ...team,
@@ -769,8 +769,8 @@ export class CollaborationMembershipServiceV2 {
     })
   }
 
-  async commitMembershipMutation(proofInput: MembershipMutationProofV2): Promise<MembershipMutationResultV2> {
-    const proof = parseMembershipMutationProofV2(proofInput)
+  async commitMembershipMutation(proofInput: MembershipMutationProof): Promise<MembershipMutationResultV2> {
+    const proof = parseMembershipMutationProof(proofInput)
     if (proof.core.purpose === "replica-rotate" || proof.core.purpose === "replica-revoke" || proof.core.purpose === "member-role-change" || proof.core.purpose === "member-revoke") return this.commitCutoffMutation(proof) as unknown as MembershipMutationResultV2
     return this.store.transact(proof.core.projectId, (transaction) => this.commitNonCutoffMutationInTransaction(proof, transaction))
   }
@@ -805,7 +805,7 @@ export class CollaborationMembershipServiceV2 {
       if (!challengeRecord || challengeRecord.consumedRequestDigest !== null || challengeRecord.invitationToken !== invitationToken || challengeRecord.intent.purpose !== "member-add") fail("not-active", "Invitation challenge is not active")
       if (uint64ToBigInt(challengeRecord.challenge.core.expiresAtUnixMs) <= BigInt(this.now())) fail("expired", "Member-add challenge expired")
       const proofCore = memberAddProofCoreV2(challengeRecord.challenge, challengeRecord.intent)
-      if (membershipMutationProofCoreDigestV2(proofCore) !== requestDigest) fail("invalid-proof", "Member-add signature half does not bind the prepared proof")
+      if (membershipMutationProofCoreDigest(proofCore) !== requestDigest) fail("invalid-proof", "Member-add signature half does not bind the prepared proof")
       const requester = requireCurrentMember(team, challengeRecord.challenge.core.requesterCredentialDigest)
       requireCurrentAdmin(team, requester, challengeRecord.intent.adminCapabilityDigest)
       const signingKey = input.kind === "admin" ? requester.memberSigningPublicKey : challengeRecord.intent.targetMemberSigningPublicKey
@@ -827,8 +827,8 @@ export class CollaborationMembershipServiceV2 {
         : Object.freeze(team.memberAddSignatureHalves.map((value, index) => index === existingIndex ? merged : value))
       transaction.write({ ...state, team: { ...team, memberAddSignatureHalves: halves } })
       if (!merged.adminSignature || !merged.targetMemberPossessionSignature) return Object.freeze({ status: "pending-other-signature" as const, requestDigest })
-      const proof = parseMembershipMutationProofV2(Object.freeze({
-        format: "convax.mutation-proof/2",
+      const proof = parseMembershipMutationProof(Object.freeze({
+        format: "convax.mutation-proof",
         core: proofCore,
         requestDigest,
         signatures: Object.freeze({ purpose: "member-add", adminSignature: merged.adminSignature, targetMemberPossessionSignature: merged.targetMemberPossessionSignature }),
@@ -842,10 +842,10 @@ export class CollaborationMembershipServiceV2 {
     readonly projectId: ProjectId
     readonly confirmation: unknown
     readonly approval: unknown
-  }): Promise<TeamEpochRolloverChallengeV2> {
+  }): Promise<TeamEpochRolloverChallenge> {
     const projectId = parseProjectId(input.projectId)
-    const confirmation = parseProjectResetConfirmationV2(input.confirmation)
-    const approval = parseProjectResetApprovalV2(input.approval)
+    const confirmation = parseProjectResetConfirmation(input.confirmation)
+    const approval = parseProjectResetApproval(input.approval)
     return this.store.transact(projectId, async (transaction) => {
       const state = requireTeamState(transaction.read())
       const team = state.team
@@ -883,28 +883,28 @@ export class CollaborationMembershipServiceV2 {
       const newProjectEpoch = this.randomId128()
       const newMembershipEpoch = this.randomId128()
       const newProjectIndexShardEpoch = this.randomId128()
-      const registryEntrySet = Object.freeze({ format: "convax.registry-entry-set/2" as const, entries: Object.freeze([]) })
-      const preparedEmptyRegistrySnapshotCore: RegistrySnapshotCoreV2 = Object.freeze({
-        format: "convax.registry-snapshot-core/2",
+      const registryEntrySet = Object.freeze({ format: "convax.registry-entry-set" as const, entries: Object.freeze([]) })
+      const preparedEmptyRegistrySnapshotCore: RegistrySnapshotCore = Object.freeze({
+        format: "convax.registry-snapshot-core",
         projectId,
         projectEpoch: newProjectEpoch,
         registrySequence: parseUint64("0"),
         priorRegistryDigest: null,
-        entriesDigest: registryEntrySetDigestV2(registryEntrySet),
+        entriesDigest: registryEntrySetDigest(registryEntrySet),
         entryCount: parseUint32("0"),
         protocolDigest: protocolDigest(),
         trustBundleDigest: this.configuration.trustBundleDigest,
         serviceKeyPurpose: "registry-cutoff",
         serviceKeyId: serviceKeyIdFor("registry-cutoff", this.signatures),
       })
-      const preparedMembershipSnapshotCore: MembershipSnapshotCoreV2 = Object.freeze({
-        format: "convax.membership-snapshot-core/2",
+      const preparedMembershipSnapshotCore: MembershipSnapshotCore = Object.freeze({
+        format: "convax.membership-snapshot-core",
         projectId,
         projectEpoch: newProjectEpoch,
         membershipEpoch: newMembershipEpoch,
         membershipSequence: parseUint64("1"),
         registrySequence: parseUint64("0"),
-        registryRootDigest: registrySnapshotCoreDigestV2(preparedEmptyRegistrySnapshotCore),
+        registryRootDigest: registrySnapshotCoreDigest(preparedEmptyRegistrySnapshotCore),
         members: Object.freeze(team.currentSnapshot.core.members.filter((member) => member.state === "active").map((member) => Object.freeze({ ...member, state: "active" as const, memberAuthorizationEpoch: this.randomId128(), memberMutationCounter: parseUint64("1") }))),
         replicas: Object.freeze([]),
         protocolDigest: protocolDigest(),
@@ -913,8 +913,8 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
       const now = nowU64(this.clock)
-      const core: TeamEpochRolloverChallengeCoreV2 = Object.freeze({
-        format: "convax.team-epoch-rollover-challenge-core/2",
+      const core: TeamEpochRolloverChallengeCore = Object.freeze({
+        format: "convax.team-epoch-rollover-challenge-core",
         challengeId: this.randomId128(),
         resetId: confirmation.core.resetId,
         projectId,
@@ -928,7 +928,7 @@ export class CollaborationMembershipServiceV2 {
         newProjectEpoch,
         newMembershipEpoch,
         newProjectIndexShardEpoch,
-        preparedNewMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core/2", preparedMembershipSnapshotCore),
+        preparedNewMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core", preparedMembershipSnapshotCore),
         serverNonce: this.randomId128(),
         issuedAtUnixMs: now,
         expiresAtUnixMs: addU64(now, CHALLENGE_TTL_MS),
@@ -937,8 +937,8 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const coreDigest = teamEpochRolloverChallengeCoreDigestV2(core)
-      const challenge: TeamEpochRolloverChallengeV2 = Object.freeze({ format: "convax.team-epoch-rollover-challenge/2", core, coreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", coreDigest)) })
+      const coreDigest = teamEpochRolloverChallengeCoreDigest(core)
+      const challenge: TeamEpochRolloverChallenge = Object.freeze({ format: "convax.team-epoch-rollover-challenge", core, coreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", coreDigest)) })
       transaction.write({ ...state, team: { ...team, rolloverChallenges: Object.freeze([...pending, Object.freeze({ challenge, confirmation, approval, preparedMembershipSnapshotCore, preparedEmptyRegistrySnapshotCore, consumedRequestDigest: null })]) } })
       return challenge
     })
@@ -949,8 +949,8 @@ export class CollaborationMembershipServiceV2 {
     attestationInput: unknown,
     admission: EmptyProjectIndexGenesisAttestationAdmissionV2,
   ): Promise<TeamEpochRolloverResultV2> {
-    const proof = parseTeamEpochRolloverProofV2(proofInput)
-    const attestation = parseEmptyProjectIndexGenesisAttestationV2(attestationInput)
+    const proof = parseTeamEpochRolloverProof(proofInput)
+    const attestation = parseEmptyProjectIndexGenesisAttestation(attestationInput)
     const admittedDigest = liveEmptyGenesisAdmissionsV2.get(admission)
     liveEmptyGenesisAdmissionsV2.delete(admission)
     if (admittedDigest !== attestation.coreDigest) fail("invalid-proof", "A live exact empty ProjectIndex attestation admission is required")
@@ -973,20 +973,20 @@ export class CollaborationMembershipServiceV2 {
       requireCurrentAdmin(team, requester, proof.core.requesterAdminCapabilityCoreDigest)
       if (requester.memberAuthorizationEpoch !== proof.core.requesterMemberAuthorizationEpoch || !await this.signatures.verifyPublicKeyDigest(requester.memberSigningPublicKey, proof.requestDigest, proof.requesterAdminMemberSignature)) fail("invalid-proof", "Project reset proof admin signature is invalid")
       if (attestation.core.projectId !== proof.core.projectId || attestation.core.newProjectEpoch !== proof.core.newProjectEpoch || attestation.core.newMembershipEpoch !== proof.core.newMembershipEpoch || attestation.core.newProjectIndexScope.projectId !== proof.core.projectId || attestation.core.newProjectIndexScope.projectEpoch !== proof.core.newProjectEpoch || attestation.core.newProjectIndexScope.shardEpoch !== proof.core.newProjectIndexShardEpoch || attestation.core.teamEpochRolloverProofCoreDigest !== proof.requestDigest || attestation.core.checkpointDigest !== proof.core.stagedEmptyProjectIndexCheckpointDigest || attestation.core.fullUpdateDigest !== proof.core.stagedEmptyProjectIndexFullUpdateDigest || attestation.core.stateVectorDigest !== proof.core.stagedEmptyProjectIndexStateVectorDigest || attestation.core.canonicalStateDigest !== proof.core.stagedEmptyProjectIndexCanonicalStateDigest || attestation.core.protocolDigest !== protocolDigest() || attestation.core.schemaDigest !== this.configuration.schemaDigest || attestation.core.uriProtocolDigest !== this.configuration.uriProtocolDigest || attestation.core.validationArtifactSetDigest !== this.configuration.validationArtifactSetDigest || attestation.core.trustBundleDigest !== this.configuration.trustBundleDigest) fail("invalid-proof", "Empty ProjectIndex attestation does not bind the rollover proof")
-      if (structuredDigest("convax.membership-snapshot-core/2", record.preparedMembershipSnapshotCore) !== challenge.preparedNewMembershipSnapshotCoreDigest || registrySnapshotCoreDigestV2(record.preparedEmptyRegistrySnapshotCore) !== record.preparedMembershipSnapshotCore.registryRootDigest) fail("invalid-proof", "Prepared rollover authority changed")
+      if (structuredDigest("convax.membership-snapshot-core", record.preparedMembershipSnapshotCore) !== challenge.preparedNewMembershipSnapshotCoreDigest || registrySnapshotCoreDigest(record.preparedEmptyRegistrySnapshotCore) !== record.preparedMembershipSnapshotCore.registryRootDigest) fail("invalid-proof", "Prepared rollover authority changed")
       const membershipSnapshot = await this.signSnapshot(record.preparedMembershipSnapshotCore)
       const requesterAfter = requireMember(membershipSnapshot, requester.memberId)
       const requesterAdminCapability = await this.signAdminCapability(membershipSnapshot, requesterAfter)
       const requesterCredential = await this.signMemberCredential(membershipSnapshot, requesterAfter, requesterAdminCapability.coreDigest)
-      const otherCredentials: MemberCredentialV2[] = []
+      const otherCredentials: MemberCredential[] = []
       for (const member of membershipSnapshot.core.members) if (member.memberId !== requesterAfter.memberId) otherCredentials.push(await this.signMemberCredential(membershipSnapshot, member, null))
-      const emptyRegistryCoreDigest = registrySnapshotCoreDigestV2(record.preparedEmptyRegistrySnapshotCore)
-      const emptyRegistrySnapshot: RegistrySnapshotV2 = Object.freeze({ format: "convax.registry-snapshot/2", core: record.preparedEmptyRegistrySnapshotCore, coreDigest: emptyRegistryCoreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("registry-cutoff", emptyRegistryCoreDigest)) })
+      const emptyRegistryCoreDigest = registrySnapshotCoreDigest(record.preparedEmptyRegistrySnapshotCore)
+      const emptyRegistrySnapshot: RegistrySnapshot = Object.freeze({ format: "convax.registry-snapshot", core: record.preparedEmptyRegistrySnapshotCore, coreDigest: emptyRegistryCoreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("registry-cutoff", emptyRegistryCoreDigest)) })
       const closedSessionCredentialDigests = Object.freeze(state.sessions.filter((session) => !session.closed).map((session) => session.credential.coreDigest).sort())
       if (closedSessionCredentialDigests.length > 512) fail("capacity-exceeded", "Project reset closes more than 512 sessions")
       const committedProjectResetCounter = incrementUint64(team.projectResetCounter)
-      const receiptCore: TeamEpochRolloverReceiptCoreV2 = Object.freeze({
-        format: "convax.team-epoch-rollover-receipt-core/2",
+      const receiptCore: TeamEpochRolloverReceiptCore = Object.freeze({
+        format: "convax.team-epoch-rollover-receipt-core",
         resetId: proof.core.resetId,
         requestDigest: proof.requestDigest,
         projectId: proof.core.projectId,
@@ -1015,8 +1015,8 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const receiptCoreDigest = teamEpochRolloverReceiptCoreDigestV2(receiptCore)
-      const receipt: TeamEpochRolloverReceiptV2 = Object.freeze({ format: "convax.team-epoch-rollover-receipt/2", core: receiptCore, coreDigest: receiptCoreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", receiptCoreDigest)) })
+      const receiptCoreDigest = teamEpochRolloverReceiptCoreDigest(receiptCore)
+      const receipt: TeamEpochRolloverReceipt = Object.freeze({ format: "convax.team-epoch-rollover-receipt", core: receiptCore, coreDigest: receiptCoreDigest, serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", receiptCoreDigest)) })
       const result: TeamEpochRolloverResultV2 = Object.freeze({ receipt, membershipSnapshot, requesterCredential, requesterAdminCapability, emptyRegistrySnapshot })
       const reservations = team.reservations.map((value) => value.state === "reserved" ? { ...value, state: "abandoned" as const, abandonmentReason: "project-reset" as const } : value)
       const nextTeam: CollaborationTeamAuthorityStateV2 = Object.freeze({
@@ -1036,14 +1036,14 @@ export class CollaborationMembershipServiceV2 {
         rolloverChallenges: Object.freeze([]),
         rolloverResults: Object.freeze([...team.rolloverResults, Object.freeze({ resetId: proof.core.resetId, requestDigest: proof.requestDigest, result })]),
       })
-      const nextMetadata = Object.freeze({ format: "convax.metadata-control-state/2" as const, contentCertificates: [], stableSets: [], projectFloors: [], replicaFloorAcks: [], registrationClaims: [], registrationAbandonments: [], registryEntries: [], registrySnapshots: [emptyRegistrySnapshot], cutoffCommits: [], shardResetApprovals: [], projectResetRolloverReceipts: [receipt] })
+      const nextMetadata = Object.freeze({ format: "convax.metadata-control-state" as const, contentCertificates: [], stableSets: [], projectFloors: [], replicaFloorAcks: [], registrationClaims: [], registrationAbandonments: [], registryEntries: [], registrySnapshots: [emptyRegistrySnapshot], cutoffCommits: [], shardResetApprovals: [], projectResetRolloverReceipts: [receipt] })
       transaction.write({ ...state, seed: seedFromTeam(nextTeam, this.configuration, null), challenges: [], sessions: Object.freeze(state.sessions.map((session) => ({ ...session, closed: true }))), tickets: [], directorySequence: parseUint64("0"), team: nextTeam, metadata: nextMetadata })
       return result
     })
   }
 
   private async commitNonCutoffMutationInTransaction(
-    proof: MembershipMutationProofV2,
+    proof: MembershipMutationProof,
     transaction: AtomicControlStateTransaction<CollaborationControlProjectStateV2>,
   ): Promise<MembershipMutationResultV2> {
     if (proof.core.purpose === "replica-rotate" || proof.core.purpose === "replica-revoke" || proof.core.purpose === "member-role-change" || proof.core.purpose === "member-revoke") fail("invalid-proof", "Cutoff mutation cannot use the non-cutoff transaction")
@@ -1069,7 +1069,7 @@ export class CollaborationMembershipServiceV2 {
       assertMutationBinding(proof, challengeRecord.challenge.core, team.currentSnapshot, requester)
       await this.verifyMutationSignatures(proof, requester, team)
       const afterCore = challengeRecord.preparedAfterCore
-      if (structuredDigest("convax.membership-snapshot-core/2", afterCore) !== challengeRecord.challenge.core.preparedAfterMembershipSnapshotCoreDigest) fail("invalid-proof", "Prepared membership snapshot changed")
+      if (structuredDigest("convax.membership-snapshot-core", afterCore) !== challengeRecord.challenge.core.preparedAfterMembershipSnapshotCoreDigest) fail("invalid-proof", "Prepared membership snapshot changed")
       if (proof.core.purpose === "replica-activate-editor") {
         const replica = requireReplica(team.currentSnapshot, proof.core.currentReplicaId)
         if (!await this.floors.verifyInstalledCurrentFloor({
@@ -1087,8 +1087,8 @@ export class CollaborationMembershipServiceV2 {
       const requesterAdminCapability = authorities.adminCapabilities.find((value) => value.core.adminMemberId === afterRequester.memberId) ?? null
       const requesterCredential = authorities.memberCredentials.find((value) => value.core.memberId === afterRequester.memberId) ?? fail("invalid-proof", "Requester credential was not issued")
       const targetMemberCredential = authorities.memberCredentials.find((value) => value.core.memberId === afterMember.memberId) ?? fail("invalid-proof", "Target member credential was not issued")
-      let actorCredential: ReplicaActorCredentialV2 | null = null
-      let editAuthorization: ReplicaEditAuthorizationV2 | null = null
+      let actorCredential: ReplicaActorCredential | null = null
+      let editAuthorization: ReplicaEditAuthorization | null = null
       let consumedReservationDigest: Digest | null = null
       let reservationIndex = -1
       if (proof.core.purpose === "replica-enroll") {
@@ -1103,8 +1103,8 @@ export class CollaborationMembershipServiceV2 {
         const replica = requireReplica(afterSnapshot, proof.core.currentReplicaId)
         editAuthorization = await this.signEditAuthorization(afterSnapshot, afterMember, replica, proof.core.installedFloorSetDigest)
       }
-      const receiptCore: MutationReceiptCoreV2 = Object.freeze({
-        format: "convax.mutation-receipt-core/2",
+      const receiptCore: MutationReceiptCore = Object.freeze({
+        format: "convax.mutation-receipt-core",
         mutationId: proof.core.mutationId,
         requestDigest: proof.requestDigest,
         purpose: proof.core.purpose,
@@ -1121,7 +1121,7 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const receipt: MutationReceiptV2 = await signArtifact("convax.mutation-receipt/2", "convax.mutation-receipt-core/2", receiptCore, this.signatures)
+      const receipt: MutationReceipt = await signArtifact("convax.mutation-receipt", "convax.mutation-receipt-core", receiptCore, this.signatures)
       const result: MembershipMutationResultV2 = Object.freeze({ receipt, membershipSnapshot: afterSnapshot, requesterCredential, requesterAdminCapability, targetMemberCredential, replicaActorCredential: actorCredential, replicaEditAuthorization: editAuthorization })
       const challenges = team.mutationChallenges.map((record, index) => index === challengeIndex ? { ...record, consumedRequestDigest: proof.requestDigest } : record)
       const reservations = reservationIndex < 0 ? team.reservations : team.reservations.map((record, index) => index !== reservationIndex ? record : {
@@ -1148,7 +1148,7 @@ export class CollaborationMembershipServiceV2 {
       return result
   }
 
-  async issueCutoffChallenge(projectIdInput: ProjectId, intentInput: CutoffMutationChallengeIntentV2): Promise<MutationChallengeV2> {
+  async issueCutoffChallenge(projectIdInput: ProjectId, intentInput: CutoffMutationChallengeIntentV2): Promise<MutationChallenge> {
     const projectId = parseProjectId(projectIdInput)
     const intent = normalizeCutoffIntent(intentInput)
     return this.store.transact(projectId, async (transaction) => {
@@ -1162,8 +1162,8 @@ export class CollaborationMembershipServiceV2 {
       const prepared = this.prepareCutoff(state, requester, intent)
       const now = nowU64(this.clock)
       const targetMember = requireMember(snapshot, prepared.target.memberId)
-      const core: MutationChallengeCoreV2 = Object.freeze({
-        format: "convax.mutation-challenge-core/2",
+      const core: MutationChallengeCore = Object.freeze({
+        format: "convax.mutation-challenge-core",
         purpose: intent.purpose,
         challengeId: this.randomId128(),
         mutationId: intent.mutationId,
@@ -1177,8 +1177,8 @@ export class CollaborationMembershipServiceV2 {
         requesterCredentialDigest: intent.requesterCredentialDigest,
         replicaIdReservationReceiptDigest: intent.purpose === "replica-rotate" ? intent.replicaIdReservationReceiptDigest : null,
         requiredFloorSetDigest: null,
-        preparedAfterMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core/2", prepared.afterCore),
-        preparedCutoffCoverageRootCoreDigest: registryCutoffCoverageRootCoreDigestV2(prepared.rootCore),
+        preparedAfterMembershipSnapshotCoreDigest: structuredDigest("convax.membership-snapshot-core", prepared.afterCore),
+        preparedCutoffCoverageRootCoreDigest: registryCutoffCoverageRootCoreDigest(prepared.rootCore),
         serverNonce: this.randomId128(),
         issuedAtUnixMs: now,
         expiresAtUnixMs: addU64(now, CHALLENGE_TTL_MS),
@@ -1187,15 +1187,15 @@ export class CollaborationMembershipServiceV2 {
         serviceKeyPurpose: "membership",
         serviceKeyId: serviceKeyIdV2(this.signatures),
       })
-      const challenge = await signArtifact("convax.mutation-challenge/2", "convax.mutation-challenge-core/2", core, this.signatures)
+      const challenge = await signArtifact("convax.mutation-challenge", "convax.mutation-challenge-core", core, this.signatures)
       const nextTeam = Object.freeze({ ...team, cutoffChallenges: Object.freeze([...pending, Object.freeze({ challenge, intent, preparedAfterCore: prepared.afterCore, preparedPages: intent.pages, preparedRootCore: prepared.rootCore, consumedRequestDigest: null })]) })
       transaction.write({ ...state, team: nextTeam })
       return challenge
     })
   }
 
-  async commitCutoffMutation(proofInput: MembershipMutationProofV2): Promise<CutoffMembershipMutationResultV2> {
-    const proof = parseMembershipMutationProofV2(proofInput)
+  async commitCutoffMutation(proofInput: MembershipMutationProof): Promise<CutoffMembershipMutationResultV2> {
+    const proof = parseMembershipMutationProof(proofInput)
     if (proof.core.purpose !== "replica-rotate" && proof.core.purpose !== "replica-revoke" && proof.core.purpose !== "member-role-change" && proof.core.purpose !== "member-revoke") fail("invalid-proof", "Proof is not a cutoff mutation")
     return this.store.transact(proof.core.projectId, async (transaction) => {
       const state = requireTeamState(transaction.read())
@@ -1216,24 +1216,24 @@ export class CollaborationMembershipServiceV2 {
       if (cutoffCoverageRootCoreDigest !== record.challenge.core.preparedCutoffCoverageRootCoreDigest) fail("invalid-proof", "Cutoff proof does not bind the prepared coverage root")
       assertCutoffProofIntent(proof, record.intent)
       await this.verifyMutationSignatures(proof, requester, team)
-      if (structuredDigest("convax.membership-snapshot-core/2", record.preparedAfterCore) !== record.challenge.core.preparedAfterMembershipSnapshotCoreDigest || registryCutoffCoverageRootCoreDigestV2(record.preparedRootCore) !== record.challenge.core.preparedCutoffCoverageRootCoreDigest) fail("invalid-proof", "Prepared cutoff material changed")
+      if (structuredDigest("convax.membership-snapshot-core", record.preparedAfterCore) !== record.challenge.core.preparedAfterMembershipSnapshotCoreDigest || registryCutoffCoverageRootCoreDigest(record.preparedRootCore) !== record.challenge.core.preparedCutoffCoverageRootCoreDigest) fail("invalid-proof", "Prepared cutoff material changed")
       const beforeSnapshot = team.currentSnapshot
       const afterSnapshot = await this.signSnapshot(record.preparedAfterCore)
       if (afterSnapshot.coreDigest !== record.preparedRootCore.afterMembershipSnapshotDigest) fail("invalid-proof", "Prepared cutoff after-membership digest mismatch")
       const closedSessions = state.sessions.filter((session) => !session.closed && isCutoffSessionTarget(session.credential.core.memberId, session.credential.core.replicaId, record.preparedRootCore.target))
       if (closedSessions.length > 8) fail("capacity-exceeded", "Cutoff closes more than eight sessions")
       const closedSessionCredentialDigests = Object.freeze(closedSessions.map((session) => session.credential.coreDigest).sort())
-      const coverageRoot = await signArtifactForPurpose("convax.registry-cutoff-coverage-root/2", "convax.registry-cutoff-coverage-root-core/2", record.preparedRootCore, "registry-cutoff", this.signatures)
-      const authorizationCore: AuthorizationMutationCoreV2 = Object.freeze({ format: "convax.authorization-mutation-core/2", mutationId: proof.core.mutationId, projectId: proof.core.projectId, projectEpoch: proof.core.projectEpoch, membershipEpoch: proof.core.membershipEpoch, target: record.preparedRootCore.target, beforeMembershipSnapshotDigest: beforeSnapshot.coreDigest, afterMembershipSnapshotDigest: afterSnapshot.coreDigest, registryCutoffCoverageRootCoreDigest: coverageRoot.coreDigest, closedSessionCredentialDigests, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: serviceKeyIdFor("registry-cutoff", this.signatures) })
-      const authorizationMutation = await signArtifactForPurpose("convax.authorization-mutation/2", "convax.authorization-mutation-core/2", authorizationCore, "registry-cutoff", this.signatures)
-      if (authorizationMutationCoreDigestV2(authorizationCore) !== authorizationMutation.coreDigest) fail("invalid-proof", "Authorization mutation digest changed")
+      const coverageRoot = await signArtifactForPurpose("convax.registry-cutoff-coverage-root", "convax.registry-cutoff-coverage-root-core", record.preparedRootCore, "registry-cutoff", this.signatures)
+      const authorizationCore: AuthorizationMutationCore = Object.freeze({ format: "convax.authorization-mutation-core", mutationId: proof.core.mutationId, projectId: proof.core.projectId, projectEpoch: proof.core.projectEpoch, membershipEpoch: proof.core.membershipEpoch, target: record.preparedRootCore.target, beforeMembershipSnapshotDigest: beforeSnapshot.coreDigest, afterMembershipSnapshotDigest: afterSnapshot.coreDigest, registryCutoffCoverageRootCoreDigest: coverageRoot.coreDigest, closedSessionCredentialDigests, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: serviceKeyIdFor("registry-cutoff", this.signatures) })
+      const authorizationMutation = await signArtifactForPurpose("convax.authorization-mutation", "convax.authorization-mutation-core", authorizationCore, "registry-cutoff", this.signatures)
+      if (authorizationMutationCoreDigest(authorizationCore) !== authorizationMutation.coreDigest) fail("invalid-proof", "Authorization mutation digest changed")
       const afterRequester = requireMember(afterSnapshot, requester.memberId)
       const authorities = await this.signNextMemberAuthorities(team, afterSnapshot)
       const requesterAdminCapability = authorities.adminCapabilities.find((value) => value.core.adminMemberId === afterRequester.memberId) ?? null
       const requesterCredential = authorities.memberCredentials.find((value) => value.core.memberId === afterRequester.memberId) ?? fail("invalid-proof", "Requester credential was not issued")
       const afterTarget = afterSnapshot.core.members.find((member) => member.memberId === proof.core.targetMemberId)
       const targetMemberCredential = !afterTarget || afterTarget.state !== "active" ? null : authorities.memberCredentials.find((value) => value.core.memberId === afterTarget.memberId) ?? fail("invalid-proof", "Target member credential was not issued")
-      let rotationActorCredential: ReplicaActorCredentialV2 | null = null
+      let rotationActorCredential: ReplicaActorCredential | null = null
       let rotationReservationIndex = -1
       if (proof.core.purpose === "replica-rotate") {
         const rotationCore = proof.core
@@ -1243,8 +1243,8 @@ export class CollaborationMembershipServiceV2 {
         if (rotationCore.newReplicaId !== reservation.receipt.core.assignedReplicaId || rotationCore.newReplicaSigningPublicKey !== reservation.receipt.core.newReplicaSigningPublicKey || rotationCore.requestedEditState !== reservation.receipt.core.requestedEditState) fail("invalid-proof", "Replica rotation proof does not bind its reservation")
         rotationActorCredential = await this.signActorCredential(afterSnapshot, requireReplica(afterSnapshot, rotationCore.newReplicaId))
       }
-      const receiptCore: MutationReceiptCoreV2 = Object.freeze({ format: "convax.mutation-receipt-core/2", mutationId: proof.core.mutationId, requestDigest: proof.requestDigest, purpose: proof.core.purpose, beforeMembershipSnapshotDigest: beforeSnapshot.coreDigest, afterMembershipSnapshotDigest: afterSnapshot.coreDigest, consumedReplicaIdReservationReceiptDigest: proof.core.purpose === "replica-rotate" ? proof.core.replicaIdReservationReceiptDigest : null, issuedReplicaActorCredentialDigest: rotationActorCredential?.coreDigest ?? null, issuedReplicaEditAuthorizationDigest: null, authorizationMutationDigest: authorizationMutation.coreDigest, cutoffCoverageRootCoreDigest: coverageRoot.coreDigest, closedSessionCredentialDigests, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
-      const receipt = await signArtifact("convax.mutation-receipt/2", "convax.mutation-receipt-core/2", receiptCore, this.signatures)
+      const receiptCore: MutationReceiptCore = Object.freeze({ format: "convax.mutation-receipt-core", mutationId: proof.core.mutationId, requestDigest: proof.requestDigest, purpose: proof.core.purpose, beforeMembershipSnapshotDigest: beforeSnapshot.coreDigest, afterMembershipSnapshotDigest: afterSnapshot.coreDigest, consumedReplicaIdReservationReceiptDigest: proof.core.purpose === "replica-rotate" ? proof.core.replicaIdReservationReceiptDigest : null, issuedReplicaActorCredentialDigest: rotationActorCredential?.coreDigest ?? null, issuedReplicaEditAuthorizationDigest: null, authorizationMutationDigest: authorizationMutation.coreDigest, cutoffCoverageRootCoreDigest: coverageRoot.coreDigest, closedSessionCredentialDigests, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
+      const receipt = await signArtifact("convax.mutation-receipt", "convax.mutation-receipt-core", receiptCore, this.signatures)
       const result = Object.freeze({ receipt, membershipSnapshot: afterSnapshot, requesterCredential, requesterAdminCapability, targetMemberCredential, coverageRoot, authorizationMutation, replicaActorCredential: rotationActorCredential, replicaEditAuthorization: null })
       const reservations = rotationReservationIndex < 0 ? team.reservations : team.reservations.map((item, index) => index !== rotationReservationIndex ? item : { ...item, state: "consumed" as const, consumedMutationId: proof.core.mutationId, consumedMutationReceiptCoreDigest: receipt.coreDigest })
       const nextTeam: CollaborationTeamAuthorityStateV2 = Object.freeze({ ...team, currentSnapshot: afterSnapshot, snapshots: Object.freeze([...team.snapshots, afterSnapshot]), memberCredentials: Object.freeze([...team.memberCredentials, ...authorities.memberCredentials]), adminCapabilities: Object.freeze([...team.adminCapabilities, ...authorities.adminCapabilities]), actorCredentials: rotationActorCredential ? Object.freeze([...team.actorCredentials, rotationActorCredential]) : team.actorCredentials, reservations, cutoffChallenges: Object.freeze(team.cutoffChallenges.map((value, index) => index === challengeIndex ? { ...value, consumedRequestDigest: proof.requestDigest } : value)), cutoffResults: Object.freeze([...team.cutoffResults, Object.freeze({ mutationId: proof.core.mutationId, requestDigest: proof.requestDigest, result })]) })
@@ -1256,12 +1256,12 @@ export class CollaborationMembershipServiceV2 {
     })
   }
 
-  private prepareCutoff(state: CollaborationControlProjectStateV2 & { readonly team: CollaborationTeamAuthorityStateV2 }, requester: MembershipMemberV2, intent: CutoffMutationChallengeIntentV2): Readonly<{ afterCore: MembershipSnapshotCoreV2; target: RegistryCutoffTargetV2; rootCore: RegistryCutoffCoverageRootCoreV2 }> {
+  private prepareCutoff(state: CollaborationControlProjectStateV2 & { readonly team: CollaborationTeamAuthorityStateV2 }, requester: MembershipMember, intent: CutoffMutationChallengeIntentV2): Readonly<{ afterCore: MembershipSnapshotCore; target: RegistryCutoffTarget; rootCore: RegistryCutoffCoverageRootCore }> {
     const before = state.team.currentSnapshot
     const nextSequence = incrementUint64(before.core.membershipSequence)
     let members = [...before.core.members]
     let replicas = [...before.core.replicas]
-    let target: RegistryCutoffTargetV2
+    let target: RegistryCutoffTarget
     if (intent.purpose === "replica-revoke" || intent.purpose === "replica-rotate") {
       const replica = requireReplica(before, intent.currentReplicaId)
       if (replica.memberId !== requester.memberId) fail("not-active", "A member may revoke only its own replica")
@@ -1285,15 +1285,15 @@ export class CollaborationMembershipServiceV2 {
       replicas = replicas.map((value) => value.memberId !== member.memberId ? value : intent.purpose === "member-revoke" ? { ...value, state: "revoked" as const, editState: "none" as const, revokedAtMembershipSequence: nextSequence } : { ...value, editState: "none" as const, replicaAuthorizationEpoch: this.randomId128() })
     }
     const afterCore = Object.freeze({ ...before.core, membershipSequence: nextSequence, registrySequence: state.seed.registrySequence, registryRootDigest: state.seed.registryRootDigest, members: Object.freeze(members), replicas: Object.freeze(replicas) })
-    const afterDigest = structuredDigest("convax.membership-snapshot-core/2", afterCore)
+    const afterDigest = structuredDigest("convax.membership-snapshot-core", afterCore)
     verifyCutoffPages(intent.pages, intent.cutoffId, state)
     const pageDigests = Object.freeze(intent.pages.map((page) => page.coreDigest))
     const leafCount = intent.pages.reduce((count, page) => count + page.core.leaves.length, 0)
-    const rootCore: RegistryCutoffCoverageRootCoreV2 = Object.freeze({ format: "convax.registry-cutoff-coverage-root-core/2", projectId: before.core.projectId, projectEpoch: before.core.projectEpoch, cutoffId: intent.cutoffId, target, beforeMembershipSnapshotDigest: before.coreDigest, afterMembershipSnapshotDigest: afterDigest, registrySequence: state.seed.registrySequence, registryRootDigest: state.seed.registryRootDigest, unlistedScopePolicy: "empty-target-frontier", pageDigests, leafCount: parseUint32(String(leafCount)), protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: serviceKeyIdFor("registry-cutoff", this.signatures) })
+    const rootCore: RegistryCutoffCoverageRootCore = Object.freeze({ format: "convax.registry-cutoff-coverage-root-core", projectId: before.core.projectId, projectEpoch: before.core.projectEpoch, cutoffId: intent.cutoffId, target, beforeMembershipSnapshotDigest: before.coreDigest, afterMembershipSnapshotDigest: afterDigest, registrySequence: state.seed.registrySequence, registryRootDigest: state.seed.registryRootDigest, unlistedScopePolicy: "empty-target-frontier", pageDigests, leafCount: parseUint32(String(leafCount)), protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: serviceKeyIdFor("registry-cutoff", this.signatures) })
     return Object.freeze({ afterCore, target, rootCore })
   }
 
-  private prepareAfterSnapshot(team: CollaborationTeamAuthorityStateV2, requester: MembershipMemberV2, intent: SupportedMutationChallengeIntentV2, currentProjection: CollaborationProjectSeedV2): MembershipSnapshotCoreV2 {
+  private prepareAfterSnapshot(team: CollaborationTeamAuthorityStateV2, requester: MembershipMember, intent: SupportedMutationChallengeIntentV2, currentProjection: CollaborationProjectSeedV2): MembershipSnapshotCore {
     const before = team.currentSnapshot
     const nextSequence = incrementUint64(before.core.membershipSequence)
     let members = [...before.core.members]
@@ -1333,7 +1333,7 @@ export class CollaborationMembershipServiceV2 {
     return Object.freeze({ ...before.core, membershipSequence: nextSequence, registrySequence: currentProjection.registrySequence, registryRootDigest: currentProjection.registryRootDigest, members: Object.freeze(members), replicas: Object.freeze(replicas) })
   }
 
-  private async verifyMutationSignatures(proof: MembershipMutationProofV2, requester: MembershipMemberV2, team: CollaborationTeamAuthorityStateV2): Promise<void> {
+  private async verifyMutationSignatures(proof: MembershipMutationProof, requester: MembershipMember, team: CollaborationTeamAuthorityStateV2): Promise<void> {
     if (proof.core.purpose === "member-add") {
       if (proof.signatures.purpose !== "member-add") fail("invalid-proof", "Mutation signature branch is invalid")
       requireCurrentAdmin(team, requester, proof.core.adminCapabilityDigest)
@@ -1351,19 +1351,19 @@ export class CollaborationMembershipServiceV2 {
     if (!("memberSignature" in proof.signatures) || !await this.signatures.verifyPublicKeyDigest(requester.memberSigningPublicKey, proof.requestDigest, proof.signatures.memberSignature)) fail("invalid-proof", "Member signature is invalid")
   }
 
-  private async signSnapshot(core: MembershipSnapshotCoreV2): Promise<MembershipSnapshotV2> {
-    return signArtifact("convax.membership-snapshot/2", "convax.membership-snapshot-core/2", core, this.signatures)
+  private async signSnapshot(core: MembershipSnapshotCore): Promise<MembershipSnapshot> {
+    return signArtifact("convax.membership-snapshot", "convax.membership-snapshot-core", core, this.signatures)
   }
 
-  private async signNextMemberAuthorities(team: CollaborationTeamAuthorityStateV2, snapshot: MembershipSnapshotV2): Promise<Readonly<{
-    memberCredentials: readonly MemberCredentialV2[]
-    adminCapabilities: readonly ProjectAdminCapabilityV2[]
+  private async signNextMemberAuthorities(team: CollaborationTeamAuthorityStateV2, snapshot: MembershipSnapshot): Promise<Readonly<{
+    memberCredentials: readonly MemberCredential[]
+    adminCapabilities: readonly ProjectAdminCapability[]
   }>> {
     const priorAdminIds = new Set(team.adminCapabilities
       .filter((value) => value.core.membershipSnapshotDigest === team.currentSnapshot.coreDigest)
       .map((value) => value.core.adminMemberId))
-    const adminCapabilities: ProjectAdminCapabilityV2[] = []
-    const memberCredentials: MemberCredentialV2[] = []
+    const adminCapabilities: ProjectAdminCapability[] = []
+    const memberCredentials: MemberCredential[] = []
     for (const member of snapshot.core.members) {
       if (member.state !== "active") continue
       const adminCapability = priorAdminIds.has(member.memberId) && member.role === "editor" ? await this.signAdminCapability(snapshot, member) : null
@@ -1373,24 +1373,24 @@ export class CollaborationMembershipServiceV2 {
     return Object.freeze({ memberCredentials: Object.freeze(memberCredentials), adminCapabilities: Object.freeze(adminCapabilities) })
   }
 
-  private async signAdminCapability(snapshot: MembershipSnapshotV2, member: MembershipMemberV2): Promise<ProjectAdminCapabilityV2> {
-    const core: ProjectAdminCapabilityCoreV2 = Object.freeze({ format: "convax.project-admin-capability-core/2", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, adminMemberId: member.memberId, adminMemberAuthorizationEpoch: member.memberAuthorizationEpoch, grants: ["membership-admin"] as const, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
-    return signArtifact("convax.project-admin-capability/2", "convax.project-admin-capability-core/2", core, this.signatures)
+  private async signAdminCapability(snapshot: MembershipSnapshot, member: MembershipMember): Promise<ProjectAdminCapability> {
+    const core: ProjectAdminCapabilityCore = Object.freeze({ format: "convax.project-admin-capability-core", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, adminMemberId: member.memberId, adminMemberAuthorizationEpoch: member.memberAuthorizationEpoch, grants: ["membership-admin"] as const, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
+    return signArtifact("convax.project-admin-capability", "convax.project-admin-capability-core", core, this.signatures)
   }
 
-  private async signMemberCredential(snapshot: MembershipSnapshotV2, member: MembershipMemberV2, adminCapabilityDigest: Digest | null): Promise<MemberCredentialV2> {
-    const core: MemberCredentialCoreV2 = Object.freeze({ format: "convax.member-credential-core/2", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, memberId: member.memberId, memberSigningPublicKey: member.memberSigningPublicKey, role: member.role, memberAuthorizationEpoch: member.memberAuthorizationEpoch, adminCapabilityDigest, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
-    return signArtifact("convax.member-credential/2", "convax.member-credential-core/2", core, this.signatures)
+  private async signMemberCredential(snapshot: MembershipSnapshot, member: MembershipMember, adminCapabilityDigest: Digest | null): Promise<MemberCredential> {
+    const core: MemberCredentialCore = Object.freeze({ format: "convax.member-credential-core", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, memberId: member.memberId, memberSigningPublicKey: member.memberSigningPublicKey, role: member.role, memberAuthorizationEpoch: member.memberAuthorizationEpoch, adminCapabilityDigest, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
+    return signArtifact("convax.member-credential", "convax.member-credential-core", core, this.signatures)
   }
 
-  private async signActorCredential(snapshot: MembershipSnapshotV2, replica: MembershipReplicaV2): Promise<ReplicaActorCredentialV2> {
-    const core: ReplicaActorCredentialCoreV2 = Object.freeze({ format: "convax.replica-actor-credential-core/2", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, memberId: replica.memberId, replicaId: replica.replicaId, replicaIdReservationReceiptDigest: replica.replicaIdReservationReceiptDigest, actorId: replica.actorId, replicaSigningPublicKey: replica.replicaSigningPublicKey, replicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
-    return signArtifact("convax.replica-actor-credential/2", "convax.replica-actor-credential-core/2", core, this.signatures)
+  private async signActorCredential(snapshot: MembershipSnapshot, replica: MembershipReplica): Promise<ReplicaActorCredential> {
+    const core: ReplicaActorCredentialCore = Object.freeze({ format: "convax.replica-actor-credential-core", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, memberId: replica.memberId, replicaId: replica.replicaId, replicaIdReservationReceiptDigest: replica.replicaIdReservationReceiptDigest, actorId: replica.actorId, replicaSigningPublicKey: replica.replicaSigningPublicKey, replicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, protocolDigest: protocolDigest(), trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
+    return signArtifact("convax.replica-actor-credential", "convax.replica-actor-credential-core", core, this.signatures)
   }
 
-  private async signEditAuthorization(snapshot: MembershipSnapshotV2, member: MembershipMemberV2, replica: MembershipReplicaV2, floor: Digest): Promise<ReplicaEditAuthorizationV2> {
-    const core: ReplicaEditAuthorizationCoreV2 = Object.freeze({ format: "convax.replica-edit-authorization-core/2", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, membershipSequence: snapshot.core.membershipSequence, memberId: member.memberId, memberAuthorizationEpoch: member.memberAuthorizationEpoch, replicaId: replica.replicaId, replicaIdReservationReceiptDigest: replica.replicaIdReservationReceiptDigest, actorId: replica.actorId, replicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, role: "editor", editState: "active-editor", installedFloorSetDigest: floor, protocolDigest: protocolDigest(), schemaDigest: this.configuration.schemaDigest, validationArtifactSetDigest: this.configuration.validationArtifactSetDigest, trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
-    return signArtifact("convax.replica-edit-authorization/2", "convax.replica-edit-authorization-core/2", core, this.signatures)
+  private async signEditAuthorization(snapshot: MembershipSnapshot, member: MembershipMember, replica: MembershipReplica, floor: Digest): Promise<ReplicaEditAuthorization> {
+    const core: ReplicaEditAuthorizationCore = Object.freeze({ format: "convax.replica-edit-authorization-core", projectId: snapshot.core.projectId, projectEpoch: snapshot.core.projectEpoch, membershipEpoch: snapshot.core.membershipEpoch, membershipSnapshotDigest: snapshot.coreDigest, membershipSequence: snapshot.core.membershipSequence, memberId: member.memberId, memberAuthorizationEpoch: member.memberAuthorizationEpoch, replicaId: replica.replicaId, replicaIdReservationReceiptDigest: replica.replicaIdReservationReceiptDigest, actorId: replica.actorId, replicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, role: "editor", editState: "active-editor", installedFloorSetDigest: floor, protocolDigest: protocolDigest(), schemaDigest: this.configuration.schemaDigest, validationArtifactSetDigest: this.configuration.validationArtifactSetDigest, trustBundleDigest: this.configuration.trustBundleDigest, serviceKeyPurpose: "membership", serviceKeyId: serviceKeyIdV2(this.signatures) })
+    return signArtifact("convax.replica-edit-authorization", "convax.replica-edit-authorization-core", core, this.signatures)
   }
 
   private randomId128(): Id128 {
@@ -1452,22 +1452,22 @@ function recoverExactBootstrap(
   })
 }
 
-async function signArtifact<const Format extends string, const Domain extends `${string}/2`, const Core extends object>(format: Format, coreDomain: Domain, core: Core, signatures: ControlDigestSignaturePortV2): Promise<Readonly<{ format: Format; core: Core; coreDigest: Digest; serviceSignature: Signature }>> {
+async function signArtifact<const Format extends string, const Domain extends string, const Core extends object>(format: Format, coreDomain: Domain, core: Core, signatures: ControlDigestSignaturePortV2): Promise<Readonly<{ format: Format; core: Core; coreDigest: Digest; serviceSignature: Signature }>> {
   const coreDigest = structuredDigest(coreDomain, core)
   return Object.freeze({ format, core, coreDigest, serviceSignature: parseSignature(await signatures.signServiceDigest("membership", coreDigest)) })
 }
 
-async function signArtifactForPurpose<const Format extends string, const Domain extends `${string}/2`, const Core extends object>(format: Format, coreDomain: Domain, core: Core, purpose: "registry-cutoff", signatures: ControlDigestSignaturePortV2): Promise<Readonly<{ format: Format; core: Core; coreDigest: Digest; serviceSignature: Signature }>> {
+async function signArtifactForPurpose<const Format extends string, const Domain extends string, const Core extends object>(format: Format, coreDomain: Domain, core: Core, purpose: "registry-cutoff", signatures: ControlDigestSignaturePortV2): Promise<Readonly<{ format: Format; core: Core; coreDigest: Digest; serviceSignature: Signature }>> {
   const coreDigest = structuredDigest(coreDomain, core)
   return Object.freeze({ format, core, coreDigest, serviceSignature: parseSignature(await signatures.signServiceDigest(purpose, coreDigest)) })
 }
 
 function requireTeamState(value: CollaborationControlProjectStateV2 | null): CollaborationControlProjectStateV2 & { readonly team: CollaborationTeamAuthorityStateV2 } {
-  if (!value || value.format !== "convax.control-project-state/2" || !value.team) fail("not-found", "Team Project is not provisioned")
+  if (!value || value.format !== "convax.control-project-state" || !value.team) fail("not-found", "Team Project is not provisioned")
   return value as CollaborationControlProjectStateV2 & { readonly team: CollaborationTeamAuthorityStateV2 }
 }
 
-function requireCurrentMember(team: CollaborationTeamAuthorityStateV2, credentialDigest: Digest): MembershipMemberV2 {
+function requireCurrentMember(team: CollaborationTeamAuthorityStateV2, credentialDigest: Digest): MembershipMember {
   const credential = findLastV2(team.memberCredentials, (value) => value.coreDigest === credentialDigest)
   if (!credential) fail("not-active", "Member credential is not current")
   const member = requireMember(team.currentSnapshot, credential.core.memberId)
@@ -1475,46 +1475,46 @@ function requireCurrentMember(team: CollaborationTeamAuthorityStateV2, credentia
   return member
 }
 
-function requireCurrentAdmin(team: CollaborationTeamAuthorityStateV2, member: MembershipMemberV2, digest: Digest): ProjectAdminCapabilityV2 {
+function requireCurrentAdmin(team: CollaborationTeamAuthorityStateV2, member: MembershipMember, digest: Digest): ProjectAdminCapability {
   const capability = findLastV2(team.adminCapabilities, (value) => value.coreDigest === digest)
   if (!capability || capability.core.adminMemberId !== member.memberId || capability.core.adminMemberAuthorizationEpoch !== member.memberAuthorizationEpoch || capability.core.membershipSnapshotDigest !== team.currentSnapshot.coreDigest) fail("not-active", "Admin capability is not current")
   return capability
 }
 
-function requireMember(snapshot: MembershipSnapshotV2, memberId: MemberId): MembershipMemberV2 {
+function requireMember(snapshot: MembershipSnapshot, memberId: MemberId): MembershipMember {
   const member = snapshot.core.members.find((value) => value.memberId === memberId)
   if (!member || member.state !== "active") fail("not-active", "Membership member is not active")
   return member
 }
 
-function requireReplica(snapshot: MembershipSnapshotV2, replicaId: ReplicaId): MembershipReplicaV2 {
+function requireReplica(snapshot: MembershipSnapshot, replicaId: ReplicaId): MembershipReplica {
   const replica = snapshot.core.replicas.find((value) => value.replicaId === replicaId)
   if (!replica || replica.state !== "active") fail("not-active", "Membership replica is not active")
   return replica
 }
 
-function assertReservationBinding(request: ReplicaIdReservationRequestV2, snapshot: MembershipSnapshotV2, member: MembershipMemberV2, team: CollaborationTeamAuthorityStateV2): void {
+function assertReservationBinding(request: ReplicaIdReservationRequest, snapshot: MembershipSnapshot, member: MembershipMember, team: CollaborationTeamAuthorityStateV2): void {
   const core = request.core
   if (core.projectEpoch !== snapshot.core.projectEpoch || core.membershipEpoch !== snapshot.core.membershipEpoch || core.expectedMembershipSequence !== snapshot.core.membershipSequence || core.requesterMemberId !== member.memberId || core.targetMemberId !== member.memberId || core.expectedTargetMemberMutationCounter !== member.memberMutationCounter || core.protocolDigest !== protocolDigest()) fail("stale-counter", "Replica reservation does not bind current member state")
   if (core.purpose === "replica-enroll" && core.currentReplicaId !== null) fail("invalid-proof", "Replica enroll reservation must not name a current replica")
   if (team.currentSnapshot.core.replicas.some((value) => value.replicaSigningPublicKey === core.newReplicaSigningPublicKey) || team.reservations.some((value) => value.receipt.core.newReplicaSigningPublicKey === core.newReplicaSigningPublicKey)) fail("invalid-proof", "Replica signing key is already retained")
 }
 
-function assertMutationBinding(proof: MembershipMutationProofV2, challenge: MutationChallengeCoreV2, snapshot: MembershipSnapshotV2, requester: MembershipMemberV2): void {
+function assertMutationBinding(proof: MembershipMutationProof, challenge: MutationChallengeCore, snapshot: MembershipSnapshot, requester: MembershipMember): void {
   const core = proof.core
   if (core.purpose !== challenge.purpose || core.mutationId !== challenge.mutationId || core.projectId !== challenge.projectId || core.projectEpoch !== challenge.projectEpoch || core.membershipEpoch !== challenge.membershipEpoch || core.expectedMembershipSequence !== snapshot.core.membershipSequence || core.requesterMemberId !== requester.memberId || core.targetMemberId !== challenge.targetMemberId || core.serverNonce !== challenge.serverNonce || core.targetMemberMutationCounter !== incrementUint64(challenge.expectedTargetMemberMutationCounter)) fail("stale-counter", "Mutation proof does not bind the current challenge")
-  if (membershipMutationProofCoreDigestV2(core) !== proof.requestDigest) fail("invalid-proof", "Mutation proof digest is invalid")
+  if (membershipMutationProofCoreDigest(core) !== proof.requestDigest) fail("invalid-proof", "Mutation proof digest is invalid")
   if (core.purpose === "replica-enroll" && (core.replicaIdReservationReceiptDigest !== challenge.replicaIdReservationReceiptDigest || core.newReplicaId === null)) fail("invalid-proof", "Mutation proof does not bind replica reservation")
   if (core.purpose === "replica-activate-editor" && core.installedFloorSetDigest !== challenge.requiredFloorSetDigest) fail("invalid-proof", "Mutation proof does not bind required floor")
 }
 
 function memberAddProofCoreV2(
-  challenge: MutationChallengeV2,
+  challenge: MutationChallenge,
   intent: Pick<MemberAddChallengeIntentV2, "targetMemberSigningPublicKey" | "initialRole" | "adminCapabilityDigest">,
-): Extract<MembershipMutationProofV2["core"], { readonly purpose: "member-add" }> {
+): Extract<MembershipMutationProof["core"], { readonly purpose: "member-add" }> {
   if (challenge.core.purpose !== "member-add") fail("invalid-proof", "Member-add proof requires a member-add challenge")
   return Object.freeze({
-    format: "convax.mutation-proof-core/2",
+    format: "convax.mutation-proof-core",
     mutationId: challenge.core.mutationId,
     challengeDigest: challenge.coreDigest,
     projectId: challenge.core.projectId,
@@ -1540,7 +1540,7 @@ function normalizeIntent(value: SupportedMutationChallengeIntentV2): SupportedMu
 }
 
 function normalizeCutoffIntent(value: CutoffMutationChallengeIntentV2): CutoffMutationChallengeIntentV2 {
-  const base = { purpose: value.purpose, mutationId: parseId128(value.mutationId), cutoffId: parseId128(value.cutoffId), requesterCredentialDigest: parseDigest(value.requesterCredentialDigest), pages: Object.freeze(value.pages.map(parseRegistryCutoffCoveragePageV2)) }
+  const base = { purpose: value.purpose, mutationId: parseId128(value.mutationId), cutoffId: parseId128(value.cutoffId), requesterCredentialDigest: parseDigest(value.requesterCredentialDigest), pages: Object.freeze(value.pages.map(parseRegistryCutoffCoveragePage)) }
   if (value.purpose === "replica-rotate") return Object.freeze({ ...base, purpose: "replica-rotate", currentReplicaId: parseReplicaId(value.currentReplicaId), replicaIdReservationReceiptDigest: parseDigest(value.replicaIdReservationReceiptDigest) })
   if (value.purpose === "replica-revoke") return Object.freeze({ ...base, purpose: "replica-revoke", currentReplicaId: parseReplicaId(value.currentReplicaId) })
   if (value.purpose === "member-role-change") {
@@ -1550,7 +1550,7 @@ function normalizeCutoffIntent(value: CutoffMutationChallengeIntentV2): CutoffMu
   return Object.freeze({ ...base, purpose: "member-revoke", adminCapabilityDigest: parseDigest(value.adminCapabilityDigest), targetMemberId: parseMemberId(value.targetMemberId) })
 }
 
-function assertCutoffProofIntent(proof: MembershipMutationProofV2, intent: CutoffMutationChallengeIntentV2): void {
+function assertCutoffProofIntent(proof: MembershipMutationProof, intent: CutoffMutationChallengeIntentV2): void {
   if (proof.core.purpose !== intent.purpose) fail("invalid-proof", "Cutoff proof purpose differs from its prepared intent")
   if (proof.core.purpose === "replica-rotate" && intent.purpose === "replica-rotate") {
     if (proof.core.currentReplicaId !== intent.currentReplicaId || proof.core.replicaIdReservationReceiptDigest !== intent.replicaIdReservationReceiptDigest) fail("invalid-proof", "Replica rotation proof differs from its prepared intent")
@@ -1571,7 +1571,7 @@ function assertCutoffProofIntent(proof: MembershipMutationProofV2, intent: Cutof
   fail("invalid-proof", "Cutoff proof branch is invalid")
 }
 
-function cutoffDigestFromProof(proof: MembershipMutationProofV2): Digest {
+function cutoffDigestFromProof(proof: MembershipMutationProof): Digest {
   switch (proof.core.purpose) {
     case "replica-rotate":
     case "replica-revoke":
@@ -1583,7 +1583,7 @@ function cutoffDigestFromProof(proof: MembershipMutationProofV2): Digest {
   }
 }
 
-function verifyCutoffPages(pages: readonly RegistryCutoffCoveragePageV2[], cutoffId: Id128, state: CollaborationControlProjectStateV2): void {
+function verifyCutoffPages(pages: readonly RegistryCutoffCoveragePage[], cutoffId: Id128, state: CollaborationControlProjectStateV2): void {
   if (pages.length > 8) fail("capacity-exceeded", "Cutoff coverage exceeds eight pages")
   const entries = metadataForCutoff(state).registryEntries
   const leaves = pages.flatMap((page, index) => {
@@ -1598,12 +1598,12 @@ function verifyCutoffPages(pages: readonly RegistryCutoffCoveragePageV2[], cutof
   }
 }
 
-function isCutoffSessionTarget(memberId: MemberId, replicaId: ReplicaId, target: RegistryCutoffTargetV2): boolean {
+function isCutoffSessionTarget(memberId: MemberId, replicaId: ReplicaId, target: RegistryCutoffTarget): boolean {
   return target.kind === "replica" ? replicaId === target.replicaId : memberId === target.memberId
 }
 
 function metadataForCutoff(state: CollaborationControlProjectStateV2): NonNullable<CollaborationControlProjectStateV2["metadata"]> {
-  return state.metadata ?? Object.freeze({ format: "convax.metadata-control-state/2", contentCertificates: [], stableSets: [], projectFloors: [], replicaFloorAcks: [], registrationClaims: [], registrationAbandonments: [], registryEntries: [], registrySnapshots: [], cutoffCommits: [], shardResetApprovals: [], projectResetRolloverReceipts: [] })
+  return state.metadata ?? Object.freeze({ format: "convax.metadata-control-state", contentCertificates: [], stableSets: [], projectFloors: [], replicaFloorAcks: [], registrationClaims: [], registrationAbandonments: [], registryEntries: [], registrySnapshots: [], cutoffCommits: [], shardResetApprovals: [], projectResetRolloverReceipts: [] })
 }
 
 function parseInvitationToken(value: unknown): string {
@@ -1643,7 +1643,7 @@ function seedFromTeam(team: CollaborationTeamAuthorityStateV2, configuration: Te
 }
 
 function deriveActorId(projectId: ProjectId, projectEpoch: Id128, memberId: MemberId, replicaId: ReplicaId, replicaSigningPublicKey: PublicKey) {
-  const digest = structuredDigest("convax.replica-actor-id/2", { projectId, projectEpoch, memberId, replicaId, replicaSigningPublicKey })
+  const digest = structuredDigest("convax.replica-actor-id", { projectId, projectEpoch, memberId, replicaId, replicaSigningPublicKey })
   const bytes = new Uint8Array(32)
   for (let index = 0; index < 32; index += 1) bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16)
   return parseActorId(encodeBase64url(bytes))
@@ -1655,7 +1655,7 @@ function nextReplicaId(current: ReplicaId | null): ReplicaId {
   return parseReplicaId(`replica_${next.toString(16).padStart(8, "0")}`)
 }
 
-function protocolDigest(): Digest { return parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest) }
+function protocolDigest(): Digest { return parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest) }
 function serviceKeyIdV2(port: ControlDigestSignaturePortV2): string {
   return serviceKeyIdFor("membership", port)
 }
@@ -1670,7 +1670,7 @@ function nowU64(clock: ControlClock): Uint64 {
   return parseUint64(String(value))
 }
 function addU64(value: Uint64, delta: bigint): Uint64 { return parseUint64((uint64ToBigInt(value) + delta).toString()) }
-function role(value: CollaborationRoleV2): CollaborationRoleV2 {
+function role(value: CollaborationRole): CollaborationRole {
   if (value !== "viewer" && value !== "editor") fail("invalid-proof", "Collaboration role is invalid")
   return value
 }

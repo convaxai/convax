@@ -1,4 +1,4 @@
-import type { BoundedOperationReceiptV2, CanvasEntityRefV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt, CanvasEntityRef } from "@convax/canvas/collaboration"
 import type { Id128 } from "@convax/collaboration"
 
 const digestPattern = /^[0-9a-f]{64}$/
@@ -8,35 +8,35 @@ const entitySuffixPattern = actorIdPattern
 
 const canvasIntentKinds = new Set([
   "canvas.agent.create",
-  "canvas.resources.add/2",
-  "canvas.resources.pending.create/2",
-  "canvas.resources.pending-generation.create/2",
-  "canvas.elements.remove/2",
-  "canvas.nodes.set-geometry/2",
-  "canvas.nodes.update-data/2",
-  "canvas.nodes.set-plugin-state/2",
-  "canvas.nodes.set-structural-parent/2",
-  "canvas.nodes.group/2",
-  "canvas.nodes.ungroup/2",
-  "canvas.edges.connect/2",
-  "canvas.metadata.update/2",
-  "canvas.generation.begin/2",
-  "canvas.generation.complete/2",
-  "canvas.generation.fail/2",
-  "canvas.generations.fail-owned/2",
-  "canvas.generation.dismiss/2",
-  "canvas.generation.fail-recovery/2",
-  "canvas.plugin.creation-group.create/2",
+  "canvas.resources.add",
+  "canvas.resources.pending.create",
+  "canvas.resources.pending-generation.create",
+  "canvas.elements.remove",
+  "canvas.nodes.set-geometry",
+  "canvas.nodes.update-data",
+  "canvas.nodes.set-plugin-state",
+  "canvas.nodes.set-structural-parent",
+  "canvas.nodes.group",
+  "canvas.nodes.ungroup",
+  "canvas.edges.connect",
+  "canvas.metadata.update",
+  "canvas.generation.begin",
+  "canvas.generation.complete",
+  "canvas.generation.fail",
+  "canvas.generations.fail-owned",
+  "canvas.generation.dismiss",
+  "canvas.generation.fail-recovery",
+  "canvas.plugin.creation-group.create",
   "canvas.plugin.surface.create",
-  "canvas.undo.semantic-inverse/2",
-  "canvas.redo.semantic-forward/2",
+  "canvas.undo.semantic-inverse",
+  "canvas.redo.semantic-forward",
 ])
 
 /**
  * Electron sandbox-local wire validation. This deliberately does not import the
  * Yjs-bearing collaboration runtime into preload.
  */
-export function assertOperationReceiptDtoV2(value: unknown): asserts value is BoundedOperationReceiptV2 {
+export function assertOperationReceiptDto(value: unknown): asserts value is BoundedOperationReceipt {
   const record = exactDataRecord(value, [
     "actorId",
     "baseFrontierDigest",
@@ -47,9 +47,9 @@ export function assertOperationReceiptDtoV2(value: unknown): asserts value is Bo
     "operationId",
     "resultEntities",
     "semanticRoot",
-  ], "BoundedOperationReceiptV2")
+  ], "BoundedOperationReceipt")
   if (
-    record.format !== "convax.canvas-operation-receipt/2" ||
+    record.format !== "convax.canvas-operation-receipt" ||
     !actorIdPattern.test(String(record.actorId)) ||
     !id128Pattern.test(String(record.operationId)) ||
     !canvasIntentKinds.has(String(record.intentKind)) ||
@@ -60,28 +60,28 @@ export function assertOperationReceiptDtoV2(value: unknown): asserts value is Bo
     record.semanticRoot !== (record.historyMaterialDigest !== null) ||
     !isDenseBoundedArray(record.resultEntities, 4_096)
   ) {
-    throw new Error("BoundedOperationReceiptV2 is invalid")
+    throw new Error("BoundedOperationReceipt is invalid")
   }
 
   let prior: string | undefined
   for (const entity of record.resultEntities) {
-    assertEntityRefDtoV2(entity)
+    assertEntityRefDto(entity)
     const key = `${entity.kind}/${entity.id}/${entity.incarnation}`
     if (prior !== undefined && prior >= key) {
-      throw new Error("BoundedOperationReceiptV2 result entities are not sorted unique")
+      throw new Error("BoundedOperationReceipt result entities are not sorted unique")
     }
     prior = key
   }
 }
 
-export function assertEntityRefDtoV2(
+export function assertEntityRefDto(
   value: unknown,
   expectedKind?: "node" | "edge",
-): asserts value is CanvasEntityRefV2 {
-  const record = exactDataRecord(value, ["id", "incarnation", "kind"], "CanvasEntityRefV2")
+): asserts value is CanvasEntityRef {
+  const record = exactDataRecord(value, ["id", "incarnation", "kind"], "CanvasEntityRef")
   const kind = record.kind
   if ((kind !== "node" && kind !== "edge") || (expectedKind !== undefined && kind !== expectedKind)) {
-    throw new Error("CanvasEntityRefV2 kind is invalid")
+    throw new Error("CanvasEntityRef kind is invalid")
   }
   const idPrefix = kind === "node" ? "n_" : "e_"
   const incarnationPrefix = kind === "node" ? "ni_" : "ei_"
@@ -94,12 +94,12 @@ export function assertEntityRefDtoV2(
     !entitySuffixPattern.test(record.incarnation.slice(incarnationPrefix.length))
   ) {
     throw new Error(
-      `CanvasEntityRefV2 must use canonical ${idPrefix} id and canonical ${incarnationPrefix} incarnation`,
+      `CanvasEntityRef must use canonical ${idPrefix} id and canonical ${incarnationPrefix} incarnation`,
     )
   }
 }
 
-export function requireId128DtoV2(value: unknown, label: string): Id128 {
+export function requireId128Dto(value: unknown, label: string): Id128 {
   if (typeof value !== "string" || !id128Pattern.test(value)) throw new Error(`${label} is invalid`)
   return value as Id128
 }

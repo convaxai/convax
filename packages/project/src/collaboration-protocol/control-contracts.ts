@@ -13,12 +13,12 @@ import type {
 } from "@convax/collaboration"
 
 /** Browser-safe control-plane DTOs. These types carry metadata only. */
-export type CollaborationRoleV2 = "viewer" | "editor"
-export type CollaborationEditStateV2 = "none" | "pending-editor" | "active-editor"
-export type CollaborationServiceKeyPurposeV2 = "membership" | "rendezvous"
+export type CollaborationRole = "viewer" | "editor"
+export type CollaborationEditState = "none" | "pending-editor" | "active-editor"
+export type CollaborationServiceKeyPurpose = "membership" | "rendezvous"
 
-export interface SessionChallengeCoreV2 {
-  readonly format: "convax.session-challenge-core/2"
+export interface SessionChallengeCore {
+  readonly format: "convax.session-challenge-core"
   readonly challengeId: Id128
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
@@ -40,15 +40,15 @@ export interface SessionChallengeCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface SessionChallengeV2 {
-  readonly format: "convax.session-challenge/2"
-  readonly core: SessionChallengeCoreV2
+export interface SessionChallenge {
+  readonly format: "convax.session-challenge"
+  readonly core: SessionChallengeCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface SessionProofCoreV2 {
-  readonly format: "convax.session-proof-core/2"
+export interface SessionProofCore {
+  readonly format: "convax.session-proof-core"
   readonly challengeDigest: Digest
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
@@ -69,15 +69,15 @@ export interface SessionProofCoreV2 {
   readonly protocolDigest: Digest
 }
 
-export interface SessionProofV2 {
-  readonly format: "convax.session-proof/2"
-  readonly core: SessionProofCoreV2
+export interface SessionProof {
+  readonly format: "convax.session-proof"
+  readonly core: SessionProofCore
   readonly coreDigest: Digest
   readonly replicaSignature: Signature
 }
 
-export interface SessionCredentialCoreV2 {
-  readonly format: "convax.session-credential-core/2"
+export interface SessionCredentialCore {
+  readonly format: "convax.session-credential-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
@@ -87,12 +87,12 @@ export interface SessionCredentialCoreV2 {
   readonly registryRootDigest: Digest
   readonly memberId: MemberId
   readonly memberAuthorizationEpoch: Id128
-  readonly role: CollaborationRoleV2
+  readonly role: CollaborationRole
   readonly replicaId: ReplicaId
   readonly actorId: ActorId
   readonly replicaAuthorizationEpoch: Id128
   readonly replicaSigningPublicKey: PublicKey
-  readonly editState: CollaborationEditStateV2
+  readonly editState: CollaborationEditState
   readonly sessionId: SessionId
   readonly leaseId: Id128
   readonly peerId: PeerId
@@ -109,32 +109,32 @@ export interface SessionCredentialCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface SessionCredentialV2 {
-  readonly format: "convax.session-credential/2"
-  readonly core: SessionCredentialCoreV2
+export interface SessionCredential {
+  readonly format: "convax.session-credential"
+  readonly core: SessionCredentialCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface ActivePeerDirectoryEntryV2 {
+export interface ActivePeerDirectoryEntry {
   readonly credentialDigest: Digest
   readonly memberId: MemberId
   readonly replicaId: ReplicaId
   readonly actorId: ActorId
-  readonly role: CollaborationRoleV2
-  readonly editState: CollaborationEditStateV2
+  readonly role: CollaborationRole
+  readonly editState: CollaborationEditState
   readonly peerId: PeerId
   readonly leaseId: Id128
 }
 
-export interface ActivePeerDirectoryCoreV2 {
-  readonly format: "convax.active-peer-directory-core/2"
+export interface ActivePeerDirectoryCore {
+  readonly format: "convax.active-peer-directory-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
   readonly membershipSnapshotDigest: Digest
   readonly directorySequence: Uint64
-  readonly peers: readonly ActivePeerDirectoryEntryV2[]
+  readonly peers: readonly ActivePeerDirectoryEntry[]
   readonly issuedAtUnixMs: Uint64
   readonly expiresAtUnixMs: Uint64
   readonly protocolDigest: Digest
@@ -143,15 +143,15 @@ export interface ActivePeerDirectoryCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ActivePeerDirectoryV2 {
-  readonly format: "convax.active-peer-directory/2"
-  readonly core: ActivePeerDirectoryCoreV2
+export interface ActivePeerDirectory {
+  readonly format: "convax.active-peer-directory"
+  readonly core: ActivePeerDirectoryCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface PeerTicketRequestCoreV2 {
-  readonly format: "convax.peer-ticket-request-core/2"
+export interface PeerTicketRequestCore {
+  readonly format: "convax.peer-ticket-request-core"
   readonly requestId: Id128
   readonly connectionId: Id128
   readonly requesterCredentialDigest: Digest
@@ -162,15 +162,15 @@ export interface PeerTicketRequestCoreV2 {
   readonly protocolDigest: Digest
 }
 
-export interface PeerTicketRequestV2 {
-  readonly format: "convax.peer-ticket-request/2"
-  readonly core: PeerTicketRequestCoreV2
+export interface PeerTicketRequest {
+  readonly format: "convax.peer-ticket-request"
+  readonly core: PeerTicketRequestCore
   readonly coreDigest: Digest
   readonly requesterSessionSignature: Signature
 }
 
-export interface PeerFreshnessTicketCoreV2 {
-  readonly format: "convax.peer-freshness-ticket-core/2"
+export interface PeerFreshnessTicketCore {
+  readonly format: "convax.peer-freshness-ticket-core"
   readonly ticketId: Id128
   readonly requestDigest: Digest
   readonly connectionId: Id128
@@ -191,9 +191,9 @@ export interface PeerFreshnessTicketCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface PeerFreshnessTicketV2 {
-  readonly format: "convax.peer-freshness-ticket/2"
-  readonly core: PeerFreshnessTicketCoreV2
+export interface PeerFreshnessTicket {
+  readonly format: "convax.peer-freshness-ticket"
+  readonly core: PeerFreshnessTicketCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }

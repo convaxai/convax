@@ -6,31 +6,31 @@ import {
 } from "@convax/bounded-value"
 import { ordinarySha256, parseUint32, parseUint64, type OwnerExternalFactPort } from "@convax/collaboration"
 import {
-  createCanvasExternalFactContextV2,
-  decodeCanvasExternalFactRequestV2,
-  discoverCanvasIntentDependenciesV2,
-  encodeCanvasExternalFactRequestV2,
-  validateCanvasExternalFactResultV2,
+  createCanvasExternalFactContext,
+  decodeCanvasExternalFactRequest,
+  discoverCanvasIntentDependencies,
+  encodeCanvasExternalFactRequest,
+  validateCanvasExternalFactResult,
 } from "./external-facts"
-import { effectiveDataDigestV2, projectedGenerationDigestV2 } from "./projection"
+import { effectiveDataDigest, projectedGenerationDigestV2 } from "./projection"
 import type {
-  CanvasExternalFactRequestV2,
-  CanvasTypedIntentUnionV2,
+  CanvasExternalFactRequest,
+  CanvasTypedIntentUnion,
   GenerationBeginV2,
-  PluginStateEnvelopeV2,
+  PluginStateEnvelope,
 } from "./types"
-import { canvasDigestV2, deriveCanvasIdV2, derivedNodeRefV2, makeStampV2 } from "./validation"
-import { validateCanvasYDocV2 } from "./ydoc"
+import { canvasDigest, deriveCanvasId, derivedNodeRef, makeStamp } from "./validation"
+import { validateCanvasYDoc } from "./ydoc"
 import { context, createAgent, digest, id128, newCanvas, nodeDataGuard, SCOPE } from "./test-fixtures.test"
 
 const U0 = parseUint32("0")
 const U1 = parseUint32("1")
 
-describe("Canvas R5 external-fact closure", () => {
+describe("Canvas current external-fact closure", () => {
   test("round-trips all four closed request kinds as exact restricted JCS", () => {
     const ownerProofDigest = digest(40)
     const resource = {
-      format: "convax.canvas-resource-ref/2" as const,
+      format: "convax.canvas-resource-ref" as const,
       uri: `convax-project://project/epochs/${id128(41)}/entries/pf_${"1".repeat(64)}`,
       mediaClass: "image" as const,
       mime: "image/png",
@@ -38,13 +38,13 @@ describe("Canvas R5 external-fact closure", () => {
       contentDigest: digest(42),
       ownerProofDigest,
     }
-    const node = derivedNodeRefV2(context(2, 2, 2), U0)
-    const requests: readonly CanvasExternalFactRequestV2[] = [
+    const node = derivedNodeRef(context(2, 2, 2), U0)
+    const requests: readonly CanvasExternalFactRequest[] = [
       {
-        format: "convax.canvas-external-fact-request/2",
+        format: "convax.canvas-external-fact-request",
         kind: "current-resources",
         proofs: [{
-          format: "convax.canvas-resource-proof-ref/2",
+          format: "convax.canvas-resource-proof-ref",
           mode: "current-owner-state",
           resource,
           ownerProofDigest,
@@ -52,10 +52,10 @@ describe("Canvas R5 external-fact closure", () => {
         }],
       },
       {
-        format: "convax.canvas-external-fact-request/2",
+        format: "convax.canvas-external-fact-request",
         kind: "retained-resources",
         proofs: [{
-          format: "convax.canvas-resource-proof-ref/2",
+          format: "convax.canvas-resource-proof-ref",
           mode: "retained-canvas-history",
           sourceState: "history-root-post",
           sourceOperationId: id128(43),
@@ -66,7 +66,7 @@ describe("Canvas R5 external-fact closure", () => {
         }],
       },
       {
-        format: "convax.canvas-external-fact-request/2",
+        format: "convax.canvas-external-fact-request",
         kind: "generation-begin",
         scope: SCOPE,
         beginDigest: digest(45),
@@ -75,13 +75,13 @@ describe("Canvas R5 external-fact closure", () => {
         toolRefDigest: digest(47),
         protocolDigest: context(3, 3, 3).protocolDigest,
       },
-      { format: "convax.canvas-external-fact-request/2", kind: "generation-recovery", proofDigest: digest(48) },
+      { format: "convax.canvas-external-fact-request", kind: "generation-recovery", proofDigest: digest(48) },
     ]
     for (const request of requests) {
-      const bytes = encodeCanvasExternalFactRequestV2(request)
+      const bytes = encodeCanvasExternalFactRequest(request)
       expect(bytes).not.toBe("rejected")
       if (bytes === "rejected") throw new Error("request codec rejected fixture")
-      expect(decodeCanvasExternalFactRequestV2(bytes)).toEqual(request)
+      expect(decodeCanvasExternalFactRequest(bytes)).toEqual(request)
     }
   })
 
@@ -89,23 +89,23 @@ describe("Canvas R5 external-fact closure", () => {
     const document = newCanvas()
     const node = createAgent(document, context(1, 1, 1))
     const operationContext = context(2, 2, 2)
-    const snapshot = validateCanvasYDocV2(document)
+    const snapshot = validateCanvasYDoc(document)
     const begin: GenerationBeginV2 = {
       format: "convax.canvas-generation-begin/2",
-      generationId: deriveCanvasIdV2("generation", operationContext, U0),
+      generationId: deriveCanvasId("generation", operationContext, U0),
       node,
       beginActorId: operationContext.actorId,
       beginAuthorizationEpochDigest: digest(50),
-      beginStamp: makeStampV2(operationContext, U0),
-      outputClaimStamp: makeStampV2(operationContext, U1),
+      beginStamp: makeStamp(operationContext, U0),
+      outputClaimStamp: makeStamp(operationContext, U1),
       toolRefDigest: digest(51),
       prompt: "generate",
-      targetEffectiveDataDigest: effectiveDataDigestV2(snapshot, snapshot.nodes.values().next().value!),
+      targetEffectiveDataDigest: effectiveDataDigest(snapshot, snapshot.nodes.values().next().value!),
       targetPluginDigest: null,
     }
-    const intent: Extract<CanvasTypedIntentUnionV2, { kind: "canvas.generation.begin/2" }> = {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.begin/2",
+    const intent: Extract<CanvasTypedIntentUnion, { kind: "canvas.generation.begin" }> = {
+      format: "convax.typed-intent",
+      kind: "canvas.generation.begin",
       guard: {
         ...nodeDataGuard(document, node),
         expectedPluginDigest: null,
@@ -113,16 +113,16 @@ describe("Canvas R5 external-fact closure", () => {
       },
       body: { begin },
     }
-    const dependencies = discoverCanvasIntentDependenciesV2(operationContext, intent)
+    const dependencies = discoverCanvasIntentDependencies(operationContext, intent)
     expect(dependencies).not.toBe("rejected")
     if (dependencies === "rejected") throw new Error("dependency discovery rejected fixture")
     expect(dependencies.validationArtifacts).toEqual([])
     expect(dependencies.externalFacts).toHaveLength(1)
-    const request = decodeCanvasExternalFactRequestV2(dependencies.externalFacts[0]!.request.exactJcs)
+    const request = decodeCanvasExternalFactRequest(dependencies.externalFacts[0]!.request.exactJcs)
     expect(request).toMatchObject({
       kind: "generation-begin",
       scope: operationContext.scope,
-      beginDigest: canvasDigestV2("convax.canvas-generation-begin/2", begin),
+      beginDigest: canvasDigest("convax.canvas-generation-begin/2", begin),
       beginAuthorizationEpochDigest: begin.beginAuthorizationEpochDigest,
       toolRefDigest: begin.toolRefDigest,
       protocolDigest: operationContext.protocolDigest,
@@ -132,16 +132,16 @@ describe("Canvas R5 external-fact closure", () => {
 
   test("result validation rejects unknown fields, kinds and malformed digests", () => {
     const valid = {
-      format: "convax.canvas-external-fact-result/2",
+      format: "convax.canvas-external-fact-result",
       kind: "generation-recovery",
       requestSha256: digest(60),
       factDigest: digest(61),
       decision: "verified",
     }
-    expect(validateCanvasExternalFactResultV2(valid)).toEqual(valid)
-    expect(validateCanvasExternalFactResultV2({ ...valid, kind: "editor-action" })).toBe("rejected")
-    expect(validateCanvasExternalFactResultV2({ ...valid, requestSha256: "bad" })).toBe("rejected")
-    expect(validateCanvasExternalFactResultV2({ ...valid, extra: true })).toBe("rejected")
+    expect(validateCanvasExternalFactResult(valid)).toEqual(valid)
+    expect(validateCanvasExternalFactResult({ ...valid, kind: "editor-action" })).toBe("rejected")
+    expect(validateCanvasExternalFactResult({ ...valid, requestSha256: "bad" })).toBe("rejected")
+    expect(validateCanvasExternalFactResult({ ...valid, extra: true })).toBe("rejected")
   })
 
   test("validates Plugin state against the exact canonical declarative artifact bytes", () => {
@@ -155,7 +155,7 @@ describe("Canvas R5 external-fact closure", () => {
     const exactBytes = canonicalPortablePluginStateSchemaBytesV1(schema)
     const schemaDigest = ordinarySha256(pluginStateSchemaDigestInputV1(schema))
     const plugin = {
-      format: "convax.canvas-plugin-state/2",
+      format: "convax.canvas-plugin-state",
       pluginId: "plugin.example",
       snapshotDigest: digest(70),
       pluginStateSchemaDigest: schemaDigest,
@@ -165,14 +165,14 @@ describe("Canvas R5 external-fact closure", () => {
         artifactDigest: schemaDigest,
       },
       state: { count: 2 },
-    } as const satisfies PluginStateEnvelopeV2
+    } as const satisfies PluginStateEnvelope
     const intent = {
-      format: "convax.typed-intent/2",
-      kind: "canvas.nodes.set-plugin-state/2",
+      format: "convax.typed-intent",
+      kind: "canvas.nodes.set-plugin-state",
       guard: {},
       body: { plugin },
-    } as unknown as CanvasTypedIntentUnionV2
-    const dependencies = discoverCanvasIntentDependenciesV2(context(7, 7, 7), intent)
+    } as unknown as CanvasTypedIntentUnion
+    const dependencies = discoverCanvasIntentDependencies(context(7, 7, 7), intent)
     expect(dependencies).not.toBe("rejected")
     if (dependencies === "rejected") throw new Error("Plugin dependency discovery rejected fixture")
     const port = {
@@ -180,7 +180,7 @@ describe("Canvas R5 external-fact closure", () => {
       resolveFact: () => ({ status: "rejected" as const, code: "fact-not-declared" as const }),
       consumedDependencies: () => dependencies,
     } as unknown as OwnerExternalFactPort<"canvas">
-    const facts = createCanvasExternalFactContextV2(context(7, 7, 7), intent, port)
+    const facts = createCanvasExternalFactContext(context(7, 7, 7), intent, port)
     expect(facts).not.toBe("pending")
     expect(facts).not.toBe("rejected")
     if (facts === "pending" || facts === "rejected") throw new Error("Plugin artifact was not resolved")
@@ -195,6 +195,6 @@ describe("Canvas R5 external-fact closure", () => {
         exactBytes: new TextEncoder().encode(` ${new TextDecoder().decode(exactBytes)}`),
       }),
     } as unknown as OwnerExternalFactPort<"canvas">
-    expect(createCanvasExternalFactContextV2(context(7, 7, 7), intent, noncanonicalPort)).toBe("rejected")
+    expect(createCanvasExternalFactContext(context(7, 7, 7), intent, noncanonicalPort)).toBe("rejected")
   })
 })

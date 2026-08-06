@@ -200,7 +200,7 @@ describe("canvas application commands", () => {
           pluginStateSchemaDigest: "b".repeat(64),
           validationArtifact: {
             owner: "plugin",
-            format: "convax.plugin-validation-artifact/2",
+            format: "convax.plugin-validation-artifact",
             artifactDigest: "b".repeat(64),
           },
           state: { board: "empty" },

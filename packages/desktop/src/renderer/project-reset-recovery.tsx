@@ -3,7 +3,7 @@ import type {
   ProjectResetPreview,
 } from "@convax/project"
 import { Button, LoadingSpinner } from "@convax/ui"
-import { ShieldCheck, Trash2, TriangleAlert } from "lucide-react"
+import { ArchiveRestore, ShieldCheck, TriangleAlert } from "lucide-react"
 import { useEffect, useState } from "react"
 
 type Locale = "en" | "zh-CN"
@@ -86,33 +86,33 @@ export function ProjectResetRecoveryState({
   const copy = locale === "zh-CN"
     ? {
         cancel: "取消",
-        confirmDescription: "此操作会永久删除下列旧版 Convax 私有数据，并创建一个空白协同画布。操作不能撤销。",
-        confirmTitle: "确认删除旧画布数据？",
+        confirmDescription: "此操作会将下列旧版 Convax 私有数据原样移入项目目录中的恢复归档，并创建一个空白协同画布。",
+        confirmTitle: "确认归档并重置旧画布数据？",
         continue: "继续",
         deletionDigest: "删除集合摘要",
         errorDescription: "重置没有完成。旧数据仍保持关闭状态，Convax 不会自动重试。",
         errorTitle: "无法重置项目",
         inventoryDigest: "旧数据清单摘要",
         preserved: "普通项目文件会保留，包括 Notes、Generated 和项目根目录中的其他文件。",
-        previewDescription: "这个项目使用已停用的画布格式。Convax 不会迁移或读取旧画布；你可以检查精确删除范围后重置为空白项目。",
+        previewDescription: "这个项目使用已停用的画布格式。Convax 不会迁移或读取旧画布；你可以检查精确归档范围后重置为空白项目。",
         previewTitle: `重置“${project.name}”的旧画布数据`,
-        reset: "删除旧数据并重置",
-        scope: "将删除的私有数据",
+        reset: "归档旧数据并重置",
+        scope: "将移入恢复归档的私有数据",
       }
     : {
         cancel: "Cancel",
-        confirmDescription: "This permanently deletes the legacy private Convax data listed below and creates an empty collaborative Canvas. This cannot be undone.",
-        confirmTitle: "Delete the legacy Canvas data?",
+        confirmDescription: "This moves the legacy private Convax data listed below unchanged into a recovery archive in the Project directory, then creates an empty collaborative Canvas.",
+        confirmTitle: "Archive and reset the legacy Canvas data?",
         continue: "Continue",
         deletionDigest: "Deletion-set digest",
         errorDescription: "The reset did not finish. Legacy data remains closed and Convax will not retry automatically.",
         errorTitle: "The Project could not be reset",
         inventoryDigest: "Unsupported-inventory digest",
         preserved: "Ordinary Project files are preserved, including Notes, Generated, and other files in the Project root.",
-        previewDescription: "This Project uses a retired Canvas format. Convax will not migrate or read it; review the exact deletion scope before resetting to an empty Project.",
+        previewDescription: "This Project uses a retired Canvas format. Convax will not migrate or read it; review the exact archive scope before resetting to an empty Project.",
         previewTitle: `Reset legacy Canvas data in “${project.name}”`,
-        reset: "Delete legacy data and reset",
-        scope: "Private data to delete",
+        reset: "Archive legacy data and reset",
+        scope: "Private data to move into the recovery archive",
       }
 
   if (step === "terminal") {
@@ -203,7 +203,7 @@ export function ProjectResetRecoveryState({
           <Button autoFocus disabled={submitting} onClick={onCancel} variant="outline">{copy.cancel}</Button>
           {confirming ? (
             <Button disabled={submitting} onClick={() => void confirmReset()} variant="destructive">
-              {submitting ? <LoadingSpinner reducedMotion={reducedMotion} size="sm" /> : <Trash2 />}
+              {submitting ? <LoadingSpinner reducedMotion={reducedMotion} size="sm" /> : <ArchiveRestore />}
               {copy.reset}
             </Button>
           ) : (

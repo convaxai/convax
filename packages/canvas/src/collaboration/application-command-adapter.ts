@@ -3,21 +3,21 @@ import type { CanvasApplicationCommand } from "../application/commands"
 import { alignCanvasNodes, distributeCanvasNodes, layoutCanvasNodes } from "../commands"
 import { getCanvasNodeSize } from "../document"
 import { applyCanvasAutoLayoutPlan, planCanvasLayout } from "../application/layout"
-import type { CanvasIntentCallerV2 } from "./session"
+import type { CanvasIntentCaller } from "./session"
 import type {
-  CanvasEntityRefV2,
-  CanvasSnapshotV2,
+  CanvasEntityRef,
+  CanvasSnapshot,
 } from "./types"
 import type { OwnerIntentConstructionContext } from "@convax/collaboration"
-import { buildCanvasProjectionIndexV2, projectCanvasDocumentV2 } from "./projection"
-import type { CanvasAuthoritativeCommandV2 } from "./command-construction"
-import { assertPluginStateV2, assertResourceProofV2, canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
+import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
+import type { CanvasAuthoritativeCommand } from "./command-construction"
+import { assertPluginState, assertResourceProof, canvasEntityKey, sameCanonicalValue } from "./validation"
 
-export const canvasResourceProofMetadataKeyV2 = "convaxCanvasResourceProofV2"
+export const canvasResourceProofMetadataKey = "convaxCanvasResourceProof"
 
-export interface CanvasApplicationCommandAdaptationV2 {
-  readonly caller: CanvasIntentCallerV2
-  readonly command: CanvasAuthoritativeCommandV2
+export interface CanvasApplicationCommandAdaptation {
+  readonly caller: CanvasIntentCaller
+  readonly command: CanvasAuthoritativeCommand
 }
 
 /**
@@ -26,45 +26,45 @@ export interface CanvasApplicationCommandAdaptationV2 {
  * payload cannot carry the required v2 proof/authorization material reject; they
  * never fall through to the JSON reducer or become a no-op frame.
  */
-export function adaptCanvasApplicationCommandV2(input: {
+export function adaptCanvasApplicationCommand(input: {
   readonly request: CanvasApplicationCommandRequest
-  readonly snapshot: CanvasSnapshotV2
+  readonly snapshot: CanvasSnapshot
   readonly context: OwnerIntentConstructionContext
-}): CanvasApplicationCommandAdaptationV2 | "rejected" {
+}): CanvasApplicationCommandAdaptation | "rejected" {
   try {
     const caller = callerFromActorKind(input.request.envelope.actor.kind)
     if (caller === "rejected") return "rejected"
     const command = input.request.envelope.command
-    const index = buildCanvasProjectionIndexV2(input.snapshot)
+    const index = buildCanvasProjectionIndex(input.snapshot)
     const nodeById = new Map(index.projection.nodes.map((node) => [node.ref.id, node] as const))
     const edgeById = new Map(index.projection.edges.map((edge) => [edge.ref.id, edge] as const))
 
     switch (command.type) {
       case "elements.remove": {
         const requestedNodes = new Set(command.nodeIds ?? [])
-        const selectedNodes = new Map<string, CanvasEntityRefV2 & { readonly kind: "node" }>()
+        const selectedNodes = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
         let changed = true
         while (changed) {
           changed = false
           for (const node of index.projection.nodes) {
             const selected = requestedNodes.has(node.ref.id) ||
-              (node.parent !== null && selectedNodes.has(canvasEntityKeyV2(node.parent)))
-            if (!selected || selectedNodes.has(canvasEntityKeyV2(node.ref))) continue
-            selectedNodes.set(canvasEntityKeyV2(node.ref), node.ref)
+              (node.parent !== null && selectedNodes.has(canvasEntityKey(node.parent)))
+            if (!selected || selectedNodes.has(canvasEntityKey(node.ref))) continue
+            selectedNodes.set(canvasEntityKey(node.ref), node.ref)
             changed = true
           }
         }
-        const selectedEdges = new Map<string, CanvasEntityRefV2 & { readonly kind: "edge" }>()
+        const selectedEdges = new Map<string, CanvasEntityRef & { readonly kind: "edge" }>()
         for (const edgeId of command.edgeIds ?? []) {
           const edge = edgeById.get(edgeId)
-          if (edge) selectedEdges.set(canvasEntityKeyV2(edge.ref), edge.ref)
+          if (edge) selectedEdges.set(canvasEntityKey(edge.ref), edge.ref)
         }
         for (const edge of index.projection.edges) {
           if (
-            selectedNodes.has(canvasEntityKeyV2(edge.source)) ||
-            selectedNodes.has(canvasEntityKeyV2(edge.target))
+            selectedNodes.has(canvasEntityKey(edge.source)) ||
+            selectedNodes.has(canvasEntityKey(edge.target))
           ) {
-            selectedEdges.set(canvasEntityKeyV2(edge.ref), edge.ref)
+            selectedEdges.set(canvasEntityKey(edge.ref), edge.ref)
           }
         }
         if (selectedNodes.size + selectedEdges.size === 0) return "rejected"
@@ -82,9 +82,9 @@ export function adaptCanvasApplicationCommandV2(input: {
           (command.connection.data !== undefined && !hasOnlyKeys(command.connection.data, ["label"]))) return "rejected"
         const source = nodeById.get(command.connection.source)
         const target = nodeById.get(command.connection.target)
-        if (!source || !target || sameCanonicalValueV2(source.ref, target.ref)) return "rejected"
+        if (!source || !target || sameCanonicalValue(source.ref, target.ref)) return "rejected"
         if (index.projection.edges.some((edge) =>
-          sameCanonicalValueV2(edge.source, source.ref) && sameCanonicalValueV2(edge.target, target.ref)
+          sameCanonicalValue(edge.source, source.ref) && sameCanonicalValue(edge.target, target.ref)
         )) return "rejected"
         const label = command.connection.data?.label
         if (label !== undefined && typeof label !== "string") return "rejected"
@@ -109,7 +109,7 @@ export function adaptCanvasApplicationCommandV2(input: {
           let parent = node.parent
           const visited = new Set<string>()
           while (parent !== null) {
-            const key = canvasEntityKeyV2(parent)
+            const key = canvasEntityKey(parent)
             if (visited.has(key)) return false
             visited.add(key)
             if (requested.has(parent.id)) return false
@@ -136,7 +136,7 @@ export function adaptCanvasApplicationCommandV2(input: {
         if (!child) return "rejected"
         const parent = command.parentId === undefined ? null : nodeById.get(command.parentId)
         if (command.parentId !== undefined && (!parent || parent.data.kind !== "group")) return "rejected"
-        if (parent && sameCanonicalValueV2(child.ref, parent.ref)) return "rejected"
+        if (parent && sameCanonicalValue(child.ref, parent.ref)) return "rejected"
         return Object.freeze({
           caller,
           command: Object.freeze({
@@ -187,7 +187,7 @@ export function adaptCanvasApplicationCommandV2(input: {
         return Object.freeze({ caller, command: Object.freeze({ kind: "nodes-ungroup", group: group.ref }) })
       }
       case "canvas.auto-layout": {
-        const document = projectCanvasDocumentV2(index.projection).document
+        const document = projectCanvasDocument(index.projection).document
         const next = applyCanvasAutoLayoutPlan(document, planCanvasLayout(document, {
           ...(command.nodeIds === undefined ? {} : { nodeIds: command.nodeIds }),
           ...(command.options === undefined ? {} : { options: command.options }),
@@ -195,15 +195,15 @@ export function adaptCanvasApplicationCommandV2(input: {
         return geometryAdaptation(caller, index, document, next)
       }
       case "nodes.align": {
-        const document = projectCanvasDocumentV2(index.projection).document
+        const document = projectCanvasDocument(index.projection).document
         return geometryAdaptation(caller, index, document, alignCanvasNodes(document, command.nodeIds, command.direction))
       }
       case "nodes.distribute": {
-        const document = projectCanvasDocumentV2(index.projection).document
+        const document = projectCanvasDocument(index.projection).document
         return geometryAdaptation(caller, index, document, distributeCanvasNodes(document, command.nodeIds, command.axis))
       }
       case "nodes.layout": {
-        const document = projectCanvasDocumentV2(index.projection).document
+        const document = projectCanvasDocument(index.projection).document
         return geometryAdaptation(caller, index, document, layoutCanvasNodes(document, {
           nodeIds: command.nodeIds,
           ...(command.layout === undefined ? {} : { layout: command.layout }),
@@ -219,8 +219,8 @@ export function adaptCanvasApplicationCommandV2(input: {
           if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
             throw new TypeError("Canvas resource proof metadata is missing")
           }
-          const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKeyV2]
-          assertResourceProofV2(proof, false)
+          const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKey]
+          assertResourceProof(proof, false)
           if (proof.mode !== "current-owner-state") throw new TypeError("Canvas resource proof is not current")
           return Object.freeze({
             title: item.name ?? (item.kind === "text" ? "Text" : item.kind === "folder" ? "Folder" : "Resource"),
@@ -257,8 +257,8 @@ export function adaptCanvasApplicationCommandV2(input: {
         if (!node || node.role !== "file") return "rejected"
         const metadata = command.item.metadata
         if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return "rejected"
-        const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKeyV2]
-        assertResourceProofV2(proof, false)
+        const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKey]
+        assertResourceProof(proof, false)
         if (proof.mode !== "current-owner-state") return "rejected"
 
         const itemMediaClass = command.item.kind === "folder" ? null : command.item.kind
@@ -289,14 +289,14 @@ export function adaptCanvasApplicationCommandV2(input: {
         // The Host must have derived a complete leased envelope. Canvas accepts
         // no node id, position, or partial Plugin identity from the caller.
         const plugin = Object.freeze({
-          format: "convax.canvas-plugin-state/2",
+          format: "convax.canvas-plugin-state",
           pluginId: command.plugin.id,
           snapshotDigest: command.plugin.snapshotDigest,
           pluginStateSchemaDigest: command.plugin.pluginStateSchemaDigest,
           validationArtifact: Object.freeze({ ...command.plugin.validationArtifact }),
           state: structuredClone(command.plugin.state),
         })
-        assertPluginStateV2(plugin)
+        assertPluginState(plugin)
         if (!finiteSize(command.size) || typeof command.label !== "string") return "rejected"
         return Object.freeze({
           caller,
@@ -327,11 +327,11 @@ export function adaptCanvasApplicationCommandV2(input: {
 }
 
 function geometryAdaptation(
-  caller: CanvasIntentCallerV2,
-  index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  before: ReturnType<typeof projectCanvasDocumentV2>["document"],
-  after: ReturnType<typeof projectCanvasDocumentV2>["document"],
-): CanvasApplicationCommandAdaptationV2 | "rejected" {
+  caller: CanvasIntentCaller,
+  index: ReturnType<typeof buildCanvasProjectionIndex>,
+  before: ReturnType<typeof projectCanvasDocument>["document"],
+  after: ReturnType<typeof projectCanvasDocument>["document"],
+): CanvasApplicationCommandAdaptation | "rejected" {
   const beforeById = new Map(before.nodes.map((node) => [node.id, node] as const))
   const updates = after.nodes.flatMap((node) => {
     const prior = beforeById.get(node.id)
@@ -358,15 +358,15 @@ function geometryAdaptation(
   })
 }
 
-function callerFromActorKind(kind: string): CanvasIntentCallerV2 | "rejected" {
+function callerFromActorKind(kind: string): CanvasIntentCaller | "rejected" {
   if (kind === "agent") return "agent"
   if (kind === "plugin") return "plugin"
   if (kind === "ui" || kind === "renderer") return "ui"
   return "rejected"
 }
 
-function sortedRefs<T extends CanvasEntityRefV2>(refs: Iterable<T>): readonly T[] {
-  return Object.freeze([...refs].sort((left, right) => canvasEntityKeyV2(left).localeCompare(canvasEntityKeyV2(right))))
+function sortedRefs<T extends CanvasEntityRef>(refs: Iterable<T>): readonly T[] {
+  return Object.freeze([...refs].sort((left, right) => canvasEntityKey(left).localeCompare(canvasEntityKey(right))))
 }
 
 function finitePoint(value: { readonly x: number; readonly y: number }): boolean {
@@ -389,4 +389,4 @@ function assertNeverCommand(value: never): "rejected" {
 
 // Keeps the switch coupled to the public union even if TypeScript changes its
 // narrowing behavior around the application command discriminator.
-type _CanvasApplicationCommandExhaustivenessV2 = CanvasApplicationCommand
+type _CanvasApplicationCommandExhaustiveness = CanvasApplicationCommand

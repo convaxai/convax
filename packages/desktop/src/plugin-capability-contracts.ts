@@ -1,5 +1,5 @@
 import type { CanvasApplicationCommand, CanvasNodeQuery, CanvasNodeSummary } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasEdge, CanvasPoint, CanvasSize } from "@convax/canvas/core"
 import type { PluginApiDeclaration } from "@convax/plugin-api"
 
@@ -130,7 +130,7 @@ export interface PluginCanvasTransactionResult {
   affectedNodeIds: string[]
   changed: boolean
   createdNodeIds: string[]
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: PluginCanvasStructureDocument
   ref: PluginCanvasRef
   /** The commit succeeded, but its potentially huge id lists were omitted from the transport response. */
@@ -139,7 +139,7 @@ export interface PluginCanvasTransactionResult {
 }
 
 export interface PluginCanvasChangeEvent {
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   ref: PluginCanvasRef
   source: "plugin" | "renderer" | "host"
 }

@@ -123,15 +123,20 @@ This package owns the durable Project aggregate and native Project adapters.
   collaboration cutover instead rejects legacy JSON, multi-document promotion stores,
   centralized edit-sequencing stores, Merkle edit logs, global revision-token bytes,
   and every retired experimental collaboration tree. Before the exact user-confirmed
-  destructive reset, preserve them without hydration, rewrite, compaction,
+  archive-and-reset operation, preserve them without hydration, rewrite, compaction,
   migration, deletion, or GC; ordinary Project files and stable `projectId` remain.
-  A completed reset keeps a recoverable backup of the previous private tree until the
-  user deletes it, and no migration helper may retain an old decoder in production.
+  A completed reset keeps the previous private tree byte-exact at the inert sibling
+  `.convax-archive-<reset-token-suffix>` until the user deletes it, and no migration
+  helper may retain an old decoder in production or treat that archive as authority.
 - ProjectIndex first registration must repeat the portable-cutover inspection before
   creating owner or collaboration bytes. Recovery may classify an already-published
   local bootstrap as unteamed only after Project/node proves its exact manifest-bound
   empty genesis and closed native inventory; any frame, route, unknown path, Team
   identity, or authority mismatch remains closed and requires rollover authority.
+  A frozen retired V3 local tree is a separate explicit-reset case: detect its two
+  exact local marker files without decoding old frames, require the Desktop Team
+  authority store to report `missing`, and stage a fresh epoch whose owner binding
+  becomes current only after the new tree and old-tree archive are both verified.
 - Consume only the exact Project, control-plane, kernel, and Canvas artifacts named by
   the one current protocol descriptor. A missing or mismatched artifact or genuine
   owner contradiction stops decode, reset, or mutation rather than selecting an

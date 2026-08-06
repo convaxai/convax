@@ -10,13 +10,13 @@ import type {
   Uint64,
 } from "@convax/collaboration"
 
-import type { CollaborationRoleV2 } from "./control-contracts"
+import type { CollaborationRole } from "./control-contracts"
 
-export type MembershipMemberStateV2 = "active" | "revoked"
-export type MembershipReplicaStateV2 = "active" | "revoked" | "replaced"
-export type MembershipReplicaEditStateV2 = "none" | "pending-editor" | "active-editor"
-export type ReplicaIdReservationPurposeV2 = "replica-enroll" | "replica-rotate"
-export type MutationPurposeV2 =
+export type MembershipMemberState = "active" | "revoked"
+export type MembershipReplicaState = "active" | "revoked" | "replaced"
+export type MembershipReplicaEditState = "none" | "pending-editor" | "active-editor"
+export type ReplicaIdReservationPurpose = "replica-enroll" | "replica-rotate"
+export type MutationPurpose =
   | "member-add"
   | "replica-enroll"
   | "replica-activate-editor"
@@ -25,61 +25,61 @@ export type MutationPurposeV2 =
   | "member-role-change"
   | "member-revoke"
 
-export interface MembershipMemberV2 {
+export interface MembershipMember {
   readonly memberId: MemberId
   readonly memberSigningPublicKey: PublicKey
-  readonly role: CollaborationRoleV2
-  readonly state: MembershipMemberStateV2
+  readonly role: CollaborationRole
+  readonly state: MembershipMemberState
   readonly memberAuthorizationEpoch: Id128
   readonly memberMutationCounter: Uint64
 }
 
-export interface MembershipReplicaV2 {
+export interface MembershipReplica {
   readonly replicaId: ReplicaId
   readonly replicaIdReservationReceiptDigest: Digest
   readonly memberId: MemberId
   readonly actorId: ActorId
   readonly replicaSigningPublicKey: PublicKey
-  readonly state: MembershipReplicaStateV2
-  readonly editState: MembershipReplicaEditStateV2
+  readonly state: MembershipReplicaState
+  readonly editState: MembershipReplicaEditState
   readonly replicaAuthorizationEpoch: Id128
   readonly enrolledAtMembershipSequence: Uint64
   readonly revokedAtMembershipSequence: Uint64 | null
   readonly replacesReplicaId: ReplicaId | null
 }
 
-export interface MembershipSnapshotCoreV2 {
-  readonly format: "convax.membership-snapshot-core/2"
+export interface MembershipSnapshotCore {
+  readonly format: "convax.membership-snapshot-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
   readonly membershipSequence: Uint64
   readonly registrySequence: Uint64
   readonly registryRootDigest: Digest
-  readonly members: readonly MembershipMemberV2[]
-  readonly replicas: readonly MembershipReplicaV2[]
+  readonly members: readonly MembershipMember[]
+  readonly replicas: readonly MembershipReplica[]
   readonly protocolDigest: Digest
   readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "membership"
   readonly serviceKeyId: string
 }
 
-export interface MembershipSnapshotV2 {
-  readonly format: "convax.membership-snapshot/2"
-  readonly core: MembershipSnapshotCoreV2
+export interface MembershipSnapshot {
+  readonly format: "convax.membership-snapshot"
+  readonly core: MembershipSnapshotCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface MemberCredentialCoreV2 {
-  readonly format: "convax.member-credential-core/2"
+export interface MemberCredentialCore {
+  readonly format: "convax.member-credential-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
   readonly membershipSnapshotDigest: Digest
   readonly memberId: MemberId
   readonly memberSigningPublicKey: PublicKey
-  readonly role: CollaborationRoleV2
+  readonly role: CollaborationRole
   readonly memberAuthorizationEpoch: Id128
   readonly adminCapabilityDigest: Digest | null
   readonly protocolDigest: Digest
@@ -88,15 +88,15 @@ export interface MemberCredentialCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface MemberCredentialV2 {
-  readonly format: "convax.member-credential/2"
-  readonly core: MemberCredentialCoreV2
+export interface MemberCredential {
+  readonly format: "convax.member-credential"
+  readonly core: MemberCredentialCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface ProjectAdminCapabilityCoreV2 {
-  readonly format: "convax.project-admin-capability-core/2"
+export interface ProjectAdminCapabilityCore {
+  readonly format: "convax.project-admin-capability-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
@@ -110,20 +110,20 @@ export interface ProjectAdminCapabilityCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ProjectAdminCapabilityV2 {
-  readonly format: "convax.project-admin-capability/2"
-  readonly core: ProjectAdminCapabilityCoreV2
+export interface ProjectAdminCapability {
+  readonly format: "convax.project-admin-capability"
+  readonly core: ProjectAdminCapabilityCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface ReplicaIdReservationRequestCoreV2 {
-  readonly format: "convax.replica-id-reservation-request-core/2"
+export interface ReplicaIdReservationRequestCore {
+  readonly format: "convax.replica-id-reservation-request-core"
   readonly allocationRequestId: Id128
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
-  readonly purpose: ReplicaIdReservationPurposeV2
+  readonly purpose: ReplicaIdReservationPurpose
   readonly expectedMembershipSequence: Uint64
   readonly requesterMemberId: MemberId
   readonly targetMemberId: MemberId
@@ -135,21 +135,21 @@ export interface ReplicaIdReservationRequestCoreV2 {
   readonly protocolDigest: Digest
 }
 
-export interface ReplicaIdReservationRequestV2 {
-  readonly format: "convax.replica-id-reservation-request/2"
-  readonly core: ReplicaIdReservationRequestCoreV2
+export interface ReplicaIdReservationRequest {
+  readonly format: "convax.replica-id-reservation-request"
+  readonly core: ReplicaIdReservationRequestCore
   readonly coreDigest: Digest
   readonly memberSignature: Signature
 }
 
-export interface ReplicaIdReservationReceiptCoreV2 {
-  readonly format: "convax.replica-id-reservation-receipt-core/2"
+export interface ReplicaIdReservationReceiptCore {
+  readonly format: "convax.replica-id-reservation-receipt-core"
   readonly allocationRequestId: Id128
   readonly reservationRequestCoreDigest: Digest
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
-  readonly purpose: ReplicaIdReservationPurposeV2
+  readonly purpose: ReplicaIdReservationPurpose
   readonly expectedMembershipSequence: Uint64
   readonly targetMemberId: MemberId
   readonly expectedTargetMemberMutationCounter: Uint64
@@ -166,15 +166,15 @@ export interface ReplicaIdReservationReceiptCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ReplicaIdReservationReceiptV2 {
-  readonly format: "convax.replica-id-reservation-receipt/2"
-  readonly core: ReplicaIdReservationReceiptCoreV2
+export interface ReplicaIdReservationReceipt {
+  readonly format: "convax.replica-id-reservation-receipt"
+  readonly core: ReplicaIdReservationReceiptCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface ReplicaActorCredentialCoreV2 {
-  readonly format: "convax.replica-actor-credential-core/2"
+export interface ReplicaActorCredentialCore {
+  readonly format: "convax.replica-actor-credential-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly memberId: MemberId
@@ -189,15 +189,15 @@ export interface ReplicaActorCredentialCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ReplicaActorCredentialV2 {
-  readonly format: "convax.replica-actor-credential/2"
-  readonly core: ReplicaActorCredentialCoreV2
+export interface ReplicaActorCredential {
+  readonly format: "convax.replica-actor-credential"
+  readonly core: ReplicaActorCredentialCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface ReplicaEditAuthorizationCoreV2 {
-  readonly format: "convax.replica-edit-authorization-core/2"
+export interface ReplicaEditAuthorizationCore {
+  readonly format: "convax.replica-edit-authorization-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
@@ -220,16 +220,16 @@ export interface ReplicaEditAuthorizationCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ReplicaEditAuthorizationV2 {
-  readonly format: "convax.replica-edit-authorization/2"
-  readonly core: ReplicaEditAuthorizationCoreV2
+export interface ReplicaEditAuthorization {
+  readonly format: "convax.replica-edit-authorization"
+  readonly core: ReplicaEditAuthorizationCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface MutationChallengeCoreV2 {
-  readonly format: "convax.mutation-challenge-core/2"
-  readonly purpose: MutationPurposeV2
+export interface MutationChallengeCore {
+  readonly format: "convax.mutation-challenge-core"
+  readonly purpose: MutationPurpose
   readonly challengeId: Id128
   readonly mutationId: Id128
   readonly projectId: ProjectId
@@ -253,15 +253,15 @@ export interface MutationChallengeCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface MutationChallengeV2 {
-  readonly format: "convax.mutation-challenge/2"
-  readonly core: MutationChallengeCoreV2
+export interface MutationChallenge {
+  readonly format: "convax.mutation-challenge"
+  readonly core: MutationChallengeCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-interface MutationProofBaseCoreV2 {
-  readonly format: "convax.mutation-proof-core/2"
+interface MutationProofBaseCore {
+  readonly format: "convax.mutation-proof-core"
   readonly mutationId: Id128
   readonly challengeDigest: Digest
   readonly projectId: ProjectId
@@ -274,14 +274,14 @@ interface MutationProofBaseCoreV2 {
   readonly serverNonce: Id128
 }
 
-export type MembershipMutationProofCoreV2 =
-  | (MutationProofBaseCoreV2 & {
+export type MembershipMutationProofCore =
+  | (MutationProofBaseCore & {
       readonly purpose: "member-add"
       readonly targetMemberSigningPublicKey: PublicKey
-      readonly initialRole: CollaborationRoleV2
+      readonly initialRole: CollaborationRole
       readonly adminCapabilityDigest: Digest
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "replica-enroll"
       readonly currentReplicaId: null
       readonly newReplicaId: ReplicaId
@@ -290,13 +290,13 @@ export type MembershipMutationProofCoreV2 =
       readonly requestedEditState: "none" | "pending-editor"
       readonly cutoffCoverageRootCoreDigest: null
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "replica-activate-editor"
       readonly currentReplicaId: ReplicaId
       readonly installedFloorSetDigest: Digest
       readonly cutoffCoverageRootCoreDigest: null
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "replica-rotate"
       readonly currentReplicaId: ReplicaId
       readonly newReplicaId: ReplicaId
@@ -305,7 +305,7 @@ export type MembershipMutationProofCoreV2 =
       readonly requestedEditState: "none" | "pending-editor"
       readonly cutoffCoverageRootCoreDigest: Digest
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "replica-revoke"
       readonly currentReplicaId: ReplicaId
       readonly newReplicaId: null
@@ -313,35 +313,35 @@ export type MembershipMutationProofCoreV2 =
       readonly requestedEditState: null
       readonly cutoffCoverageRootCoreDigest: Digest
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "member-role-change"
-      readonly nextRole: CollaborationRoleV2
+      readonly nextRole: CollaborationRole
       readonly cutoffCoverageRootCoreDigest: Digest | null
       readonly adminCapabilityDigest: Digest
     })
-  | (MutationProofBaseCoreV2 & {
+  | (MutationProofBaseCore & {
       readonly purpose: "member-revoke"
       readonly cutoffCoverageRootCoreDigest: Digest
       readonly adminCapabilityDigest: Digest
     })
 
-export type MutationProofSignaturesV2 =
+export type MutationProofSignatures =
   | { readonly purpose: "member-add"; readonly adminSignature: Signature; readonly targetMemberPossessionSignature: Signature }
   | { readonly purpose: "replica-enroll" | "replica-activate-editor" | "replica-rotate" | "replica-revoke"; readonly memberSignature: Signature }
   | { readonly purpose: "member-role-change" | "member-revoke"; readonly adminSignature: Signature }
 
-export interface MembershipMutationProofV2 {
-  readonly format: "convax.mutation-proof/2"
-  readonly core: MembershipMutationProofCoreV2
+export interface MembershipMutationProof {
+  readonly format: "convax.mutation-proof"
+  readonly core: MembershipMutationProofCore
   readonly requestDigest: Digest
-  readonly signatures: MutationProofSignaturesV2
+  readonly signatures: MutationProofSignatures
 }
 
-export interface MutationReceiptCoreV2 {
-  readonly format: "convax.mutation-receipt-core/2"
+export interface MutationReceiptCore {
+  readonly format: "convax.mutation-receipt-core"
   readonly mutationId: Id128
   readonly requestDigest: Digest
-  readonly purpose: MutationPurposeV2
+  readonly purpose: MutationPurpose
   readonly beforeMembershipSnapshotDigest: Digest
   readonly afterMembershipSnapshotDigest: Digest
   readonly consumedReplicaIdReservationReceiptDigest: Digest | null
@@ -356,9 +356,9 @@ export interface MutationReceiptCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface MutationReceiptV2 {
-  readonly format: "convax.mutation-receipt/2"
-  readonly core: MutationReceiptCoreV2
+export interface MutationReceipt {
+  readonly format: "convax.mutation-receipt"
+  readonly core: MutationReceiptCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }

@@ -5,9 +5,9 @@ import type {
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
 import { encodeBase64url, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
-import type { ProjectCanvasCatalogProjectionV2, ProjectCanvasRouteCommandResultV2 } from "@convax/project/canvas"
+import type { ProjectCanvasCatalogProjection, ProjectCanvasRouteCommandResult } from "@convax/project/canvas"
 
-import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 import { createMainProjectCollaborationComposition } from "./project-collaboration-composition"
 
 const PROJECT_A = parseProjectId(`project_${"a".repeat(64)}`)
@@ -21,7 +21,7 @@ describe("Project collaboration composition", () => {
     await harness.composition.prepareProject(PROJECT_A)
     expect(await harness.composition.projectIndexes.queryCatalog({ projectId: PROJECT_A })).toBe(harness.catalog)
     expect(await harness.composition.projectIndexes.submitRouteCommand({ projectId: PROJECT_A, command: {
-      format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Canvas",
+      format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Canvas",
     } })).toBe(harness.routeResult)
     expect(await harness.composition.projectIndexes.queryCurrentBlobDigests({ projectId: PROJECT_A })).toEqual(new Set())
     expect(await harness.composition.projectIndexes.queryFileMaterializationPlan({ projectId: PROJECT_A })).toEqual({
@@ -59,9 +59,9 @@ describe("Project collaboration composition", () => {
     await harness.composition.canvasSessions.queryRenderer(ref, opened.sessionId)
     expect(harness.queryRenderer).toHaveBeenCalledTimes(1)
 
-    harness.emit({ format: "convax.canvas-session-invalidation/2", ref, sessionId: opened.sessionId })
+    harness.emit({ format: "convax.canvas-session-invalidation", ref, sessionId: opened.sessionId })
     harness.emit({
-      format: "convax.canvas-session-invalidation/2",
+      format: "convax.canvas-session-invalidation",
       ref: { scopeId: PROJECT_B, canvasId: "other" },
       sessionId: opened.sessionId,
     })
@@ -104,15 +104,15 @@ describe("Project collaboration composition", () => {
 
 function composition() {
   const events: string[] = []
-  const catalog = Object.freeze({ marker: "catalog" }) as unknown as ProjectCanvasCatalogProjectionV2
-  const routeResult = Object.freeze({ marker: "route" }) as unknown as ProjectCanvasRouteCommandResultV2
+  const catalog = Object.freeze({ marker: "catalog" }) as unknown as ProjectCanvasCatalogProjection
+  const routeResult = Object.freeze({ marker: "route" }) as unknown as ProjectCanvasRouteCommandResult
   const queryResult = Object.freeze({ marker: "query" }) as unknown as CanvasApplicationQueryResult
   const commandResult = Object.freeze({ marker: "command" }) as unknown as CanvasApplicationCommandResult
   const commandRequest = Object.freeze({
     scopeId: PROJECT_A,
     canvasId: "canvas-main",
   }) as unknown as CanvasApplicationCommandRequest
-  const listeners = new Set<(event: Parameters<Parameters<CanvasCollaborationSessionOwnerV2["subscribe"]>[0]>[0]) => void>()
+  const listeners = new Set<(event: Parameters<Parameters<CanvasCollaborationSessionOwner["subscribe"]>[0]>[0]) => void>()
   const resume = mock(() => {
     events.push("canvas:resume")
   })
@@ -137,7 +137,7 @@ function composition() {
       events.push("index:quiesce")
     }),
   })
-  const canvasSessions: CanvasCollaborationSessionOwnerV2 = {
+  const canvasSessions: CanvasCollaborationSessionOwner = {
     open: mock(async () => Object.freeze({ sessionId: SESSION_A }) as never),
     close,
     queryRenderer,
@@ -180,7 +180,7 @@ function composition() {
     quiesceSessions,
     resume,
     routeResult,
-    emit(event: Parameters<Parameters<CanvasCollaborationSessionOwnerV2["subscribe"]>[0]>[0]) {
+    emit(event: Parameters<Parameters<CanvasCollaborationSessionOwner["subscribe"]>[0]>[0]) {
       for (const listener of listeners) listener(event)
     },
   }

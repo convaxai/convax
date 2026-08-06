@@ -223,7 +223,7 @@ describe("CVXCOLL binary closure", () => {
     const magic = frame.bytes.subarray(0, 8)
     expect(new TextDecoder().decode(magic.subarray(0, 7))).toBe("CVXCOLL")
     expect(magic[7]).toBe(0)
-    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("16860ff2784beb5d7f73386ddc7c4ddeea044401d5a77c0c5da3c60a414cc4eb"))
+    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("44270f5822614f18db7e9b5c48d1f3b2944a851bb3e498764e7f7770cc3f4066"))
     for (const offset of [30, frame.bytes.length - 1]) {
       const tampered = Uint8Array.from(frame.bytes)
       tampered[offset] ^= 1

@@ -16,30 +16,30 @@ import {
 } from "@convax/collaboration"
 
 import {
-  constructProjectCanvasRouteActivationIntentV2,
-  constructProjectCanvasRouteRenameIntentV2,
-  constructProjectCanvasRouteStageIntentV2,
-  constructProjectCanvasRouteTombstoneIntentV2,
-  projectCanvasRouteProjectionV2,
-  projectCanvasRouteProjectionDigestV2,
-  projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2,
-  projectIndexIntentDigestV2,
-  projectIndexIntentDependenciesV2,
-  projectIndexSnapshotFromValidatedOwnerStateV2,
-  projectEntryLocationProjectionV2,
-  projectProjectIndexSnapshotV2,
-  type ProjectIndexSnapshotV2,
+  constructProjectCanvasRouteActivationIntent,
+  constructProjectCanvasRouteRenameIntent,
+  constructProjectCanvasRouteStageIntent,
+  constructProjectCanvasRouteTombstoneIntent,
+  projectCanvasRouteProjection,
+  projectCanvasRouteProjectionDigest,
+  projectIndexCurrentBlobReferencesFromValidatedOwnerState,
+  projectIndexIntentDigest,
+  projectIndexIntentDependencies,
+  projectIndexSnapshotFromValidatedOwnerState,
+  projectEntryLocationProjection,
+  projectProjectIndexSnapshot,
+  type ProjectIndexSnapshot,
 } from "../collaboration/project-index"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "../collaboration/blob-replication"
+import type { ProjectIndexCurrentBlobReferencePort } from "../collaboration/blob-replication"
 import {
-  parseProjectCanvasCatalogProjectionV2,
-  validateProjectCanvasTitleV2,
-  type ProjectCanvasCatalogProjectionV2,
-  type ProjectCanvasRouteCommandResultV2,
-  type ProjectIndexCanvasApplicationPortV2,
+  parseProjectCanvasCatalogProjection,
+  validateProjectCanvasTitle,
+  type ProjectCanvasCatalogProjection,
+  type ProjectCanvasRouteCommandResult,
+  type ProjectIndexCanvasApplicationPort,
 } from "./application"
 
-export interface ProjectIndexDocumentSessionPortV2 {
+export interface ProjectIndexDocumentSessionPort {
   readonly scope: DocumentScope & { readonly docKind: "project-index" }
   query<T>(project: (state: OwnerValidatedState<"project-index">) => T): Promise<T>
   submit(input: {
@@ -53,18 +53,18 @@ export interface ProjectIndexDocumentSessionPortV2 {
   }): Promise<LocalCommitResult>
 }
 
-export type ProjectIndexFactResolutionResultV2 =
+export type ProjectIndexFactResolutionResult =
   | Readonly<{ status: "resolved"; port: OwnerExternalFactPort<"project-index"> }>
   | Readonly<{ status: "pending" | "rejected" }>
 
-export interface ProjectIndexFactResolutionPortV2 {
+export interface ProjectIndexFactResolutionPort {
   resolve(input: {
     readonly dependencies: OwnerIntentDependencies<"project-index">
     readonly signal?: AbortSignal
-  }): Promise<ProjectIndexFactResolutionResultV2>
+  }): Promise<ProjectIndexFactResolutionResult>
 }
 
-export interface ProjectCanvasGenesisStagingPortV2 {
+export interface ProjectCanvasGenesisStagingPort {
   /** Product preflight only: avoids writing F when no author can possibly produce G. */
   preflightCanvasGenesis(input: {
     readonly projectIndexScope: DocumentScope & { readonly docKind: "project-index" }
@@ -88,18 +88,18 @@ export interface ProjectCanvasGenesisStagingPortV2 {
   >
 }
 
-export interface CreateProjectIndexCanvasApplicationOptionsV2 {
-  readonly session: ProjectIndexDocumentSessionPortV2
-  readonly facts: ProjectIndexFactResolutionPortV2
-  readonly genesis: ProjectCanvasGenesisStagingPortV2
+export interface CreateProjectIndexCanvasApplicationOptions {
+  readonly session: ProjectIndexDocumentSessionPort
+  readonly facts: ProjectIndexFactResolutionPort
+  readonly genesis: ProjectCanvasGenesisStagingPort
   readonly createOperationId: () => Id128
   readonly createShardEpoch: () => Id128
 }
 
-class ProjectCanvasApplicationAttemptErrorV2 extends Error {
+class ProjectCanvasApplicationAttemptError extends Error {
   constructor(readonly code: "dependency-pending" | "rejected") {
     super(`ProjectIndex Canvas command is ${code}`)
-    this.name = "ProjectCanvasApplicationAttemptErrorV2"
+    this.name = "ProjectCanvasApplicationAttemptError"
   }
 }
 
@@ -110,16 +110,16 @@ class ProjectCanvasApplicationAttemptErrorV2 extends Error {
  * failure after F deliberately leaves a staged invisible route for deterministic
  * recovery; this service never rolls it back or claims the Canvas is live.
  */
-export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplicationPortV2, ProjectIndexCurrentBlobReferencePortV2 {
-  constructor(private readonly options: CreateProjectIndexCanvasApplicationOptionsV2) {}
+export class ProjectIndexCanvasApplication implements ProjectIndexCanvasApplicationPort, ProjectIndexCurrentBlobReferencePort {
+  constructor(private readonly options: CreateProjectIndexCanvasApplicationOptions) {}
 
-  async queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjectionV2> {
+  async queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjection> {
     this.requireProject(input.projectId)
-    const snapshot = await this.options.session.query(requireProjectIndexSnapshotV2)
+    const snapshot = await this.options.session.query(requireProjectIndexSnapshot)
     const preflight = await this.options.genesis.preflightCanvasGenesis({
       projectIndexScope: this.options.session.scope,
     })
-    return projectCanvasCatalogFromSnapshotV2(
+    return projectCanvasCatalogFromSnapshot(
       snapshot,
       preflight === "ready"
         ? "available"
@@ -139,13 +139,13 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
   }) {
     this.requireProject(input.projectId)
     return this.options.session.query((state) => {
-      const snapshot = requireProjectIndexSnapshotV2(state)
-      return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2(state).map((reference) => {
+      const snapshot = requireProjectIndexSnapshot(state)
+      return Object.freeze(projectIndexCurrentBlobReferencesFromValidatedOwnerState(state).map((reference) => {
         const entry = snapshot.entries.get(reference.entryFileId)
         if (!entry || entry.kind !== "file" || entry.storageClass === null) {
           throw new Error("Current Project resource has no live file owner")
         }
-        const location = projectEntryLocationProjectionV2(snapshot, reference.entryFileId)
+        const location = projectEntryLocationProjection(snapshot, reference.entryFileId)
         const materializedPath =
           entry.storageClass === "project-file" &&
           (location.state === "live-linked" || location.state === "conflict-path")
@@ -157,12 +157,12 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
   }
 
   async submitRouteCommand(
-    input: Parameters<ProjectIndexCanvasApplicationPortV2["submitRouteCommand"]>[0],
-  ): Promise<ProjectCanvasRouteCommandResultV2> {
+    input: Parameters<ProjectIndexCanvasApplicationPort["submitRouteCommand"]>[0],
+  ): Promise<ProjectCanvasRouteCommandResult> {
     this.requireProject(input.projectId)
     try {
       if (input.signal?.aborted) return { status: "rejected", code: "cancelled" }
-      if (input.command.kind === "project.canvas.route.create/2") {
+      if (input.command.kind === "project.canvas.route.create") {
         return await this.createCanvas(input.projectId, input.command.title, input.signal)
       }
       const operationId = parseId128(this.options.createOperationId())
@@ -171,15 +171,15 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
         operationId,
         signal: input.signal,
         prepare: async ({ base, context, signal }) => {
-          const snapshot = requireProjectIndexSnapshotV2(base)
-          const constructed = input.command.kind === "project.canvas.route.rename/2"
-            ? constructProjectCanvasRouteRenameIntentV2({
+          const snapshot = requireProjectIndexSnapshot(base)
+          const constructed = input.command.kind === "project.canvas.route.rename"
+            ? constructProjectCanvasRouteRenameIntent({
                 snapshot,
                 context,
                 canvasId,
-                title: validateProjectCanvasTitleV2(input.command.title),
+                title: validateProjectCanvasTitle(input.command.title),
               })
-            : constructProjectCanvasRouteTombstoneIntentV2({ snapshot, context, canvasId })
+            : constructProjectCanvasRouteTombstoneIntent({ snapshot, context, canvasId })
           if (constructed === "rejected") throw routeRejection(snapshot, canvasId)
           return this.prepareIntent(context, constructed, signal)
         },
@@ -194,8 +194,8 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     projectId: ProjectId,
     titleInput: string,
     signal?: AbortSignal,
-  ): Promise<ProjectCanvasRouteCommandResultV2> {
-    const title = validateProjectCanvasTitleV2(titleInput)
+  ): Promise<ProjectCanvasRouteCommandResult> {
+    const title = validateProjectCanvasTitle(titleInput)
     const preflight = await this.options.genesis.preflightCanvasGenesis({
       projectIndexScope: this.options.session.scope,
       signal,
@@ -210,19 +210,19 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
       operationId: stageOperationId,
       signal,
       prepare: async ({ base, context, signal: attemptSignal }) => {
-        const constructed = constructProjectCanvasRouteStageIntentV2({
-          snapshot: requireProjectIndexSnapshotV2(base),
+        const constructed = constructProjectCanvasRouteStageIntent({
+          snapshot: requireProjectIndexSnapshot(base),
           context,
           shardEpoch,
           title,
         })
-        if (constructed === "rejected") throw new ProjectCanvasApplicationAttemptErrorV2("rejected")
+        if (constructed === "rejected") throw new ProjectCanvasApplicationAttemptError("rejected")
         stagedCanvasId = constructed.canvasId
         return this.prepareIntent(context, constructed.intent, attemptSignal)
       },
     })
     if (stagedCanvasId === undefined) {
-      throw new ProjectCanvasApplicationAttemptErrorV2("rejected")
+      throw new ProjectCanvasApplicationAttemptError("rejected")
     }
     if (signal?.aborted) return { status: "rejected", code: "cancelled" }
     const canvasScope = Object.freeze({
@@ -246,8 +246,8 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
       operationId: activationOperationId,
       signal,
       prepare: async ({ base, context, signal: attemptSignal }) => {
-        const snapshot = requireProjectIndexSnapshotV2(base)
-        const intent = constructProjectCanvasRouteActivationIntentV2({
+        const snapshot = requireProjectIndexSnapshot(base)
+        const intent = constructProjectCanvasRouteActivationIntent({
           snapshot,
           context,
           canvasId: stagedCanvasId!,
@@ -268,29 +268,29 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
 
   private async prepareIntent(
     context: OwnerIntentConstructionContext,
-    typedIntent: Parameters<typeof projectIndexIntentDependenciesV2>[1],
+    typedIntent: Parameters<typeof projectIndexIntentDependencies>[1],
     signal?: AbortSignal,
   ): Promise<PreparedLocalIntent> {
-    const dependencies = projectIndexIntentDependenciesV2(
-      { ...context, intentDigest: projectIndexIntentDigestV2(typedIntent) },
+    const dependencies = projectIndexIntentDependencies(
+      { ...context, intentDigest: projectIndexIntentDigest(typedIntent) },
       typedIntent,
     )
     const resolved = await this.options.facts.resolve({ dependencies, signal })
     if (resolved.status !== "resolved") {
-      throw new ProjectCanvasApplicationAttemptErrorV2(
+      throw new ProjectCanvasApplicationAttemptError(
         resolved.status === "pending" ? "dependency-pending" : "rejected",
       )
     }
     return Object.freeze({ typedIntent, externalFacts: resolved.port })
   }
 
-  private rejection(error: unknown): ProjectCanvasRouteCommandResultV2 {
+  private rejection(error: unknown): ProjectCanvasRouteCommandResult {
     if (isAbort(error)) return { status: "rejected", code: "cancelled" }
-    if (error instanceof ProjectCanvasApplicationAttemptErrorV2) {
+    if (error instanceof ProjectCanvasApplicationAttemptError) {
       if (error.code === "dependency-pending") return { status: "rejected", code: "dependency-pending" }
       return { status: "rejected", code: "read-only-recovery-required" }
     }
-    if (error instanceof ProjectCanvasRouteRejectionV2) {
+    if (error instanceof ProjectCanvasRouteRejection) {
       return { status: "rejected", code: error.code }
     }
     throw error
@@ -303,35 +303,35 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
   }
 }
 
-class ProjectCanvasRouteRejectionV2 extends Error {
+class ProjectCanvasRouteRejection extends Error {
   constructor(readonly code: "canvas-not-found" | "route-tombstoned") {
     super(code)
-    this.name = "ProjectCanvasRouteRejectionV2"
+    this.name = "ProjectCanvasRouteRejection"
   }
 }
 
-function routeRejection(snapshot: ProjectIndexSnapshotV2, canvasId: CanvasId) {
-  const route = projectProjectIndexSnapshotV2(snapshot).canvasRoutes.find(
+function routeRejection(snapshot: ProjectIndexSnapshot, canvasId: CanvasId) {
+  const route = projectProjectIndexSnapshot(snapshot).canvasRoutes.find(
     (candidate) => candidate.canvasId === canvasId,
   )
-  return new ProjectCanvasRouteRejectionV2(route?.state === "tombstoned" ? "route-tombstoned" : "canvas-not-found")
+  return new ProjectCanvasRouteRejection(route?.state === "tombstoned" ? "route-tombstoned" : "canvas-not-found")
 }
 
-function projectCanvasCatalogFromSnapshotV2(
-  snapshot: ProjectIndexSnapshotV2,
-  creationAvailability: ProjectCanvasCatalogProjectionV2["creationAvailability"],
-): ProjectCanvasCatalogProjectionV2 {
-  const projection = projectProjectIndexSnapshotV2(snapshot)
+function projectCanvasCatalogFromSnapshot(
+  snapshot: ProjectIndexSnapshot,
+  creationAvailability: ProjectCanvasCatalogProjection["creationAvailability"],
+): ProjectCanvasCatalogProjection {
+  const projection = projectProjectIndexSnapshot(snapshot)
   const routes = Object.freeze(projection.canvasRoutes.map((route) => Object.freeze({
     canvasId: route.canvasId,
     state: route.state as "staged" | "live" | "tombstoned",
     title: route.currentTitle,
     shardEpoch: route.currentShardEpoch,
     activationDigest: route.currentActivationDigest,
-    routeProjectionDigest: projectCanvasRouteProjectionDigestV2(route),
+    routeProjectionDigest: projectCanvasRouteProjectionDigest(route),
   })))
-  return parseProjectCanvasCatalogProjectionV2(Object.freeze({
-    format: "convax.project-canvas-catalog-projection/2",
+  return parseProjectCanvasCatalogProjection(Object.freeze({
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability,
     projectId: snapshot.identity.projectId,
     projectEpoch: snapshot.identity.projectEpoch,
@@ -340,8 +340,8 @@ function projectCanvasCatalogFromSnapshotV2(
   }), snapshot.identity.projectId)
 }
 
-function requireProjectIndexSnapshotV2(state: OwnerValidatedState<"project-index">): ProjectIndexSnapshotV2 {
-  const snapshot = projectIndexSnapshotFromValidatedOwnerStateV2(state)
+function requireProjectIndexSnapshot(state: OwnerValidatedState<"project-index">): ProjectIndexSnapshot {
+  const snapshot = projectIndexSnapshotFromValidatedOwnerState(state)
   if (snapshot === null) throw new Error("ProjectIndex owner returned an invalid validated state")
   return snapshot
 }

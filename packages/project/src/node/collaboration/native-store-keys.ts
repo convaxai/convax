@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto"
 import type { Digest, DocumentScope } from "@convax/collaboration"
 
-export type DocumentNativeKeyV2 = string & { readonly __documentNativeKeyV2: true }
-export type ObjectNativeKeyV2 = string & { readonly __objectNativeKeyV2: true }
-export type JournalSegmentNativeKeyV2 = string & { readonly __journalSegmentNativeKeyV2: true }
+export type DocumentNativeKey = string & { readonly __documentNativeKey: true }
+export type ObjectNativeKey = string & { readonly __objectNativeKey: true }
+export type JournalSegmentNativeKey = string & { readonly __journalSegmentNativeKey: true }
 
 const digestPattern = /^[0-9a-f]{64}$/u
 const uint64Pattern = /^(0|[1-9][0-9]*)$/u
@@ -13,19 +13,19 @@ const maximumUint64 = (1n << 64n) - 1n
  * Native document names are opaque hashes of the complete portable scope. Raw
  * Project, Canvas and epoch identifiers never become path components.
  */
-export function deriveDocumentNativeKeyV2(scope: DocumentScope): DocumentNativeKeyV2 {
+export function deriveDocumentNativeKey(scope: DocumentScope): DocumentNativeKey {
   validateDocumentScopeShape(scope)
   return sha256(
-    Buffer.from("convax.native-document-store-key/2\0", "utf8"),
+    Buffer.from("convax.native-document-store-key\0", "utf8"),
     Buffer.from(restrictedJcs(scope), "utf8"),
-  ) as DocumentNativeKeyV2
+  ) as DocumentNativeKey
 }
 
 /**
  * Immutable object names bind both the object family and portable digest. This
  * prevents one digest-looking value from aliasing objects in different stores.
  */
-export function deriveObjectNativeKeyV2(objectKind: string, digest: Digest | string): ObjectNativeKeyV2 {
+export function deriveObjectNativeKey(objectKind: string, digest: Digest | string): ObjectNativeKey {
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(objectKind)) {
     throw new InvalidCollaborationNativeKeyInputError("Object kind is not canonical ASCII")
   }
@@ -33,15 +33,15 @@ export function deriveObjectNativeKeyV2(objectKind: string, digest: Digest | str
     throw new InvalidCollaborationNativeKeyInputError("Object digest must be lowercase SHA-256")
   }
   return sha256(
-    Buffer.from("convax.native-object-store-key/2\0", "utf8"),
+    Buffer.from("convax.native-object-store-key\0", "utf8"),
     Buffer.from(objectKind, "ascii"),
     Buffer.from("\0", "ascii"),
     Buffer.from(digest, "hex"),
-  ) as ObjectNativeKeyV2
+  ) as ObjectNativeKey
 }
 
 /** Local recovery ordering only; this value never enters portable winner rules. */
-export function deriveJournalSegmentNativeKeyV2(sequence: string): JournalSegmentNativeKeyV2 {
+export function deriveJournalSegmentNativeKey(sequence: string): JournalSegmentNativeKey {
   if (!uint64Pattern.test(sequence)) {
     throw new InvalidCollaborationNativeKeyInputError("Journal sequence must be canonical unsigned decimal")
   }
@@ -49,10 +49,10 @@ export function deriveJournalSegmentNativeKeyV2(sequence: string): JournalSegmen
   if (parsed < 1n || parsed > maximumUint64) {
     throw new InvalidCollaborationNativeKeyInputError("Journal sequence must be in the inclusive u64 range 1..max")
   }
-  return `s2-${parsed.toString(16).padStart(16, "0")}` as JournalSegmentNativeKeyV2
+  return `s2-${parsed.toString(16).padStart(16, "0")}` as JournalSegmentNativeKey
 }
 
-export function parseJournalSegmentNativeKeyV2(value: unknown): string {
+export function parseJournalSegmentNativeKey(value: unknown): string {
   if (typeof value !== "string" || !/^s2-[0-9a-f]{16}$/u.test(value)) {
     throw new InvalidCollaborationNativeKeyInputError("Journal segment native key is invalid")
   }

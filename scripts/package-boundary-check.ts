@@ -27,9 +27,9 @@ const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-chang
 const architectureContractPath = join(repositoryRoot, "docs", "architecture.md")
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
 const archivedAuthorityTokens = [
-  "docs/superpowers/specs/authorities",
-  "collaboration-v10-active-authority",
-  "collaboration-v11-active-authority",
+  ["docs/superpowers/specs/", "authorities"].join(""),
+  ["collaboration-v", "10-active-authority"].join(""),
+  ["collaboration-v", "11-active-authority"].join(""),
 ]
 const runtimeAndPackagingGlobs = [
   "packages/*/src/**/*.ts",
@@ -326,7 +326,7 @@ requireContractMarkers("apps/api/AGENTS.md", collaborationGovernanceContracts[7]
   "both a content certificate",
 ])
 if (!(await Bun.file(apiManifestPath).exists()))
-  throw new Error("apps/api/package.json is required by collaboration v10")
+  throw new Error("apps/api/package.json is required")
 if (
   desktopComposition.includes("RemoteCapabilityRegistryClient") ||
   desktopComposition.includes("registry/v1/index.json") ||

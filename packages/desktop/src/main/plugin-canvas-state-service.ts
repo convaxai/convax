@@ -1,15 +1,15 @@
 import type { CanvasNode } from "@convax/canvas"
-import type { PluginRequirementV2, PluginStateEnvelopeV2 } from "@convax/canvas/collaboration"
+import type { PluginRequirement, PluginStateEnvelope } from "@convax/canvas/collaboration"
 
 import type { PluginHostMutationCheckpoint, PluginHostNodeBinding } from "../plugin-host-api-main-contracts"
 import type { PluginPrincipal } from "../plugin-capability-contracts"
 import { matchesWebPluginCanvasNodeIdentity, webPluginNodeMetadata } from "../plugin-canvas-node"
 import { PluginHostApiError, PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
-import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 import type { PluginStateSchemaAuthorityV1 } from "./plugin-state-schema-authority"
 
 export interface PluginCanvasStateServiceOptionsV1 {
-  readonly canvas: Pick<CanvasCollaborationSessionOwnerV2, "queryAuthoritative" | "submitAuthoritative">
+  readonly canvas: Pick<CanvasCollaborationSessionOwner, "queryAuthoritative" | "submitAuthoritative">
   readonly schemas: Pick<PluginStateSchemaAuthorityV1, "resolvePrincipal" | "validateState">
 }
 
@@ -45,14 +45,14 @@ export class PluginCanvasStateServiceV1 {
     const entity = projected.nodeEntities.find((candidate) => candidate.nodeId === node.id)?.entity
     if (!entity) throw new PluginHostApiError("stale-context", "Plugin Canvas node incarnation is unavailable")
 
-    const owner: PluginRequirementV2 = Object.freeze({
+    const owner: PluginRequirement = Object.freeze({
       pluginId: input.principal.pluginId,
-      snapshotDigest: input.principal.snapshotDigest as PluginRequirementV2["snapshotDigest"],
+      snapshotDigest: input.principal.snapshotDigest as PluginRequirement["snapshotDigest"],
       pluginStateSchemaDigest: schema.pluginStateSchemaDigest,
       validationArtifact: schema.validationArtifact,
     })
-    const plugin: PluginStateEnvelopeV2 = Object.freeze({
-      format: "convax.canvas-plugin-state/2",
+    const plugin: PluginStateEnvelope = Object.freeze({
+      format: "convax.canvas-plugin-state",
       ...owner,
       state: structuredClone(input.state),
     })

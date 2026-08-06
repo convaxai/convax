@@ -1,5 +1,5 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
@@ -17,7 +17,7 @@ export type CanvasTextResourceClient = CanvasTextResourceService
 
 export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
   warnings: readonly string[]
 }
@@ -59,7 +59,7 @@ export interface CanvasResourceSaveEditableCopyInput {
 }
 
 export interface CanvasResourceRelinkResult {
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
   warnings: readonly string[]
 }

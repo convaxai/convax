@@ -20,7 +20,7 @@ const catalogOperationReceipt = () =>
     format: "convax.canvas-operation-receipt/2",
     historyMaterialDigest: null,
     intentDigest: digest("b"),
-    intentKind: "canvas.nodes.set-plugin-state/2",
+    intentKind: "canvas.nodes.set-plugin-state",
     operationId: "A".repeat(22),
     resultEntities: [],
     semanticRoot: true,

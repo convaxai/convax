@@ -26,10 +26,10 @@ import {
   type Uint64,
 } from "@convax/collaboration"
 
-import type { ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
+import type { ElectronSafeStoragePort } from "./electron-replica-signing-vault"
 
-interface TeamIdentityVaultRecordV2 {
-  readonly format: "convax.desktop-team-identity-key/2"
+interface TeamIdentityVaultRecord {
+  readonly format: "convax.desktop-team-identity-key"
   readonly purpose: "member" | "session"
   readonly projectId: ProjectId
   readonly memberId: MemberId
@@ -40,13 +40,13 @@ interface TeamIdentityVaultRecordV2 {
   readonly privateKeyPkcs8Base64url: string
 }
 
-export interface TeamIdentitySigningKeyV1 {
+export interface TeamIdentitySigningKey {
   readonly publicKey: PublicKey
   readonly signer: ReplicaSignerPort
 }
 
-type MemberKeyIdentityV1 = Readonly<{ projectId: ProjectId; memberId: MemberId }>
-type SessionKeyIdentityV1 = Readonly<{
+type MemberKeyIdentity = Readonly<{ projectId: ProjectId; memberId: MemberId }>
+type SessionKeyIdentity = Readonly<{
   projectId: ProjectId
   projectEpoch: Id128
   memberId: MemberId
@@ -56,15 +56,15 @@ type SessionKeyIdentityV1 = Readonly<{
 }>
 
 /** Main-private OS-vault key owner for long-lived member and per-session signing identities. */
-export class ElectronTeamIdentityVaultV1 {
+export class ElectronTeamIdentityVault {
   constructor(
     private readonly rootDirectory: string,
-    private readonly safeStorage: ElectronSafeStoragePortV2,
+    private readonly safeStorage: ElectronSafeStoragePort,
   ) {
     if (!path.isAbsolute(rootDirectory)) throw new TypeError("Team identity vault root must be absolute")
   }
 
-  ensureMemberKey(input: MemberKeyIdentityV1): Promise<TeamIdentitySigningKeyV1> {
+  ensureMemberKey(input: MemberKeyIdentity): Promise<TeamIdentitySigningKey> {
     const identity = Object.freeze({
       purpose: "member" as const,
       projectId: parseProjectId(input.projectId),
@@ -77,7 +77,7 @@ export class ElectronTeamIdentityVaultV1 {
     return this.ensure(identity)
   }
 
-  openMemberSigner(input: MemberKeyIdentityV1 & { readonly expectedPublicKey: PublicKey }) {
+  openMemberSigner(input: MemberKeyIdentity & { readonly expectedPublicKey: PublicKey }) {
     return this.open(Object.freeze({
       purpose: "member" as const,
       projectId: parseProjectId(input.projectId),
@@ -89,15 +89,15 @@ export class ElectronTeamIdentityVaultV1 {
     }), input.expectedPublicKey)
   }
 
-  ensureSessionKey(input: SessionKeyIdentityV1): Promise<TeamIdentitySigningKeyV1> {
+  ensureSessionKey(input: SessionKeyIdentity): Promise<TeamIdentitySigningKey> {
     return this.ensure(parseSessionIdentity(input))
   }
 
-  openSessionSigner(input: SessionKeyIdentityV1 & { readonly expectedPublicKey: PublicKey }) {
+  openSessionSigner(input: SessionKeyIdentity & { readonly expectedPublicKey: PublicKey }) {
     return this.open(parseSessionIdentity(input), input.expectedPublicKey)
   }
 
-  async removeSessionKey(input: SessionKeyIdentityV1): Promise<"removed" | "missing"> {
+  async removeSessionKey(input: SessionKeyIdentity): Promise<"removed" | "missing"> {
     this.requireSecureBackend()
     const identity = parseSessionIdentity(input)
     const target = this.target(identity)
@@ -135,7 +135,7 @@ export class ElectronTeamIdentityVaultV1 {
     return removed
   }
 
-  private async ensure(identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">): Promise<TeamIdentitySigningKeyV1> {
+  private async ensure(identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">): Promise<TeamIdentitySigningKey> {
     this.requireSecureBackend()
     await ensureDirectory(this.rootDirectory)
     const target = this.target(identity)
@@ -143,8 +143,8 @@ export class ElectronTeamIdentityVaultV1 {
     const pair = generateKeyPairSync("ed25519")
     const privateKeyPkcs8 = pair.privateKey.export({ format: "der", type: "pkcs8" }) as Buffer
     try {
-      const record: TeamIdentityVaultRecordV2 = Object.freeze({
-        format: "convax.desktop-team-identity-key/2",
+      const record: TeamIdentityVaultRecord = Object.freeze({
+        format: "convax.desktop-team-identity-key",
         ...identity,
         privateKeyPkcs8Base64url: privateKeyPkcs8.toString("base64url"),
       })
@@ -163,7 +163,7 @@ export class ElectronTeamIdentityVaultV1 {
   }
 
   private async open(
-    identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">,
+    identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
     expectedPublicKey: PublicKey,
   ): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected"> {
     if (!this.hasSecureBackend()) return "unavailable"
@@ -178,9 +178,9 @@ export class ElectronTeamIdentityVaultV1 {
   }
 
   private async load(
-    identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">,
+    identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
     target: string,
-  ): Promise<TeamIdentitySigningKeyV1> {
+  ): Promise<TeamIdentitySigningKey> {
     const parsed = await this.readRecord(target)
     if (!sameIdentity(parsed, identity)) throw new Error("Team identity vault key crossed identity")
     const privateDer = Buffer.from(parsed.privateKeyPkcs8Base64url, "base64url")
@@ -207,7 +207,7 @@ export class ElectronTeamIdentityVaultV1 {
     }
   }
 
-  private async readRecord(target: string): Promise<TeamIdentityVaultRecordV2> {
+  private async readRecord(target: string): Promise<TeamIdentityVaultRecord> {
     if (!await isFile(target)) throw new Error("Team identity vault entry is missing")
     const encrypted = Buffer.from(await fs.readFile(target))
     let plaintext = ""
@@ -219,9 +219,9 @@ export class ElectronTeamIdentityVaultV1 {
     }
   }
 
-  private target(identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">): string {
+  private target(identity: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">): string {
     const { expiresAtUnixMs: _expiry, ...nativeIdentity } = identity
-    const digest = structuredDigest("convax.desktop-team-identity-native-key-v3/2", nativeIdentity)
+    const digest = structuredDigest("convax.desktop-team-identity-native-key-v3", nativeIdentity)
     return path.join(this.rootDirectory, `${parseDigest(digest)}.vault`)
   }
 
@@ -234,7 +234,7 @@ export class ElectronTeamIdentityVaultV1 {
   }
 }
 
-function parseSessionIdentity(input: SessionKeyIdentityV1) {
+function parseSessionIdentity(input: SessionKeyIdentity) {
   return Object.freeze({
     purpose: "session" as const,
     projectId: parseProjectId(input.projectId),
@@ -246,18 +246,18 @@ function parseSessionIdentity(input: SessionKeyIdentityV1) {
   })
 }
 
-function parseRecord(value: unknown): TeamIdentityVaultRecordV2 {
+function parseRecord(value: unknown): TeamIdentityVaultRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Team identity vault plaintext is invalid")
   const record = value as Record<string, unknown>
   const keys = ["expiresAtUnixMs", "format", "memberId", "privateKeyPkcs8Base64url", "projectEpoch", "projectId", "purpose", "replicaId", "sessionId"]
   if (Object.keys(record).sort().join("\0") !== keys.sort().join("\0") ||
-    record.format !== "convax.desktop-team-identity-key/2" ||
+    record.format !== "convax.desktop-team-identity-key" ||
     (record.purpose !== "member" && record.purpose !== "session") ||
     typeof record.privateKeyPkcs8Base64url !== "string" || record.privateKeyPkcs8Base64url.length < 1 || record.privateKeyPkcs8Base64url.length > 512) {
     throw new Error("Team identity vault plaintext has unsupported fields")
   }
   const base = {
-    format: "convax.desktop-team-identity-key/2" as const,
+    format: "convax.desktop-team-identity-key" as const,
     purpose: record.purpose,
     projectId: parseProjectId(record.projectId),
     memberId: parseMemberId(record.memberId),
@@ -279,8 +279,8 @@ function parseRecord(value: unknown): TeamIdentityVaultRecordV2 {
 }
 
 function sameIdentity(
-  left: TeamIdentityVaultRecordV2,
-  right: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">,
+  left: TeamIdentityVaultRecord,
+  right: Omit<TeamIdentityVaultRecord, "format" | "privateKeyPkcs8Base64url">,
 ): boolean {
   return left.purpose === right.purpose && left.projectId === right.projectId && left.memberId === right.memberId &&
     left.projectEpoch === right.projectEpoch && left.replicaId === right.replicaId && left.sessionId === right.sessionId &&

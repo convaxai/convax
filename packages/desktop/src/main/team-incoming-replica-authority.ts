@@ -4,17 +4,17 @@ import {
   parseDocumentScope,
   type DecodedCausalEditFrame,
 } from "@convax/collaboration"
-import type { IncomingReplicaAuthoritySourceV2 } from "./collaboration-authority-ports"
-import type { NodeDurableTeamAuthorityStoreV1 } from "./durable-team-authority-store"
+import type { IncomingReplicaAuthoritySource } from "./collaboration-authority-ports"
+import type { NodeDurableTeamAuthorityStore } from "./durable-team-authority-store"
 
 /**
  * Uses the exact durable team graph when it contains the frame actor. Remote
  * actors remain pending until their signed artifact closure is admitted; peer
  * presence alone never upgrades them.
  */
-export function createLocalTeamIncomingReplicaAuthoritySourceV2(
-  store: Pick<NodeDurableTeamAuthorityStoreV1, "open">,
-): IncomingReplicaAuthoritySourceV2 {
+export function createLocalTeamIncomingReplicaAuthoritySource(
+  store: Pick<NodeDurableTeamAuthorityStore, "open">,
+): IncomingReplicaAuthoritySource {
   return Object.freeze({
     async verify({ frame }: { readonly frame: DecodedCausalEditFrame }) {
       const scope = parseDocumentScope(frame.header.core.scope)

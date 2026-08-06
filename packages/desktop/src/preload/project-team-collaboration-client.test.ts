@@ -1,9 +1,9 @@
 import { describe, expect, mock, test } from "bun:test"
 
-import { projectTeamCollaborationIpcChannelsV2 } from "../project-team-collaboration-contracts"
+import { projectTeamCollaborationIpcChannels } from "../project-team-collaboration-contracts"
 import {
-  createProjectTeamCollaborationPreloadClientV2,
-  type ProjectTeamCollaborationPreloadIpcV2,
+  createProjectTeamCollaborationPreloadClient,
+  type ProjectTeamCollaborationPreloadIpc,
 } from "./project-team-collaboration-client"
 
 const projectId = "123e4567-e89b-42d3-a456-426614174000"
@@ -18,7 +18,7 @@ function onlineStatus() {
   return {
     canEdit: true,
     connectedPeerCount: 1,
-    format: "convax.project-team-collaboration-status/2" as const,
+    format: "convax.project-team-collaboration-status" as const,
     projectId,
     reason: null,
     state: "online" as const,
@@ -28,7 +28,7 @@ function onlineStatus() {
 function fakeIpc(response: unknown = onlineStatus()) {
   const listeners = new Map<string, (event: unknown, value: unknown) => void>()
   const invoke = mock(async () => response)
-  const ipc: ProjectTeamCollaborationPreloadIpcV2 = {
+  const ipc: ProjectTeamCollaborationPreloadIpc = {
     invoke,
     on: (channel, listener) => listeners.set(channel, listener),
     removeListener: (channel, listener) => {
@@ -41,14 +41,14 @@ function fakeIpc(response: unknown = onlineStatus()) {
 describe("Project team collaboration preload client", () => {
   test("exposes only bounded status projections and the plain invitation carrier", async () => {
     const { invoke, ipc } = fakeIpc({ invitation, status: onlineStatus() })
-    const client = createProjectTeamCollaborationPreloadClientV2(ipc)
+    const client = createProjectTeamCollaborationPreloadClient(ipc)
 
     await expect(client.bootstrapTeam({ projectId })).resolves.toEqual({ invitation, status: onlineStatus() })
-    expect(invoke).toHaveBeenLastCalledWith(projectTeamCollaborationIpcChannelsV2.bootstrapTeam, { projectId })
+    expect(invoke).toHaveBeenLastCalledWith(projectTeamCollaborationIpcChannels.bootstrapTeam, { projectId })
 
     invoke.mockImplementation(async () => onlineStatus())
     await expect(client.joinTeam({ invitation, projectId })).resolves.toEqual(onlineStatus())
-    expect(invoke).toHaveBeenLastCalledWith(projectTeamCollaborationIpcChannelsV2.joinTeam, {
+    expect(invoke).toHaveBeenLastCalledWith(projectTeamCollaborationIpcChannels.joinTeam, {
       invitation,
       projectId,
     })
@@ -56,7 +56,7 @@ describe("Project team collaboration preload client", () => {
 
   test("rejects an invitation for another Project before IPC", async () => {
     const { invoke, ipc } = fakeIpc()
-    const client = createProjectTeamCollaborationPreloadClientV2(ipc)
+    const client = createProjectTeamCollaborationPreloadClient(ipc)
 
     await expect(
       client.joinTeam({ invitation: { ...invitation, projectId: "project-other" }, projectId }),
@@ -66,17 +66,17 @@ describe("Project team collaboration preload client", () => {
 
   test("rejects malformed Main responses instead of leaking them", async () => {
     const { ipc } = fakeIpc({ ...onlineStatus(), peerId: "routing-secret" })
-    const client = createProjectTeamCollaborationPreloadClientV2(ipc)
+    const client = createProjectTeamCollaborationPreloadClient(ipc)
 
     await expect(client.getStatus({ projectId })).rejects.toThrow("unknown or missing fields")
   })
 
   test("drops malformed events and removes the exact subscription", () => {
     const { ipc, listeners } = fakeIpc()
-    const client = createProjectTeamCollaborationPreloadClientV2(ipc)
+    const client = createProjectTeamCollaborationPreloadClient(ipc)
     const observed = mock(() => undefined)
     const unsubscribe = client.subscribeStatus(observed)
-    const emit = listeners.get(projectTeamCollaborationIpcChannelsV2.changed)!
+    const emit = listeners.get(projectTeamCollaborationIpcChannels.changed)!
 
     emit({}, { ...onlineStatus(), peerId: "not-renderer-safe" })
     emit({}, onlineStatus())
@@ -84,6 +84,6 @@ describe("Project team collaboration preload client", () => {
     expect(observed).toHaveBeenCalledWith(onlineStatus())
 
     unsubscribe()
-    expect(listeners.has(projectTeamCollaborationIpcChannelsV2.changed)).toBe(false)
+    expect(listeners.has(projectTeamCollaborationIpcChannels.changed)).toBe(false)
   })
 })

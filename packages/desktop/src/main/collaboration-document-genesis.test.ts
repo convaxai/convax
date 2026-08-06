@@ -3,9 +3,9 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  installCanvasGenesisProofCarrierVerifierFactoryV2,
-  selectedCanvasDocumentOwnerArtifactDefinitionV2,
-  type CanvasGenesisBuildAuthorV2,
+  installCanvasGenesisProofCarrierVerifierFactory,
+  selectedCanvasDocumentOwnerArtifactDefinition,
+  type CanvasGenesisBuildAuthor,
 } from "@convax/canvas/collaboration"
 import {
   createSelectedDocumentOwnerArtifactFactory,
@@ -24,14 +24,14 @@ import {
   type StateVector,
 } from "@convax/collaboration"
 import {
-  NodeCollaborationPersistenceV2,
+  NodeCollaborationPersistence,
   stageDurableProjectDocumentGenesis,
   type ProjectDocumentGenesisStorePort,
   type ProjectDocumentGenesisVerifierPort,
 } from "@convax/project/node"
 
-import { createCanvasDocumentGenesisVerifierPortV2 } from "./canvas-document-genesis"
-import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
+import { createCanvasDocumentGenesisVerifierPort } from "./canvas-document-genesis"
+import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
 
 const bytes = new TextEncoder()
 const projectEpoch = id(1)
@@ -59,12 +59,12 @@ const predecessor = Object.freeze({
 
 describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact Canvas CVXCGP02 candidate through the real Node sole-writer barrier", async () => {
-    const authority = await loadHistoricalTestAuthorityV2()
+    const authority = await loadHistoricalTestAuthority()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = canvasGenesisAuthor(authority)
-    const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({
+    const factory = installCanvasGenesisProofCarrierVerifierFactory({
       authority,
       historicalAuthorVerifier: {
         verifyHistoricalAuthor: () => ({
@@ -77,7 +77,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
     })
     const verifierResult = factory.createVerifier(runtimeResult)
     if (verifierResult.status !== "created") throw new Error(verifierResult.code)
-    const adapter = createCanvasDocumentGenesisVerifierPortV2({
+    const adapter = createCanvasDocumentGenesisVerifierPort({
       authority,
       runtime: runtimeResult,
       verifier: verifierResult.verifier,
@@ -89,7 +89,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-canvas-genesis-chain-"))
     const collaborationDirectory = path.join(root, ".convax", "collaboration")
     await fs.mkdir(collaborationDirectory, { recursive: true })
-    const store = await NodeCollaborationPersistenceV2.open({
+    const store = await NodeCollaborationPersistence.open({
       collaborationDirectory,
       localActorId: author.authorActorId,
       materializer: {
@@ -191,7 +191,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   })
 })
 
-function canvasGenesisAuthor(authority: import("@convax/collaboration").CurrentProtocolAuthority): CanvasGenesisBuildAuthorV2 {
+function canvasGenesisAuthor(authority: import("@convax/collaboration").CurrentProtocolAuthority): CanvasGenesisBuildAuthor {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
   const artifact = (
     owner: import("@convax/collaboration").ValidationArtifactOwner,
@@ -234,12 +234,12 @@ function encodedIdentity(seed: number, length: number): string {
 }
 
 function base(scope: DocumentScope) {
-  const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   return Object.freeze({
     scope,
     frontier,
     frontierDigest: digest("empty-frontier"),
-    actorHeads: Object.freeze({ format: "convax.replica-actor-head-set/2" as const, scope, heads: Object.freeze([]) }),
+    actorHeads: Object.freeze({ format: "convax.replica-actor-head-set" as const, scope, heads: Object.freeze([]) }),
     fullUpdate: bytes.encode("full-update"),
     stateVector: bytes.encode("state-vector") as StateVector,
     canonicalStateDigest: digest("canonical"),

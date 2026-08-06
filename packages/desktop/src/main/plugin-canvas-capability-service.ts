@@ -1,5 +1,5 @@
 import type { CanvasApplicationService, CanvasDocumentRef, CanvasNodeQuery } from "@convax/canvas/application"
-import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import type { ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
 
 import type {
@@ -24,7 +24,7 @@ import { projectPluginCanvasDocument } from "./plugin-canvas-projection"
 
 type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
 interface ProjectCanvasPort {
-  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjection>
 }
 
 export interface PluginPrincipalResolver {

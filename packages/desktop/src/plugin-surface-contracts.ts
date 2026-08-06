@@ -1,4 +1,4 @@
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 
 export const pluginSurfaceIpcChannels = {
@@ -14,7 +14,7 @@ export interface PluginSurfaceCreateInput {
 
 export interface PluginSurfaceCreateResult {
   createdNodeId: string
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
 }
 

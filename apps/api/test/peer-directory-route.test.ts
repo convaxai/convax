@@ -8,7 +8,7 @@ import {
 
 const projectId = parseProjectId("project-a")
 const credentialDigest = parseDigest("1".repeat(64))
-const directory = Object.freeze({ format: "convax.active-peer-directory/2", marker: "signed-directory" })
+const directory = Object.freeze({ format: "convax.active-peer-directory", marker: "signed-directory" })
 
 function handler(options?: { readonly authorize?: boolean }) {
   const rendezvous = {

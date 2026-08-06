@@ -1,5 +1,5 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
-import type { DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import type { DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 
 export const canvasGenerationReconcileObservationTimeoutMs = 10_000
 
@@ -13,8 +13,8 @@ type ScheduleTimeout = (callback: () => void, timeoutMs: number) => () => void
 export interface CanvasSessionMountOptions {
   readonly onDiagnostic: (diagnostic: CanvasSessionReconcileDiagnostic) => void
   readonly onMountFailure: (error: unknown) => void
-  readonly onMounted: (session: DesktopCanvasRendererSessionV2) => void
-  readonly openSession: (signal: AbortSignal) => Promise<DesktopCanvasRendererSessionV2>
+  readonly onMounted: (session: DesktopCanvasRendererSession) => void
+  readonly openSession: (signal: AbortSignal) => Promise<DesktopCanvasRendererSession>
   readonly reconcileCanvas: (ref: CanvasDocumentRef) => Promise<unknown>
   readonly reconcileObservationTimeoutMs?: number
   readonly ref: CanvasDocumentRef
@@ -30,7 +30,7 @@ export function mountCanvasSessionWithBackgroundReconcile(options: CanvasSession
   const controller = new AbortController()
   const ref = Object.freeze({ ...options.ref })
   let disposed = false
-  let session: DesktopCanvasRendererSessionV2 | null = null
+  let session: DesktopCanvasRendererSession | null = null
   let stopReconcileObservation: () => void = () => undefined
 
   const disposeSession = () => {

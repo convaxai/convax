@@ -1,33 +1,33 @@
 import type {
-  CanvasEntityRefV2,
-  CanvasRendererCollaborationClientV2,
-  CanvasRendererCommandV2,
+  CanvasEntityRef,
+  CanvasRendererCollaborationClient,
+  CanvasRendererCommand,
 } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 import type { CanvasDocumentRef } from "@convax/canvas/application"
 import type {
-  CanvasRendererSessionTransportV2,
-  CanvasSessionInvalidationDtoV2,
-  CanvasSessionProjectionDtoV2,
+  CanvasRendererSessionTransport,
+  CanvasSessionInvalidationDto,
+  CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
 
-export interface DesktopCanvasRendererSessionV2 extends CanvasRendererCollaborationClientV2 {
+export interface DesktopCanvasRendererSession extends CanvasRendererCollaborationClient {
   readonly ref: CanvasDocumentRef
   refresh(signal?: AbortSignal): Promise<void>
   dispose(): void
 }
 
-export async function openDesktopCanvasRendererSessionV2(input: {
+export async function openDesktopCanvasRendererSession(input: {
   readonly createCommandId?: () => string
   readonly ref: CanvasDocumentRef
-  readonly transport: CanvasRendererSessionTransportV2
+  readonly transport: CanvasRendererSessionTransport
   readonly signal?: AbortSignal
-}): Promise<DesktopCanvasRendererSessionV2> {
+}): Promise<DesktopCanvasRendererSession> {
   throwIfAborted(input.signal)
   const initial = await input.transport.open(input.ref)
   try {
     throwIfAborted(input.signal)
-    return new DesktopCanvasRendererSession(
+    return new MountedDesktopCanvasRendererSession(
       input.ref,
       input.transport,
       initial,
@@ -43,24 +43,24 @@ export async function openDesktopCanvasRendererSessionV2(input: {
   }
 }
 
-class DesktopCanvasRendererSession implements DesktopCanvasRendererSessionV2 {
+class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSession {
   readonly authority = "project-collaboration-application" as const
   readonly undoModel = "project-yjs-semantic-history" as const
   readonly ref: CanvasDocumentRef
-  readonly #transport: CanvasRendererSessionTransportV2
+  readonly #transport: CanvasRendererSessionTransport
   readonly #createCommandId: () => string
   readonly #listeners = new Set<() => void>()
-  readonly #entities = new Map<string, CanvasEntityRefV2 & { readonly kind: "node" }>()
+  readonly #entities = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
   readonly #unsubscribe: () => void
-  #snapshot: CanvasSessionProjectionDtoV2
+  #snapshot: CanvasSessionProjectionDto
   #lane: Promise<void> = Promise.resolve()
   #disposed = false
   #refreshQueued = false
 
   constructor(
     ref: CanvasDocumentRef,
-    transport: CanvasRendererSessionTransportV2,
-    initial: CanvasSessionProjectionDtoV2,
+    transport: CanvasRendererSessionTransport,
+    initial: CanvasSessionProjectionDto,
     createCommandId: () => string,
   ) {
     this.ref = Object.freeze({ ...ref })
@@ -93,7 +93,7 @@ class DesktopCanvasRendererSession implements DesktopCanvasRendererSessionV2 {
     return this.#snapshot.canRedo
   }
 
-  submit(command: CanvasRendererCommandV2, signal?: AbortSignal): Promise<void> {
+  submit(command: CanvasRendererCommand, signal?: AbortSignal): Promise<void> {
     const commandId = this.#createCommandId()
     return this.#enqueue(async () => {
       throwIfAborted(signal)
@@ -148,7 +148,7 @@ class DesktopCanvasRendererSession implements DesktopCanvasRendererSessionV2 {
     })
   }
 
-  #onInvalidation(event: CanvasSessionInvalidationDtoV2): void {
+  #onInvalidation(event: CanvasSessionInvalidationDto): void {
     if (
       this.#disposed ||
       event.sessionId !== this.#snapshot.sessionId ||
@@ -174,14 +174,14 @@ class DesktopCanvasRendererSession implements DesktopCanvasRendererSessionV2 {
     return current
   }
 
-  #accept(next: CanvasSessionProjectionDtoV2): void {
+  #accept(next: CanvasSessionProjectionDto): void {
     if (this.#disposed) return
     this.#snapshot = requireProjection(this.ref, next, this.#snapshot.sessionId)
     this.#replaceEntities(next)
     for (const listener of [...this.#listeners]) listener()
   }
 
-  #replaceEntities(next: CanvasSessionProjectionDtoV2): void {
+  #replaceEntities(next: CanvasSessionProjectionDto): void {
     this.#entities.clear()
     for (const entry of next.nodeEntities) this.#entities.set(entry.nodeId, entry.entity)
   }
@@ -197,11 +197,11 @@ class DesktopCanvasRendererSession implements DesktopCanvasRendererSessionV2 {
 
 function requireProjection(
   expectedRef: CanvasDocumentRef,
-  value: CanvasSessionProjectionDtoV2,
-  expectedSessionId?: CanvasSessionProjectionDtoV2["sessionId"],
-): CanvasSessionProjectionDtoV2 {
+  value: CanvasSessionProjectionDto,
+  expectedSessionId?: CanvasSessionProjectionDto["sessionId"],
+): CanvasSessionProjectionDto {
   if (
-    value.format !== "convax.canvas-session-projection/2" ||
+    value.format !== "convax.canvas-session-projection" ||
     !sameRef(value.ref, expectedRef) ||
     value.document.id !== expectedRef.canvasId ||
     (expectedSessionId !== undefined && value.sessionId !== expectedSessionId)

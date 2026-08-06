@@ -10,9 +10,9 @@ import {
   parseSignature,
 } from "@convax/collaboration"
 
-import type { DesktopCollaborationControlHttpClientV2 } from "./collaboration-control-http-client"
-import type { DesktopTeamAuthorityRecordV1, VerifiedDesktopTeamAuthorityV1 } from "./durable-team-authority-store"
-import { ProductionProjectTeamPeerSessionFactoryV2, waitForTeamRetryV2 } from "./project-team-peer-session-factory"
+import type { DesktopCollaborationControlHttpClient } from "./collaboration-control-http-client"
+import type { DesktopTeamAuthorityRecord, VerifiedDesktopTeamAuthority } from "./durable-team-authority-store"
+import { ProductionProjectTeamPeerSessionFactory, waitForTeamRetry } from "./project-team-peer-session-factory"
 
 const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
 const projectId = parseProjectId("project-team-factory")
@@ -27,14 +27,14 @@ const invitation = Object.freeze({
   expiresAtUnixMs: "9999999999999" as const,
 })
 
-describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
+describe("ProductionProjectTeamPeerSessionFactory", () => {
   test("removes the retry abort listener on both timeout and cancellation", async () => {
     const resolved = new AbortController()
-    await waitForTeamRetryV2(0, resolved.signal)
+    await waitForTeamRetry(0, resolved.signal)
     expect(getEventListeners(resolved.signal, "abort")).toHaveLength(0)
 
     const cancelled = new AbortController()
-    const waiting = waitForTeamRetryV2(60_000, cancelled.signal)
+    const waiting = waitForTeamRetry(60_000, cancelled.signal)
     expect(getEventListeners(cancelled.signal, "abort")).toHaveLength(1)
     cancelled.abort(new DOMException("cancelled", "AbortError"))
     await expect(waiting).rejects.toThrow("cancelled")
@@ -42,8 +42,8 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
   })
 
   test("binds bootstrap to verified native facts, publishes authority, provisions, barriers writer, then opens", async () => {
-    const record = { projectId } as DesktopTeamAuthorityRecordV1
-    const admitted = { record } as VerifiedDesktopTeamAuthorityV1
+    const record = { projectId } as DesktopTeamAuthorityRecord
+    const admitted = { record } as VerifiedDesktopTeamAuthority
     const install = mock(async () => undefined)
     const provision = mock(async () => ({ record, state: "active-editor" as const }))
     const barrier = mock(async () => undefined)
@@ -52,8 +52,8 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
       membershipSnapshot: {}, ownerCredential: {}, ownerAdminCapability: {}, invitation,
       initialization: { projectId, ...nativeFacts() },
     } }))
-    const factory = new ProductionProjectTeamPeerSessionFactoryV2({
-      control: { bootstrapTeam } as unknown as DesktopCollaborationControlHttpClientV2,
+    const factory = new ProductionProjectTeamPeerSessionFactory({
+      control: { bootstrapTeam } as unknown as DesktopCollaborationControlHttpClient,
       teamAdmission: { admit: mock(async () => admitted) },
       teamStore: { open: mock(async () => "missing" as const), install },
       memberIdentity: { resolve: mock(async () => memberId) },
@@ -76,8 +76,8 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
   })
 
   test("retries a lost bootstrap response with byte-identical authority input and installs only the recovered Team graph", async () => {
-    const record = { projectId } as DesktopTeamAuthorityRecordV1
-    const admitted = { record } as VerifiedDesktopTeamAuthorityV1
+    const record = { projectId } as DesktopTeamAuthorityRecord
+    const admitted = { record } as VerifiedDesktopTeamAuthority
     const membershipSnapshot = Object.freeze({ coreDigest: digest("c") })
     const ownerCredential = Object.freeze({ coreDigest: digest("d") })
     const ownerAdminCapability = Object.freeze({ coreDigest: digest("e") })
@@ -105,8 +105,8 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
       })
       return admitted
     })
-    const factory = new ProductionProjectTeamPeerSessionFactoryV2({
-      control: { bootstrapTeam } as unknown as DesktopCollaborationControlHttpClientV2,
+    const factory = new ProductionProjectTeamPeerSessionFactory({
+      control: { bootstrapTeam } as unknown as DesktopCollaborationControlHttpClient,
       teamAdmission: { admit },
       teamStore: { open: mock(async () => "missing" as const), install },
       memberIdentity: { resolve: mock(async () => memberId) },
@@ -131,11 +131,11 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
   })
 
   test("never calls network for an unteamed open and exposes pending floor as explicit attention", async () => {
-    const control = { bootstrapTeam: mock(() => { throw new Error("must not call") }) } as unknown as DesktopCollaborationControlHttpClientV2
+    const control = { bootstrapTeam: mock(() => { throw new Error("must not call") }) } as unknown as DesktopCollaborationControlHttpClient
     const missing = factoryFixture({ control, open: "missing" })
     await expect(missing.openExisting({ projectId, signal: new AbortController().signal })).resolves.toEqual({ status: "local-only" })
 
-    const record = { projectId } as DesktopTeamAuthorityRecordV1
+    const record = { projectId } as DesktopTeamAuthorityRecord
     const pending = factoryFixture({ control, open: record, provisionState: "pending-floor" })
     await expect(pending.openExisting({ projectId, signal: new AbortController().signal })).resolves.toEqual({
       status: "attention", reason: "floor-installation-pending",
@@ -144,13 +144,13 @@ describe("ProductionProjectTeamPeerSessionFactoryV2", () => {
 })
 
 function factoryFixture(input: {
-  control: DesktopCollaborationControlHttpClientV2
-  open: DesktopTeamAuthorityRecordV1 | "missing"
+  control: DesktopCollaborationControlHttpClient
+  open: DesktopTeamAuthorityRecord | "missing"
   provisionState?: "active-editor" | "pending-floor"
 }) {
-  const record = input.open === "missing" ? ({ projectId } as DesktopTeamAuthorityRecordV1) : input.open
-  const admitted = { record } as VerifiedDesktopTeamAuthorityV1
-  return new ProductionProjectTeamPeerSessionFactoryV2({
+  const record = input.open === "missing" ? ({ projectId } as DesktopTeamAuthorityRecord) : input.open
+  const admitted = { record } as VerifiedDesktopTeamAuthority
+  return new ProductionProjectTeamPeerSessionFactory({
     control: input.control,
     teamAdmission: { admit: async () => admitted },
     teamStore: { open: async () => input.open, install: async () => undefined },

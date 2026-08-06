@@ -299,7 +299,7 @@ function mustReject(bytes) {
 const packaged = new Uint8Array(await Bun.file(new URL("./fixture/current.json", import.meta.url)).arrayBuffer())
 const descriptor = collaboration.parseCurrentProtocolDescriptor(packaged)
 if (!Object.isFrozen(descriptor) || descriptor.format !== collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FORMAT) throw new Error("packaged descriptor is invalid")
-if (descriptor.protocolDigest !== "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5") throw new Error("packaged descriptor digest is not the built digest")
+if (descriptor.protocolDigest !== "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993") throw new Error("packaged descriptor digest is not the built digest")
 if (collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME !== "current.json") throw new Error("descriptor file name is not exact")
 const drifted = Uint8Array.from(packaged); drifted[3] ^= 1; mustReject(drifted)
 mustReject(packaged.slice(0, -1))

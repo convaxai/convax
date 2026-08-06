@@ -18,13 +18,13 @@ import {
   type Signature,
 } from "@convax/collaboration"
 
-export type ProjectResetReasonV2 =
+export type ProjectResetReason =
   | "unsupported-portable-version"
   | "incompatible-project-index-schema"
   | "unrecoverable-project-index-corruption"
   | "explicit-empty-project-reset"
 
-export type ProjectResetConfirmationPrincipalV2 =
+export type ProjectResetConfirmationPrincipal =
   | Readonly<{
       kind: "team-replica"
       memberId: MemberId
@@ -38,13 +38,13 @@ export type ProjectResetConfirmationPrincipalV2 =
       localConfirmationKeyId: string
     }>
 
-export interface ProjectResetConfirmationCoreV2 {
-  readonly format: "convax.project-reset-confirmation-core/2"
+export interface ProjectResetConfirmationCore {
+  readonly format: "convax.project-reset-confirmation-core"
   readonly resetId: Id128
   readonly confirmationId: Id128
   readonly projectId: ProjectId
   readonly oldProjectEpoch: Id128 | null
-  readonly reason: ProjectResetReasonV2
+  readonly reason: ProjectResetReason
   readonly observedOldPrivateTreeDigest: Digest
   readonly unsupportedInventoryDigest: Digest
   readonly privateDeletionSetDigest: Digest
@@ -54,27 +54,27 @@ export interface ProjectResetConfirmationCoreV2 {
   readonly requestedProtocolDigest: Digest
   readonly requestedSchemaDigest: Digest
   readonly requestedUriProtocolDigest: Digest
-  readonly confirmationPrincipal: ProjectResetConfirmationPrincipalV2
+  readonly confirmationPrincipal: ProjectResetConfirmationPrincipal
   readonly protocolDigest: Digest
 }
 
-export interface ProjectResetConfirmationV2 {
-  readonly format: "convax.project-reset-confirmation/2"
-  readonly core: ProjectResetConfirmationCoreV2
+export interface ProjectResetConfirmation {
+  readonly format: "convax.project-reset-confirmation"
+  readonly core: ProjectResetConfirmationCore
   readonly coreDigest: Digest
   readonly confirmationSignature: Signature
 }
 
-export function parseProjectResetConfirmationCoreV2(value: unknown): ProjectResetConfirmationCoreV2 {
+export function parseProjectResetConfirmationCore(value: unknown): ProjectResetConfirmationCore {
   assertExactKeys(value, [
     "format", "resetId", "confirmationId", "projectId", "oldProjectEpoch", "reason",
     "observedOldPrivateTreeDigest", "unsupportedInventoryDigest", "privateDeletionSetDigest",
     "stableProjectIdPreserved", "ordinaryProjectFilesPreserved", "deletionStatement",
     "requestedProtocolDigest", "requestedSchemaDigest", "requestedUriProtocolDigest",
     "confirmationPrincipal", "protocolDigest",
-  ], "ProjectResetConfirmationCoreV2")
+  ], "ProjectResetConfirmationCore")
   if (
-    value.format !== "convax.project-reset-confirmation-core/2" ||
+    value.format !== "convax.project-reset-confirmation-core" ||
     !isReason(value.reason) ||
     value.stableProjectIdPreserved !== true ||
     value.ordinaryProjectFilesPreserved !== true ||
@@ -104,21 +104,21 @@ export function parseProjectResetConfirmationCoreV2(value: unknown): ProjectRese
   })
 }
 
-export function projectResetConfirmationCoreDigestV2(value: ProjectResetConfirmationCoreV2): Digest {
-  return structuredDigest("convax.project-reset-confirmation-core/2", parseProjectResetConfirmationCoreV2(value))
+export function projectResetConfirmationCoreDigest(value: ProjectResetConfirmationCore): Digest {
+  return structuredDigest("convax.project-reset-confirmation-core", parseProjectResetConfirmationCore(value))
 }
 
 /** Pure Ed25519 signs the decoded core digest; there is no second signature domain. */
-export function projectResetConfirmationSignatureMessageV2(value: Digest): Uint8Array {
+export function projectResetConfirmationSignatureMessage(value: Digest): Uint8Array {
   return Uint8Array.from(parseDigest(value).match(/../gu)!, (pair) => Number.parseInt(pair, 16))
 }
 
-export function parseProjectResetConfirmationV2(value: unknown): ProjectResetConfirmationV2 {
-  assertExactKeys(value, ["format", "core", "coreDigest", "confirmationSignature"], "ProjectResetConfirmationV2")
-  if (value.format !== "convax.project-reset-confirmation/2") throw new TypeError("Project reset confirmation format is invalid")
-  const core = parseProjectResetConfirmationCoreV2(value.core)
+export function parseProjectResetConfirmation(value: unknown): ProjectResetConfirmation {
+  assertExactKeys(value, ["format", "core", "coreDigest", "confirmationSignature"], "ProjectResetConfirmation")
+  if (value.format !== "convax.project-reset-confirmation") throw new TypeError("Project reset confirmation format is invalid")
+  const core = parseProjectResetConfirmationCore(value.core)
   const coreDigest = parseDigest(value.coreDigest)
-  if (coreDigest !== projectResetConfirmationCoreDigestV2(core)) throw new TypeError("Project reset confirmation digest mismatches")
+  if (coreDigest !== projectResetConfirmationCoreDigest(core)) throw new TypeError("Project reset confirmation digest mismatches")
   return Object.freeze({
     format: value.format,
     core,
@@ -127,7 +127,7 @@ export function parseProjectResetConfirmationV2(value: unknown): ProjectResetCon
   })
 }
 
-function parsePrincipal(value: unknown): ProjectResetConfirmationPrincipalV2 {
+function parsePrincipal(value: unknown): ProjectResetConfirmationPrincipal {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Project reset principal is invalid")
   if ((value as { kind?: unknown }).kind === "local-project-owner") {
     assertExactKeys(value, ["kind", "localProjectBindingDigest", "localConfirmationKeyId"], "Local Project reset principal")
@@ -149,7 +149,7 @@ function parsePrincipal(value: unknown): ProjectResetConfirmationPrincipalV2 {
   })
 }
 
-function isReason(value: unknown): value is ProjectResetReasonV2 {
+function isReason(value: unknown): value is ProjectResetReason {
   return value === "unsupported-portable-version" || value === "incompatible-project-index-schema" ||
     value === "unrecoverable-project-index-corruption" || value === "explicit-empty-project-reset"
 }

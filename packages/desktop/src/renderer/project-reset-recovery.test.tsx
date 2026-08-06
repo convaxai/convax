@@ -136,10 +136,10 @@ describe("ProjectResetRecoveryState", () => {
 
       await act(async () => button("Continue")?.click())
       expect(client.confirmReset).not.toHaveBeenCalled()
-      expect(button("Delete legacy data and reset")).toBeTruthy()
+      expect(button("Archive legacy data and reset")).toBeTruthy()
       expect(document.activeElement?.textContent).toBe("Cancel")
 
-      await act(async () => button("Delete legacy data and reset")?.click())
+      await act(async () => button("Archive legacy data and reset")?.click())
       expect(client.confirmReset).toHaveBeenCalledTimes(1)
       expect(client.confirmReset).toHaveBeenCalledWith({ projectId: "project-legacy", token })
       expect(onPublished).toHaveBeenCalledWith("project-legacy")
@@ -169,12 +169,12 @@ describe("ProjectResetRecoveryState", () => {
         const client = recoveryClient({ confirmReset })
         await renderRecovery(root, client)
         await act(async () => button("Continue")?.click())
-        await act(async () => button("Delete legacy data and reset")?.click())
+        await act(async () => button("Archive legacy data and reset")?.click())
 
         expect(document.querySelector("[data-project-reset-error]")).toBeTruthy()
         expect(document.body.textContent).toContain("Convax will not retry automatically")
         expect(button("Continue")).toBeUndefined()
-        expect(button("Delete legacy data and reset")).toBeUndefined()
+        expect(button("Archive legacy data and reset")).toBeUndefined()
         expect([...document.querySelectorAll("button")]).toHaveLength(1)
         expect(confirmReset).toHaveBeenCalledTimes(1)
       })

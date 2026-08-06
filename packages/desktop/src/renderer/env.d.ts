@@ -1,6 +1,6 @@
 import type { AgentClient } from "@convax/agent-runtime"
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
-import type { CanvasRendererSessionTransportV2 } from "../canvas-session-contracts"
+import type { CanvasRendererSessionTransport } from "../canvas-session-contracts"
 import type { CanvasRendererClient } from "../canvas-renderer-contracts"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient } from "@convax/project"
@@ -19,7 +19,7 @@ import type { PetSettingsHostClient } from "./pet-settings-host"
 import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
 import type { MarketplaceClient } from "../marketplace-contracts"
 import type { MainWindowControlsClient } from "../main-window-controls-contracts"
-import type { ProjectTeamCollaborationClientV2 } from "../project-team-collaboration-contracts"
+import type { ProjectTeamCollaborationClient } from "../project-team-collaboration-contracts"
 
 declare global {
   const __CONVAX_FEATURE_SERVICES__: boolean
@@ -35,7 +35,7 @@ declare global {
         pluginSurfaces: PluginSurfaceRendererClient
         renderer: CanvasRendererClient
         resources: CanvasResourceClient
-        sessions: CanvasRendererSessionTransportV2
+        sessions: CanvasRendererSessionTransport
         textResources: CanvasTextResourceClient
       }
       generation: GenerationClient
@@ -53,7 +53,7 @@ declare global {
       projectFiles: ProjectFilesClient
       projects: ProjectLifecycleClient & {
         canvases: ProjectCanvasClient
-        collaboration: ProjectTeamCollaborationClientV2
+        collaboration: ProjectTeamCollaborationClient
         recovery: ProjectCollaborationRecoveryClient
       }
       protocol?: DesktopProtocolClient

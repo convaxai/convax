@@ -52,6 +52,21 @@ describe("portable collaboration cutover", () => {
     )
   })
 
+  test("detects a retired protocol tree without decoding or changing its bytes", async () => {
+    const projectRoot = await createLegacyProject()
+    await fs.rm(path.join(projectRoot, ".convax", "canvases"), { recursive: true })
+    const retired = path.join(projectRoot, ".convax", "protocol-v3")
+    await fs.mkdir(retired)
+    await fs.writeFile(path.join(retired, "active.jcs"), "retired-protocol-bytes")
+    const before = await fs.readFile(path.join(retired, "active.jcs"))
+
+    const inspection = await resolvePortableProjectData(projectRoot)
+    expect(inspection.status).toBe("unsupported-project-data")
+    if (inspection.status !== "unsupported-project-data") throw new Error("expected unsupported")
+    expect(inspection.error.unsupportedPaths).toEqual([".convax/protocol-v3"])
+    expect(await fs.readFile(path.join(retired, "active.jcs"))).toEqual(before)
+  })
+
   test("planning and missing confirmation perform zero writes", async () => {
     const projectRoot = await createLegacyProject()
     const catalog = path.join(projectRoot, ".convax", "canvases", "catalog.json")
@@ -223,7 +238,30 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
     expect(await fs.readFile(path.join(projectRoot, "Generated", "keep.mp4"), "utf8")).toBe("generated")
     expect(await fs.readFile(path.join(projectRoot, ".convax-conflicts", "keep.md"), "utf8")).toBe("conflict")
-    expect((await resolvePortableProjectData(projectRoot)).status).toBe("current")
+    const archive = (await fs.readdir(projectRoot)).find((entry) => entry.startsWith(".convax-archive-"))
+    expect(archive).toBeTruthy()
+    expect(await fs.readFile(path.join(projectRoot, archive!, "canvases", "catalog.json"), "utf8")).toBe("catalog")
+  })
+
+  durabilityTest("finalizes authority only after the old private tree is a verified recoverable archive", async () => {
+    const projectRoot = await createLegacyProject()
+    const plan = await planPortableProjectReset(projectRoot)
+    let finalized = false
+    const input = resetInput({
+      confirmationToken: plan.token,
+      finalizePublishedReset: async ({ archivedConvaxDirectory, publishedConvaxDirectory }) => {
+        expect(await fs.readFile(path.join(archivedConvaxDirectory, "canvases", "catalog.json"), "utf8")).toBe(
+          "catalog",
+        )
+        expect(await fs.readFile(path.join(publishedConvaxDirectory, "collaboration", "genesis.bin"), "utf8")).toBe(
+          "genesis",
+        )
+        finalized = true
+      },
+    })
+
+    await executeWithLease(plan, input)
+    expect(finalized).toBeTrue()
   })
 
   durabilityTest("binds receipt verification to the exact reset intent and rejects a staging symlink", async () => {
@@ -431,6 +469,9 @@ function resetInput(
     authorizationKind: overrides.authorizationKind ?? "team-epoch-rollover",
     confirmationToken: overrides.confirmationToken,
     faultHooks: overrides.faultHooks,
+    ...(overrides.finalizePublishedReset
+      ? { finalizePublishedReset: overrides.finalizePublishedReset }
+      : {}),
     nextProjectEpoch: overrides.nextProjectEpoch ?? epoch,
     signal: overrides.signal,
     stageGenesis:

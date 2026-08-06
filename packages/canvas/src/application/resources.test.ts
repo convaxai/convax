@@ -1,13 +1,13 @@
 import { describe, expect, mock, test } from "bun:test"
 import { parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
-import type { BoundedOperationReceiptV2 } from "../collaboration"
+import type { BoundedOperationReceipt } from "../collaboration"
 import { createCanvasDocument } from "../document"
 import type { CanvasUploadItem } from "../types"
 import { CanvasResourceBusinessService, CanvasResourcePartialFailureError } from "./resources"
 import type { CanvasApplicationCommandResult } from "./service"
 
-const receipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
+const receipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
   actorId: parseActorId("A".repeat(43)),
   operationId: parseId128("A".repeat(22)),
   intentDigest: parseDigest("d".repeat(64)),

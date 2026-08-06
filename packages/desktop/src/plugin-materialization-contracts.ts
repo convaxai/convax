@@ -13,12 +13,12 @@ export interface PluginMaterializationInput {
 
 export interface PluginMaterializationResult {
   createdNodeId: string
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
 }
 
 export interface PluginMaterializationRendererClient {
   materialize(input: PluginMaterializationInput): Promise<PluginMaterializationResult>
 }
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"

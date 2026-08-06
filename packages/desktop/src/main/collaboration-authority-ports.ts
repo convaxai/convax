@@ -22,7 +22,7 @@ import {
   type ValidationArtifactSet,
 } from "@convax/collaboration"
 
-export interface CurrentLocalReplicaAuthorityEvidenceV2 {
+export interface CurrentLocalReplicaAuthorityEvidence {
   /** Exact request binding produced after current control-plane verification. */
   readonly scope: DocumentScope
   readonly operationId: Id128
@@ -40,17 +40,17 @@ export interface CurrentLocalReplicaAuthorityEvidenceV2 {
  * reservation receipt, actor credential, active-editor authorization, cutoff and
  * installed floor before returning evidence. Peer id/session order is not input.
  */
-export interface CurrentLocalReplicaAuthoritySourceV2 {
+export interface CurrentLocalReplicaAuthoritySource {
   resolveCurrent(input: {
     readonly scope: DocumentScope
     readonly actorId: ActorId
     readonly operationId: Id128
     readonly baseFrontierDigest: Digest
     readonly ownerSchemaDigest: Digest
-  }): Promise<CurrentLocalReplicaAuthorityEvidenceV2 | "pending" | "rejected">
+  }): Promise<CurrentLocalReplicaAuthorityEvidence | "pending" | "rejected">
 }
 
-export interface VerifiedIncomingReplicaAuthorityEvidenceV2 {
+export interface VerifiedIncomingReplicaAuthorityEvidence {
   readonly scope: DocumentScope
   readonly frameDigest: Digest
   readonly actorId: ActorId
@@ -65,15 +65,15 @@ export interface VerifiedIncomingReplicaAuthorityEvidenceV2 {
  * Implementations resolve exact digest-addressed dependencies and cutoff state;
  * PeerJS connection identity alone can never produce this evidence.
  */
-export interface IncomingReplicaAuthoritySourceV2 {
+export interface IncomingReplicaAuthoritySource {
   verify(input: {
     readonly frame: DecodedCausalEditFrame
-  }): Promise<VerifiedIncomingReplicaAuthorityEvidenceV2 | "pending" | "rejected">
+  }): Promise<VerifiedIncomingReplicaAuthorityEvidence | "pending" | "rejected">
 }
 
-export function createCurrentLocalReplicaAuthorityPortV2(input: {
+export function createCurrentLocalReplicaAuthorityPort(input: {
   readonly actorId: ActorId
-  readonly source: CurrentLocalReplicaAuthoritySourceV2
+  readonly source: CurrentLocalReplicaAuthoritySource
 }): LocalAuthorityPort {
   const actorId = parseActorId(input.actorId)
   if (!input.source || typeof input.source.resolveCurrent !== "function") {
@@ -124,8 +124,8 @@ export function createCurrentLocalReplicaAuthorityPortV2(input: {
   return Object.freeze(port)
 }
 
-export function createIncomingReplicaAuthorityVerificationPortV2(
-  source: IncomingReplicaAuthoritySourceV2,
+export function createIncomingReplicaAuthorityVerificationPort(
+  source: IncomingReplicaAuthoritySource,
 ): IncomingAuthorityVerificationPort {
   if (!source || typeof source.verify !== "function") {
     throw new TypeError("Incoming replica authority source is required")

@@ -6,8 +6,8 @@ import type {
 } from "@convax/collaboration"
 
 import {
-  createRouteScopedCanvasFactResolverV2,
-  createRouteScopedCanvasIncomingFactResolverV2,
+  createRouteScopedCanvasFactResolver,
+  createRouteScopedCanvasIncomingFactResolver,
 } from "./canvas-route-external-facts"
 
 describe("route-scoped Canvas external facts", () => {
@@ -19,23 +19,23 @@ describe("route-scoped Canvas external facts", () => {
         return { status: "created" as const, port }
       },
     } as OwnerExternalFactPortFactory<"canvas">
-    const resolve = createRouteScopedCanvasFactResolverV2({ factory })
+    const resolve = createRouteScopedCanvasFactResolver({ factory })
     await expect(resolve({ scope: scope(), dependencies: { validationArtifacts: [], externalFacts: [] } }))
       .resolves.toEqual({ status: "resolved", port })
   })
 
   test("keeps every nonempty authority closure pending when no production verifier is installed", async () => {
     const factory = { createAttemptPort() { throw new Error("must not create") } } as unknown as OwnerExternalFactPortFactory<"canvas">
-    const resolve = createRouteScopedCanvasFactResolverV2({ factory })
-    const artifact = { owner: "plugin" as const, format: "convax.plugin-validation-artifact/2", artifactDigest: "a".repeat(64) as never }
+    const resolve = createRouteScopedCanvasFactResolver({ factory })
+    const artifact = { owner: "plugin" as const, format: "convax.plugin-validation-artifact", artifactDigest: "a".repeat(64) as never }
     await expect(resolve({ scope: scope(), dependencies: { validationArtifacts: [artifact], externalFacts: [] } }))
       .resolves.toEqual({ status: "pending" })
   })
 
   test("rejects an incoming frame that crosses the bound Canvas route", async () => {
     const factory = { createAttemptPort() { throw new Error("must not create") } } as unknown as OwnerExternalFactPortFactory<"canvas">
-    const resolve = createRouteScopedCanvasFactResolverV2({ factory })
-    const incoming = createRouteScopedCanvasIncomingFactResolverV2({ scope: scope(), resolve })
+    const resolve = createRouteScopedCanvasFactResolver({ factory })
+    const incoming = createRouteScopedCanvasIncomingFactResolver({ scope: scope(), resolve })
     const frame = { header: { core: { scope: { ...scope(), shardEpoch: "AwMDAwMDAwMDAwMDAwMDAw" } } } } as never
     await expect(incoming.resolve({ frame, declaredDependencies: { validationArtifacts: [], externalFacts: [] } }))
       .resolves.toEqual({ status: "rejected" })

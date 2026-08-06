@@ -11,43 +11,43 @@ import {
   type ValidationArtifactRef,
 } from "@convax/collaboration"
 import {
-  decodeCanvasExternalFactRequestV2,
-  type CanvasExternalFactRequestV2,
+  decodeCanvasExternalFactRequest,
+  type CanvasExternalFactRequest,
 } from "@convax/canvas/collaboration"
 import { parseProjectUri } from "@convax/uri"
 
-import type { CanvasFactResolutionV2 } from "./canvas-collaboration-session-owner"
+import type { CanvasFactResolution } from "./canvas-collaboration-session-owner"
 
-type CanvasScopeV2 = DocumentScope & { readonly docKind: "canvas" }
+type CanvasScope = DocumentScope & { readonly docKind: "canvas" }
 
-export interface CanvasRouteArtifactAuthorityV2 {
+export interface CanvasRouteArtifactAuthority {
   resolve(input: {
-    readonly scope: CanvasScopeV2
+    readonly scope: CanvasScope
     readonly ref: ValidationArtifactRef
     readonly signal?: AbortSignal
   }): Promise<OwnerValidationArtifactResolveResult>
 }
 
-export interface CanvasRouteExternalFactAuthorityV2 {
+export interface CanvasRouteExternalFactAuthority {
   verify(input: {
-    readonly scope: CanvasScopeV2
-    readonly request: CanvasExternalFactRequestV2
+    readonly scope: CanvasScope
+    readonly request: CanvasExternalFactRequest
     readonly requirement: OwnerExternalFactRequirement<"canvas">
     readonly signal?: AbortSignal
   }): Promise<"verified" | "pending" | "rejected">
 }
 
 /** Async route edge that creates the attempt-scoped branded owner port only after every fact closes. */
-export function createRouteScopedCanvasFactResolverV2(input: {
+export function createRouteScopedCanvasFactResolver(input: {
   readonly factory: OwnerExternalFactPortFactory<"canvas">
-  readonly artifacts?: CanvasRouteArtifactAuthorityV2
-  readonly facts?: CanvasRouteExternalFactAuthorityV2
+  readonly artifacts?: CanvasRouteArtifactAuthority
+  readonly facts?: CanvasRouteExternalFactAuthority
 }) {
   return async function resolve(inputAttempt: {
-    readonly scope: CanvasScopeV2
+    readonly scope: CanvasScope
     readonly dependencies: OwnerIntentDependencies<"canvas">
     readonly signal?: AbortSignal
-  }): Promise<CanvasFactResolutionV2> {
+  }): Promise<CanvasFactResolution> {
     const scope = requireCanvasScope(inputAttempt.scope)
     inputAttempt.signal?.throwIfAborted()
     const artifacts = new Map<string, Extract<OwnerValidationArtifactResolveResult, { status: "resolved" }>>()
@@ -61,7 +61,7 @@ export function createRouteScopedCanvasFactResolverV2(input: {
 
     const facts = new Map<string, unknown>()
     for (const requirement of inputAttempt.dependencies.externalFacts) {
-      const request = decodeCanvasExternalFactRequestV2(new Uint8Array(requirement.request.exactJcs))
+      const request = decodeCanvasExternalFactRequest(new Uint8Array(requirement.request.exactJcs))
       if (request === "rejected" || !requestBelongsToScope(request, scope)) {
         return Object.freeze({ status: "rejected" })
       }
@@ -70,7 +70,7 @@ export function createRouteScopedCanvasFactResolverV2(input: {
       inputAttempt.signal?.throwIfAborted()
       if (decision !== "verified") return Object.freeze({ status: decision })
       facts.set(factKey(requirement), Object.freeze({
-        format: "convax.canvas-external-fact-result/2",
+        format: "convax.canvas-external-fact-result",
         kind: requirement.kind,
         requestSha256: requirement.request.sha256,
         factDigest: requirement.factDigest,
@@ -100,9 +100,9 @@ export function createRouteScopedCanvasFactResolverV2(input: {
 }
 
 /** Incoming frames use the same exact route-scoped authority and never trust their peer/session identity. */
-export function createRouteScopedCanvasIncomingFactResolverV2(input: {
-  readonly scope: CanvasScopeV2
-  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolverV2>
+export function createRouteScopedCanvasIncomingFactResolver(input: {
+  readonly scope: CanvasScope
+  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolver>
 }): IncomingOwnerFactResolverPort {
   const scope = requireCanvasScope(input.scope)
   return Object.freeze({
@@ -122,13 +122,13 @@ export function createRouteScopedCanvasIncomingFactResolverV2(input: {
 }
 
 
-function requireCanvasScope(value: DocumentScope): CanvasScopeV2 {
+function requireCanvasScope(value: DocumentScope): CanvasScope {
   const scope = parseDocumentScope(value)
   if (scope.docKind !== "canvas") throw new TypeError("Canvas external facts require a Canvas scope")
-  return scope as CanvasScopeV2
+  return scope as CanvasScope
 }
 
-function requestBelongsToScope(request: CanvasExternalFactRequestV2, scope: CanvasScopeV2): boolean {
+function requestBelongsToScope(request: CanvasExternalFactRequest, scope: CanvasScope): boolean {
   if (request.kind === "generation-begin") {
     const requestScope = parseDocumentScope(request.scope)
     return sameScope(requestScope, scope)

@@ -1,5 +1,5 @@
 import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient, ProjectRecord } from "@convax/project"
-import type { ProjectIndexFileApplicationPortV2, ProjectIndexFileMutationResultV2 } from "@convax/project/canvas"
+import type { ProjectIndexFileApplicationPort, ProjectIndexFileMutationResult } from "@convax/project/canvas"
 import { parseProjectId } from "@convax/collaboration"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
@@ -243,7 +243,7 @@ export async function registerProjectIpc(
      */
     onActivated?(project: ProjectRecord): Promise<void> | void
     /** Main-owned ProjectIndex bridge. Production supplies it; unit adapters may omit it. */
-    projectIndexFiles?: ProjectIndexFileApplicationPortV2
+    projectIndexFiles?: ProjectIndexFileApplicationPort
   },
 ) {
   const handlerDisposers: Array<() => void> = []
@@ -292,7 +292,7 @@ export async function registerProjectIpc(
 
   const withCollaboration = async (
     result: FilesResult<"createEntry">,
-    operations: readonly Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResultV2> }>[],
+    operations: readonly Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResult> }>[],
   ): Promise<FilesResult<"createEntry">> => {
     if (!options.projectIndexFiles) return result
     const failedPaths: Array<{ path: string; code: string }> = []
@@ -322,7 +322,7 @@ export async function registerProjectIpc(
   }
 
   const publishTreeOperations = async (projectId: string, rootPath: string) => {
-    const operations: Array<Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResultV2> }>> = []
+    const operations: Array<Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResult> }>> = []
     const visit = async (entryPath: string) => {
       try {
         await manager.readFileInfo({ projectId, path: entryPath })

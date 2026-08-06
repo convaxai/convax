@@ -33,10 +33,10 @@ import {
 } from "@convax/collaboration"
 
 import type {
-  DurableVerifiedLocalAuthorityCacheEntryV2,
-  DurableVerifiedLocalAuthorityCacheV2,
+  DurableVerifiedLocalAuthorityCacheEntry,
+  DurableVerifiedLocalAuthorityCache,
 } from "./collaboration-production-runtime"
-import type { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
+import type { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
 
 const RECORD_FORMAT = "convax.desktop-local-authority-cache-record/1" as const
 const POINTER_FORMAT = "convax.desktop-local-authority-cache-pointer/1" as const
@@ -48,7 +48,7 @@ const dependencyKinds = new Set<CausalDependencyKind>([
   "generation-external-fact", "reset-authorization",
 ])
 
-export interface LocalReplicaAuthorityCacheRecordV2 {
+export interface LocalReplicaAuthorityCacheRecord {
   readonly format: typeof RECORD_FORMAT
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
@@ -64,30 +64,30 @@ export interface LocalReplicaAuthorityCacheRecordV2 {
   readonly validationArtifacts: ValidationArtifactSet
 }
 
-export interface LocalReplicaEnrollmentCandidateV2
-  extends Omit<LocalReplicaAuthorityCacheRecordV2, "format" | "role" | "editState"> {
+export interface LocalReplicaEnrollmentCandidate
+  extends Omit<LocalReplicaAuthorityCacheRecord, "format" | "role" | "editState"> {
   readonly authorizationEvidence: unknown
 }
 
-declare const verifiedLocalReplicaEnrollmentBrandV2: unique symbol
-export interface VerifiedLocalReplicaEnrollmentV2 {
-  readonly record: LocalReplicaAuthorityCacheRecordV2
-  readonly [verifiedLocalReplicaEnrollmentBrandV2]: true
+declare const verifiedLocalReplicaEnrollmentBrand: unique symbol
+export interface VerifiedLocalReplicaEnrollment {
+  readonly record: LocalReplicaAuthorityCacheRecord
+  readonly [verifiedLocalReplicaEnrollmentBrand]: true
 }
 
 const liveEnrollments = new WeakSet<object>()
 
-export interface LocalReplicaEnrollmentVerifierFactoryV2 {
-  verify(candidate: LocalReplicaEnrollmentCandidateV2): Promise<VerifiedLocalReplicaEnrollmentV2 | "rejected">
+export interface LocalReplicaEnrollmentVerifierFactory {
+  verify(candidate: LocalReplicaEnrollmentCandidate): Promise<VerifiedLocalReplicaEnrollment | "rejected">
 }
 
 /** Converts current control/local-owner proof into a one-use process capability. */
-export function createLocalReplicaEnrollmentVerifierFactoryV2(input: {
-  verifyCurrent(input: LocalReplicaEnrollmentCandidateV2): Promise<boolean>
-}): LocalReplicaEnrollmentVerifierFactoryV2 {
+export function createLocalReplicaEnrollmentVerifierFactory(input: {
+  verifyCurrent(input: LocalReplicaEnrollmentCandidate): Promise<boolean>
+}): LocalReplicaEnrollmentVerifierFactory {
   if (typeof input.verifyCurrent !== "function") throw new TypeError("Local replica enrollment verifier is required")
   return Object.freeze({
-    async verify(candidate: LocalReplicaEnrollmentCandidateV2) {
+    async verify(candidate: LocalReplicaEnrollmentCandidate) {
       const { authorizationEvidence: _authorizationEvidence, ...candidateRecord } = candidate
       const record = parseRecord({
         ...candidateRecord,
@@ -98,15 +98,15 @@ export function createLocalReplicaEnrollmentVerifierFactoryV2(input: {
       if (!await input.verifyCurrent(Object.freeze({ ...record, authorizationEvidence: candidate.authorizationEvidence }))) {
         return "rejected"
       }
-      const enrollment = Object.freeze({ record }) as VerifiedLocalReplicaEnrollmentV2
+      const enrollment = Object.freeze({ record }) as VerifiedLocalReplicaEnrollment
       liveEnrollments.add(enrollment)
       return enrollment
     },
   })
 }
 
-export interface DurableLocalReplicaAuthorityCacheV2 extends DurableVerifiedLocalAuthorityCacheV2 {
-  install(enrollment: VerifiedLocalReplicaEnrollmentV2): Promise<void>
+export interface DurableLocalReplicaAuthorityCache extends DurableVerifiedLocalAuthorityCache {
+  install(enrollment: VerifiedLocalReplicaEnrollment): Promise<void>
   resolveLocalProjectActor(input: {
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
@@ -118,13 +118,13 @@ export interface DurableLocalReplicaAuthorityCacheV2 extends DurableVerifiedLoca
  * are immutable; one atomic pointer selects the greatest verified membership
  * sequence. It contains no session credential, peer id, or private key.
  */
-export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalReplicaAuthorityCacheV2 {
+export class NodeDurableLocalReplicaAuthorityCache implements DurableLocalReplicaAuthorityCache {
   constructor(private readonly rootDirectory: string, private readonly protocolDigest: Digest) {
     if (!path.isAbsolute(rootDirectory)) throw new TypeError("Local authority cache root must be absolute")
     parseDigest(protocolDigest)
   }
 
-  async install(enrollment: VerifiedLocalReplicaEnrollmentV2): Promise<void> {
+  async install(enrollment: VerifiedLocalReplicaEnrollment): Promise<void> {
     if (!liveEnrollments.has(enrollment)) throw new TypeError("Local authority enrollment was not verified in this process")
     const record = parseRecord(enrollment.record)
     if (record.protocolDigest !== this.protocolDigest) throw new Error("Local authority enrollment uses another protocol")
@@ -147,7 +147,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     }
     await writeImmutable(path.join(this.rootDirectory, "records", `${recordDigest}.jcs`), recordBytes)
     const projectSelector = projectBindingSelectorDigest(record)
-    const binding: LocalReplicaProjectBindingV2 = Object.freeze({
+    const binding: LocalReplicaProjectBinding = Object.freeze({
       format: PROJECT_BINDING_FORMAT,
       selector: projectSelector,
       projectId: record.projectId,
@@ -160,7 +160,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
       path.join(this.rootDirectory, "project-bindings", `${projectSelector}.jcs`),
       encodeRestrictedJcs(binding),
     )
-    const pointer: LocalAuthorityPointerV2 = Object.freeze({
+    const pointer: LocalAuthorityPointer = Object.freeze({
       format: POINTER_FORMAT,
       selector,
       membershipSequence: record.membershipSequence,
@@ -205,8 +205,8 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
   }
 
   async resolveCurrent(
-    request: Parameters<DurableVerifiedLocalAuthorityCacheV2["resolveCurrent"]>[0],
-  ): Promise<DurableVerifiedLocalAuthorityCacheEntryV2 | "pending" | "rejected"> {
+    request: Parameters<DurableVerifiedLocalAuthorityCache["resolveCurrent"]>[0],
+  ): Promise<DurableVerifiedLocalAuthorityCacheEntry | "pending" | "rejected"> {
     let scope: ReturnType<typeof parseDocumentScope>
     try { scope = parseDocumentScope(request.scope) } catch { return "rejected" }
     if (request.actorId !== parseActorId(request.actorId)) return "rejected"
@@ -245,7 +245,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     }
   }
 
-  private async readPointer(selector: Digest): Promise<LocalAuthorityPointerV2 | null> {
+  private async readPointer(selector: Digest): Promise<LocalAuthorityPointer | null> {
     try {
       const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "current", `${selector}.jcs`)))
       return parsePointer(decodeRestrictedJcs(bytes), selector)
@@ -255,7 +255,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     }
   }
 
-  private async readRecord(recordDigest: Digest, selector: Digest): Promise<LocalReplicaAuthorityCacheRecordV2> {
+  private async readRecord(recordDigest: Digest, selector: Digest): Promise<LocalReplicaAuthorityCacheRecord> {
     const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "records", `${recordDigest}.jcs`)))
     if (ordinarySha256(bytes) !== recordDigest) throw new Error("Local authority cache record digest mismatches")
     const record = parseRecord(decodeRestrictedJcs(bytes))
@@ -264,9 +264,9 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
   }
 }
 
-export interface LocalProjectIndexEnrollmentInstallPortV2 {
+export interface LocalProjectIndexEnrollmentInstallPort {
   installProjectIndexBase(input: {
-    readonly enrollment: LocalReplicaAuthorityCacheRecordV2
+    readonly enrollment: LocalReplicaAuthorityCacheRecord
     readonly replicaSigningPublicKey: PublicKey
   }): Promise<void>
 }
@@ -276,17 +276,17 @@ export interface LocalProjectIndexEnrollmentInstallPortV2 {
  * keys or an installed base without a current pointer grant no edit authority and
  * are safe to retry with the exact same enrollment.
  */
-export async function enrollNewLocalProjectReplicaV2(input: {
+export async function enrollNewLocalProjectReplica(input: {
   readonly identity: {
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
     readonly replicaId: ReplicaId
   }
-  readonly vault: Pick<ElectronReplicaSigningVaultV2, "createReplicaKey">
-  prepareEnrollment(publicKey: PublicKey): Promise<VerifiedLocalReplicaEnrollmentV2 | "rejected">
-  readonly projectIndex: LocalProjectIndexEnrollmentInstallPortV2
-  readonly cache: Pick<DurableLocalReplicaAuthorityCacheV2, "install">
-}): Promise<Readonly<{ enrollment: LocalReplicaAuthorityCacheRecordV2; publicKey: PublicKey }> | "rejected"> {
+  readonly vault: Pick<ElectronReplicaSigningVault, "createReplicaKey">
+  prepareEnrollment(publicKey: PublicKey): Promise<VerifiedLocalReplicaEnrollment | "rejected">
+  readonly projectIndex: LocalProjectIndexEnrollmentInstallPort
+  readonly cache: Pick<DurableLocalReplicaAuthorityCache, "install">
+}): Promise<Readonly<{ enrollment: LocalReplicaAuthorityCacheRecord; publicKey: PublicKey }> | "rejected"> {
   const identity = Object.freeze({
     projectId: parseProjectId(input.identity.projectId),
     projectEpoch: parseId128(input.identity.projectEpoch),
@@ -307,7 +307,7 @@ export async function enrollNewLocalProjectReplicaV2(input: {
   return Object.freeze({ enrollment: record, publicKey: key.publicKey })
 }
 
-interface LocalAuthorityPointerV2 {
+interface LocalAuthorityPointer {
   readonly format: typeof POINTER_FORMAT
   readonly selector: Digest
   readonly membershipSequence: Uint64
@@ -315,7 +315,7 @@ interface LocalAuthorityPointerV2 {
   readonly recordDigest: Digest
 }
 
-interface LocalReplicaProjectBindingV2 {
+interface LocalReplicaProjectBinding {
   readonly format: typeof PROJECT_BINDING_FORMAT
   readonly selector: Digest
   readonly projectId: ProjectId
@@ -325,7 +325,7 @@ interface LocalReplicaProjectBindingV2 {
   readonly recordDigest: Digest
 }
 
-function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecordV2 {
+function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecord {
   assertExactKeys(value, [
     "format", "projectId", "projectEpoch", "actorId", "membershipSequence", "controlEvidenceDigest",
     "protocolDigest", "role", "editState", "replicaSigningPublicKey", "signerAuthority", "dependencies",
@@ -412,7 +412,7 @@ function projectBindingSelectorDigest(input: { readonly projectId: ProjectId; re
   })))
 }
 
-function parseProjectBinding(value: unknown, selector: Digest): LocalReplicaProjectBindingV2 {
+function parseProjectBinding(value: unknown, selector: Digest): LocalReplicaProjectBinding {
   assertExactKeys(
     value,
     ["format", "selector", "projectId", "projectEpoch", "actorId", "replicaId", "recordDigest"],
@@ -437,7 +437,7 @@ function parseProjectBinding(value: unknown, selector: Digest): LocalReplicaProj
   })
 }
 
-function parsePointer(value: unknown, selector: Digest): LocalAuthorityPointerV2 {
+function parsePointer(value: unknown, selector: Digest): LocalAuthorityPointer {
   assertExactKeys(value, ["format", "selector", "membershipSequence", "controlEvidenceDigest", "recordDigest"], "local authority pointer")
   if (value.format !== POINTER_FORMAT || parseDigest(value.selector) !== selector) {
     throw new TypeError("Local authority pointer crossed identity")

@@ -9,7 +9,7 @@ import {
   type DocumentScope,
   type IncomingFrameResult,
 } from "@convax/collaboration"
-import { peerControlCodecV2 } from "@convax/project/collaboration-protocol"
+import { peerControlCodec } from "@convax/project/collaboration-protocol"
 
 import {
   CollaborationPeerJsTransport,
@@ -19,10 +19,10 @@ import {
   type PeerJsLikePeer,
 } from "./peerjs-transport"
 import {
-  CollaborationSessionOrchestratorV2,
-  type CollaborationKernelEndpointV2,
-  type CollaborationPeerAdmissionV2,
-  type CollaborationPeerSessionPrincipalV2,
+  CollaborationSessionOrchestrator,
+  type CollaborationKernelEndpoint,
+  type CollaborationPeerAdmission,
+  type CollaborationPeerSessionPrincipal,
 } from "./session-orchestrator"
 
 type ConnectionEvent = "open" | "data" | "close" | "error"
@@ -120,7 +120,7 @@ class FakePeerNetwork {
   }
 }
 
-class FakeKernelEndpoint implements CollaborationKernelEndpointV2 {
+class FakeKernelEndpoint implements CollaborationKernelEndpoint {
   readonly durable = new Map<Digest, Uint8Array>()
   readonly accepted = new Set<Digest>()
   readonly received: Uint8Array[] = []
@@ -160,7 +160,7 @@ const deterministicSignature = parseSignature(
   encodeBase64url(Uint8Array.from({ length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0)),
 )
 
-function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmissionV2 {
+function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmission {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
   const credential = (peerId: string) => ordinarySha256(encoder.encode(`credential:${peerId}`))
@@ -171,7 +171,7 @@ function admission(localPeerId: string, remotePeerId: string, network: FakePeerN
       const connectionId = parseId128(decoder.decode(exactBytes))
       if (connectionId !== currentConnection()) return "rejected"
       const channelOpen = (channel: string) => ordinarySha256(encoder.encode(`${connectionId}:${channel}`))
-      const principal: CollaborationPeerSessionPrincipalV2 = {
+      const principal: CollaborationPeerSessionPrincipal = {
         connectionId,
         localCredentialDigest: credential(localPeerId),
         remoteCredentialDigest: credential(remotePeerId),
@@ -195,9 +195,9 @@ function createOrchestrator(input: {
   network: FakePeerNetwork
   capturedWire: Array<{ channel: string; bytes: Uint8Array }>
   idFillStart: number
-}): CollaborationSessionOrchestratorV2 {
+}): CollaborationSessionOrchestrator {
   let idFill = input.idFillStart
-  return new CollaborationSessionOrchestratorV2({
+  return new CollaborationSessionOrchestrator({
     localPeerId: input.localPeerId,
     admission: admission(input.localPeerId, input.remotePeerId, input.network),
     createProtocolId: () => parseId128(encodeBase64url(new Uint8Array(16).fill(idFill++))),
@@ -221,13 +221,13 @@ function createOrchestrator(input: {
   })
 }
 
-async function settle(...orchestrators: CollaborationSessionOrchestratorV2[]): Promise<void> {
+async function settle(...orchestrators: CollaborationSessionOrchestrator[]): Promise<void> {
   for (let pass = 0; pass < 20; pass += 1) {
     for (const orchestrator of orchestrators) await orchestrator.idle()
   }
 }
 
-describe("Main R5 collaboration session orchestrator", () => {
+describe("Main current collaboration session orchestrator", () => {
   test("retains offline frames, reconnects over exact CVXPEER2, converges exact bytes and records durable proof ACKs", async () => {
     const network = new FakePeerNetwork()
     const alphaWire: Array<{ channel: string; bytes: Uint8Array }> = []
@@ -274,13 +274,13 @@ describe("Main R5 collaboration session orchestrator", () => {
 
     const allWire = [...alphaWire, ...omegaWire]
     expect(allWire.length).toBeGreaterThan(0)
-    const decoded = allWire.map(({ channel, bytes }) => ({ channel, message: peerControlCodecV2.decodeMessageWire(bytes) }))
+    const decoded = allWire.map(({ channel, bytes }) => ({ channel, message: peerControlCodec.decodeMessageWire(bytes) }))
     expect(decoded.every(({ channel, message }) => message.core.channel === channel)).toBe(true)
     expect(decoded.some(({ message }) => message.core.bodyKind === "control.transfer-offer")).toBe(true)
     expect(decoded.some(({ message }) => message.core.bodyKind === "update.transfer-chunk")).toBe(true)
     expect(decoded.some(({ message }) => message.core.bodyKind === "control.transfer-ack")).toBe(true)
     for (const { message } of decoded.filter(({ channel }) => channel === "control")) {
-      const body = peerControlCodecV2.decodeControlBody(message.body, message.core.bodyKind)
+      const body = peerControlCodec.decodeControlBody(message.body, message.core.bodyKind)
       expect(["transfer-offer", "transfer-accept", "transfer-ack"]).toContain(body.kind)
       if (body.kind === "transfer-ack") expect(body.durabilityProofDigest).not.toBeNull()
     }

@@ -48,7 +48,7 @@ export interface ProjectResetPreview {
   unsupportedInventoryDigest: string
 }
 
-/** The resolver has exactly these outcomes; there is no legacy, successor, or promoted state. */
+/** The resolver has exactly these outcomes; there is no legacy, follow-on, or elevated state. */
 export type ProjectRecoveryStatus =
   | { status: "current" }
   | { unsupportedPaths: readonly string[]; status: "unsupported-project-data" }

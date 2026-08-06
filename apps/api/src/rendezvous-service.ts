@@ -27,19 +27,19 @@ import {
   type Uint64,
 } from "@convax/collaboration"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  type ActivePeerDirectoryCoreV2,
-  type ActivePeerDirectoryV2,
-  type CollaborationEditStateV2,
-  type CollaborationRoleV2,
-  type PeerFreshnessTicketCoreV2,
-  type PeerFreshnessTicketV2,
-  type PeerTicketRequestV2,
-  type SessionChallengeCoreV2,
-  type SessionChallengeV2,
-  type SessionCredentialCoreV2,
-  type SessionCredentialV2,
-  type SessionProofV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  type ActivePeerDirectoryCore,
+  type ActivePeerDirectory,
+  type CollaborationEditState,
+  type CollaborationRole,
+  type PeerFreshnessTicketCore,
+  type PeerFreshnessTicket,
+  type PeerTicketRequest,
+  type SessionChallengeCore,
+  type SessionChallenge,
+  type SessionCredentialCore,
+  type SessionCredential,
+  type SessionProof,
 } from "@convax/project/collaboration-protocol"
 import type { AtomicControlStateStore, ControlClock, ControlRandomSource } from "./contracts"
 import type { CollaborationTeamAuthorityStateV2 } from "./membership-service"
@@ -57,7 +57,7 @@ export interface CollaborationReplicaSeedV2 {
   readonly actorId: ActorId
   readonly replicaAuthorizationEpoch: Id128
   readonly replicaSigningPublicKey: PublicKey
-  readonly editState: CollaborationEditStateV2
+  readonly editState: CollaborationEditState
   readonly sessionCounter: Uint64
   readonly active: boolean
 }
@@ -65,7 +65,7 @@ export interface CollaborationReplicaSeedV2 {
 export interface CollaborationMemberSeedV2 {
   readonly memberId: MemberId
   readonly memberAuthorizationEpoch: Id128
-  readonly role: CollaborationRoleV2
+  readonly role: CollaborationRole
   readonly active: boolean
   readonly replicas: readonly CollaborationReplicaSeedV2[]
 }
@@ -171,12 +171,12 @@ export function createSessionDirectoryAuthorizationFactoryV2(verifier: {
 }
 
 interface SessionChallengeRecordV2 {
-  readonly challenge: SessionChallengeV2
+  readonly challenge: SessionChallenge
   readonly consumedProofDigest: Digest | null
 }
 
 interface SessionRecordV2 {
-  readonly credential: SessionCredentialV2
+  readonly credential: SessionCredential
   readonly proofDigest: Digest
   readonly closed: boolean
 }
@@ -184,11 +184,11 @@ interface SessionRecordV2 {
 interface TicketRecordV2 {
   readonly requestId: Id128
   readonly requestDigest: Digest
-  readonly ticket: PeerFreshnessTicketV2
+  readonly ticket: PeerFreshnessTicket
 }
 
 export interface CollaborationControlProjectStateV2 {
-  readonly format: "convax.control-project-state/2"
+  readonly format: "convax.control-project-state"
   readonly seed: CollaborationProjectSeedV2
   readonly challenges: readonly SessionChallengeRecordV2[]
   readonly sessions: readonly SessionRecordV2[]
@@ -229,7 +229,7 @@ export class CollaborationRendezvousServiceV2 {
     await this.store.transact(seed.projectId, (transaction) => {
       if (transaction.read() !== null) fail("project-exists", "Collaboration Project is already provisioned")
       transaction.write({
-        format: "convax.control-project-state/2",
+        format: "convax.control-project-state",
         seed,
         challenges: [],
         sessions: [],
@@ -245,7 +245,7 @@ export class CollaborationRendezvousServiceV2 {
     readonly projectId: ProjectId
     readonly memberId: MemberId
     readonly replicaId: ReplicaId
-  }, authorization: SessionChallengeAuthorizationV2): Promise<SessionChallengeV2> {
+  }, authorization: SessionChallengeAuthorizationV2): Promise<SessionChallenge> {
     const projectId = parseProjectId(input.projectId)
     const memberId = parseMemberId(input.memberId)
     const replicaId = parseReplicaId(input.replicaId)
@@ -266,8 +266,8 @@ export class CollaborationRendezvousServiceV2 {
       )
       const sameReplica = liveChallenges.filter((record) => record.challenge.core.replicaId === replicaId)
       if (sameReplica.length >= MAX_PENDING_CHALLENGES) fail("capacity-exceeded", "Replica has four pending session challenges")
-      const core: SessionChallengeCoreV2 = Object.freeze({
-        format: "convax.session-challenge-core/2",
+      const core: SessionChallengeCore = Object.freeze({
+        format: "convax.session-challenge-core",
         challengeId: this.randomId128(),
         projectId: state.seed.projectId,
         projectEpoch: state.seed.projectEpoch,
@@ -278,19 +278,19 @@ export class CollaborationRendezvousServiceV2 {
         actorId: replica.actorId,
         expectedReplicaSessionCounter: incrementUint64(replica.sessionCounter),
         serverNonce: this.randomId128(),
-        sessionId: this.randomId128() as SessionChallengeCoreV2["sessionId"],
+        sessionId: this.randomId128() as SessionChallengeCore["sessionId"],
         leaseId: this.randomId128(),
         peerId: this.randomPeerId(),
         issuedAtUnixMs: now,
         expiresAtUnixMs: addU64(now, SESSION_CHALLENGE_TTL_MS),
-        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
         trustBundleDigest: state.seed.trustBundleDigest,
         serviceKeyPurpose: "membership",
         serviceKeyId: requireServiceKeyId(this.signatures.serviceKeyId("membership")),
       })
-      const coreDigest = structuredDigest("convax.session-challenge-core/2", core)
-      const challenge: SessionChallengeV2 = Object.freeze({
-        format: "convax.session-challenge/2",
+      const coreDigest = structuredDigest("convax.session-challenge-core", core)
+      const challenge: SessionChallenge = Object.freeze({
+        format: "convax.session-challenge",
         core,
         coreDigest,
         serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", coreDigest)),
@@ -303,7 +303,7 @@ export class CollaborationRendezvousServiceV2 {
     })
   }
 
-  async issueSessionCredential(proofInput: SessionProofV2): Promise<SessionCredentialV2> {
+  async issueSessionCredential(proofInput: SessionProof): Promise<SessionCredential> {
     const proof = normalizeSessionProof(proofInput)
     return this.store.transact(proof.core.projectId, async (transaction) => {
       const state = requireState(transaction.read())
@@ -332,8 +332,8 @@ export class CollaborationRendezvousServiceV2 {
       if (!await this.signatures.verifyPublicKeyDigest(replica.replicaSigningPublicKey, proof.coreDigest, proof.replicaSignature)) {
         fail("invalid-proof", "Replica signature is invalid")
       }
-      const core: SessionCredentialCoreV2 = Object.freeze({
-        format: "convax.session-credential-core/2",
+      const core: SessionCredentialCore = Object.freeze({
+        format: "convax.session-credential-core",
         projectId: state.seed.projectId,
         projectEpoch: state.seed.projectEpoch,
         membershipEpoch: state.seed.membershipEpoch,
@@ -357,16 +357,16 @@ export class CollaborationRendezvousServiceV2 {
         sessionProofDigest: proof.coreDigest,
         issuedAtUnixMs: now,
         expiresAtUnixMs: proof.core.requestedExpiresAtUnixMs,
-        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
         schemaDigest: state.seed.schemaDigest,
         validationArtifactSetDigest: state.seed.validationArtifactSetDigest,
         trustBundleDigest: state.seed.trustBundleDigest,
         serviceKeyPurpose: "membership",
         serviceKeyId: requireServiceKeyId(this.signatures.serviceKeyId("membership")),
       })
-      const coreDigest = structuredDigest("convax.session-credential-core/2", core)
-      const credential: SessionCredentialV2 = Object.freeze({
-        format: "convax.session-credential/2",
+      const coreDigest = structuredDigest("convax.session-credential-core", core)
+      const credential: SessionCredential = Object.freeze({
+        format: "convax.session-credential",
         core,
         coreDigest,
         serviceSignature: parseSignature(await this.signatures.signServiceDigest("membership", coreDigest)),
@@ -398,7 +398,7 @@ export class CollaborationRendezvousServiceV2 {
   async getActivePeerDirectory(
     projectIdInput: ProjectId,
     authorization: SessionDirectoryAuthorizationV2,
-  ): Promise<ActivePeerDirectoryV2> {
+  ): Promise<ActivePeerDirectory> {
     const projectId = parseProjectId(projectIdInput)
     const authority = liveSessionDirectoryAuthorizations.get(authorization)
     if (!authority || authority.projectId !== projectId) {
@@ -424,8 +424,8 @@ export class CollaborationRendezvousServiceV2 {
         leaseId: credential.core.leaseId,
       })).sort((left, right) => left.replicaId.localeCompare(right.replicaId))
       const directorySequence = incrementUint64(state.directorySequence)
-      const core: ActivePeerDirectoryCoreV2 = Object.freeze({
-        format: "convax.active-peer-directory-core/2",
+      const core: ActivePeerDirectoryCore = Object.freeze({
+        format: "convax.active-peer-directory-core",
         projectId: state.seed.projectId,
         projectEpoch: state.seed.projectEpoch,
         membershipEpoch: state.seed.membershipEpoch,
@@ -434,14 +434,14 @@ export class CollaborationRendezvousServiceV2 {
         peers,
         issuedAtUnixMs: now,
         expiresAtUnixMs: addU64(now, DIRECTORY_TTL_MS),
-        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
         trustBundleDigest: state.seed.trustBundleDigest,
         serviceKeyPurpose: "rendezvous",
         serviceKeyId: requireServiceKeyId(this.signatures.serviceKeyId("rendezvous")),
       })
-      const coreDigest = structuredDigest("convax.active-peer-directory-core/2", core)
-      const directory: ActivePeerDirectoryV2 = Object.freeze({
-        format: "convax.active-peer-directory/2",
+      const coreDigest = structuredDigest("convax.active-peer-directory-core", core)
+      const directory: ActivePeerDirectory = Object.freeze({
+        format: "convax.active-peer-directory",
         core,
         coreDigest,
         serviceSignature: parseSignature(await this.signatures.signServiceDigest("rendezvous", coreDigest)),
@@ -451,7 +451,7 @@ export class CollaborationRendezvousServiceV2 {
     })
   }
 
-  async issuePeerFreshnessTicket(projectIdInput: ProjectId, requestInput: PeerTicketRequestV2): Promise<PeerFreshnessTicketV2> {
+  async issuePeerFreshnessTicket(projectIdInput: ProjectId, requestInput: PeerTicketRequest): Promise<PeerFreshnessTicket> {
     const projectId = parseProjectId(projectIdInput)
     const request = normalizePeerTicketRequest(requestInput)
     return this.store.transact(projectId, async (transaction) => {
@@ -473,8 +473,8 @@ export class CollaborationRendezvousServiceV2 {
         request.coreDigest,
         request.requesterSessionSignature,
       )) fail("invalid-proof", "Requester session signature is invalid")
-      const core: PeerFreshnessTicketCoreV2 = Object.freeze({
-        format: "convax.peer-freshness-ticket-core/2",
+      const core: PeerFreshnessTicketCore = Object.freeze({
+        format: "convax.peer-freshness-ticket-core",
         ticketId: this.randomId128(),
         requestDigest: request.coreDigest,
         connectionId: request.core.connectionId,
@@ -488,15 +488,15 @@ export class CollaborationRendezvousServiceV2 {
         responderPeerId: request.core.responderPeerId,
         issuedAtUnixMs: now,
         expiresAtUnixMs: addU64(now, TICKET_TTL_MS),
-        channelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest),
-        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+        channelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.channelContractDigest),
+        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
         trustBundleDigest: state.seed.trustBundleDigest,
         serviceKeyPurpose: "rendezvous",
         serviceKeyId: requireServiceKeyId(this.signatures.serviceKeyId("rendezvous")),
       })
-      const coreDigest = structuredDigest("convax.peer-freshness-ticket-core/2", core)
-      const ticket: PeerFreshnessTicketV2 = Object.freeze({
-        format: "convax.peer-freshness-ticket/2",
+      const coreDigest = structuredDigest("convax.peer-freshness-ticket-core", core)
+      const ticket: PeerFreshnessTicket = Object.freeze({
+        format: "convax.peer-freshness-ticket",
         core,
         coreDigest,
         serviceSignature: parseSignature(await this.signatures.signServiceDigest("rendezvous", coreDigest)),
@@ -564,7 +564,7 @@ function uniqueReplicaId(value: ReplicaId, seen: Set<string>): ReplicaId {
   return value
 }
 
-function normalizeSessionProof(input: SessionProofV2): SessionProofV2 {
+function normalizeSessionProof(input: SessionProof): SessionProof {
   assertExactKeys(input, ["format", "core", "coreDigest", "replicaSignature"], "session proof")
   assertExactKeys(input.core, [
     "format", "challengeDigest", "projectId", "projectEpoch", "membershipEpoch", "membershipSnapshotDigest",
@@ -572,7 +572,7 @@ function normalizeSessionProof(input: SessionProofV2): SessionProofV2 {
     "replicaSessionCounter", "serverNonce", "sessionId", "leaseId", "peerId", "sessionSigningPublicKey",
     "requestedExpiresAtUnixMs", "protocolDigest",
   ], "session proof core")
-  if (input.format !== "convax.session-proof/2" || input.core.format !== "convax.session-proof-core/2") {
+  if (input.format !== "convax.session-proof" || input.core.format !== "convax.session-proof-core") {
     fail("invalid-proof", "Session proof format is invalid")
   }
   const core = Object.freeze({
@@ -597,17 +597,17 @@ function normalizeSessionProof(input: SessionProofV2): SessionProofV2 {
     protocolDigest: parseDigest(input.core.protocolDigest),
   })
   const coreDigest = parseDigest(input.coreDigest)
-  if (structuredDigest("convax.session-proof-core/2", core) !== coreDigest) fail("invalid-proof", "Session proof digest is invalid")
-  return Object.freeze({ format: "convax.session-proof/2", core, coreDigest, replicaSignature: parseSignature(input.replicaSignature) })
+  if (structuredDigest("convax.session-proof-core", core) !== coreDigest) fail("invalid-proof", "Session proof digest is invalid")
+  return Object.freeze({ format: "convax.session-proof", core, coreDigest, replicaSignature: parseSignature(input.replicaSignature) })
 }
 
-function normalizePeerTicketRequest(input: PeerTicketRequestV2): PeerTicketRequestV2 {
+function normalizePeerTicketRequest(input: PeerTicketRequest): PeerTicketRequest {
   assertExactKeys(input, ["format", "core", "coreDigest", "requesterSessionSignature"], "peer ticket request")
   assertExactKeys(input.core, [
     "format", "requestId", "connectionId", "requesterCredentialDigest", "responderCredentialDigest",
     "requesterPeerId", "responderPeerId", "requesterNonce", "protocolDigest",
   ], "peer ticket request core")
-  if (input.format !== "convax.peer-ticket-request/2" || input.core.format !== "convax.peer-ticket-request-core/2") {
+  if (input.format !== "convax.peer-ticket-request" || input.core.format !== "convax.peer-ticket-request-core") {
     fail("invalid-proof", "Peer ticket request format is invalid")
   }
   const core = Object.freeze({
@@ -622,9 +622,9 @@ function normalizePeerTicketRequest(input: PeerTicketRequestV2): PeerTicketReque
     protocolDigest: parseDigest(input.core.protocolDigest),
   })
   const coreDigest = parseDigest(input.coreDigest)
-  if (structuredDigest("convax.peer-ticket-request-core/2", core) !== coreDigest) fail("invalid-proof", "Peer ticket request digest is invalid")
+  if (structuredDigest("convax.peer-ticket-request-core", core) !== coreDigest) fail("invalid-proof", "Peer ticket request digest is invalid")
   return Object.freeze({
-    format: "convax.peer-ticket-request/2",
+    format: "convax.peer-ticket-request",
     core,
     coreDigest,
     requesterSessionSignature: parseSignature(input.requesterSessionSignature),
@@ -632,8 +632,8 @@ function normalizePeerTicketRequest(input: PeerTicketRequestV2): PeerTicketReque
 }
 
 function assertProofBinding(
-  proof: SessionProofV2,
-  challenge: SessionChallengeCoreV2,
+  proof: SessionProof,
+  challenge: SessionChallengeCore,
   seed: CollaborationProjectSeedV2,
   member: CollaborationMemberSeedV2,
   replica: CollaborationReplicaSeedV2,
@@ -681,16 +681,16 @@ function requireActiveReplica(seed: CollaborationProjectSeedV2, memberId: Member
 }
 
 function requireState(value: CollaborationControlProjectStateV2 | null): CollaborationControlProjectStateV2 {
-  if (value === null || value.format !== "convax.control-project-state/2") fail("not-found", "Collaboration Project is not provisioned")
+  if (value === null || value.format !== "convax.control-project-state") fail("not-found", "Collaboration Project is not provisioned")
   return value
 }
 
-function requireRole(value: CollaborationRoleV2): CollaborationRoleV2 {
+function requireRole(value: CollaborationRole): CollaborationRole {
   if (value !== "viewer" && value !== "editor") fail("invalid-proof", "Collaboration role is invalid")
   return value
 }
 
-function requireEditState(value: CollaborationEditStateV2): CollaborationEditStateV2 {
+function requireEditState(value: CollaborationEditState): CollaborationEditState {
   if (value !== "none" && value !== "pending-editor" && value !== "active-editor") fail("invalid-proof", "Edit state is invalid")
   return value
 }

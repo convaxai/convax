@@ -21,7 +21,7 @@ describe("Desktop staged current protocol loader", () => {
     const authority = await loadCurrentCollaborationProtocol({ explicitProtocolRoot: root });
 
     expect(authority.protocolDigest).toBe(
-      parseDigest("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
+      parseDigest("6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993"),
     );
   });
 

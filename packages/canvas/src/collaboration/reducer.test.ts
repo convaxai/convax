@@ -1,37 +1,37 @@
 import { describe, expect, test } from "bun:test"
 import { comparePortableStamps, compareUtf8, parseUint32, parseUint64 } from "@convax/collaboration"
 import {
-  buildCanvasProjectionIndexV2,
-  effectiveDataDigestV2,
-  effectivePluginDigestV2,
-  generationLifecycleCoreV2,
-  generationLifecycleDigestV2,
-  geometryDigestV2,
-  obstacleProjectionDigestV2,
+  buildCanvasProjectionIndex,
+  effectiveDataDigest,
+  effectivePluginDigest,
+  generationLifecycleCore,
+  generationLifecycleDigest,
+  geometryDigest,
+  obstacleProjectionDigest,
   projectedGenerationDigestV2,
-  projectionDigestV2,
+  projectionDigest,
 } from "./projection"
-import { applyCanvasCandidateIntentV2, materializeCanvasSemanticHistoryIntentV2 } from "./reducer"
-import { discoverCanvasValueDependenciesV2 } from "./external-facts"
+import { applyCanvasCandidateIntent, materializeCanvasSemanticHistoryIntent } from "./reducer"
+import { discoverCanvasValueDependencies } from "./external-facts"
 import type {
-  CanvasExternalFactContextV2,
-  CanvasHistoryBindingV2,
-  CanvasSemanticOperationV2,
-  CanvasTypedIntentUnionV2,
-  PluginRequirementV2,
-  PluginStateEnvelopeV2,
-  SemanticHistoryRootV2,
-  SemanticHistoryTransitionV2,
+  CanvasExternalFactContext,
+  CanvasHistoryBinding,
+  CanvasSemanticOperation,
+  CanvasTypedIntentUnion,
+  PluginRequirement,
+  PluginStateEnvelope,
+  SemanticHistoryRoot,
+  SemanticHistoryTransition,
 } from "./types"
 import {
-  canvasDigestV2,
-  canvasEntityKeyV2,
-  deriveCanvasIdV2,
-  derivedEdgeRefV2,
-  derivedNodeRefV2,
-  makeStampV2,
+  canvasDigest,
+  canvasEntityKey,
+  deriveCanvasId,
+  derivedEdgeRef,
+  derivedNodeRef,
+  makeStamp,
 } from "./validation"
-import { encodeCanvasCanonicalStateV2, validateCanvasYDocV2 } from "./ydoc"
+import { encodeCanvasCanonicalState, validateCanvasYDoc } from "./ydoc"
 import {
   applyOk,
   context,
@@ -54,12 +54,12 @@ describe("Canvas v2 reducer and merge invariants", () => {
   test("emits an exact sorted eight-write ledger for node create", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)
-    const node = derivedNodeRefV2(operationContext, U0)
+    const node = derivedNodeRef(operationContext, U0)
     const result = applyOk(document, operationContext, nodeCreate(operationContext, "ledger"))
     expect(result.actualWriteEvidence.changedPaths).toEqual([...result.actualWriteEvidence.changedPaths].sort())
     expect(result.actualWriteEvidence.changedPaths).toHaveLength(8)
     expect(result.actualWriteEvidence.writes).toHaveLength(8)
-    expect(result.actualWriteEvidence.changedPaths).toContain(`nodes/${canvasEntityKeyV2(node)}/creationGroup`)
+    expect(result.actualWriteEvidence.changedPaths).toContain(`nodes/${canvasEntityKey(node)}/creationGroup`)
     expect(result.actualWriteEvidence.changedPaths).toContain(`semanticHistory/root/${operationContext.operationId}`)
     expect(result.actualWriteEvidence.changedPaths).toContain(
       `operations/operation/${operationContext.actorId}/${operationContext.operationId}`,
@@ -71,7 +71,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
   test("semantic inverse and forward use latest-state guards and recreate under a new incarnation", () => {
     const document = newCanvas()
     const rootContext = context(1, 40, 1)
-    const original = derivedNodeRefV2(rootContext, U0)
+    const original = derivedNodeRef(rootContext, U0)
     const rootResult = applyOk(document, rootContext, nodeCreate(rootContext, "history"))
     const root = rootResult.semanticHistoryRoot!
     const inverseTemplate = root.inverseTemplate[0]!
@@ -80,49 +80,49 @@ describe("Canvas v2 reducer and merge invariants", () => {
 
     const undoContext = context(2, 41, 2)
     const inverseMaterial = {
-      format: "convax.canvas-semantic-operation/2",
+      format: "convax.canvas-semantic-operation",
       template: inverseTemplate,
       materializedGuard: { op: "node.tombstone", guard: nodeLiveGuard(document, original) },
       derived: [],
       retainedResourceProofs: [],
     } as const
-    const inverseOperation: CanvasSemanticOperationV2 = {
+    const inverseOperation: CanvasSemanticOperation = {
       ...inverseMaterial,
       guardDigest: semanticGuardDigest(root, "inverse", inverseMaterial),
     }
     const undoGuard = semanticStateGuard(document, root)
     applyOk(document, undoContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.undo.semantic-inverse/2",
+      format: "convax.typed-intent",
+      kind: "canvas.undo.semantic-inverse",
       guard: { ...undoGuard, expectedMode: "applied" },
       body: { operations: [inverseOperation] },
     })
-    expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes).toEqual([])
+    expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toEqual([])
 
     const forwardTemplate = root.forwardTemplate[0]!
     expect(forwardTemplate.op).toBe("node.create")
     if (forwardTemplate.op !== "node.create") throw new Error("fixture history forward is not node.create")
     const redoContext = context(3, 42, 3)
-    const recreated = derivedNodeRefV2(redoContext, U0)
+    const recreated = derivedNodeRef(redoContext, U0)
     const forwardMaterial = {
-      format: "convax.canvas-semantic-operation/2",
+      format: "convax.canvas-semantic-operation",
       template: forwardTemplate,
       materializedGuard: { op: "node.create", guard: null },
       derived: [{ kind: "node", handle: forwardTemplate.handle, ordinal: U0, ref: recreated }],
       retainedResourceProofs: [],
     } as const
-    const forwardOperation: CanvasSemanticOperationV2 = {
+    const forwardOperation: CanvasSemanticOperation = {
       ...forwardMaterial,
       guardDigest: semanticGuardDigest(root, "forward", forwardMaterial),
     }
     const redoGuard = semanticStateGuard(document, root)
     applyOk(document, redoContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.redo.semantic-forward/2",
+      format: "convax.typed-intent",
+      kind: "canvas.redo.semantic-forward",
       guard: { ...redoGuard, expectedMode: "undone" },
       body: { operations: [forwardOperation] },
     })
-    const projected = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes
+    const projected = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes
     expect(projected.map((node) => node.ref)).toEqual([recreated])
     expect(recreated).not.toEqual(original)
   })
@@ -132,28 +132,28 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const rootContext = context(1, 45, 1)
     const root = applyOk(document, rootContext, nodeCreate(rootContext, "owner-materialized")).semanticHistoryRoot!
     const undoContext = context(2, 46, 2)
-    const undo = materializeCanvasSemanticHistoryIntentV2(
-      validateCanvasYDocV2(document),
+    const undo = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
       undoContext,
       "undo",
       root.rootOperationId,
     )
     expect(undo).not.toBe("rejected")
-    if (undo === "rejected" || undo.kind !== "canvas.undo.semantic-inverse/2") throw new Error("undo did not materialize")
+    if (undo === "rejected" || undo.kind !== "canvas.undo.semantic-inverse") throw new Error("undo did not materialize")
     applyOk(document, undoContext, undo)
-    expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes).toEqual([])
+    expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toEqual([])
 
     const redoContext = context(3, 47, 3)
-    const redo = materializeCanvasSemanticHistoryIntentV2(
-      validateCanvasYDocV2(document),
+    const redo = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
       redoContext,
       "redo",
       root.rootOperationId,
     )
     expect(redo).not.toBe("rejected")
-    if (redo === "rejected" || redo.kind !== "canvas.redo.semantic-forward/2") throw new Error("redo did not materialize")
+    if (redo === "rejected" || redo.kind !== "canvas.redo.semantic-forward") throw new Error("redo did not materialize")
     applyOk(document, redoContext, redo)
-    expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes).toHaveLength(1)
+    expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toHaveLength(1)
   })
 
   test("owner history materializer closes delete, move, connect and Plugin creation-group roots", () => {
@@ -162,20 +162,20 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const node = createAgent(document, context(10, 100, 1), "delete")
       const root = applyOk(document, context(11, 101, 2), removeNode(document, node)).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(12, 102, 3), context(13, 103, 4))
-      expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes).toEqual([])
+      expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toEqual([])
     }
     {
       const document = newCanvas()
       const node = createAgent(document, context(20, 110, 1), "move")
       const moveContext = context(21, 111, 2)
       const root = applyOk(document, moveContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.set-geometry/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.set-geometry",
         guard: { nodes: [{ ...nodeLiveGuard(document, node), expectedGeometryDigest: geometryDigestForTest(document, node) }] },
         body: { updates: [{ node, position: { x: 640, y: 320 }, size: null }] },
       }).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(22, 112, 3), context(23, 113, 4))
-      expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).nodesByKey.get(canvasEntityKeyV2(node))!.position).toEqual({ x: 640, y: 320 })
+      expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).nodesByKey.get(canvasEntityKey(node))!.position).toEqual({ x: 640, y: 320 })
     }
     {
       const document = newCanvas()
@@ -183,7 +183,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const target = createAgent(document, context(31, 121, 2), "target")
       const root = connect(document, source, target, context(32, 122, 3)).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(33, 123, 4), context(34, 124, 5))
-      expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.edges).toHaveLength(1)
+      expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.edges).toHaveLength(1)
     }
     {
       const document = newCanvas()
@@ -192,9 +192,9 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const root = applyOk(document, pluginContext, creationGroupIntent(document, source, pluginContext)).semanticHistoryRoot!
       const redoContext = context(43, 133, 4)
       const roundTrip = materializedRoundTrip(document, root, context(42, 132, 3), redoContext)
-      const dependencies = discoverCanvasValueDependenciesV2(redoContext, roundTrip.redo)
+      const dependencies = discoverCanvasValueDependencies(redoContext, roundTrip.redo)
       expect(dependencies === "rejected" ? [] : dependencies.validationArtifacts).toHaveLength(1)
-      const projection = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection
+      const projection = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection
       expect(projection.nodes).toHaveLength(2)
       expect(projection.edges).toHaveLength(1)
     }
@@ -212,28 +212,28 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const node = createAgent(document, context(53, 143, 1), "data-before")
       const updateContext = context(54, 144, 2)
       const root = applyOk(document, updateContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.update-data/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.update-data",
         guard: { node: nodeDataGuard(document, node), resourceProof: null },
-        body: { node, data: { format: "convax.canvas-node-data/2", kind: "agent", title: "data-after", instructions: "updated" } },
+        body: { node, data: { format: "convax.canvas-node-data", kind: "agent", title: "data-after", instructions: "updated" } },
       }).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(55, 145, 3), context(56, 146, 4))
     }
     {
       const document = newCanvas()
       const node = createAgent(document, context(57, 147, 1), "plugin-state")
-      const plugin: PluginStateEnvelopeV2 = {
-        format: "convax.canvas-plugin-state/2",
+      const plugin: PluginStateEnvelope = {
+        format: "convax.canvas-plugin-state",
         pluginId: "plugin.state",
         snapshotDigest: digest(150),
         pluginStateSchemaDigest: digest(151),
-        validationArtifact: { owner: "plugin", format: "convax.plugin-validation-artifact/2", artifactDigest: digest(152) },
+        validationArtifact: { owner: "plugin", format: "convax.plugin-validation-artifact", artifactDigest: digest(152) },
         state: { enabled: true },
       }
       const pluginContext = context(58, 148, 2)
       const root = applyOk(document, pluginContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.set-plugin-state/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.set-plugin-state",
         guard: { node: {
           ...nodeLiveGuard(document, node),
           expectedPluginDigest: null,
@@ -254,10 +254,10 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const group = createGroup(document, child, context(62, 152, 2), "parent-group")
       const parentContext = context(63, 153, 3)
       const root = applyOk(document, parentContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.set-structural-parent/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.set-structural-parent",
         guard: { child: { ...nodeLiveGuard(document, child), expectedOwnSlotDigest: null }, parent: null },
-        body: { child, parent: null, relationId: deriveCanvasIdV2("relation", parentContext, U0) },
+        body: { child, parent: null, relationId: deriveCanvasId("relation", parentContext, U0) },
       }).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(64, 154, 4), context(65, 155, 5))
       expect(group.kind).toBe("node")
@@ -275,18 +275,18 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const group = createGroup(document, child, context(71, 161, 2), "ungroup-root")
       const ungroupContext = context(72, 162, 3)
       const root = applyOk(document, ungroupContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.ungroup/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.ungroup",
         guard: {
           group: nodeLiveGuard(document, group),
           children: [{ ...nodeLiveGuard(document, child), expectedOwnSlotDigest: null }],
-          expectedEffectiveChildSetDigest: canvasDigestV2("convax.canvas-effective-child-set/2", {
-            format: "convax.canvas-effective-child-set/2",
+          expectedEffectiveChildSetDigest: canvasDigest("convax.canvas-effective-child-set", {
+            format: "convax.canvas-effective-child-set",
             group,
             children: [child],
           }),
         },
-        body: { group, children: [child], nullRelationIds: [deriveCanvasIdV2("relation", ungroupContext, U0)] },
+        body: { group, children: [child], nullRelationIds: [deriveCanvasId("relation", ungroupContext, U0)] },
       }).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(73, 163, 4), context(74, 164, 5))
     }
@@ -294,9 +294,9 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const document = newCanvas()
       const metadataContext = context(75, 165, 1)
       const root = applyOk(document, metadataContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.metadata.update/2",
-        guard: { fields: [{ field: "title", expectedEffectiveDigest: canvasDigestV2("convax.canvas-metadata-effective/2", { format: "convax.canvas-metadata-effective/2", field: "title", value: null }), expectedOwnSlotDigest: null }] },
+        format: "convax.typed-intent",
+        kind: "canvas.metadata.update",
+        guard: { fields: [{ field: "title", expectedEffectiveDigest: canvasDigest("convax.canvas-metadata-effective", { format: "convax.canvas-metadata-effective", field: "title", value: null }), expectedOwnSlotDigest: null }] },
         body: { fields: [{ field: "title", value: "Collaborative Canvas" }] },
       }).semanticHistoryRoot!
       materializedRoundTrip(document, root, context(76, 166, 2), context(77, 167, 3))
@@ -304,9 +304,9 @@ describe("Canvas v2 reducer and merge invariants", () => {
     {
       const document = newCanvas()
       const resourceContext = context(78, 168, 1)
-      const node = derivedNodeRefV2(resourceContext, U0)
+      const node = derivedNodeRef(resourceContext, U0)
       const resource = {
-        format: "convax.canvas-resource-ref/2" as const,
+        format: "convax.canvas-resource-ref" as const,
         uri: `convax-project://project/epochs/${context(1, 1, 1).operationId}/entries/pf_${"3".repeat(64)}`,
         mediaClass: "image" as const,
         mime: "image/png",
@@ -315,23 +315,23 @@ describe("Canvas v2 reducer and merge invariants", () => {
         ownerProofDigest: digest(171),
       }
       const root = applyOk(document, resourceContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.resources.add/2",
+        format: "convax.typed-intent",
+        kind: "canvas.resources.add",
         guard: {
           existingEndpoints: [],
           derivedNodes: [{ ordinal: U0, node, expectedAbsent: true }],
           derivedEdges: [],
-          resourceProofs: [{ createdNodeOrdinal: U0, proof: { format: "convax.canvas-resource-proof-ref/2", mode: "current-owner-state", resource, ownerProofDigest: resource.ownerProofDigest, requireCurrentLiveVersion: true } }],
+          resourceProofs: [{ createdNodeOrdinal: U0, proof: { format: "convax.canvas-resource-proof-ref", mode: "current-owner-state", resource, ownerProofDigest: resource.ownerProofDigest, requireCurrentLiveVersion: true } }],
         },
         body: {
-          placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigestV2(validateCanvasYDocV2(document)) },
+          placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
           nodes: [{ ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title: "resource-history", resource }],
           edges: [],
         },
       }).semanticHistoryRoot!
       const redoContext = context(80, 170, 3)
       const roundTrip = materializedRoundTrip(document, root, context(79, 169, 2), redoContext)
-      const dependencies = discoverCanvasValueDependenciesV2(redoContext, roundTrip.redo)
+      const dependencies = discoverCanvasValueDependencies(redoContext, roundTrip.redo)
       expect(dependencies === "rejected" ? [] : dependencies.externalFacts).toHaveLength(1)
     }
   })
@@ -339,10 +339,10 @@ describe("Canvas v2 reducer and merge invariants", () => {
   test("pending-generation history never restarts work and restores only a retained terminal lifecycle", () => {
     const document = newCanvas()
     const rootContext = context(81, 171, 1)
-    const node = derivedNodeRefV2(rootContext, U0)
-    const generationId = deriveCanvasIdV2("generation", rootContext, U0)
+    const node = derivedNodeRef(rootContext, U0)
+    const generationId = deriveCanvasId("generation", rootContext, U0)
     const pendingData = {
-      format: "convax.canvas-node-data/2" as const,
+      format: "convax.canvas-node-data" as const,
       kind: "placeholder" as const,
       owner: "generation" as const,
       title: "pending-generation-history",
@@ -354,34 +354,34 @@ describe("Canvas v2 reducer and merge invariants", () => {
       node,
       beginActorId: rootContext.actorId,
       beginAuthorizationEpochDigest: digest(172),
-      beginStamp: makeStampV2(rootContext, parseUint32("5")),
-      outputClaimStamp: makeStampV2(rootContext, parseUint32("6")),
+      beginStamp: makeStamp(rootContext, parseUint32("5")),
+      outputClaimStamp: makeStamp(rootContext, parseUint32("6")),
       toolRefDigest: digest(173),
       prompt: "generate once",
-      targetEffectiveDataDigest: canvasDigestV2("convax.canvas-effective-data/2", { format: "convax.canvas-effective-data/2", data: pendingData }),
+      targetEffectiveDataDigest: canvasDigest("convax.canvas-effective-data", { format: "convax.canvas-effective-data", data: pendingData }),
       targetPluginDigest: null,
     }
     const root = applyOk(document, rootContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.resources.pending-generation.create/2",
+      format: "convax.typed-intent",
+      kind: "canvas.resources.pending-generation.create",
       guard: { existingEndpoints: [], derivedNode: { ordinal: U0, node, expectedAbsent: true }, derivedEdges: [] },
       body: {
-        placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigestV2(validateCanvasYDocV2(document)) },
+        placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
         node: { ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title: pendingData.title, expectedClass: pendingData.expectedClass },
         edges: [],
         begin,
       },
     }).semanticHistoryRoot!
-    const lifecycleBase = validateCanvasYDocV2(document)
+    const lifecycleBase = validateCanvasYDoc(document)
     const terminalContext = context(81, 172, 2)
     applyOk(document, terminalContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.fail/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.fail",
       guard: {
         ...nodeLiveGuard(document, node),
         generationId,
-        beginDigest: canvasDigestV2("convax.canvas-generation-begin/2", begin),
-        expectedLifecycleDigest: generationLifecycleDigestV2(lifecycleBase, generationId),
+        beginDigest: canvasDigest("convax.canvas-generation-begin/2", begin),
+        expectedLifecycleDigest: generationLifecycleDigest(lifecycleBase, generationId),
         expectedTerminalDigest: null,
         expectedDismissalDigest: null,
         expectedRecoveryFailureDigest: null,
@@ -391,59 +391,59 @@ describe("Canvas v2 reducer and merge invariants", () => {
         phase: "failed",
         generationId,
         node,
-        beginDigest: canvasDigestV2("convax.canvas-generation-begin/2", begin),
+        beginDigest: canvasDigest("convax.canvas-generation-begin/2", begin),
         beginActorId: rootContext.actorId,
         failureCode: "generation-failed",
         publicMessage: null,
       } },
     })
     materializedRoundTrip(document, root, context(83, 173, 3), context(84, 174, 4))
-    const restored = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes[0]!
+    const restored = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes[0]!
     expect(restored.data).toMatchObject({ kind: "placeholder", owner: "manual-pending", state: { phase: "failed" } })
-    expect(validateCanvasYDocV2(document).generationBegins.size).toBe(1)
+    expect(validateCanvasYDoc(document).generationBegins.size).toBe(1)
   })
 
   test("semantic inverse rejects a new incident edge without changing the candidate", () => {
     const document = newCanvas()
     const rootContext = context(1, 50, 1)
-    const node = derivedNodeRefV2(rootContext, U0)
+    const node = derivedNodeRef(rootContext, U0)
     const root = applyOk(document, rootContext, nodeCreate(rootContext, "root")).semanticHistoryRoot!
     const other = createAgent(document, context(2, 51, 2), "other")
     connect(document, node, other, context(3, 52, 3))
     const template = root.inverseTemplate[0]!
     if (template.op !== "node.tombstone") throw new Error("fixture history inverse is not node.tombstone")
     const operationMaterial = {
-      format: "convax.canvas-semantic-operation/2",
+      format: "convax.canvas-semantic-operation",
       template,
       materializedGuard: { op: "node.tombstone", guard: nodeLiveGuard(document, node) },
       derived: [],
       retainedResourceProofs: [],
     } as const
-    const operation: CanvasSemanticOperationV2 = {
+    const operation: CanvasSemanticOperation = {
       ...operationMaterial,
       guardDigest: semanticGuardDigest(root, "inverse", operationMaterial),
     }
-    const before = encodeCanvasCanonicalStateV2(document)
+    const before = encodeCanvasCanonicalState(document)
     expect(
-      applyCanvasCandidateIntentV2(
+      applyCanvasCandidateIntent(
         document,
         context(4, 53, 4),
         {
-          format: "convax.typed-intent/2",
-          kind: "canvas.undo.semantic-inverse/2",
+          format: "convax.typed-intent",
+          kind: "canvas.undo.semantic-inverse",
           guard: { ...semanticStateGuard(document, root), expectedMode: "applied" },
           body: { operations: [operation] },
         },
         VALID_FACTS,
       ),
     ).toBe("rejected")
-    expect(encodeCanvasCanonicalStateV2(document)).toEqual(before)
+    expect(encodeCanvasCanonicalState(document)).toEqual(before)
   })
 
   test("concurrent semantic forwards retain both facts but project only the deterministic winner", () => {
     const document = newCanvas()
     const rootContext = context(1, 60, 1)
-    const original = derivedNodeRefV2(rootContext, U0)
+    const original = derivedNodeRef(rootContext, U0)
     const root = applyOk(document, rootContext, nodeCreate(rootContext, "concurrent-redo")).semanticHistoryRoot!
     applyOk(document, context(2, 61, 2), semanticUndoIntent(document, root, original))
 
@@ -451,18 +451,18 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const right = fork(document)
     const leftContext = context(3, 62, 3)
     const rightContext = context(4, 63, 3)
-    const leftRef = derivedNodeRefV2(leftContext, U0)
-    const rightRef = derivedNodeRefV2(rightContext, U0)
+    const leftRef = derivedNodeRef(leftContext, U0)
+    const rightRef = derivedNodeRef(rightContext, U0)
     applyOk(left, leftContext, semanticRedoIntent(document, root, leftContext))
     applyOk(right, rightContext, semanticRedoIntent(document, root, rightContext))
 
     const first = merge(document, [left, right], [0, 1])
     const second = merge(document, [left, right], [1, 0], 1)
-    expect(encodeCanvasCanonicalStateV2(first)).toEqual(encodeCanvasCanonicalStateV2(second))
-    const projected = buildCanvasProjectionIndexV2(validateCanvasYDocV2(first)).projection.nodes
+    expect(encodeCanvasCanonicalState(first)).toEqual(encodeCanvasCanonicalState(second))
+    const projected = buildCanvasProjectionIndex(validateCanvasYDoc(first)).projection.nodes
     expect(projected).toHaveLength(1)
     expect([leftRef, rightRef]).toContainEqual(projected[0]!.ref)
-    expect(validateCanvasYDocV2(first).nodes.size).toBe(3)
+    expect(validateCanvasYDoc(first).nodes.size).toBe(3)
   })
 
   test("permutations and duplicate delivery of independent frames converge", () => {
@@ -478,12 +478,12 @@ describe("Canvas v2 reducer and merge invariants", () => {
       merge(base, branches, [0, 1], 0),
       merge(base, branches, [1, 0], 1),
     ]
-    const expected = encodeCanvasCanonicalStateV2(schedules[0]!)
-    const projection = projectionDigestV2(validateCanvasYDocV2(schedules[0]!))
+    const expected = encodeCanvasCanonicalState(schedules[0]!)
+    const projection = projectionDigest(validateCanvasYDoc(schedules[0]!))
     for (const document of schedules) {
-      expect(encodeCanvasCanonicalStateV2(document)).toEqual(expected)
-      expect(projectionDigestV2(validateCanvasYDocV2(document))).toBe(projection)
-      expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes).toHaveLength(2)
+      expect(encodeCanvasCanonicalState(document)).toEqual(expected)
+      expect(projectionDigest(validateCanvasYDoc(document))).toBe(projection)
+      expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toHaveLength(2)
     }
   })
 
@@ -492,11 +492,11 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const source = createAgent(base, context(1, 1, 1), "source")
     const target = createAgent(base, context(2, 2, 2), "target")
     const edgeContext = context(3, 3, 3)
-    const edge = derivedEdgeRefV2(edgeContext, U0)
+    const edge = derivedEdgeRef(edgeContext, U0)
     const edgeBranch = fork(base)
     applyOk(edgeBranch, edgeContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.edges.connect/2",
+      format: "convax.typed-intent",
+      kind: "canvas.edges.connect",
       guard: {
         edge: { ordinal: U0, edge, expectedAbsent: true },
         source: { ...nodeLiveGuard(base, source), expectedConnectable: true },
@@ -509,7 +509,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
           incarnation: edge.incarnation,
           source,
           target,
-          data: { format: "convax.canvas-edge-data/2", kind: "business", label: null },
+          data: { format: "convax.canvas-edge-data", kind: "business", label: null },
         },
       },
     })
@@ -521,10 +521,10 @@ describe("Canvas v2 reducer and merge invariants", () => {
       [1, 0],
     ] as const) {
       const merged = merge(base, [edgeBranch, deleteBranch], order)
-      const snapshot = validateCanvasYDocV2(merged)
-      expect(snapshot.edges.has(canvasEntityKeyV2(edge))).toBeTrue()
-      expect(buildCanvasProjectionIndexV2(snapshot).projection.edges).toEqual([])
-      expect(buildCanvasProjectionIndexV2(snapshot).projection.nodes.map((node) => node.ref)).toEqual([target])
+      const snapshot = validateCanvasYDoc(merged)
+      expect(snapshot.edges.has(canvasEntityKey(edge))).toBeTrue()
+      expect(buildCanvasProjectionIndex(snapshot).projection.edges).toEqual([])
+      expect(buildCanvasProjectionIndex(snapshot).projection.nodes.map((node) => node.ref)).toEqual([target])
     }
   })
 
@@ -541,8 +541,8 @@ describe("Canvas v2 reducer and merge invariants", () => {
       child: { mode: "external", ref: child },
       parent: { mode: "handle", handle: "n/0" },
     })
-    const projectedChild = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection.nodes.find(
-      (node) => canvasEntityKeyV2(node.ref) === canvasEntityKeyV2(child),
+    const projectedChild = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes.find(
+      (node) => canvasEntityKey(node.ref) === canvasEntityKey(child),
     )!
     expect(projectedChild.parent).toBeNull()
   })
@@ -553,18 +553,18 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const pluginContext = context(2, 2, 2)
     const pluginIntent = creationGroupIntent(base, source, pluginContext)
     const pending = fork(base)
-    const before = encodeCanvasCanonicalStateV2(pending)
-    const pendingFacts: CanvasExternalFactContextV2 = { ...VALID_FACTS, validatePluginArtifact: () => "pending" }
-    expect(applyCanvasCandidateIntentV2(pending, pluginContext, pluginIntent, pendingFacts)).toBe("pending")
-    expect(encodeCanvasCanonicalStateV2(pending)).toEqual(before)
+    const before = encodeCanvasCanonicalState(pending)
+    const pendingFacts: CanvasExternalFactContext = { ...VALID_FACTS, validatePluginArtifact: () => "pending" }
+    expect(applyCanvasCandidateIntent(pending, pluginContext, pluginIntent, pendingFacts)).toBe("pending")
+    expect(encodeCanvasCanonicalState(pending)).toEqual(before)
     const mismatched = fork(base)
     const mismatchedIntent = structuredClone(pluginIntent) as typeof pluginIntent
     ;(mismatchedIntent.body.nodes[0]!.plugin as { validationArtifact: unknown }).validationArtifact = {
       ...mismatchedIntent.body.nodes[0]!.plugin!.validationArtifact,
       artifactDigest: digest(99),
     }
-    expect(applyCanvasCandidateIntentV2(mismatched, pluginContext, mismatchedIntent, VALID_FACTS)).toBe("rejected")
-    expect(encodeCanvasCanonicalStateV2(mismatched)).toEqual(before)
+    expect(applyCanvasCandidateIntent(mismatched, pluginContext, mismatchedIntent, VALID_FACTS)).toBe("rejected")
+    expect(encodeCanvasCanonicalState(mismatched)).toEqual(before)
 
     const pluginBranch = fork(base)
     applyOk(pluginBranch, pluginContext, pluginIntent)
@@ -574,14 +574,14 @@ describe("Canvas v2 reducer and merge invariants", () => {
       merge(base, [pluginBranch, deleteBranch], [0, 1]),
       merge(base, [pluginBranch, deleteBranch], [1, 0], 0),
     ]
-    const expected = encodeCanvasCanonicalStateV2(schedules[0]!)
+    const expected = encodeCanvasCanonicalState(schedules[0]!)
     for (const merged of schedules) {
-      const snapshot = validateCanvasYDocV2(merged)
-      expect(encodeCanvasCanonicalStateV2(merged)).toEqual(expected)
+      const snapshot = validateCanvasYDoc(merged)
+      expect(encodeCanvasCanonicalState(merged)).toEqual(expected)
       expect(snapshot.nodes.size).toBe(2)
       expect(snapshot.edges.size).toBe(1)
-      expect(buildCanvasProjectionIndexV2(snapshot).projection.nodes).toEqual([])
-      expect(buildCanvasProjectionIndexV2(snapshot).projection.edges).toEqual([])
+      expect(buildCanvasProjectionIndex(snapshot).projection.nodes).toEqual([])
+      expect(buildCanvasProjectionIndex(snapshot).projection.edges).toEqual([])
     }
   })
 
@@ -589,25 +589,25 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const document = newCanvas()
     const node = createPendingFile(document, context(1, 1, 1), "pending")
     const beginContext = context(4, 20, 2)
-    const baseSnapshot = validateCanvasYDocV2(document)
-    const record = baseSnapshot.nodes.get(canvasEntityKeyV2(node))!
-    const generationId = deriveCanvasIdV2("generation", beginContext, U0)
+    const baseSnapshot = validateCanvasYDoc(document)
+    const record = baseSnapshot.nodes.get(canvasEntityKey(node))!
+    const generationId = deriveCanvasId("generation", beginContext, U0)
     const begin = {
       format: "convax.canvas-generation-begin/2" as const,
       generationId,
       node,
       beginActorId: beginContext.actorId,
       beginAuthorizationEpochDigest: digest(90),
-      beginStamp: makeStampV2(beginContext, U0),
-      outputClaimStamp: makeStampV2(beginContext, U1),
+      beginStamp: makeStamp(beginContext, U0),
+      outputClaimStamp: makeStamp(beginContext, U1),
       toolRefDigest: digest(91),
       prompt: "generate",
-      targetEffectiveDataDigest: effectiveDataDigestV2(baseSnapshot, record),
-      targetPluginDigest: effectivePluginDigestV2(record),
+      targetEffectiveDataDigest: effectiveDataDigest(baseSnapshot, record),
+      targetPluginDigest: effectivePluginDigest(record),
     }
     applyOk(document, beginContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.begin/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.begin",
       guard: {
         ...nodeDataGuard(document, node),
         expectedPluginDigest: null,
@@ -620,26 +620,26 @@ describe("Canvas v2 reducer and merge invariants", () => {
     applyOk(deleteBranch, context(5, 21, 3), removeNode(causalBase, node))
     const terminalBranch = fork(causalBase)
     const terminalContext = context(4, 22, 3)
-    const lifecycleBase = validateCanvasYDocV2(causalBase)
-    const lifecycle = generationLifecycleCoreV2(lifecycleBase, generationId)
+    const lifecycleBase = validateCanvasYDoc(causalBase)
+    const lifecycle = generationLifecycleCore(lifecycleBase, generationId)
     const terminal = {
       format: "convax.canvas-generation-terminal/2" as const,
       phase: "failed" as const,
       generationId,
       node,
-      beginDigest: canvasDigestV2("convax.canvas-generation-begin/2", begin),
+      beginDigest: canvasDigest("convax.canvas-generation-begin/2", begin),
       beginActorId: beginContext.actorId,
       failureCode: "failed",
       publicMessage: null,
     }
     applyOk(terminalBranch, terminalContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.fail/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.fail",
       guard: {
         ...nodeLiveGuard(causalBase, node),
         generationId,
         beginDigest: terminal.beginDigest,
-        expectedLifecycleDigest: generationLifecycleDigestV2(lifecycleBase, generationId),
+        expectedLifecycleDigest: generationLifecycleDigest(lifecycleBase, generationId),
         expectedTerminalDigest: null,
         expectedDismissalDigest: lifecycle.dismissal === null ? null : digest(1),
         expectedRecoveryFailureDigest: lifecycle.recoveryFailure === null ? null : digest(1),
@@ -647,34 +647,34 @@ describe("Canvas v2 reducer and merge invariants", () => {
       body: { terminal },
     })
     const merged = merge(causalBase, [deleteBranch, terminalBranch], [1, 0], 1)
-    const snapshot = validateCanvasYDocV2(merged)
+    const snapshot = validateCanvasYDoc(merged)
     expect(snapshot.generationTerminals.size).toBe(1)
-    expect(buildCanvasProjectionIndexV2(snapshot).projection.nodes).toEqual([])
+    expect(buildCanvasProjectionIndex(snapshot).projection.nodes).toEqual([])
   })
 
   test("dismissal outranks a surviving success and suppresses its output claim", () => {
     const document = newCanvas()
     const node = createPendingFile(document, context(1, 1, 1), "original-placeholder")
     const beginContext = context(7, 30, 2)
-    const before = validateCanvasYDocV2(document)
-    const record = before.nodes.get(canvasEntityKeyV2(node))!
-    const generationId = deriveCanvasIdV2("generation", beginContext, U0)
+    const before = validateCanvasYDoc(document)
+    const record = before.nodes.get(canvasEntityKey(node))!
+    const generationId = deriveCanvasId("generation", beginContext, U0)
     const begin = {
       format: "convax.canvas-generation-begin/2" as const,
       generationId,
       node,
       beginActorId: beginContext.actorId,
       beginAuthorizationEpochDigest: digest(101),
-      beginStamp: makeStampV2(beginContext, U0),
-      outputClaimStamp: makeStampV2(beginContext, U1),
+      beginStamp: makeStamp(beginContext, U0),
+      outputClaimStamp: makeStamp(beginContext, U1),
       toolRefDigest: digest(102),
       prompt: "generate",
-      targetEffectiveDataDigest: effectiveDataDigestV2(before, record),
+      targetEffectiveDataDigest: effectiveDataDigest(before, record),
       targetPluginDigest: null,
     }
     applyOk(document, beginContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.begin/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.begin",
       guard: {
         ...nodeDataGuard(document, node),
         expectedPluginDigest: null,
@@ -682,9 +682,9 @@ describe("Canvas v2 reducer and merge invariants", () => {
       },
       body: { begin },
     })
-    const active = validateCanvasYDocV2(document)
+    const active = validateCanvasYDoc(document)
     const canonicalResource = {
-      format: "convax.canvas-resource-ref/2" as const,
+      format: "convax.canvas-resource-ref" as const,
       uri: `convax-project://project/epochs/${context(1, 1, 1).operationId}/entries/pf_${"1".repeat(64)}`,
       mediaClass: "image" as const,
       mime: "image/png",
@@ -693,22 +693,22 @@ describe("Canvas v2 reducer and merge invariants", () => {
       ownerProofDigest: digest(104),
     }
     const proof = {
-      format: "convax.canvas-resource-proof-ref/2" as const,
+      format: "convax.canvas-resource-proof-ref" as const,
       mode: "current-owner-state" as const,
       resource: canonicalResource,
       ownerProofDigest: canonicalResource.ownerProofDigest,
       requireCurrentLiveVersion: true as const,
     }
-    const beginDigest = canvasDigestV2("convax.canvas-generation-begin/2", begin)
+    const beginDigest = canvasDigest("convax.canvas-generation-begin/2", begin)
     const completeContext = context(7, 31, 3)
     applyOk(document, completeContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.complete/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.complete",
       guard: {
         ...nodeLiveGuard(document, node),
         generationId,
         beginDigest,
-        expectedLifecycleDigest: generationLifecycleDigestV2(active, generationId),
+        expectedLifecycleDigest: generationLifecycleDigest(active, generationId),
         expectedTerminalDigest: null,
         expectedDismissalDigest: null,
         expectedRecoveryFailureDigest: null,
@@ -723,7 +723,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
           beginDigest,
           beginActorId: beginContext.actorId,
           outputData: {
-            format: "convax.canvas-node-data/2",
+            format: "convax.canvas-node-data",
             kind: "resource",
             title: "generated",
             resource: canonicalResource,
@@ -733,20 +733,20 @@ describe("Canvas v2 reducer and merge invariants", () => {
       },
     })
     expect(
-      buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).nodesByKey.get(canvasEntityKeyV2(node))!.data.kind,
+      buildCanvasProjectionIndex(validateCanvasYDoc(document)).nodesByKey.get(canvasEntityKey(node))!.data.kind,
     ).toBe("resource")
-    const completed = validateCanvasYDocV2(document)
-    const terminal = generationLifecycleCoreV2(completed, generationId).terminal!
+    const completed = validateCanvasYDoc(document)
+    const terminal = generationLifecycleCore(completed, generationId).terminal!
     const dismissContext = context(8, 32, 4)
     applyOk(document, dismissContext, {
-      format: "convax.typed-intent/2",
-      kind: "canvas.generation.dismiss/2",
+      format: "convax.typed-intent",
+      kind: "canvas.generation.dismiss",
       guard: {
         ...nodeLiveGuard(document, node),
         generationId,
         beginDigest,
-        expectedLifecycleDigest: generationLifecycleDigestV2(completed, generationId),
-        expectedTerminalDigest: canvasDigestV2("convax.canvas-generation-terminal/2", terminal),
+        expectedLifecycleDigest: generationLifecycleDigest(completed, generationId),
+        expectedTerminalDigest: canvasDigest("convax.canvas-generation-terminal/2", terminal),
         expectedDismissalDigest: null,
         expectedRecoveryFailureDigest: null,
       },
@@ -754,8 +754,8 @@ describe("Canvas v2 reducer and merge invariants", () => {
         dismissal: { format: "convax.canvas-generation-dismissal/2", generationId, beginDigest, marker: "dismissed" },
       },
     })
-    const projected = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).nodesByKey.get(
-      canvasEntityKeyV2(node),
+    const projected = buildCanvasProjectionIndex(validateCanvasYDoc(document)).nodesByKey.get(
+      canvasEntityKey(node),
     )!
     expect(projected.generationLifecycle).toBe("dismissed")
     expect(projected.data.kind).toBe("placeholder")
@@ -778,20 +778,20 @@ describe("Canvas v2 reducer and merge invariants", () => {
       const branch = fork(base)
       const operationContext = context(10 + index, 10 + index, 10)
       applyOk(branch, operationContext, {
-        format: "convax.typed-intent/2",
-        kind: "canvas.nodes.set-structural-parent/2",
+        format: "convax.typed-intent",
+        kind: "canvas.nodes.set-structural-parent",
         guard: {
           child: { ...nodeLiveGuard(base, child), expectedOwnSlotDigest: null },
           parent: nodeLiveGuard(base, parent),
         },
-        body: { child, parent, relationId: deriveCanvasIdV2("relation", operationContext, U0) },
+        body: { child, parent, relationId: deriveCanvasId("relation", operationContext, U0) },
       })
       return branch
     })
     const first = merge(base, branches, [0, 1, 2])
     const second = merge(base, branches, [2, 0, 1], 2)
-    expect(encodeCanvasCanonicalStateV2(first)).toEqual(encodeCanvasCanonicalStateV2(second))
-    const firstIndex = buildCanvasProjectionIndexV2(validateCanvasYDocV2(first))
+    expect(encodeCanvasCanonicalState(first)).toEqual(encodeCanvasCanonicalState(second))
+    const firstIndex = buildCanvasProjectionIndex(validateCanvasYDoc(first))
     expect(
       [...firstIndex.selectedContainments.values()].filter((choice) => choice?.parent !== null && choice !== null),
     ).toHaveLength(5)
@@ -799,17 +799,17 @@ describe("Canvas v2 reducer and merge invariants", () => {
     const business = fork(base)
     connect(business, groupChild(base, childA), groupChild(base, childB), context(20, 20, 20))
     connect(business, groupChild(base, childB), groupChild(base, childA), context(21, 21, 21))
-    expect(buildCanvasProjectionIndexV2(validateCanvasYDocV2(business)).projection.edges).toHaveLength(2)
+    expect(buildCanvasProjectionIndex(validateCanvasYDoc(business)).projection.edges).toHaveLength(2)
   })
 })
 
 function semanticGuardDigest(
-  root: SemanticHistoryRootV2,
+  root: SemanticHistoryRoot,
   direction: "inverse" | "forward",
-  operation: Pick<CanvasSemanticOperationV2, "template" | "materializedGuard">,
+  operation: Pick<CanvasSemanticOperation, "template" | "materializedGuard">,
 ) {
-  return canvasDigestV2("convax.canvas-semantic-guard/2", {
-    format: "convax.canvas-semantic-guard/2",
+  return canvasDigest("convax.canvas-semantic-guard", {
+    format: "convax.canvas-semantic-guard",
     rootOperationId: root.rootOperationId,
     direction,
     operationIndex: U0,
@@ -820,36 +820,36 @@ function semanticGuardDigest(
 
 function materializedRoundTrip(
   document: ReturnType<typeof newCanvas>,
-  root: SemanticHistoryRootV2,
+  root: SemanticHistoryRoot,
   undoContext: ReturnType<typeof context>,
   redoContext: ReturnType<typeof context>,
 ) {
-  const undo = materializeCanvasSemanticHistoryIntentV2(validateCanvasYDocV2(document), undoContext, "undo", root.rootOperationId)
-  if (undo === "rejected" || undo.kind !== "canvas.undo.semantic-inverse/2") throw new Error("history undo did not materialize")
+  const undo = materializeCanvasSemanticHistoryIntent(validateCanvasYDoc(document), undoContext, "undo", root.rootOperationId)
+  if (undo === "rejected" || undo.kind !== "canvas.undo.semantic-inverse") throw new Error("history undo did not materialize")
   applyOk(document, undoContext, undo)
-  const redo = materializeCanvasSemanticHistoryIntentV2(validateCanvasYDocV2(document), redoContext, "redo", root.rootOperationId)
-  if (redo === "rejected" || redo.kind !== "canvas.redo.semantic-forward/2") throw new Error("history redo did not materialize")
+  const redo = materializeCanvasSemanticHistoryIntent(validateCanvasYDoc(document), redoContext, "redo", root.rootOperationId)
+  if (redo === "rejected" || redo.kind !== "canvas.redo.semantic-forward") throw new Error("history redo did not materialize")
   applyOk(document, redoContext, redo)
   return { undo, redo }
 }
 
-function historyRootFor(document: ReturnType<typeof newCanvas>, operationId: string): SemanticHistoryRootV2 {
-  const value = validateCanvasYDocV2(document).semanticHistory.get(`root/${operationId}`)
-  if (value?.format !== "convax.canvas-semantic-history-root/2") throw new Error("history root is absent")
+function historyRootFor(document: ReturnType<typeof newCanvas>, operationId: string): SemanticHistoryRoot {
+  const value = validateCanvasYDoc(document).semanticHistory.get(`root/${operationId}`)
+  if (value?.format !== "convax.canvas-semantic-history-root") throw new Error("history root is absent")
   return value
 }
 
-function geometryDigestForTest(document: ReturnType<typeof newCanvas>, node: ReturnType<typeof derivedNodeRefV2>) {
-  return geometryDigestV2(validateCanvasYDocV2(document).nodes.get(canvasEntityKeyV2(node))!)
+function geometryDigestForTest(document: ReturnType<typeof newCanvas>, node: ReturnType<typeof derivedNodeRef>) {
+  return geometryDigest(validateCanvasYDoc(document).nodes.get(canvasEntityKey(node))!)
 }
 
-function semanticStateGuard(document: ReturnType<typeof newCanvas>, root: SemanticHistoryRootV2) {
-  const snapshot = validateCanvasYDocV2(document)
+function semanticStateGuard(document: ReturnType<typeof newCanvas>, root: SemanticHistoryRoot) {
+  const snapshot = validateCanvasYDoc(document)
   const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === root.rootOperationId)!
   const entries = [...snapshot.semanticHistory.entries()]
     .filter(
-      (entry): entry is [string, SemanticHistoryTransitionV2] =>
-        entry[1].format === "convax.canvas-semantic-history-transition/2" &&
+      (entry): entry is [string, SemanticHistoryTransition] =>
+        entry[1].format === "convax.canvas-semantic-history-transition" &&
         entry[1].rootOperationId === root.rootOperationId,
     )
     .sort((left, right) => compareUtf8(left[0], right[0]))
@@ -859,16 +859,16 @@ function semanticStateGuard(document: ReturnType<typeof newCanvas>, root: Semant
     const stampOrder = comparePortableStamps(winner[1].stamp, candidate[1].stamp)
     return stampOrder < 0 || (stampOrder === 0 && compareUtf8(winner[0], candidate[0]) < 0) ? candidate : winner
   }, null)?.[1]
-  const effectiveBindings: readonly CanvasHistoryBindingV2[] = effective?.resultBindings ?? root.initialBindings
+  const effectiveBindings: readonly CanvasHistoryBinding[] = effective?.resultBindings ?? root.initialBindings
   const effectiveMode = effective?.mode === "undone" ? "undone" : "applied"
-  const expectedRootReceiptDigest = canvasDigestV2("convax.canvas-operation-receipt/2", receipt)
-  const expectedHistoryRootDigest = canvasDigestV2("convax.canvas-semantic-history-root/2", root)
+  const expectedRootReceiptDigest = canvasDigest("convax.canvas-operation-receipt", receipt)
+  const expectedHistoryRootDigest = canvasDigest("convax.canvas-semantic-history-root", root)
   return {
     rootOperationId: root.rootOperationId,
     expectedRootReceiptDigest,
     expectedHistoryRootDigest,
-    expectedHistoryStateDigest: canvasDigestV2("convax.canvas-semantic-history-state/2", {
-      format: "convax.canvas-semantic-history-state/2",
+    expectedHistoryStateDigest: canvasDigest("convax.canvas-semantic-history-state", {
+      format: "convax.canvas-semantic-history-state",
       rootReceiptDigest: expectedRootReceiptDigest,
       historyRootDigest: expectedHistoryRootDigest,
       transitions,
@@ -881,21 +881,21 @@ function semanticStateGuard(document: ReturnType<typeof newCanvas>, root: Semant
 
 function semanticUndoIntent(
   document: ReturnType<typeof newCanvas>,
-  root: SemanticHistoryRootV2,
-  node: ReturnType<typeof derivedNodeRefV2>,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.undo.semantic-inverse/2" }> {
+  root: SemanticHistoryRoot,
+  node: ReturnType<typeof derivedNodeRef>,
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.undo.semantic-inverse" }> {
   const template = root.inverseTemplate[0]!
   if (template.op !== "node.tombstone") throw new Error("fixture history inverse is not node.tombstone")
   const material = {
-    format: "convax.canvas-semantic-operation/2",
+    format: "convax.canvas-semantic-operation",
     template,
     materializedGuard: { op: "node.tombstone", guard: nodeLiveGuard(document, node) },
     derived: [],
     retainedResourceProofs: [],
   } as const
   return {
-    format: "convax.typed-intent/2",
-    kind: "canvas.undo.semantic-inverse/2",
+    format: "convax.typed-intent",
+    kind: "canvas.undo.semantic-inverse",
     guard: { ...semanticStateGuard(document, root), expectedMode: "applied" },
     body: { operations: [{ ...material, guardDigest: semanticGuardDigest(root, "inverse", material) }] },
   }
@@ -903,21 +903,21 @@ function semanticUndoIntent(
 
 function semanticRedoIntent(
   document: ReturnType<typeof newCanvas>,
-  root: SemanticHistoryRootV2,
+  root: SemanticHistoryRoot,
   operationContext: ReturnType<typeof context>,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.redo.semantic-forward/2" }> {
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.redo.semantic-forward" }> {
   const template = root.forwardTemplate[0]!
   if (template.op !== "node.create") throw new Error("fixture history forward is not node.create")
   const material = {
-    format: "convax.canvas-semantic-operation/2",
+    format: "convax.canvas-semantic-operation",
     template,
     materializedGuard: { op: "node.create", guard: null },
-    derived: [{ kind: "node", handle: template.handle, ordinal: U0, ref: derivedNodeRefV2(operationContext, U0) }],
+    derived: [{ kind: "node", handle: template.handle, ordinal: U0, ref: derivedNodeRef(operationContext, U0) }],
     retainedResourceProofs: [],
   } as const
   return {
-    format: "convax.typed-intent/2",
-    kind: "canvas.redo.semantic-forward/2",
+    format: "convax.typed-intent",
+    kind: "canvas.redo.semantic-forward",
     guard: { ...semanticStateGuard(document, root), expectedMode: "undone" },
     body: { operations: [{ ...material, guardDigest: semanticGuardDigest(root, "forward", material) }] },
   }
@@ -926,10 +926,10 @@ function semanticRedoIntent(
 function nodeCreate(
   operationContext: ReturnType<typeof context>,
   title: string,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.agent.create" }> {
-  const node = derivedNodeRefV2(operationContext, U0)
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.agent.create" }> {
+  const node = derivedNodeRef(operationContext, U0)
   return {
-    format: "convax.typed-intent/2",
+    format: "convax.typed-intent",
     kind: "canvas.agent.create",
     guard: { ordinal: U0, node, expectedAbsent: true },
     body: {
@@ -940,7 +940,7 @@ function nodeCreate(
         role: "agent",
         position: { x: 0, y: 0 },
         size: { width: 240, height: 120 },
-        data: { format: "convax.canvas-node-data/2", kind: "agent", title, instructions: null },
+        data: { format: "convax.canvas-node-data", kind: "agent", title, instructions: null },
         plugin: null,
       },
     },
@@ -949,11 +949,11 @@ function nodeCreate(
 
 function removeNode(
   document: ReturnType<typeof newCanvas>,
-  node: ReturnType<typeof derivedNodeRefV2>,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.elements.remove/2" }> {
+  node: ReturnType<typeof derivedNodeRef>,
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.elements.remove" }> {
   return {
-    format: "convax.typed-intent/2",
-    kind: "canvas.elements.remove/2",
+    format: "convax.typed-intent",
+    kind: "canvas.elements.remove",
     guard: { nodes: [nodeLiveGuard(document, node)], edges: [], requireObservedIncidentEdgeClosure: true },
     body: { nodes: [node], edges: [] },
   }
@@ -961,29 +961,29 @@ function removeNode(
 
 function creationGroupIntent(
   document: ReturnType<typeof newCanvas>,
-  source: ReturnType<typeof derivedNodeRefV2>,
+  source: ReturnType<typeof derivedNodeRef>,
   operationContext: ReturnType<typeof context>,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.plugin.creation-group.create/2" }> {
-  const node = derivedNodeRefV2(operationContext, U1)
-  const edge = derivedEdgeRefV2(operationContext, U2)
-  const requirement: PluginRequirementV2 = {
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.plugin.creation-group.create" }> {
+  const node = derivedNodeRef(operationContext, U1)
+  const edge = derivedEdgeRef(operationContext, U2)
+  const requirement: PluginRequirement = {
     pluginId: "plugin.image",
     snapshotDigest: digest(30),
     pluginStateSchemaDigest: digest(31),
     validationArtifact: {
       owner: "plugin",
-      format: "convax.plugin-validation-artifact/2",
+      format: "convax.plugin-validation-artifact",
       artifactDigest: digest(32),
     },
   }
-  const plugin: PluginStateEnvelopeV2 = {
-    format: "convax.canvas-plugin-state/2",
+  const plugin: PluginStateEnvelope = {
+    format: "convax.canvas-plugin-state",
     ...requirement,
     state: { task: "render" },
   }
   return {
-    format: "convax.typed-intent/2",
-    kind: "canvas.plugin.creation-group.create/2",
+    format: "convax.typed-intent",
+    kind: "canvas.plugin.creation-group.create",
     guard: {
       source: nodeDataGuard(document, source),
       pluginRequirement: requirement,
@@ -1002,7 +1002,7 @@ function creationGroupIntent(
           role: "agent",
           position: { x: 300, y: 0 },
           size: { width: 240, height: 120 },
-          data: { format: "convax.canvas-node-data/2", kind: "agent", title: "result", instructions: null },
+          data: { format: "convax.canvas-node-data", kind: "agent", title: "result", instructions: null },
           plugin,
         },
       ],
@@ -1013,7 +1013,7 @@ function creationGroupIntent(
           incarnation: edge.incarnation,
           source,
           target: { createdNodeOrdinal: U1 },
-          data: { format: "convax.canvas-edge-data/2", kind: "business", label: null },
+          data: { format: "convax.canvas-edge-data", kind: "business", label: null },
         },
       ],
     },
@@ -1022,25 +1022,25 @@ function creationGroupIntent(
 
 function createGroup(
   document: ReturnType<typeof newCanvas>,
-  child: ReturnType<typeof derivedNodeRefV2>,
+  child: ReturnType<typeof derivedNodeRef>,
   operationContext: ReturnType<typeof context>,
   title: string,
 ) {
-  const group = derivedNodeRefV2(operationContext, U0)
-  const projectedChild = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).nodesByKey.get(
-    canvasEntityKeyV2(child),
+  const group = derivedNodeRef(operationContext, U0)
+  const projectedChild = buildCanvasProjectionIndex(validateCanvasYDoc(document)).nodesByKey.get(
+    canvasEntityKey(child),
   )!
   const groupPosition = { x: projectedChild.position.x - 20, y: projectedChild.position.y - 20 }
   const groupSize = { width: projectedChild.size.width + 40, height: projectedChild.size.height + 40 }
-  const expectedGeometryPlanDigest = canvasDigestV2("convax.canvas-group-geometry-plan/2", {
-    format: "convax.canvas-group-geometry-plan/2",
+  const expectedGeometryPlanDigest = canvasDigest("convax.canvas-group-geometry-plan", {
+    format: "convax.canvas-group-geometry-plan",
     children: [{ node: child, position: projectedChild.position, size: projectedChild.size }],
     groupPosition,
     groupSize,
   })
   applyOk(document, operationContext, {
-    format: "convax.typed-intent/2",
-    kind: "canvas.nodes.group/2",
+    format: "convax.typed-intent",
+    kind: "canvas.nodes.group",
     guard: {
       group: { ordinal: U0, node: group, expectedAbsent: true },
       children: [{ ...nodeLiveGuard(document, child), expectedOwnSlotDigest: null }],
@@ -1054,11 +1054,11 @@ function createGroup(
         role: "file",
         position: groupPosition,
         size: groupSize,
-        data: { format: "convax.canvas-node-data/2", kind: "group", title },
+        data: { format: "convax.canvas-node-data", kind: "group", title },
         plugin: null,
       },
       children: [child],
-      relationIds: [deriveCanvasIdV2("relation", operationContext, U1)],
+      relationIds: [deriveCanvasId("relation", operationContext, U1)],
     },
   })
   return group
@@ -1066,14 +1066,14 @@ function createGroup(
 
 function connect(
   document: ReturnType<typeof newCanvas>,
-  source: ReturnType<typeof derivedNodeRefV2>,
-  target: ReturnType<typeof derivedNodeRefV2>,
+  source: ReturnType<typeof derivedNodeRef>,
+  target: ReturnType<typeof derivedNodeRef>,
   operationContext: ReturnType<typeof context>,
 ) {
-  const edge = derivedEdgeRefV2(operationContext, U0)
+  const edge = derivedEdgeRef(operationContext, U0)
   return applyOk(document, operationContext, {
-    format: "convax.typed-intent/2",
-    kind: "canvas.edges.connect/2",
+    format: "convax.typed-intent",
+    kind: "canvas.edges.connect",
     guard: {
       edge: { ordinal: U0, edge, expectedAbsent: true },
       source: { ...nodeLiveGuard(document, source), expectedConnectable: true },
@@ -1086,12 +1086,12 @@ function connect(
         incarnation: edge.incarnation,
         source,
         target,
-        data: { format: "convax.canvas-edge-data/2", kind: "business", label: null },
+        data: { format: "convax.canvas-edge-data", kind: "business", label: null },
       },
     },
   })
 }
 
-function groupChild(_document: ReturnType<typeof newCanvas>, child: ReturnType<typeof derivedNodeRefV2>) {
+function groupChild(_document: ReturnType<typeof newCanvas>, child: ReturnType<typeof derivedNodeRef>) {
   return child
 }

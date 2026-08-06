@@ -13,10 +13,10 @@ import {
 } from "@convax/collaboration"
 
 import type {
-  MembershipMutationProofCoreV2,
-  MembershipMutationProofV2,
-  ReplicaIdReservationRequestCoreV2,
-  ReplicaIdReservationRequestV2,
+  MembershipMutationProofCore,
+  MembershipMutationProof,
+  ReplicaIdReservationRequestCore,
+  ReplicaIdReservationRequest,
 } from "./membership-contracts"
 
 const proofBaseKeys = [
@@ -25,28 +25,28 @@ const proofBaseKeys = [
   "serverNonce", "purpose",
 ] as const
 
-export function replicaIdReservationRequestCoreDigestV2(core: ReplicaIdReservationRequestCoreV2): Digest {
-  return structuredDigest("convax.replica-id-reservation-request-core/2", core)
+export function replicaIdReservationRequestCoreDigest(core: ReplicaIdReservationRequestCore): Digest {
+  return structuredDigest("convax.replica-id-reservation-request-core", core)
 }
 
-export function membershipMutationProofCoreDigestV2(core: MembershipMutationProofCoreV2): Digest {
-  return structuredDigest("convax.mutation-proof-core/2", core)
+export function membershipMutationProofCoreDigest(core: MembershipMutationProofCore): Digest {
+  return structuredDigest("convax.mutation-proof-core", core)
 }
 
-export function parseReplicaIdReservationRequestV2(value: unknown): ReplicaIdReservationRequestV2 {
+export function parseReplicaIdReservationRequest(value: unknown): ReplicaIdReservationRequest {
   assertExactKeys(value, ["format", "core", "coreDigest", "memberSignature"], "replica id reservation request")
-  if (value.format !== "convax.replica-id-reservation-request/2") invalid("Replica reservation request format is invalid")
+  if (value.format !== "convax.replica-id-reservation-request") invalid("Replica reservation request format is invalid")
   assertExactKeys(value.core, [
     "format", "allocationRequestId", "projectId", "projectEpoch", "membershipEpoch", "purpose",
     "expectedMembershipSequence", "requesterMemberId", "targetMemberId", "expectedTargetMemberMutationCounter",
     "requesterCredentialDigest", "currentReplicaId", "newReplicaSigningPublicKey", "requestedEditState", "protocolDigest",
   ], "replica id reservation request core")
-  if (value.core.format !== "convax.replica-id-reservation-request-core/2") invalid("Replica reservation request core format is invalid")
+  if (value.core.format !== "convax.replica-id-reservation-request-core") invalid("Replica reservation request core format is invalid")
   if (value.core.purpose !== "replica-enroll" && value.core.purpose !== "replica-rotate") invalid("Replica reservation purpose is invalid")
   if (value.core.requestedEditState !== "none" && value.core.requestedEditState !== "pending-editor") invalid("Requested edit state is invalid")
   const currentReplicaId = value.core.currentReplicaId === null ? null : parseReplicaId(value.core.currentReplicaId)
-  const core: ReplicaIdReservationRequestCoreV2 = Object.freeze({
-    format: "convax.replica-id-reservation-request-core/2",
+  const core: ReplicaIdReservationRequestCore = Object.freeze({
+    format: "convax.replica-id-reservation-request-core",
     allocationRequestId: parseId128(value.core.allocationRequestId),
     projectId: parseProjectId(value.core.projectId),
     projectEpoch: parseId128(value.core.projectEpoch),
@@ -63,32 +63,32 @@ export function parseReplicaIdReservationRequestV2(value: unknown): ReplicaIdRes
     protocolDigest: parseDigest(value.core.protocolDigest),
   })
   const coreDigest = parseDigest(value.coreDigest)
-  if (replicaIdReservationRequestCoreDigestV2(core) !== coreDigest) invalid("Replica reservation request digest is invalid")
+  if (replicaIdReservationRequestCoreDigest(core) !== coreDigest) invalid("Replica reservation request digest is invalid")
   return Object.freeze({
-    format: "convax.replica-id-reservation-request/2",
+    format: "convax.replica-id-reservation-request",
     core,
     coreDigest,
     memberSignature: parseSignature(value.memberSignature),
   })
 }
 
-export function parseMembershipMutationProofV2(value: unknown): MembershipMutationProofV2 {
+export function parseMembershipMutationProof(value: unknown): MembershipMutationProof {
   assertExactKeys(value, ["format", "core", "requestDigest", "signatures"], "membership mutation proof")
-  if (value.format !== "convax.mutation-proof/2") invalid("Membership mutation proof format is invalid")
-  const core = parseMembershipMutationProofCoreV2(value.core)
+  if (value.format !== "convax.mutation-proof") invalid("Membership mutation proof format is invalid")
+  const core = parseMembershipMutationProofCore(value.core)
   const requestDigest = parseDigest(value.requestDigest)
-  if (membershipMutationProofCoreDigestV2(core) !== requestDigest) invalid("Membership mutation request digest is invalid")
+  if (membershipMutationProofCoreDigest(core) !== requestDigest) invalid("Membership mutation request digest is invalid")
   const signatures = parseProofSignatures(value.signatures, core.purpose)
-  return Object.freeze({ format: "convax.mutation-proof/2", core, requestDigest, signatures })
+  return Object.freeze({ format: "convax.mutation-proof", core, requestDigest, signatures })
 }
 
 /** Parses the exact server-prepared core before either required signer attaches proof. */
-export function parseMembershipMutationProofCoreV2(value: unknown): MembershipMutationProofCoreV2 {
+export function parseMembershipMutationProofCore(value: unknown): MembershipMutationProofCore {
   if (typeof value !== "object" || value === null || Array.isArray(value)) invalid("Membership mutation proof core is invalid")
   assertExactKeys(value, proofKeys((value as Record<string, unknown>).purpose), "membership mutation proof core")
-  if (value.format !== "convax.mutation-proof-core/2") invalid("Membership mutation proof core format is invalid")
+  if (value.format !== "convax.mutation-proof-core") invalid("Membership mutation proof core format is invalid")
   const base = {
-    format: "convax.mutation-proof-core/2" as const,
+    format: "convax.mutation-proof-core" as const,
     mutationId: parseId128(value.mutationId),
     challengeDigest: parseDigest(value.challengeDigest),
     projectId: parseProjectId(value.projectId),
@@ -100,7 +100,7 @@ export function parseMembershipMutationProofCoreV2(value: unknown): MembershipMu
     targetMemberMutationCounter: parseUint64(value.targetMemberMutationCounter),
     serverNonce: parseId128(value.serverNonce),
   }
-  let core: MembershipMutationProofCoreV2
+  let core: MembershipMutationProofCore
   switch (value.purpose) {
     case "member-add":
       core = Object.freeze({ ...base, purpose: "member-add", targetMemberSigningPublicKey: parsePublicKey(value.targetMemberSigningPublicKey), initialRole: role(value.initialRole), adminCapabilityDigest: parseDigest(value.adminCapabilityDigest) })
@@ -144,7 +144,7 @@ function proofKeys(purpose: unknown): readonly string[] {
   }
 }
 
-function parseProofSignatures(value: unknown, purpose: MembershipMutationProofCoreV2["purpose"]): MembershipMutationProofV2["signatures"] {
+function parseProofSignatures(value: unknown, purpose: MembershipMutationProofCore["purpose"]): MembershipMutationProof["signatures"] {
   if (purpose === "member-add") {
     assertExactKeys(value, ["purpose", "adminSignature", "targetMemberPossessionSignature"], "member add signatures")
     if (value.purpose !== purpose) invalid("Membership proof signature purpose is invalid")

@@ -17,20 +17,20 @@ import {
   type YjsDocumentFactory,
 } from "@convax/collaboration"
 import type {
-  NodeAcceptedFrameObjectV2,
-  NodeAcceptedReplicaHeadV2,
-  NodeReplicaHeadMaterializerV2,
+  NodeAcceptedFrameObject,
+  NodeAcceptedReplicaHead,
+  NodeReplicaHeadMaterializer,
 } from "@convax/project/node"
 
-export interface AcceptedClosureStoreV2 {
-  loadInstalledBase(scope: DocumentScope): Promise<NodeAcceptedReplicaHeadV2>
-  listAcceptedFrames(scope: DocumentScope): Promise<readonly NodeAcceptedFrameObjectV2[]>
+export interface AcceptedClosureStore {
+  loadInstalledBase(scope: DocumentScope): Promise<NodeAcceptedReplicaHead>
+  listAcceptedFrames(scope: DocumentScope): Promise<readonly NodeAcceptedFrameObject[]>
   readAcceptedFrame(scope: DocumentScope, frameDigest: Digest): Promise<Uint8Array | null>
 }
 
-export interface AcceptedCausalClosureIndexV2 extends CausalClosurePort {
-  warm(store: AcceptedClosureStoreV2): Promise<NodeAcceptedReplicaHeadV2>
-  hydrate(store: AcceptedClosureStoreV2, frameDigest: Digest): Promise<boolean>
+export interface AcceptedCausalClosureIndex extends CausalClosurePort {
+  warm(store: AcceptedClosureStore): Promise<NodeAcceptedReplicaHead>
+  hydrate(store: AcceptedClosureStore, frameDigest: Digest): Promise<boolean>
   materializationOrder(frontier: DecodedCausalEditFrame["context"]["baseFrontier"]): readonly DecodedCausalEditFrame[] | "pending"
 }
 
@@ -38,17 +38,17 @@ export interface AcceptedCausalClosureIndexV2 extends CausalClosurePort {
  * Main-owned in-memory causal index over Project-owned exact durable bytes. It is
  * disposable reconstruction state, never a second accepted document or store.
  */
-export function createAcceptedCausalClosureIndexV2(input: {
+export function createAcceptedCausalClosureIndex(input: {
   readonly authority: CurrentProtocolAuthority
   readonly scope: DocumentScope
-}): AcceptedCausalClosureIndexV2 {
+}): AcceptedCausalClosureIndex {
   const scope = parseDocumentScope(input.scope)
   const roots = new Set<Digest>()
   const frames = new Map<Digest, DecodedCausalEditFrame>()
   const parents = new Map<Digest, readonly Digest[]>()
   let warmed = false
 
-  const index: AcceptedCausalClosureIndexV2 = {
+  const index: AcceptedCausalClosureIndex = {
     contains(descendantInput, ancestorInput) {
       const descendant = parseDigest(descendantInput)
       const ancestor = parseDigest(ancestorInput)
@@ -87,7 +87,7 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
   return Object.freeze(index)
 
-  function ingest(object: NodeAcceptedFrameObjectV2): DecodedCausalEditFrame {
+  function ingest(object: NodeAcceptedFrameObject): DecodedCausalEditFrame {
     const frame = inspectAcceptedFrameObject(input.authority, object.ref, object.exactFrameBytes)
     assertSameScope(frame.header.core.scope, scope)
     const digest = parseDigest(frame.frameDigest)
@@ -108,7 +108,7 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
 
   async function hydrateDigest(
-    store: AcceptedClosureStoreV2,
+    store: AcceptedClosureStore,
     digest: Digest,
     visiting: Set<Digest>,
   ): Promise<boolean> {
@@ -171,14 +171,14 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
 }
 
-export function createProductionNodeReplicaHeadMaterializerV2(input: {
+export function createProductionNodeReplicaHeadMaterializer(input: {
   readonly authority: CurrentProtocolAuthority
   readonly owner: DocumentOwnerRuntime
   readonly causalClosure: CausalClosurePort
   readonly createDocument: YjsDocumentFactory["createDocument"]
   readonly requiredBlobDigests: (frame: DecodedCausalEditFrame) => readonly Digest[]
-}): NodeReplicaHeadMaterializerV2 {
-  const materializer: NodeReplicaHeadMaterializerV2 = {
+}): NodeReplicaHeadMaterializer {
+  const materializer: NodeReplicaHeadMaterializer = {
     async inspectFrame(ref, exactBytes) {
       const frame = inspectAcceptedFrameObject(input.authority, ref, exactBytes)
       const requiredBlobDigests = [...input.requiredBlobDigests(frame)].map(parseDigest).sort()
@@ -203,13 +203,13 @@ export function createProductionNodeReplicaHeadMaterializerV2(input: {
   return Object.freeze(materializer)
 }
 
-export function createDurableExactBaseResolverV2(input: {
+export function createDurableExactBaseResolver(input: {
   readonly authority: CurrentProtocolAuthority
   readonly scope: DocumentScope
   readonly owner: DocumentOwnerRuntime
-  readonly store: AcceptedClosureStoreV2
-  readonly index: AcceptedCausalClosureIndexV2
-  readonly installedBase: NodeAcceptedReplicaHeadV2
+  readonly store: AcceptedClosureStore
+  readonly index: AcceptedCausalClosureIndex
+  readonly installedBase: NodeAcceptedReplicaHead
   readonly createDocument: YjsDocumentFactory["createDocument"]
 }): ExactBaseResolverPort {
   const scope = parseDocumentScope(input.scope)
@@ -252,7 +252,7 @@ export function createDurableExactBaseResolverV2(input: {
   return Object.freeze(resolver)
 }
 
-function cloneHead(value: NodeAcceptedReplicaHeadV2): NodeAcceptedReplicaHeadV2 {
+function cloneHead(value: NodeAcceptedReplicaHead): NodeAcceptedReplicaHead {
   return Object.freeze({
     ...value,
     fullUpdate: Uint8Array.from(value.fullUpdate),

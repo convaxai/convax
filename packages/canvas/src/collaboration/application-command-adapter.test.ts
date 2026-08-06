@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import type { CanvasApplicationCommand, CanvasApplicationCommandRequest } from "../application"
-import { adaptCanvasApplicationCommandV2 } from "./application-command-adapter"
-import { constructCanvasAuthoritativeIntentV2 } from "./command-construction"
+import { adaptCanvasApplicationCommand } from "./application-command-adapter"
+import { constructCanvasAuthoritativeIntent } from "./command-construction"
 import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
-import { derivedNodeRefV2 } from "./validation"
-import { validateCanvasYDocV2 } from "./ydoc"
-import { projectCanvasV2 } from "./projection"
-import type { CanvasResourceProofRefV2 } from "./types"
+import { derivedNodeRef } from "./validation"
+import { validateCanvasYDoc } from "./ydoc"
+import { projectCanvas } from "./projection"
+import type { CanvasResourceProofRef } from "./types"
 import { parseUint32, parseUint64 } from "@convax/collaboration"
 
 describe("Canvas v2 application command adapter", () => {
@@ -40,7 +40,7 @@ describe("Canvas v2 application command adapter", () => {
     })
     expect(group.command.kind).toBe("nodes-group")
     applyAdapted(document, groupContext, group.command)
-    const groupRef = derivedNodeRefV2(groupContext, parseUint32("0"))
+    const groupRef = derivedNodeRef(groupContext, parseUint32("0"))
 
     const ungroupContext = context(1, 6, 6)
     const ungroup = requireAdaptation(document, ungroupContext, { type: "nodes.ungroup", nodeId: groupRef.id })
@@ -156,13 +156,13 @@ describe("Canvas v2 application command adapter", () => {
     })
     applyAdapted(document, operationContext, mapped.command)
 
-    const projected = projectCanvasV2(validateCanvasYDocV2(document)).nodes.find(
+    const projected = projectCanvas(validateCanvasYDoc(document)).nodes.find(
       (candidate) => candidate.ref.id === node.id,
     )
     expect(projected).toMatchObject({
       role: "file",
       data: {
-        format: "convax.canvas-node-data/2",
+        format: "convax.canvas-node-data",
         kind: "resource",
         title: "Replacement.png",
         resource: proof.resource,
@@ -283,9 +283,9 @@ function adapt(
   command: CanvasApplicationCommand,
   actorKind = "ui",
 ) {
-  return adaptCanvasApplicationCommandV2({
+  return adaptCanvasApplicationCommand({
     request: request(command, actorKind),
-    snapshot: validateCanvasYDocV2(document),
+    snapshot: validateCanvasYDoc(document),
     context: operationContext,
   })
 }
@@ -303,10 +303,10 @@ function requireAdaptation(
 function applyAdapted(
   document: ReturnType<typeof newCanvas>,
   operationContext: ReturnType<typeof context>,
-  command: Parameters<typeof constructCanvasAuthoritativeIntentV2>[0]["command"],
+  command: Parameters<typeof constructCanvasAuthoritativeIntent>[0]["command"],
 ) {
-  const constructed = constructCanvasAuthoritativeIntentV2({
-    snapshot: validateCanvasYDocV2(document),
+  const constructed = constructCanvasAuthoritativeIntent({
+    snapshot: validateCanvasYDoc(document),
     context: operationContext,
     command,
   })
@@ -317,13 +317,13 @@ function applyAdapted(
 function currentResourceProof(
   mediaClass: "text" | "image" | "video" | "audio" | "file",
   seed: number,
-): Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> {
+): Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> {
   const ownerProofDigest = digest(seed)
   return {
-    format: "convax.canvas-resource-proof-ref/2",
+    format: "convax.canvas-resource-proof-ref",
     mode: "current-owner-state",
     resource: {
-      format: "convax.canvas-resource-ref/2",
+      format: "convax.canvas-resource-ref",
       uri:
         `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
         `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${String(seed % 10).repeat(64)}` +
@@ -341,13 +341,13 @@ function currentResourceProof(
 
 function resourceItem(
   kind: "text" | "image" | "video" | "audio" | "file",
-  proof: CanvasResourceProofRefV2,
+  proof: CanvasResourceProofRef,
   name = "Resource",
 ) {
   return {
     id: `resource-${kind}`,
     kind,
-    metadata: { convaxCanvasResourceProofV2: proof },
+    metadata: { convaxCanvasResourceProof: proof },
     name,
     state: { status: "stale" as const },
   }

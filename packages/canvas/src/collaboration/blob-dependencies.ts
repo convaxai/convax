@@ -6,8 +6,8 @@ import {
   type Digest,
 } from "@convax/collaboration"
 
-import { decodeCanvasTypedIntentV2 } from "./intent-validation"
-import { assertResourceRefV2 } from "./validation"
+import { decodeCanvasTypedIntent } from "./intent-validation"
+import { assertResourceRef } from "./validation"
 
 const MAX_REQUIRED_BLOBS_PER_FRAME = 256
 
@@ -15,13 +15,13 @@ const MAX_REQUIRED_BLOBS_PER_FRAME = 256
  * Derives the immutable blob closure from one already decoded Canvas frame.
  * Plugin state is opaque and is never scanned as Host resource metadata.
  */
-export function requiredCanvasBlobDigestsV2(
+export function requiredCanvasBlobDigests(
   frame: DecodedCausalEditFrame,
 ): readonly Digest[] {
   if (frame.header.core.scope.docKind !== "canvas") {
     throw new TypeError("Canvas blob dependency extraction received another document owner")
   }
-  const intent = decodeCanvasTypedIntentV2(new Uint8Array(frame.sections.typedIntentJcs))
+  const intent = decodeCanvasTypedIntent(new Uint8Array(frame.sections.typedIntentJcs))
   if (frame.header.core.intentKind !== intent.kind) {
     throw new TypeError("Canvas frame intent kind does not match its exact typed intent")
   }
@@ -32,8 +32,8 @@ export function requiredCanvasBlobDigestsV2(
 
   const digests = new Set<Digest>()
   walkHostValue(intent, (value) => {
-    if (value.format !== "convax.canvas-resource-ref/2") return
-    assertResourceRefV2(value)
+    if (value.format !== "convax.canvas-resource-ref") return
+    assertResourceRef(value)
     digests.add(parseDigest(value.contentDigest))
   })
   const result = [...digests].sort()
@@ -52,7 +52,7 @@ function walkHostValue(value: unknown, visit: (value: Record<string, unknown>) =
   const record = value as Record<string, unknown>
   visit(record)
   for (const [key, child] of Object.entries(record)) {
-    if (record.format === "convax.canvas-plugin-state/2" && key === "state") continue
+    if (record.format === "convax.canvas-plugin-state" && key === "state") continue
     walkHostValue(child, visit)
   }
 }

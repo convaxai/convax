@@ -8,11 +8,11 @@ import {
   type ProjectId,
 } from "@convax/collaboration"
 
-export type ProjectCanvasRouteStateV2 = "staged" | "live" | "tombstoned"
+export type ProjectCanvasRouteState = "staged" | "live" | "tombstoned"
 
-export interface ProjectCanvasRouteViewV2 {
+export interface ProjectCanvasRouteView {
   readonly canvasId: CanvasId
-  readonly state: ProjectCanvasRouteStateV2
+  readonly state: ProjectCanvasRouteState
   readonly title: string | null
   readonly shardEpoch: Id128 | null
   readonly activationDigest: Digest | null
@@ -20,35 +20,35 @@ export interface ProjectCanvasRouteViewV2 {
 }
 
 /** Authoritative ProjectIndex route projection; visibleCanvases is derived. */
-export interface ProjectCanvasCatalogProjectionV2 {
-  readonly format: "convax.project-canvas-catalog-projection/2"
+export interface ProjectCanvasCatalogProjection {
+  readonly format: "convax.project-canvas-catalog-projection"
   readonly creationAvailability: "available" | "local-authority-unavailable" | "read-only-recovery-required"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
-  readonly routes: readonly ProjectCanvasRouteViewV2[]
-  readonly visibleCanvases: readonly ProjectCanvasRouteViewV2[]
+  readonly routes: readonly ProjectCanvasRouteView[]
+  readonly visibleCanvases: readonly ProjectCanvasRouteView[]
 }
 
-export type ProjectCanvasRouteCommandV2 =
+export type ProjectCanvasRouteCommand =
   | Readonly<{
-      format: "convax.project-canvas-route-command/2"
-      kind: "project.canvas.route.create/2"
+      format: "convax.project-canvas-route-command"
+      kind: "project.canvas.route.create"
       title: string
     }>
   | Readonly<{
-      format: "convax.project-canvas-route-command/2"
-      kind: "project.canvas.route.rename/2"
+      format: "convax.project-canvas-route-command"
+      kind: "project.canvas.route.rename"
       canvasId: CanvasId
       title: string
     }>
   | Readonly<{
-      format: "convax.project-canvas-route-command/2"
-      kind: "project.canvas.route.tombstone/2"
+      format: "convax.project-canvas-route-command"
+      kind: "project.canvas.route.tombstone"
       canvasId: CanvasId
     }>
 
-export type ProjectCanvasRouteCommandResultV2 =
-  | Readonly<{ status: "committed"; catalog: ProjectCanvasCatalogProjectionV2; canvasId: CanvasId }>
+export type ProjectCanvasRouteCommandResult =
+  | Readonly<{ status: "committed"; catalog: ProjectCanvasCatalogProjection; canvasId: CanvasId }>
   | Readonly<{
       status: "rejected"
       code:
@@ -59,22 +59,22 @@ export type ProjectCanvasRouteCommandResultV2 =
         | "read-only-recovery-required"
     }>
 
-export interface ProjectIndexCanvasApplicationPortV2 {
-  queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjectionV2>
+export interface ProjectIndexCanvasApplicationPort {
+  queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjection>
   submitRouteCommand(input: {
     readonly projectId: ProjectId
-    readonly command: ProjectCanvasRouteCommandV2
+    readonly command: ProjectCanvasRouteCommand
     readonly signal?: AbortSignal
-  }): Promise<ProjectCanvasRouteCommandResultV2>
+  }): Promise<ProjectCanvasRouteCommandResult>
 }
 
-export function parseProjectCanvasCatalogProjectionV2(
-  value: ProjectCanvasCatalogProjectionV2,
+export function parseProjectCanvasCatalogProjection(
+  value: ProjectCanvasCatalogProjection,
   projectId: ProjectId,
-): ProjectCanvasCatalogProjectionV2 {
+): ProjectCanvasCatalogProjection {
   if (
     !hasExactKeys(value, ["format", "creationAvailability", "projectId", "projectEpoch", "routes", "visibleCanvases"]) ||
-    value.format !== "convax.project-canvas-catalog-projection/2" ||
+    value.format !== "convax.project-canvas-catalog-projection" ||
     value.projectId !== projectId ||
     parseId128(value.projectEpoch) !== value.projectEpoch ||
     !Array.isArray(value.routes) ||
@@ -100,11 +100,11 @@ export function parseProjectCanvasCatalogProjectionV2(
       if (route.state === "live") {
         parseId128(route.shardEpoch)
         parseDigest(route.activationDigest)
-        validateProjectCanvasTitleV2(route.title)
+        validateProjectCanvasTitle(route.title)
       } else if (route.state === "staged") {
         parseId128(route.shardEpoch)
         if (route.activationDigest !== null) throw new TypeError("Staged Canvas route cannot have an activation")
-        validateProjectCanvasTitleV2(route.title)
+        validateProjectCanvasTitle(route.title)
       } else if (route.shardEpoch !== null || route.activationDigest !== null || route.title !== null) {
         throw new TypeError("Tombstoned Canvas route must suppress its live projection")
       }
@@ -114,7 +114,7 @@ export function parseProjectCanvasCatalogProjectionV2(
   const visible = routes.filter((route) => route.state === "live")
   if (
     value.visibleCanvases.length !== visible.length ||
-    value.visibleCanvases.some((route, index) => !sameProjectCanvasRouteViewV2(route, visible[index]))
+    value.visibleCanvases.some((route, index) => !sameProjectCanvasRouteView(route, visible[index]))
   ) {
     throw new TypeError("Visible Canvas catalog is not the exact live-route projection")
   }
@@ -128,9 +128,9 @@ export function parseProjectCanvasCatalogProjectionV2(
   })
 }
 
-function sameProjectCanvasRouteViewV2(
-  left: ProjectCanvasRouteViewV2,
-  right: ProjectCanvasRouteViewV2 | undefined,
+function sameProjectCanvasRouteView(
+  left: ProjectCanvasRouteView,
+  right: ProjectCanvasRouteView | undefined,
 ): boolean {
   return right !== undefined && left.canvasId === right.canvasId && left.state === right.state &&
     left.title === right.title && left.shardEpoch === right.shardEpoch &&
@@ -144,7 +144,7 @@ function hasExactKeys(value: object, expected: readonly string[]): boolean {
   return actual.length === sortedExpected.length && actual.every((key, index) => key === sortedExpected[index])
 }
 
-export function validateProjectCanvasTitleV2(value: unknown): string {
+export function validateProjectCanvasTitle(value: unknown): string {
   if (
     typeof value !== "string" ||
     value.normalize("NFC") !== value ||

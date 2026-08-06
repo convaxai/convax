@@ -4,15 +4,15 @@ import os from "node:os"
 import path from "node:path"
 
 import {
-  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  buildCanvasProjectionIndexV2,
-  createCanvasReconstructionYDocV2,
-  createCanvasYDocV2,
-  derivedNodeRefV2,
-  encodeCanvasCanonicalStateV2,
-  selectedCanvasDocumentOwnerArtifactDefinitionV2,
-  validateCanvasYDocV2,
-  type CanvasTypedIntentUnionV2,
+  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  buildCanvasProjectionIndex,
+  createCanvasReconstructionYDoc,
+  createCanvasYDoc,
+  derivedNodeRef,
+  encodeCanvasCanonicalState,
+  selectedCanvasDocumentOwnerArtifactDefinition,
+  validateCanvasYDoc,
+  type CanvasTypedIntentUnion,
 } from "@convax/canvas/collaboration"
 import {
   CollaborationKernel,
@@ -48,15 +48,15 @@ import {
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import {
-  NodeCollaborationPersistenceV2,
-  type NodeAcceptedReplicaHeadV2,
+  NodeCollaborationPersistence,
+  type NodeAcceptedReplicaHead,
 } from "@convax/project/node"
-import { peerControlCodecV2 } from "@convax/project/collaboration-protocol"
+import { peerControlCodec } from "@convax/project/collaboration-protocol"
 
-import { loadHistoricalTestAuthorityV2 } from "../main/collaboration-authority.test-support"
+import { loadHistoricalTestAuthority } from "../main/collaboration-authority.test-support"
 import {
-  createMainCollaborationProductionRuntimeV2,
-  createProjectCollaborationMaterializerRegistryV2,
+  createMainCollaborationProductionRuntime,
+  createProjectCollaborationMaterializerRegistry,
 } from "../main/collaboration-production-runtime"
 import {
   CollaborationPeerJsTransport,
@@ -66,10 +66,10 @@ import {
   type PeerJsLikePeer,
 } from "./peerjs-transport"
 import {
-  CollaborationSessionOrchestratorV2,
-  type CollaborationKernelEndpointV2,
-  type CollaborationPeerAdmissionV2,
-  type CollaborationPeerSessionPrincipalV2,
+  CollaborationSessionOrchestrator,
+  type CollaborationKernelEndpoint,
+  type CollaborationPeerAdmission,
+  type CollaborationPeerSessionPrincipal,
 } from "./session-orchestrator"
 
 type ConnectionEvent = "open" | "data" | "close" | "error"
@@ -92,7 +92,7 @@ afterEach(async () => {
 
 describe("real Canvas collaboration session", () => {
   test("reopens disconnected durable edits, reconnects over CVXPEER2, converges and ACKs only durable receive", async () => {
-    const authority = await loadHistoricalTestAuthorityV2()
+    const authority = await loadHistoricalTestAuthority()
     const runtime = createCanvasRuntime(authority)
     const scope = canvasScope()
     const genesis = createGenesis(authority, runtime, scope)
@@ -194,7 +194,7 @@ describe("real Canvas collaboration session", () => {
     expect(alphaEndpoint.acks.length).toBeGreaterThan(ackCountBeforeDuplicate)
 
     const decodedKinds = [...alphaWire, ...omegaWire].map(({ channel, bytes }) => {
-      const decoded = peerControlCodecV2.decodeMessageWire(bytes)
+      const decoded = peerControlCodec.decodeMessageWire(bytes)
       return `${channel}:${decoded.core.bodyKind}`
     })
     expect(decodedKinds.some((kind) => kind === "control:control.transfer-offer")).toBeTrue()
@@ -213,7 +213,7 @@ describe("real Canvas collaboration session", () => {
 
 function createCanvasRuntime(authority: CurrentProtocolAuthority): DocumentOwnerRuntime<"canvas"> {
   const result = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-    .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
+    .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
   if ("status" in result) throw new Error(`Canvas owner runtime rejected: ${result.code}`)
   return result
 }
@@ -232,27 +232,27 @@ function createGenesis(
   authority: CurrentProtocolAuthority,
   runtime: DocumentOwnerRuntime<"canvas">,
   scope: DocumentScope,
-): { acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">; checkpointBytes: Uint8Array; checkpointDigest: Digest } {
-  const document = createCanvasYDocV2(
+): { acceptedBase: Omit<NodeAcceptedReplicaHead, "headDigest">; checkpointBytes: Uint8Array; checkpointDigest: Digest } {
+  const document = createCanvasYDoc(
     scope,
-    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     authority.protocolDigest,
     routeDependencyDigest,
     parseReplicaId("replica_00000001"),
   )
   try {
     const fullUpdate = encodeFullUpdate(document)
-    const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+    const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
     const acceptedBase = Object.freeze({
       scope,
       frontier,
       frontierDigest: causalFrontierDigest(frontier),
-      actorHeads: Object.freeze({ format: "convax.replica-actor-head-set/2" as const, scope, heads: Object.freeze([]) }),
+      actorHeads: Object.freeze({ format: "convax.replica-actor-head-set" as const, scope, heads: Object.freeze([]) }),
       fullUpdate,
       stateVector: encodeStateVector(document),
       canonicalStateDigest: canonicalStateDigest(
         runtime.protocolPort.schemaDigest,
-        encodeCanvasCanonicalStateV2(document),
+        encodeCanvasCanonicalState(document),
       ),
     })
     return {
@@ -291,13 +291,13 @@ async function openReplica(input: {
   initialize: boolean
 }) {
   const createFacts = () => createEmptyCanvasFacts(input.runtime)
-  const materializers = createProjectCollaborationMaterializerRegistryV2()
-  const persistence = await NodeCollaborationPersistenceV2.open({
+  const materializers = createProjectCollaborationMaterializerRegistry()
+  const persistence = await NodeCollaborationPersistence.open({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.identity.actorId,
     materializer: materializers,
   })
-  const production = await createMainCollaborationProductionRuntimeV2({
+  const production = await createMainCollaborationProductionRuntime({
     authority: input.authority,
     scope: input.scope,
     owner: input.runtime,
@@ -315,7 +315,7 @@ async function openReplica(input: {
       }),
     },
     incomingFacts: { resolve: async () => ({ status: "resolved", port: createFacts() }) },
-    createDocument: createCanvasReconstructionYDocV2,
+    createDocument: createCanvasReconstructionYDoc,
     requiredBlobDigests: () => [],
     persistence,
     materializers,
@@ -424,7 +424,7 @@ function requiredValidationArtifacts(authority: CurrentProtocolAuthority): Valid
     return { owner, format: value.format, artifactDigest: value.artifactDigest }
   }
   return Object.freeze({
-    format: "convax.validation-artifact-set/2",
+    format: "convax.validation-artifact-set",
     artifacts: Object.freeze([
       artifact("canvas", "canvas-schema"),
       artifact("control-plane", "control-plane"),
@@ -443,9 +443,9 @@ async function commitOneNode(
   const result = await kernel.commitLocalIntent({
     operationId,
     prepare: ({ context }) => {
-      const node = derivedNodeRefV2(context, u0)
-      const intent: Extract<CanvasTypedIntentUnionV2, { kind: "canvas.agent.create" }> = {
-        format: "convax.typed-intent/2",
+      const node = derivedNodeRef(context, u0)
+      const intent: Extract<CanvasTypedIntentUnion, { kind: "canvas.agent.create" }> = {
+        format: "convax.typed-intent",
         kind: "canvas.agent.create",
         guard: { ordinal: u0, node, expectedAbsent: true },
         body: {
@@ -456,7 +456,7 @@ async function commitOneNode(
             role: "agent",
             position: { x: title === "alpha" ? 0 : 300, y: 0 },
             size: { width: 240, height: 120 },
-            data: { format: "convax.canvas-node-data/2", kind: "agent", title, instructions: null },
+            data: { format: "convax.canvas-node-data", kind: "agent", title, instructions: null },
             plugin: null,
           },
         },
@@ -467,7 +467,7 @@ async function commitOneNode(
   return result.frame.frameDigest
 }
 
-class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
+class RealKernelEndpoint implements CollaborationKernelEndpoint {
   readonly acks: Array<{ peerId: string; frameDigest: Digest; replicaDurableAckCoreDigest: Digest }> = []
   readonly receivedDurably: Digest[] = []
 
@@ -476,7 +476,7 @@ class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
     readonly identity: ReplicaIdentity,
     readonly authority: CurrentProtocolAuthority,
     readonly kernel: CollaborationKernel,
-    readonly persistence: NodeCollaborationPersistenceV2,
+    readonly persistence: NodeCollaborationPersistence,
     readonly scope: DocumentScope,
   ) {}
 
@@ -490,7 +490,7 @@ class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
     this.receivedDurably.push(ref.frameDigest)
     const projection = this.kernel.getProjectionSnapshot()
     const core = {
-      format: "convax.replica-durable-ack-core/2",
+      format: "convax.replica-durable-ack-core",
       scope: this.scope,
       frameOrCheckpointDigest: ref.frameDigest,
       receiverMemberId: this.identity.memberId,
@@ -503,7 +503,7 @@ class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
     }
     return {
       result,
-      replicaDurableAckCoreDigest: structuredDigest("convax.replica-durable-ack-core/2", core),
+      replicaDurableAckCoreDigest: structuredDigest("convax.replica-durable-ack-core", core),
     }
   }
 
@@ -595,7 +595,7 @@ class FakePeerNetwork {
   rotateConnection(): void { this.connectionFill += 1 }
 }
 
-function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmissionV2 {
+function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmission {
   const credential = (peerId: string) => ordinarySha256(encoder.encode(`credential:${peerId}`))
   const currentConnection = () => id128(network.connectionFill)
   return {
@@ -604,7 +604,7 @@ function admission(localPeerId: string, remotePeerId: string, network: FakePeerN
       const connectionId = parseId128(new TextDecoder().decode(exactBytes))
       if (connectionId !== currentConnection()) return "rejected"
       const channelOpen = (channel: string) => ordinarySha256(encoder.encode(`${connectionId}:${channel}`))
-      const principal: CollaborationPeerSessionPrincipalV2 = {
+      const principal: CollaborationPeerSessionPrincipal = {
         connectionId,
         localCredentialDigest: credential(localPeerId),
         remoteCredentialDigest: credential(remotePeerId),
@@ -628,9 +628,9 @@ function createOrchestrator(input: {
   network: FakePeerNetwork
   capturedWire: Array<{ channel: string; bytes: Uint8Array }>
   idFillStart: number
-}): CollaborationSessionOrchestratorV2 {
+}): CollaborationSessionOrchestrator {
   let idFill = input.idFillStart
-  return new CollaborationSessionOrchestratorV2({
+  return new CollaborationSessionOrchestrator({
     localPeerId: input.localPeerId,
     admission: admission(input.localPeerId, input.remotePeerId, input.network),
     createProtocolId: () => id128(idFill++),
@@ -656,27 +656,27 @@ function createOrchestrator(input: {
   })
 }
 
-async function settle(...orchestrators: CollaborationSessionOrchestratorV2[]): Promise<void> {
+async function settle(...orchestrators: CollaborationSessionOrchestrator[]): Promise<void> {
   for (let pass = 0; pass < 30; pass += 1) {
     for (const orchestrator of orchestrators) await orchestrator.idle()
   }
 }
 
 function canonicalCanvasBytes(fullUpdate: Uint8Array): Uint8Array {
-  const document = createCanvasReconstructionYDocV2()
+  const document = createCanvasReconstructionYDoc()
   try {
     applyYjsUpdate(document, fullUpdate, reconstructionOrigin)
-    return encodeCanvasCanonicalStateV2(document)
+    return encodeCanvasCanonicalState(document)
   } finally {
     document.destroy()
   }
 }
 
 function projectionFromUpdate(fullUpdate: Uint8Array) {
-  const document = createCanvasReconstructionYDocV2()
+  const document = createCanvasReconstructionYDoc()
   try {
     applyYjsUpdate(document, fullUpdate, reconstructionOrigin)
-    return buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection
+    return buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection
   } finally {
     document.destroy()
   }

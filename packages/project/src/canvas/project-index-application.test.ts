@@ -13,18 +13,18 @@ import {
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  applyProjectIndexCandidateIntentV2,
-  createProjectIndexYDocV2,
-  projectIndexIntentDigestV2,
-  projectProjectIndexV2,
-  validateProjectIndexYDocV2,
-  type ProjectEntryRecordV2,
-  type ProjectIndexIntentV2,
+  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  applyProjectIndexCandidateIntent,
+  createProjectIndexYDoc,
+  projectIndexIntentDigest,
+  projectProjectIndex,
+  validateProjectIndexYDoc,
+  type ProjectEntryRecord,
+  type ProjectIndexIntent,
 } from "../collaboration/project-index"
 import {
-  ProjectIndexCanvasApplicationV2,
-  type ProjectIndexDocumentSessionPortV2,
+  ProjectIndexCanvasApplication,
+  type ProjectIndexDocumentSessionPort,
 } from "./project-index-application"
 
 const projectId = "project-a" as ProjectId
@@ -33,7 +33,7 @@ const projectShardEpoch = id(2)
 const protocolDigest = digest("protocol")
 const actorId = actor(3)
 
-describe("ProjectIndexCanvasApplicationV2", () => {
+describe("ProjectIndexCanvasApplication", () => {
   test("queries blob currentness only through validated ProjectIndex owner state", async () => {
     const fixture = createFixture()
     const application = fixture.application({ stageCanvasGenesis: async () => "rejected" })
@@ -46,7 +46,7 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     let observedStaged = false
     const application = fixture.application({
       async stageCanvasGenesis(input) {
-        const routes = projectProjectIndexV2(fixture.document).canvasRoutes
+        const routes = projectProjectIndex(fixture.document).canvasRoutes
         observedStaged = routes.length === 1 && routes[0]?.state === "staged"
         expect(input.predecessor.frame.frameDigest).toBe(digest("frame-1"))
         expect(input.predecessor.acceptedFrontierDigest).toBe(digest("frontier-1"))
@@ -60,7 +60,7 @@ describe("ProjectIndexCanvasApplicationV2", () => {
 
     const result = await application.submitRouteCommand({
       projectId,
-      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Team Canvas" },
+      command: { format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Team Canvas" },
     })
     expect(observedStaged).toBe(true)
     expect(result.status).toBe("committed")
@@ -72,8 +72,8 @@ describe("ProjectIndexCanvasApplicationV2", () => {
       title: "Team Canvas",
     })
     expect(fixture.submittedKinds).toEqual([
-      "project.canvas.route.stage/2",
-      "project.canvas.route.activate/2",
+      "project.canvas.route.stage",
+      "project.canvas.route.activate",
     ])
   })
 
@@ -82,14 +82,14 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     const application = fixture.application({ stageCanvasGenesis: async () => "pending" })
     const result = await application.submitRouteCommand({
       projectId,
-      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Pending" },
+      command: { format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Pending" },
     })
     expect(result).toEqual({ status: "rejected", code: "dependency-pending" })
     const catalog = await application.queryCatalog({ projectId })
     expect(catalog.routes).toHaveLength(1)
     expect(catalog.routes[0]?.state).toBe("staged")
     expect(catalog.visibleCanvases).toEqual([])
-    expect(fixture.submittedKinds).toEqual(["project.canvas.route.stage/2"])
+    expect(fixture.submittedKinds).toEqual(["project.canvas.route.stage"])
   })
 
   test("does not write a staged route when Canvas author preflight is pending", async () => {
@@ -105,15 +105,15 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     const result = await application.submitRouteCommand({
       projectId,
       command: {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.create/2",
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.create",
         title: "No unteamed authority",
       },
     })
     expect(result).toEqual({ status: "rejected", code: "dependency-pending" })
     expect(stagingCalled).toBe(false)
     expect(fixture.submittedKinds).toEqual([])
-    expect(projectProjectIndexV2(fixture.document).canvasRoutes).toEqual([])
+    expect(projectProjectIndex(fixture.document).canvasRoutes).toEqual([])
     expect((await application.queryCatalog({ projectId })).creationAvailability).toBe("local-authority-unavailable")
   })
 
@@ -133,7 +133,7 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     const result = await application.submitRouteCommand({
       projectId,
       signal: abort.signal,
-      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Cancelled" },
+      command: { format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Cancelled" },
     })
     expect(result).toEqual({ status: "rejected", code: "cancelled" })
     expect((await application.queryCatalog({ projectId })).routes[0]?.state).toBe("staged")
@@ -152,14 +152,14 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     })
     const created = await application.submitRouteCommand({
       projectId,
-      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Before" },
+      command: { format: "convax.project-canvas-route-command", kind: "project.canvas.route.create", title: "Before" },
     })
     if (created.status !== "committed") throw new Error("create rejected")
     const renamed = await application.submitRouteCommand({
       projectId,
       command: {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.rename/2",
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.rename",
         canvasId: created.canvasId,
         title: "After",
       },
@@ -170,8 +170,8 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     const tombstoned = await application.submitRouteCommand({
       projectId,
       command: {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.tombstone/2",
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.tombstone",
         canvasId: created.canvasId,
       },
     })
@@ -191,7 +191,7 @@ function createFixture() {
   const externalFacts = {
     resolveFact: () => ({ status: "rejected" as const }),
   } as unknown as OwnerExternalFactPort<"project-index">
-  const session: ProjectIndexDocumentSessionPortV2 = {
+  const session: ProjectIndexDocumentSessionPort = {
     scope: {
       projectId,
       projectEpoch,
@@ -200,23 +200,23 @@ function createFixture() {
       shardEpoch: projectShardEpoch,
     },
     async query(project) {
-      return project({ owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">)
+      return project({ owner: "project-index", value: validateProjectIndexYDoc(document) } as OwnerValidatedState<"project-index">)
     },
     async submit(input) {
       submission += 1
       const context = constructionContext(input.operationId ?? id(200 + submission), String(submission))
       const prepared = await input.prepare({
-        base: { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">,
+        base: { owner: "project-index", value: validateProjectIndexYDoc(document) } as OwnerValidatedState<"project-index">,
         context,
         signal: input.signal,
       })
-      const typedIntent = prepared.typedIntent as ProjectIndexIntentV2
+      const typedIntent = prepared.typedIntent as ProjectIndexIntent
       submittedKinds.push(typedIntent.kind)
       const validationContext: OwnerIntentValidationContext = {
         ...context,
-        intentDigest: projectIndexIntentDigestV2(typedIntent),
+        intentDigest: projectIndexIntentDigest(typedIntent),
       }
-      const applied = applyProjectIndexCandidateIntentV2(document, validationContext, typedIntent, {
+      const applied = applyProjectIndexCandidateIntent(document, validationContext, typedIntent, {
         verifyBlob: () => true,
         verifyCanvasGenesis: () => true,
         verifyResetAuthorization: () => true,
@@ -225,7 +225,7 @@ function createFixture() {
       const frameDigest = digest(`frame-${submission}`)
       const frame = {
         frameDigest,
-        header: { format: "convax.causal-edit-frame/2", core: { scope: session.scope, operationId: context.operationId } },
+        header: { format: "convax.causal-edit-frame", core: { scope: session.scope, operationId: context.operationId } },
       } as unknown as DecodedCausalEditFrame
       latestFrame = frame
       return {
@@ -240,10 +240,10 @@ function createFixture() {
     submittedKinds,
     lastFrame: () => latestFrame,
     application(genesis: Pick<
-      ConstructorParameters<typeof ProjectIndexCanvasApplicationV2>[0]["genesis"],
+      ConstructorParameters<typeof ProjectIndexCanvasApplication>[0]["genesis"],
       "stageCanvasGenesis"
-    > & Partial<ConstructorParameters<typeof ProjectIndexCanvasApplicationV2>[0]["genesis"]>) {
-      return new ProjectIndexCanvasApplicationV2({
+    > & Partial<ConstructorParameters<typeof ProjectIndexCanvasApplication>[0]["genesis"]>) {
+      return new ProjectIndexCanvasApplication({
         session,
         genesis: {
           preflightCanvasGenesis: async () => "ready",
@@ -260,8 +260,8 @@ function createFixture() {
 function genesis(): Y.Doc {
   const context = constructionContext(id(1), "0")
   const rootDirectoryId = `pd_${"a".repeat(64)}` as const
-  const rootEntry: ProjectEntryRecordV2 = {
-    format: "convax.project-entry/2",
+  const rootEntry: ProjectEntryRecord = {
+    format: "convax.project-entry",
     entryId: rootDirectoryId,
     kind: "directory",
     storageClass: null,
@@ -271,22 +271,22 @@ function genesis(): Y.Doc {
     createdByActorId: context.actorId,
     createdByOperationId: context.operationId,
     createdStamp: {
-      format: "convax.portable-stamp/2",
+      format: "convax.portable-stamp",
       lamport: context.lamport,
       actorId: context.actorId,
       operationId: context.operationId,
       writeOrdinal: "0" as Uint32,
     },
   }
-  return createProjectIndexYDocV2({
-    format: "convax.project-index-identity/2",
+  return createProjectIndexYDoc({
+    format: "convax.project-index-identity",
     schema: "convax.project-index.v2",
     projectId,
     projectEpoch,
     shardEpoch: projectShardEpoch,
     rootDirectoryId,
     protocolDigest,
-    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     uriProtocolDigest: digest("uri"),
   }, rootEntry)
 }
@@ -300,7 +300,7 @@ function constructionContext(operationId: Id128, lamport: string): OwnerIntentCo
     lamport: lamport as never,
     baseFrontierDigest: digest("base"),
     protocolDigest,
-    ownerSchemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    ownerSchemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     validationArtifactSetDigest: digest("artifacts"),
   }
 }

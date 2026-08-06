@@ -14,14 +14,14 @@ describe("collaboration API payload-zero boundary", () => {
       new Request(`${base}/sessions`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ format: "convax.session-proof/2", coreDigest: "metadata-only" }),
+        body: JSON.stringify({ format: "convax.session-proof", coreDigest: "metadata-only" }),
       }),
     )
     expect(response.status).toBe(503)
     expect(await body(response)).toEqual({
-      format: "convax.api-error/2",
+      format: "convax.api-error",
       code: "control-adapters-unavailable",
-      integrationStatus: "r5-contract-selected",
+      integrationStatus: "current-contract-selected",
     })
   })
 
@@ -37,7 +37,7 @@ describe("collaboration API payload-zero boundary", () => {
     for (const forbidden of [
       { causalFrame: "bytes" },
       { nested: { yjsUpdate: [1, 2, 3] } },
-      { typedIntent: { kind: "canvas.node.create/2" } },
+      { typedIntent: { kind: "canvas.node.create" } },
       { blobBytes: "base64" },
       { serverEditSequence: "1" },
     ]) {

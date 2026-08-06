@@ -11,31 +11,31 @@ import type {
   Uint64,
 } from "@convax/collaboration"
 
-export interface ReplicaProjectFloorEntryV2 {
+export interface ReplicaProjectFloorEntry {
   readonly scope: DocumentScope
   readonly basis: "project-index" | "project-index-live-route"
   readonly prunableCheckpointSetCertificateDigest: Digest
   readonly replicaCausalFloorAckDigest: Digest
 }
 
-export interface ReplicaProjectFloorPageCoreV2 {
-  readonly format: "convax.replica-project-floor-page-core/2"
+export interface ReplicaProjectFloorPageCore {
+  readonly format: "convax.replica-project-floor-page-core"
   readonly floorSetId: Id128
   readonly targetReplicaId: ReplicaId
   readonly pageIndex: Uint32
   readonly firstScopeKey: string
   readonly lastScopeKey: string
-  readonly entries: readonly ReplicaProjectFloorEntryV2[]
+  readonly entries: readonly ReplicaProjectFloorEntry[]
 }
 
-export interface ReplicaProjectFloorPageV2 {
-  readonly format: "convax.replica-project-floor-page/2"
-  readonly core: ReplicaProjectFloorPageCoreV2
+export interface ReplicaProjectFloorPage {
+  readonly format: "convax.replica-project-floor-page"
+  readonly core: ReplicaProjectFloorPageCore
   readonly coreDigest: Digest
 }
 
-export interface ReplicaProjectFloorRootCoreV2 {
-  readonly format: "convax.replica-project-floor-root-core/2"
+export interface ReplicaProjectFloorRootCore {
+  readonly format: "convax.replica-project-floor-root-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
@@ -58,15 +58,15 @@ export interface ReplicaProjectFloorRootCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface ReplicaProjectFloorRootV2 {
-  readonly format: "convax.replica-project-floor-root/2"
-  readonly core: ReplicaProjectFloorRootCoreV2
+export interface ReplicaProjectFloorRoot {
+  readonly format: "convax.replica-project-floor-root"
+  readonly core: ReplicaProjectFloorRootCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface DocumentRegistrationClaimCoreV2 {
-  readonly format: "convax.document-registration-claim-core/2"
+export interface DocumentRegistrationClaimCore {
+  readonly format: "convax.document-registration-claim-core"
   readonly scope: DocumentScope
   readonly registrarMemberId: MemberId
   readonly registrarReplicaId: ReplicaId
@@ -78,36 +78,36 @@ export interface DocumentRegistrationClaimCoreV2 {
   readonly protocolDigest: Digest
 }
 
-export interface DocumentRegistrationClaimV2 {
-  readonly format: "convax.document-registration-claim/2"
-  readonly core: DocumentRegistrationClaimCoreV2
+export interface DocumentRegistrationClaim {
+  readonly format: "convax.document-registration-claim"
+  readonly core: DocumentRegistrationClaimCore
   readonly coreDigest: Digest
   readonly replicaSignature: Signature
 }
 
-export type DocumentRegistrationAbandonmentActorV2 =
+export type DocumentRegistrationAbandonmentActor =
   | Readonly<{ kind: "registrar"; replicaId: ReplicaId }>
   | Readonly<{ kind: "project-admin"; memberId: MemberId; adminCapabilityDigest: Digest }>
 
-export interface DocumentRegistrationAbandonmentCoreV2 {
-  readonly format: "convax.document-registration-abandonment-core/2"
+export interface DocumentRegistrationAbandonmentCore {
+  readonly format: "convax.document-registration-abandonment-core"
   readonly registrationClaimDigest: Digest
   readonly scope: DocumentScope
   readonly claimRevision: Uint64
-  readonly actor: DocumentRegistrationAbandonmentActorV2
+  readonly actor: DocumentRegistrationAbandonmentActor
   readonly reason: "cancelled" | "invalid-genesis" | "superseded-staging"
   readonly protocolDigest: Digest
 }
 
-export interface DocumentRegistrationAbandonmentV2 {
-  readonly format: "convax.document-registration-abandonment/2"
-  readonly core: DocumentRegistrationAbandonmentCoreV2
+export interface DocumentRegistrationAbandonment {
+  readonly format: "convax.document-registration-abandonment"
+  readonly core: DocumentRegistrationAbandonmentCore
   readonly coreDigest: Digest
   readonly actorSignature: Signature
 }
 
-export interface CollaborationScopeEntryCoreV2 {
-  readonly format: "convax.collaboration-scope-entry-core/2"
+export interface CollaborationScopeEntryCore {
+  readonly format: "convax.collaboration-scope-entry-core"
   readonly scopeKey: string
   readonly registrarReplicaId: ReplicaId
   readonly claimRevision: Uint64
@@ -119,19 +119,19 @@ export interface CollaborationScopeEntryCoreV2 {
   readonly abandonmentDigest: Digest | null
 }
 
-export interface CollaborationScopeEntryV2 {
-  readonly format: "convax.collaboration-scope-entry/2"
-  readonly core: CollaborationScopeEntryCoreV2
+export interface CollaborationScopeEntry {
+  readonly format: "convax.collaboration-scope-entry"
+  readonly core: CollaborationScopeEntryCore
   readonly coreDigest: Digest
 }
 
-export interface RegistryEntrySetV2 {
-  readonly format: "convax.registry-entry-set/2"
-  readonly entries: readonly CollaborationScopeEntryV2[]
+export interface RegistryEntrySet {
+  readonly format: "convax.registry-entry-set"
+  readonly entries: readonly CollaborationScopeEntry[]
 }
 
-export interface RegistrySnapshotCoreV2 {
-  readonly format: "convax.registry-snapshot-core/2"
+export interface RegistrySnapshotCore {
+  readonly format: "convax.registry-snapshot-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly registrySequence: Uint64
@@ -144,14 +144,14 @@ export interface RegistrySnapshotCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface RegistrySnapshotV2 {
-  readonly format: "convax.registry-snapshot/2"
-  readonly core: RegistrySnapshotCoreV2
+export interface RegistrySnapshot {
+  readonly format: "convax.registry-snapshot"
+  readonly core: RegistrySnapshotCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export type RegistryCutoffTargetV2 =
+export type RegistryCutoffTarget =
   | Readonly<{
       kind: "replica"
       action: "revoke"
@@ -173,42 +173,42 @@ export type RegistryCutoffTargetV2 =
       }>[]
     }>
 
-export interface RegistryEntryIdentityV2 {
-  readonly format: "convax.registry-entry-identity/2"
+export interface RegistryEntryIdentity {
+  readonly format: "convax.registry-entry-identity"
   readonly scopeKey: string
   readonly registrarReplicaId: ReplicaId
   readonly claimRevision: Uint64
 }
 
-export interface TargetCutoffLeafCoreV2 {
-  readonly format: "convax.target-cutoff-leaf-core/2"
-  readonly entryIdentity: RegistryEntryIdentityV2
+export interface TargetCutoffLeafCore {
+  readonly format: "convax.target-cutoff-leaf-core"
+  readonly entryIdentity: RegistryEntryIdentity
   readonly entryDigest: Digest
   readonly entryState: "registered-candidate" | "dual-validated" | "abandoned"
   readonly targetFrontier: Readonly<{ kind: "certified"; frontierDigest: Digest }> | Readonly<{ kind: "empty-target-frontier" }>
 }
 
-export interface RegistryCutoffCoveragePageCoreV2 {
-  readonly format: "convax.registry-cutoff-coverage-page-core/2"
+export interface RegistryCutoffCoveragePageCore {
+  readonly format: "convax.registry-cutoff-coverage-page-core"
   readonly cutoffId: Id128
   readonly pageIndex: Uint32
   readonly firstLeafIdentityDigest: Digest
   readonly lastLeafIdentityDigest: Digest
-  readonly leaves: readonly TargetCutoffLeafCoreV2[]
+  readonly leaves: readonly TargetCutoffLeafCore[]
 }
 
-export interface RegistryCutoffCoveragePageV2 {
-  readonly format: "convax.registry-cutoff-coverage-page/2"
-  readonly core: RegistryCutoffCoveragePageCoreV2
+export interface RegistryCutoffCoveragePage {
+  readonly format: "convax.registry-cutoff-coverage-page"
+  readonly core: RegistryCutoffCoveragePageCore
   readonly coreDigest: Digest
 }
 
-export interface RegistryCutoffCoverageRootCoreV2 {
-  readonly format: "convax.registry-cutoff-coverage-root-core/2"
+export interface RegistryCutoffCoverageRootCore {
+  readonly format: "convax.registry-cutoff-coverage-root-core"
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly cutoffId: Id128
-  readonly target: RegistryCutoffTargetV2
+  readonly target: RegistryCutoffTarget
   readonly beforeMembershipSnapshotDigest: Digest
   readonly afterMembershipSnapshotDigest: Digest
   readonly registrySequence: Uint64
@@ -222,20 +222,20 @@ export interface RegistryCutoffCoverageRootCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface RegistryCutoffCoverageRootV2 {
-  readonly format: "convax.registry-cutoff-coverage-root/2"
-  readonly core: RegistryCutoffCoverageRootCoreV2
+export interface RegistryCutoffCoverageRoot {
+  readonly format: "convax.registry-cutoff-coverage-root"
+  readonly core: RegistryCutoffCoverageRootCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
-export interface AuthorizationMutationCoreV2 {
-  readonly format: "convax.authorization-mutation-core/2"
+export interface AuthorizationMutationCore {
+  readonly format: "convax.authorization-mutation-core"
   readonly mutationId: Id128
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly membershipEpoch: Id128
-  readonly target: RegistryCutoffTargetV2
+  readonly target: RegistryCutoffTarget
   readonly beforeMembershipSnapshotDigest: Digest
   readonly afterMembershipSnapshotDigest: Digest
   readonly registryCutoffCoverageRootCoreDigest: Digest
@@ -246,9 +246,9 @@ export interface AuthorizationMutationCoreV2 {
   readonly serviceKeyId: string
 }
 
-export interface AuthorizationMutationV2 {
-  readonly format: "convax.authorization-mutation/2"
-  readonly core: AuthorizationMutationCoreV2
+export interface AuthorizationMutation {
+  readonly format: "convax.authorization-mutation"
+  readonly core: AuthorizationMutationCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }

@@ -44,7 +44,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createRoot } from "react-dom/client"
 import { I18nextProvider } from "react-i18next"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
-import { parseProjectTeamInvitationV2 } from "../project-team-collaboration-contracts"
+import { parseProjectTeamInvitation } from "../project-team-collaboration-contracts"
 import {
   hasWebPluginCanvasSurface,
   type ActiveInstalledWebPluginSummary,
@@ -90,7 +90,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
-import { openDesktopCanvasRendererSessionV2, type DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import {
   mountCanvasSessionWithBackgroundReconcile,
   type CanvasSessionReconcileDiagnostic,
@@ -666,7 +666,7 @@ function App() {
   const canvasSessionScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
   const [mountedCanvasSession, setMountedCanvasSession] = useState<{
     key: string
-    session: DesktopCanvasRendererSessionV2
+    session: DesktopCanvasRendererSession
   } | null>(null)
   const [canvasSessionFailure, setCanvasSessionFailure] = useState<{ key: string; message: string } | null>(null)
   useEffect(() => {
@@ -685,7 +685,7 @@ function App() {
       },
       onMounted: (session) => setMountedCanvasSession({ key, session }),
       openSession: (signal) =>
-        openDesktopCanvasRendererSessionV2({
+        openDesktopCanvasRendererSession({
           ref,
           signal,
           transport: window.convax.canvas.sessions,
@@ -2440,7 +2440,7 @@ function App() {
                     }}
                     onJoinTeam={async ({ invitation, projectId }) => {
                       await window.convax.projects.collaboration.joinTeam({
-                        invitation: parseProjectTeamInvitationV2(JSON.parse(invitation)),
+                        invitation: parseProjectTeamInvitation(JSON.parse(invitation)),
                         projectId,
                       })
                     }}

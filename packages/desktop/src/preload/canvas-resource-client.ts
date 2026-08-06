@@ -16,7 +16,7 @@ import {
   isCanvasResourcePartialFailureResponse,
   isCanvasTextResourceConflictResponse,
 } from "../canvas-resource-private-contract"
-import { assertOperationReceiptDtoV2 } from "./canvas-operation-receipt-codec"
+import { assertOperationReceiptDto } from "./canvas-operation-receipt-codec"
 
 interface CanvasResourcePreloadClientOptions {
   getPathForFile(file: File): string
@@ -294,7 +294,7 @@ async function invokeCanvasResourceRelink(
   }
   const projection = parseCanvasDocument(result.projection)
   if (!projection) throw new Error("Canvas relink projection is invalid")
-  assertOperationReceiptDtoV2(result.operationReceipt)
+  assertOperationReceiptDto(result.operationReceipt)
   return {
     operationReceipt: structuredClone(result.operationReceipt),
     projection,
@@ -324,7 +324,7 @@ function requireCanvasResourceAddResult(value: unknown): CanvasResourceAddResult
   }
   const projection = parseCanvasDocument(value.projection)
   if (!projection) throw new Error("Canvas resource response projection is invalid")
-  assertOperationReceiptDtoV2(value.operationReceipt)
+  assertOperationReceiptDto(value.operationReceipt)
   return {
     createdNodeIds: value.createdNodeIds,
     operationReceipt: structuredClone(value.operationReceipt),

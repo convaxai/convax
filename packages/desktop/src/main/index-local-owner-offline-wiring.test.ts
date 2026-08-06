@@ -7,15 +7,15 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import * as ts from "typescript"
 
 import {
-  ProjectTeamCollaborationManagerV2,
-  type ProjectTeamPeerSessionFactoryV2,
+  ProjectTeamCollaborationManager,
+  type ProjectTeamPeerSessionFactory,
 } from "./project-team-collaboration-manager"
 
 const mainPath = fileURLToPath(new URL("./index.ts", import.meta.url))
 const mainSource = readFileSync(mainPath, "utf8")
 
 interface TestStatus {
-  format: "convax.project-team-collaboration-status/2"
+  format: "convax.project-team-collaboration-status"
   projectId: string
   state: "local-only" | "starting" | "online" | "offline" | "viewer" | "attention"
   canEdit: boolean
@@ -53,7 +53,7 @@ type TeamRuntimeGateFactory = (input: {
 async function loadTeamRuntimeGateFactory(): Promise<TeamRuntimeGateFactory> {
   const sourceFile = ts.createSourceFile(mainPath, mainSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
   const declaration = sourceFile.statements.find((statement): statement is ts.FunctionDeclaration =>
-    ts.isFunctionDeclaration(statement) && statement.name?.text === "createProjectTeamRuntimeGateV2")
+    ts.isFunctionDeclaration(statement) && statement.name?.text === "createProjectTeamRuntimeGate")
   if (!declaration) throw new Error("Project Team runtime gate factory is missing from Main")
   const source = declaration.getText(sourceFile)
   const javascript = ts.transpileModule(source, {
@@ -65,24 +65,24 @@ async function loadTeamRuntimeGateFactory(): Promise<TeamRuntimeGateFactory> {
     await writeFile(modulePath, javascript, "utf8")
     const loaded: unknown = await import(pathToFileURL(modulePath).href)
     if (!isTeamRuntimeGateModule(loaded)) throw new Error("Transpiled Team runtime gate module is invalid")
-    return loaded.createProjectTeamRuntimeGateV2
+    return loaded.createProjectTeamRuntimeGate
   } finally {
     await rm(directory, { force: true, recursive: true })
   }
 }
 
 function isTeamRuntimeGateModule(value: unknown): value is {
-  createProjectTeamRuntimeGateV2: TeamRuntimeGateFactory
+  createProjectTeamRuntimeGate: TeamRuntimeGateFactory
 } {
   return typeof value === "object" && value !== null &&
-    typeof Reflect.get(value, "createProjectTeamRuntimeGateV2") === "function"
+    typeof Reflect.get(value, "createProjectTeamRuntimeGate") === "function"
 }
 
 const createTeamRuntimeGate = await loadTeamRuntimeGateFactory()
 
 function localOnlyStatus(projectId: string): TestStatus {
   return Object.freeze({
-    format: "convax.project-team-collaboration-status/2" as const,
+    format: "convax.project-team-collaboration-status" as const,
     projectId,
     state: "local-only" as const,
     canEdit: false,
@@ -93,7 +93,7 @@ function localOnlyStatus(projectId: string): TestStatus {
 
 function onlineStatus(projectId: string): TestStatus {
   return Object.freeze({
-    format: "convax.project-team-collaboration-status/2" as const,
+    format: "convax.project-team-collaboration-status" as const,
     projectId,
     state: "online" as const,
     canEdit: true,
@@ -305,7 +305,7 @@ describe("Desktop Main local-first Team runtime wiring", () => {
     expect(failed.unsubscribeCalls).toBe(1)
     expect(failed.disposeCalls).toBe(1)
     expect(gate.service.getStatus("project-broken-team")).toEqual({
-      format: "convax.project-team-collaboration-status/2",
+      format: "convax.project-team-collaboration-status",
       projectId: "project-broken-team",
       state: "attention",
       canEdit: false,
@@ -358,7 +358,7 @@ describe("Desktop Main local-first Team runtime wiring", () => {
     let activationStarted!: () => void
     const started = new Promise<void>((resolve) => { activationStarted = resolve })
     let activationAborted = false
-    const openExisting: ProjectTeamPeerSessionFactoryV2["openExisting"] = ({ signal }) =>
+    const openExisting: ProjectTeamPeerSessionFactory["openExisting"] = ({ signal }) =>
       new Promise((_, reject) => {
         activationStarted()
         signal.addEventListener("abort", () => {
@@ -366,12 +366,12 @@ describe("Desktop Main local-first Team runtime wiring", () => {
           reject(signal.reason)
         }, { once: true })
       })
-    const factory: ProjectTeamPeerSessionFactoryV2 = {
+    const factory: ProjectTeamPeerSessionFactory = {
       openExisting,
       async bootstrapTeam() { throw new Error("bootstrap is not expected") },
       async joinTeam() { throw new Error("join is not expected") },
     }
-    const manager = new ProjectTeamCollaborationManagerV2(factory)
+    const manager = new ProjectTeamCollaborationManager(factory)
     const runtime: TestRuntime = {
       service: {
         activateLocalProject: (projectId) => manager.activateLocalProject(projectId),
@@ -403,7 +403,7 @@ describe("Desktop Main local-first Team runtime wiring", () => {
   })
 
   test("keeps every Team/control constructor inside the lazily created runtime closure", () => {
-    const compositionStart = mainSource.indexOf("projectTeamRuntimeGate = createProjectTeamRuntimeGateV2({")
+    const compositionStart = mainSource.indexOf("projectTeamRuntimeGate = createProjectTeamRuntimeGate({")
     const runtimeStart = mainSource.indexOf("createRuntime: () => {", compositionStart)
     const compositionEnd = mainSource.indexOf("const petAssetInspector", runtimeStart)
     expect(compositionStart).toBeGreaterThan(0)
@@ -412,12 +412,12 @@ describe("Desktop Main local-first Team runtime wiring", () => {
 
     const runtimeSource = mainSource.slice(runtimeStart, compositionEnd)
     for (const constructor of [
-      "createDesktopCollaborationControlHttpClientV2({",
-      "new ElectronTeamIdentityVaultV1(",
-      "new NodeProjectTeamMemberIdentityStoreV1(",
-      "new DesktopProjectTeamReplicaProvisionerV2({",
-      "new ProductionProjectTeamPeerSessionFactoryV2({",
-      "new ProjectTeamCollaborationManagerV2(",
+      "createDesktopCollaborationControlHttpClient({",
+      "new ElectronTeamIdentityVault(",
+      "new NodeProjectTeamMemberIdentityStore(",
+      "new DesktopProjectTeamReplicaProvisioner({",
+      "new ProductionProjectTeamPeerSessionFactory({",
+      "new ProjectTeamCollaborationManager(",
       "net.isOnline()",
       'powerMonitor.on("resume"',
       'powerMonitor.removeListener("resume"',

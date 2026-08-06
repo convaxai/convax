@@ -1,11 +1,11 @@
 import { parseProjectId, type ProjectId } from "@convax/collaboration"
 
-import type { NodeDurableTeamAuthorityStoreV1 } from "./durable-team-authority-store"
-import type { ProjectTeamCollaborationStatusV2 } from "../project-team-collaboration-contracts"
+import type { NodeDurableTeamAuthorityStore } from "./durable-team-authority-store"
+import type { ProjectTeamCollaborationStatus } from "../project-team-collaboration-contracts"
 
-export interface ProjectSharingActivationServiceV2 {
-  activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatusV2>
-  activateProject(projectId: string): Promise<ProjectTeamCollaborationStatusV2>
+export interface ProjectSharingActivationService {
+  activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
+  activateProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
 }
 
 /**
@@ -14,11 +14,11 @@ export interface ProjectSharingActivationServiceV2 {
  * Rejected durable Team bytes stay on the shared fail-closed path and are never
  * reinterpreted as an unshared Project.
  */
-export async function activateProjectSharingFromDurableBindingV2(input: {
+export async function activateProjectSharingFromDurableBinding(input: {
   readonly projectId: string
-  readonly sharing: Pick<NodeDurableTeamAuthorityStoreV1, "open">
-  readonly service: ProjectSharingActivationServiceV2
-}): Promise<ProjectTeamCollaborationStatusV2> {
+  readonly sharing: Pick<NodeDurableTeamAuthorityStore, "open">
+  readonly service: ProjectSharingActivationService
+}): Promise<ProjectTeamCollaborationStatus> {
   const projectId: ProjectId = parseProjectId(input.projectId)
   const binding = await input.sharing.open(projectId)
   return binding === "missing"

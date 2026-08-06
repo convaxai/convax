@@ -8,8 +8,8 @@ import {
   type DocumentScope,
 } from "@convax/collaboration"
 import type {
-  InitializeNativeCollaborationShardWithGenesisProofV2,
-  NodeAcceptedReplicaHeadV2,
+  InitializeNativeCollaborationShardWithGenesisProof,
+  NodeAcceptedReplicaHead,
 } from "./persistence-store"
 
 export interface ProjectDocumentGenesisPredecessor {
@@ -22,7 +22,7 @@ export interface VerifiedProjectDocumentGenesisCandidate<K extends DocumentOwner
   readonly checkpointObjectDigest: Digest
   readonly checkpointExactBytes: Readonly<Uint8Array>
   readonly proofCarrierExactBytes: Readonly<Uint8Array>
-  readonly acceptedBase: InitializeNativeCollaborationShardWithGenesisProofV2["acceptedBase"]
+  readonly acceptedBase: InitializeNativeCollaborationShardWithGenesisProof["acceptedBase"]
 }
 
 export type PrepareProjectDocumentGenesisResult<K extends DocumentOwnerKind> =
@@ -44,8 +44,8 @@ export interface ProjectDocumentGenesisVerifierPort<K extends DocumentOwnerKind>
 
 export interface ProjectDocumentGenesisStorePort {
   initializeShardWithGenesisProof(
-    input: InitializeNativeCollaborationShardWithGenesisProofV2,
-  ): Promise<NodeAcceptedReplicaHeadV2>
+    input: InitializeNativeCollaborationShardWithGenesisProof,
+  ): Promise<NodeAcceptedReplicaHead>
 }
 
 export interface DurableProjectDocumentGenesisIdentity<K extends DocumentOwnerKind> {
@@ -114,7 +114,7 @@ export async function stageDurableProjectDocumentGenesis<K extends DocumentOwner
 function cloneCandidate<K extends DocumentOwnerKind>(
   value: VerifiedProjectDocumentGenesisCandidate<K>,
   expectedScope: DocumentScope & { readonly docKind: K },
-): InitializeNativeCollaborationShardWithGenesisProofV2 {
+): InitializeNativeCollaborationShardWithGenesisProof {
   const scope = parseDocumentScope(value.scope)
   if (!sameScope(scope, expectedScope)) throw new Error("Verified document genesis crossed scope")
   const acceptedScope = parseDocumentScope(value.acceptedBase.scope)

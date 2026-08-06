@@ -3,7 +3,7 @@ import type {
   CanvasApplicationQueryResult,
   CanvasApplicationService,
 } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 
 type CanvasProjectionSource = CanvasDocument | (() => CanvasDocument)
@@ -11,7 +11,7 @@ type CanvasProjectionSource = CanvasDocument | (() => CanvasDocument)
 export function canvasOperationReceipt(
   operationId: string,
   actorId = "desktop-test",
-): BoundedOperationReceiptV2 {
+): BoundedOperationReceipt {
   return { actorId, operationId } as never
 }
 

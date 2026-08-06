@@ -1,20 +1,20 @@
 import { parseDigest, parsePublicKey, type Digest } from "@convax/collaboration"
-import type { PinnedControlServiceKeyV2 } from "@convax/project/collaboration-protocol"
+import type { PinnedControlServiceKey } from "@convax/project/collaboration-protocol"
 
-export interface DesktopCollaborationControlRuntimeConfigV1 {
+export interface DesktopCollaborationControlRuntimeConfig {
   readonly format: "convax.desktop-collaboration-control-runtime/1"
   readonly serviceBaseUrl: string
   readonly trustBundleDigest: Digest
-  readonly keys: readonly PinnedControlServiceKeyV2[]
+  readonly keys: readonly PinnedControlServiceKey[]
 }
 
 /**
  * Deployment-owned public trust roots. Absence disables online collaboration;
  * malformed or partial configuration aborts startup instead of changing trust.
  */
-export function parseDesktopCollaborationControlRuntimeConfigV1(
+export function parseDesktopCollaborationControlRuntimeConfig(
   encoded: string | undefined,
-): DesktopCollaborationControlRuntimeConfigV1 | null {
+): DesktopCollaborationControlRuntimeConfig | null {
   if (encoded === undefined || encoded.trim() === "") return null
   if (encoded.length > 32 * 1024) throw new TypeError("Collaboration control runtime configuration is too large")
   let value: unknown

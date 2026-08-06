@@ -1,14 +1,14 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
 import {
-  assertResourceRefV2,
-  canvasProjectionResourceMetadataKeyV2,
-  type CanvasResourceRefV2,
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
+  type CanvasResourceRef,
 } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 import { parseProjectId } from "@convax/collaboration"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
+import type { ProjectIndexCurrentBlobReferencePort } from "../../collaboration/blob-replication"
 import {
   hydrateProjectCanvasDocument,
   hydrateStaleProjectCanvasResources,
@@ -17,7 +17,7 @@ import {
   type ProjectResourceReference,
   type ProjectResourceSnapshot,
 } from "../../canvas/project-resources"
-import { projectResourceReferenceDigestV2 } from "../../collaboration/project-index"
+import { projectIndexResourceReferenceDigest } from "../../collaboration/project-index"
 import { mimeTypeForPath } from "../project-manager-helpers"
 import { readStableProjectFile, readStableProjectUtf8File } from "../stable-project-file"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
@@ -38,7 +38,7 @@ export interface ProjectCanvasResourceUrlInput {
 export type ProjectCanvasResourceUrlFactory = (input: ProjectCanvasResourceUrlInput) => string
 
 export interface ProjectCanvasResourceHydratorOptions {
-  currentResources?: ProjectIndexCurrentBlobReferencePortV2
+  currentResources?: ProjectIndexCurrentBlobReferencePort
   maximumMediaBytes?: number
   maximumTextBytes?: number
 }
@@ -66,7 +66,7 @@ const defaultMaximumMediaBytes = 64 * 1024 * 1024
 const defaultMaximumTextBytes = 16 * 1024 * 1024
 
 export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort {
-  readonly #currentResources?: ProjectIndexCurrentBlobReferencePortV2
+  readonly #currentResources?: ProjectIndexCurrentBlobReferencePort
   readonly #maximumMediaBytes: number
   readonly #maximumTextBytes: number
 
@@ -118,12 +118,12 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     projectId: string
   }): Promise<{ document: CanvasDocument; unavailableNodeIds: ReadonlySet<string> }> {
     if (!this.#currentResources) return { document: input.document, unavailableNodeIds: new Set() }
-    const resources = new Map<number, CanvasResourceRefV2>()
+    const resources = new Map<number, CanvasResourceRef>()
     input.document.nodes.forEach((node, index) => {
       if (!node.data.metadata || typeof node.data.metadata !== "object" || Array.isArray(node.data.metadata)) return
-      const candidate = (node.data.metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+      const candidate = (node.data.metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
       try {
-        assertResourceRefV2(candidate)
+        assertResourceRef(candidate)
         resources.set(index, candidate)
       } catch {
         // The ordinary hydrator below projects a bounded corrupt state.
@@ -147,7 +147,7 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
         current.reference.blob.mime !== resource.mime ||
         current.reference.blob.byteLength !== resource.byteLength ||
         current.reference.blob.digest !== resource.contentDigest ||
-        projectResourceReferenceDigestV2(current.reference) !== resource.ownerProofDigest
+        projectIndexResourceReferenceDigest(current.reference) !== resource.ownerProofDigest
       ) {
         return node
       }

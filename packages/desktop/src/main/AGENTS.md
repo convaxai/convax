@@ -218,6 +218,11 @@ For any matching change, read the full routed reference before planning or editi
   cutover guard. A legacy recovery adapter may resolve only an exact pristine
   local-owner bootstrap through the Project/node verifier; path presence alone is
   neither Team evidence nor permission to reset current collaboration state.
+- The explicit retired-V3 local reset branch requires both frozen local marker files,
+  no sharing-handoff or Team/control namespace, and `missing` from the durable Team
+  authority store. It never decodes old frames. Prepare a fresh owner binding, keep
+  it inert through genesis publication and byte-exact `.convax-archive-*` verification,
+  then activate it; interruption keeps the old binding or recovery marker fail-closed.
 - Opening a Project with no durable Team binding must not bootstrap, join, or open
   Team control-plane state. This keeps the shell local-first; mutation authority
   still comes only from the validated current protocol descriptor, never from shell

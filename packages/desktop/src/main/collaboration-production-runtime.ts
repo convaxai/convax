@@ -13,41 +13,41 @@ import type {
   CurrentProtocolAuthority,
   YjsDocumentFactory,
 } from "@convax/collaboration"
-import { NodeCollaborationPersistenceV2 } from "@convax/project/node"
-import type { NodeReplicaHeadMaterializerV2 } from "@convax/project/node"
+import { NodeCollaborationPersistence } from "@convax/project/node"
+import type { NodeReplicaHeadMaterializer } from "@convax/project/node"
 
 import {
-  createCurrentLocalReplicaAuthorityPortV2,
-  createIncomingReplicaAuthorityVerificationPortV2,
-  type CurrentLocalReplicaAuthorityEvidenceV2,
-  type CurrentLocalReplicaAuthoritySourceV2,
-  type IncomingReplicaAuthoritySourceV2,
+  createCurrentLocalReplicaAuthorityPort,
+  createIncomingReplicaAuthorityVerificationPort,
+  type CurrentLocalReplicaAuthorityEvidence,
+  type CurrentLocalReplicaAuthoritySource,
+  type IncomingReplicaAuthoritySource,
 } from "./collaboration-authority-ports"
 import {
-  createAcceptedCausalClosureIndexV2,
-  createDurableExactBaseResolverV2,
-  createProductionNodeReplicaHeadMaterializerV2,
+  createAcceptedCausalClosureIndex,
+  createDurableExactBaseResolver,
+  createProductionNodeReplicaHeadMaterializer,
 } from "./collaboration-exact-base"
 
-export interface OfflineReplicaSigningVaultV2 {
+export interface OfflineReplicaSigningVault {
   openSigner(input: {
     readonly projectId: DocumentScope["projectId"]
     readonly projectEpoch: DocumentScope["projectEpoch"]
-    readonly replicaId: CurrentLocalReplicaAuthorityEvidenceV2["signerAuthority"]["replicaId"]
+    readonly replicaId: CurrentLocalReplicaAuthorityEvidence["signerAuthority"]["replicaId"]
     readonly expectedPublicKey: PublicKey
   }): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected">
 }
 
-export interface DurableVerifiedLocalAuthorityCacheEntryV2
-  extends Omit<CurrentLocalReplicaAuthorityEvidenceV2, "signer"> {
+export interface DurableVerifiedLocalAuthorityCacheEntry
+  extends Omit<CurrentLocalReplicaAuthorityEvidence, "signer"> {
   readonly replicaSigningPublicKey: PublicKey
 }
 
 /** Digest-addressed current control evidence persisted outside Project payload bytes. */
-export interface DurableVerifiedLocalAuthorityCacheV2 {
+export interface DurableVerifiedLocalAuthorityCache {
   resolveCurrent(
-    input: Parameters<CurrentLocalReplicaAuthoritySourceV2["resolveCurrent"]>[0],
-  ): Promise<DurableVerifiedLocalAuthorityCacheEntryV2 | "pending" | "rejected">
+    input: Parameters<CurrentLocalReplicaAuthoritySource["resolveCurrent"]>[0],
+  ): Promise<DurableVerifiedLocalAuthorityCacheEntry | "pending" | "rejected">
 }
 
 /**
@@ -55,12 +55,12 @@ export interface DurableVerifiedLocalAuthorityCacheV2 {
  * Only the signer is reopened from the OS vault; neither private key nor signer is
  * stored in Project collaboration metadata.
  */
-export function createOfflineCurrentLocalReplicaAuthoritySourceV2(input: {
-  readonly cache: DurableVerifiedLocalAuthorityCacheV2
-  readonly vault: OfflineReplicaSigningVaultV2
-}): CurrentLocalReplicaAuthoritySourceV2 {
-  const source: CurrentLocalReplicaAuthoritySourceV2 = {
-    async resolveCurrent(request: Parameters<CurrentLocalReplicaAuthoritySourceV2["resolveCurrent"]>[0]) {
+export function createOfflineCurrentLocalReplicaAuthoritySource(input: {
+  readonly cache: DurableVerifiedLocalAuthorityCache
+  readonly vault: OfflineReplicaSigningVault
+}): CurrentLocalReplicaAuthoritySource {
+  const source: CurrentLocalReplicaAuthoritySource = {
+    async resolveCurrent(request: Parameters<CurrentLocalReplicaAuthoritySource["resolveCurrent"]>[0]) {
       const cached = await input.cache.resolveCurrent(request)
       if (cached === "pending" || cached === "rejected") return cached
       const signer = await input.vault.openSigner({
@@ -77,21 +77,21 @@ export function createOfflineCurrentLocalReplicaAuthoritySourceV2(input: {
   return Object.freeze(source)
 }
 
-export interface MainCollaborationProductionRuntimeV2<K extends DocumentOwnerKind> {
+export interface MainCollaborationProductionRuntime<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
-  readonly persistence: NodeCollaborationPersistenceV2
+  readonly persistence: NodeCollaborationPersistence
   readonly ports: CollaborationKernelPorts
   dispose(): void
 }
 
-export interface ProjectCollaborationMaterializerRegistryV2 extends NodeReplicaHeadMaterializerV2 {
+export interface ProjectCollaborationMaterializerRegistry extends NodeReplicaHeadMaterializer {
   register(input: {
     readonly scope: DocumentScope
-    readonly materializer: NodeReplicaHeadMaterializerV2
+    readonly materializer: NodeReplicaHeadMaterializer
   }): () => void
 }
 
-export interface OpenProjectCollaborationDocumentV2<K extends DocumentOwnerKind> {
+export interface OpenProjectCollaborationDocument<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly owner: DocumentOwnerRuntime<K>
   readonly incomingFacts: IncomingOwnerFactResolverPort
@@ -100,39 +100,39 @@ export interface OpenProjectCollaborationDocumentV2<K extends DocumentOwnerKind>
   readonly prepareShard?: () => Promise<void>
 }
 
-export interface MainProjectCollaborationProductionRuntimeV2 {
-  readonly persistence: NodeCollaborationPersistenceV2
+export interface MainProjectCollaborationProductionRuntime {
+  readonly persistence: NodeCollaborationPersistence
   openDocument<K extends DocumentOwnerKind>(
-    input: OpenProjectCollaborationDocumentV2<K>,
-  ): Promise<MainCollaborationProductionRuntimeV2<K>>
+    input: OpenProjectCollaborationDocument<K>,
+  ): Promise<MainCollaborationProductionRuntime<K>>
   closeDocument(scope: DocumentScope): Promise<void>
   dispose(): Promise<void>
 }
 
 /** Project-scoped owner of the one native writer and every lazy document runtime. */
-export async function createMainProjectCollaborationProductionRuntimeV2(input: {
+export async function createMainProjectCollaborationProductionRuntime(input: {
   readonly authority: CurrentProtocolAuthority
   readonly collaborationDirectory: string
   readonly actorId: ActorId
-  readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
-  readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
-}): Promise<MainProjectCollaborationProductionRuntimeV2> {
-  const materializers = createProjectCollaborationMaterializerRegistryV2()
-  const persistence = await NodeCollaborationPersistenceV2.open({
+  readonly localAuthority: CurrentLocalReplicaAuthoritySource
+  readonly incomingAuthority: IncomingReplicaAuthoritySource
+}): Promise<MainProjectCollaborationProductionRuntime> {
+  const materializers = createProjectCollaborationMaterializerRegistry()
+  const persistence = await NodeCollaborationPersistence.open({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.actorId,
     materializer: materializers,
   })
-  const documents = new Map<Digest, Promise<MainCollaborationProductionRuntimeV2<DocumentOwnerKind>>>()
+  const documents = new Map<Digest, Promise<MainCollaborationProductionRuntime<DocumentOwnerKind>>>()
   let disposed = false
-  const project: MainProjectCollaborationProductionRuntimeV2 = {
+  const project: MainProjectCollaborationProductionRuntime = {
     persistence,
-    async openDocument<K extends DocumentOwnerKind>(document: OpenProjectCollaborationDocumentV2<K>) {
+    async openDocument<K extends DocumentOwnerKind>(document: OpenProjectCollaborationDocument<K>) {
       requireLive()
       const key = documentScopeDigest(document.scope)
       let promised = documents.get(key)
       if (!promised) {
-        const creating = createMainCollaborationProductionRuntimeV2({
+        const creating = createMainCollaborationProductionRuntime({
           authority: input.authority,
           scope: document.scope,
           owner: document.owner,
@@ -145,7 +145,7 @@ export async function createMainProjectCollaborationProductionRuntimeV2(input: {
           persistence,
           materializers,
           ...(document.prepareShard ? { prepareShard: document.prepareShard } : {}),
-        }) as Promise<MainCollaborationProductionRuntimeV2<DocumentOwnerKind>>
+        }) as Promise<MainCollaborationProductionRuntime<DocumentOwnerKind>>
         documents.set(key, creating)
         void creating.catch(() => { if (documents.get(key) === creating) documents.delete(key) })
         promised = creating
@@ -154,7 +154,7 @@ export async function createMainProjectCollaborationProductionRuntimeV2(input: {
       if (documentScopeDigest(runtime.scope) !== key || runtime.scope.docKind !== document.scope.docKind) {
         throw new Error("Project collaboration runtime returned another document scope")
       }
-      return runtime as MainCollaborationProductionRuntimeV2<K>
+      return runtime as MainCollaborationProductionRuntime<K>
     },
     async closeDocument(scope) {
       const key = documentScopeDigest(scope)
@@ -181,9 +181,9 @@ export async function createMainProjectCollaborationProductionRuntimeV2(input: {
 }
 
 /** One Project writer routes materialization by exact document scope. */
-export function createProjectCollaborationMaterializerRegistryV2(): ProjectCollaborationMaterializerRegistryV2 {
-  const entries = new Map<Digest, NodeReplicaHeadMaterializerV2>()
-  const registry: ProjectCollaborationMaterializerRegistryV2 = {
+export function createProjectCollaborationMaterializerRegistry(): ProjectCollaborationMaterializerRegistry {
+  const entries = new Map<Digest, NodeReplicaHeadMaterializer>()
+  const registry: ProjectCollaborationMaterializerRegistry = {
     register({ scope, materializer }) {
       const key = documentScopeDigest(scope)
       if (entries.has(key)) throw new Error("Collaboration document materializer is already registered")
@@ -210,7 +210,7 @@ export function createProjectCollaborationMaterializerRegistryV2(): ProjectColla
   }
   return Object.freeze(registry)
 
-  function requireMaterializer(scope: DocumentScope): NodeReplicaHeadMaterializerV2 {
+  function requireMaterializer(scope: DocumentScope): NodeReplicaHeadMaterializer {
     const materializer = entries.get(documentScopeDigest(scope))
     if (!materializer) throw new Error("Collaboration document materializer is not registered")
     return materializer
@@ -221,27 +221,27 @@ export function createProjectCollaborationMaterializerRegistryV2(): ProjectColla
  * Small Main composition seam. Authority, owner semantics, OS-vault identity,
  * Project sole-writer durability and causal reconstruction remain independent.
  */
-export async function createMainCollaborationProductionRuntimeV2<K extends DocumentOwnerKind>(input: {
+export async function createMainCollaborationProductionRuntime<K extends DocumentOwnerKind>(input: {
   readonly authority: CurrentProtocolAuthority
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly owner: DocumentOwnerRuntime<K>
   readonly actorId: ActorId
-  readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
-  readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
+  readonly localAuthority: CurrentLocalReplicaAuthoritySource
+  readonly incomingAuthority: IncomingReplicaAuthoritySource
   readonly incomingFacts: IncomingOwnerFactResolverPort
   readonly createDocument: YjsDocumentFactory["createDocument"]
   readonly requiredBlobDigests: (frame: DecodedCausalEditFrame) => readonly Digest[]
   /** One already-open Project-scoped sole writer shared by ProjectIndex and every Canvas. */
-  readonly persistence: NodeCollaborationPersistenceV2
-  readonly materializers: ProjectCollaborationMaterializerRegistryV2
+  readonly persistence: NodeCollaborationPersistence
+  readonly materializers: ProjectCollaborationMaterializerRegistry
   /** Used only by explicit genesis/open orchestration after the scope materializer is registered. */
   readonly prepareShard?: () => Promise<void>
-}): Promise<MainCollaborationProductionRuntimeV2<K>> {
-  const causalClosure = createAcceptedCausalClosureIndexV2({
+}): Promise<MainCollaborationProductionRuntime<K>> {
+  const causalClosure = createAcceptedCausalClosureIndex({
     authority: input.authority,
     scope: input.scope,
   })
-  const materializer = createProductionNodeReplicaHeadMaterializerV2({
+  const materializer = createProductionNodeReplicaHeadMaterializer({
     authority: input.authority,
     owner: input.owner,
     causalClosure,
@@ -255,13 +255,13 @@ export async function createMainCollaborationProductionRuntimeV2<K extends Docum
     const ports: CollaborationKernelPorts = Object.freeze({
       createDocument: input.createDocument,
       persistence: input.persistence,
-      localAuthority: createCurrentLocalReplicaAuthorityPortV2({
+      localAuthority: createCurrentLocalReplicaAuthorityPort({
         actorId: input.actorId,
         source: input.localAuthority,
       }),
-      incomingAuthority: createIncomingReplicaAuthorityVerificationPortV2(input.incomingAuthority),
+      incomingAuthority: createIncomingReplicaAuthorityVerificationPort(input.incomingAuthority),
       incomingFacts: input.incomingFacts,
-      exactBaseResolver: createDurableExactBaseResolverV2({
+      exactBaseResolver: createDurableExactBaseResolver({
         authority: input.authority,
         scope: input.scope,
         owner: input.owner,

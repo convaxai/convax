@@ -15,76 +15,76 @@ import {
   type Signature,
 } from "@convax/collaboration"
 import {
-  membershipMutationProofCoreDigestV2,
-  parseActivePeerDirectoryV2,
-  parseMemberCredentialV2,
-  parseMembershipMutationProofCoreV2,
-  parseMembershipMutationProofV2,
-  parseMembershipSnapshotV2,
-  parseMutationChallengeV2,
-  parseMutationReceiptV2,
-  parsePeerFreshnessTicketV2,
-  parseProjectAdminCapabilityV2,
-  parseReplicaActorCredentialV2,
-  parseReplicaEditAuthorizationV2,
-  parseReplicaIdReservationReceiptV2,
-  parseReplicaIdReservationRequestV2,
-  parseSessionChallengeV2,
-  parseSessionCredentialV2,
-  peerTicketRequestCoreDigestV2,
-  sessionProofCoreDigestV2,
-  type ActivePeerDirectoryV2,
-  type MemberCredentialV2,
-  type MembershipMutationProofCoreV2,
-  type MembershipMutationProofV2,
-  type MembershipSnapshotV2,
-  type MutationChallengeV2,
-  type MutationReceiptV2,
-  type PeerFreshnessTicketV2,
-  type PeerTicketRequestV2,
-  type PinnedControlServiceVerifierV2,
-  type ProjectAdminCapabilityV2,
-  type ReplicaActorCredentialV2,
-  type ReplicaEditAuthorizationV2,
-  type ReplicaIdReservationReceiptV2,
-  type ReplicaIdReservationRequestV2,
-  type SessionChallengeV2,
-  type SessionCredentialV2,
-  type SessionProofV2,
+  membershipMutationProofCoreDigest,
+  parseActivePeerDirectory,
+  parseMemberCredential,
+  parseMembershipMutationProofCore,
+  parseMembershipMutationProof,
+  parseMembershipSnapshot,
+  parseMutationChallenge,
+  parseMutationReceipt,
+  parsePeerFreshnessTicket,
+  parseProjectAdminCapability,
+  parseReplicaActorCredential,
+  parseReplicaEditAuthorization,
+  parseReplicaIdReservationReceipt,
+  parseReplicaIdReservationRequest,
+  parseSessionChallenge,
+  parseSessionCredential,
+  peerTicketRequestCoreDigest,
+  sessionProofCoreDigest,
+  type ActivePeerDirectory,
+  type MemberCredential,
+  type MembershipMutationProofCore,
+  type MembershipMutationProof,
+  type MembershipSnapshot,
+  type MutationChallenge,
+  type MutationReceipt,
+  type PeerFreshnessTicket,
+  type PeerTicketRequest,
+  type PinnedControlServiceVerifier,
+  type ProjectAdminCapability,
+  type ReplicaActorCredential,
+  type ReplicaEditAuthorization,
+  type ReplicaIdReservationReceipt,
+  type ReplicaIdReservationRequest,
+  type SessionChallenge,
+  type SessionCredential,
+  type SessionProof,
 } from "@convax/project/collaboration-protocol"
 
 import {
-  parseProjectTeamInvitationV2,
-  type ProjectTeamInvitationCarrierV2,
+  parseProjectTeamInvitation,
+  type ProjectTeamInvitationCarrier,
 } from "../project-team-collaboration-contracts"
 
 const MAX_CONTROL_RESPONSE_BYTES = 1024 * 1024
 
-type ControlOperationV2 =
+type ControlOperation =
   | "team-bootstrap" | "invitation-create" | "invitation-prepare" | "invitation-revoke"
   | "member-add-signature-half" | "replica-reservation" | "mutation-challenge" | "membership-mutation"
   | "session-challenge" | "session-credential" | "peer-directory" | "peer-ticket"
 
-export type CollaborationControlCallResultV2<T> =
+export type CollaborationControlCallResult<T> =
   | Readonly<{ status: "ok"; value: T }>
   | Readonly<{ status: "online-disabled"; reason: "service-url-unconfigured" }>
-  | Readonly<{ status: "rejected"; code: CollaborationControlRejectionCodeV2 }>
+  | Readonly<{ status: "rejected"; code: CollaborationControlRejectionCode }>
   | Readonly<{ status: "unavailable"; code: "aborted" | "http-error" | "network-error" }>
 
-export type CollaborationControlRejectionCodeV2 =
+export type CollaborationControlRejectionCode =
   | "expired" | "identity-mismatch" | "invalid-service-artifact" | "invalid-proof"
   | "not-active" | "not-found" | "stale-counter" | "equivocation"
   | "capacity-exceeded" | "project-exists"
 
-export interface DesktopTeamBootstrapResultV2 {
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly ownerCredential: MemberCredentialV2
-  readonly ownerAdminCapability: ProjectAdminCapabilityV2
-  readonly invitation: ProjectTeamInvitationCarrierV2
-  readonly initialization: DesktopProjectBootstrapInitializationV2
+export interface DesktopTeamBootstrapResult {
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly ownerCredential: MemberCredential
+  readonly ownerAdminCapability: ProjectAdminCapability
+  readonly invitation: ProjectTeamInvitationCarrier
+  readonly initialization: DesktopProjectBootstrapInitialization
 }
 
-export interface DesktopProjectBootstrapInitializationV2 {
+export interface DesktopProjectBootstrapInitialization {
   readonly projectId: ProjectId
   readonly projectEpoch: Id128
   readonly projectIndexShardEpoch: Id128
@@ -95,33 +95,33 @@ export interface DesktopProjectBootstrapInitializationV2 {
   readonly initialProjectIndexCanonicalStateDigest: Digest
 }
 
-export interface DesktopPreparedTeamInvitationV1 {
-  readonly invitation: ProjectTeamInvitationCarrierV2
-  readonly challenge: MutationChallengeV2
-  readonly proofCore: Extract<MembershipMutationProofCoreV2, { readonly purpose: "member-add" }>
+export interface DesktopPreparedTeamInvitation {
+  readonly invitation: ProjectTeamInvitationCarrier
+  readonly challenge: MutationChallenge
+  readonly proofCore: Extract<MembershipMutationProofCore, { readonly purpose: "member-add" }>
   readonly requestDigest: Digest
 }
 
-export interface DesktopMembershipMutationResultV2 {
-  readonly receipt: MutationReceiptV2
-  readonly membershipSnapshot: MembershipSnapshotV2
-  readonly requesterCredential: MemberCredentialV2
-  readonly requesterAdminCapability: ProjectAdminCapabilityV2 | null
-  readonly targetMemberCredential: MemberCredentialV2
-  readonly replicaActorCredential: ReplicaActorCredentialV2 | null
-  readonly replicaEditAuthorization: ReplicaEditAuthorizationV2 | null
+export interface DesktopMembershipMutationResult {
+  readonly receipt: MutationReceipt
+  readonly membershipSnapshot: MembershipSnapshot
+  readonly requesterCredential: MemberCredential
+  readonly requesterAdminCapability: ProjectAdminCapability | null
+  readonly targetMemberCredential: MemberCredential
+  readonly replicaActorCredential: ReplicaActorCredential | null
+  readonly replicaEditAuthorization: ReplicaEditAuthorization | null
 }
 
-export type DesktopMemberAddSignatureHalfResultV2 =
+export type DesktopMemberAddSignatureHalfResult =
   | Readonly<{ status: "pending-other-signature"; requestDigest: Digest }>
-  | Readonly<{ status: "committed"; requestDigest: Digest; result: DesktopMembershipMutationResultV2 }>
+  | Readonly<{ status: "committed"; requestDigest: Digest; result: DesktopMembershipMutationResult }>
 
-export type DesktopMutationChallengeIntentV2 =
+export type DesktopMutationChallengeIntent =
   | Readonly<{ purpose: "member-add"; mutationId: Id128; requesterCredentialDigest: Digest; adminCapabilityDigest: Digest; targetMemberId: MemberId; targetMemberSigningPublicKey: PublicKey; initialRole: "viewer" | "editor" }>
   | Readonly<{ purpose: "replica-enroll"; mutationId: Id128; requesterCredentialDigest: Digest; replicaIdReservationReceiptDigest: Digest }>
   | Readonly<{ purpose: "replica-activate-editor"; mutationId: Id128; requesterCredentialDigest: Digest; currentReplicaId: ReplicaId; installedFloorSetDigest: Digest }>
 
-export interface DesktopCollaborationControlHttpClientV2 {
+export interface DesktopCollaborationControlHttpClient {
   bootstrapTeam(input: {
     readonly projectId: ProjectId
     readonly projectEpoch: Id128
@@ -136,27 +136,27 @@ export interface DesktopCollaborationControlHttpClientV2 {
     readonly expectedProtocolDigest: Digest
     readonly expectedTrustBundleDigest: Digest
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<DesktopTeamBootstrapResultV2>>
+  }): Promise<CollaborationControlCallResult<DesktopTeamBootstrapResult>>
   createInvitation(input: {
     readonly projectId: ProjectId
     readonly requesterCredentialDigest: Digest
     readonly adminCapabilityDigest: Digest
     readonly initialRole: "viewer" | "editor"
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<ProjectTeamInvitationCarrierV2>>
+  }): Promise<CollaborationControlCallResult<ProjectTeamInvitationCarrier>>
   prepareInvitation(input: {
-    readonly invitation: ProjectTeamInvitationCarrierV2
+    readonly invitation: ProjectTeamInvitationCarrier
     readonly mutationId: Id128
     readonly targetMemberId: MemberId
     readonly targetMemberSigningPublicKey: PublicKey
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<DesktopPreparedTeamInvitationV1>>
+  }): Promise<CollaborationControlCallResult<DesktopPreparedTeamInvitation>>
   revokeInvitation(input: {
     readonly projectId: ProjectId
     readonly requesterCredentialDigest: Digest
     readonly invitationToken: string
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<Readonly<{ status: "revoked" }>>>
+  }): Promise<CollaborationControlCallResult<Readonly<{ status: "revoked" }>>>
   submitMemberAddSignatureHalf(input: {
     readonly projectId: ProjectId
     readonly invitationToken: string
@@ -164,64 +164,64 @@ export interface DesktopCollaborationControlHttpClientV2 {
     readonly kind: "admin" | "target-possession"
     readonly signature: Signature
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<DesktopMemberAddSignatureHalfResultV2>>
+  }): Promise<CollaborationControlCallResult<DesktopMemberAddSignatureHalfResult>>
   reserveReplicaId(input: {
-    readonly request: ReplicaIdReservationRequestV2
+    readonly request: ReplicaIdReservationRequest
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<ReplicaIdReservationReceiptV2>>
+  }): Promise<CollaborationControlCallResult<ReplicaIdReservationReceipt>>
   requestMutationChallenge(input: {
     readonly projectId: ProjectId
-    readonly intent: DesktopMutationChallengeIntentV2
+    readonly intent: DesktopMutationChallengeIntent
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<MutationChallengeV2>>
+  }): Promise<CollaborationControlCallResult<MutationChallenge>>
   commitMembershipMutation(input: {
-    readonly proof: MembershipMutationProofV2
+    readonly proof: MembershipMutationProof
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<DesktopMembershipMutationResultV2>>
+  }): Promise<CollaborationControlCallResult<DesktopMembershipMutationResult>>
   requestSessionChallenge(input: {
     readonly projectId: ProjectId
     readonly memberId: MemberId
     readonly replicaId: ReplicaId
-    readonly expected: Pick<SessionChallengeV2["core"],
+    readonly expected: Pick<SessionChallenge["core"],
       "projectEpoch" | "membershipEpoch" | "membershipSnapshotDigest" | "actorId" | "protocolDigest">
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<SessionChallengeV2>>
+  }): Promise<CollaborationControlCallResult<SessionChallenge>>
   issueSessionCredential(input: {
-    readonly proof: SessionProofV2
-    readonly expectedChallenge: SessionChallengeV2
+    readonly proof: SessionProof
+    readonly expectedChallenge: SessionChallenge
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<SessionCredentialV2>>
+  }): Promise<CollaborationControlCallResult<SessionCredential>>
   getActivePeerDirectory(input: {
-    readonly credential: SessionCredentialV2
+    readonly credential: SessionCredential
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<ActivePeerDirectoryV2>>
+  }): Promise<CollaborationControlCallResult<ActivePeerDirectory>>
   requestPeerFreshnessTicket(input: {
-    readonly request: PeerTicketRequestV2
-    readonly requesterCredential: SessionCredentialV2
-    readonly responderCredential: SessionCredentialV2
+    readonly request: PeerTicketRequest
+    readonly requesterCredential: SessionCredential
+    readonly responderCredential: SessionCredential
     readonly expectedChannelContractDigest: Digest
     readonly signal?: AbortSignal
-  }): Promise<CollaborationControlCallResultV2<PeerFreshnessTicketV2>>
+  }): Promise<CollaborationControlCallResult<PeerFreshnessTicket>>
 }
 
 /** Main-only metadata client. A disabled/unavailable service never affects local editing. */
-export function createDesktopCollaborationControlHttpClientV2(input: {
+export function createDesktopCollaborationControlHttpClient(input: {
   readonly serviceBaseUrl?: string | null
-  readonly verifier: PinnedControlServiceVerifierV2
+  readonly verifier: PinnedControlServiceVerifier
   readonly fetch?: typeof globalThis.fetch
   readonly nowUnixMs?: () => bigint
   readonly requestHeaders?: (input: {
-    readonly operation: ControlOperationV2
+    readonly operation: ControlOperation
     readonly projectId: ProjectId
   }) => Promise<Readonly<Record<string, string>>>
-}): DesktopCollaborationControlHttpClientV2 {
+}): DesktopCollaborationControlHttpClient {
   const baseUrl = input.serviceBaseUrl === null || input.serviceBaseUrl === undefined || !input.serviceBaseUrl.trim()
     ? null
     : parseServiceBaseUrl(input.serviceBaseUrl)
   const fetcher = input.fetch ?? globalThis.fetch
   const now = input.nowUnixMs ?? (() => BigInt(Date.now()))
 
-  const client: DesktopCollaborationControlHttpClientV2 = {
+  const client: DesktopCollaborationControlHttpClient = {
     async bootstrapTeam(request) {
       const projectId = parseProjectId(request.projectId)
       const ownerMemberId = parseMemberId(request.ownerMemberId)
@@ -290,7 +290,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       if (request.initialRole !== "viewer" && request.initialRole !== "editor") throw new TypeError("Invitation role is invalid")
       const result = await post("invitation-create", projectId, "invitations", {
         action: "create", requesterCredentialDigest, adminCapabilityDigest, initialRole: request.initialRole,
-      }, parseProjectTeamInvitationV2, request.signal)
+      }, parseProjectTeamInvitation, request.signal)
       if (result.status !== "ok") return result
       if (result.value.projectId !== projectId || result.value.initialRole !== request.initialRole) return rejected("identity-mismatch")
       if (BigInt(result.value.expiresAtUnixMs) <= now()) return rejected("expired")
@@ -298,7 +298,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async prepareInvitation(request) {
-      const invitation = parseProjectTeamInvitationV2(request.invitation)
+      const invitation = parseProjectTeamInvitation(request.invitation)
       if (BigInt(invitation.expiresAtUnixMs) <= now()) return rejected("expired")
       const mutationId = parseId128(request.mutationId)
       const targetMemberId = parseMemberId(request.targetMemberId)
@@ -322,7 +322,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         proof.requesterMemberId !== challenge.requesterMemberId || proof.targetMemberId !== targetMemberId ||
         proof.serverNonce !== challenge.serverNonce || proof.targetMemberSigningPublicKey !== targetMemberSigningPublicKey ||
         proof.initialRole !== invitation.initialRole || proof.adminCapabilityDigest === undefined ||
-        value.requestDigest !== membershipMutationProofCoreDigestV2(proof)) {
+        value.requestDigest !== membershipMutationProofCoreDigest(proof)) {
         return rejected("identity-mismatch")
       }
       return result
@@ -351,7 +351,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         const mutation = result.value.result
         for (const artifact of membershipMutationArtifacts(mutation)) {
           const verified = await verifySignedArtifact(artifact, input.verifier)
-          if (verified.status !== "ok") return verified as CollaborationControlCallResultV2<DesktopMemberAddSignatureHalfResultV2>
+          if (verified.status !== "ok") return verified as CollaborationControlCallResult<DesktopMemberAddSignatureHalfResult>
         }
         if (mutation.receipt.core.requestDigest !== requestDigest || mutation.receipt.core.purpose !== "member-add" ||
           mutation.membershipSnapshot.core.projectId !== projectId) return rejected("identity-mismatch")
@@ -360,9 +360,9 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async reserveReplicaId(request) {
-      const reservation = parseReplicaIdReservationRequestV2(request.request)
+      const reservation = parseReplicaIdReservationRequest(request.request)
       const result = await post("replica-reservation", reservation.core.projectId, "replica-reservations", reservation,
-        parseReplicaIdReservationReceiptV2, request.signal)
+        parseReplicaIdReservationReceipt, request.signal)
       if (result.status !== "ok") return result
       const verified = await verifyArtifact(result.value, now(), input.verifier)
       if (verified.status !== "ok") return verified
@@ -382,7 +382,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       const projectId = parseProjectId(request.projectId)
       const intent = normalizeMutationIntent(request.intent)
       const result = await post("mutation-challenge", projectId, "mutation-challenges", intent,
-        parseMutationChallengeV2, request.signal)
+        parseMutationChallenge, request.signal)
       if (result.status !== "ok") return result
       const verified = await verifyArtifact(result.value, now(), input.verifier)
       if (verified.status !== "ok") return verified
@@ -398,14 +398,14 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async commitMembershipMutation(request) {
-      const proof = parseMembershipMutationProofV2(request.proof)
+      const proof = parseMembershipMutationProof(request.proof)
       const result = await post("membership-mutation", proof.core.projectId, "membership-mutations", proof,
         parseMembershipMutationResult, request.signal)
       if (result.status !== "ok") return result
       const value = result.value
       for (const artifact of membershipMutationArtifacts(value)) {
         const verified = await verifySignedArtifact(artifact, input.verifier)
-        if (verified.status !== "ok") return verified as CollaborationControlCallResultV2<DesktopMembershipMutationResultV2>
+        if (verified.status !== "ok") return verified as CollaborationControlCallResult<DesktopMembershipMutationResult>
       }
       const receipt = value.receipt.core
       const snapshot = value.membershipSnapshot
@@ -439,13 +439,13 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       return result
     },
 
-    async requestSessionChallenge(request: Parameters<DesktopCollaborationControlHttpClientV2["requestSessionChallenge"]>[0]) {
+    async requestSessionChallenge(request: Parameters<DesktopCollaborationControlHttpClient["requestSessionChallenge"]>[0]) {
       const projectId = parseProjectId(request.projectId)
       const memberId = parseMemberId(request.memberId)
       const replicaId = parseReplicaId(request.replicaId)
-      const result = await post<SessionChallengeV2>("session-challenge", projectId, "session-challenges", {
+      const result = await post<SessionChallenge>("session-challenge", projectId, "session-challenges", {
         memberId, replicaId,
-      }, parseSessionChallengeV2, request.signal)
+      }, parseSessionChallenge, request.signal)
       if (result.status !== "ok") return result
       const challenge = result.value
       const core = challenge.core
@@ -458,9 +458,9 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       return verifyArtifact(challenge, now(), input.verifier)
     },
 
-    async issueSessionCredential(request: Parameters<DesktopCollaborationControlHttpClientV2["issueSessionCredential"]>[0]) {
+    async issueSessionCredential(request: Parameters<DesktopCollaborationControlHttpClient["issueSessionCredential"]>[0]) {
       const proof = requireSessionProof(request.proof)
-      const challenge = parseSessionChallengeV2(request.expectedChallenge)
+      const challenge = parseSessionChallenge(request.expectedChallenge)
       if (proof.core.challengeDigest !== challenge.coreDigest || proof.core.projectId !== challenge.core.projectId ||
         proof.core.projectEpoch !== challenge.core.projectEpoch || proof.core.membershipEpoch !== challenge.core.membershipEpoch ||
         proof.core.membershipSnapshotDigest !== challenge.core.membershipSnapshotDigest || proof.core.memberId !== challenge.core.memberId ||
@@ -470,8 +470,8 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         proof.core.protocolDigest !== challenge.core.protocolDigest) {
         return rejected("identity-mismatch")
       }
-      const result = await post<SessionCredentialV2>(
-        "session-credential", proof.core.projectId, "sessions", proof, parseSessionCredentialV2, request.signal,
+      const result = await post<SessionCredential>(
+        "session-credential", proof.core.projectId, "sessions", proof, parseSessionCredential, request.signal,
       )
       if (result.status !== "ok") return result
       const credential = result.value
@@ -489,13 +489,13 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       return verifyArtifact(credential, now(), input.verifier)
     },
 
-    async getActivePeerDirectory(request: Parameters<DesktopCollaborationControlHttpClientV2["getActivePeerDirectory"]>[0]) {
-      const credential = parseSessionCredentialV2(request.credential)
+    async getActivePeerDirectory(request: Parameters<DesktopCollaborationControlHttpClient["getActivePeerDirectory"]>[0]) {
+      const credential = parseSessionCredential(request.credential)
       const credentialStatus = await verifyArtifact(credential, now(), input.verifier)
       if (credentialStatus.status !== "ok") return credentialStatus
-      const result = await post<ActivePeerDirectoryV2>("peer-directory", credential.core.projectId, "peer-directory", {
+      const result = await post<ActivePeerDirectory>("peer-directory", credential.core.projectId, "peer-directory", {
         credentialDigest: credential.coreDigest,
-      }, parseActivePeerDirectoryV2, request.signal)
+      }, parseActivePeerDirectory, request.signal)
       if (result.status !== "ok") return result
       const directory = result.value
       const core = directory.core
@@ -511,10 +511,10 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
       return verifyArtifact(directory, now(), input.verifier)
     },
 
-    async requestPeerFreshnessTicket(request: Parameters<DesktopCollaborationControlHttpClientV2["requestPeerFreshnessTicket"]>[0]) {
+    async requestPeerFreshnessTicket(request: Parameters<DesktopCollaborationControlHttpClient["requestPeerFreshnessTicket"]>[0]) {
       const ticketRequest = requirePeerTicketRequest(request.request)
-      const requester = parseSessionCredentialV2(request.requesterCredential)
-      const responder = parseSessionCredentialV2(request.responderCredential)
+      const requester = parseSessionCredential(request.requesterCredential)
+      const responder = parseSessionCredential(request.responderCredential)
       const timestamp = now()
       const requesterStatus = await verifyArtifact(requester, timestamp, input.verifier)
       if (requesterStatus.status !== "ok") return requesterStatus
@@ -529,8 +529,8 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         ticketRequest.core.protocolDigest !== requester.core.protocolDigest || responder.core.protocolDigest !== requester.core.protocolDigest) {
         return rejected("identity-mismatch")
       }
-      const result = await post<PeerFreshnessTicketV2>(
-        "peer-ticket", requester.core.projectId, "peer-tickets", ticketRequest, parsePeerFreshnessTicketV2, request.signal,
+      const result = await post<PeerFreshnessTicket>(
+        "peer-ticket", requester.core.projectId, "peer-tickets", ticketRequest, parsePeerFreshnessTicket, request.signal,
       )
       if (result.status !== "ok") return result
       const ticket = result.value
@@ -551,13 +551,13 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
   return Object.freeze(client)
 
   async function post<T>(
-    operation: ControlOperationV2,
+    operation: ControlOperation,
     projectId: ProjectId,
     segment: string,
     body: unknown,
     parse: (value: unknown) => T,
     signal?: AbortSignal,
-  ): Promise<CollaborationControlCallResultV2<T>> {
+  ): Promise<CollaborationControlCallResult<T>> {
     if (baseUrl === null) return Object.freeze({ status: "online-disabled", reason: "service-url-unconfigured" })
     if (signal?.aborted) return Object.freeze({ status: "unavailable", code: "aborted" })
     let response: Response
@@ -596,23 +596,23 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
   }
 }
 
-function requireSessionProof(value: SessionProofV2): SessionProofV2 {
-  if (value.format !== "convax.session-proof/2" || value.core.format !== "convax.session-proof-core/2" ||
-    value.coreDigest !== sessionProofCoreDigestV2(value.core)) throw new TypeError("Session proof is invalid")
+function requireSessionProof(value: SessionProof): SessionProof {
+  if (value.format !== "convax.session-proof" || value.core.format !== "convax.session-proof-core" ||
+    value.coreDigest !== sessionProofCoreDigest(value.core)) throw new TypeError("Session proof is invalid")
   return value
 }
 
-function requirePeerTicketRequest(value: PeerTicketRequestV2): PeerTicketRequestV2 {
-  if (value.format !== "convax.peer-ticket-request/2" || value.core.format !== "convax.peer-ticket-request-core/2" ||
-    value.coreDigest !== peerTicketRequestCoreDigestV2(value.core)) throw new TypeError("Peer ticket request is invalid")
+function requirePeerTicketRequest(value: PeerTicketRequest): PeerTicketRequest {
+  if (value.format !== "convax.peer-ticket-request" || value.core.format !== "convax.peer-ticket-request-core" ||
+    value.coreDigest !== peerTicketRequestCoreDigest(value.core)) throw new TypeError("Peer ticket request is invalid")
   return value
 }
 
 async function verifyArtifact<T extends {
   readonly core: { readonly issuedAtUnixMs: string; readonly expiresAtUnixMs: string; readonly serviceKeyPurpose: "membership" | "rendezvous"; readonly serviceKeyId: string }
   readonly coreDigest: Digest
-  readonly serviceSignature: SessionChallengeV2["serviceSignature"]
-}>(artifact: T, now: bigint, verifier: PinnedControlServiceVerifierV2): Promise<CollaborationControlCallResultV2<T>> {
+  readonly serviceSignature: SessionChallenge["serviceSignature"]
+}>(artifact: T, now: bigint, verifier: PinnedControlServiceVerifier): Promise<CollaborationControlCallResult<T>> {
   const issued = BigInt(artifact.core.issuedAtUnixMs)
   const expires = BigInt(artifact.core.expiresAtUnixMs)
   if (issued >= expires || now >= expires) return rejected("expired")
@@ -628,8 +628,8 @@ async function verifyArtifact<T extends {
 async function verifySignedArtifact<T extends {
   readonly core: { readonly serviceKeyPurpose: "membership" | "rendezvous"; readonly serviceKeyId: string }
   readonly coreDigest: Digest
-  readonly serviceSignature: SessionChallengeV2["serviceSignature"]
-}>(artifact: T, verifier: PinnedControlServiceVerifierV2): Promise<CollaborationControlCallResultV2<T>> {
+  readonly serviceSignature: SessionChallenge["serviceSignature"]
+}>(artifact: T, verifier: PinnedControlServiceVerifier): Promise<CollaborationControlCallResult<T>> {
   if (!(await verifier.verify({
     purpose: artifact.core.serviceKeyPurpose,
     serviceKeyId: artifact.core.serviceKeyId,
@@ -639,13 +639,13 @@ async function verifySignedArtifact<T extends {
   return Object.freeze({ status: "ok", value: artifact })
 }
 
-function rejected(code: CollaborationControlRejectionCodeV2) {
+function rejected(code: CollaborationControlRejectionCode) {
   return Object.freeze({ status: "rejected" as const, code })
 }
 
-function parseControlError(value: unknown): Exclude<CollaborationControlRejectionCodeV2, "identity-mismatch" | "invalid-service-artifact"> | null {
+function parseControlError(value: unknown): Exclude<CollaborationControlRejectionCode, "identity-mismatch" | "invalid-service-artifact"> | null {
   const record = exactRecordOrNull(value, ["code", "format"])
-  if (!record || record.format !== "convax.api-error/2") return null
+  if (!record || record.format !== "convax.api-error") return null
   switch (record.code) {
     case "expired": case "invalid-proof": case "not-active": case "not-found": case "stale-counter":
     case "equivocation": case "capacity-exceeded": case "project-exists": return record.code
@@ -653,18 +653,18 @@ function parseControlError(value: unknown): Exclude<CollaborationControlRejectio
   }
 }
 
-function parseTeamBootstrapResult(value: unknown): DesktopTeamBootstrapResultV2 {
+function parseTeamBootstrapResult(value: unknown): DesktopTeamBootstrapResult {
   const record = exactRecord(value, ["initialization", "invitation", "membershipSnapshot", "ownerAdminCapability", "ownerCredential"], "Team bootstrap result")
   return Object.freeze({
-    membershipSnapshot: parseMembershipSnapshotV2(record.membershipSnapshot),
-    ownerCredential: parseMemberCredentialV2(record.ownerCredential),
-    ownerAdminCapability: parseProjectAdminCapabilityV2(record.ownerAdminCapability),
-    invitation: parseProjectTeamInvitationV2(record.invitation),
+    membershipSnapshot: parseMembershipSnapshot(record.membershipSnapshot),
+    ownerCredential: parseMemberCredential(record.ownerCredential),
+    ownerAdminCapability: parseProjectAdminCapability(record.ownerAdminCapability),
+    invitation: parseProjectTeamInvitation(record.invitation),
     initialization: parseProjectBootstrapInitialization(record.initialization),
   })
 }
 
-function parseProjectBootstrapInitialization(value: unknown): DesktopProjectBootstrapInitializationV2 {
+function parseProjectBootstrapInitialization(value: unknown): DesktopProjectBootstrapInitialization {
   const record = exactRecord(value, [
     "initialProjectIndexCanonicalStateDigest", "initialProjectIndexCheckpointDigest",
     "initialProjectIndexFullUpdateDigest", "initialProjectIndexStateVectorDigest",
@@ -683,8 +683,8 @@ function parseProjectBootstrapInitialization(value: unknown): DesktopProjectBoot
 }
 
 function sameProjectBootstrapInitialization(
-  left: DesktopProjectBootstrapInitializationV2,
-  right: DesktopProjectBootstrapInitializationV2,
+  left: DesktopProjectBootstrapInitialization,
+  right: DesktopProjectBootstrapInitialization,
 ): boolean {
   return left.projectId === right.projectId && left.projectEpoch === right.projectEpoch &&
     left.projectIndexShardEpoch === right.projectIndexShardEpoch &&
@@ -695,37 +695,37 @@ function sameProjectBootstrapInitialization(
     left.initialProjectIndexCanonicalStateDigest === right.initialProjectIndexCanonicalStateDigest
 }
 
-function parsePreparedTeamInvitation(value: unknown): DesktopPreparedTeamInvitationV1 {
+function parsePreparedTeamInvitation(value: unknown): DesktopPreparedTeamInvitation {
   const record = exactRecord(value, ["challenge", "invitation", "proofCore", "requestDigest"], "Prepared team invitation")
-  const proofCore = parseMembershipMutationProofCoreV2(record.proofCore)
+  const proofCore = parseMembershipMutationProofCore(record.proofCore)
   if (proofCore.purpose !== "member-add") throw new TypeError("Prepared invitation proof purpose is invalid")
   const requestDigest = parseDigest(record.requestDigest)
-  if (membershipMutationProofCoreDigestV2(proofCore) !== requestDigest) throw new TypeError("Prepared invitation request digest is invalid")
+  if (membershipMutationProofCoreDigest(proofCore) !== requestDigest) throw new TypeError("Prepared invitation request digest is invalid")
   return Object.freeze({
-    invitation: parseProjectTeamInvitationV2(record.invitation),
-    challenge: parseMutationChallengeV2(record.challenge),
+    invitation: parseProjectTeamInvitation(record.invitation),
+    challenge: parseMutationChallenge(record.challenge),
     proofCore,
     requestDigest,
   })
 }
 
-function parseMembershipMutationResult(value: unknown): DesktopMembershipMutationResultV2 {
+function parseMembershipMutationResult(value: unknown): DesktopMembershipMutationResult {
   const record = exactRecord(value, [
     "membershipSnapshot", "receipt", "replicaActorCredential", "replicaEditAuthorization",
     "requesterAdminCapability", "requesterCredential", "targetMemberCredential",
   ], "Membership mutation result")
   return Object.freeze({
-    receipt: parseMutationReceiptV2(record.receipt),
-    membershipSnapshot: parseMembershipSnapshotV2(record.membershipSnapshot),
-    requesterCredential: parseMemberCredentialV2(record.requesterCredential),
-    requesterAdminCapability: record.requesterAdminCapability === null ? null : parseProjectAdminCapabilityV2(record.requesterAdminCapability),
-    targetMemberCredential: parseMemberCredentialV2(record.targetMemberCredential),
-    replicaActorCredential: record.replicaActorCredential === null ? null : parseReplicaActorCredentialV2(record.replicaActorCredential),
-    replicaEditAuthorization: record.replicaEditAuthorization === null ? null : parseReplicaEditAuthorizationV2(record.replicaEditAuthorization),
+    receipt: parseMutationReceipt(record.receipt),
+    membershipSnapshot: parseMembershipSnapshot(record.membershipSnapshot),
+    requesterCredential: parseMemberCredential(record.requesterCredential),
+    requesterAdminCapability: record.requesterAdminCapability === null ? null : parseProjectAdminCapability(record.requesterAdminCapability),
+    targetMemberCredential: parseMemberCredential(record.targetMemberCredential),
+    replicaActorCredential: record.replicaActorCredential === null ? null : parseReplicaActorCredential(record.replicaActorCredential),
+    replicaEditAuthorization: record.replicaEditAuthorization === null ? null : parseReplicaEditAuthorization(record.replicaEditAuthorization),
   })
 }
 
-function parseMemberAddSignatureHalfResult(value: unknown): DesktopMemberAddSignatureHalfResultV2 {
+function parseMemberAddSignatureHalfResult(value: unknown): DesktopMemberAddSignatureHalfResult {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Member-add signature-half result is invalid")
   const status = (value as Record<string, unknown>).status
   if (status === "pending-other-signature") {
@@ -745,7 +745,7 @@ function parseRevoked(value: unknown): Readonly<{ status: "revoked" }> {
   return Object.freeze({ status: "revoked" })
 }
 
-function normalizeMutationIntent(value: DesktopMutationChallengeIntentV2): DesktopMutationChallengeIntentV2 {
+function normalizeMutationIntent(value: DesktopMutationChallengeIntent): DesktopMutationChallengeIntent {
   const purpose = value.purpose
   if (purpose === "member-add") {
     if (value.initialRole !== "viewer" && value.initialRole !== "editor") throw new TypeError("Initial member role is invalid")
@@ -766,9 +766,9 @@ function normalizeMutationIntent(value: DesktopMutationChallengeIntentV2): Deskt
   throw new TypeError("Mutation challenge purpose is unsupported")
 }
 
-function membershipMutationArtifacts(value: DesktopMembershipMutationResultV2): ReadonlyArray<
-  MembershipSnapshotV2 | MutationReceiptV2 | MemberCredentialV2 | ProjectAdminCapabilityV2 |
-  ReplicaActorCredentialV2 | ReplicaEditAuthorizationV2
+function membershipMutationArtifacts(value: DesktopMembershipMutationResult): ReadonlyArray<
+  MembershipSnapshot | MutationReceipt | MemberCredential | ProjectAdminCapability |
+  ReplicaActorCredential | ReplicaEditAuthorization
 > {
   return Object.freeze([
     value.receipt, value.membershipSnapshot, value.requesterCredential,
@@ -779,13 +779,13 @@ function membershipMutationArtifacts(value: DesktopMembershipMutationResultV2): 
   ])
 }
 
-function sameInvitation(left: ProjectTeamInvitationCarrierV2, right: ProjectTeamInvitationCarrierV2): boolean {
+function sameInvitation(left: ProjectTeamInvitationCarrier, right: ProjectTeamInvitationCarrier): boolean {
   return left.invitationToken === right.invitationToken && left.projectId === right.projectId &&
     left.initialRole === right.initialRole && left.expiresAtUnixMs === right.expiresAtUnixMs
 }
 
 function parseInvitationToken(value: string): string {
-  return parseProjectTeamInvitationV2({
+  return parseProjectTeamInvitation({
     invitationToken: value,
     projectId: "token-validation",
     initialRole: "viewer",

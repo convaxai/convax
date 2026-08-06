@@ -13,18 +13,18 @@ import {
   parseUint64,
 } from "@convax/collaboration"
 
-import type { ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
-import { ElectronTeamIdentityVaultV1 } from "./electron-team-identity-vault"
+import type { ElectronSafeStoragePort } from "./electron-replica-signing-vault"
+import { ElectronTeamIdentityVault } from "./electron-team-identity-vault"
 
 const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
 const projectId = parseProjectId("project-team-vault")
 const memberId = parseMemberId(id(2))
 
-describe("ElectronTeamIdentityVaultV1", () => {
+describe("ElectronTeamIdentityVault", () => {
   test("keeps member and session keys stable and purpose-separated", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
     const storage = fakeSafeStorage()
-    const vault = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), storage)
+    const vault = new ElectronTeamIdentityVault(path.join(root, "keys"), storage)
     const member = await vault.ensureMemberKey({ projectId, memberId })
     const sameMember = await vault.ensureMemberKey({ projectId, memberId })
     expect(sameMember.publicKey).toBe(member.publicKey)
@@ -38,7 +38,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
     expect(session.publicKey).not.toBe(member.publicKey)
     expect((await vault.ensureSessionKey(sessionIdentity)).publicKey).toBe(session.publicKey)
     await expect(vault.openSessionSigner({ ...sessionIdentity, expectedPublicKey: member.publicKey })).resolves.toBe("rejected")
-    const restarted = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), storage)
+    const restarted = new ElectronTeamIdentityVault(path.join(root, "keys"), storage)
     expect((await restarted.ensureSessionKey(sessionIdentity)).publicKey).toBe(session.publicKey)
 
     const entries = await fs.readdir(path.join(root, "keys"))
@@ -48,7 +48,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
 
   test("fails closed without an OS-backed encryption backend", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
-    const vault = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), {
+    const vault = new ElectronTeamIdentityVault(path.join(root, "keys"), {
       ...fakeSafeStorage(),
       isEncryptionAvailable: () => false,
     })
@@ -57,7 +57,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
 
   test("prunes only expired session keys and explicitly removes a closed session", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
-    const vault = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), fakeSafeStorage())
+    const vault = new ElectronTeamIdentityVault(path.join(root, "keys"), fakeSafeStorage())
     const member = await vault.ensureMemberKey({ projectId, memberId })
     const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaId("replica_00000001") }
     const expired = { ...base, sessionId: parseSessionId(id(4)), expiresAtUnixMs: parseUint64("100") }
@@ -76,7 +76,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
   test("rejects symlink entries and encrypted identity crossover", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
     const keyRoot = path.join(root, "keys")
-    const vault = new ElectronTeamIdentityVaultV1(keyRoot, fakeSafeStorage())
+    const vault = new ElectronTeamIdentityVault(keyRoot, fakeSafeStorage())
     await vault.ensureMemberKey({ projectId, memberId })
     const memberEntries = new Set(await fs.readdir(keyRoot))
     const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaId("replica_00000001"), expiresAtUnixMs: parseUint64("200") }
@@ -96,7 +96,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
 
   test("fails closed for Electron basic_text storage", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
-    const vault = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), {
+    const vault = new ElectronTeamIdentityVault(path.join(root, "keys"), {
       ...fakeSafeStorage(),
       getSelectedStorageBackend: () => "basic_text",
     })
@@ -104,7 +104,7 @@ describe("ElectronTeamIdentityVaultV1", () => {
   })
 })
 
-function fakeSafeStorage(): ElectronSafeStoragePortV2 {
+function fakeSafeStorage(): ElectronSafeStoragePort {
   const key = randomBytes(32)
   return {
     isEncryptionAvailable: () => true,

@@ -6,8 +6,8 @@
  * integration gate will compare these constants with its exact limits/channel
  * digests once the public v2 kernel export is available.
  */
-export const CONTROL_PROTOCOL_LIMITS_V2 = Object.freeze({
-  format: "convax.protocol-limits/2",
+export const CONTROL_PROTOCOL_LIMITS = Object.freeze({
+  format: "convax.protocol-limits",
   serviceTrustKeys: "32",
   activeProjectMembers: "256",
   retainedRevokedMembersPerProjectEpoch: "4096",
@@ -82,12 +82,12 @@ export const CONTROL_PROTOCOL_LIMITS_V2 = Object.freeze({
   quarantineBytesPerProject: "134217728",
 } as const)
 
-export type ControlProtocolLimitNameV2 = Exclude<keyof typeof CONTROL_PROTOCOL_LIMITS_V2, "format">
+export type ControlProtocolLimitName = Exclude<keyof typeof CONTROL_PROTOCOL_LIMITS, "format">
 
-export type PeerChannelNameV2 = "control" | "update" | "blob" | "awareness"
+export type PeerChannelName = "control" | "update" | "blob" | "awareness"
 
-export const PEER_CHANNEL_CONTRACT_V2 = Object.freeze({
-  format: "convax.peer-channel-contract/2",
+export const PEER_CHANNEL_CONTRACT = Object.freeze({
+  format: "convax.peer-channel-contract",
   policies: Object.freeze([
     Object.freeze({
       channel: "control",
@@ -126,27 +126,27 @@ export const PEER_CHANNEL_CONTRACT_V2 = Object.freeze({
   malformedStrikeCloseThreshold: "3",
 } as const)
 
-export const CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2 = Object.freeze({
-  protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5",
+export const CONTROL_PROTOCOL_EXPECTED_IDENTITIES = Object.freeze({
+  protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
   limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
   channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
 } as const)
 
-export function controlProtocolLimitV2(name: ControlProtocolLimitNameV2): bigint {
-  return BigInt(CONTROL_PROTOCOL_LIMITS_V2[name])
+export function controlProtocolLimit(name: ControlProtocolLimitName): bigint {
+  return BigInt(CONTROL_PROTOCOL_LIMITS[name])
 }
 
-export function assertControlDescriptorShapeV2(): void {
-  if (Object.keys(CONTROL_PROTOCOL_LIMITS_V2).length !== 73) {
+export function assertControlDescriptorShape(): void {
+  if (Object.keys(CONTROL_PROTOCOL_LIMITS).length !== 73) {
     throw new Error("control protocol limit descriptor must contain exactly 73 fields")
   }
-  if (PEER_CHANNEL_CONTRACT_V2.policies.length !== 4) {
+  if (PEER_CHANNEL_CONTRACT.policies.length !== 4) {
     throw new Error("control protocol channel descriptor must contain exactly four channels")
   }
-  const channels = PEER_CHANNEL_CONTRACT_V2.policies.map((policy) => policy.channel)
+  const channels = PEER_CHANNEL_CONTRACT.policies.map((policy) => policy.channel)
   if (channels.join(",") !== "control,update,blob,awareness" || new Set(channels).size !== 4) {
     throw new Error("control protocol channel descriptor has a duplicate or noncanonical order")
   }
 }
 
-assertControlDescriptorShapeV2()
+assertControlDescriptorShape()

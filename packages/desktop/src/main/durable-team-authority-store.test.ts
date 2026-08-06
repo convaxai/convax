@@ -14,16 +14,16 @@ import {
   structuredDigest,
 } from "@convax/collaboration"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  type MemberCredentialV2,
-  type MembershipSnapshotV2,
-  type ProjectAdminCapabilityV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  type MemberCredential,
+  type MembershipSnapshot,
+  type ProjectAdminCapability,
 } from "@convax/project/collaboration-protocol"
 
 import {
-  NodeDurableTeamAuthorityStoreV1,
-  createDesktopTeamAuthorityAdmissionV1,
-  type DesktopTeamAuthorityCandidateV1,
+  NodeDurableTeamAuthorityStore,
+  createDesktopTeamAuthorityAdmission,
+  type DesktopTeamAuthorityCandidate,
 } from "./durable-team-authority-store"
 
 const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
@@ -32,14 +32,14 @@ const projectId = parseProjectId("project-team-authority")
 const memberId = parseMemberId(id(2))
 const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
 const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(4)))
-const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest)
 const trustBundleDigest = digest("2")
 
-describe("NodeDurableTeamAuthorityStoreV1", () => {
+describe("NodeDurableTeamAuthorityStore", () => {
   test("installs only admitted graphs and reopens exact canonical bytes", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-authority-"))
-    const store = new NodeDurableTeamAuthorityStoreV1(path.join(root, "authority"))
-    const admission = createDesktopTeamAuthorityAdmissionV1({
+    const store = new NodeDurableTeamAuthorityStore(path.join(root, "authority"))
+    const admission = createDesktopTeamAuthorityAdmission({
       protocolDigest, trustBundleDigest, verifier: { async verify() { return true } },
     })
     const verified = await admission.admit(candidate("1"))
@@ -55,8 +55,8 @@ describe("NodeDurableTeamAuthorityStoreV1", () => {
 
   test("rejects signature failure, crossed graphs, rollback and same-sequence equivocation", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-authority-"))
-    const store = new NodeDurableTeamAuthorityStoreV1(path.join(root, "authority"))
-    const admission = createDesktopTeamAuthorityAdmissionV1({
+    const store = new NodeDurableTeamAuthorityStore(path.join(root, "authority"))
+    const admission = createDesktopTeamAuthorityAdmission({
       protocolDigest, trustBundleDigest, verifier: { async verify() { return true } },
     })
     const second = await admission.admit(candidate("2"))
@@ -77,50 +77,50 @@ describe("NodeDurableTeamAuthorityStoreV1", () => {
       memberCredential: {
         ...crossedCandidate.memberCredential,
         core: { ...crossedCandidate.memberCredential.core, membershipSnapshotDigest: digest("f") },
-      } as MemberCredentialV2,
+      } as MemberCredential,
     }
     await expect(admission.admit(crossed)).resolves.toBe("rejected")
-    const badSignature = createDesktopTeamAuthorityAdmissionV1({
+    const badSignature = createDesktopTeamAuthorityAdmission({
       protocolDigest, trustBundleDigest, verifier: { async verify() { return false } },
     })
     await expect(badSignature.admit(candidate("1"))).resolves.toBe("rejected")
   })
 })
 
-function candidate(sequence: string, membershipEpoch = id(6)): DesktopTeamAuthorityCandidateV1 {
+function candidate(sequence: string, membershipEpoch = id(6)): DesktopTeamAuthorityCandidate {
   const memberAuthorizationEpoch = id(5)
   const snapshotCore = {
-    format: "convax.membership-snapshot-core/2" as const,
+    format: "convax.membership-snapshot-core" as const,
     projectId, projectEpoch: id(4), membershipEpoch, membershipSequence: parseUint64(sequence),
     registrySequence: parseUint64("1"), registryRootDigest: digest("3"),
     members: [{ memberId, memberSigningPublicKey: publicKey, role: "editor" as const, state: "active" as const, memberAuthorizationEpoch, memberMutationCounter: parseUint64(sequence) }],
     replicas: [], protocolDigest, trustBundleDigest, serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  const membershipSnapshot: MembershipSnapshotV2 = {
-    format: "convax.membership-snapshot/2", core: snapshotCore,
-    coreDigest: structuredDigest("convax.membership-snapshot-core/2", snapshotCore), serviceSignature: signature,
+  const membershipSnapshot: MembershipSnapshot = {
+    format: "convax.membership-snapshot", core: snapshotCore,
+    coreDigest: structuredDigest("convax.membership-snapshot-core", snapshotCore), serviceSignature: signature,
   }
   const adminCore = {
-    format: "convax.project-admin-capability-core/2" as const,
+    format: "convax.project-admin-capability-core" as const,
     projectId, projectEpoch: snapshotCore.projectEpoch, membershipEpoch: snapshotCore.membershipEpoch,
     membershipSnapshotDigest: membershipSnapshot.coreDigest, adminMemberId: memberId,
     adminMemberAuthorizationEpoch: memberAuthorizationEpoch, grants: ["membership-admin"] as const,
     protocolDigest, trustBundleDigest, serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  const adminCapability: ProjectAdminCapabilityV2 = {
-    format: "convax.project-admin-capability/2", core: adminCore,
-    coreDigest: structuredDigest("convax.project-admin-capability-core/2", adminCore), serviceSignature: signature,
+  const adminCapability: ProjectAdminCapability = {
+    format: "convax.project-admin-capability", core: adminCore,
+    coreDigest: structuredDigest("convax.project-admin-capability-core", adminCore), serviceSignature: signature,
   }
   const credentialCore = {
-    format: "convax.member-credential-core/2" as const,
+    format: "convax.member-credential-core" as const,
     projectId, projectEpoch: snapshotCore.projectEpoch, membershipEpoch: snapshotCore.membershipEpoch,
     membershipSnapshotDigest: membershipSnapshot.coreDigest, memberId, memberSigningPublicKey: publicKey,
     role: "editor" as const, memberAuthorizationEpoch, adminCapabilityDigest: adminCapability.coreDigest,
     protocolDigest, trustBundleDigest, serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
-  const memberCredential: MemberCredentialV2 = {
-    format: "convax.member-credential/2", core: credentialCore,
-    coreDigest: structuredDigest("convax.member-credential-core/2", credentialCore), serviceSignature: signature,
+  const memberCredential: MemberCredential = {
+    format: "convax.member-credential", core: credentialCore,
+    coreDigest: structuredDigest("convax.member-credential-core", credentialCore), serviceSignature: signature,
   }
   return { membershipSnapshot, memberCredential, adminCapability, replicaActorCredential: null, replicaEditAuthorization: null }
 }

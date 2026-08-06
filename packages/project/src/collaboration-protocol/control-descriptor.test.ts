@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import {
-  CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
-  CONTROL_PROTOCOL_LIMITS_V2,
-  PEER_CHANNEL_CONTRACT_V2,
-  PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2,
-  controlProtocolLimitV2,
+  CONTROL_PROTOCOL_EXPECTED_IDENTITIES,
+  CONTROL_PROTOCOL_LIMITS,
+  PEER_CHANNEL_CONTRACT,
+  PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION,
+  controlProtocolLimit,
 } from "../collaboration-protocol"
-import type { ControlProtocolLimitNameV2 } from "../collaboration-protocol"
+import type { ControlProtocolLimitName } from "../collaboration-protocol"
 
-const frozenLimitFixtures: readonly (readonly [ControlProtocolLimitNameV2, string])[] = [
+const frozenLimitFixtures: readonly (readonly [ControlProtocolLimitName, string])[] = [
   ["serviceTrustKeys", "32"],
   ["activeProjectMembers", "256"],
   ["retainedRevokedMembersPerProjectEpoch", "4096"],
@@ -85,9 +85,9 @@ const frozenLimitFixtures: readonly (readonly [ControlProtocolLimitNameV2, strin
 
 describe("frozen control-plane descriptor", () => {
   test("contains exactly 72 named limits and four canonical channels", () => {
-    expect(Object.keys(CONTROL_PROTOCOL_LIMITS_V2).length - 1).toBe(72)
-    expect(PEER_CHANNEL_CONTRACT_V2).toEqual({
-      format: "convax.peer-channel-contract/2",
+    expect(Object.keys(CONTROL_PROTOCOL_LIMITS).length - 1).toBe(72)
+    expect(PEER_CHANNEL_CONTRACT).toEqual({
+      format: "convax.peer-channel-contract",
       policies: [
         {
           channel: "control",
@@ -125,30 +125,30 @@ describe("frozen control-plane descriptor", () => {
       awarenessTtlMs: "30000",
       malformedStrikeCloseThreshold: "3",
     })
-    expect(new Set(PEER_CHANNEL_CONTRACT_V2.policies.map((policy) => policy.channel)).size).toBe(4)
+    expect(new Set(PEER_CHANNEL_CONTRACT.policies.map((policy) => policy.channel)).size).toBe(4)
   })
 
   test("projects every exact and plus-one limit mechanically", () => {
     expect(frozenLimitFixtures).toHaveLength(72)
     expect(Object.fromEntries(frozenLimitFixtures)).toEqual(
-      Object.fromEntries(Object.entries(CONTROL_PROTOCOL_LIMITS_V2).filter(([name]) => name !== "format")),
+      Object.fromEntries(Object.entries(CONTROL_PROTOCOL_LIMITS).filter(([name]) => name !== "format")),
     )
     for (const [name, encoded] of frozenLimitFixtures) {
-      const exact = controlProtocolLimitV2(name)
+      const exact = controlProtocolLimit(name)
       expect(exact.toString()).toBe(encoded)
       expect(exact + 1n).toBe(BigInt(encoded) + 1n)
     }
   })
 
   test("pins the reviewed identities without reconstructing the kernel bundle", () => {
-    expect(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2).toEqual({
-      protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5",
+    expect(CONTROL_PROTOCOL_EXPECTED_IDENTITIES).toEqual({
+      protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
       limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
       channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
     })
-    expect(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2).toEqual({
-      status: "r5-contract-selected",
-      requiredProtocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5",
+    expect(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION).toEqual({
+      status: "current-contract-selected",
+      requiredProtocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
       requiredDomainCount: 127,
       fallbackDecoder: false,
       compatibilityPrimitiveAliases: false,

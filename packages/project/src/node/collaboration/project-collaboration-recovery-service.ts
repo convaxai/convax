@@ -21,6 +21,17 @@ export interface ProjectRecoveryRootPort {
 export interface ProjectResetPreparedAuthority {
   readonly authorizationEvidence: unknown
   readonly authorizationKind: ExecutePortableProjectReset["authorizationKind"]
+  readonly finalizePublishedReset?: (input: {
+    readonly archivedConvaxDirectory: string
+    readonly executionFingerprint: string
+    readonly nextProjectEpoch: string
+    readonly originalTreeDigest: string
+    readonly privateDeletionSetDigest: string
+    readonly projectId: string
+    readonly publishedConvaxDirectory: string
+    readonly unsupportedInventoryDigest: string
+    readonly signal?: AbortSignal
+  }) => Promise<void>
   readonly nextProjectEpoch: string
   readonly stageGenesis: ExecutePortableProjectReset["stageGenesis"]
   readonly verifier: ExecutePortableProjectReset["verifier"]

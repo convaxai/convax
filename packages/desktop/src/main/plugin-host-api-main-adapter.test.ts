@@ -116,7 +116,7 @@ function adapter(options?: {
           title: "Canvas",
         }
         return {
-          format: "convax.project-canvas-catalog-projection/2" as const,
+          format: "convax.project-canvas-catalog-projection" as const,
           projectId: binding.projectId as never,
           routes: [route],
           visibleCanvases: [route],

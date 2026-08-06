@@ -3,8 +3,8 @@ import { encodeBase64url, parseId128 } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
 
 import { canvasSessionIpcChannels } from "../canvas-session-contracts"
-import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
-import { registerCanvasSessionIpcV2 } from "./canvas-session-ipc"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
+import { registerCanvasSessionIpc } from "./canvas-session-ipc"
 
 const ref = Object.freeze({ canvasId: "canvas-one", scopeId: "project-one" })
 const sessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
@@ -40,7 +40,7 @@ function invoke(handler: Handler, current: TestSender, input: unknown) {
 
 function projection() {
   return Object.freeze({
-    format: "convax.canvas-session-projection/2" as const,
+    format: "convax.canvas-session-projection" as const,
     ref,
     sessionId,
     document: Object.freeze({ id: ref.canvasId }),
@@ -67,13 +67,13 @@ function ownerFixture() {
   }
   return {
     emit(event: unknown) { invalidationListener?.(event) },
-    owner: owner as unknown as CanvasCollaborationSessionOwnerV2,
+    owner: owner as unknown as CanvasCollaborationSessionOwner,
     spies: owner,
   }
 }
 
 function register(
-  owner: CanvasCollaborationSessionOwnerV2,
+  owner: CanvasCollaborationSessionOwner,
   options: {
     active?: () => Readonly<{ canvasId: string; projectId: string }> | null
     prepareProject?: (projectId: string) => Promise<void>
@@ -84,7 +84,7 @@ function register(
     handle(channel: string, handler: Handler) { handlers.set(channel, handler) },
     removeHandler(channel: string) { handlers.delete(channel) },
   }
-  const dispose = registerCanvasSessionIpcV2(owner, {
+  const dispose = registerCanvasSessionIpc(owner, {
     ipcMain: ipc,
     isTrustedSender: (event) => event.sender.id > 0,
     resolveActiveCanvas: async () => options.active?.() ?? { canvasId: ref.canvasId, projectId: ref.scopeId },
@@ -204,9 +204,9 @@ describe("Canvas collaboration session IPC", () => {
     const first = sender(7)
     await invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, first, ref)
 
-    fixture.emit({ format: "convax.canvas-session-invalidation/2", ref, sessionId })
+    fixture.emit({ format: "convax.canvas-session-invalidation", ref, sessionId })
     expect(first.send).toHaveBeenCalledWith(canvasSessionIpcChannels.invalidated, {
-      format: "convax.canvas-session-invalidation/2",
+      format: "convax.canvas-session-invalidation",
       ref,
       sessionId,
     })

@@ -1,11 +1,11 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import {
-  ProjectTeamCollaborationManagerV2,
-  type ProjectTeamPeerSessionFactoryV2,
-  type ProjectTeamPeerSessionOpenResultV2,
-  type ProjectTeamPeerSessionSnapshotV2,
-  type ProjectTeamPeerSessionV2,
+  ProjectTeamCollaborationManager,
+  type ProjectTeamPeerSessionFactory,
+  type ProjectTeamPeerSessionOpenResult,
+  type ProjectTeamPeerSessionSnapshot,
+  type ProjectTeamPeerSession,
 } from "./project-team-collaboration-manager"
 
 const projectOne = "project-one"
@@ -17,31 +17,31 @@ const invitation = {
   expiresAtUnixMs: "1770000000000",
 }
 
-class FakeSession implements ProjectTeamPeerSessionV2 {
-  readonly listeners = new Set<(snapshot: ProjectTeamPeerSessionSnapshotV2) => void>()
+class FakeSession implements ProjectTeamPeerSession {
+  readonly listeners = new Set<(snapshot: ProjectTeamPeerSessionSnapshot) => void>()
   readonly quiesce = mock(async (): Promise<void> => undefined)
   readonly onlineCalls: boolean[] = []
 
   constructor(
     readonly projectId: string,
-    private current: ProjectTeamPeerSessionSnapshotV2 = {
+    private current: ProjectTeamPeerSessionSnapshot = {
       state: "online", canEdit: true, connectedPeerCount: 1, reason: null,
     },
   ) {}
 
   snapshot() { return this.current }
-  subscribe(listener: (snapshot: ProjectTeamPeerSessionSnapshotV2) => void) {
+  subscribe(listener: (snapshot: ProjectTeamPeerSessionSnapshot) => void) {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
   setOnline(online: boolean) { this.onlineCalls.push(online) }
-  publish(snapshot: ProjectTeamPeerSessionSnapshotV2) {
+  publish(snapshot: ProjectTeamPeerSessionSnapshot) {
     this.current = snapshot
     for (const listener of this.listeners) listener(snapshot)
   }
 }
 
-function factory(overrides: Partial<ProjectTeamPeerSessionFactoryV2> = {}): ProjectTeamPeerSessionFactoryV2 {
+function factory(overrides: Partial<ProjectTeamPeerSessionFactory> = {}): ProjectTeamPeerSessionFactory {
   return {
     openExisting: async () => ({ status: "local-only" }),
     bootstrapTeam: async ({ projectId }) => ({
@@ -53,10 +53,10 @@ function factory(overrides: Partial<ProjectTeamPeerSessionFactoryV2> = {}): Proj
   }
 }
 
-describe("ProjectTeamCollaborationManagerV2", () => {
+describe("ProjectTeamCollaborationManager", () => {
   test("keeps an unteamed Project local-only without fabricating a session", async () => {
-    const openExisting = mock(async (): Promise<ProjectTeamPeerSessionOpenResultV2> => ({ status: "local-only" }))
-    const manager = new ProjectTeamCollaborationManagerV2(factory({ openExisting }))
+    const openExisting = mock(async (): Promise<ProjectTeamPeerSessionOpenResult> => ({ status: "local-only" }))
+    const manager = new ProjectTeamCollaborationManager(factory({ openExisting }))
     await expect(manager.activateLocalProject(projectOne)).resolves.toEqual(expect.objectContaining({
       projectId: projectOne, state: "local-only", canEdit: false, connectedPeerCount: 0,
     }))
@@ -66,8 +66,8 @@ describe("ProjectTeamCollaborationManagerV2", () => {
 
   test("starts one verified session for duplicate active-Project activation", async () => {
     const session = new FakeSession(projectOne)
-    const openExisting = mock(async (): Promise<ProjectTeamPeerSessionOpenResultV2> => ({ status: "ready", session }))
-    const manager = new ProjectTeamCollaborationManagerV2(factory({ openExisting }))
+    const openExisting = mock(async (): Promise<ProjectTeamPeerSessionOpenResult> => ({ status: "ready", session }))
+    const manager = new ProjectTeamCollaborationManager(factory({ openExisting }))
     await manager.activateProject(projectOne)
     await manager.activateProject(projectOne)
     expect(openExisting).toHaveBeenCalledTimes(1)
@@ -78,7 +78,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
   test("quiesces the previous Project before publishing the next Project session", async () => {
     const first = new FakeSession(projectOne)
     const second = new FakeSession(projectTwo)
-    const manager = new ProjectTeamCollaborationManagerV2(factory({
+    const manager = new ProjectTeamCollaborationManager(factory({
       openExisting: async ({ projectId }) => ({ status: "ready", session: projectId === projectOne ? first : second }),
     }))
     await manager.activateProject(projectOne)
@@ -90,10 +90,10 @@ describe("ProjectTeamCollaborationManagerV2", () => {
   })
 
   test("a stale async open cannot retain or publish a session after Project switch", async () => {
-    let release!: (value: ProjectTeamPeerSessionOpenResultV2) => void
+    let release!: (value: ProjectTeamPeerSessionOpenResult) => void
     const late = new FakeSession(projectOne)
     const current = new FakeSession(projectTwo)
-    const manager = new ProjectTeamCollaborationManagerV2(factory({
+    const manager = new ProjectTeamCollaborationManager(factory({
       openExisting: ({ projectId }) => projectId === projectOne
         ? new Promise((resolve) => { release = resolve })
         : Promise.resolve({ status: "ready", session: current }),
@@ -111,7 +111,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
   test("credential expiry and revocation close transport while retaining a bounded status", async () => {
     for (const reason of ["credential-expired", "authorization-revoked"] as const) {
       const session = new FakeSession(projectOne)
-      const manager = new ProjectTeamCollaborationManagerV2(factory({
+      const manager = new ProjectTeamCollaborationManager(factory({
         openExisting: async () => ({ status: "ready", session }),
       }))
       await manager.activateProject(projectOne)
@@ -125,7 +125,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
 
   test("forwards browser connectivity only to the active physical session", async () => {
     const session = new FakeSession(projectOne)
-    const manager = new ProjectTeamCollaborationManagerV2(factory({
+    const manager = new ProjectTeamCollaborationManager(factory({
       openExisting: async () => ({ status: "ready", session }),
     }))
     await manager.activateProject(projectOne)
@@ -140,7 +140,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
     const joinTeam = mock(async ({ projectId }: { projectId: string }) => ({
       status: "ready" as const, session: new FakeSession(projectId),
     }))
-    const manager = new ProjectTeamCollaborationManagerV2(factory({ joinTeam }))
+    const manager = new ProjectTeamCollaborationManager(factory({ joinTeam }))
     await manager.activateProject(projectOne)
     expect(() => manager.joinTeam({ projectId: projectTwo, invitation })).toThrow("stale")
     await expect(manager.joinTeam({ projectId: projectOne, invitation })).resolves.toEqual(
@@ -159,7 +159,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
   })
 
   test("returns the exact safe invitation from bootstrap without exposing authority", async () => {
-    const manager = new ProjectTeamCollaborationManagerV2(factory())
+    const manager = new ProjectTeamCollaborationManager(factory())
     await manager.activateProject(projectOne)
     await expect(manager.bootstrapTeam(projectOne)).resolves.toEqual({
       invitation,
@@ -172,7 +172,7 @@ describe("ProjectTeamCollaborationManagerV2", () => {
     let release!: () => void
     const session = new FakeSession(projectOne)
     session.quiesce.mockImplementation(() => new Promise<void>((resolve) => { release = resolve }))
-    const manager = new ProjectTeamCollaborationManagerV2(factory({
+    const manager = new ProjectTeamCollaborationManager(factory({
       openExisting: async () => ({ status: "ready", session }),
     }))
     await manager.activateProject(projectOne)

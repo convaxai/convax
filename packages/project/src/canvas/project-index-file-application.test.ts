@@ -11,19 +11,19 @@ import {
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  applyProjectIndexCandidateIntentV2,
-  constructProjectFileCreateIntentV2,
-  createProjectIndexYDocV2,
-  decodeProjectIndexBlobPublicationCurrentnessRequestV2,
-  projectIndexIntentDigestV2,
-  projectIndexIntentDependenciesV2,
-  validateProjectIndexYDocV2,
-  type ProjectEntryRecordV2,
-  type ProjectIndexIntentV2,
+  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  applyProjectIndexCandidateIntent,
+  constructProjectFileCreateIntent,
+  createProjectIndexYDoc,
+  decodeProjectIndexBlobPublicationCurrentnessRequest,
+  projectIndexIntentDigest,
+  projectIndexIntentDependencies,
+  validateProjectIndexYDoc,
+  type ProjectEntryRecord,
+  type ProjectIndexIntent,
 } from "../collaboration/project-index"
-import { ProjectIndexFileApplicationV2 } from "./project-index-file-application"
-import { ProjectIndexCanvasApplicationV2, type ProjectIndexDocumentSessionPortV2 } from "./project-index-application"
+import { ProjectIndexFileApplication } from "./project-index-file-application"
+import { ProjectIndexCanvasApplication, type ProjectIndexDocumentSessionPort } from "./project-index-application"
 
 const projectId = "project-a" as ProjectId
 const projectEpoch = id128(1)
@@ -32,18 +32,18 @@ const protocolDigest = digest("protocol")
 const uriProtocolDigest = digest("uri")
 const rootDirectoryId = `pd_${"a".repeat(64)}` as const
 
-describe("ProjectIndexFileApplicationV2", () => {
+describe("ProjectIndexFileApplication", () => {
   test("keeps blob fact request identity stable when the frame carries a different wire intent digest", () => {
     const context = constructionContext(actor(1), id128(10), "1")
-    const snapshot = validateProjectIndexYDocV2(genesis())
+    const snapshot = validateProjectIndexYDoc(genesis())
     const blob = {
-      format: "convax.blob-ref/2" as const,
+      format: "convax.blob-ref" as const,
       algorithm: "sha256" as const,
       digest: digest("blob"),
       byteLength: "5" as never,
       mime: "text/markdown",
     }
-    const constructed = constructProjectFileCreateIntentV2({
+    const constructed = constructProjectFileCreateIntent({
       snapshot,
       context,
       parentDirectoryId: rootDirectoryId,
@@ -55,15 +55,15 @@ describe("ProjectIndexFileApplicationV2", () => {
     })
     if (constructed === "rejected") throw new Error("ProjectIndex file intent construction rejected")
 
-    const dependencies = projectIndexIntentDependenciesV2(
+    const dependencies = projectIndexIntentDependencies(
       { ...context, intentDigest: digest("other-wire-intent") },
       constructed.intent,
     )
     const requirement = dependencies.externalFacts[0]
     expect(requirement).toBeDefined()
-    const request = decodeProjectIndexBlobPublicationCurrentnessRequestV2(requirement!.request.exactJcs)
+    const request = decodeProjectIndexBlobPublicationCurrentnessRequest(requirement!.request.exactJcs)
     expect(request).not.toBe("rejected")
-    expect(request === "rejected" ? null : request.intentDigest).toBe(projectIndexIntentDigestV2(constructed.intent))
+    expect(request === "rejected" ? null : request.intentDigest).toBe(projectIndexIntentDigest(constructed.intent))
   })
 
   test("admits bytes before committing a stable file identity and projects the hash-pinned materialization plan", async () => {
@@ -71,7 +71,7 @@ describe("ProjectIndexFileApplicationV2", () => {
     const order: string[] = []
     const context = constructionContext(actor(1), id128(3), "1")
     const session = applyingSession(document, context, order)
-    const application = new ProjectIndexFileApplicationV2({
+    const application = new ProjectIndexFileApplication({
       session,
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
       blobs: {
@@ -109,7 +109,7 @@ describe("ProjectIndexFileApplicationV2", () => {
     const document = genesis()
     const order: string[] = []
     const context = constructionContext(actor(1), id128(4), "1")
-    const application = new ProjectIndexFileApplicationV2({
+    const application = new ProjectIndexFileApplication({
       session: applyingSession(document, context, order),
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
       blobs: {
@@ -126,7 +126,7 @@ describe("ProjectIndexFileApplicationV2", () => {
       contentPolicy: "conflict-preserving-text",
     })).toEqual({ status: "partial-success", code: "blob-publication-failed" })
     expect(order).toEqual([])
-    expect(validateProjectIndexYDocV2(document).entries.size).toBe(1)
+    expect(validateProjectIndexYDoc(document).entries.size).toBe(1)
   })
 
   test("streams a managed admission before creating one immutable unlocated identity and re-admits existing bytes", async () => {
@@ -135,14 +135,14 @@ describe("ProjectIndexFileApplicationV2", () => {
     const context = constructionContext(actor(1), id128(5), "1")
     const bytes = new TextEncoder().encode("managed-media")
     const blob = {
-      format: "convax.blob-ref/2" as const,
+      format: "convax.blob-ref" as const,
       algorithm: "sha256" as const,
       digest: digestBytes(bytes),
       byteLength: String(bytes.byteLength) as never,
       mime: "video/mp4",
     }
     let admissions = 0
-    const application = new ProjectIndexFileApplicationV2({
+    const application = new ProjectIndexFileApplication({
       session: applyingSession(document, context, order),
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
       blobs: {
@@ -173,7 +173,7 @@ describe("ProjectIndexFileApplicationV2", () => {
     expect(second).toEqual(first)
     expect(admissions).toBe(2)
     expect(order).toEqual(["managed-blob", "commit", "managed-blob"])
-    const snapshot = validateProjectIndexYDocV2(document)
+    const snapshot = validateProjectIndexYDoc(document)
     const managed = [...snapshot.entries.values()].filter((entry) => entry.storageClass === "managed-blob")
     expect(managed).toHaveLength(1)
     expect(managed[0]).toMatchObject({
@@ -181,7 +181,7 @@ describe("ProjectIndexFileApplicationV2", () => {
       provenance: "managed-admission",
       storageClass: "managed-blob",
     })
-    const projection = new ProjectIndexCanvasApplicationV2({
+    const projection = new ProjectIndexCanvasApplication({
       session: applyingSession(document, context, []),
       facts: { async resolve() { return { status: "resolved", port: {} as never } } },
       genesis: {
@@ -201,17 +201,17 @@ describe("ProjectIndexFileApplicationV2", () => {
   })
 })
 
-function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContext, order: string[]): ProjectIndexDocumentSessionPortV2 {
-  const scope = context.scope as ProjectIndexDocumentSessionPortV2["scope"]
+function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContext, order: string[]): ProjectIndexDocumentSessionPort {
+  const scope = context.scope as ProjectIndexDocumentSessionPort["scope"]
   return {
     scope,
     async query(project) { return project(validated(document)) },
     async submit(input) {
       const prepared = await input.prepare({ base: validated(document), context })
-      const intent = prepared.typedIntent as ProjectIndexIntentV2
-      const applied = applyProjectIndexCandidateIntentV2(
+      const intent = prepared.typedIntent as ProjectIndexIntent
+      const applied = applyProjectIndexCandidateIntent(
         document,
-        { ...context, intentDigest: projectIndexIntentDigestV2(intent) },
+        { ...context, intentDigest: projectIndexIntentDigest(intent) },
         intent,
         { verifyBlob: () => true, verifyCanvasGenesis: () => true, verifyResetAuthorization: () => true },
       )
@@ -223,13 +223,13 @@ function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContex
 }
 
 function validated(document: Y.Doc): OwnerValidatedState<"project-index"> {
-  return { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">
+  return { owner: "project-index", value: validateProjectIndexYDoc(document) } as OwnerValidatedState<"project-index">
 }
 
 function genesis(): Y.Doc {
   const context = constructionContext(actor(9), id128(9), "0")
-  const rootEntry: ProjectEntryRecordV2 = {
-    format: "convax.project-entry/2",
+  const rootEntry: ProjectEntryRecord = {
+    format: "convax.project-entry",
     entryId: rootDirectoryId,
     kind: "directory",
     storageClass: null,
@@ -238,17 +238,17 @@ function genesis(): Y.Doc {
     conflictSource: null,
     createdByActorId: context.actorId,
     createdByOperationId: context.operationId,
-    createdStamp: { format: "convax.portable-stamp/2", lamport: "0" as never, actorId: context.actorId, operationId: context.operationId, writeOrdinal: "0" as never },
+    createdStamp: { format: "convax.portable-stamp", lamport: "0" as never, actorId: context.actorId, operationId: context.operationId, writeOrdinal: "0" as never },
   }
-  return createProjectIndexYDocV2({
-    format: "convax.project-index-identity/2",
+  return createProjectIndexYDoc({
+    format: "convax.project-index-identity",
     schema: "convax.project-index.v2",
     projectId,
     projectEpoch,
     shardEpoch,
     rootDirectoryId,
     protocolDigest,
-    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     uriProtocolDigest,
   }, rootEntry)
 }
@@ -262,7 +262,7 @@ function constructionContext(actorId: ActorId, operationId: Id128, lamport: stri
     lamport: lamport as never,
     baseFrontierDigest: digest("frontier"),
     protocolDigest,
-    ownerSchemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+    ownerSchemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
     validationArtifactSetDigest: digest("artifacts"),
   }
 }

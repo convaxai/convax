@@ -1,5 +1,5 @@
 import type { CanvasDocument, CanvasNode } from "@convax/canvas"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { PluginCanvasStructureDocument } from "./plugin-capability-contracts"
 import type { WebPluginGenerationInputRole, WebPluginGenerationModality } from "./plugin-contracts"
 import type { InstalledPlugin } from "./plugin-api"
@@ -72,7 +72,7 @@ export interface PluginGenerationCanvasResult {
   createdNodeIds: readonly string[]
   /** Present only for a text operation whose declared delivery is `return`. */
   outputText?: string
-  operationReceipt: BoundedOperationReceiptV2 | null
+  operationReceipt: BoundedOperationReceipt | null
   projection: PluginCanvasStructureDocument
   toolId: string
   warnings: readonly string[]
@@ -80,7 +80,7 @@ export interface PluginGenerationCanvasResult {
 
 export interface PluginCanvasImageResult {
   createdNodeId: string
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: PluginCanvasStructureDocument
 }
 

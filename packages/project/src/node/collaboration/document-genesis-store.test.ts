@@ -100,10 +100,10 @@ function predecessor(scope: DocumentScope = projectIndexScope) {
 function createCandidate() {
   const acceptedBase = Object.freeze({
     scope: canvasScope,
-    frontier: Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) }),
+    frontier: Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) }),
     frontierDigest: digest("frontier"),
     actorHeads: Object.freeze({
-      format: "convax.replica-actor-head-set/2" as const,
+      format: "convax.replica-actor-head-set" as const,
       scope: canvasScope,
       heads: Object.freeze([]),
     }),

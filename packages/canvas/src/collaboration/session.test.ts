@@ -1,25 +1,25 @@
 import { describe, expect, test } from "bun:test"
-import { CanvasIntentApplicationServiceV2, CanvasReactFlowTransientStateV2 } from "./session"
-import type { CanvasCallerIntentV2, CanvasIntentCommitPortV2 } from "./session"
+import { CanvasIntentApplicationService, CanvasReactFlowTransientState } from "./session"
+import type { CanvasCallerIntent, CanvasIntentCommitPort } from "./session"
 import { context, createAgent, id128, newCanvas, U0 } from "./test-fixtures.test"
-import { derivedNodeRefV2 } from "./validation"
-import { projectCanvasV2 } from "./projection"
-import { validateCanvasYDocV2 } from "./ydoc"
+import { derivedNodeRef } from "./validation"
+import { projectCanvas } from "./projection"
+import { validateCanvasYDoc } from "./ydoc"
 
 describe("Canvas v2 caller and React Flow boundaries", () => {
   test("UI, Agent and Plugin use the same typed-intent commit service", async () => {
-    const calls: CanvasCallerIntentV2[] = []
-    const port: CanvasIntentCommitPortV2 = {
+    const calls: CanvasCallerIntent[] = []
+    const port: CanvasIntentCommitPort = {
       async commit(intent) {
         calls.push(intent)
         return {
           operationId: id128(99),
-          projection: projectCanvasV2(validateCanvasYDocV2(newCanvas())),
+          projection: projectCanvas(validateCanvasYDoc(newCanvas())),
           semanticRootOperationId: id128(98),
         }
       },
     }
-    const service = new CanvasIntentApplicationServiceV2(port)
+    const service = new CanvasIntentApplicationService(port)
     const intent = nodeCreate()
     for (const caller of ["ui", "agent", "plugin"] as const) await service.apply(caller, intent)
     expect(calls).toEqual([intent, intent, intent])
@@ -27,7 +27,7 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
 
   test("pre-commit cancellation and commit failure do not fabricate a projection", async () => {
     let commits = 0
-    const service = new CanvasIntentApplicationServiceV2({
+    const service = new CanvasIntentApplicationService({
       async commit() {
         commits += 1
         throw new Error("durability-failed")
@@ -44,9 +44,9 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
   test("selection, measured size, drag preview and viewport remain disposable transient state", () => {
     const document = newCanvas()
     const node = createAgent(document, context(1, 1, 1))
-    const projection = projectCanvasV2(validateCanvasYDocV2(document))
+    const projection = projectCanvas(validateCanvasYDoc(document))
     const key = `node/${node.id}/${node.incarnation}`
-    const transient = new CanvasReactFlowTransientStateV2()
+    const transient = new CanvasReactFlowTransientState()
     transient.setMeasured(key, { width: 999, height: 888 })
     transient.setSelected([key])
     transient.beginDrag(key, 10, 20)
@@ -67,9 +67,9 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
   test("scope reset clears every React Flow cache without creating durable state", () => {
     const document = newCanvas()
     const node = createAgent(document, context(2, 1, 1))
-    const projection = projectCanvasV2(validateCanvasYDocV2(document))
+    const projection = projectCanvas(validateCanvasYDoc(document))
     const key = `node/${node.id}/${node.incarnation}`
-    const transient = new CanvasReactFlowTransientStateV2()
+    const transient = new CanvasReactFlowTransientState()
     transient.setMeasured(key, { width: 999, height: 888 })
     transient.setSelected([key])
     transient.beginDrag(key, 10, 20)
@@ -89,11 +89,11 @@ describe("Canvas v2 caller and React Flow boundaries", () => {
   })
 })
 
-function nodeCreate(): CanvasCallerIntentV2 {
+function nodeCreate(): CanvasCallerIntent {
   const operationContext = context(1, 1, 1)
-  const node = derivedNodeRefV2(operationContext, U0)
+  const node = derivedNodeRef(operationContext, U0)
   return {
-    format: "convax.typed-intent/2",
+    format: "convax.typed-intent",
     kind: "canvas.agent.create",
     guard: { ordinal: U0, node, expectedAbsent: true },
     body: {
@@ -104,7 +104,7 @@ function nodeCreate(): CanvasCallerIntentV2 {
         role: "agent",
         position: { x: 0, y: 0 },
         size: { width: 100, height: 100 },
-        data: { format: "convax.canvas-node-data/2", kind: "agent", title: "agent", instructions: null },
+        data: { format: "convax.canvas-node-data", kind: "agent", title: "agent", instructions: null },
         plugin: null,
       },
     },

@@ -1,23 +1,23 @@
 import { describe, expect, test } from "bun:test"
 import { parseUint32 } from "@convax/collaboration"
-import { adaptCanvasApplicationCommandV2 } from "./application-command-adapter"
-import { constructCanvasAuthoritativeIntentV2 } from "./command-construction"
+import { adaptCanvasApplicationCommand } from "./application-command-adapter"
+import { constructCanvasAuthoritativeIntent } from "./command-construction"
 import { createCanvasFileRendererRegistry } from "../file-renderer-registry"
-import { buildCanvasProjectionIndexV2, projectCanvasDocumentV2 } from "./projection"
-import { applyCanvasCandidateIntentV2 } from "./reducer"
-import type { CanvasExternalFactContextV2, CanvasTypedIntentUnionV2, PluginStateEnvelopeV2 } from "./types"
-import { canvasEntityKeyV2, derivedNodeRefV2 } from "./validation"
-import { encodeCanvasCanonicalStateV2, validateCanvasYDocV2 } from "./ydoc"
+import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
+import { applyCanvasCandidateIntent } from "./reducer"
+import type { CanvasExternalFactContext, CanvasTypedIntentUnion, PluginStateEnvelope } from "./types"
+import { canvasEntityKey, derivedNodeRef } from "./validation"
+import { encodeCanvasCanonicalState, validateCanvasYDoc } from "./ydoc"
 import { applyOk, context, createAgent, digest, newCanvas, U0, VALID_FACTS } from "./test-fixtures.test"
 
-const PLUGIN: PluginStateEnvelopeV2 = Object.freeze({
-  format: "convax.canvas-plugin-state/2",
+const PLUGIN: PluginStateEnvelope = Object.freeze({
+  format: "convax.canvas-plugin-state",
   pluginId: "acme.storyboard",
   snapshotDigest: digest(70),
   pluginStateSchemaDigest: digest(71),
   validationArtifact: Object.freeze({
     owner: "plugin",
-    format: "convax.plugin-validation-artifact/2",
+    format: "convax.plugin-validation-artifact",
     artifactDigest: digest(72),
   }),
   state: { board: "empty" },
@@ -27,20 +27,20 @@ describe("Canvas generic Plugin surface creation", () => {
   test("creates one independent top-level node with Canvas-owned identity and placement", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)
-    const node = derivedNodeRefV2(operationContext, U0)
+    const node = derivedNodeRef(operationContext, U0)
     const result = applyOk(document, operationContext, pluginSurfaceIntent(document, operationContext))
 
-    const snapshot = validateCanvasYDocV2(document)
-    const projection = buildCanvasProjectionIndexV2(snapshot).projection
+    const snapshot = validateCanvasYDoc(document)
+    const projection = buildCanvasProjectionIndex(snapshot).projection
     expect(projection.nodes).toHaveLength(1)
     expect(projection.edges).toEqual([])
     const created = projection.nodes[0]!
-    expect(canvasEntityKeyV2(created.ref)).toBe(canvasEntityKeyV2(node))
+    expect(canvasEntityKey(created.ref)).toBe(canvasEntityKey(node))
     expect(created.role).toBe("file")
     expect(created.parent).toBeNull()
-    expect(snapshot.nodes.get(canvasEntityKeyV2(node))!.creationGroup).toBeNull()
+    expect(snapshot.nodes.get(canvasEntityKey(node))!.creationGroup).toBeNull()
     expect(created.data).toEqual({
-      format: "convax.canvas-node-data/2",
+      format: "convax.canvas-node-data",
       kind: "plugin-surface",
       title: "Storyboard",
     })
@@ -56,7 +56,7 @@ describe("Canvas generic Plugin surface creation", () => {
     createAgent(document, context(1, 1, 1))
     applyOk(document, context(1, 2, 2), pluginSurfaceIntent(document, context(1, 2, 2)))
 
-    const projection = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection
+    const projection = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection
     const surface = projection.nodes.find((candidate) => candidate.data.kind === "plugin-surface")!
     expect(surface.position).toEqual({ x: 264, y: 0 })
   })
@@ -64,36 +64,36 @@ describe("Canvas generic Plugin surface creation", () => {
   test("an unverified Plugin artifact or state writes nothing", () => {
     for (const facts of [rejecting("validatePluginArtifact"), rejecting("validatePluginState")]) {
       const document = newCanvas()
-      const before = encodeCanvasCanonicalStateV2(document)
+      const before = encodeCanvasCanonicalState(document)
       const operationContext = context(1, 1, 1)
-      const outcome = applyCanvasCandidateIntentV2(
+      const outcome = applyCanvasCandidateIntent(
         document,
         operationContext,
         pluginSurfaceIntent(document, operationContext),
         facts,
       )
       expect(outcome).toBe("rejected")
-      expect(encodeCanvasCanonicalStateV2(document)).toEqual(before)
+      expect(encodeCanvasCanonicalState(document)).toEqual(before)
     }
   })
 
   test("rejects a caller-selected node id, a second ordinal, and a stale placement", () => {
     const document = newCanvas()
     const operationContext = context(1, 1, 1)
-    const foreign = derivedNodeRefV2(context(2, 9, 9), U0)
+    const foreign = derivedNodeRef(context(2, 9, 9), U0)
 
     const forged = pluginSurfaceIntent(document, operationContext)
     const forgedBody = forged.body as { node: { nodeId: string } }
     forgedBody.node.nodeId = foreign.id
-    expect(applyCanvasCandidateIntentV2(document, operationContext, forged, VALID_FACTS)).toBe("rejected")
+    expect(applyCanvasCandidateIntent(document, operationContext, forged, VALID_FACTS)).toBe("rejected")
 
     const misordinal = pluginSurfaceIntent(document, operationContext)
     ;(misordinal.body as { node: { ordinal: unknown } }).node.ordinal = parseUint32("1")
-    expect(applyCanvasCandidateIntentV2(document, operationContext, misordinal, VALID_FACTS)).toBe("rejected")
+    expect(applyCanvasCandidateIntent(document, operationContext, misordinal, VALID_FACTS)).toBe("rejected")
 
     const stale = pluginSurfaceIntent(document, operationContext)
     ;(stale.body as { placement: { obstacleProjectionDigest: unknown } }).placement.obstacleProjectionDigest = digest(9)
-    expect(applyCanvasCandidateIntentV2(document, operationContext, stale, VALID_FACTS)).toBe("rejected")
+    expect(applyCanvasCandidateIntent(document, operationContext, stale, VALID_FACTS)).toBe("rejected")
   })
 
   test("projects an installed surface as the Plugin renderer kind and keeps its portable state", () => {
@@ -101,8 +101,8 @@ describe("Canvas generic Plugin surface creation", () => {
     const operationContext = context(1, 1, 1)
     applyOk(document, operationContext, pluginSurfaceIntent(document, operationContext))
 
-    const projection = buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection
-    const projected = projectCanvasDocumentV2(projection).document.nodes[0]!
+    const projection = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection
+    const projected = projectCanvasDocument(projection).document.nodes[0]!
     expect(projected.data.kind).toBe(`plugin.${PLUGIN.pluginId}`)
     expect(projected.data.label).toBe("Storyboard")
     expect(projected.data.metadata).toEqual({
@@ -130,9 +130,9 @@ describe("Canvas generic Plugin surface creation", () => {
 
   test("adapts the Host business command without accepting an id, position, or digest", () => {
     const document = newCanvas()
-    const snapshot = validateCanvasYDocV2(document)
+    const snapshot = validateCanvasYDoc(document)
     const operationContext = context(1, 1, 1)
-    const adaptation = adaptCanvasApplicationCommandV2({
+    const adaptation = adaptCanvasApplicationCommand({
       request: {
         canvasId: "canvas",
         scopeId: "project",
@@ -164,7 +164,7 @@ describe("Canvas generic Plugin surface creation", () => {
       plugin: PLUGIN,
     })
 
-    const construction = constructCanvasAuthoritativeIntentV2({
+    const construction = constructCanvasAuthoritativeIntent({
       snapshot,
       context: operationContext,
       command: adaptation.command,
@@ -173,7 +173,7 @@ describe("Canvas generic Plugin surface creation", () => {
     expect(construction.intent.kind).toBe("canvas.plugin.surface.create")
     expect(construction.dependencies.validationArtifacts).toEqual([PLUGIN.validationArtifact])
     const body = construction.intent.body as { node: { nodeId: string }; placement: { anchor: unknown } }
-    expect(body.node.nodeId).toBe(derivedNodeRefV2(operationContext, U0).id)
+    expect(body.node.nodeId).toBe(derivedNodeRef(operationContext, U0).id)
     expect(body.placement.anchor).toEqual({ x: 0, y: 0 })
   })
 })
@@ -181,9 +181,9 @@ describe("Canvas generic Plugin surface creation", () => {
 function pluginSurfaceIntent(
   document: ReturnType<typeof newCanvas>,
   operationContext: ReturnType<typeof context>,
-): CanvasTypedIntentUnionV2 {
-  const construction = constructCanvasAuthoritativeIntentV2({
-    snapshot: validateCanvasYDocV2(document),
+): CanvasTypedIntentUnion {
+  const construction = constructCanvasAuthoritativeIntent({
+    snapshot: validateCanvasYDoc(document),
     context: operationContext,
     command: {
       kind: "plugin-surface-create",
@@ -196,6 +196,6 @@ function pluginSurfaceIntent(
   return structuredClone(construction.intent)
 }
 
-function rejecting(method: keyof CanvasExternalFactContextV2): CanvasExternalFactContextV2 {
+function rejecting(method: keyof CanvasExternalFactContext): CanvasExternalFactContext {
   return { ...VALID_FACTS, [method]: () => "invalid" }
 }

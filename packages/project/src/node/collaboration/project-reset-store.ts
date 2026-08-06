@@ -13,16 +13,16 @@ import {
 } from "@convax/collaboration"
 
 import {
-  parseProjectResetConfirmationV2,
-  type ProjectResetConfirmationV2,
-  type ProjectResetReasonV2,
+  parseProjectResetConfirmation,
+  type ProjectResetConfirmation,
+  type ProjectResetReason,
 } from "../../collaboration-protocol/project-reset"
-import { fsyncProjectDirectoryV2 } from "./directory-durability"
+import { fsyncProjectDirectory } from "./directory-durability"
 
 const RECORDS_FILE = "project-reset-records-v2.jcs"
 const MAX_RECORD_BYTES = 64 * 1024
 
-export type ProjectResetManifestStateV2 =
+export type ProjectResetManifestState =
   | "reset-staged"
   | "reset-authorized"
   | "reset-publishing"
@@ -30,15 +30,15 @@ export type ProjectResetManifestStateV2 =
   | "reset-retiring-old"
   | "reset-complete"
 
-export interface ProjectResetManifestV2 {
-  readonly format: "convax.project-reset-manifest/2"
+export interface ProjectResetManifest {
+  readonly format: "convax.project-reset-manifest"
   readonly resetId: Id128
   readonly projectId: ProjectId
   readonly oldProjectEpoch: Id128 | null
   readonly newProjectEpoch: Id128
   readonly newMembershipEpoch: Id128 | null
   readonly newProjectIndexShardEpoch: Id128
-  readonly reason: ProjectResetReasonV2
+  readonly reason: ProjectResetReason
   readonly observedOldPrivateTreeDigest: Digest
   readonly unsupportedInventoryDigest: Digest
   readonly privateDeletionSetDigest: Digest
@@ -54,40 +54,40 @@ export interface ProjectResetManifestV2 {
   readonly teamEpochRolloverRequestDigest: Digest | null
   readonly emptyProjectIndexGenesisAttestationCoreDigest: Digest | null
   readonly teamEpochRolloverReceiptCoreDigest: Digest | null
-  readonly state: ProjectResetManifestStateV2
+  readonly state: ProjectResetManifestState
 }
 
-export interface ProjectResetRecordsV2 {
-  readonly format: "convax.project-reset-records/2"
-  readonly manifest: ProjectResetManifestV2
-  readonly confirmation: ProjectResetConfirmationV2
+export interface ProjectResetRecords {
+  readonly format: "convax.project-reset-records"
+  readonly manifest: ProjectResetManifest
+  readonly confirmation: ProjectResetConfirmation
 }
 
-export async function writeProjectResetRecordsV2(
+export async function writeProjectResetRecords(
   collaborationDirectory: string,
-  records: ProjectResetRecordsV2,
+  records: ProjectResetRecords,
 ): Promise<void> {
   const directory = await requireCollaborationDirectory(collaborationDirectory)
   const normalized = normalizeRecords(records)
   await writeOrReplaceRecord(path.join(directory, RECORDS_FILE), encodeBounded(normalized))
 }
 
-export async function readProjectResetRecordsV2(
+export async function readProjectResetRecords(
   collaborationDirectory: string,
-): Promise<ProjectResetRecordsV2> {
+): Promise<ProjectResetRecords> {
   const directory = await requireCollaborationDirectory(collaborationDirectory)
   const value = decodeRestrictedJcs(await readBoundedPlainFile(path.join(directory, RECORDS_FILE)))
   if (!isPlainRecord(value) || !hasExactKeys(value, ["format", "manifest", "confirmation"]) ||
-    value.format !== "convax.project-reset-records/2") throw new TypeError("Project reset records schema is invalid")
+    value.format !== "convax.project-reset-records") throw new TypeError("Project reset records schema is invalid")
   const normalized = normalizeRecords({
     format: value.format,
-    confirmation: parseProjectResetConfirmationV2(value.confirmation),
-    manifest: parseProjectResetManifestV2(value.manifest),
+    confirmation: parseProjectResetConfirmation(value.confirmation),
+    manifest: parseProjectResetManifest(value.manifest),
   })
   return Object.freeze(normalized)
 }
 
-export function parseProjectResetManifestV2(value: unknown): ProjectResetManifestV2 {
+export function parseProjectResetManifest(value: unknown): ProjectResetManifest {
   const keys = [
     "format", "resetId", "projectId", "oldProjectEpoch", "newProjectEpoch", "newMembershipEpoch",
     "newProjectIndexShardEpoch", "reason", "observedOldPrivateTreeDigest", "unsupportedInventoryDigest",
@@ -97,7 +97,7 @@ export function parseProjectResetManifestV2(value: unknown): ProjectResetManifes
     "projectResetApprovalCoreDigest", "teamEpochRolloverRequestDigest",
     "emptyProjectIndexGenesisAttestationCoreDigest", "teamEpochRolloverReceiptCoreDigest", "state",
   ] as const
-  if (!isPlainRecord(value) || !hasExactKeys(value, keys) || value.format !== "convax.project-reset-manifest/2" ||
+  if (!isPlainRecord(value) || !hasExactKeys(value, keys) || value.format !== "convax.project-reset-manifest" ||
     !isResetReason(value.reason) || !isState(value.state)) {
     throw new TypeError("Project reset manifest schema is invalid")
   }
@@ -129,10 +129,10 @@ export function parseProjectResetManifestV2(value: unknown): ProjectResetManifes
   })
 }
 
-function normalizeRecords(records: ProjectResetRecordsV2): ProjectResetRecordsV2 {
-  if (records.format !== "convax.project-reset-records/2") throw new TypeError("Project reset records format is invalid")
-  const confirmation = parseProjectResetConfirmationV2(records.confirmation)
-  const manifest = parseProjectResetManifestV2(records.manifest)
+function normalizeRecords(records: ProjectResetRecords): ProjectResetRecords {
+  if (records.format !== "convax.project-reset-records") throw new TypeError("Project reset records format is invalid")
+  const confirmation = parseProjectResetConfirmation(records.confirmation)
+  const manifest = parseProjectResetManifest(records.manifest)
   if (manifest.resetId !== confirmation.core.resetId || manifest.projectId !== confirmation.core.projectId ||
     manifest.oldProjectEpoch !== confirmation.core.oldProjectEpoch || manifest.reason !== confirmation.core.reason ||
     manifest.observedOldPrivateTreeDigest !== confirmation.core.observedOldPrivateTreeDigest ||
@@ -185,7 +185,7 @@ async function writeOrReplaceRecord(target: string, bytes: Uint8Array): Promise<
     await fs.rm(temporary, { force: true }).catch(() => undefined)
     throw error
   }
-  await fsyncProjectDirectoryV2(path.dirname(target))
+  await fsyncProjectDirectory(path.dirname(target))
 }
 
 function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
@@ -213,12 +213,12 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
   return Object.keys(value).sort().join("\0") === [...keys].sort().join("\0")
 }
 
-function isResetReason(value: unknown): value is ProjectResetReasonV2 {
+function isResetReason(value: unknown): value is ProjectResetReason {
   return value === "unsupported-portable-version" || value === "incompatible-project-index-schema" ||
     value === "unrecoverable-project-index-corruption" || value === "explicit-empty-project-reset"
 }
 
-function isState(value: unknown): value is ProjectResetManifestStateV2 {
+function isState(value: unknown): value is ProjectResetManifestState {
   return value === "reset-staged" || value === "reset-authorized" || value === "reset-publishing" ||
     value === "reset-published" || value === "reset-retiring-old" || value === "reset-complete"
 }

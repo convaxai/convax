@@ -259,7 +259,7 @@ describe("PetHostConnection", () => {
   test("validates exact envelopes, identifiers, payload bounds, and method params", async () => {
     const host = fixture()
     await host.connection.handle({ ...request("extra", "activity.getSnapshot"), extra: true })
-    await host.connection.handle({ ...request("protocol", "activity.getSnapshot"), protocol: "convax.pet-host/2" })
+    await host.connection.handle({ ...request("protocol", "activity.getSnapshot"), protocol: "convax.pet-host" })
     await host.connection.handle(request("params", "activity.open", { activityId: "one", extra: true, revision: 1 }))
     await host.connection.handle(request("preferences", "preferences.update", { selectedPetId: "Bad_Id" }))
     await host.connection.handle(request("empty-preferences", "preferences.update", {}))

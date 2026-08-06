@@ -12,7 +12,7 @@ import {
   parseUint64,
   structuredDigest,
 } from "@convax/collaboration"
-import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2, type SessionProofV2 } from "@convax/project/collaboration-protocol"
+import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES, type SessionProof } from "@convax/project/collaboration-protocol"
 import {
   CollaborationControlServiceErrorV2,
   CollaborationRendezvousServiceV2,
@@ -85,11 +85,11 @@ function member(memberByte: number, replica: string, actorByte: number) {
   }
 }
 
-function proofFor(seed: CollaborationProjectSeedV2, memberIndex: number, challenge: Awaited<ReturnType<CollaborationRendezvousServiceV2["issueSessionChallenge"]>>): SessionProofV2 {
+function proofFor(seed: CollaborationProjectSeedV2, memberIndex: number, challenge: Awaited<ReturnType<CollaborationRendezvousServiceV2["issueSessionChallenge"]>>): SessionProof {
   const member = seed.members[memberIndex]!
   const replica = member.replicas[0]!
   const core = {
-    format: "convax.session-proof-core/2" as const,
+    format: "convax.session-proof-core" as const,
     challengeDigest: challenge.coreDigest,
     projectId: seed.projectId,
     projectEpoch: seed.projectEpoch,
@@ -107,12 +107,12 @@ function proofFor(seed: CollaborationProjectSeedV2, memberIndex: number, challen
     peerId: challenge.core.peerId,
     sessionSigningPublicKey: publicKey,
     requestedExpiresAtUnixMs: parseUint64("1600000"),
-    protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+    protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
   }
   return {
-    format: "convax.session-proof/2",
+    format: "convax.session-proof",
     core,
-    coreDigest: structuredDigest("convax.session-proof-core/2", core),
+    coreDigest: structuredDigest("convax.session-proof-core", core),
     replicaSignature: signature,
   }
 }
@@ -131,7 +131,7 @@ async function issueChallenge(
   return service.issueSessionChallenge(request, authorization)
 }
 
-describe("R5 collaboration rendezvous service", () => {
+describe("current collaboration rendezvous service", () => {
   test("rechecks revoked member and replica state before issuing any peer route", async () => {
     const seed = projectSeed()
     const memberRevoked = { ...seed, members: [{ ...seed.members[0]!, active: false }] }
@@ -189,7 +189,7 @@ describe("R5 collaboration rendezvous service", () => {
     expect(directory.core.peers.map((peer) => peer.peerId)).toEqual([challengeA.core.peerId, challengeB.core.peerId])
 
     const requestCore = {
-      format: "convax.peer-ticket-request-core/2" as const,
+      format: "convax.peer-ticket-request-core" as const,
       requestId: id(40),
       connectionId: id(41),
       requesterCredentialDigest: credentialA.coreDigest,
@@ -197,19 +197,19 @@ describe("R5 collaboration rendezvous service", () => {
       requesterPeerId: credentialA.core.peerId,
       responderPeerId: credentialB.core.peerId,
       requesterNonce: id(42),
-      protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+      protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest),
     }
     const request = {
-      format: "convax.peer-ticket-request/2" as const,
+      format: "convax.peer-ticket-request" as const,
       core: requestCore,
-      coreDigest: structuredDigest("convax.peer-ticket-request-core/2", requestCore),
+      coreDigest: structuredDigest("convax.peer-ticket-request-core", requestCore),
       requesterSessionSignature: signature,
     }
     const first = await service.issuePeerFreshnessTicket(seed.projectId, request)
     const retry = await service.issuePeerFreshnessTicket(seed.projectId, request)
     expect(retry).toEqual(first)
     expect(first.core.connectionId).toBe(requestCore.connectionId)
-    expect(first.core.channelContractDigest).toBe(parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest))
+    expect(first.core.channelContractDigest).toBe(parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.channelContractDigest))
   })
 
   test("caps pending challenges and rejects a same-session equivocation", async () => {

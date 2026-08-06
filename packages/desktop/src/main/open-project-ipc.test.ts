@@ -15,7 +15,7 @@ import {
   type CanvasApplicationCommandRequest,
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import {
   parseActorId,
   parseDigest,
@@ -45,13 +45,13 @@ const handlers = new Map<string, InvokeHandler>()
 const rendererListeners = new Map<string, Set<(...args: unknown[]) => void>>()
 const rendererSends: Array<{ channel: string; input: unknown }> = []
 const trustedEvent = { sender: { id: 1 }, senderFrame: { url: "file:///convax/index.html" } }
-const operationReceipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
+const operationReceipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
   actorId: parseActorId("A".repeat(43)),
   operationId: parseId128("A".repeat(22)),
   intentDigest: parseDigest("d".repeat(64)),
   baseFrontierDigest: parseDigest("e".repeat(64)),
-  intentKind: "canvas.nodes.set-geometry/2",
+  intentKind: "canvas.nodes.set-geometry",
   resultEntities: [],
   semanticRoot: true,
   historyMaterialDigest: parseDigest("f".repeat(64)),

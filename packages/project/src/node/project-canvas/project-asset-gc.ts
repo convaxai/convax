@@ -3,7 +3,7 @@ import { constants as fsConstants, type BigIntStats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import { parseDigest, parseProjectId } from "@convax/collaboration"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
+import type { ProjectIndexCurrentBlobReferencePort } from "../../collaboration/blob-replication"
 import type { ProjectRootResolver, ProjectManagedAssetStore } from "./project-managed-asset-store"
 
 export const projectAssetGcGraceMs = 7 * 24 * 60 * 60 * 1_000
@@ -19,7 +19,7 @@ export interface ProjectAssetGcState {
 
 export interface ProjectAssetGcOptions {
   assets: ProjectManagedAssetStore
-  references: ProjectIndexCurrentBlobReferencePortV2
+  references: ProjectIndexCurrentBlobReferencePort
   now?: () => number
   projects: ProjectRootResolver
 }
@@ -61,7 +61,7 @@ const hashChunkBytes = 64 * 1024
 
 export class ProjectAssetGc {
   readonly #assets: ProjectManagedAssetStore
-  readonly #references: ProjectIndexCurrentBlobReferencePortV2
+  readonly #references: ProjectIndexCurrentBlobReferencePort
   readonly #now: () => number
   readonly #projects: ProjectRootResolver
 

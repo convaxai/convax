@@ -36,38 +36,38 @@ import {
 } from "@convax/collaboration"
 import type * as Y from "yjs"
 import {
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  createProjectIndexReconstructionYDocV2,
-  createProjectIndexYDocV2,
-  encodeProjectCanonicalStateV2,
-  projectIndexOwnerCanonicalizerDescriptorV2,
-  validateProjectIndexYDocV2,
-  type ProjectEntryRecordV2,
+  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  createProjectIndexReconstructionYDoc,
+  createProjectIndexYDoc,
+  encodeProjectCanonicalState,
+  projectIndexOwnerCanonicalizerDescriptor,
+  validateProjectIndexYDoc,
+  type ProjectEntryRecord,
 } from "../../collaboration/project-index"
 import {
-  NodeCollaborationPersistenceErrorV2,
-  NodeCollaborationPersistenceV2,
-  type NodeAcceptedReplicaHeadV2,
-  type NodeCollaborationPersistenceFaultHooksV2,
-  type NodeReplicaHeadMaterializerV2,
+  NodeCollaborationPersistenceError,
+  NodeCollaborationPersistence,
+  type NodeAcceptedReplicaHead,
+  type NodeCollaborationPersistenceFaultHooks,
+  type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
-import { fsyncProjectDirectoryV2 } from "./directory-durability"
-import { deriveDocumentNativeKeyV2, deriveObjectNativeKeyV2 } from "./native-store-keys"
-import { readProjectResetRecordsV2 } from "./project-reset-store"
+import { fsyncProjectDirectory } from "./directory-durability"
+import { deriveDocumentNativeKey, deriveObjectNativeKey } from "./native-store-keys"
+import { readProjectResetRecords } from "./project-reset-store"
 
-const MANIFEST_MAGIC = Buffer.from("CVXPMV02", "ascii")
+const MANIFEST_MAGIC = Buffer.from("CVXPIMAN", "ascii")
 const MANIFEST_HEADER_BYTES = 12
 const MANIFEST_CHECKSUM_BYTES = 32
 const MAX_MANIFEST_PAYLOAD_BYTES = 64 * 1024
-const LOCAL_RECORD_DOMAIN = Buffer.from("convax.local-project-store-record-digest/2\0", "utf8")
-const STORE_IDENTITY = "convax.project-collaboration-native-store/2" as const
+const LOCAL_RECORD_DOMAIN = Buffer.from("convax.local-project-store-record-digest\0", "utf8")
+const STORE_IDENTITY = "convax.project-collaboration-native-store" as const
 type ProjectIndexDocumentScope = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
 }
 
 export interface ProjectNativeStoreManifest {
-  readonly format: "convax.project-native-store-manifest/2"
+  readonly format: "convax.project-native-store-manifest"
   readonly storeIdentity: typeof STORE_IDENTITY
   readonly projectIndexScope: ProjectIndexDocumentScope
   readonly protocolDigest: Digest
@@ -90,7 +90,7 @@ export interface VerifiedEmptyProjectIndexGenesis {
   readonly manifest: ProjectNativeStoreManifest
   readonly manifestLocalRecordDigest: Digest
   readonly checkpointExactBytes: Uint8Array
-  readonly acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">
+  readonly acceptedBase: Omit<NodeAcceptedReplicaHead, "headDigest">
 }
 
 export interface ProjectIndexGenesisCheckpointVerifier {
@@ -106,7 +106,7 @@ export interface ProjectIndexNativeStoreInitializationFaults {
 /**
  * Project-owned constructor for the only legal empty ProjectIndex base. A new
  * Project creates this current genesis once; there is no earlier genesis and no
- * later promotion. Desktop supplies already-durable principal identities and
+ * later conflictCopy. Desktop supplies already-durable principal identities and
  * signs the returned core; it never assembles Project schema bytes itself.
  */
 export function createEmptyProjectIndexGenesisCandidate(input: {
@@ -123,16 +123,16 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
   const scope = requireProjectIndexScope(input.scope)
   const actorId = parseActorId(input.actorId)
   const operationId = parseId128(input.operationId)
-  const rootDirectoryId = `pd_${structuredDigest("convax.project-derived-identity/2", {
-    format: "convax.project-derived-identity-core/2",
+  const rootDirectoryId = `pd_${structuredDigest("convax.project-derived-identity", {
+    format: "convax.project-derived-identity-core",
     scope,
     actorId,
     operationId,
     ordinal: parseUint32("0"),
     kind: "directory",
   })}` as const
-  const rootEntry: ProjectEntryRecordV2 = Object.freeze({
-    format: "convax.project-entry/2",
+  const rootEntry: ProjectEntryRecord = Object.freeze({
+    format: "convax.project-entry",
     entryId: rootDirectoryId,
     kind: "directory",
     storageClass: null,
@@ -142,16 +142,16 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
     createdByActorId: actorId,
     createdByOperationId: operationId,
     createdStamp: Object.freeze({
-      format: "convax.portable-stamp/2",
+      format: "convax.portable-stamp",
       lamport: parseUint64("0"),
       actorId,
       operationId,
       writeOrdinal: parseUint32("0"),
     }),
   })
-  const document = createProjectIndexYDocV2(
+  const document = createProjectIndexYDoc(
     Object.freeze({
-      format: "convax.project-index-identity/2",
+      format: "convax.project-index-identity",
       schema: "convax.project-index.v2",
       projectId: scope.projectId,
       projectEpoch: scope.projectEpoch,
@@ -165,16 +165,16 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
   )
   const fullUpdate = encodeFullUpdate(document)
   const stateVector = encodeStateVector(document)
-  const canonicalState = encodeProjectCanonicalStateV2(document)
-  const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+  const canonicalState = encodeProjectCanonicalState(document)
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
-    format: "convax.replica-actor-head-set/2" as const,
+    format: "convax.replica-actor-head-set" as const,
     scope,
     heads: Object.freeze([]),
   })
   const checkpointCore: ReplicaCheckpointCore = Object.freeze({
-    format: "convax.replica-checkpoint-core/2",
+    format: "convax.replica-checkpoint-core",
     scope,
     checkpointId: parseId128(input.checkpointId),
     authorMemberId: parseMemberId(input.authorMemberId),
@@ -192,7 +192,7 @@ export function createEmptyProjectIndexGenesisCandidate(input: {
     protocolDigest: parseDigest(input.authority.protocolDigest),
     schemaDigest: parseDigest(input.authority.schemaDigest),
     canonicalizerDigest: ownerCanonicalizerDescriptorDigest(
-      projectIndexOwnerCanonicalizerDescriptorV2(input.authority.schemaDigest),
+      projectIndexOwnerCanonicalizerDescriptor(input.authority.schemaDigest),
     ),
     validationArtifactSetDigest: parseDigest(input.validationArtifactSetDigest),
   })
@@ -263,14 +263,14 @@ export async function verifyEmptyProjectIndexGenesis(input: {
   readonly verifier: ProjectIndexGenesisCheckpointVerifier
 }): Promise<VerifiedEmptyProjectIndexGenesis> {
   const scope = requireProjectIndexScope(input.scope)
-  const snapshot = validateProjectIndexYDocV2(input.document, scope)
+  const snapshot = validateProjectIndexYDoc(input.document, scope)
   if (
     snapshot.entries.size !== 1 ||
     !snapshot.entries.has(snapshot.identity.rootDirectoryId) ||
     snapshot.entryLocations.size !== 0 ||
     snapshot.entryTombstones.size !== 0 ||
     snapshot.contentFamilies.size !== 0 ||
-    snapshot.contentPromotions.size !== 0 ||
+    snapshot.contentConflictCopies.size !== 0 ||
     snapshot.pathReservations.size !== 0 ||
     snapshot.canvasRoutes.size !== 0 ||
     snapshot.operations.size !== 0
@@ -280,17 +280,17 @@ export async function verifyEmptyProjectIndexGenesis(input: {
   const checkpoint = decodeExactCheckpoint(input.checkpointExactBytes)
   const fullUpdate = encodeFullUpdate(input.document)
   const stateVector = encodeStateVector(input.document)
-  const canonicalState = encodeProjectCanonicalStateV2(input.document)
+  const canonicalState = encodeProjectCanonicalState(input.document)
   const canonicalStateDigest = computeCanonicalStateDigest(snapshot.identity.schemaDigest, canonicalState)
-  const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
-    format: "convax.replica-actor-head-set/2" as const,
+    format: "convax.replica-actor-head-set" as const,
     scope,
     heads: Object.freeze([]),
   })
   const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(
-    projectIndexOwnerCanonicalizerDescriptorV2(snapshot.identity.schemaDigest),
+    projectIndexOwnerCanonicalizerDescriptor(snapshot.identity.schemaDigest),
   )
   const core = checkpoint.core
   if (
@@ -313,7 +313,7 @@ export async function verifyEmptyProjectIndexGenesis(input: {
     throw new TypeError("ProjectIndex genesis checkpoint authority is rejected")
   const checkpointObjectDigest = replicaCheckpointObjectDigest(checkpoint)
   const manifest = parseProjectNativeStoreManifest({
-    format: "convax.project-native-store-manifest/2",
+    format: "convax.project-native-store-manifest",
     storeIdentity: STORE_IDENTITY,
     projectIndexScope: scope,
     protocolDigest: snapshot.identity.protocolDigest,
@@ -348,11 +348,11 @@ export async function verifyEmptyProjectIndexGenesis(input: {
 export async function initializeUnteamedProjectIndexNativeStore(input: {
   readonly collaborationDirectory: string
   readonly localActorId: ActorId
-  readonly materializer: NodeReplicaHeadMaterializerV2
+  readonly materializer: NodeReplicaHeadMaterializer
   readonly genesis: VerifiedEmptyProjectIndexGenesis
-  readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooksV2
+  readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooks
   readonly faults?: ProjectIndexNativeStoreInitializationFaults
-}): Promise<NodeAcceptedReplicaHeadV2> {
+}): Promise<NodeAcceptedReplicaHead> {
   if (!path.isAbsolute(input.collaborationDirectory)) throw new TypeError("Collaboration directory must be absolute")
   const target = path.resolve(input.collaborationDirectory)
   if (target !== input.collaborationDirectory) throw new TypeError("Collaboration directory must be canonical")
@@ -370,7 +370,7 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
   const staged = await lstatOrNull(staging)
   if (!staged) {
     await fs.mkdir(staging, { mode: 0o700 })
-    await fsyncProjectDirectoryV2(parent)
+    await fsyncProjectDirectory(parent)
     await writeNewManifest(path.join(staging, "manifest-v2.bin"), expectedManifestBytes)
     await input.faults?.afterManifestFsync?.()
   } else if (!staged.isDirectory() || staged.isSymbolicLink()) {
@@ -381,7 +381,7 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
 
   const head = await initializeOrVerifyStagedStore(staging, input)
   await input.faults?.afterGenesisFsync?.()
-  await fsyncProjectDirectoryV2(staging)
+  await fsyncProjectDirectory(staging)
   await input.faults?.beforePublishRename?.()
   try {
     await fs.rename(staging, target)
@@ -391,7 +391,7 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
     }
     throw error
   }
-  await fsyncProjectDirectoryV2(parent)
+  await fsyncProjectDirectory(parent)
   return head
 }
 
@@ -404,7 +404,7 @@ export async function initializeUnteamedProjectIndexNativeStore(input: {
 export async function verifyPristineUnteamedProjectIndexNativeStore(input: {
   readonly collaborationDirectory: string
   readonly localActorId: ActorId
-  readonly materializer: NodeReplicaHeadMaterializerV2
+  readonly materializer: NodeReplicaHeadMaterializer
   readonly manifest: ProjectNativeStoreManifest
   readonly verifier: ProjectIndexGenesisCheckpointVerifier
 }): Promise<void> {
@@ -416,28 +416,28 @@ export async function verifyPristineUnteamedProjectIndexNativeStore(input: {
   }
   const manifest = parseProjectNativeStoreManifest(input.manifest)
   await requireExactManifest(input.collaborationDirectory, encodeProjectNativeStoreManifest(manifest))
-  const store = await NodeCollaborationPersistenceV2.openReadOnly({
+  const store = await NodeCollaborationPersistence.openReadOnly({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.localActorId,
     materializer: input.materializer,
   })
-  let installed: NodeAcceptedReplicaHeadV2
+  let installed: NodeAcceptedReplicaHead
   try {
     installed = await store.loadInstalledBase(manifest.projectIndexScope)
   } finally {
     store.dispose()
   }
-  const document = createProjectIndexReconstructionYDocV2()
+  const document = createProjectIndexReconstructionYDoc()
   try {
     applyYjsUpdate(
       document,
       installed.fullUpdate,
       Object.freeze({
-        format: "convax.pristine-project-index-bootstrap-inspection/2",
+        format: "convax.pristine-project-index-bootstrap-inspection",
       }),
     )
-    const documentKey = deriveDocumentNativeKeyV2(manifest.projectIndexScope)
-    const checkpointKey = deriveObjectNativeKeyV2("checkpoint", manifest.emptyProjectIndexCheckpointObjectDigest)
+    const documentKey = deriveDocumentNativeKey(manifest.projectIndexScope)
+    const checkpointKey = deriveObjectNativeKey("checkpoint", manifest.emptyProjectIndexCheckpointObjectDigest)
     const checkpointExactBytes = await readPlainBoundedFile(
       path.join(
         input.collaborationDirectory,
@@ -495,9 +495,9 @@ export async function readProjectNativeStoreManifest(
 }
 
 export async function describeProjectIndexInstalledBase(input: {
-  readonly persistence: Pick<NodeCollaborationPersistenceV2, "loadInstalledBase">
+  readonly persistence: Pick<NodeCollaborationPersistence, "loadInstalledBase">
   readonly scope: DocumentScope
-}): Promise<NodeAcceptedReplicaHeadV2> {
+}): Promise<NodeAcceptedReplicaHead> {
   const scope = requireProjectIndexScope(input.scope)
   const installed = await input.persistence.loadInstalledBase(scope)
   if (!sameScope(installed.scope, scope)) throw new TypeError("Installed ProjectIndex base crossed scope")
@@ -521,14 +521,14 @@ function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreMani
   if (
     !isPlainObject(value) ||
     !hasExactKeys(value, keys) ||
-    value.format !== "convax.project-native-store-manifest/2" ||
+    value.format !== "convax.project-native-store-manifest" ||
     value.storeIdentity !== STORE_IDENTITY
   ) {
     throw new TypeError("Project native manifest schema is invalid")
   }
   const scope = requireProjectIndexScope(value.projectIndexScope)
   const schemaDigest = parseDigest(value.schemaDigest)
-  if (schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2) {
+  if (schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST) {
     throw new TypeError("Project native manifest schema is unsupported")
   }
   return Object.freeze({
@@ -566,8 +566,8 @@ function decodeExactCheckpoint(exactBytes: Readonly<Uint8Array>): ReplicaCheckpo
 async function initializeOrVerifyStagedStore(
   staging: string,
   input: Parameters<typeof initializeUnteamedProjectIndexNativeStore>[0],
-): Promise<NodeAcceptedReplicaHeadV2> {
-  const store = await NodeCollaborationPersistenceV2.open({
+): Promise<NodeAcceptedReplicaHead> {
+  const store = await NodeCollaborationPersistence.open({
     collaborationDirectory: staging,
     localActorId: input.localActorId,
     materializer: input.materializer,
@@ -579,7 +579,7 @@ async function initializeOrVerifyStagedStore(
       assertInstalledMatchesGenesis(installed, input.genesis)
       return installed
     } catch (error) {
-      if (!(error instanceof NodeCollaborationPersistenceErrorV2) || error.code !== "document-not-found") throw error
+      if (!(error instanceof NodeCollaborationPersistenceError) || error.code !== "document-not-found") throw error
     }
     return await store.initializeShard({
       scope: input.genesis.manifest.projectIndexScope,
@@ -596,9 +596,9 @@ async function verifyCompleteStore(
   directory: string,
   expectedManifestBytes: Uint8Array,
   input: Parameters<typeof initializeUnteamedProjectIndexNativeStore>[0],
-): Promise<NodeAcceptedReplicaHeadV2> {
+): Promise<NodeAcceptedReplicaHead> {
   await requireExactManifest(directory, expectedManifestBytes)
-  const store = await NodeCollaborationPersistenceV2.open({
+  const store = await NodeCollaborationPersistence.open({
     collaborationDirectory: directory,
     localActorId: input.localActorId,
     materializer: input.materializer,
@@ -617,7 +617,7 @@ async function requirePristineBootstrapInventory(
   manifest: ProjectNativeStoreManifest,
 ): Promise<void> {
   const scope = manifest.projectIndexScope
-  const documentKey = deriveDocumentNativeKeyV2(scope)
+  const documentKey = deriveDocumentNativeKey(scope)
   const documentRoot = `documents/${documentKey}`
   const allowedDirectories = new Set([
     "documents",
@@ -699,7 +699,7 @@ async function requireMatchingLocalResetPublication(
   collaborationDirectory: string,
   manifest: ProjectNativeStoreManifest,
 ): Promise<void> {
-  const records = await readProjectResetRecordsV2(collaborationDirectory)
+  const records = await readProjectResetRecords(collaborationDirectory)
   const reset = records.manifest
   const principal = records.confirmation.core.confirmationPrincipal
   if (
@@ -728,7 +728,7 @@ function escapeRegExp(value: string): string {
 }
 
 function assertInstalledMatchesGenesis(
-  installed: NodeAcceptedReplicaHeadV2,
+  installed: NodeAcceptedReplicaHead,
   genesis: VerifiedEmptyProjectIndexGenesis,
 ): void {
   const expected = genesis.acceptedBase
@@ -757,7 +757,7 @@ async function writeNewManifest(target: string, bytes: Uint8Array): Promise<void
   } finally {
     await handle.close()
   }
-  await fsyncProjectDirectoryV2(path.dirname(target))
+  await fsyncProjectDirectory(path.dirname(target))
 }
 
 async function readPlainBoundedFile(target: string): Promise<Uint8Array> {

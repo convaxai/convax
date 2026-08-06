@@ -87,7 +87,7 @@ export interface CheckpointContentCertificateSignerPortV2 {
 
 export interface CheckpointAttesterAuditV2 {
   record(record: Readonly<{
-    format: "convax.checkpoint-attester-audit/2"
+    format: "convax.checkpoint-attester-audit"
     requestId: string
     byteCount: Uint64
     sectionDigests: readonly Digest[]
@@ -195,7 +195,7 @@ export function createIsolatedCheckpointAttesterV2Handler(
       }
       try {
         await options.audit.record(Object.freeze({
-          format: "convax.checkpoint-attester-audit/2",
+          format: "convax.checkpoint-attester-audit",
           requestId,
           byteCount: String(byteCount) as Uint64,
           sectionDigests,
@@ -282,7 +282,7 @@ async function attestCarrier(
 
   const serviceKeyId = options.signer.serviceKeyId("content-attestation")
   const core = parseCheckpointContentCertificateCore(Object.freeze({
-    format: "convax.checkpoint-content-certificate-core/2",
+    format: "convax.checkpoint-content-certificate-core",
     scope: index.scope,
     checkpointDigest: index.proposalCheckpointDigest,
     parentCertificateDigests: verification.parentCertificateDigests,
@@ -304,7 +304,7 @@ async function attestCarrier(
   const serviceSignature = parseSignature(await options.signer.signServiceDigest("content-attestation", coreDigest))
   throwIfAborted(signal)
   const certificate = parseCheckpointContentCertificate(Object.freeze({
-    format: "convax.checkpoint-content-certificate/2",
+    format: "convax.checkpoint-content-certificate",
     core,
     coreDigest,
     serviceSignature,
@@ -431,5 +431,5 @@ function unavailable(code: string): never {
 }
 
 function response(status: number, code: string): Response {
-  return Response.json({ format: "convax.api-error/2", code }, { status, headers: { "cache-control": "no-store" } })
+  return Response.json({ format: "convax.api-error", code }, { status, headers: { "cache-control": "no-store" } })
 }

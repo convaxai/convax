@@ -12,64 +12,64 @@ import {
   type ValidationArtifactSet,
 } from "@convax/collaboration"
 import {
-  membershipMutationProofCoreDigestV2,
-  replicaIdReservationRequestCoreDigestV2,
-  type MembershipMutationProofV2,
-  type ReplicaIdReservationRequestV2,
+  membershipMutationProofCoreDigest,
+  replicaIdReservationRequestCoreDigest,
+  type MembershipMutationProof,
+  type ReplicaIdReservationRequest,
 } from "@convax/project/collaboration-protocol"
 
-import type { ProjectTeamInvitationCarrierV2 } from "../project-team-collaboration-contracts"
+import type { ProjectTeamInvitationCarrier } from "../project-team-collaboration-contracts"
 import type {
-  DesktopCollaborationControlHttpClientV2,
-  DesktopMembershipMutationResultV2,
-  DesktopProjectBootstrapInitializationV2,
+  DesktopCollaborationControlHttpClient,
+  DesktopMembershipMutationResult,
+  DesktopProjectBootstrapInitialization,
 } from "./collaboration-control-http-client"
 import type {
-  DurableLocalReplicaAuthorityCacheV2,
-  LocalReplicaEnrollmentVerifierFactoryV2,
+  DurableLocalReplicaAuthorityCache,
+  LocalReplicaEnrollmentVerifierFactory,
 } from "./durable-local-authority-cache"
 import {
-  type DesktopTeamAuthorityCandidateV1,
-  type DesktopTeamAuthorityRecordV1,
-  type NodeDurableTeamAuthorityStoreV1,
-  type VerifiedDesktopTeamAuthorityV1,
+  type DesktopTeamAuthorityCandidate,
+  type DesktopTeamAuthorityRecord,
+  type NodeDurableTeamAuthorityStore,
+  type VerifiedDesktopTeamAuthority,
 } from "./durable-team-authority-store"
-import type { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
-import type { ElectronTeamIdentityVaultV1 } from "./electron-team-identity-vault"
+import type { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
+import type { ElectronTeamIdentityVault } from "./electron-team-identity-vault"
 import type {
-  ProjectTeamPeerBootstrapOpenResultV2,
-  ProjectTeamPeerSessionFactoryV2,
-  ProjectTeamPeerSessionOpenResultV2,
-  ProjectTeamPeerSessionV2,
+  ProjectTeamPeerBootstrapOpenResult,
+  ProjectTeamPeerSessionFactory,
+  ProjectTeamPeerSessionOpenResult,
+  ProjectTeamPeerSession,
 } from "./project-team-collaboration-manager"
 
-export interface ProjectTeamMemberIdentityPortV2 {
+export interface ProjectTeamMemberIdentityPort {
   resolve(projectId: ProjectId): Promise<MemberId>
 }
 
-export interface ProjectTeamNativeBootstrapFactsPortV2 {
-  resolve(projectId: ProjectId): Promise<DesktopProjectBootstrapInitializationV2>
+export interface ProjectTeamNativeBootstrapFactsPort {
+  resolve(projectId: ProjectId): Promise<DesktopProjectBootstrapInitialization>
 }
 
-export interface ProjectTeamActiveSessionPortV2 {
-  open(input: { readonly record: DesktopTeamAuthorityRecordV1; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionV2>
+export interface ProjectTeamActiveSessionPort {
+  open(input: { readonly record: DesktopTeamAuthorityRecord; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSession>
 }
 
-export interface ProjectTeamFloorActivationPortV2 {
+export interface ProjectTeamFloorActivationPort {
   activate(input: {
-    readonly record: DesktopTeamAuthorityRecordV1
+    readonly record: DesktopTeamAuthorityRecord
     readonly memberSigner: ReplicaSignerPort
     readonly replicaSigner: ReplicaSignerPort
     readonly signal: AbortSignal
-  }): Promise<DesktopMembershipMutationResultV2 | "pending">
+  }): Promise<DesktopMembershipMutationResult | "pending">
 }
 
-export interface ProjectTeamAuthorityAdmissionPortV2 {
-  admit(candidate: DesktopTeamAuthorityCandidateV1): Promise<VerifiedDesktopTeamAuthorityV1 | "rejected">
+export interface ProjectTeamAuthorityAdmissionPort {
+  admit(candidate: DesktopTeamAuthorityCandidate): Promise<VerifiedDesktopTeamAuthority | "rejected">
 }
 
-export interface ProjectTeamReplicaProvisioningResultV2 {
-  readonly record: DesktopTeamAuthorityRecordV1
+export interface ProjectTeamReplicaProvisioningResult {
+  readonly record: DesktopTeamAuthorityRecord
   readonly state: "active-editor" | "pending-floor"
 }
 
@@ -78,21 +78,21 @@ export interface ProjectTeamReplicaProvisioningResultV2 {
  * reservation, but the assigned replicaId is published only after the signed
  * receipt is verified. Team and offline-authority pointers are always last.
  */
-export class DesktopProjectTeamReplicaProvisionerV2 {
+export class DesktopProjectTeamReplicaProvisioner {
   constructor(private readonly options: {
-    readonly control: DesktopCollaborationControlHttpClientV2
-    readonly teamAdmission: ProjectTeamAuthorityAdmissionPortV2
-    readonly teamStore: Pick<NodeDurableTeamAuthorityStoreV1, "install">
-    readonly memberVault: Pick<ElectronTeamIdentityVaultV1, "openMemberSigner">
-    readonly replicaVault: Pick<ElectronReplicaSigningVaultV2, "prepareReplicaKey" | "bindPreparedReplicaKey" | "openSigner">
-    readonly floor: ProjectTeamFloorActivationPortV2
-    readonly localEnrollment: LocalReplicaEnrollmentVerifierFactoryV2
-    readonly localAuthority: Pick<DurableLocalReplicaAuthorityCacheV2, "install">
+    readonly control: DesktopCollaborationControlHttpClient
+    readonly teamAdmission: ProjectTeamAuthorityAdmissionPort
+    readonly teamStore: Pick<NodeDurableTeamAuthorityStore, "install">
+    readonly memberVault: Pick<ElectronTeamIdentityVault, "openMemberSigner">
+    readonly replicaVault: Pick<ElectronReplicaSigningVault, "prepareReplicaKey" | "bindPreparedReplicaKey" | "openSigner">
+    readonly floor: ProjectTeamFloorActivationPort
+    readonly localEnrollment: LocalReplicaEnrollmentVerifierFactory
+    readonly localAuthority: Pick<DurableLocalReplicaAuthorityCache, "install">
     readonly validationArtifacts: ValidationArtifactSet
     readonly createId: () => Id128
   }) {}
 
-  async provision(recordInput: DesktopTeamAuthorityRecordV1, signal: AbortSignal): Promise<ProjectTeamReplicaProvisioningResultV2> {
+  async provision(recordInput: DesktopTeamAuthorityRecord, signal: AbortSignal): Promise<ProjectTeamReplicaProvisioningResult> {
     let record = recordInput
     if (record.replicaEditAuthorization) return Object.freeze({ record, state: "active-editor" })
     const memberSigner = await this.openMemberSigner(record)
@@ -115,17 +115,17 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
   }
 
   private async enrollReplica(
-    record: DesktopTeamAuthorityRecordV1,
+    record: DesktopTeamAuthorityRecord,
     memberSigner: ReplicaSignerPort,
     signal: AbortSignal,
-  ): Promise<DesktopTeamAuthorityRecordV1> {
+  ): Promise<DesktopTeamAuthorityRecord> {
     const allocationRequestId = parseId128(this.options.createId())
     const projectEpoch = record.membershipSnapshot.core.projectEpoch
     const prepared = await this.options.replicaVault.prepareReplicaKey({ projectId: record.projectId, projectEpoch, allocationRequestId })
     const member = record.membershipSnapshot.core.members.find((candidate) => candidate.memberId === record.memberId)
     if (!member || member.state !== "active") throw new Error("Local member is not active")
     const core = Object.freeze({
-      format: "convax.replica-id-reservation-request-core/2" as const,
+      format: "convax.replica-id-reservation-request-core" as const,
       allocationRequestId,
       projectId: record.projectId,
       projectEpoch,
@@ -141,9 +141,9 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
       requestedEditState: "pending-editor" as const,
       protocolDigest: record.membershipSnapshot.core.protocolDigest,
     })
-    const coreDigest = replicaIdReservationRequestCoreDigestV2(core)
-    const request: ReplicaIdReservationRequestV2 = Object.freeze({
-      format: "convax.replica-id-reservation-request/2",
+    const coreDigest = replicaIdReservationRequestCoreDigest(core)
+    const request: ReplicaIdReservationRequest = Object.freeze({
+      format: "convax.replica-id-reservation-request",
       core,
       coreDigest,
       memberSignature: await memberSigner.sign(Buffer.from(coreDigest, "hex")),
@@ -167,7 +167,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
       signal,
     }), "Replica enrollment challenge")
     const proofCore = Object.freeze({
-      format: "convax.mutation-proof-core/2" as const,
+      format: "convax.mutation-proof-core" as const,
       mutationId: challenge.core.mutationId,
       challengeDigest: challenge.coreDigest,
       projectId: record.projectId,
@@ -186,9 +186,9 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
       requestedEditState: "pending-editor" as const,
       cutoffCoverageRootCoreDigest: null,
     })
-    const requestDigest = membershipMutationProofCoreDigestV2(proofCore)
-    const proof: MembershipMutationProofV2 = Object.freeze({
-      format: "convax.mutation-proof/2",
+    const requestDigest = membershipMutationProofCoreDigest(proofCore)
+    const proof: MembershipMutationProof = Object.freeze({
+      format: "convax.mutation-proof",
       core: proofCore,
       requestDigest,
       signatures: Object.freeze({ purpose: "replica-enroll", memberSignature: await memberSigner.sign(Buffer.from(requestDigest, "hex")) }),
@@ -200,9 +200,9 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
   }
 
   private async installMutationForLocalMember(
-    result: DesktopMembershipMutationResultV2,
+    result: DesktopMembershipMutationResult,
     memberId: MemberId,
-    previous?: DesktopTeamAuthorityRecordV1,
+    previous?: DesktopTeamAuthorityRecord,
   ) {
     const credential = result.targetMemberCredential.core.memberId === memberId
       ? result.targetMemberCredential
@@ -210,7 +210,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
         ? result.requesterCredential
         : null
     if (!credential) throw new Error("Membership mutation omitted local member credential")
-    const candidate: DesktopTeamAuthorityCandidateV1 = Object.freeze({
+    const candidate: DesktopTeamAuthorityCandidate = Object.freeze({
       membershipSnapshot: result.membershipSnapshot,
       memberCredential: credential,
       adminCapability: result.requesterAdminCapability?.core.adminMemberId === memberId ? result.requesterAdminCapability : null,
@@ -226,7 +226,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
     return admitted.record
   }
 
-  private async publishOfflineAuthority(record: DesktopTeamAuthorityRecordV1, evidence: unknown): Promise<void> {
+  private async publishOfflineAuthority(record: DesktopTeamAuthorityRecord, evidence: unknown): Promise<void> {
     const actor = record.replicaActorCredential!
     const edit = record.replicaEditAuthorization!
     const enrollment = await this.options.localEnrollment.verify({
@@ -259,7 +259,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
     await this.options.localAuthority.install(enrollment)
   }
 
-  private async openMemberSigner(record: DesktopTeamAuthorityRecordV1): Promise<ReplicaSignerPort> {
+  private async openMemberSigner(record: DesktopTeamAuthorityRecord): Promise<ReplicaSignerPort> {
     const signer = await this.options.memberVault.openMemberSigner({
       projectId: record.projectId,
       memberId: record.memberId,
@@ -271,16 +271,16 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
 }
 
 /** Production lifecycle facade. It never upgrades an unsigned or partial graph. */
-export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPeerSessionFactoryV2 {
+export class ProductionProjectTeamPeerSessionFactory implements ProjectTeamPeerSessionFactory {
   constructor(private readonly options: {
-    readonly control: DesktopCollaborationControlHttpClientV2
-    readonly teamAdmission: ProjectTeamAuthorityAdmissionPortV2
-    readonly teamStore: Pick<NodeDurableTeamAuthorityStoreV1, "open" | "install">
-    readonly memberIdentity: ProjectTeamMemberIdentityPortV2
-    readonly memberVault: Pick<ElectronTeamIdentityVaultV1, "ensureMemberKey">
-    readonly nativeFacts: ProjectTeamNativeBootstrapFactsPortV2
-    readonly provisioner: Pick<DesktopProjectTeamReplicaProvisionerV2, "provision">
-    readonly sessions: ProjectTeamActiveSessionPortV2
+    readonly control: DesktopCollaborationControlHttpClient
+    readonly teamAdmission: ProjectTeamAuthorityAdmissionPort
+    readonly teamStore: Pick<NodeDurableTeamAuthorityStore, "open" | "install">
+    readonly memberIdentity: ProjectTeamMemberIdentityPort
+    readonly memberVault: Pick<ElectronTeamIdentityVault, "ensureMemberKey">
+    readonly nativeFacts: ProjectTeamNativeBootstrapFactsPort
+    readonly provisioner: Pick<DesktopProjectTeamReplicaProvisioner, "provision">
+    readonly sessions: ProjectTeamActiveSessionPort
     readonly protocolDigest: Digest
     readonly trustBundleDigest: Digest
     readonly createId: () => Id128
@@ -289,7 +289,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     readonly nowUnixMs?: () => bigint
   }) {}
 
-  async openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2> {
+  async openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResult> {
     const projectId = parseProjectId(input.projectId)
     const current = await this.options.teamStore.open(projectId)
     if (current === "missing") return Object.freeze({ status: "local-only" })
@@ -305,7 +305,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     return this.finishProvisioning(readmitted.record, input.signal)
   }
 
-  async bootstrapTeam(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerBootstrapOpenResultV2> {
+  async bootstrapTeam(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerBootstrapOpenResult> {
     const projectId = parseProjectId(input.projectId)
     const existing = await this.options.teamStore.open(projectId)
     if (existing !== "missing") {
@@ -342,7 +342,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     return Object.freeze({ invitation: bootstrap.value.invitation, session })
   }
 
-  async joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrierV2; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2> {
+  async joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrier; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResult> {
     const projectId = parseProjectId(input.projectId)
     const memberId = parseMemberId(await this.options.memberIdentity.resolve(projectId))
     const memberKey = await this.options.memberVault.ensureMemberKey({ projectId, memberId })
@@ -355,7 +355,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     })
     if (prepared.status !== "ok") return controlAttention(prepared)
     const signature = await memberKey.signer.sign(Buffer.from(prepared.value.requestDigest, "hex"))
-    const wait = this.options.wait ?? waitForTeamRetryV2
+    const wait = this.options.wait ?? waitForTeamRetry
     const nowUnixMs = this.options.nowUnixMs ?? (() => BigInt(Date.now()))
     while (nowUnixMs() < BigInt(input.invitation.expiresAtUnixMs)) {
       const submitted = await this.options.control.submitMemberAddSignatureHalf({
@@ -390,7 +390,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     return attention("credential-expired")
   }
 
-  private async finishProvisioning(record: DesktopTeamAuthorityRecordV1, signal: AbortSignal): Promise<ProjectTeamPeerSessionOpenResultV2> {
+  private async finishProvisioning(record: DesktopTeamAuthorityRecord, signal: AbortSignal): Promise<ProjectTeamPeerSessionOpenResult> {
     const provisioned = await this.options.provisioner.provision(record, signal)
     if (provisioned.state === "pending-floor") return attention("floor-installation-pending")
     await this.options.afterAuthorityChange(provisioned.record.projectId)
@@ -407,12 +407,12 @@ function attention(reason: "protocol-rejected" | "floor-installation-pending" | 
   return Object.freeze({ status: "attention" as const, reason })
 }
 
-function controlAttention(result: { readonly status: string }): ProjectTeamPeerSessionOpenResultV2 {
+function controlAttention(result: { readonly status: string }): ProjectTeamPeerSessionOpenResult {
   return result.status === "online-disabled" ? attention("service-unconfigured") :
     result.status === "unavailable" ? attention("service-unavailable") : attention("protocol-rejected")
 }
 
-export function waitForTeamRetryV2(milliseconds: number, signal: AbortSignal): Promise<void> {
+export function waitForTeamRetry(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout> | undefined
     const cleanup = () => {

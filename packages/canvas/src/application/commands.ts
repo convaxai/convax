@@ -25,8 +25,8 @@ import {
 } from "../document"
 import type { ValidationArtifactRef } from "@convax/collaboration"
 import {
-  canvasProjectionPluginIdentityMetadataKeyV2,
-  canvasProjectionPluginStateMetadataKeyV2,
+  canvasProjectionPluginIdentityMetadataKey,
+  canvasProjectionPluginStateMetadataKey,
 } from "../collaboration/projection"
 import { sameCanvasJson } from "../json-equality"
 import type {
@@ -838,12 +838,12 @@ function createPluginSurface(
       kind: `plugin.${command.plugin.id}`,
       label: command.label,
       metadata: {
-        [canvasProjectionPluginIdentityMetadataKeyV2]: {
+        [canvasProjectionPluginIdentityMetadataKey]: {
           id: command.plugin.id,
           snapshotDigest: command.plugin.snapshotDigest,
           pluginStateSchemaDigest: command.plugin.pluginStateSchemaDigest,
         },
-        [canvasProjectionPluginStateMetadataKeyV2]: structuredClone(command.plugin.state),
+        [canvasProjectionPluginStateMetadataKey]: structuredClone(command.plugin.state),
       },
     },
     height: command.size.height,

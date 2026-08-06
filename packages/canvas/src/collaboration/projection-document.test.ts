@@ -1,20 +1,20 @@
 import { describe, expect, test } from "bun:test"
-import type { CanvasProjectionV2, Digest } from "./types"
+import type { CanvasProjection, Digest } from "./types"
 import {
-  canvasProjectionPluginIdentityMetadataKeyV2,
-  canvasProjectionPluginStateMetadataKeyV2,
-  canvasProjectionResourceMetadataKeyV2,
-  projectCanvasDocumentV2,
+  canvasProjectionPluginIdentityMetadataKey,
+  canvasProjectionPluginStateMetadataKey,
+  canvasProjectionResourceMetadataKey,
+  projectCanvasDocument,
 } from "./projection"
 
 const digest = (value: string) => value.repeat(64).slice(0, 64) as Digest
 
-function projection(): CanvasProjectionV2 {
+function projection(): CanvasProjection {
   return {
     identity: {
-      format: "convax.canvas.v2",
+      format: "convax.canvas",
       scopeId: digest("a"),
-      canvasId: "canvas-1" as CanvasProjectionV2["identity"]["canvasId"],
+      canvasId: "canvas-1" as CanvasProjection["identity"]["canvasId"],
       ownerSchemaDigest: digest("b"),
       protocolDigest: digest("c"),
       canonicalizerDigest: digest("d"),
@@ -31,32 +31,32 @@ function projection(): CanvasProjectionV2 {
         position: { x: 10, y: 20 },
         size: { width: 320, height: 240 },
         data: {
-          format: "convax.canvas-node-data/2",
+          format: "convax.canvas-node-data",
           kind: "resource",
           title: "Image",
           resource: {
-            format: "convax.canvas-resource-ref/2",
+            format: "convax.canvas-resource-ref",
             uri:
               `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
               `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
               `?blob=sha256%3A${"a".repeat(64)}&path=Generated%2Fimage.png`,
             mediaClass: "image",
             mime: "image/png",
-            byteLength: 12 as CanvasProjectionV2["nodes"][number]["data"] extends { kind: "resource" }
-              ? CanvasProjectionV2["nodes"][number]["data"]["resource"]["byteLength"]
+            byteLength: 12 as CanvasProjection["nodes"][number]["data"] extends { kind: "resource" }
+              ? CanvasProjection["nodes"][number]["data"]["resource"]["byteLength"]
               : never,
             contentDigest: digest("a"),
             ownerProofDigest: digest("b"),
           },
         },
         plugin: {
-          format: "convax.canvas-plugin-state/2",
+          format: "convax.canvas-plugin-state",
           pluginId: "diagram",
           snapshotDigest: digest("c"),
           pluginStateSchemaDigest: digest("d"),
           validationArtifact: {
             owner: "plugin",
-            format: "convax.plugin-validation-artifact/2",
+            format: "convax.plugin-validation-artifact",
             artifactDigest: digest("e"),
           },
           state: { color: "blue" },
@@ -70,7 +70,7 @@ function projection(): CanvasProjectionV2 {
         position: { x: 400, y: 20 },
         size: { width: 420, height: 520 },
         data: {
-          format: "convax.canvas-node-data/2",
+          format: "convax.canvas-node-data",
           kind: "agent",
           title: "Writer",
           instructions: "Draft the copy",
@@ -85,7 +85,7 @@ function projection(): CanvasProjectionV2 {
         ref: { kind: "edge", id: "edge-1", incarnation: "edge-v1" },
         source: { kind: "node", id: "source", incarnation: "source-v1" },
         target: { kind: "node", id: "target", incarnation: "target-v1" },
-        data: { format: "convax.canvas-edge-data/2", kind: "business", label: "input" },
+        data: { format: "convax.canvas-edge-data", kind: "business", label: "input" },
       },
     ],
   }
@@ -93,7 +93,7 @@ function projection(): CanvasProjectionV2 {
 
 describe("Canvas v2 renderer document projection", () => {
   test("keeps URI, Plugin display state, geometry, and exact node incarnation in Canvas-owned mapping", () => {
-    const projected = projectCanvasDocumentV2(projection())
+    const projected = projectCanvasDocument(projection())
     const source = projected.document.nodes[0]!
 
     expect(projected.document).toMatchObject({
@@ -110,13 +110,13 @@ describe("Canvas v2 renderer document projection", () => {
         kind: "plugin.diagram",
         label: "Image",
         metadata: {
-          [canvasProjectionPluginIdentityMetadataKeyV2]: {
+          [canvasProjectionPluginIdentityMetadataKey]: {
             id: "diagram",
             snapshotDigest: digest("c"),
             pluginStateSchemaDigest: digest("d"),
           },
-          [canvasProjectionPluginStateMetadataKeyV2]: { color: "blue" },
-          [canvasProjectionResourceMetadataKeyV2]: {
+          [canvasProjectionPluginStateMetadataKey]: { color: "blue" },
+          [canvasProjectionResourceMetadataKey]: {
             uri: projection().nodes[0]!.data.kind === "resource" ? projection().nodes[0]!.data.resource.uri : "",
           },
         },
@@ -128,13 +128,13 @@ describe("Canvas v2 renderer document projection", () => {
       id: "source",
       incarnation: "source-v1",
     })
-    expect(source.data.metadata?.[canvasProjectionPluginIdentityMetadataKeyV2]).not.toHaveProperty("validationArtifact")
+    expect(source.data.metadata?.[canvasProjectionPluginIdentityMetadataKey]).not.toHaveProperty("validationArtifact")
   })
 
   test("fails closed when two live incarnations collapse to one React Flow id", () => {
     const value = projection()
     expect(() =>
-      projectCanvasDocumentV2({
+      projectCanvasDocument({
         ...value,
         nodes: [...value.nodes, { ...value.nodes[1]!, ref: { kind: "node", id: "source", incarnation: "source-v2" } }],
       }),
@@ -143,7 +143,7 @@ describe("Canvas v2 renderer document projection", () => {
 
   test("projects a manual pending image as an idle empty card instead of an active generation", () => {
     const value = projection()
-    const projected = projectCanvasDocumentV2({
+    const projected = projectCanvasDocument({
       ...value,
       nodes: [
         {
@@ -152,7 +152,7 @@ describe("Canvas v2 renderer document projection", () => {
           position: { x: 10, y: 20 },
           size: { width: 320, height: 240 },
           data: {
-            format: "convax.canvas-node-data/2",
+            format: "convax.canvas-node-data",
             kind: "placeholder",
             owner: "manual-pending",
             title: "Image",

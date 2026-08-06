@@ -13,10 +13,10 @@ import {
   parseReplicaId,
   parseSignature,
 } from "@convax/collaboration"
-import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2 } from "../../collaboration-protocol/control-descriptor"
-import { createBlobDurableAckV2 } from "../../collaboration/blob-replication"
-import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
-import { createCompleteProjectBlobRootScanPortV2, ProjectBlobReplicationStoreV2 } from "./blob-replication-store"
+import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES } from "../../collaboration-protocol/control-descriptor"
+import { createBlobDurableAck } from "../../collaboration/blob-replication"
+import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
+import { createCompleteProjectBlobRootScanPort, ProjectBlobReplicationStore } from "./blob-replication-store"
 
 const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
 const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
@@ -136,7 +136,7 @@ describe("Project/node blob replication store", () => {
       const reference = resource(new TextEncoder().encode("ack"))
       const evidence = await store.admitVerifiedBytes(reference, new TextEncoder().encode("ack"))
       const core = store.createAckCore({ evidence, ...receiver })
-      const ack = createBlobDurableAckV2(core, signature)
+      const ack = createBlobDurableAck(core, signature)
       await store.recordVerifiedRemoteAck({ ack, verifyCurrentAck: async () => true })
       expect(await store.evaluateReplication({ references: [reference], frameAckReceivers: [], verifyCurrentAck: () => true })).toBe("local-structural-only")
       expect(await store.evaluateReplication({ references: [reference], frameAckReceivers: [{ receiverReplicaId: receiver.receiverReplicaId, receiverAuthorizationDigest: receiver.receiverAuthorizationDigest }], verifyCurrentAck: () => true })).toBe("blob-replicated")
@@ -172,7 +172,7 @@ describe("Project/node blob replication store", () => {
     const a = ordinarySha256(new TextEncoder().encode("root-a"))
     const b = ordinarySha256(new TextEncoder().encode("root-b"))
     const contributor = (digests: ReadonlySet<typeof a>) => ({ scanRoots: async () => ({ complete: true as const, digests }) })
-    const port = createCompleteProjectBlobRootScanPortV2({
+    const port = createCompleteProjectBlobRootScanPort({
       projectIndex: contributor(new Set([a])),
       canvasHistory: contributor(new Set([b])),
       collaborationEvidence: contributor(new Set([a])),
@@ -180,7 +180,7 @@ describe("Project/node blob replication store", () => {
       publicationResetAndPartialSuccess: contributor(new Set()),
     })
     expect((await port.scanCompleteRoots({ projectId, projectEpoch })).digests).toEqual(new Set([a, b]))
-    const failed = createCompleteProjectBlobRootScanPortV2({
+    const failed = createCompleteProjectBlobRootScanPort({
       projectIndex: contributor(new Set([a])),
       canvasHistory: { scanRoots: async () => { throw new Error("Canvas history unreadable") } },
       collaborationEvidence: contributor(new Set()),
@@ -198,17 +198,17 @@ async function collaborationDirectory(root: string, name: string) {
 }
 
 function open(directory: string, now?: () => number) {
-  return ProjectBlobReplicationStoreV2.open({ collaborationDirectory: directory, projectId, projectEpoch, protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest), now })
+  return ProjectBlobReplicationStore.open({ collaborationDirectory: directory, projectId, projectEpoch, protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES.protocolDigest), now })
 }
 
-function resource(bytes: Uint8Array, family = "a"): ProjectResourceReferenceV2 {
+function resource(bytes: Uint8Array, family = "a"): ProjectIndexResourceReference {
   const digest = ordinarySha256(bytes)
   return Object.freeze({
-    format: "convax.project-resource-reference/2", projectId, projectEpoch,
+    format: "convax.project-resource-reference", projectId, projectEpoch,
     entryFileId: `pf_${family.repeat(64)}` as never, familyPrimaryFileId: `pf_${family.repeat(64)}` as never,
     versionId: `pv_${digest}`,
     canonicalUri: `convax-project://project-a/epochs/${projectEpoch}/entries/pf_${family.repeat(64)}?blob=sha256%3A${digest}`,
-    blob: { format: "convax.blob-ref/2" as const, algorithm: "sha256" as const, digest, byteLength: String(bytes.byteLength) as never, mime: "application/octet-stream" },
+    blob: { format: "convax.blob-ref" as const, algorithm: "sha256" as const, digest, byteLength: String(bytes.byteLength) as never, mime: "application/octet-stream" },
     versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
 }

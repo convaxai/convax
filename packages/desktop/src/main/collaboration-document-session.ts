@@ -15,12 +15,12 @@ import {
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 
-export interface CollaborationDocumentInvalidationV2 {
+export interface CollaborationDocumentInvalidation {
   readonly scope: DocumentScope
   readonly frameDigest: Digest
 }
 
-export interface MainCollaborationDocumentSessionV2<K extends DocumentOwnerKind> {
+export interface MainCollaborationDocumentSession<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
   query<T>(project: (state: OwnerValidatedState<K>) => T): Promise<T>
   submit(input: {
@@ -34,19 +34,19 @@ export interface MainCollaborationDocumentSessionV2<K extends DocumentOwnerKind>
     readonly signal?: AbortSignal
   }): Promise<LocalCommitResult>
   flush(): Promise<void>
-  subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void): () => void
+  subscribe(listener: (event: CollaborationDocumentInvalidation) => void): () => void
   dispose(): void
 }
 
-export interface CreateMainCollaborationDocumentSessionOptionsV2<K extends DocumentOwnerKind> {
+export interface CreateMainCollaborationDocumentSessionOptions<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly createOperationId: () => Id128
   readonly openKernel: (projection: {
-    publish(input: CollaborationDocumentInvalidationV2): void
+    publish(input: CollaborationDocumentInvalidation): void
   }) => Promise<CollaborationKernel>
 }
 
-export interface CreateKernelBackedMainCollaborationDocumentSessionOptionsV2<K extends DocumentOwnerKind> {
+export interface CreateKernelBackedMainCollaborationDocumentSessionOptions<K extends DocumentOwnerKind> {
   readonly authority: CurrentProtocolAuthority
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly owner: DocumentOwnerRuntime<K>
@@ -56,10 +56,10 @@ export interface CreateKernelBackedMainCollaborationDocumentSessionOptionsV2<K e
 }
 
 /** Production composition path shared by Canvas and ProjectIndex owners. */
-export function createKernelBackedMainCollaborationDocumentSessionV2<K extends DocumentOwnerKind>(
-  options: CreateKernelBackedMainCollaborationDocumentSessionOptionsV2<K>,
-): Promise<MainCollaborationDocumentSessionV2<K>> {
-  return createMainCollaborationDocumentSessionV2({
+export function createKernelBackedMainCollaborationDocumentSession<K extends DocumentOwnerKind>(
+  options: CreateKernelBackedMainCollaborationDocumentSessionOptions<K>,
+): Promise<MainCollaborationDocumentSession<K>> {
+  return createMainCollaborationDocumentSession({
     scope: options.scope,
     createOperationId: options.createOperationId,
     openKernel: (projection) => CollaborationKernel.open({
@@ -78,11 +78,11 @@ export function createKernelBackedMainCollaborationDocumentSessionV2<K extends D
  * ProjectIndex provide only their reducer/projection closures; this layer owns
  * operation allocation, queue ordering, flush and invalidation fanout.
  */
-export async function createMainCollaborationDocumentSessionV2<K extends DocumentOwnerKind>(
-  options: CreateMainCollaborationDocumentSessionOptionsV2<K>,
-): Promise<MainCollaborationDocumentSessionV2<K>> {
-  const listeners = new Set<(event: CollaborationDocumentInvalidationV2) => void>()
-  let session: MainCollaborationDocumentSessionV2<K> | undefined
+export async function createMainCollaborationDocumentSession<K extends DocumentOwnerKind>(
+  options: CreateMainCollaborationDocumentSessionOptions<K>,
+): Promise<MainCollaborationDocumentSession<K>> {
+  const listeners = new Set<(event: CollaborationDocumentInvalidation) => void>()
+  let session: MainCollaborationDocumentSession<K> | undefined
   const kernel = await options.openKernel({
     publish(input) {
       const event = Object.freeze({ scope: input.scope, frameDigest: input.frameDigest })
@@ -98,7 +98,7 @@ export async function createMainCollaborationDocumentSessionV2<K extends Documen
       requireLive()
       return kernel.queryOwnerState((state) => project(state as OwnerValidatedState<K>))
     },
-    submit(input: Parameters<MainCollaborationDocumentSessionV2<K>["submit"]>[0]): Promise<LocalCommitResult> {
+    submit(input: Parameters<MainCollaborationDocumentSession<K>["submit"]>[0]): Promise<LocalCommitResult> {
       requireLive()
       const operationId = parseId128(input.operationId ?? options.createOperationId())
       return kernel.commitLocalIntent({
@@ -116,7 +116,7 @@ export async function createMainCollaborationDocumentSessionV2<K extends Documen
       requireLive()
       return kernel.flush()
     },
-    subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void): () => void {
+    subscribe(listener: (event: CollaborationDocumentInvalidation) => void): () => void {
       requireLive()
       if (typeof listener !== "function") throw new TypeError("Collaboration invalidation listener is required")
       listeners.add(listener)

@@ -3,8 +3,8 @@ import type { CanvasId, Digest, Id128, ProjectId } from "@convax/collaboration"
 import {
   NodeProjectCanvasManager,
   ProjectCanvasRouteCommandRejectedErrorV2,
-  type ProjectCanvasCatalogProjectionV2,
-  type ProjectIndexCanvasApplicationPortV2,
+  type ProjectCanvasCatalogProjection,
+  type ProjectIndexCanvasApplicationPort,
 } from "./project-canvas-manager"
 
 const projectId = "project-a" as ProjectId
@@ -20,7 +20,7 @@ describe("NodeProjectCanvasManager", () => {
     const manager = new NodeProjectCanvasManager({
       queryCatalog,
       submitRouteCommand: mock(),
-    } as ProjectIndexCanvasApplicationPortV2)
+    } as ProjectIndexCanvasApplicationPort)
 
     const result = await manager.getCanvasCatalog({ projectId })
 
@@ -35,7 +35,7 @@ describe("NodeProjectCanvasManager", () => {
   test("surfaces tombstone rejection without inventing a local catalog mutation", async () => {
     const queryCatalog = mock(async () => projection())
     let submittedKind = ""
-    const submitRouteCommand: ProjectIndexCanvasApplicationPortV2["submitRouteCommand"] = mock(async (input) => {
+    const submitRouteCommand: ProjectIndexCanvasApplicationPort["submitRouteCommand"] = mock(async (input) => {
       submittedKind = input.command.kind
       return { status: "rejected", code: "route-tombstoned" } as const
     })
@@ -45,7 +45,7 @@ describe("NodeProjectCanvasManager", () => {
       ProjectCanvasRouteCommandRejectedErrorV2,
     )
     expect(queryCatalog).not.toHaveBeenCalled()
-    expect(submittedKind).toBe("project.canvas.route.rename/2")
+    expect(submittedKind).toBe("project.canvas.route.rename")
   })
 
   test("rejects a projection that duplicates a route", async () => {
@@ -58,7 +58,7 @@ describe("NodeProjectCanvasManager", () => {
   })
 })
 
-function projection(): ProjectCanvasCatalogProjectionV2 {
+function projection(): ProjectCanvasCatalogProjection {
   const live = {
     canvasId: liveId,
     state: "live" as const,
@@ -76,7 +76,7 @@ function projection(): ProjectCanvasCatalogProjectionV2 {
     routeProjectionDigest: digest,
   }
   return {
-    format: "convax.project-canvas-catalog-projection/2",
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",
     projectId,
     projectEpoch: epoch,

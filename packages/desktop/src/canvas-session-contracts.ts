@@ -1,8 +1,8 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
 import type {
-  BoundedOperationReceiptV2,
-  CanvasEntityRefV2,
-  CanvasRendererCommandV2,
+  BoundedOperationReceipt,
+  CanvasEntityRef,
+  CanvasRendererCommand,
 } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 import type { Id128 } from "@convax/collaboration"
@@ -18,46 +18,46 @@ export const canvasSessionIpcChannels = {
   undo: "canvas:session-undo",
 } as const
 
-export interface CanvasSessionProjectionDtoV2 {
-  readonly format: "convax.canvas-session-projection/2"
+export interface CanvasSessionProjectionDto {
+  readonly format: "convax.canvas-session-projection"
   readonly ref: CanvasDocumentRef
   /** Renderer mount identity only; never a document version or mutation guard. */
   readonly sessionId: Id128
   readonly document: CanvasDocument
   readonly nodeEntities: readonly Readonly<{
     readonly nodeId: string
-    readonly entity: CanvasEntityRefV2 & { readonly kind: "node" }
+    readonly entity: CanvasEntityRef & { readonly kind: "node" }
   }>[]
   readonly canUndo: boolean
   readonly canRedo: boolean
 }
 
-export interface CanvasSessionInvalidationDtoV2 {
-  readonly format: "convax.canvas-session-invalidation/2"
+export interface CanvasSessionInvalidationDto {
+  readonly format: "convax.canvas-session-invalidation"
   readonly ref: CanvasDocumentRef
   readonly sessionId: Id128
 }
 
-export interface CanvasRendererSessionMutationResultV2 {
-  readonly operationReceipt: BoundedOperationReceiptV2
-  readonly projection: CanvasSessionProjectionDtoV2
+export interface CanvasRendererSessionMutationResult {
+  readonly operationReceipt: BoundedOperationReceipt
+  readonly projection: CanvasSessionProjectionDto
 }
 
-export interface CanvasRendererSessionScopeV2 {
+export interface CanvasRendererSessionScope {
   readonly ref: CanvasDocumentRef
   readonly sessionId: Id128
 }
 
 /** Closed renderer/preload surface. It cannot carry raw Yjs updates or owner facts. */
-export interface CanvasRendererSessionTransportV2 {
-  open(ref: CanvasDocumentRef): Promise<CanvasSessionProjectionDtoV2>
-  query(scope: CanvasRendererSessionScopeV2): Promise<CanvasSessionProjectionDtoV2>
+export interface CanvasRendererSessionTransport {
+  open(ref: CanvasDocumentRef): Promise<CanvasSessionProjectionDto>
+  query(scope: CanvasRendererSessionScope): Promise<CanvasSessionProjectionDto>
   submit(
-    input: CanvasRendererSessionScopeV2 & { readonly command: CanvasRendererCommandV2; readonly commandId: string },
-  ): Promise<CanvasRendererSessionMutationResultV2>
-  undo(scope: CanvasRendererSessionScopeV2 & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResultV2 | null>
-  redo(scope: CanvasRendererSessionScopeV2 & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResultV2 | null>
-  flush(scope: CanvasRendererSessionScopeV2): Promise<void>
-  close(scope: CanvasRendererSessionScopeV2): Promise<void>
-  subscribe(listener: (event: CanvasSessionInvalidationDtoV2) => void): () => void
+    input: CanvasRendererSessionScope & { readonly command: CanvasRendererCommand; readonly commandId: string },
+  ): Promise<CanvasRendererSessionMutationResult>
+  undo(scope: CanvasRendererSessionScope & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResult | null>
+  redo(scope: CanvasRendererSessionScope & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResult | null>
+  flush(scope: CanvasRendererSessionScope): Promise<void>
+  close(scope: CanvasRendererSessionScope): Promise<void>
+  subscribe(listener: (event: CanvasSessionInvalidationDto) => void): () => void
 }

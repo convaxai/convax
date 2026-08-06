@@ -8,12 +8,12 @@ import {
   parseSignature,
 } from "@convax/collaboration"
 
-import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2 } from "./kernel-integration"
+import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION } from "./kernel-integration"
 import {
-  parsePeerChannelOpenV2,
-  parsePeerHandshakeV2,
-  peerChannelOpenCoreDigestV2,
-  peerHandshakeCoreDigestV2,
+  parsePeerChannelOpen,
+  parsePeerHandshake,
+  peerChannelOpenCoreDigest,
+  peerHandshakeCoreDigest,
 } from "./peer-session-codecs"
 
 const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
@@ -22,7 +22,7 @@ const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
 
 describe("Peer session codecs", () => {
   const handshakeCore = {
-    format: "convax.peer-handshake-core/2" as const,
+    format: "convax.peer-handshake-core" as const,
     connectionId: id(1),
     projectId: parseProjectId("project-peer-session"),
     projectEpoch: id(2),
@@ -35,28 +35,28 @@ describe("Peer session codecs", () => {
     initiatorNonce: id(4),
     responderNonce: id(5),
     channelContractDigest: digest("d"),
-    protocolDigest: parseDigest(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest),
+    protocolDigest: parseDigest(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION.requiredProtocolDigest),
   }
 
   test("closes and digest-binds the exact current handshake", () => {
     const value = {
-      format: "convax.peer-handshake/2" as const,
+      format: "convax.peer-handshake" as const,
       core: handshakeCore,
-      coreDigest: peerHandshakeCoreDigestV2(handshakeCore),
+      coreDigest: peerHandshakeCoreDigest(handshakeCore),
       initiatorSessionSignature: signature,
       responderSessionSignature: signature,
     }
-    expect(parsePeerHandshakeV2(value)).toEqual(value)
-    expect(() => parsePeerHandshakeV2({ ...value, peerId: "metadata-is-not-identity" })).toThrow()
-    expect(() => parsePeerHandshakeV2({ ...value, core: { ...handshakeCore, responderPeerId: handshakeCore.initiatorPeerId } })).toThrow("differ")
-    expect(() => parsePeerHandshakeV2({ ...value, coreDigest: digest("e") })).toThrow("digest")
+    expect(parsePeerHandshake(value)).toEqual(value)
+    expect(() => parsePeerHandshake({ ...value, peerId: "metadata-is-not-identity" })).toThrow()
+    expect(() => parsePeerHandshake({ ...value, core: { ...handshakeCore, responderPeerId: handshakeCore.initiatorPeerId } })).toThrow("differ")
+    expect(() => parsePeerHandshake({ ...value, coreDigest: digest("e") })).toThrow("digest")
   })
 
   test("binds every channel-open to one handshake, credential pair and selected protocol", () => {
     const core = {
-      format: "convax.peer-channel-open-core/2" as const,
+      format: "convax.peer-channel-open-core" as const,
       connectionId: handshakeCore.connectionId,
-      handshakeDigest: peerHandshakeCoreDigestV2(handshakeCore),
+      handshakeDigest: peerHandshakeCoreDigest(handshakeCore),
       channel: "update" as const,
       channelOpenId: id(6),
       initiatorCredentialDigest: handshakeCore.initiatorCredentialDigest,
@@ -67,14 +67,14 @@ describe("Peer session codecs", () => {
       protocolDigest: handshakeCore.protocolDigest,
     }
     const value = {
-      format: "convax.peer-channel-open/2" as const,
+      format: "convax.peer-channel-open" as const,
       core,
-      coreDigest: peerChannelOpenCoreDigestV2(core),
+      coreDigest: peerChannelOpenCoreDigest(core),
       initiatorSessionSignature: signature,
       responderSessionSignature: signature,
     }
-    expect(parsePeerChannelOpenV2(value)).toEqual(value)
-    expect(() => parsePeerChannelOpenV2({ ...value, core: { ...core, channel: "inventory" } })).toThrow("channel")
-    expect(() => parsePeerChannelOpenV2({ ...value, core: { ...core, protocolDigest: digest("f") } })).toThrow("current protocol digest")
+    expect(parsePeerChannelOpen(value)).toEqual(value)
+    expect(() => parsePeerChannelOpen({ ...value, core: { ...core, channel: "inventory" } })).toThrow("channel")
+    expect(() => parsePeerChannelOpen({ ...value, core: { ...core, protocolDigest: digest("f") } })).toThrow("current protocol digest")
   })
 })

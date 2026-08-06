@@ -10,7 +10,7 @@ import {
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import type { NodeProps } from "@xyflow/react"
-import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
+import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
 import { CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import type { CanvasDocument, CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
@@ -258,7 +258,7 @@ const [
 let nextNodeId = 0
 const createdNodes = new Map<string, CanvasNode>()
 
-class NodeEntryCanvasSession implements CanvasRendererCollaborationClientV2 {
+class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
   readonly undoModel = "project-yjs-semantic-history" as const
   private readonly listeners = new Set<() => void>()
@@ -298,7 +298,7 @@ class NodeEntryCanvasSession implements CanvasRendererCollaborationClientV2 {
       : undefined
   }
 
-  async submit(_command: CanvasRendererCommandV2) {}
+  async submit(_command: CanvasRendererCommand) {}
 
   subscribe(listener: () => void) {
     this.listeners.add(listener)
@@ -451,7 +451,7 @@ test("publishes hydrated resource state into the rendered transient document", a
           kind: "image",
           metadata: {
             convaxResource: {
-              format: "convax.canvas-resource-ref/2",
+              format: "convax.canvas-resource-ref",
               uri:
                 `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
                 `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +

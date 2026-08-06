@@ -11,8 +11,8 @@ import {
   parseProjectId,
   type Digest,
 } from "@convax/collaboration"
-import { deriveObjectNativeKeyV2 } from "./native-store-keys"
-import { ProjectRemoteIngressCowMapV2, type RemoteIngressEvidenceMapLeafEntryV2 } from "./remote-ingress-cow-map"
+import { deriveObjectNativeKey } from "./native-store-keys"
+import { ProjectRemoteIngressCowMap, type RemoteIngressEvidenceMapLeafEntry } from "./remote-ingress-cow-map"
 
 const roots: string[] = []
 const projectId = parseProjectId("project-a")
@@ -60,10 +60,10 @@ async function open(mapKind: "stable-key-state" | "member-quota") {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-cow74-"))
   roots.push(root)
   const admission = path.join(root, "remote-ingress-evidence-admission")
-  return { admission, map: await ProjectRemoteIngressCowMapV2.open({ admissionDirectory: admission, projectId, projectEpoch, mapKind }) }
+  return { admission, map: await ProjectRemoteIngressCowMap.open({ admissionDirectory: admission, projectId, projectEpoch, mapKind }) }
 }
 
-function stableEntries(count: number): RemoteIngressEvidenceMapLeafEntryV2[] {
+function stableEntries(count: number): RemoteIngressEvidenceMapLeafEntry[] {
   return Array.from({ length: count }, (_, index) => {
     const sourceMemberId = parseMemberId(id((index % 250) + 2))
     const transferId = idFromInteger(index)
@@ -76,7 +76,7 @@ function stableEntries(count: number): RemoteIngressEvidenceMapLeafEntryV2[] {
   })
 }
 
-function memberEntries(count: number): RemoteIngressEvidenceMapLeafEntryV2[] {
+function memberEntries(count: number): RemoteIngressEvidenceMapLeafEntry[] {
   return Array.from({ length: count }, (_, index) => Object.freeze({
     mapKind: "member-quota" as const,
     keyDigest: digest(`member:${index}`),
@@ -86,7 +86,7 @@ function memberEntries(count: number): RemoteIngressEvidenceMapLeafEntryV2[] {
 }
 
 async function page(admission: string, mapKind: string, digest: Digest): Promise<unknown> {
-  const target = path.join(admission, "maps", mapKind, "pages", `${deriveObjectNativeKeyV2("remote-ingress-map-page", digest)}.bin`)
+  const target = path.join(admission, "maps", mapKind, "pages", `${deriveObjectNativeKey("remote-ingress-map-page", digest)}.bin`)
   return decodeRestrictedJcs(await fs.readFile(target))
 }
 

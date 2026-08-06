@@ -6,13 +6,13 @@ import {
   parseProjectId,
   type DocumentScope,
 } from "@convax/collaboration"
-import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import type { ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 
-import type { MainCollaborationDocumentSessionV2 } from "./collaboration-document-session"
+import type { MainCollaborationDocumentSession } from "./collaboration-document-session"
 import {
-  MainProjectCanvasRouteRuntimeRegistryV2,
-  ProjectCanvasRouteRuntimeErrorV2,
-  type CanvasRouteRuntimeHandleV2,
+  MainProjectCanvasRouteRuntimeRegistry,
+  ProjectCanvasRouteRuntimeError,
+  type CanvasRouteRuntimeHandle,
 } from "./project-canvas-route-runtime-registry"
 
 const projectId = parseProjectId("project-a")
@@ -21,7 +21,7 @@ const canvasId = parseCanvasId(`cv_${"1".repeat(64)}`)
 const projectEpoch = id(1)
 const shardEpoch = id(2)
 
-describe("MainProjectCanvasRouteRuntimeRegistryV2", () => {
+describe("MainProjectCanvasRouteRuntimeRegistry", () => {
   test("concurrent lazy opens attach one exact live-route runtime", async () => {
     const fixture = createFixture()
     await fixture.registry.switchProject(projectId)
@@ -51,7 +51,7 @@ describe("MainProjectCanvasRouteRuntimeRegistryV2", () => {
 
     fixture.catalog = liveCatalog({ projectEpoch: id(3), shardEpoch: id(4), activation: digest("c"), route: digest("d") })
     await fixture.registry.reconcileProject(projectId)
-    expect(() => oldSession.query(() => "stale")).toThrow(ProjectCanvasRouteRuntimeErrorV2)
+    expect(() => oldSession.query(() => "stale")).toThrow(ProjectCanvasRouteRuntimeError)
 
     const current = await fixture.registry.openDocumentSession({ scopeId: projectId, canvasId })
     expect(current.scope.projectEpoch).toBe(id(3))
@@ -109,7 +109,7 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
     persistence: {} as never,
     release() { projectReleases += 1 },
   }))
-  const open = mock(async ({ scope }: { scope: DocumentScope & { docKind: "canvas" } }): Promise<CanvasRouteRuntimeHandleV2> => {
+  const open = mock(async ({ scope }: { scope: DocumentScope & { docKind: "canvas" } }): Promise<CanvasRouteRuntimeHandle> => {
     await options.beforeOpen?.()
     const session = fakeSession(scope)
     return Object.freeze({ session, dispose() { runtimeDisposals += 1; session.dispose() } })
@@ -118,9 +118,9 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
     catalog: liveCatalog(), acquire, open,
     runtimeDisposals: () => runtimeDisposals,
     projectReleases: () => projectReleases,
-    registry: undefined as unknown as MainProjectCanvasRouteRuntimeRegistryV2,
+    registry: undefined as unknown as MainProjectCanvasRouteRuntimeRegistry,
   }
-  fixture.registry = new MainProjectCanvasRouteRuntimeRegistryV2({
+  fixture.registry = new MainProjectCanvasRouteRuntimeRegistry({
     catalogs: { async queryCatalog() { return fixture.catalog } },
     projects: { acquire: acquire as never },
     runtime: { open: open as never },
@@ -128,7 +128,7 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
   return fixture
 }
 
-function fakeSession(scope: DocumentScope & { readonly docKind: "canvas" }): MainCollaborationDocumentSessionV2<"canvas"> {
+function fakeSession(scope: DocumentScope & { readonly docKind: "canvas" }): MainCollaborationDocumentSession<"canvas"> {
   let live = true
   return {
     scope,
@@ -145,7 +145,7 @@ function liveCatalog(input: {
   shardEpoch?: ReturnType<typeof id>
   activation?: ReturnType<typeof digest>
   route?: ReturnType<typeof digest>
-} = {}): ProjectCanvasCatalogProjectionV2 {
+} = {}): ProjectCanvasCatalogProjection {
   const route = {
     canvasId,
     state: "live" as const,
@@ -155,7 +155,7 @@ function liveCatalog(input: {
     routeProjectionDigest: input.route ?? digest("b"),
   }
   return {
-    format: "convax.project-canvas-catalog-projection/2",
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",
     projectId,
     projectEpoch: input.projectEpoch ?? projectEpoch,
@@ -164,9 +164,9 @@ function liveCatalog(input: {
   }
 }
 
-function tombstoneCatalog(): ProjectCanvasCatalogProjectionV2 {
+function tombstoneCatalog(): ProjectCanvasCatalogProjection {
   return {
-    format: "convax.project-canvas-catalog-projection/2",
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",
     projectId,
     projectEpoch,

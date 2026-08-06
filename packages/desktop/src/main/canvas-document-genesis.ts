@@ -1,9 +1,9 @@
 import {
-  buildCanvasGenesisProofCarrierV2,
-  installCanvasGenesisProofCarrierVerifierFactoryV2,
-  type CanvasGenesisBuildAuthorV2,
-  type CanvasGenesisHistoricalAuthorVerifierPortV2,
-  type CanvasGenesisProofCarrierVerifierV2,
+  buildCanvasGenesisProofCarrier,
+  installCanvasGenesisProofCarrierVerifierFactory,
+  type CanvasGenesisBuildAuthor,
+  type CanvasGenesisHistoricalAuthorVerifierPort,
+  type CanvasGenesisProofCarrierVerifier,
 } from "@convax/canvas/collaboration"
 import {
   assertDocumentOwnerRuntime,
@@ -18,12 +18,12 @@ import type {
   PrepareProjectDocumentGenesisResult,
 } from "@convax/project/node"
 
-export type PrepareCanvasGenesisAuthorResultV2 =
-  | Readonly<{ status: "prepared"; author: CanvasGenesisBuildAuthorV2 }>
+export type PrepareCanvasGenesisAuthorResult =
+  | Readonly<{ status: "prepared"; author: CanvasGenesisBuildAuthor }>
   | Readonly<{ status: "pending" | "rejected" }>
 
 /** Control/native composition edge. No Project bytes or route DTO enter Canvas. */
-export interface CanvasGenesisAuthorProviderPortV2 {
+export interface CanvasGenesisAuthorProviderPort {
   preflight(input: {
     readonly projectId: import("@convax/collaboration").ProjectId
     readonly projectEpoch: import("@convax/collaboration").Id128
@@ -33,26 +33,26 @@ export interface CanvasGenesisAuthorProviderPortV2 {
     readonly scope: DocumentScope & { readonly docKind: "canvas" }
     readonly projectIndexRouteDependencyFrameDigest: import("@convax/collaboration").Digest
     readonly signal?: AbortSignal
-  }): Promise<PrepareCanvasGenesisAuthorResultV2>
+  }): Promise<PrepareCanvasGenesisAuthorResult>
 }
 
-export interface CanvasDocumentGenesisAuthorityV2 {
-  readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
+export interface CanvasDocumentGenesisAuthority {
+  readonly proofVerifier: CanvasGenesisProofCarrierVerifier
   readonly genesisVerifier: ProjectDocumentGenesisVerifierPort<"canvas">
-  readonly preflight: CanvasGenesisAuthorProviderPortV2["preflight"]
+  readonly preflight: CanvasGenesisAuthorProviderPort["preflight"]
 }
 
 /** One selected Canvas runtime produces both G and the fact verifier that consumes G. */
-export function createCanvasDocumentGenesisAuthorityV2(input: {
+export function createCanvasDocumentGenesisAuthority(input: {
   readonly authority: CurrentProtocolAuthority
   readonly runtime: DocumentOwnerRuntime<"canvas">
-  readonly historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2
-  readonly authorProvider: CanvasGenesisAuthorProviderPortV2
-}): CanvasDocumentGenesisAuthorityV2 {
+  readonly historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPort
+  readonly authorProvider: CanvasGenesisAuthorProviderPort
+}): CanvasDocumentGenesisAuthority {
   if (typeof input.authorProvider?.preflight !== "function") {
     throw new TypeError("Canvas genesis author preflight is required")
   }
-  const factory = installCanvasGenesisProofCarrierVerifierFactoryV2({
+  const factory = installCanvasGenesisProofCarrierVerifierFactory({
     authority: input.authority,
     historicalAuthorVerifier: input.historicalAuthorVerifier,
   })
@@ -63,7 +63,7 @@ export function createCanvasDocumentGenesisAuthorityV2(input: {
   return Object.freeze({
     proofVerifier: created.verifier,
     preflight: input.authorProvider.preflight.bind(input.authorProvider),
-    genesisVerifier: createCanvasDocumentGenesisVerifierPortV2({
+    genesisVerifier: createCanvasDocumentGenesisVerifierPort({
       authority: input.authority,
       runtime: input.runtime,
       verifier: created.verifier,
@@ -77,11 +77,11 @@ export function createCanvasDocumentGenesisAuthorityV2(input: {
  * durability coordinator. The accepted ProjectIndex frame digest remains an
  * opaque Canvas genesis predecessor witness.
  */
-export function createCanvasDocumentGenesisVerifierPortV2(input: {
+export function createCanvasDocumentGenesisVerifierPort(input: {
   readonly authority: CurrentProtocolAuthority
   readonly runtime: DocumentOwnerRuntime<"canvas">
-  readonly verifier: CanvasGenesisProofCarrierVerifierV2
-  readonly authorProvider: CanvasGenesisAuthorProviderPortV2
+  readonly verifier: CanvasGenesisProofCarrierVerifier
+  readonly authorProvider: CanvasGenesisAuthorProviderPort
 }): ProjectDocumentGenesisVerifierPort<"canvas"> {
   assertDocumentOwnerRuntime(input.runtime, input.authority)
   if (typeof input.verifier !== "function" || typeof input.authorProvider?.prepareAuthor !== "function") {
@@ -102,7 +102,7 @@ export function createCanvasDocumentGenesisVerifierPortV2(input: {
       })
       assertNotAborted(request.signal)
       if (preparedAuthor.status !== "prepared") return Object.freeze({ status: preparedAuthor.status })
-      const built = await buildCanvasGenesisProofCarrierV2({
+      const built = await buildCanvasGenesisProofCarrier({
         authority: input.authority,
         runtime: input.runtime,
         verifier: input.verifier,

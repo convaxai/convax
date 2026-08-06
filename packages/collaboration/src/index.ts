@@ -6,6 +6,7 @@ export {
   installCurrentProtocolAuthority,
   parseCurrentProtocolDescriptor,
 } from "./current-protocol"
+export { CURRENT_PROTOCOL_IDENTITIES } from "./constants"
 export type {
   CurrentProtocolArtifactDescriptor,
   CurrentProtocolDescriptor,

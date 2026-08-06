@@ -1,20 +1,20 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument } from "../document"
 import { parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
-import type { BoundedOperationReceiptV2 } from "../collaboration"
+import type { BoundedOperationReceipt } from "../collaboration"
 import {
   CanvasApplicationService,
   type CanvasApplicationCommandRequest,
   type CanvasCollaborationApplicationPort,
 } from "./service"
 
-const receipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
+const receipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
   actorId: parseActorId("A".repeat(43)),
   operationId: parseId128("A".repeat(22)),
   intentDigest: parseDigest("d".repeat(64)),
   baseFrontierDigest: parseDigest("e".repeat(64)),
-  intentKind: "canvas.nodes.set-geometry/2",
+  intentKind: "canvas.nodes.set-geometry",
   resultEntities: [],
   semanticRoot: true,
   historyMaterialDigest: parseDigest("f".repeat(64)),

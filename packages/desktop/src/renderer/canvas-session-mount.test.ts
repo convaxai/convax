@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument } from "@convax/canvas"
 import type { CanvasDocumentRef } from "@convax/canvas/application"
-import type { DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import type { DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import {
   mountCanvasSessionWithBackgroundReconcile,
   type CanvasSessionMountOptions,
@@ -24,7 +24,7 @@ function deferred<T = void>() {
 function fakeSession(ref: CanvasDocumentRef = firstRef) {
   const refresh = mock(async (_signal?: AbortSignal) => undefined)
   const dispose = mock(() => undefined)
-  const session: DesktopCanvasRendererSessionV2 = {
+  const session: DesktopCanvasRendererSession = {
     authority: "project-collaboration-application",
     canRedo: () => false,
     canUndo: () => false,
@@ -74,7 +74,7 @@ function start(
   },
 ) {
   const diagnostics: CanvasSessionReconcileDiagnostic[] = []
-  const mounted: DesktopCanvasRendererSessionV2[] = []
+  const mounted: DesktopCanvasRendererSession[] = []
   const mountFailures: unknown[] = []
   const dispose = mountCanvasSessionWithBackgroundReconcile({
     onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
@@ -153,7 +153,7 @@ describe("Canvas session mount with background generation reconciliation", () =>
 
   test("aborts a pending mount and releases a session that opens after the Canvas scope is disposed", async () => {
     const value = fakeSession()
-    const opening = deferred<DesktopCanvasRendererSessionV2>()
+    const opening = deferred<DesktopCanvasRendererSession>()
     let signal: AbortSignal | undefined
     const reconcileCanvas = mock(async () => undefined)
     const lifecycle = start(firstRef, {

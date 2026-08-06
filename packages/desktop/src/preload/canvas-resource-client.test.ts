@@ -23,7 +23,7 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 const operationReceipt = {
-  format: "convax.canvas-operation-receipt/2" as const,
+  format: "convax.canvas-operation-receipt" as const,
   actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(1))),
   operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(2))),
   intentKind: "canvas.agent.create" as const,
