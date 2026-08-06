@@ -9,14 +9,15 @@ import {
   createRef,
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import type { NodeProps } from "@xyflow/react"
+import type { Connection, NodeProps } from "@xyflow/react"
 import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
-import { CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
+import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import type { CanvasDocument, CanvasNode } from "../types"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let renderedNodes: CanvasNode[] = []
 let renderNodes = true
+let connect: ((connection: Connection) => void) | undefined
 let connectStart:
   | ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void)
   | undefined
@@ -157,11 +158,13 @@ void mock.module("@xyflow/react", () => ({
     children?: ReactNode
     nodeTypes?: Record<string, ComponentType<NodeProps<CanvasNode>>>
     nodes?: CanvasNode[]
+    onConnect?: (connection: Connection) => void
     onConnectEnd?: (event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void
     onConnectStart?: (event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void
     onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
     renderedNodes = props.nodes ?? []
+    connect = props.onConnect
     connectStart = props.onConnectStart
     connectEnd = props.onConnectEnd
     return (
@@ -950,6 +953,102 @@ test("does not offer non-atomic Agent creation after dragging a connection to em
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("submits direct and card-target connections through the existing application command bridge", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  renderNodes = true
+  const source = createMediaNode({
+    id: "connection-source",
+    position: { x: 20, y: 40 },
+    resource: { id: "connection-source", kind: "image", metadata: {}, state: { status: "ready" } },
+  })
+  const target = createMediaNode({
+    id: "connection-target",
+    position: { x: 420, y: 40 },
+    resource: { id: "connection-target", kind: "video", metadata: {}, state: { status: "ready" } },
+  })
+  const session = new NodeEntryCanvasSession(
+    createCanvasDocument({ id: "application-command-connections", nodes: [source, target] }),
+  )
+  const executeCommand = mock(async () => undefined)
+  const notify = mock(() => undefined)
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          executeCommand={executeCommand}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({ notify: { show: notify } })}
+          session={session}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      connect?.({
+        source: source.id,
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        target: target.id,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      })
+      await Promise.resolve()
+    })
+    expect(executeCommand).toHaveBeenNthCalledWith(1, {
+      type: "nodes.connect",
+      connection: { source: source.id, target: target.id },
+    })
+
+    const targetElement = container.querySelector<HTMLElement>(`[data-id="${target.id}"] .convax-node`)
+    expect(targetElement).toBeDefined()
+    Object.defineProperty(document, "elementFromPoint", { configurable: true, value: () => targetElement })
+    await act(async () => {
+      connectStart?.(new MouseEvent("mousedown", { clientX: 340, clientY: 140 }), {
+        handleId: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        nodeId: source.id,
+      })
+      connectEnd?.(new MouseEvent("mouseup", { clientX: 700, clientY: 220 }), {
+        fromNode: { id: source.id },
+        isValid: false,
+      })
+      await Promise.resolve()
+    })
+    expect(executeCommand).toHaveBeenNthCalledWith(2, {
+      type: "nodes.connect",
+      connection: { source: source.id, target: target.id },
+    })
+    expect(session.getProjection().edges).toEqual([])
+    expect(notify).not.toHaveBeenCalled()
+
+    executeCommand.mockImplementationOnce(async () => {
+      throw new Error("connection rejected")
+    })
+    await act(async () => {
+      connect?.({
+        source: source.id,
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        target: target.id,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(notify).toHaveBeenCalledWith({
+      kind: "error",
+      title: "Could not connect Canvas nodes",
+      description: "connection rejected",
+    })
+    expect(session.getProjection().edges).toEqual([])
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }

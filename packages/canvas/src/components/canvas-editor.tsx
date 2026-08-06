@@ -4321,12 +4321,28 @@ function CanvasEditorContent(
       replaceSelection,
     ],
   )
+  const executeNodeConnection = useCallback(
+    ({ source, target }: Pick<CanvasEdge, "source" | "target">) => {
+      if (source === target) return
+      if (!props.executeCommand) {
+        rejectUnmappedCanvasMutation()
+        return
+      }
+      const reportFailure = (error: unknown) => notifyError("Could not connect Canvas nodes", error)
+      try {
+        void props.executeCommand({ type: "nodes.connect", connection: { source, target } }).catch(reportFailure)
+      } catch (error) {
+        reportFailure(error)
+      }
+    },
+    [notifyError, props.executeCommand, rejectUnmappedCanvasMutation],
+  )
   const handleConnect = useCallback(
     (connection: Connection) => {
       if (!canvasPointerMutationEnabled) return
-      commit((document) => connectCanvasNodes(document, connection))
+      executeNodeConnection(connection)
     },
-    [canvasPointerMutationEnabled, commit],
+    [canvasPointerMutationEnabled, executeNodeConnection],
   )
   const handleConnectStart = useCallback<OnConnectStart>(
     (event, params) => {
@@ -4368,9 +4384,7 @@ function CanvasEditorContent(
       if (connectionState.isValid || !connectionState.fromNode) return
       if (targetNodeId) {
         if (targetNodeId !== start.nodeId) {
-          commit((document) =>
-            connectCanvasNodes(document, createCanvasCardConnection(start.nodeId, start.side, targetNodeId)),
-          )
+          executeNodeConnection(createCanvasCardConnection(start.nodeId, start.side, targetNodeId))
         }
         ignoreConnectionPaneClickRef.current = true
         window.setTimeout(() => {
@@ -4397,7 +4411,7 @@ function CanvasEditorContent(
         targetPosition: reactFlow.screenToFlowPosition(targetScreen),
       })
     },
-    [canvasPointerMutationEnabled, commit, reactFlow, updateConnectionTargetNode],
+    [canvasPointerMutationEnabled, executeNodeConnection, reactFlow, updateConnectionTargetNode],
   )
   const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
