@@ -1,47 +1,47 @@
 import type {
   ProjectCollaborationRecoveryClient,
-  ProjectRecoveryStatusV1,
-  ProjectResetOutcomeV1,
-  ProjectResetPreviewV1,
+  ProjectRecoveryStatus,
+  ProjectResetOutcome,
+  ProjectResetPreview,
 } from "../../contracts"
 import {
   executePortableProjectReset,
-  inspectPortableProjectCutover,
+  resolvePortableProjectData,
   planPortableProjectReset,
   PortableProjectResetError,
   runWithProjectClosedExclusiveMutationLease,
-  type ExecutePortableProjectResetV1,
-  type PortableProjectResetPlanV1,
+  type ExecutePortableProjectReset,
+  type PortableProjectResetPlan,
 } from "./portable-cutover"
 
-export interface ProjectRecoveryRootPortV1 {
+export interface ProjectRecoveryRootPort {
   resolveProjectRoot(projectId: string): Promise<string>
 }
 
-export interface ProjectResetPreparedAuthorityV1 {
+export interface ProjectResetPreparedAuthority {
   readonly authorizationEvidence: unknown
-  readonly authorizationKind: ExecutePortableProjectResetV1["authorizationKind"]
+  readonly authorizationKind: ExecutePortableProjectReset["authorizationKind"]
   readonly nextProjectEpoch: string
-  readonly stageGenesis: ExecutePortableProjectResetV1["stageGenesis"]
-  readonly verifier: ExecutePortableProjectResetV1["verifier"]
+  readonly stageGenesis: ExecutePortableProjectReset["stageGenesis"]
+  readonly verifier: ExecutePortableProjectReset["verifier"]
 }
 
 /** Control-plane/Project owner seam. Native reset code does not mint team authority or fake genesis verification. */
-export interface ProjectResetAuthorityPortV1 {
+export interface ProjectResetAuthorityPort {
   inspectReset(input: {
-    readonly plan: PortableProjectResetPlanV1
+    readonly plan: PortableProjectResetPlan
     readonly signal?: AbortSignal
   }): Promise<
     Readonly<{ status: "eligible" }> | Readonly<{ reason: "team-epoch-rollover-required"; status: "unavailable" }>
   >
   prepareReset(input: {
-    readonly plan: PortableProjectResetPlanV1
+    readonly plan: PortableProjectResetPlan
     readonly signal?: AbortSignal
-  }): Promise<ProjectResetPreparedAuthorityV1>
+  }): Promise<ProjectResetPreparedAuthority>
 }
 
 /** Project lifecycle owner must synchronously unmount and serialize the exact Project before invoking the operation. */
-export interface ProjectClosedMutationGateV1 {
+export interface ProjectClosedMutationGate {
   runClosed<Result>(input: {
     readonly projectId: string
     readonly projectRoot: string
@@ -49,10 +49,10 @@ export interface ProjectClosedMutationGateV1 {
   }): Promise<Result>
 }
 
-export interface NodeProjectCollaborationRecoveryServiceOptionsV1 {
-  readonly authority: ProjectResetAuthorityPortV1
-  readonly gate: ProjectClosedMutationGateV1
-  readonly projects: ProjectRecoveryRootPortV1
+export interface NodeProjectCollaborationRecoveryServiceOptions {
+  readonly authority: ProjectResetAuthorityPort
+  readonly gate: ProjectClosedMutationGate
+  readonly projects: ProjectRecoveryRootPort
 }
 
 /**
@@ -61,21 +61,21 @@ export interface NodeProjectCollaborationRecoveryServiceOptionsV1 {
  * It exposes only cloneable previews/outcomes, re-plans under the close gate,
  * and delegates frozen genesis/authorization semantics to explicit owners.
  */
-export class NodeProjectCollaborationRecoveryServiceV1 implements ProjectCollaborationRecoveryClient {
-  constructor(private readonly options: NodeProjectCollaborationRecoveryServiceOptionsV1) {}
+export class NodeProjectCollaborationRecoveryService implements ProjectCollaborationRecoveryClient {
+  constructor(private readonly options: NodeProjectCollaborationRecoveryServiceOptions) {}
 
-  async inspectProject(projectId: string): Promise<ProjectRecoveryStatusV1> {
+  async inspectProject(projectId: string): Promise<ProjectRecoveryStatus> {
     const projectRoot = await this.options.projects.resolveProjectRoot(projectId)
-    const inspection = await inspectPortableProjectCutover(projectRoot)
-    if (inspection.status === "current") return { status: "current" }
-    if (inspection.status === "recovery-required") return { status: "recovery-required" }
+    const resolution = await resolvePortableProjectData(projectRoot)
+    if (resolution.status === "current") return { status: "current" }
+    if (resolution.status === "recovery-required") return { status: "recovery-required" }
     return {
-      legacyPaths: Object.freeze([...inspection.error.legacyPaths]),
-      status: "unsupported-portable-project-version",
+      unsupportedPaths: Object.freeze([...resolution.error.unsupportedPaths]),
+      status: "unsupported-project-data",
     }
   }
 
-  async previewReset(projectId: string): Promise<ProjectResetPreviewV1> {
+  async previewReset(projectId: string): Promise<ProjectResetPreview> {
     const projectRoot = await this.options.projects.resolveProjectRoot(projectId)
     const plan = await planPortableProjectReset(projectRoot)
     if (plan.projectId !== projectId) {
@@ -101,7 +101,7 @@ export class NodeProjectCollaborationRecoveryServiceV1 implements ProjectCollabo
 
   async confirmReset(
     input: Parameters<ProjectCollaborationRecoveryClient["confirmReset"]>[0],
-  ): Promise<ProjectResetOutcomeV1> {
+  ): Promise<ProjectResetOutcome> {
     const projectRoot = await this.options.projects.resolveProjectRoot(input.projectId)
     return this.options.gate.runClosed({
       projectId: input.projectId,

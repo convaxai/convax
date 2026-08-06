@@ -5,8 +5,8 @@ import {
   type NodeReplicaHeadMaterializerV2,
 } from "./persistence-store"
 import type {
-  ProjectClosedMutationGateV1,
-  ProjectRecoveryRootPortV1,
+  ProjectClosedMutationGate,
+  ProjectRecoveryRootPort,
 } from "./project-collaboration-recovery-service"
 
 export interface ProjectCollaborationRuntimeRootPortV2 {
@@ -95,7 +95,7 @@ interface ProjectRuntimeBindingV2 {
  * but it cannot choose the collaboration directory or dispose a writer directly.
  */
 export class NodeProjectCollaborationRuntimeCoordinatorV2
-  implements ProjectClosedMutationGateV1, ProjectRecoveryRootPortV1
+  implements ProjectClosedMutationGate, ProjectRecoveryRootPort
 {
   private readonly bindings = new Map<string, ProjectRuntimeBindingV2>()
   private readonly openProjects = new Map<string, OpenProjectRuntimeV2>()

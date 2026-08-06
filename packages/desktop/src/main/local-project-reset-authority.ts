@@ -18,14 +18,14 @@ import {
 } from "@convax/project/collaboration-protocol"
 import {
   derivePortableProjectResetExecutionFingerprint,
-  readProjectNativeStoreManifestV2,
+  readProjectNativeStoreManifest,
   readProjectResetRecordsV2,
   writeProjectResetRecordsV2,
-  type PortableProjectResetPlanV1,
-  type ProjectResetAuthorityPortV1,
+  type PortableProjectResetPlan,
+  type ProjectResetAuthorityPort,
   type ProjectResetManifestStateV2,
   type ProjectResetManifestV2,
-  type ProjectResetPreparedAuthorityV1,
+  type ProjectResetPreparedAuthority,
 } from "@convax/project/node"
 
 import {
@@ -51,7 +51,7 @@ export class TeamProjectResetUnavailableErrorV2 extends Error {
  * pre-bound OS-vault principal and native composition; Project owns the reset
  * record codec, tree swap, and empty ProjectIndex schema.
  */
-export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1 {
+export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPort {
   constructor(
     private readonly options: {
       readonly authority: CurrentProtocolAuthority
@@ -59,7 +59,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
     },
   ) {}
 
-  async inspectReset(input: { readonly plan: PortableProjectResetPlanV1; readonly signal?: AbortSignal }): Promise<
+  async inspectReset(input: { readonly plan: PortableProjectResetPlan; readonly signal?: AbortSignal }): Promise<
     | Readonly<{ status: "eligible" }>
     | Readonly<{
         reason: "team-epoch-rollover-required"
@@ -78,9 +78,9 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
   }
 
   async prepareReset(input: {
-    readonly plan: PortableProjectResetPlanV1
+    readonly plan: PortableProjectResetPlan
     readonly signal?: AbortSignal
-  }): Promise<ProjectResetPreparedAuthorityV1> {
+  }): Promise<ProjectResetPreparedAuthority> {
     throwIfAborted(input.signal)
     const owner = await this.resolveResetOwner(input.plan, true, input.signal)
     if (!owner) throw new Error("Local Project reset owner was not prepared")
@@ -105,7 +105,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
       authorizationEvidence: confirmation,
       authorizationKind: "local-project-owner" as const,
       nextProjectEpoch: owner.binding.projectEpoch,
-      stageGenesis: async (stageInput: Parameters<ProjectResetPreparedAuthorityV1["stageGenesis"]>[0]) => {
+      stageGenesis: async (stageInput: Parameters<ProjectResetPreparedAuthority["stageGenesis"]>[0]) => {
         throwIfAborted(stageInput.signal)
         assertStageInput(expected, stageInput)
         const collaborationDirectory = path.join(stageInput.stagedConvaxDirectory, "collaboration")
@@ -125,7 +125,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
       },
       verifier: Object.freeze({
         authorizeStagedReset: async (
-          verifyInput: Parameters<ProjectResetPreparedAuthorityV1["verifier"]["authorizeStagedReset"]>[0],
+          verifyInput: Parameters<ProjectResetPreparedAuthority["verifier"]["authorizeStagedReset"]>[0],
         ) => {
           if (
             !matchesVerificationInput(expected, verifyInput) ||
@@ -152,7 +152,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
             : "rejected"
         },
         verifyStagedGenesis: async (
-          verifyInput: Parameters<ProjectResetPreparedAuthorityV1["verifier"]["verifyStagedGenesis"]>[0],
+          verifyInput: Parameters<ProjectResetPreparedAuthority["verifier"]["verifyStagedGenesis"]>[0],
         ) => {
           if (!matchesVerificationInput(expected, verifyInput)) return false
           return this.verifyAndAdvance(
@@ -163,7 +163,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
           )
         },
         verifyPublishedGenesis: async (
-          verifyInput: Parameters<ProjectResetPreparedAuthorityV1["verifier"]["verifyPublishedGenesis"]>[0],
+          verifyInput: Parameters<ProjectResetPreparedAuthority["verifier"]["verifyPublishedGenesis"]>[0],
         ) => {
           if (!matchesVerificationInput(expected, verifyInput)) return false
           return this.verifyAndAdvance(
@@ -178,7 +178,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
   }
 
   private async resolveResetOwner(
-    plan: PortableProjectResetPlanV1,
+    plan: PortableProjectResetPlan,
     createIfMissing: boolean,
     signal?: AbortSignal,
   ): Promise<ResolvedLocalProjectOwnerAuthorityV2 | undefined> {
@@ -227,7 +227,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
   }
 
   private async createConfirmation(
-    plan: PortableProjectResetPlanV1,
+    plan: PortableProjectResetPlan,
     owner: ResolvedLocalProjectOwnerAuthorityV2,
   ): Promise<ProjectResetConfirmationV2> {
     const resetId = derivedId128("convax.local-project-reset-id/2", {
@@ -285,7 +285,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
   }
 
   private readNativeManifest(collaborationDirectory: string) {
-    return readProjectNativeStoreManifestV2(collaborationDirectory, {
+    return readProjectNativeStoreManifest(collaborationDirectory, {
       protocolDigest: this.options.authority.protocolDigest,
       schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
       uriProtocolDigest: this.options.authority.protocolSchemaBundle.core.uriProtocolDigest,
@@ -323,13 +323,13 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
 }
 
 type ResetExpected = Readonly<{
-  plan: PortableProjectResetPlanV1
+  plan: PortableProjectResetPlan
   owner: ResolvedLocalProjectOwnerAuthorityV2
   confirmation: ProjectResetConfirmationV2
   executionFingerprint: string
 }>
 
-type NativeManifest = Awaited<ReturnType<typeof readProjectNativeStoreManifestV2>>
+type NativeManifest = Awaited<ReturnType<typeof readProjectNativeStoreManifest>>
 
 function createResetManifest(
   expected: ResetExpected,
@@ -385,7 +385,7 @@ function matchesNativeManifest(
   )
 }
 
-function assertNoTeamNamespaces(plan: PortableProjectResetPlanV1): void {
+function assertNoTeamNamespaces(plan: PortableProjectResetPlan): void {
   // This branch relies on the cutover invariant that legacy Convax releases
   // persisted every team/control identity under one of these exact private
   // namespaces. It is deliberately not a heuristic for arbitrary corruption:

@@ -21,10 +21,10 @@ import type {
   ProjectIndexFactResolutionPortV2,
 } from "@convax/project/canvas"
 import {
-  stageDurableProjectDocumentGenesisV2,
+  stageDurableProjectDocumentGenesis,
   type NodeCollaborationPersistenceV2,
   type ProjectBlobReplicationStoreV2,
-  type ProjectDocumentGenesisVerifierPortV2,
+  type ProjectDocumentGenesisVerifierPort,
 } from "@convax/project/node"
 
 /**
@@ -153,7 +153,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
     NodeCollaborationPersistenceV2,
     "initializeShardWithGenesisProof" | "readGenesisProof"
   >
-  readonly genesisVerifier: ProjectDocumentGenesisVerifierPortV2<"canvas">
+  readonly genesisVerifier: ProjectDocumentGenesisVerifierPort<"canvas">
   readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
   readonly preflightAuthor: (input: {
     readonly projectId: DocumentScope["projectId"]
@@ -263,7 +263,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
     },
     async stageCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPortV2["stageCanvasGenesis"]>[0]) {
       if (!sameProjectEpoch(request.scope, projectIndexScope)) return "rejected"
-      const staged = await stageDurableProjectDocumentGenesisV2({
+      const staged = await stageDurableProjectDocumentGenesis({
         scope: request.scope,
         predecessor: request.predecessor,
         verifier: input.genesisVerifier,

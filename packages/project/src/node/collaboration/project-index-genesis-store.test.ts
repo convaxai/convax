@@ -38,12 +38,12 @@ import {
   type NodeReplicaHeadMaterializerV2,
 } from "./persistence-store"
 import {
-  decodeProjectNativeStoreManifestV2,
-  encodeProjectNativeStoreManifestV2,
-  initializeUnteamedProjectIndexNativeStoreV2,
-  readProjectNativeStoreManifestV2,
-  resolveCurrentProjectIndexScopeV2,
-  verifyEmptyProjectIndexGenesisV2,
+  decodeProjectNativeStoreManifest,
+  encodeProjectNativeStoreManifest,
+  initializeUnteamedProjectIndexNativeStore,
+  readProjectNativeStoreManifest,
+  resolveCurrentProjectIndexScope,
+  verifyEmptyProjectIndexGenesis,
 } from "./project-index-genesis-store"
 
 const roots: string[] = []
@@ -72,13 +72,13 @@ afterEach(async () => {
 describe("ProjectIndex native genesis store", () => {
   durabilityTest("publishes a new unteamed Project atomically and reopens the exact installed base", async () => {
     const fixture = await createFixture()
-    const first = await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    const first = await initializeUnteamedProjectIndexNativeStore(fixture.input)
     expect(first.scope).toEqual(scope)
-    expect(await resolveCurrentProjectIndexScopeV2(fixture.target, authority)).toEqual(scope)
-    expect((await readProjectNativeStoreManifestV2(fixture.target, authority)).initializationAuthorityDigest)
+    expect(await resolveCurrentProjectIndexScope(fixture.target, authority)).toEqual(scope)
+    expect((await readProjectNativeStoreManifest(fixture.target, authority)).initializationAuthorityDigest)
       .toBe(digest("enrollment"))
 
-    const retry = await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    const retry = await initializeUnteamedProjectIndexNativeStore(fixture.input)
     expect(retry.canonicalStateDigest).toBe(first.canonicalStateDigest)
     const store = await NodeCollaborationPersistenceV2.open({
       collaborationDirectory: fixture.target,
@@ -96,16 +96,16 @@ describe("ProjectIndex native genesis store", () => {
 
   durabilityTest("rejects unknown manifest fields, checksum tampering and stale live authority", async () => {
     const fixture = await createFixture()
-    const exact = encodeProjectNativeStoreManifestV2(fixture.genesis.manifest)
+    const exact = encodeProjectNativeStoreManifest(fixture.genesis.manifest)
     const payloadLength = Buffer.from(exact).readUInt32BE(8)
     const payload = JSON.parse(new TextDecoder().decode(exact.slice(12, 12 + payloadLength)))
-    expect(() => encodeProjectNativeStoreManifestV2({ ...payload, revision: 1 })).toThrow("schema")
+    expect(() => encodeProjectNativeStoreManifest({ ...payload, revision: 1 })).toThrow("schema")
     const tampered = Uint8Array.from(exact)
     tampered[tampered.length - 1] ^= 1
-    expect(() => decodeProjectNativeStoreManifestV2(tampered)).toThrow("checksum")
+    expect(() => decodeProjectNativeStoreManifest(tampered)).toThrow("checksum")
 
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
-    await expect(readProjectNativeStoreManifestV2(fixture.target, {
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
+    await expect(readProjectNativeStoreManifest(fixture.target, {
       ...authority, protocolDigest: digest("old-protocol"),
     })).rejects.toThrow("authority is not current")
   })
@@ -113,31 +113,31 @@ describe("ProjectIndex native genesis store", () => {
   durabilityTest("resumes the same staged genesis after crashes but rejects another epoch as equivocation", async () => {
     const fixture = await createFixture()
     let failManifest = true
-    await expect(initializeUnteamedProjectIndexNativeStoreV2({
+    await expect(initializeUnteamedProjectIndexNativeStore({
       ...fixture.input,
       faults: { async afterManifestFsync() { if (failManifest) { failManifest = false; throw new Error("crash-manifest") } } },
     })).rejects.toThrow("crash-manifest")
     expect(await fs.lstat(`${fixture.target}.staging`)).toBeTruthy()
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
 
     const another = await createFixture({ projectEpoch: id(9), target: fixture.target })
-    await expect(initializeUnteamedProjectIndexNativeStoreV2(another.input)).rejects.toThrow("equivocation")
+    await expect(initializeUnteamedProjectIndexNativeStore(another.input)).rejects.toThrow("equivocation")
   })
 
   durabilityTest("resumes after durable genesis and detects an altered installed base on restart", async () => {
     const fixture = await createFixture()
     let failGenesis = true
-    await expect(initializeUnteamedProjectIndexNativeStoreV2({
+    await expect(initializeUnteamedProjectIndexNativeStore({
       ...fixture.input,
       faults: { async afterGenesisFsync() { if (failGenesis) { failGenesis = false; throw new Error("crash-genesis") } } },
     })).rejects.toThrow("crash-genesis")
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
 
     const baseFile = await findFirst(fixture.target, (value) => value.includes("/journals/bases/") && value.endsWith(".bin"))
     const bytes = await fs.readFile(baseFile)
     bytes[bytes.length - 1] ^= 1
     await fs.writeFile(baseFile, bytes)
-    await expect(initializeUnteamedProjectIndexNativeStoreV2(fixture.input)).rejects.toThrow()
+    await expect(initializeUnteamedProjectIndexNativeStore(fixture.input)).rejects.toThrow()
   })
 
   test("reconstruction factory binds only the owner root and validation rejects an unknown root", () => {
@@ -162,7 +162,7 @@ async function createFixture(overrides: { projectEpoch?: ReturnType<typeof id>; 
     projectEpoch: overrides.projectEpoch ?? projectEpoch,
   } as DocumentScope
   const checkpoint = checkpointFor(candidate, candidateScope)
-  const genesis = await verifyEmptyProjectIndexGenesisV2({
+  const genesis = await verifyEmptyProjectIndexGenesis({
     scope: candidateScope,
     document: candidate,
     checkpointExactBytes: encodeRestrictedJcs(checkpoint),

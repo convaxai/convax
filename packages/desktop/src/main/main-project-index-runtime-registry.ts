@@ -35,14 +35,14 @@ import type {
   ProjectCollaborationRuntimeLeaseV2,
 } from "@convax/project/node"
 import {
-  createEmptyProjectIndexGenesisCandidateV2,
-  initializeUnteamedProjectIndexNativeStoreV2,
-  inspectPortableProjectCutover,
+  createEmptyProjectIndexGenesisCandidate,
+  initializeUnteamedProjectIndexNativeStore,
+  resolvePortableProjectData,
   ProjectBlobReplicationStoreV2,
   ProjectIndexFileMaterializerV2,
-  readProjectNativeStoreManifestV2,
-  verifyEmptyProjectIndexGenesisV2,
-  verifyPristineUnteamedProjectIndexNativeStoreV2,
+  readProjectNativeStoreManifest,
+  verifyEmptyProjectIndexGenesis,
+  verifyPristineUnteamedProjectIndexNativeStore,
   type NodeReplicaHeadMaterializerV2,
 } from "@convax/project/node"
 
@@ -100,7 +100,7 @@ export function createExistingProjectIndexRegistrationPortV2(
   const port: MainProjectIndexFirstRegistrationPortV2 = {
     async ensureRegistered({ projectId, projectRoot }) {
       try {
-        const manifest = await readProjectNativeStoreManifestV2(path.join(projectRoot, ".convax", "collaboration"), {
+        const manifest = await readProjectNativeStoreManifest(path.join(projectRoot, ".convax", "collaboration"), {
           protocolDigest: authority.protocolDigest,
           schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
           uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
@@ -132,9 +132,9 @@ export function createLocalProjectOwnerIndexRegistrationPortV2(
 ): MainProjectIndexFirstRegistrationPortV2 {
   const port: MainProjectIndexFirstRegistrationPortV2 = {
     async ensureRegistered({ projectId, projectRoot }) {
-      const cutover = await inspectPortableProjectCutover(projectRoot)
-      if (cutover.status === "unsupported-portable-project-version") throw cutover.error
-      if (cutover.status === "recovery-required") {
+      const resolution = await resolvePortableProjectData(projectRoot)
+      if (resolution.status === "unsupported-project-data") throw resolution.error
+      if (resolution.status === "recovery-required") {
         throw new Error("Project collaboration reset recovery must finish before first registration")
       }
       const authorityTuple = {
@@ -144,7 +144,7 @@ export function createLocalProjectOwnerIndexRegistrationPortV2(
       } as const
       const collaborationDirectory = path.join(projectRoot, ".convax", "collaboration")
       try {
-        const manifest = await readProjectNativeStoreManifestV2(collaborationDirectory, authorityTuple)
+        const manifest = await readProjectNativeStoreManifest(collaborationDirectory, authorityTuple)
         if (manifest.projectIndexScope.projectId !== projectId) {
           throw new Error("ProjectIndex manifest crossed the bound Project")
         }
@@ -180,13 +180,13 @@ export async function initializeLocalOwnerProjectIndexNativeStoreV2(input: {
     uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
   } as const
   const { genesis, scope } = prepared
-  await initializeUnteamedProjectIndexNativeStoreV2({
+  await initializeUnteamedProjectIndexNativeStore({
     collaborationDirectory,
     localActorId: owner.binding.actorId,
     materializer: genesisMaterializer,
     genesis,
   })
-  const installed = await readProjectNativeStoreManifestV2(collaborationDirectory, authorityTuple)
+  const installed = await readProjectNativeStoreManifest(collaborationDirectory, authorityTuple)
   if (
     installed.projectIndexScope.projectId !== scope.projectId ||
     installed.initializationAuthorityDigest !== owner.binding.bindingDigest
@@ -201,12 +201,12 @@ export async function verifyPristineLocalOwnerProjectIndexNativeStoreV2(input: {
   readonly owner: ResolvedLocalProjectOwnerAuthorityV2
   readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
 }): Promise<void> {
-  const manifest = await readProjectNativeStoreManifestV2(input.collaborationDirectory, {
+  const manifest = await readProjectNativeStoreManifest(input.collaborationDirectory, {
     protocolDigest: input.authority.protocolDigest,
     schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
     uriProtocolDigest: input.authority.protocolSchemaBundle.core.uriProtocolDigest,
   })
-  await verifyPristineUnteamedProjectIndexNativeStoreV2({
+  await verifyPristineUnteamedProjectIndexNativeStore({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.owner.binding.actorId,
     materializer: genesisMaterializer,
@@ -247,7 +247,7 @@ async function prepareLocalOwnerProjectIndexGenesisV2(input: {
     docId: "project-index",
     shardEpoch: owner.binding.projectIndexShardEpoch,
   })
-  const candidate = createEmptyProjectIndexGenesisCandidateV2({
+  const candidate = createEmptyProjectIndexGenesisCandidate({
     scope,
     actorId: owner.binding.actorId,
     operationId: owner.binding.genesisOperationId,
@@ -265,7 +265,7 @@ async function prepareLocalOwnerProjectIndexGenesisV2(input: {
     coreDigest,
     replicaSignature: await owner.signer.sign(Buffer.from(coreDigest, "hex")),
   })
-  const genesis = await verifyEmptyProjectIndexGenesisV2({
+  const genesis = await verifyEmptyProjectIndexGenesis({
     scope,
     document: candidate.document,
     checkpointExactBytes: encodeRestrictedJcs(checkpoint),

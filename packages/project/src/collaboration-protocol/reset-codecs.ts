@@ -192,7 +192,7 @@ function serviceKeyId(value: unknown): asserts value is string {
 
 function protocolDigest(value: unknown): Digest {
   const digest = parseDigest(value)
-  if (digest !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) invalid("Reset protocol digest is not the selected R5 digest")
+  if (digest !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) invalid("Reset protocol digest is not the current protocol digest")
   return digest
 }
 

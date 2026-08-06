@@ -41,7 +41,7 @@ function header(raw: Uint8Array, overrides: Partial<PeerTransferChunkHeaderV2> =
   }
 }
 
-describe("R5 exact Peer wire codec", () => {
+describe("Exact Peer wire codec", () => {
   test("encodes CVXPEER2 with exact core, raw signature and body then decodes without parsing the body", async () => {
     const body = encodePeerControlBodyV2({
       format: "convax.peer-control/2",

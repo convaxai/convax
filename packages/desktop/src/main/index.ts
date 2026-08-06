@@ -35,7 +35,7 @@ import {
 import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
 import {
   NodeProjectManager,
-  NodeProjectCollaborationRecoveryServiceV1,
+  NodeProjectCollaborationRecoveryService,
   NodeProjectCollaborationRuntimeCoordinatorV2,
   ProjectAssetGc,
   ProjectCanvasDocumentService,
@@ -45,7 +45,7 @@ import {
   ProjectCanvasResourcePreparation,
   ProjectManagedAssetStore,
   ProjectResourceReader,
-  readProjectNativeStoreManifestV2,
+  readProjectNativeStoreManifest,
 } from "@convax/project/node"
 import {
   app,
@@ -794,7 +794,7 @@ function startApplication() {
       projects: projectManager,
       identity: {
         async resolveLocalActorId({ projectId, projectRoot }) {
-          const manifest = await readProjectNativeStoreManifestV2(join(projectRoot, ".convax", "collaboration"), {
+          const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
               protocolDigest: collaborationAuthority.protocolDigest,
               schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
               uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
@@ -826,7 +826,7 @@ function startApplication() {
         },
       },
     })
-    const projectRecovery = new NodeProjectCollaborationRecoveryServiceV1({
+    const projectRecovery = new NodeProjectCollaborationRecoveryService({
       authority: new LocalProjectResetAuthorityV2({
         authority: collaborationAuthority,
         owners: localProjectOwnerAuthority,
@@ -986,7 +986,7 @@ function startApplication() {
           nativeFacts: {
             async resolve(projectId) {
               const projectRoot = await projectManager.resolveProjectRoot({ projectId })
-              const manifest = await readProjectNativeStoreManifestV2(join(projectRoot, ".convax", "collaboration"), {
+              const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
                   protocolDigest: collaborationAuthority.protocolDigest,
                   schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
                   uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,

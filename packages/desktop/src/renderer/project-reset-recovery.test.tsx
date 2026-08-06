@@ -1,7 +1,7 @@
 import type {
   ProjectCollaborationRecoveryClient,
-  ProjectRecoveryStatusV1,
-  ProjectResetPreviewV1,
+  ProjectRecoveryStatus,
+  ProjectResetPreview,
 } from "@convax/project"
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { Window } from "happy-dom"
@@ -12,7 +12,7 @@ import { ProjectResetRecoveryState } from "./project-reset-recovery"
 const deletionDigest = "a".repeat(64)
 const inventoryDigest = "b".repeat(64)
 const token = "reset-host-preview" as const
-const preview: ProjectResetPreviewV1 = {
+const preview: ProjectResetPreview = {
   format: "convax.project-reset-preview/1",
   ordinaryProjectFilesPreserved: true,
   preview: [
@@ -29,8 +29,8 @@ function recoveryClient(overrides: Partial<ProjectCollaborationRecoveryClient> =
   return {
     confirmReset: mock(async () => ({ projectId: "project-legacy", status: "published" as const })),
     inspectProject: mock(async () => ({
-      legacyPaths: [".convax/canvases/catalog.json"],
-      status: "unsupported-portable-project-version" as const,
+      unsupportedPaths: [".convax/canvases/catalog.json"],
+      status: "unsupported-project-data" as const,
     })),
     previewReset: mock(async () => preview),
     ...overrides,
@@ -95,10 +95,10 @@ function button(label: string) {
 }
 
 describe("ProjectResetRecoveryState", () => {
-  test("stays absent unless inspection confirms an eligible legacy Project", async () => {
+  test("stays absent unless the resolver reports unsupported Project data", async () => {
     await withDom(async (root) => {
       const current = recoveryClient({
-        inspectProject: mock(async (): Promise<ProjectRecoveryStatusV1> => ({ status: "current" })),
+        inspectProject: mock(async (): Promise<ProjectRecoveryStatus> => ({ status: "current" })),
       })
       const onUnavailable = mock(() => undefined)
       await renderRecovery(root, current, { onUnavailable })

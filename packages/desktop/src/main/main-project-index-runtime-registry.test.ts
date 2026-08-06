@@ -5,7 +5,7 @@ import path from "node:path"
 import { createWebCryptoEd25519Verifier, parseDigest, parseProjectId } from "@convax/collaboration"
 import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
-import { readProjectNativeStoreManifestV2 } from "@convax/project/node"
+import { readProjectNativeStoreManifest } from "@convax/project/node"
 
 import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
@@ -69,7 +69,7 @@ describe("existing ProjectIndex registration", () => {
         projectId: parseProjectId("project-legacy-first-register"),
         projectRoot,
       }),
-    ).rejects.toMatchObject({ code: "unsupported-portable-version" })
+    ).rejects.toMatchObject({ code: "unsupported-project-data" })
     expect(ownerCreated).toBeFalse()
     await expect(fs.access(path.join(projectRoot, ".convax", "collaboration"))).rejects.toThrow()
   })
@@ -106,7 +106,7 @@ describe("existing ProjectIndex registration", () => {
     const retry = await registration.ensureRegistered({ projectId, projectRoot })
     expect(retry).toEqual(first)
 
-    const manifest = await readProjectNativeStoreManifestV2(path.join(projectRoot, ".convax", "collaboration"), {
+    const manifest = await readProjectNativeStoreManifest(path.join(projectRoot, ".convax", "collaboration"), {
       protocolDigest: authority.protocolDigest,
       schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
       uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,

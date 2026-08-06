@@ -1,5 +1,5 @@
 /**
- * Exact control-plane-owned constants from the active R5 control artifact.
+ * Exact control-plane-owned constants from the current control artifact.
  *
  * The 127-domain registry, ProtocolSchemaBundle and digest implementation remain
  * kernel-owned and are deliberately not reconstructed in this package. The kernel

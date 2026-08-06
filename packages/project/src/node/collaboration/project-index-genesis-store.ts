@@ -61,15 +61,15 @@ const MANIFEST_CHECKSUM_BYTES = 32
 const MAX_MANIFEST_PAYLOAD_BYTES = 64 * 1024
 const LOCAL_RECORD_DOMAIN = Buffer.from("convax.local-project-store-record-digest/2\0", "utf8")
 const STORE_IDENTITY = "convax.project-collaboration-native-store/2" as const
-type ProjectIndexDocumentScopeV2 = DocumentScope & {
+type ProjectIndexDocumentScope = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
 }
 
-export interface ProjectNativeStoreManifestV2 {
+export interface ProjectNativeStoreManifest {
   readonly format: "convax.project-native-store-manifest/2"
   readonly storeIdentity: typeof STORE_IDENTITY
-  readonly projectIndexScope: ProjectIndexDocumentScopeV2
+  readonly projectIndexScope: ProjectIndexDocumentScope
   readonly protocolDigest: Digest
   readonly schemaDigest: Digest
   readonly uriProtocolDigest: Digest
@@ -80,35 +80,36 @@ export interface ProjectNativeStoreManifestV2 {
   readonly emptyProjectIndexCanonicalStateDigest: Digest
 }
 
-export interface ProjectNativeStoreAuthorityV2 {
+export interface ProjectNativeStoreAuthority {
   readonly protocolDigest: Digest
   readonly schemaDigest: Digest
   readonly uriProtocolDigest: Digest
 }
 
-export interface VerifiedEmptyProjectIndexGenesisV2 {
-  readonly manifest: ProjectNativeStoreManifestV2
+export interface VerifiedEmptyProjectIndexGenesis {
+  readonly manifest: ProjectNativeStoreManifest
   readonly manifestLocalRecordDigest: Digest
   readonly checkpointExactBytes: Uint8Array
   readonly acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">
 }
 
-export interface ProjectIndexGenesisCheckpointVerifierV2 {
+export interface ProjectIndexGenesisCheckpointVerifier {
   verify(checkpoint: ReplicaCheckpoint): Promise<boolean>
 }
 
-export interface ProjectIndexNativeStoreInitializationFaultsV2 {
+export interface ProjectIndexNativeStoreInitializationFaults {
   afterManifestFsync?(): Promise<void>
   afterGenesisFsync?(): Promise<void>
   beforePublishRename?(): Promise<void>
 }
 
 /**
- * Project-owned constructor for the only legal empty ProjectIndex base. Desktop
- * supplies already-durable principal identities and signs the returned core; it
- * never assembles Project schema bytes itself.
+ * Project-owned constructor for the only legal empty ProjectIndex base. A new
+ * Project creates this current genesis once; there is no earlier genesis and no
+ * later promotion. Desktop supplies already-durable principal identities and
+ * signs the returned core; it never assembles Project schema bytes itself.
  */
-export function createEmptyProjectIndexGenesisCandidateV2(input: {
+export function createEmptyProjectIndexGenesisCandidate(input: {
   readonly scope: DocumentScope
   readonly actorId: ActorId
   readonly operationId: Id128
@@ -117,7 +118,7 @@ export function createEmptyProjectIndexGenesisCandidateV2(input: {
   readonly authorReplicaId: ReplicaId
   readonly authorAuthorizationDigest: Digest
   readonly validationArtifactSetDigest: Digest
-  readonly authority: ProjectNativeStoreAuthorityV2
+  readonly authority: ProjectNativeStoreAuthority
 }): Readonly<{ document: Y.Doc; checkpointCore: ReplicaCheckpointCore }> {
   const scope = requireProjectIndexScope(input.scope)
   const actorId = parseActorId(input.actorId)
@@ -202,8 +203,8 @@ export function createEmptyProjectIndexGenesisCandidateV2(input: {
 }
 
 /** Host-private envelope: magic + uint32 JCS length + JCS + ordinary SHA-256 checksum. */
-export function encodeProjectNativeStoreManifestV2(input: ProjectNativeStoreManifestV2): Uint8Array {
-  const manifest = parseProjectNativeStoreManifestV2(input)
+export function encodeProjectNativeStoreManifest(input: ProjectNativeStoreManifest): Uint8Array {
+  const manifest = parseProjectNativeStoreManifest(input)
   const payload = encodeRestrictedJcs(manifest)
   if (payload.byteLength > MAX_MANIFEST_PAYLOAD_BYTES) throw new TypeError("Project native manifest is too large")
   const output = Buffer.alloc(MANIFEST_HEADER_BYTES + payload.byteLength + MANIFEST_CHECKSUM_BYTES)
@@ -214,7 +215,7 @@ export function encodeProjectNativeStoreManifestV2(input: ProjectNativeStoreMani
   return Uint8Array.from(output)
 }
 
-export function decodeProjectNativeStoreManifestV2(exactBytes: Readonly<Uint8Array>): ProjectNativeStoreManifestV2 {
+export function decodeProjectNativeStoreManifest(exactBytes: Readonly<Uint8Array>): ProjectNativeStoreManifest {
   if (!(exactBytes instanceof Uint8Array)) throw new TypeError("Project native manifest must be bytes")
   const bytes = Buffer.from(exactBytes)
   if (
@@ -235,15 +236,15 @@ export function decodeProjectNativeStoreManifestV2(exactBytes: Readonly<Uint8Arr
   const checksum = bytes.subarray(MANIFEST_HEADER_BYTES + payloadLength)
   const computed = createHash("sha256").update(payload).digest()
   if (!timingSafeEqual(checksum, computed)) throw new TypeError("Project native manifest checksum mismatches")
-  const manifest = parseProjectNativeStoreManifestV2(decodeRestrictedJcs(payload))
+  const manifest = parseProjectNativeStoreManifest(decodeRestrictedJcs(payload))
   if (!sameBytes(payload, encodeRestrictedJcs(manifest))) {
     throw new TypeError("Project native manifest JCS bytes are not canonical")
   }
   return manifest
 }
 
-export function projectNativeStoreManifestLocalRecordDigestV2(input: ProjectNativeStoreManifestV2): Digest {
-  const manifest = parseProjectNativeStoreManifestV2(input)
+export function projectNativeStoreManifestLocalRecordDigest(input: ProjectNativeStoreManifest): Digest {
+  const manifest = parseProjectNativeStoreManifest(input)
   return parseDigest(
     createHash("sha256")
       .update(LOCAL_RECORD_DOMAIN)
@@ -254,13 +255,13 @@ export function projectNativeStoreManifestLocalRecordDigestV2(input: ProjectNati
   )
 }
 
-export async function verifyEmptyProjectIndexGenesisV2(input: {
+export async function verifyEmptyProjectIndexGenesis(input: {
   readonly scope: DocumentScope
   readonly document: Y.Doc
   readonly checkpointExactBytes: Readonly<Uint8Array>
   readonly initializationAuthorityDigest: Digest
-  readonly verifier: ProjectIndexGenesisCheckpointVerifierV2
-}): Promise<VerifiedEmptyProjectIndexGenesisV2> {
+  readonly verifier: ProjectIndexGenesisCheckpointVerifier
+}): Promise<VerifiedEmptyProjectIndexGenesis> {
   const scope = requireProjectIndexScope(input.scope)
   const snapshot = validateProjectIndexYDocV2(input.document, scope)
   if (
@@ -311,7 +312,7 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
   if (!(await input.verifier.verify(checkpoint)))
     throw new TypeError("ProjectIndex genesis checkpoint authority is rejected")
   const checkpointObjectDigest = replicaCheckpointObjectDigest(checkpoint)
-  const manifest = parseProjectNativeStoreManifestV2({
+  const manifest = parseProjectNativeStoreManifest({
     format: "convax.project-native-store-manifest/2",
     storeIdentity: STORE_IDENTITY,
     projectIndexScope: scope,
@@ -326,7 +327,7 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
   })
   return Object.freeze({
     manifest,
-    manifestLocalRecordDigest: projectNativeStoreManifestLocalRecordDigestV2(manifest),
+    manifestLocalRecordDigest: projectNativeStoreManifestLocalRecordDigest(manifest),
     checkpointExactBytes: Uint8Array.from(input.checkpointExactBytes),
     acceptedBase: Object.freeze({
       scope,
@@ -344,20 +345,20 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
  * Initializes a new Project through a same-filesystem sibling stage. The final
  * collaboration directory is therefore either absent or a complete reopenable store.
  */
-export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
+export async function initializeUnteamedProjectIndexNativeStore(input: {
   readonly collaborationDirectory: string
   readonly localActorId: ActorId
   readonly materializer: NodeReplicaHeadMaterializerV2
-  readonly genesis: VerifiedEmptyProjectIndexGenesisV2
+  readonly genesis: VerifiedEmptyProjectIndexGenesis
   readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooksV2
-  readonly faults?: ProjectIndexNativeStoreInitializationFaultsV2
+  readonly faults?: ProjectIndexNativeStoreInitializationFaults
 }): Promise<NodeAcceptedReplicaHeadV2> {
   if (!path.isAbsolute(input.collaborationDirectory)) throw new TypeError("Collaboration directory must be absolute")
   const target = path.resolve(input.collaborationDirectory)
   if (target !== input.collaborationDirectory) throw new TypeError("Collaboration directory must be canonical")
   const parent = path.dirname(target)
   await requirePlainDirectory(parent, "Project private directory")
-  const expectedManifestBytes = encodeProjectNativeStoreManifestV2(input.genesis.manifest)
+  const expectedManifestBytes = encodeProjectNativeStoreManifest(input.genesis.manifest)
   const existing = await lstatOrNull(target)
   if (existing) {
     if (!existing.isDirectory() || existing.isSymbolicLink())
@@ -396,16 +397,16 @@ export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
 
 /**
  * Recognizes only the exact empty local-owner genesis emitted by
- * initializeUnteamedProjectIndexNativeStoreV2. This is a narrow recovery probe
- * for a legacy Project whose bootstrap was published before the cutover guard
- * ran; it is not a general current-Project reset or epoch-rollover authority.
+ * initializeUnteamedProjectIndexNativeStore. This is a narrow recovery probe for
+ * a Project whose bootstrap was published before the resolver guard ran; it is
+ * not a general current-Project reset or epoch-rollover authority.
  */
-export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
+export async function verifyPristineUnteamedProjectIndexNativeStore(input: {
   readonly collaborationDirectory: string
   readonly localActorId: ActorId
   readonly materializer: NodeReplicaHeadMaterializerV2
-  readonly manifest: ProjectNativeStoreManifestV2
-  readonly verifier: ProjectIndexGenesisCheckpointVerifierV2
+  readonly manifest: ProjectNativeStoreManifest
+  readonly verifier: ProjectIndexGenesisCheckpointVerifier
 }): Promise<void> {
   if (
     !path.isAbsolute(input.collaborationDirectory) ||
@@ -413,8 +414,8 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   ) {
     throw new TypeError("Collaboration directory must be canonical and absolute")
   }
-  const manifest = parseProjectNativeStoreManifestV2(input.manifest)
-  await requireExactManifest(input.collaborationDirectory, encodeProjectNativeStoreManifestV2(manifest))
+  const manifest = parseProjectNativeStoreManifest(input.manifest)
+  await requireExactManifest(input.collaborationDirectory, encodeProjectNativeStoreManifest(manifest))
   const store = await NodeCollaborationPersistenceV2.openReadOnly({
     collaborationDirectory: input.collaborationDirectory,
     localActorId: input.localActorId,
@@ -447,7 +448,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
         `${checkpointKey}.bin`,
       ),
     )
-    const verified = await verifyEmptyProjectIndexGenesisV2({
+    const verified = await verifyEmptyProjectIndexGenesis({
       scope: manifest.projectIndexScope,
       document,
       checkpointExactBytes,
@@ -455,7 +456,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
       verifier: input.verifier,
     })
     if (
-      !sameBytes(encodeProjectNativeStoreManifestV2(verified.manifest), encodeProjectNativeStoreManifestV2(manifest))
+      !sameBytes(encodeProjectNativeStoreManifest(verified.manifest), encodeProjectNativeStoreManifest(manifest))
     ) {
       throw new TypeError("Installed ProjectIndex bootstrap differs from its empty genesis manifest")
     }
@@ -465,24 +466,24 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   await requirePristineBootstrapInventory(input.collaborationDirectory, manifest)
 }
 
-export async function resolveCurrentProjectIndexScopeV2(
+export async function resolveCurrentProjectIndexScope(
   collaborationDirectory: string,
-  authority: ProjectNativeStoreAuthorityV2,
-): Promise<ProjectIndexDocumentScopeV2> {
-  const manifest = await readProjectNativeStoreManifestV2(collaborationDirectory, authority)
+  authority: ProjectNativeStoreAuthority,
+): Promise<ProjectIndexDocumentScope> {
+  const manifest = await readProjectNativeStoreManifest(collaborationDirectory, authority)
   return manifest.projectIndexScope
 }
 
-export async function readProjectNativeStoreManifestV2(
+export async function readProjectNativeStoreManifest(
   collaborationDirectory: string,
-  authority: ProjectNativeStoreAuthorityV2,
-): Promise<ProjectNativeStoreManifestV2> {
+  authority: ProjectNativeStoreAuthority,
+): Promise<ProjectNativeStoreManifest> {
   if (!path.isAbsolute(collaborationDirectory) || path.resolve(collaborationDirectory) !== collaborationDirectory) {
     throw new TypeError("Collaboration directory must be canonical and absolute")
   }
   await requirePlainDirectory(collaborationDirectory, "Collaboration store")
   const bytes = await readPlainBoundedFile(path.join(collaborationDirectory, "manifest-v2.bin"))
-  const manifest = decodeProjectNativeStoreManifestV2(bytes)
+  const manifest = decodeProjectNativeStoreManifest(bytes)
   if (
     manifest.protocolDigest !== parseDigest(authority.protocolDigest) ||
     manifest.schemaDigest !== parseDigest(authority.schemaDigest) ||
@@ -493,7 +494,7 @@ export async function readProjectNativeStoreManifestV2(
   return manifest
 }
 
-export async function describeProjectIndexInstalledBaseV2(input: {
+export async function describeProjectIndexInstalledBase(input: {
   readonly persistence: Pick<NodeCollaborationPersistenceV2, "loadInstalledBase">
   readonly scope: DocumentScope
 }): Promise<NodeAcceptedReplicaHeadV2> {
@@ -503,7 +504,7 @@ export async function describeProjectIndexInstalledBaseV2(input: {
   return installed
 }
 
-function parseProjectNativeStoreManifestV2(value: unknown): ProjectNativeStoreManifestV2 {
+function parseProjectNativeStoreManifest(value: unknown): ProjectNativeStoreManifest {
   const keys = [
     "format",
     "storeIdentity",
@@ -545,12 +546,12 @@ function parseProjectNativeStoreManifestV2(value: unknown): ProjectNativeStoreMa
   })
 }
 
-function requireProjectIndexScope(value: unknown): ProjectIndexDocumentScopeV2 {
+function requireProjectIndexScope(value: unknown): ProjectIndexDocumentScope {
   const scope = parseDocumentScope(value)
   if (scope.docKind !== "project-index" || scope.docId !== "project-index") {
     throw new TypeError("ProjectIndex scope is invalid")
   }
-  return scope as ProjectIndexDocumentScopeV2
+  return scope as ProjectIndexDocumentScope
 }
 
 function decodeExactCheckpoint(exactBytes: Readonly<Uint8Array>): ReplicaCheckpoint {
@@ -564,7 +565,7 @@ function decodeExactCheckpoint(exactBytes: Readonly<Uint8Array>): ReplicaCheckpo
 
 async function initializeOrVerifyStagedStore(
   staging: string,
-  input: Parameters<typeof initializeUnteamedProjectIndexNativeStoreV2>[0],
+  input: Parameters<typeof initializeUnteamedProjectIndexNativeStore>[0],
 ): Promise<NodeAcceptedReplicaHeadV2> {
   const store = await NodeCollaborationPersistenceV2.open({
     collaborationDirectory: staging,
@@ -594,7 +595,7 @@ async function initializeOrVerifyStagedStore(
 async function verifyCompleteStore(
   directory: string,
   expectedManifestBytes: Uint8Array,
-  input: Parameters<typeof initializeUnteamedProjectIndexNativeStoreV2>[0],
+  input: Parameters<typeof initializeUnteamedProjectIndexNativeStore>[0],
 ): Promise<NodeAcceptedReplicaHeadV2> {
   await requireExactManifest(directory, expectedManifestBytes)
   const store = await NodeCollaborationPersistenceV2.open({
@@ -613,7 +614,7 @@ async function verifyCompleteStore(
 
 async function requirePristineBootstrapInventory(
   collaborationDirectory: string,
-  manifest: ProjectNativeStoreManifestV2,
+  manifest: ProjectNativeStoreManifest,
 ): Promise<void> {
   const scope = manifest.projectIndexScope
   const documentKey = deriveDocumentNativeKeyV2(scope)
@@ -696,7 +697,7 @@ async function requirePristineBootstrapInventory(
 
 async function requireMatchingLocalResetPublication(
   collaborationDirectory: string,
-  manifest: ProjectNativeStoreManifestV2,
+  manifest: ProjectNativeStoreManifest,
 ): Promise<void> {
   const records = await readProjectResetRecordsV2(collaborationDirectory)
   const reset = records.manifest
@@ -728,7 +729,7 @@ function escapeRegExp(value: string): string {
 
 function assertInstalledMatchesGenesis(
   installed: NodeAcceptedReplicaHeadV2,
-  genesis: VerifiedEmptyProjectIndexGenesisV2,
+  genesis: VerifiedEmptyProjectIndexGenesis,
 ): void {
   const expected = genesis.acceptedBase
   if (
@@ -744,7 +745,7 @@ function assertInstalledMatchesGenesis(
 
 async function requireExactManifest(directory: string, expected: Uint8Array): Promise<void> {
   const actual = await readPlainBoundedFile(path.join(directory, "manifest-v2.bin"))
-  decodeProjectNativeStoreManifestV2(actual)
+  decodeProjectNativeStoreManifest(actual)
   if (!sameBytes(actual, expected)) throw new TypeError("Project native manifest initialization equivocation")
 }
 

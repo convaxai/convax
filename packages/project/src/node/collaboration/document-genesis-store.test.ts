@@ -10,8 +10,8 @@ import {
   type StateVector,
 } from "@convax/collaboration"
 import {
-  stageDurableProjectDocumentGenesisV2,
-  type ProjectDocumentGenesisStorePortV2,
+  stageDurableProjectDocumentGenesis,
+  type ProjectDocumentGenesisStorePort,
 } from "./document-genesis-store"
 
 const projectId = parseProjectId(`project_${"a".repeat(64)}`)
@@ -36,12 +36,12 @@ describe("Project durable document genesis barrier", () => {
     const candidate = createCandidate()
     const prepare = mock(async () => ({ status: "verified" as const, candidate }))
     const initialize = mock(async (input: Parameters<
-      ProjectDocumentGenesisStorePortV2["initializeShardWithGenesisProof"]
+      ProjectDocumentGenesisStorePort["initializeShardWithGenesisProof"]
     >[0]) => Object.freeze({
       ...input.acceptedBase,
       headDigest: digest("head"),
     }))
-    const result = await stageDurableProjectDocumentGenesisV2({
+    const result = await stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(),
       verifier: { prepare },
@@ -65,7 +65,7 @@ describe("Project durable document genesis barrier", () => {
 
   test("keeps pending authoring fail-closed without touching persistence", async () => {
     const initialize = mock(async () => { throw new Error("must not write") })
-    await expect(stageDurableProjectDocumentGenesisV2({
+    await expect(stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(),
       verifier: { async prepare() { return { status: "pending" } } },
@@ -77,7 +77,7 @@ describe("Project durable document genesis barrier", () => {
   test("rejects a cross-Project predecessor before invoking the owner verifier", async () => {
     const prepare = mock(async () => ({ status: "verified" as const, candidate: createCandidate() }))
     const crossedScope = { ...projectIndexScope, projectId: parseProjectId(`project_${"c".repeat(64)}`) }
-    await expect(stageDurableProjectDocumentGenesisV2({
+    await expect(stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(crossedScope),
       verifier: { prepare },

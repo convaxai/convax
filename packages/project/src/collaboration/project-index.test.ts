@@ -58,7 +58,7 @@ const facts = Object.freeze({
   verifyResetAuthorization: () => true,
 })
 
-describe("ProjectIndex R5 owner schema", () => {
+describe("ProjectIndex owner schema", () => {
   test("constructs the closed stage, activation, rename and tombstone route intents from the exact base", () => {
     const document = genesis()
     const stageContext = draftContext(actor(2), id128(41), "2")

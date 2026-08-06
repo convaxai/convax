@@ -17,7 +17,7 @@ const scope = {
   shardEpoch: id(2),
 } as DocumentScope
 
-describe("R5 native collaboration keys", () => {
+describe("Native collaboration keys", () => {
   test("derives stable opaque document and kind-separated object keys", () => {
     const documentKey = deriveDocumentNativeKeyV2(scope)
     expect(documentKey).toMatch(/^[0-9a-f]{64}$/)

@@ -115,7 +115,7 @@ export function parsePeerChannelV2(value: unknown): PeerChannelV2 {
 function protocolDigest(value: unknown): Digest {
   const digest = parseDigest(value)
   if (digest !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) {
-    invalid("Peer session protocol digest is not the selected R5 digest")
+    invalid("Peer session protocol digest is not the current protocol digest")
   }
   return digest
 }

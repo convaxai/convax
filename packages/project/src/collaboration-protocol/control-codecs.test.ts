@@ -143,7 +143,7 @@ const directoryEntry: ActivePeerDirectoryEntryV2 = {
   leaseId: id(8),
 }
 
-describe("R5 control artifact codecs", () => {
+describe("Control artifact codecs", () => {
   test("closes challenge, credential, directory, and ticket core digests", () => {
     expect(parseSessionChallengeV2(challenge())).toEqual(challenge())
     expect(parseSessionCredentialV2(credential())).toEqual(credential())

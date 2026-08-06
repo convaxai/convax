@@ -423,7 +423,7 @@ interface LoadedPendingFrameV2 {
 const rootWriterLeases = new Set<string>()
 
 /**
- * R5 native object/outbox/journal/head adapter. One instance is the sole Main
+ * Native object/outbox/journal/head adapter. One instance is the sole Main
  * writer for one already-bound Project collaboration directory; it serves the
  * ProjectIndex shard and every per-Canvas shard through opaque document keys.
  */

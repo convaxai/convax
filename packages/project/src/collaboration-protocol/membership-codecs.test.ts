@@ -25,8 +25,8 @@ const digest = (digit: string) => parseDigest(digit.repeat(64))
 const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
 const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
 
-describe("R5 membership codecs", () => {
-  test("closes reservation and member-add proof over exact R5 fields", () => {
+describe("Membership codecs", () => {
+  test("closes reservation and member-add proof over exact current fields", () => {
     const reservationCore = {
       format: "convax.replica-id-reservation-request-core/2" as const,
       allocationRequestId: id(1),

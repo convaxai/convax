@@ -25,9 +25,9 @@ import {
 } from "@convax/collaboration"
 import {
   NodeCollaborationPersistenceV2,
-  stageDurableProjectDocumentGenesisV2,
-  type ProjectDocumentGenesisStorePortV2,
-  type ProjectDocumentGenesisVerifierPortV2,
+  stageDurableProjectDocumentGenesis,
+  type ProjectDocumentGenesisStorePort,
+  type ProjectDocumentGenesisVerifierPort,
 } from "@convax/project/node"
 
 import { createCanvasDocumentGenesisVerifierPortV2 } from "./canvas-document-genesis"
@@ -99,7 +99,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
       },
     })
     try {
-      const result = await stageDurableProjectDocumentGenesisV2({
+      const result = await stageDurableProjectDocumentGenesis({
         scope: canvasScope,
         predecessor,
         verifier: adapter,
@@ -123,14 +123,14 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
     const acceptedBase = base(canvasScope)
     let installedCheckpoint: Uint8Array | undefined
     let installedCarrier: Uint8Array | undefined
-    const store: ProjectDocumentGenesisStorePortV2 = {
+    const store: ProjectDocumentGenesisStorePort = {
       async initializeShardWithGenesisProof(input) {
         installedCheckpoint = input.checkpointExactBytes as Uint8Array
         installedCarrier = input.proofCarrierExactBytes as Uint8Array
         return { ...input.acceptedBase, headDigest: digest("durable-head") }
       },
     }
-    const verifier: ProjectDocumentGenesisVerifierPortV2<"canvas"> = {
+    const verifier: ProjectDocumentGenesisVerifierPort<"canvas"> = {
       async prepare() {
         return {
           status: "verified",
@@ -144,7 +144,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
         }
       },
     }
-    const result = await stageDurableProjectDocumentGenesisV2({ scope: canvasScope, predecessor, verifier, store })
+    const result = await stageDurableProjectDocumentGenesis({ scope: canvasScope, predecessor, verifier, store })
     expect(result).not.toBe("pending")
     expect(result).not.toBe("rejected")
     if (typeof result === "string") throw new Error("unexpected result")
@@ -162,7 +162,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
 
   test("propagates owner pending without touching durability", async () => {
     const initializeShardWithGenesisProof = mock(async () => { throw new Error("must not run") })
-    const result = await stageDurableProjectDocumentGenesisV2({
+    const result = await stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor,
       verifier: { prepare: async () => ({ status: "pending" }) },
@@ -181,7 +181,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
         header: { core: { scope: { ...projectIndexScope, projectId: parseProjectId("other") } } },
       } as unknown as DecodedCausalEditFrame,
     }
-    await expect(stageDurableProjectDocumentGenesisV2({
+    await expect(stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: wrong,
       verifier: { prepare },

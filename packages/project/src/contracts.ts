@@ -22,7 +22,7 @@ export interface ProjectRecord {
   name: string
   rootPath: string
   /** Derived openability only; never persisted as a second Project authority. */
-  recovery?: ProjectRecoveryStatusV1
+  recovery?: ProjectRecoveryStatus
 }
 
 export interface ProjectSelectionResult {
@@ -31,29 +31,30 @@ export interface ProjectSelectionResult {
   projects: ProjectRecord[]
 }
 
-export type ProjectResetConfirmationTokenV1 = `reset-host-${string}`
+export type ProjectResetConfirmationToken = `reset-host-${string}`
 
-export interface ProjectResetDeletePreviewEntryV1 {
+export interface ProjectResetDeletePreviewEntry {
   kind: "directory" | "file"
   path: string
 }
 
-export interface ProjectResetPreviewV1 {
+export interface ProjectResetPreview {
   format: "convax.project-reset-preview/1"
   ordinaryProjectFilesPreserved: true
   privateDeletionSetDigest: string
-  preview: readonly ProjectResetDeletePreviewEntryV1[]
+  preview: readonly ProjectResetDeletePreviewEntry[]
   projectId: string
-  token: ProjectResetConfirmationTokenV1
+  token: ProjectResetConfirmationToken
   unsupportedInventoryDigest: string
 }
 
-export type ProjectRecoveryStatusV1 =
+/** The resolver has exactly these outcomes; there is no legacy, successor, or promoted state. */
+export type ProjectRecoveryStatus =
   | { status: "current" }
-  | { legacyPaths: readonly string[]; status: "unsupported-portable-project-version" }
+  | { unsupportedPaths: readonly string[]; status: "unsupported-project-data" }
   | { status: "recovery-required" }
 
-export type ProjectResetOutcomeV1 =
+export type ProjectResetOutcome =
   | { projectId: string; status: "published" }
   | { reason: "team-service-unavailable" | "cancelled"; status: "staged" }
 
@@ -61,10 +62,10 @@ export interface ProjectCollaborationRecoveryClient {
   confirmReset(input: {
     projectId: string
     signal?: AbortSignal
-    token: ProjectResetConfirmationTokenV1
-  }): Promise<ProjectResetOutcomeV1>
-  inspectProject(projectId: string): Promise<ProjectRecoveryStatusV1>
-  previewReset(projectId: string): Promise<ProjectResetPreviewV1>
+    token: ProjectResetConfirmationToken
+  }): Promise<ProjectResetOutcome>
+  inspectProject(projectId: string): Promise<ProjectRecoveryStatus>
+  previewReset(projectId: string): Promise<ProjectResetPreview>
 }
 
 export interface ProjectLifecycleClient {

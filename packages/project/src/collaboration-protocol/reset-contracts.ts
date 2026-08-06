@@ -20,7 +20,7 @@ export type CanvasDocumentScopeV2 = DocumentScope & {
   readonly docId: CanvasId
 }
 
-export type ProjectIndexDocumentScopeV2 = DocumentScope & {
+export type ProjectIndexDocumentScope = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
 }
@@ -39,7 +39,7 @@ export interface DocumentShardResetRouteCasCoreV2 {
 
 export interface DocumentShardResetClaimCoreV2 {
   readonly format: "convax.document-shard-reset-claim-core/2"
-  readonly projectIndexScope: ProjectIndexDocumentScopeV2
+  readonly projectIndexScope: ProjectIndexDocumentScope
   readonly oldScope: CanvasDocumentScopeV2
   readonly newScope: CanvasDocumentScopeV2
   readonly reason: DocumentShardResetReasonV2

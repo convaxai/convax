@@ -6,12 +6,12 @@ import {
   allocateLocalProjectEpoch,
   derivePortableProjectResetExecutionFingerprint,
   executePortableProjectReset,
-  inspectPortableProjectCutover,
+  resolvePortableProjectData,
   planPortableProjectReset,
   PortableProjectResetError,
   runWithProjectClosedExclusiveMutationLease,
-  UnsupportedPortableProjectVersion,
-  type PortableProjectResetVerifierV1,
+  UnsupportedProjectDataError,
+  type PortableProjectResetVerifier,
 } from "./portable-cutover"
 
 const roots: string[] = []
@@ -26,11 +26,11 @@ describe("portable collaboration cutover", () => {
   test("detects legacy JSON without hydrating, changing or deleting it", async () => {
     const projectRoot = await createLegacyProject()
     const before = await fs.readFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"))
-    const inspection = await inspectPortableProjectCutover(projectRoot)
-    expect(inspection.status).toBe("unsupported-portable-project-version")
-    if (inspection.status !== "unsupported-portable-project-version") throw new Error("expected unsupported")
-    expect(inspection.error).toBeInstanceOf(UnsupportedPortableProjectVersion)
-    expect(inspection.error.legacyPaths).toEqual([
+    const inspection = await resolvePortableProjectData(projectRoot)
+    expect(inspection.status).toBe("unsupported-project-data")
+    if (inspection.status !== "unsupported-project-data") throw new Error("expected unsupported")
+    expect(inspection.error).toBeInstanceOf(UnsupportedProjectDataError)
+    expect(inspection.error.unsupportedPaths).toEqual([
       ".convax/canvases/canvas-main/document.json",
       ".convax/canvases/catalog.json",
     ])
@@ -43,10 +43,10 @@ describe("portable collaboration cutover", () => {
     await fs.mkdir(path.join(projectRoot, ".convax", "collaboration"))
     await fs.writeFile(path.join(projectRoot, ".convax", "collaboration", "legacy-journal.bin"), "legacy")
 
-    const inspection = await inspectPortableProjectCutover(projectRoot)
-    expect(inspection.status).toBe("unsupported-portable-project-version")
-    if (inspection.status !== "unsupported-portable-project-version") throw new Error("expected unsupported")
-    expect(inspection.error.legacyPaths).toEqual([".convax/collaboration"])
+    const inspection = await resolvePortableProjectData(projectRoot)
+    expect(inspection.status).toBe("unsupported-project-data")
+    if (inspection.status !== "unsupported-project-data") throw new Error("expected unsupported")
+    expect(inspection.error.unsupportedPaths).toEqual([".convax/collaboration"])
     expect(await fs.readFile(path.join(projectRoot, ".convax", "collaboration", "legacy-journal.bin"), "utf8")).toBe(
       "legacy",
     )
@@ -223,7 +223,7 @@ describe("portable collaboration cutover", () => {
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
     expect(await fs.readFile(path.join(projectRoot, "Generated", "keep.mp4"), "utf8")).toBe("generated")
     expect(await fs.readFile(path.join(projectRoot, ".convax-conflicts", "keep.md"), "utf8")).toBe("conflict")
-    expect((await inspectPortableProjectCutover(projectRoot)).status).toBe("current")
+    expect((await resolvePortableProjectData(projectRoot)).status).toBe("current")
   })
 
   durabilityTest("binds receipt verification to the exact reset intent and rejects a staging symlink", async () => {
@@ -349,7 +349,7 @@ describe("portable collaboration cutover", () => {
     await expect(
       executeWithLease(plan, resetInput({ confirmationToken: plan.token, verifier: rejectedReopen })),
     ).rejects.toMatchObject({ code: "RECOVERY_REQUIRED" })
-    expect((await inspectPortableProjectCutover(projectRoot)).status).toBe("recovery-required")
+    expect((await resolvePortableProjectData(projectRoot)).status).toBe("recovery-required")
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
@@ -373,7 +373,7 @@ describe("portable collaboration cutover", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "RECOVERY_REQUIRED" })
-    expect((await inspectPortableProjectCutover(projectRoot)).status).toBe("recovery-required")
+    expect((await resolvePortableProjectData(projectRoot)).status).toBe("recovery-required")
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 
@@ -393,7 +393,7 @@ describe("portable collaboration cutover", () => {
         }),
       ),
     ).rejects.toBeInstanceOf(PortableProjectResetError)
-    expect((await inspectPortableProjectCutover(projectRoot)).status).toBe("recovery-required")
+    expect((await resolvePortableProjectData(projectRoot)).status).toBe("recovery-required")
     expect(await fs.readFile(path.join(projectRoot, "Notes", "keep.md"), "utf8")).toBe("keep")
   })
 })
@@ -452,8 +452,8 @@ function executeWithLease(plan: Parameters<typeof executePortableProjectReset>[0
 }
 
 function verifier(
-  authority: Awaited<ReturnType<PortableProjectResetVerifierV1["authorizeStagedReset"]>>,
-): PortableProjectResetVerifierV1 {
+  authority: Awaited<ReturnType<PortableProjectResetVerifier["authorizeStagedReset"]>>,
+): PortableProjectResetVerifier {
   return {
     authorizeStagedReset: async (input) => {
       if (authority !== "verified") return authority

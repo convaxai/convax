@@ -2844,7 +2844,7 @@ function parseIdentity(value: unknown): ProjectIndexIdentityRecordV2 {
   if (value.format !== "convax.project-index-identity/2" || value.schema !== "convax.project-index.v2") fail("invalid-identity", "ProjectIndex identity is not v2")
   const identity = value as unknown as ProjectIndexIdentityRecordV2
   parseProjectId(identity.projectId); parseId128(identity.projectEpoch); parseId128(identity.shardEpoch); parseProjectDirectoryId(identity.rootDirectoryId); parseDigest(identity.protocolDigest); parseDigest(identity.schemaDigest); parseDigest(identity.uriProtocolDigest)
-  if (identity.schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2) fail("schema-mismatch", "ProjectIndex identity does not bind the selected R5 artifact")
+  if (identity.schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2) fail("schema-mismatch", "ProjectIndex identity does not bind the current protocol artifact")
   return freezeJcs(identity)
 }
 

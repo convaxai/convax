@@ -324,7 +324,7 @@ function digestList(value: unknown, minimum: number, maximum: number, label: str
 
 function protocolDigest(value: unknown): Digest {
   const parsed = parseDigest(value)
-  if (parsed !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) invalid("Protocol digest is not the selected R5 digest")
+  if (parsed !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) invalid("Protocol digest is not the current protocol digest")
   return parsed
 }
 

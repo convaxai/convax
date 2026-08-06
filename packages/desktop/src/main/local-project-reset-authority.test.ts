@@ -5,9 +5,9 @@ import path from "node:path"
 import { createWebCryptoEd25519Verifier, parseProjectId } from "@convax/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import {
-  NodeProjectCollaborationRecoveryServiceV1,
+  NodeProjectCollaborationRecoveryService,
   ProjectBlobReplicationStoreV2,
-  readProjectNativeStoreManifestV2,
+  readProjectNativeStoreManifest,
   readProjectResetRecordsV2,
 } from "@convax/project/node"
 
@@ -29,7 +29,7 @@ afterEach(async () => {
 describe("local Project reset authority", () => {
   test("publishes an exact signed unteamed reset and preserves ordinary Project files", async () => {
     const fixture = await createFixture()
-    const service = new NodeProjectCollaborationRecoveryServiceV1({
+    const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
       gate: {
         async runClosed({ operation }) {
@@ -46,7 +46,7 @@ describe("local Project reset authority", () => {
     const legacyCatalog = path.join(fixture.projectRoot, ".convax", "canvases", "catalog.json")
     const catalogBefore = await fs.readFile(legacyCatalog)
     expect(await service.inspectProject("project_test")).toMatchObject({
-      status: "unsupported-portable-project-version",
+      status: "unsupported-project-data",
     })
     expect(await fs.readFile(legacyCatalog)).toEqual(catalogBefore)
     const preview = await service.previewReset("project_test")
@@ -59,7 +59,7 @@ describe("local Project reset authority", () => {
     await expect(fs.access(path.join(fixture.projectRoot, ".convax", "canvases"))).rejects.toThrow()
 
     const collaboration = path.join(fixture.projectRoot, ".convax", "collaboration")
-    const native = await readProjectNativeStoreManifestV2(collaboration, {
+    const native = await readProjectNativeStoreManifest(collaboration, {
       protocolDigest: fixture.authority.protocolDigest,
       schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
       uriProtocolDigest: fixture.authority.protocolSchemaBundle.core.uriProtocolDigest,
@@ -102,7 +102,7 @@ describe("local Project reset authority", () => {
       verifyCheckpointSignature: (binding, coreDigest, signature) =>
         fixture.owners.verifyCheckpointSignature(binding, coreDigest, signature),
     })
-    const service = new NodeProjectCollaborationRecoveryServiceV1({
+    const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
       gate: {
         async runClosed({ operation }) {
@@ -130,7 +130,7 @@ describe("local Project reset authority", () => {
     const collaboration = path.join(fixture.projectRoot, ".convax", "collaboration")
     await fs.mkdir(collaboration)
     await fs.writeFile(path.join(collaboration, "legacy-membership.bin"), "team-evidence")
-    const service = new NodeProjectCollaborationRecoveryServiceV1({
+    const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
       gate: {
         async runClosed({ operation }) {
@@ -171,7 +171,7 @@ describe("local Project reset authority", () => {
     )
     await fs.writeFile(path.join(frames, `${"a".repeat(64)}.bin`), "accepted-state")
     const before = await fs.readFile(path.join(frames, `${"a".repeat(64)}.bin`))
-    const service = new NodeProjectCollaborationRecoveryServiceV1({
+    const service = new NodeProjectCollaborationRecoveryService({
       authority: fixture.resets,
       gate: {
         async runClosed({ operation }) {

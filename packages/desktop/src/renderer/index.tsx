@@ -388,7 +388,7 @@ function App() {
     ? projectSnapshot.projects.find(
         (project) =>
           project.id === projectSnapshot.pendingRecoveryProjectId &&
-          project.recovery?.status === "unsupported-portable-project-version",
+          project.recovery?.status === "unsupported-project-data",
       )
     : undefined
   const projectCanvasSnapshot = useSyncExternalStore(

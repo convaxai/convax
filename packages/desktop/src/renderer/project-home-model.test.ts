@@ -85,8 +85,8 @@ describe("Project startup routing", () => {
   test("keeps an explicit reset candidate out of automatic workspace restore", () => {
     const legacy = project("legacy", {
       recovery: {
-        legacyPaths: [".convax/canvases/catalog.json"],
-        status: "unsupported-portable-project-version",
+        unsupportedPaths: [".convax/canvases/catalog.json"],
+        status: "unsupported-project-data",
       },
     })
     expect(

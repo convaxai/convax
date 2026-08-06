@@ -12,12 +12,12 @@ import type {
   NodeAcceptedReplicaHeadV2,
 } from "./persistence-store"
 
-export interface ProjectDocumentGenesisPredecessorV2 {
+export interface ProjectDocumentGenesisPredecessor {
   readonly frame: DecodedCausalEditFrame
   readonly acceptedFrontierDigest: Digest
 }
 
-export interface VerifiedProjectDocumentGenesisCandidateV2<K extends DocumentOwnerKind> {
+export interface VerifiedProjectDocumentGenesisCandidate<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly checkpointObjectDigest: Digest
   readonly checkpointExactBytes: Readonly<Uint8Array>
@@ -25,30 +25,30 @@ export interface VerifiedProjectDocumentGenesisCandidateV2<K extends DocumentOwn
   readonly acceptedBase: InitializeNativeCollaborationShardWithGenesisProofV2["acceptedBase"]
 }
 
-export type PrepareProjectDocumentGenesisResultV2<K extends DocumentOwnerKind> =
-  | Readonly<{ status: "verified"; candidate: VerifiedProjectDocumentGenesisCandidateV2<K> }>
+export type PrepareProjectDocumentGenesisResult<K extends DocumentOwnerKind> =
+  | Readonly<{ status: "verified"; candidate: VerifiedProjectDocumentGenesisCandidate<K> }>
   | Readonly<{ status: "pending" | "rejected" }>
 
 /**
- * Owner-specific authoring remains outside Project. A future successor can supply
- * another implementation only after its authority is selected; this port does
- * not infer signer kind, membership, or sharing state.
+ * Owner-specific authoring remains outside Project. There is exactly one current
+ * protocol behind this port; it does not infer signer kind, membership, or
+ * sharing state, and it never selects between protocol implementations.
  */
-export interface ProjectDocumentGenesisVerifierPortV2<K extends DocumentOwnerKind> {
+export interface ProjectDocumentGenesisVerifierPort<K extends DocumentOwnerKind> {
   prepare(input: {
     readonly scope: DocumentScope & { readonly docKind: K }
-    readonly predecessor: ProjectDocumentGenesisPredecessorV2
+    readonly predecessor: ProjectDocumentGenesisPredecessor
     readonly signal?: AbortSignal
-  }): Promise<PrepareProjectDocumentGenesisResultV2<K>>
+  }): Promise<PrepareProjectDocumentGenesisResult<K>>
 }
 
-export interface ProjectDocumentGenesisStorePortV2 {
+export interface ProjectDocumentGenesisStorePort {
   initializeShardWithGenesisProof(
     input: InitializeNativeCollaborationShardWithGenesisProofV2,
   ): Promise<NodeAcceptedReplicaHeadV2>
 }
 
-export interface DurableProjectDocumentGenesisIdentityV2<K extends DocumentOwnerKind> {
+export interface DurableProjectDocumentGenesisIdentity<K extends DocumentOwnerKind> {
   readonly scope: DocumentScope & { readonly docKind: K }
   readonly predecessorFrameDigest: Digest
   readonly stagedProjectIndexFrontierDigest: Digest
@@ -66,13 +66,13 @@ export interface DurableProjectDocumentGenesisIdentityV2<K extends DocumentOwner
  * It never constructs a Canvas, chooses an author, or treats a pending author as
  * permission. The exact accepted base must survive the native store round trip.
  */
-export async function stageDurableProjectDocumentGenesisV2<K extends DocumentOwnerKind>(input: {
+export async function stageDurableProjectDocumentGenesis<K extends DocumentOwnerKind>(input: {
   readonly scope: DocumentScope & { readonly docKind: K }
-  readonly predecessor: ProjectDocumentGenesisPredecessorV2
-  readonly verifier: ProjectDocumentGenesisVerifierPortV2<K>
-  readonly store: ProjectDocumentGenesisStorePortV2
+  readonly predecessor: ProjectDocumentGenesisPredecessor
+  readonly verifier: ProjectDocumentGenesisVerifierPort<K>
+  readonly store: ProjectDocumentGenesisStorePort
   readonly signal?: AbortSignal
-}): Promise<DurableProjectDocumentGenesisIdentityV2<K> | "pending" | "rejected"> {
+}): Promise<DurableProjectDocumentGenesisIdentity<K> | "pending" | "rejected"> {
   assertNotAborted(input.signal)
   const scope = parseDocumentScope(input.scope) as DocumentScope & { readonly docKind: K }
   const predecessorScope = input.predecessor.frame.header.core.scope
@@ -112,7 +112,7 @@ export async function stageDurableProjectDocumentGenesisV2<K extends DocumentOwn
 }
 
 function cloneCandidate<K extends DocumentOwnerKind>(
-  value: VerifiedProjectDocumentGenesisCandidateV2<K>,
+  value: VerifiedProjectDocumentGenesisCandidate<K>,
   expectedScope: DocumentScope & { readonly docKind: K },
 ): InitializeNativeCollaborationShardWithGenesisProofV2 {
   const scope = parseDocumentScope(value.scope)

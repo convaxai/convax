@@ -1,6 +1,6 @@
 import type {
   ProjectCollaborationRecoveryClient,
-  ProjectResetPreviewV1,
+  ProjectResetPreview,
 } from "@convax/project"
 import { Button, LoadingSpinner } from "@convax/ui"
 import { ShieldCheck, Trash2, TriangleAlert } from "lucide-react"
@@ -31,7 +31,7 @@ function isDigest(value: string) {
   return /^[0-9a-f]{64}$/u.test(value)
 }
 
-function requireEligiblePreview(projectId: string, preview: ProjectResetPreviewV1) {
+function requireEligiblePreview(projectId: string, preview: ProjectResetPreview) {
   if (
     preview.projectId !== projectId ||
     preview.ordinaryProjectFilesPreserved !== true ||
@@ -53,7 +53,7 @@ export function ProjectResetRecoveryState({
   project,
   reducedMotion,
 }: ProjectResetRecoveryStateProps) {
-  const [preview, setPreview] = useState<ProjectResetPreviewV1 | null>(null)
+  const [preview, setPreview] = useState<ProjectResetPreview | null>(null)
   const [step, setStep] = useState<ResetStep>("preview")
   const [terminalError, setTerminalError] = useState<string | null>(null)
 
@@ -63,8 +63,8 @@ export function ProjectResetRecoveryState({
     setStep("preview")
     setTerminalError(null)
     void client.inspectProject(project.id)
-      .then(async (inspection) => {
-        if (inspection.status !== "unsupported-portable-project-version") {
+      .then(async (resolution) => {
+        if (resolution.status !== "unsupported-project-data") {
           if (current) onUnavailable()
           return null
         }

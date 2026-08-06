@@ -14,8 +14,8 @@ import {
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import type {
-  ProjectDocumentGenesisVerifierPortV2 as DocumentGenesisVerifierPortV2,
-  PrepareProjectDocumentGenesisResultV2 as PrepareDocumentGenesisResultV2,
+  ProjectDocumentGenesisVerifierPort,
+  PrepareProjectDocumentGenesisResult,
 } from "@convax/project/node"
 
 export type PrepareCanvasGenesisAuthorResultV2 =
@@ -38,7 +38,7 @@ export interface CanvasGenesisAuthorProviderPortV2 {
 
 export interface CanvasDocumentGenesisAuthorityV2 {
   readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
-  readonly genesisVerifier: DocumentGenesisVerifierPortV2<"canvas">
+  readonly genesisVerifier: ProjectDocumentGenesisVerifierPort<"canvas">
   readonly preflight: CanvasGenesisAuthorProviderPortV2["preflight"]
 }
 
@@ -82,15 +82,15 @@ export function createCanvasDocumentGenesisVerifierPortV2(input: {
   readonly runtime: DocumentOwnerRuntime<"canvas">
   readonly verifier: CanvasGenesisProofCarrierVerifierV2
   readonly authorProvider: CanvasGenesisAuthorProviderPortV2
-}): DocumentGenesisVerifierPortV2<"canvas"> {
+}): ProjectDocumentGenesisVerifierPort<"canvas"> {
   assertDocumentOwnerRuntime(input.runtime, input.authority)
   if (typeof input.verifier !== "function" || typeof input.authorProvider?.prepareAuthor !== "function") {
     throw new TypeError("Canvas document-genesis composition is invalid")
   }
   return Object.freeze({
     async prepare(
-      request: Parameters<DocumentGenesisVerifierPortV2<"canvas">["prepare"]>[0],
-    ): Promise<PrepareDocumentGenesisResultV2<"canvas">> {
+      request: Parameters<ProjectDocumentGenesisVerifierPort<"canvas">["prepare"]>[0],
+    ): Promise<PrepareProjectDocumentGenesisResult<"canvas">> {
       assertNotAborted(request.signal)
       const scope = parseDocumentScope(request.scope) as DocumentScope & { readonly docKind: "canvas" }
       if (scope.docKind !== "canvas") return Object.freeze({ status: "rejected" })

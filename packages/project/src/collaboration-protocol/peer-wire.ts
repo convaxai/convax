@@ -221,7 +221,7 @@ export interface CreatePeerMessageWireInputV2 {
 }
 
 /**
- * Exact browser-safe R5 codec surface consumed by Desktop. It deliberately omits
+ * Exact browser-safe codec surface consumed by Desktop. It deliberately omits
  * inventory DTOs until the complete root/page verifier exists.
  */
 export interface PeerControlCodecV2 {

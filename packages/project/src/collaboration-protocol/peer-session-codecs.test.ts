@@ -20,7 +20,7 @@ const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(
 const digest = (fill: string) => parseDigest(fill.repeat(64))
 const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
 
-describe("R5 peer session codecs", () => {
+describe("Peer session codecs", () => {
   const handshakeCore = {
     format: "convax.peer-handshake-core/2" as const,
     connectionId: id(1),
@@ -38,7 +38,7 @@ describe("R5 peer session codecs", () => {
     protocolDigest: parseDigest(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest),
   }
 
-  test("closes and digest-binds the exact R5 handshake", () => {
+  test("closes and digest-binds the exact current handshake", () => {
     const value = {
       format: "convax.peer-handshake/2" as const,
       core: handshakeCore,
@@ -75,6 +75,6 @@ describe("R5 peer session codecs", () => {
     }
     expect(parsePeerChannelOpenV2(value)).toEqual(value)
     expect(() => parsePeerChannelOpenV2({ ...value, core: { ...core, channel: "inventory" } })).toThrow("channel")
-    expect(() => parsePeerChannelOpenV2({ ...value, core: { ...core, protocolDigest: digest("f") } })).toThrow("selected R5")
+    expect(() => parsePeerChannelOpenV2({ ...value, core: { ...core, protocolDigest: digest("f") } })).toThrow("current protocol digest")
   })
 })

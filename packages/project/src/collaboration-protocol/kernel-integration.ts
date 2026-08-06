@@ -1,5 +1,5 @@
 /**
- * Exact Project-side expectation for the active R5 collaboration bundle. Runtime
+ * Exact Project-side expectation for the current collaboration protocol. Runtime
  * composition must still compare this tuple with the live module-private authority;
  * these constants never mint protocol authority or provide a fallback decoder.
  */

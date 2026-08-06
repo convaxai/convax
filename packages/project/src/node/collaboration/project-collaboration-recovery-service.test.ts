@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { NodeProjectCollaborationRecoveryServiceV1 } from "./project-collaboration-recovery-service"
+import { NodeProjectCollaborationRecoveryService } from "./project-collaboration-recovery-service"
 
 const roots: string[] = []
 const projectId = "project-recovery"
@@ -13,14 +13,14 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
-describe("NodeProjectCollaborationRecoveryServiceV1", () => {
+describe("NodeProjectCollaborationRecoveryService", () => {
   test("projects an unsupported inspection and a cloneable private-deletion preview", async () => {
     const root = await createLegacyProject()
     const service = createService(root)
 
     expect(await service.inspectProject(projectId)).toEqual({
-      legacyPaths: [".convax/canvases/catalog.json"],
-      status: "unsupported-portable-project-version",
+      unsupportedPaths: [".convax/canvases/catalog.json"],
+      status: "unsupported-project-data",
     })
     const preview = await service.previewReset(projectId)
     expect(preview.projectId).toBe(projectId)
@@ -89,12 +89,12 @@ describe("NodeProjectCollaborationRecoveryServiceV1", () => {
 function createService(
   root: string,
   overrides: {
-    gate?: ConstructorParameters<typeof NodeProjectCollaborationRecoveryServiceV1>[0]["gate"]
+    gate?: ConstructorParameters<typeof NodeProjectCollaborationRecoveryService>[0]["gate"]
     onPrepare?(): void
     resetUnavailable?: boolean
   } = {},
 ) {
-  return new NodeProjectCollaborationRecoveryServiceV1({
+  return new NodeProjectCollaborationRecoveryService({
     projects: {
       resolveProjectRoot: async (requested) => (requested === projectId ? root : Promise.reject(new Error("unknown"))),
     },
@@ -102,7 +102,7 @@ function createService(
       overrides.gate ??
       ({
         runClosed: async ({ operation }) => operation(),
-      } satisfies ConstructorParameters<typeof NodeProjectCollaborationRecoveryServiceV1>[0]["gate"]),
+      } satisfies ConstructorParameters<typeof NodeProjectCollaborationRecoveryService>[0]["gate"]),
     authority: {
       async inspectReset() {
         return overrides.resetUnavailable

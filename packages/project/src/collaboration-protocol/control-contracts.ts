@@ -12,7 +12,7 @@ import type {
   Uint64,
 } from "@convax/collaboration"
 
-/** Browser-safe R5 control-plane DTOs. These types carry metadata only. */
+/** Browser-safe control-plane DTOs. These types carry metadata only. */
 export type CollaborationRoleV2 = "viewer" | "editor"
 export type CollaborationEditStateV2 = "none" | "pending-editor" | "active-editor"
 export type CollaborationServiceKeyPurposeV2 = "membership" | "rendezvous"

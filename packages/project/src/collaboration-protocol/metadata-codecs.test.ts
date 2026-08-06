@@ -30,7 +30,7 @@ const projectEpoch = id(1)
 const scope = Object.freeze({ projectId, projectEpoch, docKind: "project-index" as const, docId: "project-index" as const, shardEpoch: id(2) })
 const protocolDigest = parseDigest(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest)
 
-describe("R5 metadata/reset public codecs", () => {
+describe("Project metadata/reset public codecs", () => {
   test("closes Project-floor and registration artifacts and rejects unknown fields", () => {
     const pageCore = Object.freeze({ format: "convax.replica-project-floor-page-core/2" as const, floorSetId: id(3), targetReplicaId: parseReplicaId("replica_00000001"), pageIndex: parseUint32("0"), firstScopeKey: encodeRestrictedJcsText(scope), lastScopeKey: encodeRestrictedJcsText(scope), entries: [Object.freeze({ scope, basis: "project-index" as const, prunableCheckpointSetCertificateDigest: digest("1"), replicaCausalFloorAckDigest: digest("2") })] })
     const page = Object.freeze({ format: "convax.replica-project-floor-page/2" as const, core: pageCore, coreDigest: replicaProjectFloorPageCoreDigestV2(pageCore) })

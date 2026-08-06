@@ -33,7 +33,7 @@ const uriProtocolDigest = digest("uri")
 const rootDirectoryId = `pd_${"a".repeat(64)}` as const
 
 describe("ProjectIndexFileApplicationV2", () => {
-  test("keeps blob fact request identity stable when successor framing uses a wire intent digest", () => {
+  test("keeps blob fact request identity stable when the frame carries a different wire intent digest", () => {
     const context = constructionContext(actor(1), id128(10), "1")
     const snapshot = validateProjectIndexYDocV2(genesis())
     const blob = {
@@ -56,7 +56,7 @@ describe("ProjectIndexFileApplicationV2", () => {
     if (constructed === "rejected") throw new Error("ProjectIndex file intent construction rejected")
 
     const dependencies = projectIndexIntentDependenciesV2(
-      { ...context, intentDigest: digest("successor-wire-intent") },
+      { ...context, intentDigest: digest("other-wire-intent") },
       constructed.intent,
     )
     const requirement = dependencies.externalFacts[0]
