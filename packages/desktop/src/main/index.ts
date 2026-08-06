@@ -1444,7 +1444,9 @@ function startApplication() {
     try {
       const projects = await projectManager.list()
       await Promise.all(
-        projects.filter((project) => !project.missing).map((project) => reconcileProjectGenerationSafely(project.id)),
+        projects
+          .filter((project) => !project.missing && (!project.recovery || project.recovery.status === "current"))
+          .map((project) => reconcileProjectGenerationSafely(project.id)),
       )
     } catch (error) {
       logGenerationRecoveryFailure("startup", error)
