@@ -221,7 +221,7 @@ export interface InitializeNativeCollaborationShard {
 
 export interface InitializeNativeCollaborationShardWithGenesisProof
   extends InitializeNativeCollaborationShard {
-  /** Exact verified CVXCGP02 carrier, keyed locally by the checkpoint object digest G. */
+  /** Exact verified current Canvas genesis carrier, keyed locally by checkpoint object digest G. */
   readonly proofCarrierExactBytes: Readonly<Uint8Array>
 }
 

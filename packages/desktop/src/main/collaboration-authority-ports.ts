@@ -1,5 +1,6 @@
 import {
   causalFrontierDigest,
+  causalSignerAuthorityDigest,
   incrementUint64,
   parseActorId,
   parseDigest,
@@ -54,9 +55,7 @@ export interface VerifiedIncomingReplicaAuthorityEvidence {
   readonly scope: DocumentScope
   readonly frameDigest: Digest
   readonly actorId: ActorId
-  readonly membershipSnapshotDigest: Digest
-  readonly replicaActorCredentialCoreDigest: Digest
-  readonly replicaEditAuthorizationCoreDigest: Digest
+  readonly signerAuthority: CausalSignerAuthority
   readonly replicaPublicKey: PublicKey
 }
 
@@ -139,9 +138,9 @@ export function createIncomingReplicaAuthorityVerificationPort(
       if (
         parseDigest(verified.frameDigest) !== frame.frameDigest ||
         parseActorId(verified.actorId) !== core.actorId ||
-        parseDigest(verified.membershipSnapshotDigest) !== core.membershipSnapshotDigest ||
-        parseDigest(verified.replicaActorCredentialCoreDigest) !== core.replicaActorCredentialCoreDigest ||
-        parseDigest(verified.replicaEditAuthorizationCoreDigest) !== core.replicaEditAuthorizationCoreDigest
+        verified.signerAuthority.kind !== core.signerAuthorityKind ||
+        parseDigest(causalSignerAuthorityDigest(verified.signerAuthority)) !== core.signerAuthorityDigest ||
+        parseActorId(verified.signerAuthority.actorId) !== core.actorId
       ) {
         throw new Error("Incoming replica authority evidence is bound to another frame")
       }

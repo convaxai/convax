@@ -1,6 +1,6 @@
 # Convax 单一 Current Protocol 重构执行书
 
-状态：**待执行的破坏性重构方案**。本文不是新的 V12、R6、兼容层或
+状态：**已执行，并于 2026-08-06 修正 local-first authority 缺口**。本文不是新的 V12、R6、兼容层或
 authority release。它明确撤销“生产运行时同时承载 V2/V3、V10/V11、R5 与
 successor promotion”的方向。
 
@@ -24,9 +24,30 @@ Convax 协作栈只保留一套当前实现：
 不再用 `/2`、`/3` 表示并存版本，而改成无数字后缀的 current 名称。精确协议
 身份由一个 `protocolDigest` 决定，不由版本号决定。
 
-本次选择现有 R5/V2 实现作为**代码来源**，因为它覆盖 Project、多个 Canvas、
-sharing 和现有产品路径；但重构完成后产品和源码不再称它为 R5 或 V2。V11/V3
-的窄版 local-owner successor 路径退出生产运行时，不成为 fallback。
+本次最初选择现有 R5/V2 实现作为代码来源，但该选择包含一个已证伪的隐含
+假设：R5/V2 的生产 mutation 与 Canvas genesis 只接受 Team enrollment，不能
+支撑本文同时要求的 local-first 产品模型。修正后的 current 实现仍不恢复
+V11/V3 successor runtime 或 fallback；它把必要的 local-owner 语义并入无版本
+current 协议，使 causal frame 与 Canvas genesis 都显式接受
+`local-project-owner | team-replica` authority。未共享 Project 直接由 durable
+local owner 离线创建和编辑，Team 仅通过同一协议的 durable handoff 追加共享
+能力。
+
+2026-08-06 的执行验证还证伪了两个组合层假设：空的 current ProjectIndex 不会
+自行产生可编辑 surface，Canvas genesis 持久化也不能在未注册 Canvas owner
+materializer 时写入。因此 Desktop 的 Workbench 协调器现在通过同一个 Project
+typed command 创建并打开首张 Canvas；Genesis 仅在 exact-scope materializer
+注册期间越过持久化屏障，成功帧同时进入 live causal index。Canvas 当前资源
+证明则只从 ProjectIndex 的 current-resource projection 验证，不从路径或 UI
+prepared item 推断。
+
+同日的真实旧 Project 重置再次证伪了“只有 pristine bootstrap 才能由本地
+authority reset”的假设。已有本地帧或前一次 reset records 并不等于 Team
+authority。用户明确确认后，只要 durable Team store 精确为 `missing` 且 Project
+私有树不存在 Team/control 或 sharing-handoff namespace，Desktop 就准备一枚
+新的 current local owner，在新 genesis 与旧树 byte-exact archive 均验证完成后
+才激活；unsupported bytes 全程不解码。Team record 为 active/rejected 或存在
+Team namespace 时仍必须走 control-plane rollover。
 
 这是一次 pre-release rebaseline。旧实验协作数据不会通过保留旧 decoder 来
 兼容；它只能原样归档、导出或经用户明确确认后 reset。若存在必须无损保留的
@@ -783,4 +804,3 @@ check 和 Marketplace checks。
 
 若存在必须无损保留的生产协作数据，评分降为 **3/10**；此时本方案的数据政策不
 成立，不能执行。
-

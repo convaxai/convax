@@ -22,7 +22,7 @@ import {
   type CanvasGenesisHistoricalAuthorVerifierPort,
 } from "./genesis"
 
-describe("current CVXCGP02 Canvas genesis proof carrier", () => {
+describe("current CVXCGP03 Canvas genesis proof carrier", () => {
   test("builds exact checkpoint/carrier bytes and validates the closed Canvas identity", async () => {
     const authority = await loadAuthority()
     const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
@@ -39,7 +39,7 @@ describe("current CVXCGP02 Canvas genesis proof carrier", () => {
           status: "verified",
           authorActorId: author.authorActorId,
           authorReplicaId: author.authorReplicaId,
-          authorCredentialCoreDigest: author.checkpointAuthorCredentialCoreDigest,
+          authorAuthorityDigest: author.authorAuthorityDigest,
         })
       },
     }
@@ -64,7 +64,7 @@ describe("current CVXCGP02 Canvas genesis proof carrier", () => {
 
     expect(result.status).toBe("built")
     if (result.status !== "built") return
-    expect(new TextDecoder().decode(result.proofCarrierExactBytes.slice(0, 8))).toBe("CVXCGP02")
+    expect(new TextDecoder().decode(result.proofCarrierExactBytes.slice(0, 8))).toBe("CVXCGP03")
     expect(result.validatedIdentity.identity.projectIndexRouteDependencyFrameDigest).toBe(digest(90))
     expect(result.validatedIdentity.checkpointObjectDigest).toBe(result.checkpointObjectDigest)
     expect(created.verifier(result.proofCarrierExactBytes).status).toBe("validated")
@@ -83,7 +83,7 @@ describe("current CVXCGP02 Canvas genesis proof carrier", () => {
           status: "verified",
           authorActorId: author.authorActorId,
           authorReplicaId: author.authorReplicaId,
-          authorCredentialCoreDigest: author.checkpointAuthorCredentialCoreDigest,
+          authorAuthorityDigest: author.authorAuthorityDigest,
         }),
       },
     })
@@ -127,14 +127,9 @@ function buildAuthor(authority: CurrentProtocolAuthority): CanvasGenesisBuildAut
     authorReplicaId: parseReplicaId("replica_00000001"),
     authorActorId: parseActorId(encoded(12, 32)),
     authorAuthorizationDigest: digest(13),
-    checkpointAuthorCredentialCoreDigest: digest(14),
-    checkpointAuthorCredentialExactBytes: new TextEncoder().encode("credential"),
-    checkpointAuthorMembershipSnapshotCoreDigest: digest(15),
-    checkpointAuthorMembershipSnapshotExactBytes: new TextEncoder().encode("membership"),
-    checkpointAuthorReservationReceiptCoreDigest: digest(16),
-    checkpointAuthorReservationReceiptExactBytes: new TextEncoder().encode("reservation"),
-    serviceTrustBundleCoreDigest: digest(17),
-    serviceTrustBundleExactBytes: new TextEncoder().encode("trust"),
+    authorAuthorityKind: "team-replica",
+    authorAuthorityDigest: digest(14),
+    authorAuthorityExactBytes: new TextEncoder().encode("authority"),
     validationArtifacts: Object.freeze([
       artifact("canvas", "canvas-schema"),
       artifact("control-plane", "control-plane"),

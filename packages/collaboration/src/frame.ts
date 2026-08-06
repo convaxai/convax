@@ -28,6 +28,7 @@ import {
   parseCausalContext,
   parseCausalEditCore,
   parseCausalEditFrameHeader,
+  causalSignerAuthorityDigest,
 } from "./parse"
 import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from "./authority"
 import { parseStateVector, stateVectorDigest, yjsUpdateDigest } from "./yjs-codec"
@@ -239,9 +240,8 @@ function validateFrameClosure(
     core.ownerSchemaDigest !== evidence.ownerSchemaDigest ||
     core.intentDigest !== evidence.intentDigest ||
     core.validationArtifactSetDigest !== context.validationArtifactSetDigest ||
-    core.membershipSnapshotDigest !== context.signerAuthority.membershipSnapshotDigest ||
-    core.replicaActorCredentialCoreDigest !== context.signerAuthority.replicaActorCredentialCoreDigest ||
-    core.replicaEditAuthorizationCoreDigest !== context.signerAuthority.replicaEditAuthorizationCoreDigest ||
+    core.signerAuthorityKind !== context.signerAuthority.kind ||
+    core.signerAuthorityDigest !== causalSignerAuthorityDigest(context.signerAuthority) ||
     evidence.owner !== core.scope.docKind
   ) {
     failFrame("Causal core/context/payload duplicate fields are not byte-identical")

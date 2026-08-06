@@ -179,6 +179,7 @@ async function verifiedEnrollment(
     protocolDigest,
     replicaSigningPublicKey: publicKey,
     signerAuthority: {
+      kind: "team-replica",
       memberId: parseMemberId(id(4)),
       replicaId,
       actorId,

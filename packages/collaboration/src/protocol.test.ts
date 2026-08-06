@@ -47,6 +47,7 @@ import {
   parseActualWriteEvidence,
   parseCausalContext,
   parseCausalFrontier,
+  causalSignerAuthorityDigest,
   parseValidationArtifactSet,
 } from "./parse"
 import {
@@ -108,7 +109,7 @@ async function fixtureFrame(): Promise<DecodedCausalEditFrame> {
     baseStateVectorDigest: stateVectorDigest(baseStateVector),
     baseCanonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes({})),
     signerAuthority: Object.freeze({
-      memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ZERO_16,
+      kind: "team-replica" as const, memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ZERO_16,
       replicaAuthorizationEpoch: ZERO_16, membershipSnapshotDigest: DIGEST_A,
       replicaActorCredentialCoreDigest: DIGEST_B, replicaEditAuthorizationCoreDigest: DIGEST_C,
     }),
@@ -138,8 +139,8 @@ async function fixtureFrame(): Promise<DecodedCausalEditFrame> {
     causalContextJcsByteLength: parseUint64(String(causalContextJcs.byteLength)), baseStateVectorByteLength: parseUint64(String(baseStateVector.byteLength)),
     yjsUpdateByteLength: parseUint64(String(yjsUpdate.byteLength)), actualWriteEvidenceJcsByteLength: parseUint64(String(actualWriteEvidenceJcs.byteLength)),
     protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest), ownerSchemaDigest: SCHEMA, canonicalizerDigest: CANONICALIZER,
-    validationArtifactSetDigest: artifactDigest, membershipSnapshotDigest: DIGEST_A, replicaActorCredentialCoreDigest: DIGEST_B,
-    replicaEditAuthorizationCoreDigest: DIGEST_C,
+    validationArtifactSetDigest: artifactDigest, signerAuthorityKind: context.signerAuthority.kind,
+    signerAuthorityDigest: causalSignerAuthorityDigest(context.signerAuthority),
   })
   const header = await signCausalEditCore(verified, core, { sign: async () => SIGNATURE })
   const bytes = encodeCausalEditFrame(verified, { header, sections: { typedIntentJcs, causalContextJcs, baseStateVector, yjsUpdate, actualWriteEvidenceJcs } })
@@ -223,7 +224,7 @@ describe("CVXCOLL binary closure", () => {
     const magic = frame.bytes.subarray(0, 8)
     expect(new TextDecoder().decode(magic.subarray(0, 7))).toBe("CVXCOLL")
     expect(magic[7]).toBe(0)
-    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("44270f5822614f18db7e9b5c48d1f3b2944a851bb3e498764e7f7770cc3f4066"))
+    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("991756b7c9d7b19e8958c1c4a83152df24e0881324f964bb0af32e4b894ebe85"))
     for (const offset of [30, frame.bytes.length - 1]) {
       const tampered = Uint8Array.from(frame.bytes)
       tampered[offset] ^= 1
@@ -298,7 +299,7 @@ describe("v2 exact count caps", () => {
     const context = {
       format: "convax.causal-context", scope: SCOPE, baseFrontier: { format: "convax.causal-frontier", heads: [] },
       baseFrontierDigest: causalFrontierDigest({ format: "convax.causal-frontier", heads: [] }), baseStateVectorDigest: DIGEST_A,
-      baseCanonicalStateDigest: DIGEST_B, signerAuthority: { memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ZERO_16, replicaAuthorizationEpoch: ZERO_16, membershipSnapshotDigest: DIGEST_A, replicaActorCredentialCoreDigest: DIGEST_B, replicaEditAuthorizationCoreDigest: DIGEST_C },
+      baseCanonicalStateDigest: DIGEST_B, signerAuthority: { kind: "team-replica", memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ZERO_16, replicaAuthorizationEpoch: ZERO_16, membershipSnapshotDigest: DIGEST_A, replicaActorCredentialCoreDigest: DIGEST_B, replicaEditAuthorizationCoreDigest: DIGEST_C },
       validationArtifactSetDigest: DIGEST_C,
     }
     expect(parseCausalContext({ ...context, dependencies: [...dependencyExtras.slice(0, 253), ...mandatory] }).dependencies).toHaveLength(256)

@@ -77,12 +77,14 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     expect(queryHave).toHaveBeenCalledWith([{ blobSha256: request.blob.digest, byteLength: "7" }])
   })
 
-  test("stages Canvas genesis durably and verifies the same CVXCGP02 identity for activation", async () => {
+  test("stages Canvas genesis durably and verifies the same current identity for activation", async () => {
     const fixture = productionFixture()
     const first = await fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest)
     const retry = await fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest)
     expect(first).toEqual(retry)
     expect(fixture.initializeShardWithGenesisProof).toHaveBeenCalledTimes(2)
+    expect(fixture.withGenesisMaterializer).toHaveBeenCalledTimes(2)
+    expect(fixture.activeGenesisMaterializers()).toBe(0)
     expect(first).toEqual({
       predecessorFrameDigest: fixture.stageFrameDigest,
       stagedProjectIndexFrontierDigest: fixture.stageFrontierDigest,
@@ -128,6 +130,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     const fixture = productionFixture({ failFirstInitialization: true })
     await expect(fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest))
       .rejects.toThrow("simulated crash")
+    expect(fixture.activeGenesisMaterializers()).toBe(0)
     await expect(fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest))
       .resolves.toEqual({
         predecessorFrameDigest: fixture.stageFrameDigest,
@@ -135,6 +138,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
         checkpointObjectDigest: fixture.checkpointObjectDigest,
       })
     expect(fixture.initializeShardWithGenesisProof).toHaveBeenCalledTimes(2)
+    expect(fixture.activeGenesisMaterializers()).toBe(0)
   })
 
   test("keeps an unteamed Project pending before any Canvas-store write", async () => {
@@ -187,7 +191,7 @@ function productionFixture(options: {
     canonicalStateDigest: digest("canonical"),
   })
   const checkpointBytes = new Uint8Array([6, 7])
-  const carrierBytes = new TextEncoder().encode("CVXCGP02-test")
+  const carrierBytes = new TextEncoder().encode("CVXCGP03-test")
   const prepareGenesis = mock(async () => Object.freeze({
     status: "verified" as const,
     candidate: Object.freeze({
@@ -234,11 +238,26 @@ function productionFixture(options: {
           projectIndexRouteDependencyFrameDigest: options.proofFrameDigest ?? stageFrameDigest,
         }),
         authorActorId: parseActorId(Buffer.alloc(32, 3).toString("base64url")),
-        authorCredentialCoreDigest: digest("credential"),
+        authorAuthorityDigest: digest("authority"),
       }),
     })
   }) as unknown as CanvasGenesisProofCarrierVerifier
   const factory = attemptFactory()
+  let activeGenesisMaterializers = 0
+  const recordGenesisMaterializer = mock((_scope: DocumentScope & { readonly docKind: "canvas" }) => undefined)
+  const withGenesisMaterializer = async <Result>(
+    requestScope: DocumentScope & { readonly docKind: "canvas" },
+    operation: () => Promise<Result>,
+  ): Promise<Result> => {
+    expect(sameTestScope(requestScope, canvasScope)).toBe(true)
+    recordGenesisMaterializer(requestScope)
+    activeGenesisMaterializers += 1
+    try {
+      return await operation()
+    } finally {
+      activeGenesisMaterializers -= 1
+    }
+  }
   const ports = createProjectIndexCanvasGenesisFactPorts({
     factory,
     scope: projectIndexScope,
@@ -246,6 +265,7 @@ function productionFixture(options: {
     genesisVerifier,
     proofVerifier,
     preflightAuthor: async () => options.authorPending ? "pending" : "ready",
+    withGenesisMaterializer,
   })
   const stageFrame = {
     frameDigest: stageFrameDigest,
@@ -289,6 +309,8 @@ function productionFixture(options: {
     dependencies,
     initializeShardWithGenesisProof,
     prepareGenesis,
+    withGenesisMaterializer: recordGenesisMaterializer,
+    activeGenesisMaterializers: () => activeGenesisMaterializers,
   }
 }
 

@@ -11,6 +11,7 @@ const expectedRuntimeKeys = Object.freeze([
   "CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES",
   "CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME",
   "CURRENT_PROTOCOL_DESCRIPTOR_FORMAT",
+  "CURRENT_PROTOCOL_IDENTITIES",
   "CollaborationKernel",
   "TransientSessionUndoCoordinator",
   "applyYjsUpdate",
@@ -33,6 +34,7 @@ const expectedRuntimeKeys = Object.freeze([
   "createYjsDocument",
   "causalFrontierDigest",
   "causalHeadRefFromDecodedFrame",
+  "causalSignerAuthorityDigest",
   "canonicalStateDigest",
   "checkpointContentCertificateCoreDigest",
   "checkpointContentCertificateObjectDigest",
@@ -58,6 +60,7 @@ const expectedRuntimeKeys = Object.freeze([
   "materializeAcceptedFrame",
   "maxCausalFrontier",
   "parseActorId",
+  "parseCausalSignerAuthority",
   "parseCanvasId",
   "parseCheckpointContentCertificateCore",
   "parseCheckpointContentCertificate",
@@ -67,6 +70,7 @@ const expectedRuntimeKeys = Object.freeze([
   "parseDigest",
   "parseDocumentScope",
   "parseId128",
+  "parseLocalOwnerEditAuthorizationCore",
   "parseMemberId",
   "parsePeerId",
   "parsePortableStamp",
@@ -96,6 +100,7 @@ const expectedRuntimeKeys = Object.freeze([
   "currentProtocolDescriptor",
   "encodeCurrentProtocolDescriptor",
   "installCurrentProtocolAuthority",
+  "localOwnerEditAuthorizationCoreDigest",
   "parseCurrentProtocolDescriptor",
   "stableCheckpointSetCoreDigest",
   "stateVectorDigest",
@@ -299,7 +304,7 @@ function mustReject(bytes) {
 const packaged = new Uint8Array(await Bun.file(new URL("./fixture/current.json", import.meta.url)).arrayBuffer())
 const descriptor = collaboration.parseCurrentProtocolDescriptor(packaged)
 if (!Object.isFrozen(descriptor) || descriptor.format !== collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FORMAT) throw new Error("packaged descriptor is invalid")
-if (descriptor.protocolDigest !== "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993") throw new Error("packaged descriptor digest is not the built digest")
+if (descriptor.protocolDigest !== "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9") throw new Error("packaged descriptor digest is not the built digest")
 if (collaboration.CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME !== "current.json") throw new Error("descriptor file name is not exact")
 const drifted = Uint8Array.from(packaged); drifted[3] ^= 1; mustReject(drifted)
 mustReject(packaged.slice(0, -1))

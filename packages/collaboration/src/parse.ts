@@ -32,8 +32,11 @@ import type {
 import { failCodec, failFrame } from "./errors"
 import { assertDenseArray, assertExactKeys, compareUtf8 } from "./jcs"
 import { KERNEL_LIMITS, CURRENT_PROTOCOL_IDENTITIES } from "./constants"
+import { structuredDigest } from "./digest"
 
 const DEPENDENCY_KINDS = new Set<CausalDependencyKind>([
+  "local-owner-binding",
+  "local-owner-edit-authorization",
   "membership-snapshot",
   "replica-actor-credential",
   "replica-edit-authorization",
@@ -53,8 +56,8 @@ const CORE_KEYS = [
   "baseCanonicalStateDigest", "yjsUpdateDigest", "postStateVectorDigest", "postCanonicalStateDigest",
   "actualWriteEvidenceDigest", "typedIntentJcsByteLength", "causalContextJcsByteLength",
   "baseStateVectorByteLength", "yjsUpdateByteLength", "actualWriteEvidenceJcsByteLength", "protocolDigest",
-  "ownerSchemaDigest", "canonicalizerDigest", "validationArtifactSetDigest", "membershipSnapshotDigest",
-  "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
+  "ownerSchemaDigest", "canonicalizerDigest", "validationArtifactSetDigest", "signerAuthorityKind",
+  "signerAuthorityDigest",
 ] as const
 
 export function parseDocumentScope(value: unknown): DocumentScope {
@@ -126,10 +129,8 @@ export function parseCausalContext(value: unknown): CausalContext {
   if (value.dependencies.length > KERNEL_LIMITS.causalDependencyRefs) failCodec("Causal dependencies exceed 256 refs")
   const dependencies = value.dependencies.map(parseDependency)
   assertStrictlySorted(dependencies, compareDependency, "Causal dependencies")
-  const signerAuthority = parseSignerAuthority(value.signerAuthority)
-  requireDependency(dependencies, "membership-snapshot", signerAuthority.membershipSnapshotDigest)
-  requireDependency(dependencies, "replica-actor-credential", signerAuthority.replicaActorCredentialCoreDigest)
-  requireDependency(dependencies, "replica-edit-authorization", signerAuthority.replicaEditAuthorizationCoreDigest)
+  const signerAuthority = parseCausalSignerAuthority(value.signerAuthority)
+  requireExactAuthorityDependencies(dependencies, signerAuthority)
   return Object.freeze({
     format: value.format,
     scope: parseDocumentScope(value.scope),
@@ -217,9 +218,8 @@ export function parseCausalEditCore(value: unknown): CausalEditCore {
     ownerSchemaDigest: parseDigest(value.ownerSchemaDigest),
     canonicalizerDigest: parseDigest(value.canonicalizerDigest),
     validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
-    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
+    signerAuthorityKind: parseSignerAuthorityKind(value.signerAuthorityKind),
+    signerAuthorityDigest: parseDigest(value.signerAuthorityDigest),
   })
 }
 
@@ -253,21 +253,41 @@ export function assertCoreSectionLengths(core: CausalEditCore, lengths: readonly
   }
 }
 
-function parseSignerAuthority(value: unknown): CausalSignerAuthority {
-  assertExactKeys(value, [
-    "memberId", "replicaId", "actorId", "memberAuthorizationEpoch", "replicaAuthorizationEpoch",
+export function parseCausalSignerAuthority(value: unknown): CausalSignerAuthority {
+  if (!value || typeof value !== "object" || Array.isArray(value)) failCodec("CausalSignerAuthority must be an object")
+  const source = value as Record<string, unknown>
+  if (source.kind === "local-project-owner") {
+    assertExactKeys(source, [
+      "kind", "replicaId", "actorId", "ownerBindingDigest", "ownerEditAuthorizationCoreDigest",
+    ], "LocalProjectOwnerSignerAuthority")
+    return Object.freeze({
+      kind: source.kind,
+      replicaId: parseReplicaId(source.replicaId),
+      actorId: parseActorId(source.actorId),
+      ownerBindingDigest: parseDigest(source.ownerBindingDigest),
+      ownerEditAuthorizationCoreDigest: parseDigest(source.ownerEditAuthorizationCoreDigest),
+    })
+  }
+  if (source.kind !== "team-replica") failCodec("CausalSignerAuthority kind is invalid")
+  assertExactKeys(source, [
+    "kind", "memberId", "replicaId", "actorId", "memberAuthorizationEpoch", "replicaAuthorizationEpoch",
     "membershipSnapshotDigest", "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
-  ], "CausalSignerAuthority")
+  ], "TeamReplicaSignerAuthority")
   return Object.freeze({
-    memberId: parseMemberId(value.memberId),
-    replicaId: parseReplicaId(value.replicaId),
-    actorId: parseActorId(value.actorId),
-    memberAuthorizationEpoch: parseId128(value.memberAuthorizationEpoch),
-    replicaAuthorizationEpoch: parseId128(value.replicaAuthorizationEpoch),
-    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
+    kind: source.kind,
+    memberId: parseMemberId(source.memberId),
+    replicaId: parseReplicaId(source.replicaId),
+    actorId: parseActorId(source.actorId),
+    memberAuthorizationEpoch: parseId128(source.memberAuthorizationEpoch),
+    replicaAuthorizationEpoch: parseId128(source.replicaAuthorizationEpoch),
+    membershipSnapshotDigest: parseDigest(source.membershipSnapshotDigest),
+    replicaActorCredentialCoreDigest: parseDigest(source.replicaActorCredentialCoreDigest),
+    replicaEditAuthorizationCoreDigest: parseDigest(source.replicaEditAuthorizationCoreDigest),
   })
+}
+
+export function causalSignerAuthorityDigest(value: CausalSignerAuthority): ReturnType<typeof parseDigest> {
+  return structuredDigest("convax.causal-signer-authority", parseCausalSignerAuthority(value))
 }
 
 function parseDependency(value: unknown): CausalDependencyRef {
@@ -304,8 +324,40 @@ function compareValidationArtifact(left: ValidationArtifactRef, right: Validatio
   return compareUtf8(left.owner, right.owner) || compareUtf8(left.format, right.format) || compareDecoded(left.artifactDigest, right.artifactDigest)
 }
 
-function requireDependency(dependencies: readonly CausalDependencyRef[], kind: CausalDependencyKind, digest: string): void {
-  if (!dependencies.some((dependency) => dependency.kind === kind && dependency.digest === digest)) failCodec(`Causal context lacks mandatory ${kind} dependency`)
+const AUTHORITY_DEPENDENCY_KINDS = new Set<CausalDependencyKind>([
+  "local-owner-binding",
+  "local-owner-edit-authorization",
+  "membership-snapshot",
+  "replica-actor-credential",
+  "replica-edit-authorization",
+])
+
+function requireExactAuthorityDependencies(
+  dependencies: readonly CausalDependencyRef[],
+  authority: CausalSignerAuthority,
+): void {
+  const expected = authority.kind === "local-project-owner"
+    ? [
+        { kind: "local-owner-binding", digest: authority.ownerBindingDigest },
+        { kind: "local-owner-edit-authorization", digest: authority.ownerEditAuthorizationCoreDigest },
+      ] as const
+    : [
+        { kind: "membership-snapshot", digest: authority.membershipSnapshotDigest },
+        { kind: "replica-actor-credential", digest: authority.replicaActorCredentialCoreDigest },
+        { kind: "replica-edit-authorization", digest: authority.replicaEditAuthorizationCoreDigest },
+      ] as const
+  const actual = dependencies.filter((dependency) => AUTHORITY_DEPENDENCY_KINDS.has(dependency.kind))
+  if (
+    actual.length !== expected.length ||
+    expected.some((item) => !actual.some((dependency) => dependency.kind === item.kind && dependency.digest === item.digest))
+  ) failCodec("Causal authority dependency closure is not exact for its signer kind")
+}
+
+function parseSignerAuthorityKind(value: unknown): CausalSignerAuthority["kind"] {
+  if (value !== "local-project-owner" && value !== "team-replica") {
+    failFrame("Causal signer authority kind is invalid")
+  }
+  return value
 }
 
 function assertStrictlySorted<T>(values: readonly T[], compare: (left: T, right: T) => number, label: string): void {

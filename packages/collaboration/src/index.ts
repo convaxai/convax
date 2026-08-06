@@ -75,7 +75,17 @@ export { ordinarySha256, rawDomainDigest, structuredDigest } from "./digest"
 export { comparePortableStamps, causalFrontierDigest, documentScopeDigest, maxCausalFrontier } from "./causal"
 export type { CausalClosurePort } from "./causal"
 export { ownerCanonicalizerDescriptorDigest } from "./canonicalizer"
-export { parseDocumentScope, parsePortableStamp, parseValidationArtifactSet } from "./parse"
+export {
+  localOwnerEditAuthorizationCoreDigest,
+  parseLocalOwnerEditAuthorizationCore,
+} from "./local-owner-authority"
+export {
+  causalSignerAuthorityDigest,
+  parseCausalSignerAuthority,
+  parseDocumentScope,
+  parsePortableStamp,
+  parseValidationArtifactSet,
+} from "./parse"
 
 export {
   assertExactPruningCoverage,
@@ -128,6 +138,9 @@ export type {
   CausalFrontier,
   CausalHeadRef,
   CausalSignerAuthority,
+  LocalProjectOwnerSignerAuthority,
+  LocalOwnerEditAuthorizationCore,
+  TeamReplicaSignerAuthority,
   CheckpointContentCertificateCore,
   CheckpointContentCertificate,
   CompleteRemoteIngressStagingPortResult,

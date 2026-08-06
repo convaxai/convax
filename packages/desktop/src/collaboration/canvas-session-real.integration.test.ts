@@ -308,9 +308,7 @@ async function openReplica(input: {
         scope: frame.header.core.scope,
         frameDigest: frame.frameDigest,
         actorId: frame.header.core.actorId,
-        membershipSnapshotDigest: frame.header.core.membershipSnapshotDigest,
-        replicaActorCredentialCoreDigest: frame.header.core.replicaActorCredentialCoreDigest,
-        replicaEditAuthorizationCoreDigest: frame.header.core.replicaEditAuthorizationCoreDigest,
+        signerAuthority: frame.context.signerAuthority,
         replicaPublicKey: publicKey,
       }),
     },
@@ -367,6 +365,7 @@ function localAuthority(authority: CurrentProtocolAuthority, identity: ReplicaId
         actorSequence: parseUint64("1"),
         predecessorFrameDigest: null,
         signerAuthority: {
+          kind: "team-replica" as const,
           memberId: identity.memberId,
           replicaId: identity.replicaId,
           actorId: identity.actorId,

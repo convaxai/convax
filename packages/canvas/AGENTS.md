@@ -140,6 +140,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   Project-owned route `shardEpoch` is outside Canvas content and Canvas never creates
   a `docEpoch`. A new Canvas writes its current genesis once; there is no earlier
   genesis followed by a promotion.
+- The one current Canvas genesis carrier has a typed generic author-authority
+  section. It accepts a verified local Project owner for unshared Projects or a
+  verified Team replica for shared Projects; it must not hard-code Team membership,
+  reservation, or trust sections as the only possible genesis authority.
 - This package consumes only the one current protocol descriptor and the Canvas owner
   artifact it names. The Canvas owner schema digest is that descriptor's
   domain-separated artifact digest. A missing artifact, digest mismatch, or

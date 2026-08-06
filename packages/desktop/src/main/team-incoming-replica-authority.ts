@@ -1,6 +1,5 @@
 import {
   parseActorId,
-  parseDigest,
   parseDocumentScope,
   type DecodedCausalEditFrame,
 } from "@convax/collaboration"
@@ -23,11 +22,14 @@ export function createLocalTeamIncomingReplicaAuthoritySource(
       if (record === "rejected") return "rejected"
       const actor = record.replicaActorCredential
       const edit = record.replicaEditAuthorization
+      if (frame.header.core.signerAuthorityKind !== "team-replica") return "rejected"
       if (!actor || !edit ||
         actor.core.actorId !== parseActorId(frame.header.core.actorId) ||
-        actor.coreDigest !== parseDigest(frame.header.core.replicaActorCredentialCoreDigest) ||
-        edit.coreDigest !== parseDigest(frame.header.core.replicaEditAuthorizationCoreDigest) ||
-        record.membershipSnapshot.coreDigest !== parseDigest(frame.header.core.membershipSnapshotDigest)) {
+        actor.core.actorId !== frame.context.signerAuthority.actorId ||
+        frame.context.signerAuthority.kind !== "team-replica" ||
+        actor.coreDigest !== frame.context.signerAuthority.replicaActorCredentialCoreDigest ||
+        edit.coreDigest !== frame.context.signerAuthority.replicaEditAuthorizationCoreDigest ||
+        record.membershipSnapshot.coreDigest !== frame.context.signerAuthority.membershipSnapshotDigest) {
         return "pending"
       }
       if (record.projectId !== scope.projectId || record.membershipSnapshot.core.projectEpoch !== scope.projectEpoch) return "rejected"
@@ -35,9 +37,7 @@ export function createLocalTeamIncomingReplicaAuthoritySource(
         scope,
         frameDigest: frame.frameDigest,
         actorId: actor.core.actorId,
-        membershipSnapshotDigest: record.membershipSnapshot.coreDigest,
-        replicaActorCredentialCoreDigest: actor.coreDigest,
-        replicaEditAuthorizationCoreDigest: edit.coreDigest,
+        signerAuthority: frame.context.signerAuthority,
         replicaPublicKey: actor.core.replicaSigningPublicKey,
       })
     },

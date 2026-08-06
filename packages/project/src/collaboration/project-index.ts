@@ -86,7 +86,7 @@ export const PROJECT_INDEX_ROOT_KEYS = Object.freeze([
 ] as const)
 
 export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST: Digest = parseDigest(
-  "38f3d762cfd95a6826758750d3cdb518d900ac0b15b8338aa6dfd58733e9353c",
+  "99ebca8cc048f6cf919d55a9829091e2450e59a10b87b5410d9b0243459be37c",
 )
 
 const encoder = new TextEncoder()

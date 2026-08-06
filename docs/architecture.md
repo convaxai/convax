@@ -91,8 +91,30 @@ new Canvas writes its current Canvas genesis once. Sharing uses the same current
 Project and Canvas scopes and never switches protocol. The only local mutation
 outcomes are the current protocol, `unsupported-project-data`, and an explicit
 recovery-required classification; there is no legacy, successor, or promoted state.
-A missing local mutation authority remains `local-authority-unavailable`, and Team
-creation is never presented as recovery.
+An unshared Project's durable local-owner binding is a first-class mutation
+authority: it signs ProjectIndex frames, Canvas frames, and the generic current
+Canvas-genesis author proof without a Team record, control-plane session, or network.
+The one causal-frame codec commits an explicit `local-project-owner` or
+`team-replica` signer-authority kind and its digest; those are authority modes of the
+same current protocol, never protocol selectors. A missing or rejected local owner
+remains `local-authority-unavailable`, and Team creation is never presented as
+recovery.
+
+A durable Team binding is additive sharing authority and disables new local-owner
+signing for that Project. Retained local-owner frames and genesis bytes remain
+historical inputs to the same current decoder; sharing never rewrites or re-signs
+them. A Team handoff must close the local head set before remote admission, and no
+Team enrollment record may be used as a fallback for an absent local owner.
+
+When Desktop enters an editable local Project whose current ProjectIndex has no
+live Canvas route, its Workbench coordinator invokes the same Project-owned typed
+Canvas-create command used by the visible New Canvas action and opens the committed
+result. It never fabricates a route or Canvas document in Renderer state. Canvas
+genesis crosses the native publication barrier only while the exact current Canvas
+owner materializer is registered for that scope; successful accepted frames are
+then observed by the same process-local causal index before a dependent local frame
+may commit. Registration failure, publication failure, or an incomplete causal
+closure fails the command without publishing a live route.
 
 Existing experimental collaboration trees written by the retired multi-release model
 are unsupported. They may be archived unchanged, exported as user-visible resources,
@@ -873,23 +895,20 @@ new-epoch genesis.
 The Node open guard runs before registry publication or recency mutation. Its
 host-local reset planner inventories and digests the exact private deletion set;
 ProjectIndex first registration independently repeats that cutover guard before it
-may create a durable local-owner binding or publish collaboration genesis bytes. A
-legacy Project previously affected by the old ordering may use the unteamed reset
-branch only when Project/node verifies that the published collaboration tree is the
-exact manifest-bound empty genesis for the pre-existing local-owner binding, has
-the single expected checkpoint/set/base/head inventory, and contains no accepted
-frame, Canvas route, Team/control identity, reset evidence, or unknown native state.
-This recognition treats the tree only as a rejected bootstrap artifact; it does not
-authorize reset of a current Project or reuse an old epoch. Any mismatch requires
-the control-plane rollover path and keeps the Project closed.
-An explicitly retired V3 local tree may instead use the same unteamed reset surface
-without decoding its old frames only when both frozen local markers are exact plain
-files, no sharing handoff or Team/control namespace exists, and the durable Team
-authority store reports `missing`. Reset prepares a fresh owner binding and Project
-epoch, keeps that binding inert while staging and publishing the new genesis, verifies
-the byte-exact archive, and only then atomically makes the new binding current. Any
-missing marker, Team record, rejected Team record, or interrupted finalization keeps
-the Project closed as recovery-required.
+may create a durable local-owner binding or publish collaboration genesis bytes. An
+explicitly user-confirmed unshared-local reset does not decode unsupported private
+bytes or require them to resemble an empty bootstrap. It is eligible only when the
+durable Team authority store returns exact `missing` and the inventoried Project tree
+contains no Team/control or sharing-handoff namespace. Any active or rejected Team
+record, Team/control namespace, stale plan, or changed tree requires the control-plane
+rollover path and keeps the Project closed.
+
+Every eligible unshared-local reset prepares a fresh current local-owner binding and
+Project epoch. The prepared binding remains inert while Project/node stages and
+publishes the new genesis and verifies the old private tree's byte-exact archive;
+only then does Desktop atomically make it current. It never reuses an authority
+decoded from unsupported bytes, and interruption keeps the previous binding or
+recovery state fail-closed.
 Publication requires the exact control/Project verifier to persist and approve the
 frozen confirmation/approval/rollover evidence, then re-verifies the complete
 published tree before archiving the old private tree. Stale plans, symlink changes,

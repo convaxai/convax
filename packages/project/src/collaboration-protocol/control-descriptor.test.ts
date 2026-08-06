@@ -142,14 +142,14 @@ describe("frozen control-plane descriptor", () => {
 
   test("pins the reviewed identities without reconstructing the kernel bundle", () => {
     expect(CONTROL_PROTOCOL_EXPECTED_IDENTITIES).toEqual({
-      protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
+      protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
       limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
       channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
     })
     expect(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION).toEqual({
       status: "current-contract-selected",
-      requiredProtocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
-      requiredDomainCount: 127,
+      requiredProtocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
+      requiredDomainCount: 129,
       fallbackDecoder: false,
       compatibilityPrimitiveAliases: false,
     })

@@ -95,7 +95,7 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
     return domain
   })
   if (
-    domainRegistry.length !== 127 ||
+    domainRegistry.length !== 129 ||
     domainRegistry.some((domain, index) => index > 0 && domainRegistry[index - 1]! >= domain)
   ) {
     unavailable("ProtocolSchemaBundle domain registry is not the exact sorted current domain set")

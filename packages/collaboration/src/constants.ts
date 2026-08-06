@@ -9,7 +9,7 @@ export const CAUSAL_EDIT_PREFIX_BYTES = 88 as const
  * by the current protocol descriptor and must equal this anchor.
  */
 export const CURRENT_PROTOCOL_IDENTITIES = Object.freeze({
-  protocolDigest: "6a381ca9eedad883c336fcf0874ef6b824236b5fcb99d2f1fee349653334c993",
+  protocolDigest: "8295f918e8f7b8297c080db03672fc410542280f639d9b40a8e324e560f07ae9",
   uriProtocolDigest: "9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38",
   limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
   channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
@@ -17,12 +17,12 @@ export const CURRENT_PROTOCOL_IDENTITIES = Object.freeze({
 
 export const PROTOCOL_SCHEMA_ARTIFACTS = Object.freeze([
   Object.freeze({
-    artifactDigest: "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36",
+    artifactDigest: "09d5f8748d91474de45eb3a88fe6d3054adb79e8a44dd311c9024ab95b27250a",
     format: "convax.canvas-protocol-schema",
     name: "canvas-schema",
   }),
   Object.freeze({
-    artifactDigest: "357bacba24e9be648f7d280fc474c421a5986c002040899b7f382615e8113e01",
+    artifactDigest: "1449c229278d0e30ddb800751c025ec546e8e0aea3c1e99215da411e3500a7dc",
     format: "convax.collaboration-kernel-protocol-schema",
     name: "collaboration-kernel",
   }),
@@ -32,7 +32,7 @@ export const PROTOCOL_SCHEMA_ARTIFACTS = Object.freeze([
     name: "control-plane",
   }),
   Object.freeze({
-    artifactDigest: "38f3d762cfd95a6826758750d3cdb518d900ac0b15b8338aa6dfd58733e9353c",
+    artifactDigest: "99ebca8cc048f6cf919d55a9829091e2450e59a10b87b5410d9b0243459be37c",
     format: "convax.project-persistence-protocol-schema",
     name: "project-persistence",
   }),
@@ -104,6 +104,7 @@ export const PROTOCOL_DIGEST_DOMAIN_REGISTRY = Object.freeze([
   "convax.causal-edit-signature",
   "convax.causal-frontier",
   "convax.causal-head-ref",
+  "convax.causal-signer-authority",
   "convax.checkpoint-content-certificate",
   "convax.checkpoint-content-certificate-core",
   "convax.checkpoint-validation-carrier-index",
@@ -118,6 +119,7 @@ export const PROTOCOL_DIGEST_DOMAIN_REGISTRY = Object.freeze([
   "convax.document-shard-reset-route-cas-core-digest",
   "convax.empty-project-index-genesis-attestation-core",
   "convax.generation-first-loss-receipt-core",
+  "convax.local-owner-edit-authorization-core",
   "convax.local-project-store-record-digest",
   "convax.member-credential-core",
   "convax.membership-snapshot-core",
@@ -231,9 +233,11 @@ export const KERNEL_DIGEST_DOMAINS = Object.freeze({
   causalEditSignature: "convax.causal-edit-signature",
   causalFrontier: "convax.causal-frontier",
   causalHeadRef: "convax.causal-head-ref",
+  causalSignerAuthority: "convax.causal-signer-authority",
   checkpointContentCertificateCore: "convax.checkpoint-content-certificate-core",
   checkpointContentCertificate: "convax.checkpoint-content-certificate",
   documentScope: "convax.document-scope",
+  localOwnerEditAuthorizationCore: "convax.local-owner-edit-authorization-core",
   ownerActualWriteEvidence: "convax.owner-actual-write-evidence",
   ownerCanonicalizerDescriptor: "convax.owner-canonicalizer-descriptor",
   protocolSchemaArtifact: "convax.protocol-schema-artifact",

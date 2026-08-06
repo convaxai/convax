@@ -124,6 +124,10 @@ schema and reducer, and Desktop packages and loads that one descriptor.
 - A new Project creates its current ProjectIndex genesis directly and each new
   Canvas creates its current Canvas genesis directly. There is no earlier genesis
   followed by a later promotion, and sharing does not change protocol.
+- The same current frame and Canvas-genesis codecs carry an explicit
+  `local-project-owner` or `team-replica` signer-authority mode. An unshared durable
+  local owner may create/edit ProjectIndex and Canvas data offline; a durable Team
+  binding disables new local-owner signing but never selects another protocol.
 - Frame magic, wire format, and `protocolDigest` must equal the built descriptor.
   Anything else is `unsupported-project-data`; never try a second decoder, guess a
   layout, or reinterpret unknown bytes.

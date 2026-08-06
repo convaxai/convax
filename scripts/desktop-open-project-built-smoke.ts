@@ -373,9 +373,40 @@ try {
     const projectSurface = await waitFor(
       () => document.querySelector(".convax-canvas")
         || document.querySelector('[data-project-local-authority-recovery="true"]')
-        || document.querySelector('[data-project-collaboration-pending="true"]'),
+        || document.querySelector('[data-project-collaboration-pending="true"]')
+        || document.querySelector('[data-project-recovery="true"]')
+        || document.querySelector('[data-project-home="true"] [role="alert"]'),
       "the local Project authority state or active Canvas",
-    )
+    ).catch(async (error) => {
+      const projects = await window.convax.projects.listProjects().catch((cause) => ({ error: String(cause) }))
+      const projectId = "projects" in projects
+        ? projects.projects.find((candidate) => candidate.name === "empty-project")?.id
+        : undefined
+      const catalogProbe = projectId
+        ? await Promise.race([
+            window.convax.projects.canvases.getCanvasCatalog({ projectId }).then(
+              (value) => ({ status: "resolved", value }),
+              (cause) => ({ error: String(cause), status: "rejected" }),
+            ),
+            new Promise((resolve) => setTimeout(() => resolve({ status: "timed-out" }), 2_000)),
+          ])
+        : { status: "no-project" }
+      throw new Error(String(error) + "; Project open state: " + JSON.stringify({
+        body: document.body.textContent?.trim().slice(0, 1_500),
+        catalogProbe,
+        collaborationPending: Boolean(document.querySelector('[data-project-collaboration-pending="true"]')),
+        localAuthorityRecovery: Boolean(document.querySelector('[data-project-local-authority-recovery="true"]')),
+        projectLoading: Boolean(document.querySelector('[data-project-loading="true"]')),
+        projects,
+        resetRecovery: Boolean(document.querySelector('[data-project-reset-recovery="true"]')),
+      }))
+    })
+    if (projectSurface.matches('[data-project-recovery="true"]')) {
+      throw new Error("Project open entered recovery: " + projectSurface.textContent?.trim())
+    }
+    if (projectSurface.matches('[role="alert"]')) {
+      throw new Error("Project open failed before Canvas activation: " + projectSurface.textContent?.trim())
+    }
     if (projectSurface.matches('[data-project-collaboration-pending="true"]')) {
       throw new Error("Opening a personal Project started the Team collaboration flow")
     }

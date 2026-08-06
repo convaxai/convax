@@ -121,6 +121,9 @@ export class ProjectCanvasWorkbenchCoordinator {
     }
     const next = catalog.canvases.find((canvas) => canvas.id === preferredCanvasId) ?? catalog.canvases[0]
     if (next) return this.workbench.open(projectCanvasInput(projectId, next.id))
+    if (catalog.creationAvailability === "available") {
+      return Boolean(await this.createCanvas(projectId))
+    }
     return workbench.activeInput ? this.workbench.close(workbench.activeInput) : true
   }
 

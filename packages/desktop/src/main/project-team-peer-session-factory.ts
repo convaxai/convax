@@ -238,6 +238,7 @@ export class DesktopProjectTeamReplicaProvisioner {
       protocolDigest: record.membershipSnapshot.core.protocolDigest,
       replicaSigningPublicKey: actor.core.replicaSigningPublicKey,
       signerAuthority: Object.freeze({
+        kind: "team-replica" as const,
         memberId: record.memberId,
         replicaId: actor.core.replicaId,
         actorId: actor.core.actorId,

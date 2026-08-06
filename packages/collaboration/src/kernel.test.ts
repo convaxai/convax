@@ -226,7 +226,7 @@ function ports(persistence: MemoryPersistence): CollaborationKernelPorts {
         return {
           actorId: ACTOR, actorSequence: parseUint64(last ? String(BigInt(last.actorSequence) + 1n) : "1"),
           predecessorFrameDigest: last?.frameDigest ?? null,
-          signerAuthority: { memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ID, replicaAuthorizationEpoch: ID, membershipSnapshotDigest: D1, replicaActorCredentialCoreDigest: D2, replicaEditAuthorizationCoreDigest: D3 },
+          signerAuthority: { kind: "team-replica", memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ID, replicaAuthorizationEpoch: ID, membershipSnapshotDigest: D1, replicaActorCredentialCoreDigest: D2, replicaEditAuthorizationCoreDigest: D3 },
           dependencies: [
             { kind: "membership-snapshot", digest: D1 }, { kind: "replica-actor-credential", digest: D2 }, { kind: "replica-edit-authorization", digest: D3 },
           ],
