@@ -90,6 +90,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
+import { createWorkspaceCanvasHistoryShortcutHandler } from "./canvas-history-shortcuts"
 import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import {
   mountCanvasSessionWithBackgroundReconcile,
@@ -716,6 +717,41 @@ function App() {
   )
     ? mediaOperationDialog
     : null
+  useEffect(() => {
+    if (
+      !activeCanvasSession ||
+      desktopSurface.kind !== "workspace" ||
+      settingsSection ||
+      activeMediaOperationDialog ||
+      sharingProjectId ||
+      workbenchSnapshot.changingInput ||
+      projectCanvasSnapshot.busy ||
+      projectSnapshot.changingActiveProject
+    ) {
+      return
+    }
+    const handleWorkspaceCanvasHistoryShortcut = createWorkspaceCanvasHistoryShortcutHandler({
+      onError(direction, error) {
+        console.warn(`Canvas ${direction} failed`, error)
+        setNotification({
+          kind: "error",
+          title: direction === "undo" ? "Could not undo Canvas change" : "Could not redo Canvas change",
+        })
+      },
+      session: activeCanvasSession,
+    })
+    window.addEventListener("keydown", handleWorkspaceCanvasHistoryShortcut)
+    return () => window.removeEventListener("keydown", handleWorkspaceCanvasHistoryShortcut)
+  }, [
+    activeCanvasSession,
+    activeMediaOperationDialog,
+    desktopSurface.kind,
+    projectCanvasSnapshot.busy,
+    projectSnapshot.changingActiveProject,
+    settingsSection,
+    sharingProjectId,
+    workbenchSnapshot.changingInput,
+  ])
   const activeProjectIdRef = useRef<string | null>(activeProjectId ?? null)
   activeProjectIdRef.current = activeProjectId ?? null
   useEffect(
@@ -1114,45 +1150,70 @@ function App() {
       mutation: {
         async add(request) {
           if (request.signal.aborted) throw request.signal.reason
-          if (!activeProjectId || !activeCanvasId) {
+          if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
             throw new Error("Open a Project Canvas before adding resources")
           }
-          return addCanvasUploadResources(
-            {
-              ...request,
-              canvasId: activeCanvasId,
-              projectId: activeProjectId,
-            },
-            {
-              add: (input) => window.convax.canvas.resources.add(input),
-              createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-              createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
-              createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
-              flushAuthoritativeCanvas,
-            },
+          const delivery = await activeCanvasSession.runResourceMutation(
+            () => addCanvasUploadResources(
+              {
+                ...request,
+                canvasId: activeCanvasId,
+                projectId: activeProjectId,
+              },
+              {
+                add: (input) => window.convax.canvas.resources.add(input),
+                createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+                createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
+                createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+                sessionId: activeCanvasSession.sessionId,
+              },
+            ),
+            request.signal,
           )
+          return {
+            authoritativeProjectionDelivered: delivery.projectionDelivered,
+            createdNodeIds: delivery.result.createdNodeIds,
+            warnings: delivery.result.warnings,
+          }
         },
         async relink(request) {
-          return runProjectCanvasResourceRelink({
-            activeCanvasId,
-            activeProjectId,
-            createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-            flush: flushAuthoritativeCanvas,
-            projectFiles: projectFilesController,
-            request,
-            resources: window.convax.canvas.resources,
-          })
+          if (!activeCanvasSession) throw new Error("Open a mounted Project Canvas before relinking resources")
+          const delivery = await activeCanvasSession.runResourceMutation(
+            () => runProjectCanvasResourceRelink({
+              activeCanvasId,
+              activeProjectId,
+              createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+              projectFiles: projectFilesController,
+              request,
+              resources: window.convax.canvas.resources,
+              sessionId: activeCanvasSession.sessionId,
+            }),
+            request.signal,
+          )
+          return {
+            authoritativeProjectionDelivered: delivery.projectionDelivered,
+            warnings: delivery.result.warnings,
+          }
         },
         async saveEditableCopy(request) {
           if (request.signal.aborted) throw request.signal.reason
-          if (!activeCanvasId) throw new Error("Open a Project Canvas before saving an editable copy")
-          await flushCanvasForAgent()
-          if (request.signal.aborted) throw request.signal.reason
-          return window.convax.canvas.resources.saveEditableCopy({
-            canvasId: activeCanvasId,
-            commandId: `renderer:${globalThis.crypto.randomUUID()}`,
-            nodeId: request.nodeId,
-          })
+          if (!activeCanvasId || !activeProjectId || !activeCanvasSession) {
+            throw new Error("Open a mounted Project Canvas before saving an editable copy")
+          }
+          const delivery = await activeCanvasSession.runResourceMutation(
+            () => window.convax.canvas.resources.saveEditableCopy({
+              canvasId: activeCanvasId,
+              commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+              nodeId: request.nodeId,
+              projectId: activeProjectId,
+              sessionId: activeCanvasSession.sessionId,
+            }),
+            request.signal,
+          )
+          return {
+            authoritativeProjectionDelivered: delivery.projectionDelivered,
+            warnings: delivery.result.warnings,
+          }
         },
       },
       generate: generateService,
@@ -1178,6 +1239,7 @@ function App() {
     })
   }, [
     activeCanvasId,
+    activeCanvasSession,
     activeProjectId,
     flushAuthoritativeCanvas,
     generationModelCatalogController,
@@ -2281,13 +2343,7 @@ function App() {
                         key={`${activeProject.id}:${activeCanvasId}`}
                         clipboardScope={activeProject.id}
                         fileRendererRegistry={canvasFileRendererRegistry}
-                        executeCommand={async (command) => {
-                          await window.convax.canvas.documents.execute({
-                            command,
-                            commandId: crypto.randomUUID(),
-                            ref: { canvasId: activeCanvasId, scopeId: activeProject.id },
-                          })
-                        }}
+                        executeCommand={(command) => activeCanvasSession.executeApplication(command)}
                         session={activeCanvasSession}
                         nodeRegistry={canvasNodeRegistry}
                         onDocumentChange={publishActiveCanvasNodes}

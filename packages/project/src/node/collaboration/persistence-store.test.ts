@@ -81,8 +81,14 @@ describe("NodeCollaborationPersistence", () => {
     )
     const [setName] = await fs.readdir(sets)
     await fs.unlink(path.join(sets, setName!))
-    await expect(fixture.store.loadReplicaHead(scope)).rejects.toMatchObject({ code: "store-corrupt" })
     fixture.store.dispose()
+    const reopened = await NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })
+    await expect(reopened.loadReplicaHead(scope)).rejects.toMatchObject({ code: "store-corrupt" })
+    reopened.dispose()
   })
 
   durabilityTest("installs a verified checkpoint set behind object, journal and sole-head barriers", async () => {
@@ -429,8 +435,33 @@ describe("NodeCollaborationPersistence", () => {
     const head = await reopened.loadReplicaHead(scope) as NodeAcceptedReplicaHead
     expect(head.fullUpdate).toEqual(frame.bytes)
     expect(await reopened.isReachableFromAcceptedHead(frame.ref)).toBe(true)
-    expect(fixture.frames.applyCount).toBeGreaterThanOrEqual(3)
+    expect(fixture.frames.applyCount).toBe(2)
     reopened.dispose()
+  })
+
+  durabilityTest("materializes only the new frame once on a warm commit regardless of retained history", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    let head = await initialize(fixture.store, scope)
+    for (let sequence = 1; sequence <= 32; sequence += 1) {
+      const frame = fixture.frames.create(scope, localActor, String(sequence), id128(500 + sequence))
+      const before = fixture.frames.applyCount
+      await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+      await fixture.store.putReplicationOutboxRef(frame.ref)
+      const journal = await fixture.store.appendFrameJournal(frame.ref)
+      const result = await fixture.store.compareAndCommitReplicaHead({
+        ref: frame.ref,
+        journal,
+        expectedReplicaHeadRecordDigest: head.headDigest,
+        resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+      })
+      if (result.status !== "committed") throw new Error("expected committed frame")
+      head = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
+      expect(fixture.frames.applyCount - before).toBe(1)
+    }
+    expect(await fixture.store.listDurableReplicationOutbox(scope)).toHaveLength(32)
+    expect(fixture.frames.applyCount).toBe(32)
+    fixture.store.dispose()
   })
 
   durabilityTest("accepts a complete head after response loss immediately after rename", async () => {

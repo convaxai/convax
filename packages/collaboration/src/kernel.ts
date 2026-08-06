@@ -43,6 +43,12 @@ import type {
 } from "./contracts"
 import { canonicalStateDigest, structuredDigest } from "./digest"
 import { CollaborationKernelError } from "./errors"
+import {
+  collaborationLatencyStages,
+  type CollaborationLatencyDiagnostic,
+  type CollaborationLatencyDiagnosticsPort,
+  type CollaborationLatencyStage,
+} from "./latency-diagnostics"
 import { verifyExactEd25519, type Ed25519VerifierPort } from "./crypto"
 import { assertExactKeys, decodeRestrictedJcs, encodeRestrictedJcs, isPlainDataObject, sameBytes as sameJcsBytes } from "./jcs"
 import {
@@ -117,6 +123,7 @@ export interface CollaborationKernelOptions {
   readonly signatureVerifier: Ed25519VerifierPort
   readonly projection?: { publish(input: { readonly scope: DocumentScope; readonly frameDigest: Digest }): void }
   readonly undo?: SessionUndoCoordinator
+  readonly diagnostics?: CollaborationLatencyDiagnosticsPort
 }
 
 export interface LocalIntentRequest {
@@ -187,7 +194,18 @@ export class CollaborationKernel {
   }
 
   commitLocalIntent(request: LocalIntentRequest): Promise<LocalCommitResult> {
-    return this.exclusive(() => this.commitLocalIntentExclusive(request))
+    const trace = new LocalCommitLatencyTrace(this.options.diagnostics)
+    return this.exclusive(async () => {
+      trace.finishQueue()
+      try {
+        const result = await this.commitLocalIntentExclusive(request, trace)
+        trace.publish("succeeded")
+        return result
+      } catch (error) {
+        trace.publish("failed")
+        throw error
+      }
+    })
   }
 
   receiveFrame(exactBytes: Uint8Array, signal?: AbortSignal): Promise<IncomingFrameResult> {
@@ -239,13 +257,19 @@ export class CollaborationKernel {
     this.replicaDoc.destroy()
   }
 
-  private async commitLocalIntentExclusive(request: LocalIntentRequest): Promise<LocalCommitResult> {
+  private async commitLocalIntentExclusive(
+    request: LocalIntentRequest,
+    trace: LocalCommitLatencyTrace,
+  ): Promise<LocalCommitResult> {
     this.requireLive()
     assertDocumentOwnerBinding(this.options.owner.protocolPort)
     if (typeof request.prepare !== "function") invalid("Local intent prepare callback is required")
     const operationId = parseId128(request.operationId)
     const localActorId = this.options.ports.localAuthority.actorId
-    const lookup = await this.options.ports.persistence.lookupOperation(localActorId, operationId)
+    const lookup = await trace.measure(
+      "operation-lookup",
+      () => this.options.ports.persistence.lookupOperation(localActorId, operationId),
+    )
     if (lookup.status === "accepted") {
       if (!await this.options.ports.persistence.isReachableFromAcceptedHead(lookup.ref)) throw new CollaborationKernelError("read-only-recovery-required", "Accepted operation is not reachable from the sole durable head")
       await this.refreshAcceptedHead()
@@ -256,16 +280,19 @@ export class CollaborationKernel {
     }
     if (lookup.status === "equivocation") await this.quarantineEquivocation(lookup.frameDigests)
     assertNotAborted(request.signal)
-    const durableHead = normalizeAcceptedHead(await this.options.ports.persistence.loadReplicaHead(this.options.scope), this.options.scope)
+    const durableHead = await trace.measure("head-check", async () => normalizeAcceptedHead(
+      await this.options.ports.persistence.loadReplicaHead(this.options.scope),
+      this.options.scope,
+    ))
     if (durableHead.headDigest !== this.head.headDigest) stale()
     const previousActorHead = actorHeadFor(this.head.actorHeads, localActorId)
-    const authority = await this.options.ports.localAuthority.prepareFinalFrameAuthority({
-      scope: this.options.scope,
-      operationId,
-      baseFrontier: this.head.frontier,
-      previousActorHead,
-      ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
-    })
+    const authority = await trace.measure("prepare/facts", () => this.options.ports.localAuthority.prepareFinalFrameAuthority({
+        scope: this.options.scope,
+        operationId,
+        baseFrontier: this.head.frontier,
+        previousActorHead,
+        ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
+      }))
     if (authority === "pending") pending("Local edit authority is pending")
     if (authority === "rejected") invalid("Local edit authority rejected the mutation")
     if (authority.actorId !== localActorId || authority.actorId !== authority.signerAuthority.actorId) invalid("Local authority actor binding mismatches")
@@ -288,11 +315,11 @@ export class CollaborationKernel {
       ownerSchemaDigest: this.options.owner.protocolPort.schemaDigest,
       validationArtifactSetDigest,
     })
-    const prepared = requirePreparedLocalIntent(await request.prepare({
-      base: baseState,
-      context: constructionContext,
-      signal: request.signal,
-    }))
+    const prepared = await trace.measure("prepare/facts", async () => requirePreparedLocalIntent(await request.prepare({
+        base: baseState,
+        context: constructionContext,
+        signal: request.signal,
+      })))
     assertNotAborted(request.signal)
     assertOwnerExternalFactPort(prepared.externalFacts, this.options.owner)
     claimOwnerFactPort(prepared.externalFacts)
@@ -314,7 +341,10 @@ export class CollaborationKernel {
     })
     const causalContextJcs = encodeRestrictedJcs(context)
     const fullBaseUpdate = encodeFullUpdate(this.replicaDoc)
-    const candidate = cloneExactBaseDocument(this.options.ports, fullBaseUpdate, baseStateVector, authority.signerAuthority.replicaId)
+    const candidate = trace.measureSync(
+      "candidate-clone",
+      () => cloneExactBaseDocument(this.options.ports, fullBaseUpdate, baseStateVector, authority.signerAuthority.replicaId),
+    )
     try {
       const ownerContext = {
         scope: this.options.scope,
@@ -332,20 +362,28 @@ export class CollaborationKernel {
         this.options.owner.closurePort.discoverDependencies({ context: ownerContext, intent }),
         "Local owner dependency discovery failed",
       )
-      const applyResult = applyOwnerIntent(
-        this.options.owner.protocolPort,
-        candidate,
-        ownerContext,
-        intent,
-        prepared.externalFacts,
-      )
-      assertConsumedDependencies(prepared.externalFacts, declaredDependencies)
-      requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, candidate, applyResult), "Candidate post-state violates owner invariants")
+      const applyResult = trace.measureSync("reducer", () => {
+        const result = applyOwnerIntent(
+          this.options.owner.protocolPort,
+          candidate,
+          ownerContext,
+          intent,
+          prepared.externalFacts,
+        )
+        assertConsumedDependencies(prepared.externalFacts, declaredDependencies)
+        requireOwnerState(this.options.owner.protocolPort.validatePost(baseState, candidate, result), "Candidate post-state violates owner invariants")
+        return result
+      })
       const evidence = this.codec.parseActualWriteEvidence(this.options.owner.protocolPort.deriveActualWriteEvidence(applyResult))
       assertEvidenceClosure(evidence, this.options.scope, this.options.owner.protocolPort.schemaDigest, intentDigest)
       const actualWriteEvidenceJcs = encodeRestrictedJcs(evidence)
-      const yjsUpdate = encodeCandidateDelta(candidate, baseStateVector)
-      const canonical = validateCanonicalDelta(this.options.ports, fullBaseUpdate, baseStateVector, yjsUpdate, authority.signerAuthority.replicaId)
+      const { yjsUpdate, canonical } = trace.measureSync("canonicalize", () => {
+        const update = encodeCandidateDelta(candidate, baseStateVector)
+        return {
+          yjsUpdate: update,
+          canonical: validateCanonicalDelta(this.options.ports, fullBaseUpdate, baseStateVector, update, authority.signerAuthority.replicaId),
+        }
+      })
       try {
         const postStateVector = canonical.postStateVector
         const postCanonicalStateDigest = ownerCanonicalDigest(this.options.owner.protocolPort, canonical.document)
@@ -379,22 +417,26 @@ export class CollaborationKernel {
           signerAuthorityKind: authority.signerAuthority.kind,
           signerAuthorityDigest: causalSignerAuthorityDigest(authority.signerAuthority),
         })
-        const header = await this.codec.signCore(core, authority.signer)
+        const header = await trace.measure("sign", () => this.codec.signCore(core, authority.signer))
         const bytes = this.codec.encodeFrame({
           header,
           sections: { typedIntentJcs, causalContextJcs, baseStateVector, yjsUpdate, actualWriteEvidenceJcs },
         })
         const frame = this.codec.decodeFrame(bytes)
         const newHead = causalHeadRefFromDecodedFrame(frame)
-        const durableHeadDigest = await this.persistLocal(frame, newHead, request.signal)
+        const durableHeadDigest = await this.persistLocal(frame, newHead, request.signal, trace)
         try {
-          applyYjsUpdate(this.replicaDoc, yjsUpdate, ACCEPTED_FRAME_ORIGIN)
-          this.installHead(frame, [newHead], postCanonicalStateDigest, durableHeadDigest)
+          trace.measureSync("replica-apply", () => {
+            applyYjsUpdate(this.replicaDoc, yjsUpdate, ACCEPTED_FRAME_ORIGIN)
+            this.installHead(frame, [newHead], postCanonicalStateDigest, durableHeadDigest)
+          })
         } catch (error) {
           await this.rebuildAfterDurableApplyFailure(error)
         }
         this.finishUndo(applyResult, operationId, request.historyTransition)
-        if (!request.signal?.aborted) this.options.projection?.publish({ scope: this.options.scope, frameDigest: frame.frameDigest })
+        if (!request.signal?.aborted) {
+          trace.measureSync("projection", () => this.options.projection?.publish({ scope: this.options.scope, frameDigest: frame.frameDigest }))
+        }
         return Object.freeze({ status: "saved-locally", frame, acceptedFrontierDigest: this.head.frontierDigest })
       } finally {
         canonical.document.destroy()
@@ -610,19 +652,24 @@ export class CollaborationKernel {
     }
   }
 
-  private async persistLocal(frame: DecodedCausalEditFrame, head: CausalHeadRef, signal?: AbortSignal): Promise<Digest> {
+  private async persistLocal(
+    frame: DecodedCausalEditFrame,
+    head: CausalHeadRef,
+    signal: AbortSignal | undefined,
+    trace?: LocalCommitLatencyTrace,
+  ): Promise<Digest> {
     const ref = frameObjectRefFromDecodedFrame(frame)
     assertNotAborted(signal)
-    await this.options.ports.persistence.putImmutableFrame(ref, frame.bytes)
+    await measureOptional(trace, "object", () => this.options.ports.persistence.putImmutableFrame(ref, frame.bytes))
     assertNotAborted(signal)
-    await this.options.ports.persistence.putReplicationOutboxRef(ref)
+    await measureOptional(trace, "outbox", () => this.options.ports.persistence.putReplicationOutboxRef(ref))
     assertNotAborted(signal)
-    const journal = await this.options.ports.persistence.appendFrameJournal(ref)
+    const journal = await measureOptional(trace, "journal", () => this.options.ports.persistence.appendFrameJournal(ref))
     assertFrameRefMirror(journal.ref, ref, "Journal append")
     parseDigest(journal.journalRecordDigest)
     assertNotAborted(signal)
     const frontierDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.causalFrontier, { format: "convax.causal-frontier", heads: [head] })
-    return this.commitReplicaHead(ref, journal, frontierDigest)
+    return this.commitReplicaHead(ref, journal, frontierDigest, trace)
   }
 
   private async persistIncoming(frame: DecodedCausalEditFrame, _head: CausalHeadRef, frontier: CausalFrontier): Promise<Digest> {
@@ -639,14 +686,15 @@ export class CollaborationKernel {
     ref: FrameObjectRef,
     journal: import("./ports").JournalAppendPortEvidence,
     resultingFrontierDigest: Digest,
+    trace?: LocalCommitLatencyTrace,
   ): Promise<Digest> {
     const expectedReplicaHeadRecordDigest = this.head.headDigest
-    const result = await this.options.ports.persistence.compareAndCommitReplicaHead({
-      ref,
-      journal,
-      expectedReplicaHeadRecordDigest,
-      resultingFrontierDigest,
-    })
+    const result = await measureOptional(trace, "head", () => this.options.ports.persistence.compareAndCommitReplicaHead({
+        ref,
+        journal,
+        expectedReplicaHeadRecordDigest,
+        resultingFrontierDigest,
+      }))
     if (result.status === "rejected") {
       throw new CollaborationKernelError("read-only-recovery-required", `Replica-head durability rejected: ${result.code}`)
     }
@@ -660,7 +708,10 @@ export class CollaborationKernel {
       parseDigest(evidence.observedReplicaHeadRecordDigest)
       parseDigest(evidence.quarantineCommitRecordDigest)
       parseDigest(evidence.shardDispositionHeadRecordDigest)
-      const reloaded = normalizeAcceptedHead(await this.options.ports.persistence.loadReplicaHead(this.options.scope), this.options.scope)
+      const reloaded = await measureOptional(trace, "post-head-check", async () => normalizeAcceptedHead(
+        await this.options.ports.persistence.loadReplicaHead(this.options.scope),
+        this.options.scope,
+      ))
       if (reloaded.headDigest !== evidence.shardDispositionHeadRecordDigest) invalid("Quarantine disposition head was not durably published")
       throw new CollaborationKernelError("equivocation-quarantine", "Replica-head compare-and-commit quarantined the frame")
     }
@@ -672,7 +723,10 @@ export class CollaborationKernel {
       || evidence.resultingFrontierDigest !== resultingFrontierDigest
     ) invalid("Head commit evidence mirrors do not match the commit request")
     parseDigest(evidence.resultingReplicaHeadRecordDigest)
-    const reloaded = normalizeAcceptedHead(await this.options.ports.persistence.loadReplicaHead(this.options.scope), this.options.scope)
+    const reloaded = await measureOptional(trace, "post-head-check", async () => normalizeAcceptedHead(
+      await this.options.ports.persistence.loadReplicaHead(this.options.scope),
+      this.options.scope,
+    ))
     if (
       reloaded.headDigest !== evidence.resultingReplicaHeadRecordDigest
       || reloaded.frontierDigest !== resultingFrontierDigest
@@ -746,6 +800,76 @@ export class CollaborationKernel {
     return result
   }
 
+}
+
+class LocalCommitLatencyTrace {
+  private readonly startedAt = monotonicNow()
+  private readonly stageDurations = Object.fromEntries(
+    collaborationLatencyStages.map((stage) => [stage, 0]),
+  ) as Record<CollaborationLatencyStage, number>
+  private published = false
+
+  constructor(private readonly port: CollaborationLatencyDiagnosticsPort | undefined) {}
+
+  finishQueue(): void {
+    this.stageDurations.queue += monotonicNow() - this.startedAt
+  }
+
+  async measure<T>(stage: CollaborationLatencyStage, operation: () => Promise<T>): Promise<T> {
+    const startedAt = monotonicNow()
+    try {
+      return await operation()
+    } finally {
+      this.stageDurations[stage] += monotonicNow() - startedAt
+    }
+  }
+
+  measureSync<T>(stage: CollaborationLatencyStage, operation: () => T): T {
+    const startedAt = monotonicNow()
+    try {
+      return operation()
+    } finally {
+      this.stageDurations[stage] += monotonicNow() - startedAt
+    }
+  }
+
+  publish(outcome: CollaborationLatencyDiagnostic["outcome"]): void {
+    if (!this.port || this.published) return
+    this.published = true
+    const totalDurationMs = monotonicNow() - this.startedAt
+    const stages = Object.freeze({ ...this.stageDurations })
+    const port = this.port
+    void Promise.resolve()
+      .then(async () => {
+        let sample: Awaited<ReturnType<NonNullable<CollaborationLatencyDiagnosticsPort["sample"]>>> | undefined
+        try {
+          sample = await port.sample?.()
+        } catch {
+          sample = undefined
+        }
+        const diagnostic: CollaborationLatencyDiagnostic = Object.freeze({
+          format: "convax.collaboration-latency-diagnostic",
+          outcome,
+          totalDurationMs,
+          stages,
+          ...(sample ? { sample: Object.freeze({ ...sample }) } : {}),
+        })
+        await port.record(diagnostic)
+      })
+      .catch(() => undefined)
+  }
+}
+
+function measureOptional<T>(
+  trace: LocalCommitLatencyTrace | undefined,
+  stage: CollaborationLatencyStage,
+  operation: () => Promise<T>,
+): Promise<T> {
+  return trace ? trace.measure(stage, operation) : operation()
+}
+
+function monotonicNow(): number {
+  return typeof globalThis.performance?.now === "function" ? globalThis.performance.now() : Date.now()
 }
 
 function applyOwnerIntent(

@@ -44,6 +44,18 @@ Canvas owns document and editor semantics independently of Project and Agent.
   it and submits one bounded typed intent atomically.
 - View effects are valid capabilities but cannot turn a committed domain mutation
   into a failed mutation.
+- Immediate mutation feedback is an independent Canvas view overlay. Overlay types
+  never reuse `CanvasDocument`, `CanvasNode` or `CanvasEdge`, never allocate
+  canonical identity, and never enter projection/query, selection, clipboard,
+  commands, IPC, Y.Doc or persistence. The React Flow adapter alone materializes
+  non-interactive ghost presentation. Guarded hide/replace records require the exact
+  live incarnation; a mismatch retains authority. Keep each session bounded to 32
+  pending operations and 512 ghost entities and coalesce authority/overlay changes
+  into one presentation snapshot.
+- Visual undo/redo history stores only bounded guarded presentation deltas between
+  authoritative local semantic roots. It does not select Main's root, cache Y.Doc,
+  run the reducer, or send its operation id as a command. Reconcile only against the
+  actual Main `historyTransition`; mismatch/failure clears the speculative suffix.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
   parent coordinates. Do not wait for or trust stale mounted renderer geometry.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
@@ -57,6 +69,17 @@ Canvas owns document and editor semantics independently of Project and Agent.
   required final position. Eligible flows are batch picker import and new pending
   generation. Pointer drops, ordinary paste, duplicate, and duplicate-drag do not
   move the viewport unless a separate explicit view command requests it.
+- Duplicate accepts only live source node ids plus a bounded offset. Canvas resolves
+  source content against the latest snapshot, derives clone node/edge identities,
+  preserves Group containment, and commits one guarded `canvas.nodes.duplicate`
+  typed intent atomically. Same-Canvas paste uses internal-edge scope.
+- Group fold state is canonical optional Group node data; UI Fold/Unfold and all
+  grouping/layout actions submit owner-defined application commands. Optional Fit
+  runs only after the authoritative layout commit succeeds.
+- Group drop/reparent atomically commits parentage with local geometry, and Alt-drag
+  duplicate commits only after its transient preview ends. Title, Group appearance,
+  generation-tool preference, mention edge, and intrinsic-media geometry edits use
+  closed application commands; Renderer code must not submit a general node patch.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply

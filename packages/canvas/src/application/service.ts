@@ -1,5 +1,5 @@
 import type { CanvasDocument } from "../types"
-import type { BoundedOperationReceipt } from "../collaboration"
+import type { BoundedOperationReceipt, Digest } from "../collaboration"
 import type { CanvasBusinessCommandResult, CanvasCommandEnvelope } from "./commands"
 import type { CanvasDocumentRef } from "./persistence"
 import type { CanvasNodeQuery, CanvasNodeSummary } from "./queries"
@@ -14,6 +14,8 @@ export interface CanvasApplicationCommandRequest extends CanvasDocumentRef {
 /** A read-only UI/application projection, never a persistence payload. */
 export interface CanvasApplicationCommandResult extends CanvasBusinessCommandResult {
   operationReceipt: BoundedOperationReceipt
+  /** Accepted frame marker for host/session reconciliation; never a command input. */
+  acceptedFrameDigest?: Digest
 }
 
 export interface CanvasApplicationQueryResult {

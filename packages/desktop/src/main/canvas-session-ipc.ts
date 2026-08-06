@@ -1,4 +1,4 @@
-import type { CanvasDocumentRef } from "@convax/canvas/application"
+import type { CanvasApplicationCommand, CanvasDocumentRef } from "@convax/canvas/application"
 import type { CanvasRendererCommand } from "@convax/canvas/collaboration"
 import { parseId128, type Id128 } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
@@ -91,6 +91,13 @@ export function registerCanvasSessionIpc(
     const input = requireSubmit(value)
     await requireActiveBinding(event, input)
     return owner.submitRenderer(input)
+  })
+
+  options.ipcMain.handle(canvasSessionIpcChannels.executeApplication, async (event, value) => {
+    trusted(event)
+    const input = requireApplication(value)
+    await requireActiveBinding(event, input)
+    return owner.executeApplication(input)
   })
 
   options.ipcMain.handle(canvasSessionIpcChannels.undo, async (event, value) => {
@@ -205,6 +212,25 @@ function requireSubmit(value: unknown): CanvasRendererSessionScope & {
     ...requireScopeFields(record),
     commandId: requireCommandId(record.commandId),
     command: requireRendererCommand(record.command),
+  })
+}
+
+function requireApplication(value: unknown): CanvasRendererSessionScope & {
+  readonly command: CanvasApplicationCommand
+  readonly commandId: string
+} {
+  const record = exactRecord(value, ["command", "commandId", "ref", "sessionId"], "Canvas application request")
+  if (!record.command || typeof record.command !== "object" || Array.isArray(record.command)) {
+    throw new Error("Canvas application command is invalid")
+  }
+  const command = record.command as Record<string, unknown>
+  if (typeof command.type !== "string" || command.type.length < 1 || command.type.length > 128) {
+    throw new Error("Canvas application command type is invalid")
+  }
+  return Object.freeze({
+    ...requireScopeFields(record),
+    commandId: requireCommandId(record.commandId),
+    command: structuredClone(command) as unknown as CanvasApplicationCommand,
   })
 }
 

@@ -19,9 +19,9 @@ const PLUGIN: PluginRequirement = {
 }
 
 describe("Canvas semantic-history deterministic schedule", () => {
-  test("closes exactly the frozen 15 undoable intent families", () => {
-    expect(CANVAS_UNDOABLE_INTENT_KINDS).toHaveLength(15)
-    expect(new Set(CANVAS_UNDOABLE_INTENT_KINDS).size).toBe(15)
+  test("closes exactly the frozen 16 undoable intent families", () => {
+    expect(CANVAS_UNDOABLE_INTENT_KINDS).toHaveLength(16)
+    expect(new Set(CANVAS_UNDOABLE_INTENT_KINDS).size).toBe(16)
   })
 
   test("reproduces Vector F minimum-handle Kahn order and contiguous ordinal plan", () => {

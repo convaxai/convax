@@ -147,6 +147,7 @@ function renderWithEditor(
     commit?: CanvasEditorController["commit"]
     document?: CanvasDocument
     enteringNodeIds?: ReadonlySet<string>
+    executeCommand?: CanvasEditorController["executeCommand"]
     executeSelectionAction?: CanvasEditorController["executeSelectionAction"]
     isSelectionActionPending?: CanvasEditorController["isSelectionActionPending"]
     mutationSurface?: { disabled: boolean; visible: boolean }
@@ -195,6 +196,7 @@ function renderWithEditor(
     duplicateNode: () => {},
     endGesture: () => {},
     enteringNodeIds: options.enteringNodeIds ?? new Set(),
+    executeCommand: options.executeCommand ?? (() => {}),
     executeSelectionAction: options.executeSelectionAction ?? (() => {}),
     fileRenderers,
     finishNodeEntry: () => {},
@@ -1656,15 +1658,13 @@ describe("built-in node toolbar visibility", () => {
       "plugin.example:image.generate",
     )
     let request: CanvasAssistantRequest | undefined
-    let committed: CanvasDocument | undefined
+    let command: Parameters<CanvasEditorController["executeCommand"]>[0] | undefined
     renderWithEditor(selection([imageNode.id]), false, (props) => <BuiltinCanvasNode {...props} />, false, {
       assistantRender: (next) => {
         request = next
         return <div data-assistant-toolbar />
       },
-      commit: (update) => {
-        committed = update(stored)
-      },
+      executeCommand: (next) => { command = next },
       document: stored,
       node: imageNode,
     })
@@ -1672,7 +1672,11 @@ describe("built-in node toolbar visibility", () => {
     expect(request?.generation?.ownerToolId).toBe("plugin.example:image.generate")
     expect(request?.mentionedNodeIds).toEqual([])
     request?.generation?.onOwnerToolIdChange?.("plugin.example:image.alternate")
-    expect(committed && getCanvasNodeGenerationToolId(committed.nodes[0])).toBe("plugin.example:image.alternate")
+    expect(command).toEqual({
+      type: "nodes.setGenerationToolId",
+      nodeId: imageNode.id,
+      toolId: "plugin.example:image.alternate",
+    })
   })
 
   test("defaults file and Agent conversations to direct incoming inputs only", () => {

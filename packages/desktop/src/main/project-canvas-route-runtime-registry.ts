@@ -18,6 +18,7 @@ import type {
 } from "@convax/project/node"
 
 import {
+  createMainCollaborationLatencyDiagnosticsPort,
   createKernelBackedMainCollaborationDocumentSession,
   type MainCollaborationDocumentSession,
 } from "./collaboration-document-session"
@@ -294,6 +295,9 @@ export function createProductionCanvasRouteRuntimeOpener(input: {
           ports: runtime.ports,
           signatureVerifier: input.signatureVerifier,
           createOperationId: input.createOperationId,
+          diagnostics: createMainCollaborationLatencyDiagnosticsPort({
+            sample: () => runtime.persistence.sampleLatencyDiagnostics(scope),
+          }),
         })
         return Object.freeze({ session, dispose() { session.dispose(); runtime.dispose() } })
       } catch (error) {
@@ -366,4 +370,3 @@ function leaseSession(
     },
   })
 }
-

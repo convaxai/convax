@@ -403,6 +403,33 @@ export function assertPluginState(
   assertJsonBound(value.state, 32, 4096, 256 * 1024, `${label}.state`)
 }
 
+const canvasGroupColors = new Set([
+  "default", "gray", "brown", "orange", "yellow", "green", "blue", "purple", "pink", "red",
+])
+const canvasGroupEmojis = new Set([
+  "folder", "briefcase", "inbox", "paperclip", "bookmark", "books", "notebook", "idea", "sparkles",
+  "star", "fire", "bolt", "target", "rocket", "compass", "globe", "map", "camera", "film", "music",
+  "palette", "image", "chart", "calendar", "clock", "check", "warning", "heart", "gem", "trophy", "plant",
+  "leaf", "coffee", "game", "robot", "brain", "team", "package", "tools", "puzzle", "index", "memo",
+  "pencil", "pin", "link", "archive", "card-file", "laptop", "desktop", "phone", "microphone", "headphones",
+  "key", "lock", "search", "bell", "megaphone", "gift", "party", "flag", "hourglass", "sun", "moon",
+  "cloud", "rainbow", "blossom", "sunflower", "tree", "clover", "cactus", "mountain", "wave", "butterfly",
+  "cat", "dog", "fox", "unicorn", "whale", "apple", "pizza", "cake", "football", "basketball", "focus", "peace",
+])
+
+function assertGenerationToolId(value: unknown, label: string) {
+  if (value === undefined) return
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 512 ||
+    value !== value.trim() ||
+    /[\u0000-\u001f\u007f]/.test(value)
+  ) {
+    fail("invalid-node-data", `${label} is invalid`)
+  }
+}
+
 export function assertNodeData(value: unknown, label = "NodeDataEnvelope"): asserts value is NodeDataEnvelope {
   if (typeof value !== "object" || value === null) fail("invalid-node-data", `${label} must be an object`)
   const candidate = value as Record<string, unknown>
@@ -412,23 +439,33 @@ export function assertNodeData(value: unknown, label = "NodeDataEnvelope"): asse
     assertText(value.title, 0, 4096, `${label}.title`)
     if (value.instructions !== null) assertText(value.instructions, 0, 64 * 1024, `${label}.instructions`)
   } else if (candidate.kind === "group") {
-    assertExactKeys(value, ["format", "kind", "title"], label)
+    assertExactKeys(value, ["format", "kind", "title", ...(candidate.folded === undefined ? [] : ["folded"]), ...(candidate.appearance === undefined ? [] : ["appearance"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
+    if (candidate.folded !== undefined && candidate.folded !== true) fail("invalid-node-data", `${label}.folded is invalid`)
+    if (candidate.appearance !== undefined) {
+      assertExactKeys(candidate.appearance, ["color", "emoji"], `${label}.appearance`)
+      if (!canvasGroupColors.has(candidate.appearance.color as string) || !canvasGroupEmojis.has(candidate.appearance.emoji as string)) {
+        fail("invalid-node-data", `${label}.appearance is invalid`)
+      }
+    }
   } else if (candidate.kind === "resource") {
-    assertExactKeys(value, ["format", "kind", "title", "resource"], label)
+    assertExactKeys(value, ["format", "kind", "title", "resource", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertResourceRef(value.resource)
+    assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
   } else if (candidate.kind === "plugin-surface") {
     assertExactKeys(value, ["format", "kind", "title"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "generation") {
-    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass"], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
+    assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "manual-pending") {
-    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", "state"], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", "state", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
+    assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
     if (typeof value.state !== "object" || value.state === null) fail("invalid-node-data", `${label}.state is invalid`)
     if ((value.state as { phase?: unknown }).phase === "pending")
       assertExactKeys(value.state, ["phase"], `${label}.state`)
@@ -717,6 +754,7 @@ const UNDOABLE_INTENT_KINDS = new Set([
   "canvas.resources.pending-generation.create",
   "canvas.elements.remove",
   "canvas.nodes.set-geometry",
+  "canvas.nodes.duplicate",
   "canvas.nodes.update-data",
   "canvas.nodes.set-plugin-state",
   "canvas.nodes.set-structural-parent",

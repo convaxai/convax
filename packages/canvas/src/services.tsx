@@ -34,6 +34,8 @@ export interface CanvasResourceMutationRequest {
 
 export interface CanvasResourceMutationService {
   add(input: CanvasResourceMutationRequest): Promise<{
+    /** The host already installed the same-frame authoritative projection. */
+    authoritativeProjectionDelivered?: boolean
     createdNodeIds: readonly string[]
     warnings: readonly string[]
   }>
@@ -42,8 +44,11 @@ export interface CanvasResourceMutationService {
     nodeId: string
     signal: AbortSignal
     source?: Extract<CanvasResourceSource, { kind: "host-directory" | "host-file" }>
-  }): Promise<{ warnings: readonly string[] }>
-  saveEditableCopy?(input: { nodeId: string; signal: AbortSignal }): Promise<{ warnings: readonly string[] }>
+  }): Promise<{ authoritativeProjectionDelivered?: boolean; warnings: readonly string[] }>
+  saveEditableCopy?(input: { nodeId: string; signal: AbortSignal }): Promise<{
+    authoritativeProjectionDelivered?: boolean
+    warnings: readonly string[]
+  }>
 }
 
 export interface CanvasResourceHydrationService {

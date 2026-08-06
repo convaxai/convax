@@ -2,9 +2,11 @@ import type { CanvasResourceSource } from "@convax/canvas/application"
 import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
+import type { Digest, Id128 } from "@convax/collaboration"
+import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/35"
+export const desktopProtocolVersion = "convax.desktop-ipc/36"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -15,10 +17,18 @@ export const canvasTextResourceIpcChannel = "canvas:text-resource-save"
 
 export type CanvasTextResourceClient = CanvasTextResourceService
 
+export type CanvasResourceProjectionDelivery =
+  | Readonly<{
+      status: "accepted"
+      acceptedFrameDigest: Digest
+      projection: CanvasSessionProjectionDto
+    }>
+  | Readonly<{ status: "unavailable" }>
+
 export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]
   operationReceipt: BoundedOperationReceipt
-  projection: CanvasDocument
+  delivery: CanvasResourceProjectionDelivery
   warnings: readonly string[]
 }
 
@@ -33,6 +43,7 @@ export interface CanvasResourceAddInput {
     sourceToken: string
   }[]
   projectId: string
+  sessionId: Id128
   parentId?: string
   pending?: { kind: "image" | "video"; label: string }
   relation?: {
@@ -47,6 +58,8 @@ export interface CanvasResourceRelinkInput {
   canvasId: string
   commandId: string
   nodeId: string
+  projectId: string
+  sessionId: Id128
   source:
     | { kind: "host-directory" | "host-file"; path: string }
     | { kind: "local-file"; mediaType?: string; name: string; sourceToken: string }
@@ -56,11 +69,13 @@ export interface CanvasResourceSaveEditableCopyInput {
   canvasId: string
   commandId: string
   nodeId: string
+  projectId: string
+  sessionId: Id128
 }
 
 export interface CanvasResourceRelinkResult {
+  delivery: CanvasResourceProjectionDelivery
   operationReceipt: BoundedOperationReceipt
-  projection: CanvasDocument
   warnings: readonly string[]
 }
 

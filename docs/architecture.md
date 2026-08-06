@@ -923,6 +923,15 @@ replicates the stored bytes without replaying the intent or re-signing it. No JS
 repository, renderer history, delivery queue, service registry, or global revision
 counter may be kept as a mirror.
 
+Project/node may retain a process-local `VerifiedMaterializedHeadCache` only as a
+digest-bound, disposable projection of the exact durable head record, checkpoint
+base, journal tail and reachable frame closure. Every hot-path use first re-reads
+and hashes the durable head record; a mismatch, recovery, checkpoint change,
+quarantine or reopen discards the projection and rebuilds from durable objects.
+The cache never authorizes a write or recovery decision. Operation-sidecar and
+outbox-usage indexes are likewise rebuildable derived state: immutable sidecar
+fsync precedes index publication, and reopen validates/rebuilds them.
+
 The Project asset single-source transition is one approved breaking cutover under
 this rule. Its authoritative scope and safeguards are recorded in
 [the Project asset single-source design](superpowers/specs/2026-07-21-project-asset-single-source-design.md).
@@ -1580,7 +1589,8 @@ UI action, typed Agent tool, or principal-bound Plugin call
   -> sign one final causal frame from the validated candidate result
   -> @convax/project/node fsyncs the exact object/outbox/journal/head barrier
   -> apply that exact accepted delta to replicaDoc through @convax/collaboration ports
-  -> optional mounted-view refresh/reveal
+  -> return the authoritative session projection plus accepted frame digest
+  -> optional mounted-view reconciliation/reveal
 ```
 
 The domain mutation commits before optional view behavior. Selection, reveal,
@@ -1595,6 +1605,45 @@ Its failure cannot reverse a successful domain commit. Reduced motion sets its
 duration to zero but retains necessary positioning. Pointer drops, ordinary paste,
 duplicate, and duplicate-drag preserve the camera by default; broader Fit, Reveal,
 and Zoom remain explicit view operations.
+
+Mounted Desktop Canvas UI commands use one session lease for application execute,
+undo, redo, resource delivery and projection query. A local mutation response
+installs its complete session projection and marks the accepted frame digest as
+covered; the matching invalidation therefore performs no query. An unknown/remote
+frame schedules one trailing query, and an invalidation arriving during that query
+retains another trailing refresh. `drain` waits only the renderer lane, `refresh`
+queries explicitly, and compatibility `flush` is reserved for scope transitions,
+Agent barriers and recovery. UI semantic roots enter only the originating lease;
+Agent, Plugin and background roots never enter a renderer undo stack.
+
+Immediate feedback is a Canvas-owned, session-local presentation overlay, not a
+candidate projection. Its symbol operation token and `ghost-node`, `ghost-edge`,
+exact-incarnation `hide-entity`, and guarded `replace-presentation` records are
+non-serializable view state. They enter only the React Flow adapter; selection,
+entity resolution, clipboard, Agent/Plugin queries, commands, IPC, Y.Doc and durable
+storage always observe the authoritative projection. Ghosts are non-interactive and
+bounded to 32 operations/512 entities. A visual history cursor derives guarded
+presentation deltas from consecutive authoritative local roots; Main still chooses
+and materializes undo/redo intent, and the renderer accepts only the returned actual
+`historyTransition`. Authority installation and overlay settlement are microtask
+coalesced into one combined presentation snapshot.
+
+Node duplication submits only the selected live node ids and a bounded offset. The
+Canvas owner resolves the latest source identities and content, derives all clone
+node/edge ids, and atomically commits the guarded `canvas.nodes.duplicate` typed
+intent. Group descendants and containment are resolved by the owner; same-Canvas
+paste uses the same intent with internal-edge scope. Renderer never constructs clone
+identities or persists a cloned snapshot.
+
+Group, Fold, Unfold, Ungroup, Align, Distribute, Layout, and Tidy UI actions use the
+same Canvas application-command bridge as Agent callers. Fold is canonical Group
+node data (`folded: true`, with absence meaning expanded), not renderer metadata.
+Group drop/reparent commits the parent and local geometry atomically; Alt-drag
+duplicate commits owner-derived clones only after its transient drag preview ends.
+Node title, Group appearance, file-card generation-tool preference, text-resource
+mention edges, and intrinsic media geometry also use closed application commands;
+the Renderer never persists a general node-data patch. Tidy performs its optional
+Fit only after the authoritative command commits.
 
 Canvas application transactions encode a non-empty bounded command list as one typed
 intent and execute it in one isolated candidate transaction against the latest
@@ -1685,6 +1734,11 @@ Neither Project nor Workbench imports the other to implement this flow.
   mounted and inactive Canvases have identical domain semantics.
 - Canvas attachments are validated read-only snapshots. Agents mutate through tools,
   never by shell/file edits under `.convax`.
+- Existing editable Canvas Markdown/text nodes are replaced through the typed
+  `canvas_update_text` tool. Desktop performs the editor's compare-and-replace,
+  publishes the new ProjectIndex content version, relinks the Canvas node, and only
+  then requests an optional mounted-view reload. Direct shell edits are not commits;
+  filesystem watcher events remain invalidation hints.
 - Opening a Project must not discover project-local `.agents`/`.claude` Skills or
   executable OpenCode extensions. Managed Skill changes refresh volatile OpenCode
   discovery state without replacing durable sessions.
@@ -2047,16 +2101,20 @@ preparation and never exposes staged paths through preload.
 Incompatible bridge changes must bump the Desktop protocol version so stale
 main/preload/renderer combinations fail visibly instead of hanging.
 
-The Canvas document bridge exposes authoritative projection `load` and typed-intent
-application-command `execute` only. Renderer translates local optimistic gestures
+The compatibility Canvas document bridge exposes authoritative projection `load`
+and a non-mounted typed-intent `execute`; mounted Canvas UI uses the session lease's
+application execute surface. Renderer translates local optimistic gestures
 into bounded semantic commands and never supplies an actor id, operation identity,
 raw Yjs update, or document version. Main derives the actor and stable identities,
 applies the intent through `CanvasApplicationService` to an isolated candidate,
 signs one final causal frame, persists its exact object/outbox/journal/head barrier,
 applies that exact accepted delta to `replicaDoc`, and returns the authoritative
-projection. Main-originated commits publish
-invalidations; renderer projection refresh and optional view effects are best-effort
-consumers.
+projection plus accepted frame digest. Main-originated commits publish digest-marked
+invalidations; same-frame responses suppress a query while unknown frames preserve
+one trailing refresh. Resource IPC carries the current session id: durable commit
+success is retained when delivery becomes unavailable, and a live Renderer performs
+one explicit refresh fallback. The incompatible bridge change is identified by
+`convax.desktop-ipc/36`.
 
 ## 11. Portable paths and trust boundaries
 

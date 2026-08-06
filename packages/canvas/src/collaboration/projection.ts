@@ -121,7 +121,24 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
       return {
         kind,
         label: node.data.title,
-        ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
+        ...(node.data.folded === true || node.data.appearance !== undefined || node.plugin !== null
+          ? {
+              metadata: {
+                ...pluginMetadata,
+                ...(node.data.folded === true
+                  ? { convaxGroupFold: { folded: true, schema: "convax.group-fold/1" } }
+                  : {}),
+                ...(node.data.appearance === undefined
+                  ? {}
+                  : {
+                      convaxGroupAppearance: {
+                        ...node.data.appearance,
+                        schema: "convax.group-appearance/1",
+                      },
+                    }),
+              },
+            }
+          : {}),
       }
     case "plugin-surface":
       // Without a live Plugin envelope the projected kind stays the bare
@@ -152,7 +169,17 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
         // activity overlays cannot invent work that never started.
         status: failed ? "error" : manualPending ? "idle" : "pending",
         ...(publicMessage === undefined ? {} : { error: publicMessage }),
-        metadata: pluginMetadata,
+        metadata: {
+          ...pluginMetadata,
+          ...(node.data.generationToolId === undefined
+            ? {}
+            : {
+                convaxGenerationPreference: {
+                  schema: "convax.node-generation-preference/1",
+                  toolId: node.data.generationToolId,
+                },
+              }),
+        },
       }
     }
     case "resource": {
@@ -168,6 +195,14 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
         metadata: {
           ...pluginMetadata,
           [canvasProjectionResourceMetadataKey]: resource,
+          ...(node.data.generationToolId === undefined
+            ? {}
+            : {
+                convaxGenerationPreference: {
+                  schema: "convax.node-generation-preference/1",
+                  toolId: node.data.generationToolId,
+                },
+              }),
         },
         resourceState: {
           mediaType: resource.mime,

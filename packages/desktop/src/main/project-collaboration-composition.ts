@@ -122,6 +122,12 @@ export function createMainProjectCollaborationComposition(input: Readonly<{
     submitRenderer(request) {
       return requireSession(request.ref, request.sessionId).owner.submitRenderer(request)
     },
+    executeApplication(request) {
+      return requireSession(request.ref, request.sessionId).owner.executeApplication(request)
+    },
+    deliverApplicationCommit(request) {
+      return requireSession(request.ref, request.sessionId).owner.deliverApplicationCommit(request)
+    },
     undo(request) {
       return requireSession(request.ref, request.sessionId).owner.undo(request)
     },

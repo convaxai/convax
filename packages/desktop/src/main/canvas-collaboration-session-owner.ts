@@ -16,6 +16,7 @@ import {
 import {
   queryCanvasNodes,
   type CanvasCommandActor,
+  type CanvasApplicationCommand,
   type CanvasApplicationCommandRequest,
   type CanvasApplicationCommandResult,
   type CanvasApplicationQueryResult,
@@ -33,6 +34,7 @@ import {
   type OwnerIntentConstructionContext,
   type OwnerIntentDependencies,
   type OwnerValidatedState,
+  type Digest,
 } from "@convax/collaboration"
 
 import type { MainCollaborationDocumentSession } from "./collaboration-document-session"
@@ -50,6 +52,7 @@ export type {
 export interface CanvasAuthoritativeSubmitResult {
   readonly operationReceipt: BoundedOperationReceipt
   readonly projection: CanvasDocument
+  readonly acceptedFrameDigest: Digest
 }
 
 export interface CanvasAuthoritativeProjection {
@@ -100,6 +103,30 @@ export interface CanvasCollaborationSessionOwner extends CanvasCollaborationAppl
     readonly command: CanvasRendererCommand
     readonly signal?: AbortSignal
   }): Promise<CanvasRendererSubmitResult>
+  executeApplication(input: {
+    readonly ref: CanvasDocumentRef
+    readonly sessionId: Id128
+    readonly commandId: string
+    readonly command: CanvasApplicationCommand
+    readonly signal?: AbortSignal
+  }): Promise<import("../canvas-session-contracts").CanvasRendererApplicationMutationResult>
+  /**
+   * Binds a Main-prepared UI application commit to its originating mounted
+   * renderer lease. A stale lease never reverses the already-durable commit.
+   */
+  deliverApplicationCommit(input: {
+    readonly ref: CanvasDocumentRef
+    readonly rendererActorId: string
+    readonly sessionId: Id128
+    readonly result: CanvasApplicationCommandResult
+  }): Promise<
+    | Readonly<{
+        status: "accepted"
+        acceptedFrameDigest: Digest
+        projection: CanvasSessionProjectionDto
+      }>
+    | Readonly<{ status: "unavailable" }>
+  >
   /** Main-only host surface; Plugin/renderer IPC must not expose it directly. */
   queryAuthoritative(ref: CanvasDocumentRef): Promise<CanvasAuthoritativeProjection>
   /** Main-only host surface; Plugin/renderer IPC must not expose it directly. */
@@ -137,6 +164,8 @@ interface CanvasRendererLease {
   readonly actor: CanvasCommandActor
   readonly undo: TransientSessionUndoCoordinator
   readonly abort: AbortController
+  readonly historyResponses: Map<Id128, CanvasRendererSubmitResult>
+  readonly deliveredOperationIds: Set<Id128>
 }
 
 export function createCanvasCollaborationSessionOwner(
@@ -168,14 +197,77 @@ export function createCanvasCollaborationSessionOwner(
       return exclusiveLease(lease, async () => {
         const operationId = deriveCanvasCommandOperationId({ ref: lease.owner.ref, actor: lease.actor, commandId: input.commandId })
         const result = await submitCommand(lease.owner, lease, "ui", { kind: "renderer", command: input.command }, operationId, leaseSignal(lease, input.signal))
-        return Object.freeze({ operationReceipt: result.operationReceipt, projection: projectSnapshot(lease.owner, lease, result.snapshot) })
+        return Object.freeze({
+          operationReceipt: result.operationReceipt,
+          projection: projectSnapshot(lease.owner, lease, result.snapshot),
+          acceptedFrameDigest: result.acceptedFrameDigest,
+        })
       })
+    },
+    async executeApplication(input) {
+      const lease = requireLease(input.ref, input.sessionId)
+      return exclusiveLease(lease, async () => {
+        const request: CanvasApplicationCommandRequest = {
+          ...lease.owner.ref,
+          envelope: { actor: lease.actor, command: input.command, commandId: input.commandId },
+          signal: leaseSignal(lease, input.signal),
+        }
+        const result = await submitApplicationCommand(lease.owner, lease, request)
+        return Object.freeze({
+          affectedNodeIds: result.affectedNodeIds,
+          changed: result.changed,
+          createdNodeIds: result.createdNodeIds,
+          operationReceipt: result.operationReceipt,
+          warnings: result.warnings,
+          acceptedFrameDigest: result.acceptedFrameDigest,
+          projection: projectSnapshot(lease.owner, lease, result.snapshot),
+        })
+      })
+    },
+    async deliverApplicationCommit(input) {
+      let lease: CanvasRendererLease
+      try {
+        lease = requireLease(input.ref, input.sessionId)
+      } catch {
+        return Object.freeze({ status: "unavailable" as const })
+      }
+      if (lease.actor.kind !== "renderer" || lease.actor.id !== input.rendererActorId) {
+        return Object.freeze({ status: "unavailable" as const })
+      }
+      try {
+        return await exclusiveLease(lease, async () => {
+          const frameDigest = input.result.acceptedFrameDigest
+          if (!frameDigest) return Object.freeze({ status: "unavailable" as const })
+          const snapshot = await lease.owner.document.query(requireCanvasSnapshot)
+          const receipt = [...snapshot.operations.values()].find(
+            (candidate) => candidate.operationId === input.result.operationReceipt.operationId,
+          )
+          if (!receipt || JSON.stringify(receipt) !== JSON.stringify(input.result.operationReceipt)) {
+            return Object.freeze({ status: "unavailable" as const })
+          }
+          if (!lease.deliveredOperationIds.has(receipt.operationId)) {
+            rememberDeliveredOperation(lease, receipt.operationId)
+            recordLocalSemanticRoot(lease.owner, lease, "saved-locally", receipt, frameDigest)
+          }
+          return Object.freeze({
+            status: "accepted" as const,
+            acceptedFrameDigest: frameDigest,
+            projection: projectSnapshot(lease.owner, lease, snapshot),
+          })
+        })
+      } catch {
+        return Object.freeze({ status: "unavailable" as const })
+      }
     },
     async submitAuthoritative(input) {
       const current = await documentEntry(input.ref)
       const operationId = deriveCanvasCommandOperationId({ ref: current.ref, actor: input.actor, commandId: input.commandId })
       const result = await submitCommand(current, undefined, input.caller, input.command, operationId, input.signal)
-      return Object.freeze({ operationReceipt: result.operationReceipt, projection: canvasDocumentFromSnapshot(result.snapshot) })
+      return Object.freeze({
+        operationReceipt: result.operationReceipt,
+        projection: canvasDocumentFromSnapshot(result.snapshot),
+        acceptedFrameDigest: result.acceptedFrameDigest,
+      })
     },
     async queryAuthoritative(ref) {
       return authoritativeProjection(await (await documentEntry(ref)).document.query(requireCanvasSnapshot))
@@ -239,30 +331,14 @@ export function createCanvasCollaborationSessionOwner(
     },
     async submit(request): Promise<CanvasApplicationCommandResult> {
       const current = await documentEntry(request)
-      let beforeIds = new Set<string>()
-      const committed = await current.document.submit({
-        operationId: deriveCanvasCommandOperationId({ ref: request, actor: request.envelope.actor, commandId: request.envelope.commandId }),
-        signal: request.signal,
-        prepare: async ({ base, context, signal }) => {
-          const snapshot = requireCanvasSnapshot(base)
-          beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
-          const adapted = options.applicationCommands.construct({ request, snapshot, context })
-          if (adapted === "rejected") {
-            console.error("Canvas application command mapping rejected", JSON.stringify(request.envelope.command))
-            throw new Error("Canvas application command has no frozen authoritative mapping")
-          }
-          return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
-        },
-      })
-      const result = await resultForCommit(current, committed.frame.header.core.operationId)
-      recordLocalSemanticRoot(current, undefined, committed.status, result.operationReceipt)
-      const affectedNodeIds = result.operationReceipt.resultEntities.filter((entity) => entity.kind === "node").map((entity) => entity.id)
+      const result = await submitApplicationCommand(current, undefined, request)
       return {
-        affectedNodeIds,
+        affectedNodeIds: result.affectedNodeIds,
         changed: true,
-        createdNodeIds: canvasDocumentFromSnapshot(result.snapshot).nodes.map((node) => node.id).filter((id) => !beforeIds.has(id)),
+        createdNodeIds: result.createdNodeIds,
         document: canvasDocumentFromSnapshot(result.snapshot),
         operationReceipt: result.operationReceipt,
+        acceptedFrameDigest: result.acceptedFrameDigest,
         warnings: [],
       }
     },
@@ -308,7 +384,7 @@ export function createCanvasCollaborationSessionOwner(
     const document = await options.openDocumentSession(ref)
     const entry = { ref, document, leases: new Map<Id128, CanvasRendererLease>() } as
       Omit<CanvasDocumentEntry, "unsubscribe"> & { unsubscribe?: () => void }
-    entry.unsubscribe = document.subscribe(() => publishDocument(entry as CanvasDocumentEntry))
+    entry.unsubscribe = document.subscribe((event) => publishDocument(entry as CanvasDocumentEntry, event.frameDigest))
     return Object.freeze({ ...entry, unsubscribe: entry.unsubscribe }) as CanvasDocumentEntry
   }
 
@@ -319,7 +395,7 @@ export function createCanvasCollaborationSessionOwner(
     command: CanvasAuthoritativeCommand,
     operationId: Id128 | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot }>> {
+  ): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot; acceptedFrameDigest: Digest }>> {
     const committed = await current.document.submit({
       operationId,
       signal,
@@ -327,8 +403,70 @@ export function createCanvasCollaborationSessionOwner(
         prepareCanvasCommand(current, requireCanvasSnapshot(base), context, command, attemptSignal),
     })
     const result = await resultForCommit(current, committed.frame.header.core.operationId)
-    recordLocalSemanticRoot(current, caller === "ui" ? lease : undefined, committed.status, result.operationReceipt)
-    return result
+    recordLocalSemanticRoot(
+      current,
+      caller === "ui" ? lease : undefined,
+      committed.status,
+      result.operationReceipt,
+      committed.frame.frameDigest,
+    )
+    return Object.freeze({ ...result, acceptedFrameDigest: committed.frame.frameDigest })
+  }
+
+  async function submitApplicationCommand(
+    current: CanvasDocumentEntry,
+    lease: CanvasRendererLease | undefined,
+    request: CanvasApplicationCommandRequest,
+  ): Promise<Readonly<{
+    affectedNodeIds: string[]
+    changed: true
+    createdNodeIds: string[]
+    operationReceipt: BoundedOperationReceipt
+    snapshot: CanvasSnapshot
+    acceptedFrameDigest: Digest
+    warnings: string[]
+  }>> {
+    let beforeIds = new Set<string>()
+    let caller: CanvasIntentCaller | undefined
+    const committed = await current.document.submit({
+      operationId: deriveCanvasCommandOperationId({
+        ref: request,
+        actor: request.envelope.actor,
+        commandId: request.envelope.commandId,
+      }),
+      signal: request.signal,
+      prepare: async ({ base, context, signal }) => {
+        const snapshot = requireCanvasSnapshot(base)
+        beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
+        const adapted = options.applicationCommands.construct({ request, snapshot, context })
+        if (adapted === "rejected") {
+          console.error("Canvas application command mapping rejected", JSON.stringify(request.envelope.command))
+          throw new Error("Canvas application command has no frozen authoritative mapping")
+        }
+        caller = adapted.caller
+        return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
+      },
+    })
+    const result = await resultForCommit(current, committed.frame.header.core.operationId)
+    recordLocalSemanticRoot(
+      current,
+      caller === "ui" ? lease : undefined,
+      committed.status,
+      result.operationReceipt,
+      committed.frame.frameDigest,
+    )
+    const document = canvasDocumentFromSnapshot(result.snapshot)
+    return Object.freeze({
+      affectedNodeIds: result.operationReceipt.resultEntities
+        .filter((entity) => entity.kind === "node")
+        .map((entity) => entity.id),
+      changed: true,
+      createdNodeIds: document.nodes.map((node) => node.id).filter((id) => !beforeIds.has(id)),
+      operationReceipt: result.operationReceipt,
+      snapshot: result.snapshot,
+      acceptedFrameDigest: committed.frame.frameDigest,
+      warnings: [],
+    })
   }
 
   function recordLocalSemanticRoot(
@@ -336,9 +474,10 @@ export function createCanvasCollaborationSessionOwner(
     originatingLease: CanvasRendererLease | undefined,
     commitStatus: "saved-locally" | "duplicate" | "recovered-final-frame",
     receipt: BoundedOperationReceipt,
+    frameDigest: Digest,
   ): void {
     if (commitStatus === "duplicate" || !receipt.semanticRoot) return
-    const targets = originatingLease ? [originatingLease] : [...current.leases.values()]
+    const targets = originatingLease ? [originatingLease] : []
     for (const target of targets) {
       try {
         target.undo.recordDurableRoot(receipt.operationId)
@@ -348,7 +487,7 @@ export function createCanvasCollaborationSessionOwner(
         // this mounted session's non-durable history.
         target.undo.clear("post-commit-cursor-failure")
       }
-      publishLease(target)
+      publishLease(target, frameDigest)
     }
   }
 
@@ -380,10 +519,7 @@ export function createCanvasCollaborationSessionOwner(
     const operationId = deriveCanvasCommandOperationId({ ref: lease.owner.ref, actor: lease.actor, commandId })
     const currentCursor = direction === "undo" ? lease.undo.peekUndo() : lease.undo.peekRedo()
     if (!currentCursor) {
-      const existing = await resultForOperationIfPresent(lease.owner, operationId)
-      return existing
-        ? Object.freeze({ operationReceipt: existing.operationReceipt, projection: projectSnapshot(lease.owner, lease, existing.snapshot) })
-        : null
+      return lease.historyResponses.get(operationId) ?? null
     }
     const cursorHolder: { value: ReturnType<TransientSessionUndoCoordinator["peekUndo"]> } = { value: null }
     const committed = await lease.owner.document.submit({
@@ -419,8 +555,26 @@ export function createCanvasCollaborationSessionOwner(
       else lease.undo.commitRedo(cursor.cursorToken, operationId)
     }
     const result = await resultForCommit(lease.owner, committed.frame.header.core.operationId)
-    publishLease(lease)
-    return Object.freeze({ operationReceipt: result.operationReceipt, projection: projectSnapshot(lease.owner, lease, result.snapshot) })
+    const transition = [...result.snapshot.semanticHistory.values()].find((value) =>
+      value.format === "convax.canvas-semantic-history-transition" &&
+      value.transitionOperationId === committed.frame.header.core.operationId)
+    if (
+      !transition ||
+      transition.format !== "convax.canvas-semantic-history-transition" ||
+      transition.mode !== (direction === "undo" ? "undone" : "redone")
+    ) {
+      throw new Error(`Canvas ${direction} committed without its actual semantic history transition`)
+    }
+    const response = Object.freeze({
+      operationReceipt: result.operationReceipt,
+      projection: projectSnapshot(lease.owner, lease, result.snapshot),
+      acceptedFrameDigest: committed.frame.frameDigest,
+      historyTransition: Object.freeze({ direction, rootOperationId: transition.rootOperationId }),
+    })
+    lease.historyResponses.set(operationId, response)
+    while (lease.historyResponses.size > 64) lease.historyResponses.delete(lease.historyResponses.keys().next().value!)
+    publishLease(lease, committed.frame.frameDigest)
+    return response
   }
 
   async function resultForCommit(current: CanvasDocumentEntry, operationId: Id128): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot }>> {
@@ -428,12 +582,6 @@ export function createCanvasCollaborationSessionOwner(
     const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === operationId)
     if (!receipt) throw new Error("Durable Canvas operation receipt is absent from the authoritative projection")
     return Object.freeze({ operationReceipt: structuredClone(receipt), snapshot })
-  }
-
-  async function resultForOperationIfPresent(current: CanvasDocumentEntry, operationId: Id128): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot }> | null> {
-    const snapshot = await current.document.query(requireCanvasSnapshot)
-    const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === operationId)
-    return receipt ? Object.freeze({ operationReceipt: structuredClone(receipt), snapshot }) : null
   }
 
   async function projectLease(lease: CanvasRendererLease): Promise<CanvasSessionProjectionDto> {
@@ -454,15 +602,20 @@ export function createCanvasCollaborationSessionOwner(
     })
   }
 
-  function publishLease(lease: CanvasRendererLease): void {
-    const event = Object.freeze({ format: "convax.canvas-session-invalidation" as const, ref: lease.owner.ref, sessionId: lease.sessionId })
+  function publishLease(lease: CanvasRendererLease, frameDigest: Digest): void {
+    const event = Object.freeze({
+      format: "convax.canvas-session-invalidation" as const,
+      ref: lease.owner.ref,
+      sessionId: lease.sessionId,
+      frameDigest,
+    })
     for (const listener of listeners) {
       try { listener(event) } catch { /* Invalidation failure cannot reverse durability. */ }
     }
   }
 
-  function publishDocument(current: CanvasDocumentEntry): void {
-    for (const lease of current.leases.values()) publishLease(lease)
+  function publishDocument(current: CanvasDocumentEntry, frameDigest: Digest): void {
+    for (const lease of current.leases.values()) publishLease(lease, frameDigest)
   }
 
   function createLease(current: CanvasDocumentEntry, actorInput: CanvasCommandActor): CanvasRendererLease {
@@ -476,6 +629,8 @@ export function createCanvasCollaborationSessionOwner(
         actor,
         undo: new TransientSessionUndoCoordinator({ createCursorToken: options.createCursorToken }),
         abort: new AbortController(),
+        historyResponses: new Map<Id128, CanvasRendererSubmitResult>(),
+        deliveredOperationIds: new Set<Id128>(),
       })
       current.leases.set(sessionId, lease)
       leases.set(sessionId, lease)
@@ -492,6 +647,13 @@ export function createCanvasCollaborationSessionOwner(
     const lease = leases.get(sessionId)
     if (!lease || refKey(lease.owner.ref) !== refKey(ref)) throw new Error("Canvas renderer session is stale")
     return lease
+  }
+
+  function rememberDeliveredOperation(lease: CanvasRendererLease, operationId: Id128): void {
+    lease.deliveredOperationIds.add(operationId)
+    while (lease.deliveredOperationIds.size > 64) {
+      lease.deliveredOperationIds.delete(lease.deliveredOperationIds.values().next().value!)
+    }
   }
 
   function revokeLease(lease: CanvasRendererLease, reason: "unmount" | "scope-change"): void {

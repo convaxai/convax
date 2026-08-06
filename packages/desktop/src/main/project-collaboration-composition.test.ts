@@ -4,7 +4,7 @@ import type {
   CanvasApplicationCommandResult,
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
-import { encodeBase64url, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
+import { encodeBase64url, parseDigest, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
 import type { ProjectCanvasCatalogProjection, ProjectCanvasRouteCommandResult } from "@convax/project/canvas"
 
 import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
@@ -13,6 +13,7 @@ import { createMainProjectCollaborationComposition } from "./project-collaborati
 const PROJECT_A = parseProjectId(`project_${"a".repeat(64)}`)
 const PROJECT_B = parseProjectId(`project_${"b".repeat(64)}`)
 const SESSION_A = parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => 1)))
+const FRAME = parseDigest("f".repeat(64))
 
 describe("Project collaboration composition", () => {
   test("routes catalog and document calls to the one current runtime without replacing results", async () => {
@@ -59,11 +60,12 @@ describe("Project collaboration composition", () => {
     await harness.composition.canvasSessions.queryRenderer(ref, opened.sessionId)
     expect(harness.queryRenderer).toHaveBeenCalledTimes(1)
 
-    harness.emit({ format: "convax.canvas-session-invalidation", ref, sessionId: opened.sessionId })
+    harness.emit({ format: "convax.canvas-session-invalidation", ref, sessionId: opened.sessionId, frameDigest: FRAME })
     harness.emit({
       format: "convax.canvas-session-invalidation",
       ref: { scopeId: PROJECT_B, canvasId: "other" },
       sessionId: opened.sessionId,
+      frameDigest: FRAME,
     })
     expect(events).toHaveLength(1)
 
@@ -142,6 +144,8 @@ function composition() {
     close,
     queryRenderer,
     submitRenderer: mock(async () => Object.freeze({ marker: "renderer-submit" }) as never),
+    executeApplication: mock(async () => Object.freeze({ marker: "application-submit" }) as never),
+    deliverApplicationCommit: mock(async () => Object.freeze({ status: "unavailable" as const })),
     queryAuthoritative: mock(async () => Object.freeze({ marker: "authoritative-query" }) as never),
     submitAuthoritative: mock(async () => Object.freeze({ marker: "authoritative-submit" }) as never),
     undo: mock(async () => null),

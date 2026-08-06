@@ -130,6 +130,22 @@ describe("Canvas Agent tools", () => {
       sync: { reloaded: false, warning: "renderer gone" },
     })
   })
+
+  test("updates text through the versioned writer and reloads the live Canvas", async () => {
+    const saveText = mock(async () => ({ contentRevision: "a".repeat(64), warnings: [] }))
+    const reloadDocument = mock(async () => true)
+    const provider = createProvider({ reloadDocument, saveText })
+    const controller = new AbortController()
+    await expect(provider.callTool(
+      { directory: "/project", scopeId: projectId }, "canvas_update_text",
+      { canvasId, commandId: "write-poem", content: "春天来了", nodeId: "text-node" },
+      { signal: controller.signal },
+    )).resolves.toEqual({ contentRevision: "a".repeat(64), sync: { reloaded: true }, warnings: [] })
+    expect(saveText).toHaveBeenCalledWith({
+      actor: { id: "opencode:project-a", kind: "agent" }, canvasId, commandId: "write-poem",
+      content: "春天来了", nodeId: "text-node", signal: controller.signal, scopeId: projectId,
+    })
+  })
 })
 
 function createProvider(overrides: {
@@ -138,6 +154,7 @@ function createProvider(overrides: {
   executeView?: () => Promise<never>
   getViewSnapshot?: () => Promise<CanvasViewSnapshot | null>
   reloadDocument?: () => Promise<boolean>
+  saveText?: () => Promise<{ contentRevision: string; warnings: readonly string[] }>
 } = {}) {
   return createCanvasAgentToolProvider({
     canvases: { async getCanvasCatalog() { return catalog() } },
@@ -154,6 +171,7 @@ function createProvider(overrides: {
       reloadDocument: overrides.reloadDocument ?? (async () => true),
     },
     resources: { async addResources(request) { return commandResult(request.canvasId) } },
+    textResources: { save: overrides.saveText ?? (async () => ({ contentRevision: "a".repeat(64), warnings: [] })) },
   })
 }
 

@@ -5,7 +5,7 @@ import { constructCanvasAuthoritativeIntent } from "./command-construction"
 import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
 import { derivedNodeRef } from "./validation"
 import { validateCanvasYDoc } from "./ydoc"
-import { projectCanvas } from "./projection"
+import { projectCanvas, projectCanvasDocument } from "./projection"
 import type { CanvasResourceProofRef } from "./types"
 import { parseUint32, parseUint64 } from "@convax/collaboration"
 
@@ -69,6 +69,208 @@ describe("Canvas v2 application command adapter", () => {
 
     expect(adapt(document, context(2, 3, 3), { type: "nodes.setGeometry", updates: [] })).toBe("rejected")
     expect(adapt(document, context(2, 4, 4), { type: "elements.remove", nodeIds: ["missing"] })).toBe("rejected")
+  })
+
+  test("duplicates live nodes through one owner-derived typed intent", () => {
+    const document = newCanvas()
+    const source = createAgent(document, context(20, 1, 1), "Source")
+    const target = createAgent(document, context(20, 2, 2), "Target")
+    const connectContext = context(20, 3, 3)
+    applyAdapted(
+      document,
+      connectContext,
+      requireAdaptation(document, connectContext, {
+        type: "nodes.connect",
+        connection: { source: source.id, target: target.id },
+      }).command,
+    )
+    const operationContext = context(20, 4, 4)
+    const mapped = requireAdaptation(document, operationContext, {
+      type: "nodes.duplicate",
+      nodeIds: [source.id],
+    })
+    expect(mapped.command).toMatchObject({
+      kind: "nodes-duplicate",
+      sources: [source],
+      offset: { x: 32, y: 32 },
+    })
+    applyAdapted(document, operationContext, mapped.command)
+
+    const duplicate = derivedNodeRef(operationContext, parseUint32("0"))
+    const projection = projectCanvas(validateCanvasYDoc(document))
+    expect(projection.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ ref: duplicate, data: expect.objectContaining({ title: "Source" }) }),
+      ]),
+    )
+    expect(projection.edges).toEqual(expect.arrayContaining([expect.objectContaining({ source: duplicate, target })]))
+    expect(adapt(document, context(20, 5, 5), { type: "nodes.duplicate", nodeIds: ["missing"] })).toBe("rejected")
+  })
+
+  test("duplicates a Group with its containment and persists folded state", () => {
+    const document = newCanvas()
+    const first = createAgent(document, context(21, 1, 1), "First")
+    const second = createAgent(document, context(21, 2, 2), "Second")
+    const groupContext = context(21, 3, 3)
+    applyAdapted(document, groupContext, requireAdaptation(document, groupContext, {
+      type: "nodes.group",
+      nodeIds: [first.id, second.id],
+      folded: true,
+    }).command)
+    const group = derivedNodeRef(groupContext, parseUint32("0"))
+    expect(projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === group.id)?.data).toMatchObject({
+      kind: "group",
+      folded: true,
+    })
+
+    const duplicateContext = context(21, 4, 4)
+    const duplicate = requireAdaptation(document, duplicateContext, { type: "nodes.duplicate", nodeIds: [group.id] })
+    if (duplicate.command.kind !== "nodes-duplicate") throw new Error("Expected duplicate mapping")
+    expect(duplicate.command.sources).toHaveLength(3)
+    applyAdapted(document, duplicateContext, duplicate.command)
+
+    const clonedGroup = derivedNodeRef(duplicateContext, parseUint32("0"))
+    const clonedFirst = derivedNodeRef(duplicateContext, parseUint32("1"))
+    const clonedSecond = derivedNodeRef(duplicateContext, parseUint32("2"))
+    const projection = projectCanvas(validateCanvasYDoc(document))
+    expect(projection.nodes.find((node) => node.ref.id === clonedFirst.id)?.parent).toEqual(clonedGroup)
+    expect(projection.nodes.find((node) => node.ref.id === clonedSecond.id)?.parent).toEqual(clonedGroup)
+
+    const unfoldContext = context(21, 5, 5)
+    applyAdapted(document, unfoldContext, requireAdaptation(document, unfoldContext, {
+      type: "nodes.setFolded",
+      nodeId: clonedGroup.id,
+      folded: false,
+    }).command)
+    expect(projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === clonedGroup.id)?.data).toEqual({
+      format: "convax.canvas-node-data",
+      kind: "group",
+      title: "Group",
+    })
+  })
+
+  test("persists title, Group appearance, and generation preference through closed node-data intents", () => {
+    const document = newCanvas()
+    const first = createAgent(document, context(22, 1, 1), "First")
+    const second = createAgent(document, context(22, 2, 2), "Second")
+    const groupContext = context(22, 3, 3)
+    applyAdapted(document, groupContext, requireAdaptation(document, groupContext, {
+      type: "nodes.group",
+      nodeIds: [first.id, second.id],
+    }).command)
+    const group = derivedNodeRef(groupContext, parseUint32("0"))
+
+    const appearanceContext = context(22, 4, 4)
+    applyAdapted(document, appearanceContext, requireAdaptation(document, appearanceContext, {
+      type: "nodes.setGroupAppearance",
+      nodeId: group.id,
+      appearance: { color: "blue", emoji: "rocket" },
+    }).command)
+    const titleContext = context(22, 5, 5)
+    applyAdapted(document, titleContext, requireAdaptation(document, titleContext, {
+      type: "nodes.setTitle",
+      nodeId: group.id,
+      title: "Launch",
+    }).command)
+
+    const pendingContext = context(22, 6, 6)
+    applyAdapted(document, pendingContext, requireAdaptation(document, pendingContext, {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Image",
+      nodeId: "ignored",
+      placement: { anchor: { x: 0, y: 0 } },
+    }).command)
+    const pending = derivedNodeRef(pendingContext, parseUint32("0"))
+    const preferenceContext = context(22, 7, 7)
+    applyAdapted(document, preferenceContext, requireAdaptation(document, preferenceContext, {
+      type: "nodes.setGenerationToolId",
+      nodeId: pending.id,
+      toolId: "plugin.example:image.generate",
+    }).command)
+
+    const projection = projectCanvas(validateCanvasYDoc(document))
+    expect(projection.nodes.find((node) => node.ref.id === group.id)?.data).toMatchObject({
+      kind: "group",
+      title: "Launch",
+      appearance: { color: "blue", emoji: "rocket" },
+    })
+    expect(projection.nodes.find((node) => node.ref.id === pending.id)?.data).toMatchObject({
+      generationToolId: "plugin.example:image.generate",
+    })
+    const rendered = projectCanvasDocument(projection).document
+    expect(rendered.nodes.find((node) => node.id === group.id)?.data.metadata).toMatchObject({
+      convaxGroupAppearance: { color: "blue", emoji: "rocket", schema: "convax.group-appearance/1" },
+    })
+    expect(rendered.nodes.find((node) => node.id === pending.id)?.data.metadata).toMatchObject({
+      convaxGenerationPreference: {
+        schema: "convax.node-generation-preference/1",
+        toolId: "plugin.example:image.generate",
+      },
+    })
+  })
+
+  test("atomically maps connected Project resources and manual media placeholders", () => {
+    const document = newCanvas()
+    const anchor = createAgent(document, context(9, 1, 1), "Anchor")
+    const resourceContext = context(9, 2, 2)
+    const proof = currentResourceProof("text", 90)
+    const resource = requireAdaptation(document, resourceContext, {
+      type: "resources.add",
+      items: [{ item: resourceItem("text", proof, "Notes/Brief.md"), nodeId: "caller-node-id" }],
+      placement: { anchor: { x: 400, y: 120 } },
+      relation: { anchorNodeIds: [anchor.id], direction: "from-anchor", mode: "connect" },
+    })
+    expect(resource.command).toMatchObject({
+      kind: "resources-create",
+      relation: { anchors: [anchor], direction: "from-anchor" },
+    })
+    applyAdapted(document, resourceContext, resource.command)
+    const resourceNode = derivedNodeRef(resourceContext, parseUint32("0"))
+    expect(projectCanvas(validateCanvasYDoc(document)).edges).toEqual([
+      expect.objectContaining({ source: anchor, target: resourceNode }),
+    ])
+
+    const pendingContext = context(9, 3, 3)
+    const pending = requireAdaptation(document, pendingContext, {
+      type: "resources.pending.create",
+      kind: "image",
+      label: "Image",
+      nodeId: "caller-pending-id",
+      placement: { anchor: { x: -400, y: 120 } },
+      relation: { anchorNodeIds: [anchor.id], direction: "to-anchor", mode: "connect" },
+    })
+    expect(pending.command).toMatchObject({
+      kind: "manual-resource-placeholders-create",
+      relation: { anchors: [anchor], direction: "to-anchor" },
+    })
+    applyAdapted(document, pendingContext, pending.command)
+    const pendingNode = derivedNodeRef(pendingContext, parseUint32("0"))
+    expect(projectCanvas(validateCanvasYDoc(document)).edges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: pendingNode, target: anchor }),
+      ]),
+    )
+  })
+
+  test("rejects connected resource creation when an anchor is stale or duplicated", () => {
+    const document = newCanvas()
+    const anchor = createAgent(document, context(10, 1, 1), "Anchor")
+    const command = {
+      type: "resources.pending.create" as const,
+      kind: "video" as const,
+      label: "Video",
+      nodeId: "caller-pending-id",
+      placement: { anchor: { x: 400, y: 120 } },
+    }
+    expect(adapt(document, context(10, 2, 2), {
+      ...command,
+      relation: { anchorNodeIds: ["missing"], mode: "connect" },
+    })).toBe("rejected")
+    expect(adapt(document, context(10, 3, 3), {
+      ...command,
+      relation: { anchorNodeIds: [anchor.id, anchor.id], mode: "connect" },
+    })).toBe("rejected")
   })
 
   test("maps one reparent command to the guarded structural-parent intent and rejects an unclosed batch", () => {

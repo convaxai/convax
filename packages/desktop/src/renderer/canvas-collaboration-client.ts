@@ -1,21 +1,37 @@
 import type {
+  BoundedOperationReceipt,
   CanvasEntityRef,
   CanvasRendererCollaborationClient,
   CanvasRendererCommand,
 } from "@convax/canvas/collaboration"
+import type { CanvasApplicationCommand, CanvasApplicationCommandResult } from "@convax/canvas/application"
 import type { CanvasDocument } from "@convax/canvas/core"
+import {
+  CanvasVisualHistoryCoordinator,
+  type CanvasVisualHistoryAuthority,
+} from "@convax/canvas/view"
 import type { CanvasDocumentRef } from "@convax/canvas/application"
+import type { Digest } from "@convax/collaboration"
+import type { CanvasResourceAddResult, CanvasResourceRelinkResult } from "../desktop-protocol"
 import type {
   CanvasRendererSessionTransport,
+  CanvasRendererApplicationMutationResult,
   CanvasSessionInvalidationDto,
   CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
 
 export interface DesktopCanvasRendererSession extends CanvasRendererCollaborationClient {
   readonly ref: CanvasDocumentRef
-  refresh(signal?: AbortSignal): Promise<void>
+  readonly sessionId: CanvasSessionProjectionDto["sessionId"]
+  acceptApplicationMutation(result: CanvasRendererApplicationMutationResult, signal?: AbortSignal): Promise<CanvasApplicationCommandResult>
+  runResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<Readonly<{ result: T; projectionDelivered: boolean }>>
   dispose(): void
 }
+
+const maximumRememberedFrameDigests = 64
 
 export async function openDesktopCanvasRendererSession(input: {
   readonly createCommandId?: () => string
@@ -55,7 +71,11 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   #snapshot: CanvasSessionProjectionDto
   #lane: Promise<void> = Promise.resolve()
   #disposed = false
-  #refreshQueued = false
+  #refreshScheduled = false
+  readonly #pendingInvalidationDigests = new Set<Digest>()
+  readonly #coveredFrameDigests = new Set<Digest>()
+  readonly #visualHistory = new CanvasVisualHistoryCoordinator()
+  readonly visualOverlay = this.#visualHistory.overlay
 
   constructor(
     ref: CanvasDocumentRef,
@@ -93,21 +113,42 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     return this.#snapshot.canRedo
   }
 
+  get sessionId() {
+    return this.#snapshot.sessionId
+  }
+
   submit(command: CanvasRendererCommand, signal?: AbortSignal): Promise<void> {
     const commandId = this.#createCommandId()
     return this.#enqueue(async () => {
       throwIfAborted(signal)
+      const before = this.#visualAuthority()
       const result = await this.#transport.submit({ ...this.#scope(), command, commandId })
-      throwIfAborted(signal)
-      this.#accept(result.projection)
+      // A returned mutation result is already durable. A late abort must not turn a
+      // committed command into an apparent failure or skip its authoritative projection.
+      this.#acceptMutation(result.projection, result.acceptedFrameDigest)
+      this.#recordVisualHistory(result.operationReceipt, before)
     })
   }
 
-  undo(signal?: AbortSignal): Promise<void> {
+  executeApplication(command: CanvasApplicationCommand, signal?: AbortSignal): Promise<CanvasApplicationCommandResult> {
+    const commandId = this.#createCommandId()
+    return this.#enqueue(async () => {
+      throwIfAborted(signal)
+      const before = this.#visualAuthority()
+      const result = await this.#transport.executeApplication({ ...this.#scope(), command, commandId })
+      // The transport only returns after the durable head barrier. Reconcile even when
+      // the caller aborts while that barrier is completing.
+      const accepted = this.#acceptApplicationMutation(result)
+      this.#recordVisualHistory(result.operationReceipt, before)
+      return accepted
+    })
+  }
+
+  undo(signal?: AbortSignal) {
     return this.#history("undo", signal)
   }
 
-  redo(signal?: AbortSignal): Promise<void> {
+  redo(signal?: AbortSignal) {
     return this.#history("redo", signal)
   }
 
@@ -121,6 +162,11 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     })
   }
 
+  drain(signal?: AbortSignal): Promise<void> {
+    this.#assertLive()
+    return this.#lane.then(() => throwIfAborted(signal))
+  }
+
   refresh(signal?: AbortSignal): Promise<void> {
     return this.#enqueue(async () => {
       throwIfAborted(signal)
@@ -129,22 +175,72 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     })
   }
 
+  acceptApplicationMutation(
+    result: CanvasRendererApplicationMutationResult,
+    signal?: AbortSignal,
+  ): Promise<CanvasApplicationCommandResult> {
+    return this.#enqueue(async () => {
+      void signal
+      // This method receives an already committed result from another Main-owned
+      // resource path, so cancellation cannot revoke or hide that commit.
+      return this.#acceptApplicationMutation(result)
+    })
+  }
+
+  runResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
+    operation: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<Readonly<{ result: T; projectionDelivered: boolean }>> {
+    return this.#enqueue(async () => {
+      throwIfAborted(signal)
+      const before = this.#visualAuthority()
+      const result = await operation()
+      if (result.delivery.status === "accepted") {
+        this.#acceptMutation(result.delivery.projection, result.delivery.acceptedFrameDigest)
+        this.#recordVisualHistory(result.operationReceipt, before)
+        return Object.freeze({ result, projectionDelivered: true })
+      }
+      try {
+        const pending = [...this.#pendingInvalidationDigests]
+        this.#pendingInvalidationDigests.clear()
+        this.#accept(await this.#transport.query(this.#scope()))
+        for (const digest of pending) rememberBounded(this.#coveredFrameDigests, digest)
+        this.#recordVisualHistory(result.operationReceipt, before)
+        return Object.freeze({ result, projectionDelivered: true })
+      } catch {
+        return Object.freeze({ result, projectionDelivered: false })
+      }
+    })
+  }
+
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
     this.#unsubscribe()
     this.#listeners.clear()
+    this.#visualHistory.reset()
     void this.#lane.finally(() => this.#transport.close(this.#scope())).catch(() => undefined)
   }
 
-  #history(direction: "undo" | "redo", signal?: AbortSignal): Promise<void> {
+  #history(direction: "undo" | "redo", signal?: AbortSignal) {
     const commandId = this.#createCommandId()
+    const prediction = this.#visualHistory.begin(direction, this.#visualAuthority(), this.#visualScopeKey())
     return this.#enqueue(async () => {
-      throwIfAborted(signal)
-      const result = await this.#transport[direction]({ ...this.#scope(), commandId })
-      throwIfAborted(signal)
-      if (result) this.#accept(result.projection)
-      else this.#accept(await this.#transport.query(this.#scope()))
+      try {
+        throwIfAborted(signal)
+        const result = await this.#transport[direction]({ ...this.#scope(), commandId })
+        if (!result) {
+          this.#visualHistory.reject(prediction)
+          return null
+        }
+        this.#acceptMutation(result.projection, result.acceptedFrameDigest)
+        const transition = result.historyTransition ?? null
+        this.#visualHistory.reconcile(prediction, transition)
+        return transition
+      } catch (error) {
+        this.#visualHistory.reject(prediction)
+        throw error
+      }
     })
   }
 
@@ -153,24 +249,40 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
       this.#disposed ||
       event.sessionId !== this.#snapshot.sessionId ||
       !sameRef(event.ref, this.ref) ||
-      this.#refreshQueued
+      this.#coveredFrameDigests.has(event.frameDigest)
     ) {
       return
     }
-    this.#refreshQueued = true
+    rememberBounded(this.#pendingInvalidationDigests, event.frameDigest)
+    if (this.#refreshScheduled) return
+    this.#refreshScheduled = true
     void this.#enqueue(async () => {
       try {
-        this.#accept(await this.#transport.query(this.#scope()))
+        while (this.#pendingInvalidationDigests.size > 0) {
+          const pending = [...this.#pendingInvalidationDigests]
+          this.#pendingInvalidationDigests.clear()
+          const uncovered = pending.filter((digest) => !this.#coveredFrameDigests.has(digest))
+          if (uncovered.length === 0) continue
+          this.#visualHistory.reset()
+          this.#accept(await this.#transport.query(this.#scope()))
+          for (const digest of uncovered) rememberBounded(this.#coveredFrameDigests, digest)
+        }
       } finally {
-        this.#refreshQueued = false
+        this.#refreshScheduled = false
+        if (this.#pendingInvalidationDigests.size > 0) this.#onInvalidation({
+          format: "convax.canvas-session-invalidation",
+          ref: this.ref,
+          sessionId: this.#snapshot.sessionId,
+          frameDigest: this.#pendingInvalidationDigests.values().next().value!,
+        })
       }
     }).catch(() => undefined)
   }
 
-  #enqueue(operation: () => Promise<void>): Promise<void> {
+  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     this.#assertLive()
     const current = this.#lane.then(operation)
-    this.#lane = current.catch(() => undefined)
+    this.#lane = current.then(() => undefined, () => undefined)
     return current
   }
 
@@ -181,9 +293,47 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     for (const listener of [...this.#listeners]) listener()
   }
 
+  #acceptMutation(next: CanvasSessionProjectionDto, frameDigest: Digest): void {
+    rememberBounded(this.#coveredFrameDigests, frameDigest)
+    this.#pendingInvalidationDigests.delete(frameDigest)
+    this.#accept(next)
+  }
+
+  #acceptApplicationMutation(result: CanvasRendererApplicationMutationResult): CanvasApplicationCommandResult {
+    this.#acceptMutation(result.projection, result.acceptedFrameDigest)
+    return Object.freeze({
+      acceptedFrameDigest: result.acceptedFrameDigest,
+      affectedNodeIds: [...result.affectedNodeIds],
+      changed: result.changed,
+      createdNodeIds: [...result.createdNodeIds],
+      document: result.projection.document,
+      operationReceipt: structuredClone(result.operationReceipt),
+      warnings: [...result.warnings],
+    })
+  }
+
   #replaceEntities(next: CanvasSessionProjectionDto): void {
     this.#entities.clear()
     for (const entry of next.nodeEntities) this.#entities.set(entry.nodeId, entry.entity)
+  }
+
+  #recordVisualHistory(
+    receipt: BoundedOperationReceipt,
+    before: CanvasVisualHistoryAuthority,
+  ): void {
+    if (!receipt.semanticRoot) return
+    this.#visualHistory.record(receipt.operationId, before, this.#visualAuthority())
+  }
+
+  #visualAuthority(): CanvasVisualHistoryAuthority {
+    return Object.freeze({
+      document: this.#snapshot.document,
+      nodeEntities: this.#snapshot.nodeEntities,
+    })
+  }
+
+  #visualScopeKey(): string {
+    return `${this.ref.scopeId}:${this.ref.canvasId}:${this.#snapshot.sessionId}`
   }
 
   #scope() {
@@ -228,4 +378,10 @@ function sameRef(left: CanvasDocumentRef, right: CanvasDocumentRef): boolean {
 function throwIfAborted(signal?: AbortSignal): void {
   if (!signal?.aborted) return
   throw signal.reason ?? new DOMException("Canvas renderer session was canceled", "AbortError")
+}
+
+function rememberBounded(values: Set<Digest>, value: Digest): void {
+  values.delete(value)
+  values.add(value)
+  while (values.size > maximumRememberedFrameDigests) values.delete(values.values().next().value!)
 }

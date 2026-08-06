@@ -51,6 +51,10 @@ added back.
 - Local success signs once, durably commits immutable object, replication-outbox ref,
   journal record, and sole head, then applies the exact accepted delta to
   `replicaDoc`. A below-head frame never transmits or projects.
+- Optional latency diagnostics are closed-stage, identity-free and failure-isolated.
+  They may report only stage durations, bounded history/outbox counts and cache-hit
+  booleans; Project/Canvas/entity identity and document content never enter them.
+  Instrumentation cannot reorder or weaken the object/outbox/journal/head ports.
 - Offline work uses the same final frame bytes. Reconnect requests and validates
   missing causal objects idempotently; it never reallocates identity/sequence or
   re-signs a frame.

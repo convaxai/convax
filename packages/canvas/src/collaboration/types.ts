@@ -51,6 +51,11 @@ export interface CanvasSize {
   readonly height: number
 }
 
+export interface CanvasCanonicalGroupAppearance {
+  readonly color: "default" | "gray" | "brown" | "orange" | "yellow" | "green" | "blue" | "purple" | "pink" | "red"
+  readonly emoji: "folder" | "briefcase" | "inbox" | "paperclip" | "bookmark" | "books" | "notebook" | "idea" | "sparkles" | "star" | "fire" | "bolt" | "target" | "rocket" | "compass" | "globe" | "map" | "camera" | "film" | "music" | "palette" | "image" | "chart" | "calendar" | "clock" | "check" | "warning" | "heart" | "gem" | "trophy" | "plant" | "leaf" | "coffee" | "game" | "robot" | "brain" | "team" | "package" | "tools" | "puzzle" | "index" | "memo" | "pencil" | "pin" | "link" | "archive" | "card-file" | "laptop" | "desktop" | "phone" | "microphone" | "headphones" | "key" | "lock" | "search" | "bell" | "megaphone" | "gift" | "party" | "flag" | "hourglass" | "sun" | "moon" | "cloud" | "rainbow" | "blossom" | "sunflower" | "tree" | "clover" | "cactus" | "mountain" | "wave" | "butterfly" | "cat" | "dog" | "fox" | "unicorn" | "whale" | "apple" | "pizza" | "cake" | "football" | "basketball" | "focus" | "peace"
+}
+
 export interface CanvasResourceRef {
   readonly format: "convax.canvas-resource-ref"
   readonly uri: string
@@ -103,6 +108,8 @@ export type NodeDataEnvelope =
       readonly format: "convax.canvas-node-data"
       readonly kind: "group"
       readonly title: string
+      readonly folded?: true
+      readonly appearance?: CanvasCanonicalGroupAppearance
     }
   | {
       readonly format: "convax.canvas-node-data"
@@ -113,6 +120,7 @@ export type NodeDataEnvelope =
       readonly state:
         | { readonly phase: "pending" }
         | { readonly phase: "failed"; readonly failureCode: string; readonly publicMessage: string | null }
+      readonly generationToolId?: string
     }
   | {
       readonly format: "convax.canvas-node-data"
@@ -120,12 +128,14 @@ export type NodeDataEnvelope =
       readonly owner: "generation"
       readonly title: string
       readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
+      readonly generationToolId?: string
     }
   | {
       readonly format: "convax.canvas-node-data"
       readonly kind: "resource"
       readonly title: string
       readonly resource: CanvasResourceRef
+      readonly generationToolId?: string
     }
   /**
    * Host-neutral generic Plugin surface. The concrete Plugin lives only in the
@@ -412,6 +422,12 @@ export interface EdgeCreateTemplate {
   readonly data: CanvasEdgeData
 }
 
+export interface DuplicateContainmentSpec {
+  readonly childCreatedNodeOrdinal: Uint32
+  readonly parent: CanvasEntityRef & { readonly kind: "node" } | { readonly createdNodeOrdinal: Uint32 }
+  readonly relationId: string
+}
+
 export interface ResourceNodeCreateSpec {
   readonly ordinal: Uint32
   readonly nodeId: string
@@ -495,6 +511,7 @@ export type CanvasIntentKind =
   | "canvas.resources.pending-generation.create"
   | "canvas.elements.remove"
   | "canvas.nodes.set-geometry"
+  | "canvas.nodes.duplicate"
   | "canvas.nodes.update-data"
   | "canvas.nodes.set-plugin-state"
   | "canvas.nodes.set-structural-parent"
@@ -871,6 +888,22 @@ export type CanvasIntentContractMap = {
     { readonly nodes: readonly GeometryGuard[] },
     { readonly updates: readonly GeometryUpdate[] }
   >
+  readonly "canvas.nodes.duplicate": CanvasTypedIntent<
+    "canvas.nodes.duplicate",
+    {
+      readonly sources: readonly NodeDataGuard[]
+      readonly existingEndpoints: readonly ConnectableNodeGuard[]
+      readonly existingParents: readonly NodeLiveGuard[]
+      readonly derivedNodes: readonly DerivedNodeAbsentGuard[]
+      readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
+    },
+    {
+      readonly offset: CanvasPoint
+      readonly nodes: readonly NodeCreateTemplate[]
+      readonly edges: readonly EdgeCreateTemplate[]
+      readonly containments: readonly DuplicateContainmentSpec[]
+    }
+  >
   readonly "canvas.nodes.update-data": CanvasTypedIntent<
     "canvas.nodes.update-data",
     { readonly node: NodeDataGuard; readonly resourceProof: CanvasResourceProofRef | null },
@@ -883,10 +916,11 @@ export type CanvasIntentContractMap = {
   >
   readonly "canvas.nodes.set-structural-parent": CanvasTypedIntent<
     "canvas.nodes.set-structural-parent",
-    { readonly child: ContainmentGuard; readonly parent: NodeLiveGuard | null },
+    { readonly child: ContainmentGuard & { readonly expectedGeometryDigest?: Digest }; readonly parent: NodeLiveGuard | null },
     {
       readonly child: CanvasEntityRef & { readonly kind: "node" }
       readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
+      readonly position?: CanvasPoint
       readonly relationId: string
     }
   >

@@ -14,9 +14,12 @@ or durable domain authority.
   Renderer coordinators compose public capabilities; React components handle user
   events, subscriptions, and rendering rather than recreating validation,
   persistence, placement, conflict, or recovery logic.
-- Canvas state is an optimistic projection of Main's authoritative document.
-  Submit element-level revision-bound commands, process committed revision
-  invalidations, and reload without first saving a stale whole-document snapshot.
+- Canvas domain state is Main's authoritative session projection. Immediate
+  feedback is a separate Canvas-owned presentation overlay: ghosts are
+  non-interactive and never enter selection, clipboard, commands or IPC. Install a
+  local response projection before covering its frame digest, skip the matching
+  invalidation query, and preserve one trailing query for unknown frames arriving
+  during refresh.
 - Main mutations never depend on Renderer flush, lock, mounted editor, selection,
   reveal, panel lifetime, or acknowledgement. Projection failure after commit is a
   UI recovery condition, not a failed domain mutation.

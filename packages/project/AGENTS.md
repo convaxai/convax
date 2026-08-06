@@ -89,6 +89,13 @@ This package owns the durable Project aggregate and native Project adapters.
   verified ACK and advances the sole durable head before retiring the frame outbox;
   retry must match the accepted exact ACK. Reopen treats an ACK journal with a
   missing object as store corruption rather than claiming replication.
+- Materialized accepted-head, operation-recovery, reachable-outbox and outbox-usage
+  caches are process-local rebuildable projections only. A materialized head cache
+  is bound to the exact hashed durable-head record, checkpoint base, journal tail
+  and reachable frame set; every use rechecks the durable-head digest and any
+  mismatch/recovery/quarantine/checkpoint transition clears or rebuilds it. An
+  immutable operation sidecar must be fsynced before the all-Project index learns
+  it, and reopen reconstructs every derived index.
 - Replication-cache GC consumes only a complete injected Project root scan, retains
   active transfers, uses a seven-day/two-store-generation delay and a second complete
   scan, and deletes nothing on unreadable ProjectIndex/Canvas state, invalid timing,

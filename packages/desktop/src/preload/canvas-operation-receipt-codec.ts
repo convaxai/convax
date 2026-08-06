@@ -6,6 +6,11 @@ const id128Pattern = /^[A-Za-z0-9_-]{21}[AQgw]$/
 const actorIdPattern = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/
 const entitySuffixPattern = actorIdPattern
 
+export function requireDigestDto(value: unknown, label: string): import("@convax/collaboration").Digest {
+  if (typeof value !== "string" || !digestPattern.test(value)) throw new Error(`${label} is invalid`)
+  return value as import("@convax/collaboration").Digest
+}
+
 const canvasIntentKinds = new Set([
   "canvas.agent.create",
   "canvas.resources.add",
@@ -13,6 +18,7 @@ const canvasIntentKinds = new Set([
   "canvas.resources.pending-generation.create",
   "canvas.elements.remove",
   "canvas.nodes.set-geometry",
+  "canvas.nodes.duplicate",
   "canvas.nodes.update-data",
   "canvas.nodes.set-plugin-state",
   "canvas.nodes.set-structural-parent",

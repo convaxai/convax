@@ -494,11 +494,16 @@ async function rendererPhase(input: RendererPhaseInput) {
   if (input.phase === "mutate") {
     const initial = await load()
     if (initial.nodes.length !== 0) throw new Error("A new offline Canvas was not empty")
+    const resourceSession = await window.convax.canvas.sessions.open({
+      canvasId,
+      scopeId: project.id,
+    })
     const added = await window.convax.canvas.resources.add({
       anchor: { x: 40, y: 60 },
       canvasId,
       commandId: "offline-restart-add-two",
       projectId: project.id,
+      sessionId: resourceSession.sessionId,
       sources: [
         {
           kind: "new-text",

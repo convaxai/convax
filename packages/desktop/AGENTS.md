@@ -80,8 +80,9 @@ contract and its routed references.
   Preload never receive or choose the default native creation path.
 - Workbench owns generic resize/collapse transactions. Desktop owns concrete pixels,
   viewport constraints, pointer/keyboard wiring, animation, and browser persistence.
-- Main's Canvas application service is authoritative. Renderer submits closed
-  typed intents and reloads after invalidation; it never saves a complete snapshot,
+- Main's Canvas application service is authoritative. Mounted UI submits closed
+  commands through its originating session lease, installs the returned projection
+  and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,
   sends raw Yjs updates, arbitrates Main mutations, or turns projection failure into
   domain failure.
 - Each Main mutation uses an isolated candidate Y.Doc against the latest replica
@@ -99,6 +100,10 @@ contract and its routed references.
 - React Flow projection, measurements, selection, viewport, and gesture previews
   remain transient Canvas-owned view state. Desktop supplies shell and adapters,
   not a competing document store.
+- A renderer presentation overlay is isolated from the session's authoritative
+  projection. Ghost/token/visual-history values never cross preload or IPC. Resource
+  preparation remains in Main; post-commit session delivery may be unavailable
+  without changing durable success, in which case Renderer performs one refresh.
 - Collaboration composition loads only the packaged current protocol descriptor and
   composes exactly one kernel, one codec, and one document session type. There is no
   authority selector, release pair, dual-version dispatch, promotion bridge, or
@@ -120,6 +125,10 @@ contract and its routed references.
   node factory or generic node-insert path substitutes for that command.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
+- UI and Agent updates to an existing editable Canvas text resource share one
+  Main-owned adapter over Project Files compare-and-replace, ProjectIndex version
+  publication, and the Canvas resource relink operation. Filesystem notifications
+  remain refresh hints and never substitute for that transaction path.
 - Card conversations infer only direct incoming file nodes. Image/video replacement
   cards may persist one opaque output-tool override. Text cards isolate model and
   options by output for the mounted composer and create a separate pending media

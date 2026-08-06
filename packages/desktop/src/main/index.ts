@@ -86,6 +86,7 @@ import {
   desktopUserDataDirectory,
 } from "./app-branding"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
+import { createCanvasTextResourceWriter } from "./canvas-text-resource-service"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
 import { ManagedMcpAgentToolRegistry, type ManagedMcpPrincipalState } from "./managed-mcp-agent-tools"
 import { ManagedMcpRuntimeManager } from "./managed-mcp-runtime-manager"
@@ -1515,6 +1516,13 @@ function startApplication() {
           canvases: projectCanvases,
           renderer: canvasRenderer,
           resources: canvasResources,
+          textResources: createCanvasTextResourceWriter({
+            application: canvasApplication,
+            currentResources: collaborationFacade.projectIndexes,
+            files: projectManager,
+            preparation: canvasResourcePreparation,
+            resources: canvasResources,
+          }),
         }),
         createGenerationAgentToolProvider(generation),
         createPluginOperationAgentToolProvider(generation, {
@@ -2389,6 +2397,7 @@ function startApplication() {
       application: canvasApplication,
       images: canvasResourceHydrator,
       resolveActiveCanvas,
+      sessions: collaborationCanvasSessions,
     })
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasApplication, {
       ...ipcSecurity,

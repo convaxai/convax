@@ -47,6 +47,7 @@ import {
 } from "@convax/project/node"
 
 import {
+  createMainCollaborationLatencyDiagnosticsPort,
   createKernelBackedMainCollaborationDocumentSession,
   type MainCollaborationDocumentSession,
 } from "./collaboration-document-session"
@@ -490,6 +491,9 @@ export class MainProjectIndexRuntimeRegistry
         ports: runtime.ports,
         signatureVerifier: this.options.signatureVerifier,
         createOperationId: this.options.createOperationId,
+        diagnostics: createMainCollaborationLatencyDiagnosticsPort({
+          sample: () => runtime!.persistence.sampleLatencyDiagnostics(registeredScope),
+        }),
       })
       const application = new ProjectIndexCanvasApplication({
         session,

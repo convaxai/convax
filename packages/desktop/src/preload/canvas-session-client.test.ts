@@ -49,6 +49,7 @@ const operationReceipt = Object.freeze({
   semanticRoot: true,
   historyMaterialDigest: parseDigest("c".repeat(64)),
 })
+const acceptedFrameDigest = parseDigest("d".repeat(64))
 
 function setup(respond: (channel: string, input: unknown) => unknown | Promise<unknown>) {
   const invoke = mock(async (channel: string, input: unknown) => respond(channel, input))
@@ -76,7 +77,25 @@ describe("preload Canvas session client", () => {
   test("validates every response while preserving the closed session transport", async () => {
     const bridge = setup((channel) => {
       if (channel === canvasSessionIpcChannels.submit || channel === canvasSessionIpcChannels.redo) {
-        return { operationReceipt, projection }
+        return {
+          acceptedFrameDigest,
+          operationReceipt,
+          projection,
+          ...(channel === canvasSessionIpcChannels.redo
+            ? { historyTransition: { direction: "redo", rootOperationId: operationReceipt.operationId } }
+            : {}),
+        }
+      }
+      if (channel === canvasSessionIpcChannels.executeApplication) {
+        return {
+          acceptedFrameDigest,
+          affectedNodeIds: [entity.id],
+          changed: true,
+          createdNodeIds: [],
+          operationReceipt,
+          projection,
+          warnings: [],
+        }
       }
       if (channel === canvasSessionIpcChannels.undo) return null
       if (channel === canvasSessionIpcChannels.flush || channel === canvasSessionIpcChannels.close) return undefined
@@ -91,6 +110,11 @@ describe("preload Canvas session client", () => {
 
     await expect(bridge.client.open(ref)).resolves.toMatchObject({ document: { id: ref.canvasId }, sessionId })
     await expect(bridge.client.query(scope)).resolves.toMatchObject({ canUndo: true, sessionId })
+    await expect(bridge.client.executeApplication({
+      ...scope,
+      command: { type: "nodes.setTitle", nodeId: entity.id, title: "Title" },
+      commandId: "title-one",
+    })).resolves.toMatchObject({ acceptedFrameDigest, projection: { sessionId } })
     await expect(
       bridge.client.submit({ ...scope, command, commandId: "move-one" }),
     ).resolves.toMatchObject({ operationReceipt: { operationId: operationReceipt.operationId } })
@@ -101,6 +125,7 @@ describe("preload Canvas session client", () => {
     expect(bridge.invoke.mock.calls.map(([channel]) => channel)).toEqual([
       canvasSessionIpcChannels.open,
       canvasSessionIpcChannels.query,
+      canvasSessionIpcChannels.executeApplication,
       canvasSessionIpcChannels.submit,
       canvasSessionIpcChannels.undo,
       canvasSessionIpcChannels.redo,
@@ -132,6 +157,7 @@ describe("preload Canvas session client", () => {
     await expect(wrongSession.client.query({ ref, sessionId })).rejects.toThrow("stale renderer lease")
 
     const malformedReceipt = setup(() => ({
+      acceptedFrameDigest,
       operationReceipt: { ...operationReceipt, revision: 7 },
       projection,
     }))
@@ -149,11 +175,12 @@ describe("preload Canvas session client", () => {
       format: "convax.canvas-session-invalidation",
       ref,
       sessionId,
+      frameDigest: acceptedFrameDigest,
       revision: 7,
     })).toThrow("field set")
     expect(listener).not.toHaveBeenCalled()
 
-    bridge.emit({ format: "convax.canvas-session-invalidation", ref, sessionId })
+    bridge.emit({ format: "convax.canvas-session-invalidation", ref, sessionId, frameDigest: acceptedFrameDigest })
     expect(listener).toHaveBeenCalledTimes(1)
     unsubscribe()
     expect(bridge.removeListener).toHaveBeenCalledTimes(1)

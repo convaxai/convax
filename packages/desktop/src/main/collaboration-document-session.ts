@@ -13,6 +13,9 @@ import {
   type OwnerValidatedState,
   type PreparedLocalIntent,
   type CurrentProtocolAuthority,
+  type CollaborationLatencyDiagnostic,
+  type CollaborationLatencyDiagnosticsPort,
+  type CollaborationLatencySample,
 } from "@convax/collaboration"
 
 export interface CollaborationDocumentInvalidation {
@@ -53,6 +56,7 @@ export interface CreateKernelBackedMainCollaborationDocumentSessionOptions<K ext
   readonly ports: CollaborationKernelPorts
   readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
   readonly createOperationId: () => Id128
+  readonly diagnostics?: CollaborationLatencyDiagnosticsPort
 }
 
 /** Production composition path shared by Canvas and ProjectIndex owners. */
@@ -69,7 +73,26 @@ export function createKernelBackedMainCollaborationDocumentSession<K extends Doc
       ports: options.ports,
       signatureVerifier: options.signatureVerifier,
       projection,
+      diagnostics: options.diagnostics,
     }),
+  })
+}
+
+export function createMainCollaborationLatencyDiagnosticsPort(input: {
+  readonly sample: () => CollaborationLatencySample | Promise<CollaborationLatencySample>
+  readonly slowThresholdMs?: number
+  readonly write?: (diagnostic: CollaborationLatencyDiagnostic) => void
+}): CollaborationLatencyDiagnosticsPort {
+  const threshold = input.slowThresholdMs ?? 500
+  const write = input.write ?? ((diagnostic: CollaborationLatencyDiagnostic) => {
+    console.warn("[convax:collaboration-latency]", JSON.stringify(diagnostic))
+  })
+  return Object.freeze({
+    sample: input.sample,
+    record(diagnostic: CollaborationLatencyDiagnostic) {
+      if (diagnostic.totalDurationMs <= threshold) return
+      try { write(diagnostic) } catch { /* Diagnostics never affect a durable command. */ }
+    },
   })
 }
 

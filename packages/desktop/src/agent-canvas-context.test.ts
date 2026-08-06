@@ -37,6 +37,8 @@ describe("desktop Canvas Agent context", () => {
     expect(instructions.join("\n")).toContain("outgoingNodeIds are outputs")
     expect(instructions.join("\n")).toContain("Do not search the filesystem for Canvas instructions")
     expect(instructions.join("\n")).toContain("read-only snapshots")
+    expect(instructions.join("\n")).toContain("call convax_canvas_update_text")
+    expect(instructions.join("\n")).toContain("Never edit the card's backing Project file")
   })
 
   test("flushes active-Canvas-only prompts without adding guidance outside Canvas context", () => {
