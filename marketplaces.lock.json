@@ -68,7 +68,7 @@
           "version": "0.1.3"
         },
         "targets": [],
-        "version": "0.3.1"
+        "version": "0.3.2"
       },
       {
         "id": "storyboard-studio",
@@ -85,7 +85,7 @@
           "version": "0.1.1"
         },
         "targets": [],
-        "version": "0.2.1"
+        "version": "0.2.2"
       },
       {
         "id": "video-timeline",
@@ -105,7 +105,7 @@
         "version": "0.2.1"
       }
     ],
-    "revision": 4
+    "revision": 5
   },
   "resolved": {
     "builtinBundle": {
@@ -125,20 +125,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "aa44c44b9af13bcd2e3377029a23d09fdbcdb4a141af0b93df793956143aabdb",
-        "size": 22677,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/registry-v2.json"
+        "sha256": "64d47cc038bc03973653bea76fa92edb5bba6ace8dda27613187fe936b811366",
+        "size": 30157,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/registry-v2.json"
       },
-      "revision": "f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629",
+      "revision": "cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "c19ec8df0764c55294bbef8a6c7c527917d1daa5c3f8c6f6843d2ecd30c52c41",
-        "size": 13941,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-f9b9e053765618315a06692992dc8333b98fd82349a8de04b01fe199995f4629/showcase-v2.json"
+        "sha256": "039dc516887f2626b486679a156a1ca5ec31340373da6f3bf0d552b3aad85f1b",
+        "size": 15031,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/showcase-v2.json"
       }
     },
     "packages": [
@@ -174,7 +174,7 @@
         "version": "0.4.1"
       }
     ],
-    "policyDigest": "d75b9f0180487938fe60ec1fd25b395736d825916947b57c024515f34dccde76",
+    "policyDigest": "07573bb124760461c00c2bf24f081de2194ce79d0f6982182cf325ad4013a7bb",
     "recoveryArtifacts": [
       {
         "artifact": {
@@ -246,10 +246,10 @@
       },
       {
         "artifact": {
-          "name": "plugin-storyai-3d-director-desk-0.3.1.zip",
-          "sha256": "30e076a8b42463a8dbdba95c6c2faee0402f42ad983ad97c1c3096121fd78acb",
-          "size": 1550635,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyai-3d-director-desk-v0.3.1/plugin-storyai-3d-director-desk-0.3.1.zip"
+          "name": "plugin-storyai-3d-director-desk-0.3.2.zip",
+          "sha256": "3d0f0e4a6fa89df2af2874f2b0f23547775f4d1bc31ea26047557c2e7c8b812f",
+          "size": 1559813,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyai-3d-director-desk-v0.3.2/plugin-storyai-3d-director-desk-0.3.2.zip"
         },
         "companions": [],
         "id": "storyai-3d-director-desk",
@@ -264,7 +264,7 @@
           }
         ],
         "setup": "explicit",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "retired": {
           "artifact": {
             "sha256": "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -278,10 +278,10 @@
       },
       {
         "artifact": {
-          "name": "plugin-storyboard-studio-0.2.1.zip",
-          "sha256": "fcc1fa04204e5ecd5239fb43145ab57f5cbaa983fc7c85644d1c01bb65404388",
-          "size": 725062,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyboard-studio-v0.2.1/plugin-storyboard-studio-0.2.1.zip"
+          "name": "plugin-storyboard-studio-0.2.2.zip",
+          "sha256": "3ac27ef7525d2eba9d0120a140d0551333af59e5e740e97ebbd9d71a76c752d9",
+          "size": 731697,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyboard-studio-v0.2.2/plugin-storyboard-studio-0.2.2.zip"
         },
         "companions": [],
         "id": "storyboard-studio",
@@ -296,7 +296,7 @@
           }
         ],
         "setup": "explicit",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "retired": {
           "artifact": {
             "sha256": "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",

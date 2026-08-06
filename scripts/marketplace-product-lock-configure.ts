@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 4
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 5
 
 export function configureMarketplaceProductPolicy(revision: number): MarketplaceProductPolicy {
   if (!Number.isSafeInteger(revision) || revision < 1) {
@@ -78,7 +78,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.1.3",
         },
         targets: [],
-        version: "0.3.1",
+        version: "0.3.2",
       },
       {
         id: "storyboard-studio",
@@ -95,7 +95,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.1.1",
         },
         targets: [],
-        version: "0.2.1",
+        version: "0.2.2",
       },
       {
         id: "video-timeline",

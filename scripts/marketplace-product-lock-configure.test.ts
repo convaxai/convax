@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates the approved v4 source, preinstall policy, and exact retired-major recovery set", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(4)
+  test("creates the approved v5 source, preinstall policy, and exact retired-major recovery set", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(5)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -85,7 +85,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.1.3",
           },
           targets: [],
-          version: "0.3.1",
+          version: "0.3.2",
         },
         {
           id: "storyboard-studio",
@@ -102,7 +102,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.1.1",
           },
           targets: [],
-          version: "0.2.1",
+          version: "0.2.2",
         },
         {
           id: "video-timeline",
@@ -122,7 +122,7 @@ describe("Marketplace product policy configuration", () => {
           version: "0.2.1",
         },
       ],
-      revision: 4,
+      revision: 5,
     })
   })
 
