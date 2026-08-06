@@ -7,7 +7,7 @@ import {
   installCurrentProtocolAuthority,
   parseCurrentProtocolDescriptor,
 } from "./current-protocol"
-import { CAUSAL_EDIT_MAGIC_V2, KERNEL_DIGEST_DOMAINS_V2 } from "./constants"
+import { CAUSAL_EDIT_MAGIC, KERNEL_DIGEST_DOMAINS } from "./constants"
 
 const packagedDescriptor = new Uint8Array(
   await Bun.file(new URL("../protocol/current.json", import.meta.url)).arrayBuffer(),
@@ -18,8 +18,8 @@ describe("current protocol descriptor", () => {
     const descriptor = currentProtocolDescriptor()
 
     expect(descriptor.format).toBe(CURRENT_PROTOCOL_DESCRIPTOR_FORMAT)
-    expect(descriptor.frameMagic).toBe(CAUSAL_EDIT_MAGIC_V2)
-    expect(descriptor.typedIntentFormat).toBe(KERNEL_DIGEST_DOMAINS_V2.typedIntent)
+    expect(descriptor.frameMagic).toBe(CAUSAL_EDIT_MAGIC)
+    expect(descriptor.typedIntentFormat).toBe(KERNEL_DIGEST_DOMAINS.typedIntent)
     expect(descriptor.artifacts.map(({ name }) => name)).toEqual([
       "canvas-schema",
       "collaboration-kernel",

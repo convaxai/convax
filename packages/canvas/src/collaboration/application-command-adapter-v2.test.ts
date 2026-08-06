@@ -7,7 +7,7 @@ import { derivedNodeRefV2 } from "./validation"
 import { validateCanvasYDocV2 } from "./ydoc"
 import { projectCanvasV2 } from "./projection"
 import type { CanvasResourceProofRefV2 } from "./types"
-import { parseUint32V2, parseUint64V2 } from "@convax/collaboration"
+import { parseUint32, parseUint64 } from "@convax/collaboration"
 
 describe("Canvas v2 application command adapter", () => {
   test("maps move, connect, group, ungroup, and incident-closed removal to closed v2 intents", () => {
@@ -40,7 +40,7 @@ describe("Canvas v2 application command adapter", () => {
     })
     expect(group.command.kind).toBe("nodes-group")
     applyAdapted(document, groupContext, group.command)
-    const groupRef = derivedNodeRefV2(groupContext, parseUint32V2("0"))
+    const groupRef = derivedNodeRefV2(groupContext, parseUint32("0"))
 
     const ungroupContext = context(1, 6, 6)
     const ungroup = requireAdaptation(document, ungroupContext, { type: "nodes.ungroup", nodeId: groupRef.id })
@@ -330,7 +330,7 @@ function currentResourceProof(
         `?blob=sha256%3A${String((seed + 1) % 10).repeat(64)}&path=Media%2Fresource.bin`,
       mediaClass,
       mime: mediaClass === "image" ? "image/png" : mediaClass === "video" ? "video/mp4" : "application/octet-stream",
-      byteLength: parseUint64V2("12"),
+      byteLength: parseUint64("12"),
       contentDigest: digest(seed + 1),
       ownerProofDigest,
     },

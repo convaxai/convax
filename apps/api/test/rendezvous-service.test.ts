@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
+  encodeBase64url,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
 } from "@convax/collaboration"
 import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2, type SessionProofV2 } from "@convax/project/collaboration-protocol"
 import {
@@ -26,11 +26,11 @@ import {
   type SessionChallengeAuthorizationFactoryV2,
 } from "../src"
 
-const signature = parseSignatureV2("A".repeat(86))
-const publicKey = parsePublicKeyV2("A".repeat(43))
-const digest = (value: string) => parseDigestV2(value.repeat(64))
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
-const actor = (byte: number) => parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(byte)))
+const signature = parseSignature("A".repeat(86))
+const publicKey = parsePublicKey("A".repeat(43))
+const digest = (value: string) => parseDigest(value.repeat(64))
+const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
+const actor = (byte: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(byte)))
 
 class FakeClock {
   value = 1_000_000
@@ -53,12 +53,12 @@ const signatures: ControlDigestSignaturePortV2 = {
 
 function projectSeed(): CollaborationProjectSeedV2 {
   return {
-    projectId: parseProjectIdV2("team-project"),
+    projectId: parseProjectId("team-project"),
     projectEpoch: id(1),
     membershipEpoch: id(2),
-    membershipSequence: parseUint64V2("1"),
+    membershipSequence: parseUint64("1"),
     membershipSnapshotDigest: digest("1"),
-    registrySequence: parseUint64V2("1"),
+    registrySequence: parseUint64("1"),
     registryRootDigest: digest("2"),
     schemaDigest: digest("3"),
     validationArtifactSetDigest: digest("4"),
@@ -69,17 +69,17 @@ function projectSeed(): CollaborationProjectSeedV2 {
 
 function member(memberByte: number, replica: string, actorByte: number) {
   return {
-    memberId: parseMemberIdV2(id(memberByte)),
+    memberId: parseMemberId(id(memberByte)),
     memberAuthorizationEpoch: id(memberByte + 20),
     role: "editor" as const,
     active: true,
     replicas: [{
-      replicaId: parseReplicaIdV2(replica),
+      replicaId: parseReplicaId(replica),
       actorId: actor(actorByte),
       replicaAuthorizationEpoch: id(memberByte + 30),
       replicaSigningPublicKey: publicKey,
       editState: "active-editor" as const,
-      sessionCounter: parseUint64V2("0"),
+      sessionCounter: parseUint64("0"),
       active: true,
     }],
   }
@@ -106,13 +106,13 @@ function proofFor(seed: CollaborationProjectSeedV2, memberIndex: number, challen
     leaseId: challenge.core.leaseId,
     peerId: challenge.core.peerId,
     sessionSigningPublicKey: publicKey,
-    requestedExpiresAtUnixMs: parseUint64V2("1600000"),
-    protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+    requestedExpiresAtUnixMs: parseUint64("1600000"),
+    protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
   }
   return {
     format: "convax.session-proof/2",
     core,
-    coreDigest: structuredDigestV2("convax.session-proof-core/2", core),
+    coreDigest: structuredDigest("convax.session-proof-core/2", core),
     replicaSignature: signature,
   }
 }
@@ -197,19 +197,19 @@ describe("R5 collaboration rendezvous service", () => {
       requesterPeerId: credentialA.core.peerId,
       responderPeerId: credentialB.core.peerId,
       requesterNonce: id(42),
-      protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+      protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
     }
     const request = {
       format: "convax.peer-ticket-request/2" as const,
       core: requestCore,
-      coreDigest: structuredDigestV2("convax.peer-ticket-request-core/2", requestCore),
+      coreDigest: structuredDigest("convax.peer-ticket-request-core/2", requestCore),
       requesterSessionSignature: signature,
     }
     const first = await service.issuePeerFreshnessTicket(seed.projectId, request)
     const retry = await service.issuePeerFreshnessTicket(seed.projectId, request)
     expect(retry).toEqual(first)
     expect(first.core.connectionId).toBe(requestCore.connectionId)
-    expect(first.core.channelContractDigest).toBe(parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest))
+    expect(first.core.channelContractDigest).toBe(parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest))
   })
 
   test("caps pending challenges and rejects a same-session equivocation", async () => {

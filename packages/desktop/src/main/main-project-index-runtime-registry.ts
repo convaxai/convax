@@ -1,20 +1,20 @@
 import path from "node:path"
 import {
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseProjectIdV2,
-  replicaActorHeadSetDigestV2,
-  replicaCheckpointCoreDigestV2,
-  type CollaborationKernelOptionsV2,
-  type DecodedCausalEditFrameV2,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type IncomingOwnerFactResolverPortV2,
-  type VerifiedProtocolAuthorityV2,
-  type YjsDocumentFactoryV2,
+  createSelectedDocumentOwnerArtifactFactory,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseProjectId,
+  replicaActorHeadSetDigest,
+  replicaCheckpointCoreDigest,
+  type CollaborationKernelOptions,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type DocumentScope,
+  type Id128,
+  type IncomingOwnerFactResolverPort,
+  type CurrentProtocolAuthority,
+  type YjsDocumentFactory,
 } from "@convax/collaboration"
 import {
   ProjectIndexCanvasApplicationV2,
@@ -65,7 +65,7 @@ import type {
   ResolvedLocalProjectOwnerAuthorityV2,
 } from "./local-project-owner-authority"
 
-type ProjectIndexScopeV2 = DocumentScopeV2 & {
+type ProjectIndexScopeV2 = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
 }
@@ -76,7 +76,7 @@ export interface MainProjectIndexFirstRegistrationPortV2 {
    * the coordinator is allowed to create/open the Project writer.
    */
   ensureRegistered(input: {
-    readonly projectId: ReturnType<typeof parseProjectIdV2>
+    readonly projectId: ReturnType<typeof parseProjectId>
     readonly projectRoot: string
   }): Promise<ProjectIndexScopeV2>
 }
@@ -95,7 +95,7 @@ export class CollaborationEnrollmentRequiredErrorV2 extends Error {
 
 /** Existing verified stores open offline; absent stores never mint local authority. */
 export function createExistingProjectIndexRegistrationPortV2(
-  authority: VerifiedProtocolAuthorityV2,
+  authority: CurrentProtocolAuthority,
 ): MainProjectIndexFirstRegistrationPortV2 {
   const port: MainProjectIndexFirstRegistrationPortV2 = {
     async ensureRegistered({ projectId, projectRoot }) {
@@ -126,7 +126,7 @@ export function createExistingProjectIndexRegistrationPortV2(
  * same checkpoint core and native-store publication rejects equivocation.
  */
 export function createLocalProjectOwnerIndexRegistrationPortV2(
-  authority: VerifiedProtocolAuthorityV2,
+  authority: CurrentProtocolAuthority,
   owners: DurableLocalProjectOwnerAuthorityResolverV2 &
     Pick<NodeDurableLocalProjectOwnerAuthorityV2, "verifyCheckpointSignature">,
 ): MainProjectIndexFirstRegistrationPortV2 {
@@ -167,7 +167,7 @@ export function createLocalProjectOwnerIndexRegistrationPortV2(
 }
 
 export async function initializeLocalOwnerProjectIndexNativeStoreV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   readonly collaborationDirectory: string
   readonly owner: ResolvedLocalProjectOwnerAuthorityV2
   readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
@@ -196,7 +196,7 @@ export async function initializeLocalOwnerProjectIndexNativeStoreV2(input: {
 }
 
 export async function verifyPristineLocalOwnerProjectIndexNativeStoreV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   readonly collaborationDirectory: string
   readonly owner: ResolvedLocalProjectOwnerAuthorityV2
   readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
@@ -229,7 +229,7 @@ export async function verifyPristineLocalOwnerProjectIndexNativeStoreV2(input: {
 }
 
 async function prepareLocalOwnerProjectIndexGenesisV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   readonly collaborationDirectory: string
   readonly owner: ResolvedLocalProjectOwnerAuthorityV2
   readonly verifyCheckpointSignature: NodeDurableLocalProjectOwnerAuthorityV2["verifyCheckpointSignature"]
@@ -258,7 +258,7 @@ async function prepareLocalOwnerProjectIndexGenesisV2(input: {
     validationArtifactSetDigest: owner.binding.validationArtifactSetDigest,
     authority: authorityTuple,
   })
-  const coreDigest = replicaCheckpointCoreDigestV2(candidate.checkpointCore)
+  const coreDigest = replicaCheckpointCoreDigest(candidate.checkpointCore)
   const checkpoint = Object.freeze({
     format: "convax.replica-checkpoint/2" as const,
     core: candidate.checkpointCore,
@@ -268,7 +268,7 @@ async function prepareLocalOwnerProjectIndexGenesisV2(input: {
   const genesis = await verifyEmptyProjectIndexGenesisV2({
     scope,
     document: candidate.document,
-    checkpointExactBytes: encodeRestrictedJcsV2(checkpoint),
+    checkpointExactBytes: encodeRestrictedJcs(checkpoint),
     initializationAuthorityDigest: owner.binding.bindingDigest,
     verifier: {
       async verify(value) {
@@ -295,13 +295,13 @@ const genesisMaterializer: NodeReplicaHeadMaterializerV2 = Object.freeze({
   async applyAcceptedFrame() {
     throw new Error("ProjectIndex genesis has no causal frame")
   },
-  actorHeadsDigest: replicaActorHeadSetDigestV2,
+  actorHeadsDigest: replicaActorHeadSetDigest,
 })
 
 export interface MainProjectIndexDescriptorV2 {
-  readonly createDocument: YjsDocumentFactoryV2["createDocument"]
-  readonly incomingFacts: IncomingOwnerFactResolverPortV2
-  readonly requiredBlobDigests: (frame: DecodedCausalEditFrameV2) => readonly DigestV2[]
+  readonly createDocument: YjsDocumentFactory["createDocument"]
+  readonly incomingFacts: IncomingOwnerFactResolverPort
+  readonly requiredBlobDigests: (frame: DecodedCausalEditFrame) => readonly Digest[]
   readonly facts: ProjectIndexFactResolutionPortV2
   readonly canvasGenesis: ProjectCanvasGenesisStagingPortV2
 }
@@ -333,18 +333,18 @@ export class MainProjectIndexRuntimeRegistryV2
 
   constructor(
     private readonly options: {
-      readonly authority: VerifiedProtocolAuthorityV2
+      readonly authority: CurrentProtocolAuthority
       readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinatorV2, "acquire" | "resolveProjectRoot">
       readonly firstRegistration: MainProjectIndexFirstRegistrationPortV2
       readonly materializers: ProjectCollaborationMaterializerRegistryV2
       readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
       readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
-      readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
-      readonly createOperationId: () => Id128V2
-      readonly createShardEpoch: () => Id128V2
+      readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
+      readonly createOperationId: () => Id128
+      readonly createShardEpoch: () => Id128
       describeProjectIndex(input: {
         readonly scope: ProjectIndexScopeV2
-        readonly owner: DocumentOwnerRuntimeV2<"project-index">
+        readonly owner: DocumentOwnerRuntime<"project-index">
         readonly project: ProjectCollaborationRuntimeLeaseV2
         readonly blobs: ProjectBlobReplicationStoreV2
       }): MainProjectIndexDescriptorV2
@@ -352,63 +352,63 @@ export class MainProjectIndexRuntimeRegistryV2
   ) {}
 
   async queryCatalog(input: Parameters<ProjectIndexCanvasApplicationPortV2["queryCatalog"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCatalog({ projectId })
   }
 
   async submitRouteCommand(input: Parameters<ProjectIndexCanvasApplicationPortV2["submitRouteCommand"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.submitRouteCommand({ ...input, projectId })
   }
 
   async queryCurrentBlobDigests(
     input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentBlobDigests"]>[0],
   ) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return queryMainProjectIndexCurrentBlobDigestsV2((await this.open(projectId)).application, { projectId })
   }
 
   async queryCurrentResources(
     input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentResources"]>[0],
   ) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResources({ projectId })
   }
 
   async createDirectory(input: Parameters<ProjectIndexFileApplicationPortV2["createDirectory"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.createDirectory({ ...input, projectId })
   }
 
   async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.admitManagedBlob({ ...input, projectId })
   }
 
   async publishFile(input: Parameters<ProjectIndexFileApplicationPortV2["publishFile"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.publishFile({ ...input, projectId })
   }
 
   async relocateEntry(input: Parameters<ProjectIndexFileApplicationPortV2["relocateEntry"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.relocateEntry({ ...input, projectId })
   }
 
   async tombstoneEntry(input: Parameters<ProjectIndexFileApplicationPortV2["tombstoneEntry"]>[0]) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.tombstoneEntry({ ...input, projectId })
   }
 
   async queryFileMaterializationPlan(
     input: Parameters<ProjectIndexFileMaterializationProjectionPortV2["queryFileMaterializationPlan"]>[0],
   ) {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).fileApplication.queryFileMaterializationPlan({ projectId })
   }
 
   async quiesceProject(projectIdInput: string): Promise<void> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     await this.serialize(projectId, async () => {
       const pending = this.entries.get(projectId)
       if (!pending) return
@@ -432,7 +432,7 @@ export class MainProjectIndexRuntimeRegistryV2
     await Promise.all([...this.entries.keys()].map((projectId) => this.quiesceProject(projectId)))
   }
 
-  private open(projectId: ReturnType<typeof parseProjectIdV2>): Promise<OpenProjectIndexEntryV2> {
+  private open(projectId: ReturnType<typeof parseProjectId>): Promise<OpenProjectIndexEntryV2> {
     this.requireLive()
     let pending = this.entries.get(projectId)
     if (!pending) {
@@ -451,7 +451,7 @@ export class MainProjectIndexRuntimeRegistryV2
     return pending
   }
 
-  private async openFresh(projectId: ReturnType<typeof parseProjectIdV2>): Promise<OpenProjectIndexEntryV2> {
+  private async openFresh(projectId: ReturnType<typeof parseProjectId>): Promise<OpenProjectIndexEntryV2> {
     const projectRoot = await this.options.projects.resolveProjectRoot(projectId)
     const registeredScope = await this.options.firstRegistration.ensureRegistered({ projectId, projectRoot })
     if (registeredScope.projectId !== projectId) throw new Error("ProjectIndex first-register crossed Project identity")
@@ -570,8 +570,8 @@ export class MainProjectIndexRuntimeRegistryV2
 export async function queryMainProjectIndexCurrentBlobDigestsV2(
   application: ProjectIndexCurrentBlobReferencePortV2,
   input: Parameters<ProjectIndexCurrentBlobReferencePortV2["queryCurrentBlobDigests"]>[0],
-): Promise<ReadonlySet<DigestV2>> {
-  const projectId = parseProjectIdV2(input.projectId)
+): Promise<ReadonlySet<Digest>> {
+  const projectId = parseProjectId(input.projectId)
   const values = await application.queryCurrentBlobDigests({ projectId })
   if (
     !values ||
@@ -583,8 +583,8 @@ export async function queryMainProjectIndexCurrentBlobDigestsV2(
     typeof values[Symbol.iterator] !== "function"
   )
     throw new TypeError("ProjectIndex current blob-reference projection is malformed")
-  const result = new Set<DigestV2>()
-  for (const value of values) result.add(parseDigestV2(value))
+  const result = new Set<Digest>()
+  for (const value of values) result.add(parseDigest(value))
   if (result.size !== values.size) {
     throw new TypeError("ProjectIndex current blob-reference projection has inconsistent set semantics")
   }
@@ -592,9 +592,9 @@ export async function queryMainProjectIndexCurrentBlobDigestsV2(
 }
 
 export function createMainProjectIndexOwnerRuntimeV2(
-  authority: VerifiedProtocolAuthorityV2,
-): DocumentOwnerRuntimeV2<"project-index"> {
-  const selected = createSelectedDocumentOwnerArtifactFactoryV2(authority, "project-index").createRuntime(
+  authority: CurrentProtocolAuthority,
+): DocumentOwnerRuntime<"project-index"> {
+  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "project-index").createRuntime(
     selectedProjectIndexDocumentOwnerArtifactDefinitionV2,
   )
   if ("status" in selected) throw new Error(`ProjectIndex owner runtime is ${selected.code}`)

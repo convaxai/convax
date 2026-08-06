@@ -1,18 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
+  encodeBase64url,
   installCurrentProtocolAuthority,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  type ValidationArtifactRefV2,
-  type VerifiedProtocolAuthorityV2,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
+  createSelectedDocumentOwnerArtifactFactory,
+  type ValidationArtifactRef,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import { selectedCanvasDocumentOwnerArtifactDefinitionV2 } from "./session"
 import {
@@ -25,7 +25,7 @@ import {
 describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
   test("builds exact checkpoint/carrier bytes and validates the closed Canvas identity", async () => {
     const authority = await loadAuthority()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
       .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = buildAuthor(authority)
@@ -47,10 +47,10 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
     const created = factory.createVerifier(runtimeResult)
     if (created.status !== "created") throw new Error(created.code)
     const scope = Object.freeze({
-      projectId: parseProjectIdV2("project"),
+      projectId: parseProjectId("project"),
       projectEpoch: id128(1),
       docKind: "canvas" as const,
-      docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`),
+      docId: parseCanvasId(`cv_${"2".repeat(64)}`),
       shardEpoch: id128(2),
     })
     const result = await buildCanvasGenesisProofCarrierV2({
@@ -72,7 +72,7 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
 
   test("rejects a tampered section and never exposes a partial identity", async () => {
     const authority = await loadAuthority()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
       .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = buildAuthor(authority)
@@ -94,8 +94,8 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
       runtime: runtimeResult,
       verifier: created.verifier,
       scope: {
-        projectId: parseProjectIdV2("project"), projectEpoch: id128(3), docKind: "canvas",
-        docId: parseCanvasIdV2(`cv_${"3".repeat(64)}`), shardEpoch: id128(4),
+        projectId: parseProjectId("project"), projectEpoch: id128(3), docKind: "canvas",
+        docId: parseCanvasId(`cv_${"3".repeat(64)}`), shardEpoch: id128(4),
       },
       projectIndexRouteDependencyFrameDigest: digest(91),
       author,
@@ -109,10 +109,10 @@ describe("R5 CVXCGP02 Canvas genesis proof carrier", () => {
   })
 })
 
-function buildAuthor(authority: VerifiedProtocolAuthorityV2): CanvasGenesisBuildAuthorV2 {
+function buildAuthor(authority: CurrentProtocolAuthority): CanvasGenesisBuildAuthorV2 {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
   const artifact = (
-    owner: ValidationArtifactRefV2["owner"],
+    owner: ValidationArtifactRef["owner"],
     name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence",
   ) => {
     const selected = byName.get(name)!
@@ -123,9 +123,9 @@ function buildAuthor(authority: VerifiedProtocolAuthorityV2): CanvasGenesisBuild
   }
   return Object.freeze({
     checkpointId: id128(10),
-    authorMemberId: parseMemberIdV2(encoded(11, 16)),
-    authorReplicaId: parseReplicaIdV2("replica_00000001"),
-    authorActorId: parseActorIdV2(encoded(12, 32)),
+    authorMemberId: parseMemberId(encoded(11, 16)),
+    authorReplicaId: parseReplicaId("replica_00000001"),
+    authorActorId: parseActorId(encoded(12, 32)),
     authorAuthorizationDigest: digest(13),
     checkpointAuthorCredentialCoreDigest: digest(14),
     checkpointAuthorCredentialExactBytes: new TextEncoder().encode("credential"),
@@ -141,15 +141,15 @@ function buildAuthor(authority: VerifiedProtocolAuthorityV2): CanvasGenesisBuild
       artifact("kernel", "collaboration-kernel"),
       artifact("project-index", "project-persistence"),
     ]),
-    signCheckpointCoreDigest: async () => parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(1))),
+    signCheckpointCoreDigest: async () => parseSignature(encodeBase64url(new Uint8Array(64).fill(1))),
   })
 }
 
-async function loadAuthority(): Promise<VerifiedProtocolAuthorityV2> {
+async function loadAuthority(): Promise<CurrentProtocolAuthority> {
   return installCurrentProtocolAuthority()
 }
 
-function id128(seed: number) { return parseId128V2(encoded(seed, 16)) }
-function digest(seed: number) { return parseDigestV2([...bytes(seed, 32)].map((value) => value.toString(16).padStart(2, "0")).join("")) }
-function encoded(seed: number, length: number) { return encodeBase64urlV2(bytes(seed, length)) }
+function id128(seed: number) { return parseId128(encoded(seed, 16)) }
+function digest(seed: number) { return parseDigest([...bytes(seed, 32)].map((value) => value.toString(16).padStart(2, "0")).join("")) }
+function encoded(seed: number, length: number) { return encodeBase64url(bytes(seed, length)) }
 function bytes(seed: number, length: number) { return Uint8Array.from({ length }, (_, index) => (seed * 17 + index * 29) & 0xff) }

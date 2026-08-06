@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createWebCryptoEd25519VerifierV2, parseDigestV2, parseProjectIdV2 } from "@convax/collaboration"
+import { createWebCryptoEd25519Verifier, parseDigest, parseProjectId } from "@convax/collaboration"
 import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import { readProjectNativeStoreManifestV2 } from "@convax/project/node"
@@ -33,7 +33,7 @@ describe("existing ProjectIndex registration", () => {
 
     await expect(
       registration.ensureRegistered({
-        projectId: parseProjectIdV2("project-unregistered"),
+        projectId: parseProjectId("project-unregistered"),
         projectRoot,
       }),
     ).rejects.toBeInstanceOf(CollaborationEnrollmentRequiredErrorV2)
@@ -66,7 +66,7 @@ describe("existing ProjectIndex registration", () => {
 
     await expect(
       registration.ensureRegistered({
-        projectId: parseProjectIdV2("project-legacy-first-register"),
+        projectId: parseProjectId("project-legacy-first-register"),
         projectRoot,
       }),
     ).rejects.toMatchObject({ code: "unsupported-portable-version" })
@@ -81,7 +81,7 @@ describe("existing ProjectIndex registration", () => {
     const userData = path.join(root, "user-data")
     await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
     const authority = await loadHistoricalTestAuthorityV2()
-    const projectId = parseProjectIdV2("project-first-register")
+    const projectId = parseProjectId("project-first-register")
     const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "keychain",
@@ -99,7 +99,7 @@ describe("existing ProjectIndex registration", () => {
         },
       },
       vault,
-      verifier: createWebCryptoEd25519VerifierV2(),
+      verifier: createWebCryptoEd25519Verifier(),
     })
     const registration = createLocalProjectOwnerIndexRegistrationPortV2(authority, owners)
     const first = await registration.ensureRegistered({ projectId, projectRoot })
@@ -124,8 +124,8 @@ describe("existing ProjectIndex registration", () => {
 })
 
 describe("ProjectIndex current blob-reference Main bridge", () => {
-  const projectId = parseProjectIdV2("project-blob-references")
-  const digest = parseDigestV2("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  const projectId = parseProjectId("project-blob-references")
+  const digest = parseDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
   test("propagates an unavailable owner query and never guesses from another projection", async () => {
     const application: ProjectIndexCurrentBlobReferencePortV2 = {

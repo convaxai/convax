@@ -1,17 +1,17 @@
-import { CollaborationCodecErrorV2 } from "./errors"
+import { CollaborationCodecError } from "./errors"
 
 const decoder = new TextDecoder("utf-8", { fatal: true })
 const encoder = new TextEncoder()
 
-export function encodeRestrictedJcsV2(value: unknown): Uint8Array {
+export function encodeRestrictedJcs(value: unknown): Uint8Array {
   return encoder.encode(canonicalize(value, 0, new Set<object>()))
 }
 
-export function encodeRestrictedJcsTextV2(value: unknown): string {
+export function encodeRestrictedJcsText(value: unknown): string {
   return canonicalize(value, 0, new Set<object>())
 }
 
-export function decodeRestrictedJcsV2(bytes: Uint8Array): unknown {
+export function decodeRestrictedJcs(bytes: Uint8Array): unknown {
   requireUint8Array(bytes, "restricted JCS")
   let text: string
   let parsed: unknown
@@ -19,10 +19,10 @@ export function decodeRestrictedJcsV2(bytes: Uint8Array): unknown {
     text = decoder.decode(bytes)
     parsed = JSON.parse(text) as unknown
   } catch (error) {
-    throw new CollaborationCodecErrorV2("invalid-canonical-jcs", "Restricted JCS is not valid UTF-8 JSON", { cause: error })
+    throw new CollaborationCodecError("invalid-canonical-jcs", "Restricted JCS is not valid UTF-8 JSON", { cause: error })
   }
-  if (!sameBytes(encodeRestrictedJcsV2(parsed), bytes)) {
-    throw new CollaborationCodecErrorV2("invalid-canonical-jcs", "Restricted JCS bytes are not canonical")
+  if (!sameBytes(encodeRestrictedJcs(parsed), bytes)) {
+    throw new CollaborationCodecError("invalid-canonical-jcs", "Restricted JCS bytes are not canonical")
   }
   return parsed
 }
@@ -33,7 +33,7 @@ export function isPlainDataObject(value: unknown): value is Record<string, unkno
   return prototype === Object.prototype || prototype === null
 }
 
-export function assertExactKeysV2(
+export function assertExactKeys(
   value: unknown,
   required: readonly string[],
   label: string,
@@ -46,12 +46,12 @@ export function assertExactKeysV2(
   }
 }
 
-export function assertDenseArrayV2(value: unknown, label: string): asserts value is readonly unknown[] {
+export function assertDenseArray(value: unknown, label: string): asserts value is readonly unknown[] {
   if (!Array.isArray(value)) invalid(`${label} must be an array`)
   assertArrayShape(value)
 }
 
-export function assertNfcScalarStringV2(value: unknown, label: string): asserts value is string {
+export function assertNfcScalarString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string") invalid(`${label} must be a string`)
   if (value.normalize("NFC") !== value) invalid(`${label} must be NFC`)
   for (let index = 0; index < value.length; index += 1) {
@@ -66,15 +66,15 @@ export function assertNfcScalarStringV2(value: unknown, label: string): asserts 
   }
 }
 
-export function utf8ByteLengthV2(value: string): number {
+export function utf8ByteLength(value: string): number {
   return encoder.encode(value).byteLength
 }
 
-export function compareUtf8V2(left: string, right: string): number {
-  return compareBytesV2(encoder.encode(left), encoder.encode(right))
+export function compareUtf8(left: string, right: string): number {
+  return compareBytes(encoder.encode(left), encoder.encode(right))
 }
 
-export function compareBytesV2(left: Uint8Array, right: Uint8Array): number {
+export function compareBytes(left: Uint8Array, right: Uint8Array): number {
   const length = Math.min(left.byteLength, right.byteLength)
   for (let index = 0; index < length; index += 1) {
     const difference = (left[index] ?? 0) - (right[index] ?? 0)
@@ -96,7 +96,7 @@ function canonicalize(value: unknown, depth: number, ancestors: Set<object>): st
   if (depth > 128) invalid("Restricted JCS exceeds the depth limit")
   if (value === null || typeof value === "boolean") return JSON.stringify(value)
   if (typeof value === "string") {
-    assertNfcScalarStringV2(value, "Restricted JCS string")
+    assertNfcScalarString(value, "Restricted JCS string")
     return JSON.stringify(value)
   }
   if (typeof value === "number") {
@@ -119,7 +119,7 @@ function canonicalize(value: unknown, depth: number, ancestors: Set<object>): st
   return withAncestor(value, ancestors, () => {
     const keys = assertObjectShape(value).sort(compareUtf16)
     return `{${keys.map((key) => {
-      assertNfcScalarStringV2(key, "Restricted JCS key")
+      assertNfcScalarString(key, "Restricted JCS key")
       const descriptor = Object.getOwnPropertyDescriptor(value, key)
       if (!descriptor || !("value" in descriptor)) invalid("Restricted JCS objects require data properties")
       return `${JSON.stringify(key)}:${canonicalize(descriptor.value, depth + 1, ancestors)}`
@@ -174,5 +174,5 @@ function compareUtf16(left: string, right: string): number {
 }
 
 function invalid(message: string): never {
-  throw new CollaborationCodecErrorV2("invalid-canonical-jcs", message)
+  throw new CollaborationCodecError("invalid-canonical-jcs", message)
 }

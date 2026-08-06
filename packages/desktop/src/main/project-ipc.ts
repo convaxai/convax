@@ -1,6 +1,6 @@
 import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient, ProjectRecord } from "@convax/project"
 import type { ProjectIndexFileApplicationPortV2, ProjectIndexFileMutationResultV2 } from "@convax/project/canvas"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { IpcMainInvokeEvent, OpenDialogOptions } from "electron"
@@ -148,7 +148,7 @@ type ProjectInvokeChannel = keyof ProjectIpcContract
 type StopWatching = () => void
 
 function parseProjectIdForCollaboration(projectId: string) {
-  return parseProjectIdV2(projectId)
+  return parseProjectId(projectId)
 }
 
 function decodeProjectFileDataUrl(dataUrl: string): Uint8Array {

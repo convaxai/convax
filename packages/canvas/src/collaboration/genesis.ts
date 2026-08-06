@@ -1,50 +1,50 @@
 import {
-  applyUpdateV1V2,
-  assertDenseArrayV2,
-  assertDocumentOwnerRuntimeV2,
-  assertExactKeysV2,
-  canonicalStateDigestV2,
-  causalFrontierDigestV2,
-  decodeRestrictedJcsV2,
-  encodeFullUpdateV2,
-  encodeRestrictedJcsV2,
-  encodeStateVectorV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseReplicaCheckpointV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint32V2,
-  parseUint64V2,
-  parseValidationArtifactSetV2,
-  replicaActorHeadSetDigestV2,
-  replicaCheckpointCoreDigestV2,
-  replicaCheckpointObjectDigestV2,
-  replicaIdToYjsClientIdV2,
-  stateVectorDigestV2,
-  structuredDigestV2,
-  yjsUpdateDigestV2,
-  type ActorIdV2,
-  type CausalFrontierV2,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ReplicaCheckpointCoreV2,
-  type ReplicaCheckpointV2,
-  type ReplicaActorHeadSetV2,
-  type ReplicaIdV2,
-  type SignatureV2,
-  type StateVectorV2,
-  type Uint32V2,
-  type Uint64V2,
-  type ValidationArtifactRefV2,
-  type VerifiedProtocolAuthorityV2,
+  applyYjsUpdate,
+  assertDenseArray,
+  assertDocumentOwnerRuntime,
+  assertExactKeys,
+  canonicalStateDigest as computeCanonicalStateDigest,
+  causalFrontierDigest,
+  decodeRestrictedJcs,
+  encodeFullUpdate,
+  encodeRestrictedJcs,
+  encodeStateVector,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parseMemberId,
+  parseReplicaCheckpoint,
+  parseReplicaId,
+  parseSignature,
+  parseUint32,
+  parseUint64,
+  parseValidationArtifactSet,
+  replicaActorHeadSetDigest,
+  replicaCheckpointCoreDigest,
+  replicaCheckpointObjectDigest,
+  replicaIdToYjsClientId,
+  stateVectorDigest,
+  structuredDigest,
+  yjsUpdateDigest,
+  type ActorId,
+  type CausalFrontier,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type DocumentScope,
+  type Id128,
+  type MemberId,
+  type ReplicaCheckpointCore,
+  type ReplicaCheckpoint,
+  type ReplicaActorHeadSet,
+  type ReplicaId,
+  type Signature,
+  type StateVector,
+  type Uint32,
+  type Uint64,
+  type ValidationArtifactRef,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import type { CanvasIdentityV2 } from "./types"
@@ -68,9 +68,9 @@ const INDEX_KEYS = [
 export type CanvasGenesisProofCarrierExactBytesV2 = Readonly<Uint8Array>
 
 export interface CanvasGenesisProofCarrierSectionLocationV2 {
-  readonly byteOffset: Uint64V2
-  readonly byteLength: Uint64V2
-  readonly sha256: DigestV2
+  readonly byteOffset: Uint64
+  readonly byteLength: Uint64
+  readonly sha256: Digest
 }
 
 type SingletonSectionKindV2 =
@@ -85,55 +85,55 @@ type SingletonSectionKindV2 =
 
 export type CanvasGenesisProofCarrierSectionV2 = CanvasGenesisProofCarrierSectionLocationV2 & Readonly<{
   kind: SingletonSectionKindV2 | "validation-artifact"
-  ordinal: Uint32V2
+  ordinal: Uint32
   subject: Readonly<Record<string, unknown>>
 }>
 
 export interface CanvasGenesisProofCarrierIndexV2 {
   readonly format: "convax.canvas-genesis-proof-carrier/2"
-  readonly scope: DocumentScopeV2
-  readonly checkpointObjectDigest: DigestV2
-  readonly fullUpdateDigest: DigestV2
-  readonly stateVectorDigest: DigestV2
-  readonly canonicalStateDigest: DigestV2
-  readonly checkpointAuthorCredentialCoreDigest: DigestV2
-  readonly checkpointAuthorReservationReceiptCoreDigest: DigestV2
-  readonly checkpointAuthorMembershipSnapshotCoreDigest: DigestV2
-  readonly serviceTrustBundleCoreDigest: DigestV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
-  readonly validationArtifacts: readonly ValidationArtifactRefV2[]
+  readonly scope: DocumentScope
+  readonly checkpointObjectDigest: Digest
+  readonly fullUpdateDigest: Digest
+  readonly stateVectorDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly checkpointAuthorCredentialCoreDigest: Digest
+  readonly checkpointAuthorReservationReceiptCoreDigest: Digest
+  readonly checkpointAuthorMembershipSnapshotCoreDigest: Digest
+  readonly serviceTrustBundleCoreDigest: Digest
+  readonly ownerSchemaDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly validationArtifactSetDigest: Digest
+  readonly validationArtifacts: readonly ValidationArtifactRef[]
   readonly sections: readonly CanvasGenesisProofCarrierSectionV2[]
-  readonly totalSectionBytes: Uint64V2
-  readonly protocolDigest: DigestV2
+  readonly totalSectionBytes: Uint64
+  readonly protocolDigest: Digest
 }
 
 export interface ValidatedCanvasGenesisIdentityV2 {
-  readonly checkpointObjectDigest: DigestV2
-  readonly scope: DocumentScopeV2
+  readonly checkpointObjectDigest: Digest
+  readonly scope: DocumentScope
   readonly identity: CanvasIdentityV2
-  readonly authorActorId: ActorIdV2
-  readonly authorCredentialCoreDigest: DigestV2
+  readonly authorActorId: ActorId
+  readonly authorCredentialCoreDigest: Digest
 }
 
 export type ValidateCanvasGenesisProofCarrierResultV2 =
   | Readonly<{
       status: "validated"
-      exactBytesSha256: DigestV2
-      canvasArtifactDigest: DigestV2
+      exactBytesSha256: Digest
+      canvasArtifactDigest: Digest
       identity: ValidatedCanvasGenesisIdentityV2
     }>
   | Readonly<{
       status: "pending"
-      exactBytesSha256: DigestV2
-      canvasArtifactDigest: DigestV2
+      exactBytesSha256: Digest
+      canvasArtifactDigest: Digest
       code: "canvas-genesis-proof-dependency-pending"
     }>
   | Readonly<{
       status: "rejected"
-      exactBytesSha256: DigestV2
-      canvasArtifactDigest: DigestV2
+      exactBytesSha256: Digest
+      canvasArtifactDigest: Digest
       code:
         | "canvas-genesis-proof-envelope-invalid"
         | "canvas-genesis-proof-limit-exceeded"
@@ -144,14 +144,14 @@ export type ValidateCanvasGenesisProofCarrierResultV2 =
     }>
 
 export interface CanvasGenesisHistoricalAuthorVerificationInputV2 {
-  readonly scope: DocumentScopeV2
-  readonly checkpoint: ReplicaCheckpointV2
+  readonly scope: DocumentScope
+  readonly checkpoint: ReplicaCheckpoint
   readonly checkpointAuthorCredentialExactBytes: Readonly<Uint8Array>
   readonly checkpointAuthorMembershipSnapshotExactBytes: Readonly<Uint8Array>
   readonly checkpointAuthorReservationReceiptExactBytes: Readonly<Uint8Array>
   readonly serviceTrustBundleExactBytes: Readonly<Uint8Array>
   readonly validationArtifacts: readonly Readonly<{
-    artifact: ValidationArtifactRefV2
+    artifact: ValidationArtifactRef
     exactBytes: Readonly<Uint8Array>
   }>[]
 }
@@ -159,9 +159,9 @@ export interface CanvasGenesisHistoricalAuthorVerificationInputV2 {
 export type CanvasGenesisHistoricalAuthorVerificationResultV2 =
   | Readonly<{
       status: "verified"
-      authorActorId: ActorIdV2
-      authorReplicaId: ReplicaIdV2
-      authorCredentialCoreDigest: DigestV2
+      authorActorId: ActorId
+      authorReplicaId: ReplicaId
+      authorCredentialCoreDigest: Digest
     }>
   | Readonly<{ status: "pending" }>
   | Readonly<{ status: "rejected" }>
@@ -182,7 +182,7 @@ declare const canvasGenesisProofCarrierVerifierFactoryBrandV2: unique symbol
 
 export interface CanvasGenesisProofCarrierVerifierV2 {
   (exactBytes: CanvasGenesisProofCarrierExactBytesV2): ValidateCanvasGenesisProofCarrierResultV2
-  readonly canvasArtifactDigest: DigestV2
+  readonly canvasArtifactDigest: Digest
   readonly [canvasGenesisProofCarrierVerifierBrandV2]: true
 }
 
@@ -194,8 +194,8 @@ export type CreateCanvasGenesisProofCarrierVerifierResultV2 =
     }>
 
 export interface CanvasGenesisProofCarrierVerifierFactoryV2 {
-  readonly canvasArtifactDigest: DigestV2
-  createVerifier(runtime: DocumentOwnerRuntimeV2<"canvas">): CreateCanvasGenesisProofCarrierVerifierResultV2
+  readonly canvasArtifactDigest: Digest
+  createVerifier(runtime: DocumentOwnerRuntime<"canvas">): CreateCanvasGenesisProofCarrierVerifierResultV2
   readonly [canvasGenesisProofCarrierVerifierFactoryBrandV2]: true
 }
 
@@ -204,7 +204,7 @@ const liveVerifiers = new WeakSet<object>()
 
 /** Composition-only installer: a structural authority cannot pass Kernel's live authority check. */
 export function installCanvasGenesisProofCarrierVerifierFactoryV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   readonly historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2
 }): CanvasGenesisProofCarrierVerifierFactoryV2 {
   const canvasArtifactDigest = selectedCanvasArtifact(input.authority)
@@ -213,9 +213,9 @@ export function installCanvasGenesisProofCarrierVerifierFactoryV2(input: {
   }
   const factory = Object.freeze({
     canvasArtifactDigest,
-    createVerifier(runtime: DocumentOwnerRuntimeV2<"canvas">): CreateCanvasGenesisProofCarrierVerifierResultV2 {
+    createVerifier(runtime: DocumentOwnerRuntime<"canvas">): CreateCanvasGenesisProofCarrierVerifierResultV2 {
       try {
-        assertDocumentOwnerRuntimeV2(runtime, input.authority)
+        assertDocumentOwnerRuntime(runtime, input.authority)
       } catch {
         return Object.freeze({ status: "rejected", code: "canvas-runtime-invalid" })
       }
@@ -232,40 +232,40 @@ export function installCanvasGenesisProofCarrierVerifierFactoryV2(input: {
 }
 
 export interface CanvasGenesisBuildAuthorV2 {
-  readonly checkpointId: Id128V2
-  readonly authorMemberId: MemberIdV2
-  readonly authorReplicaId: ReplicaIdV2
-  readonly authorActorId: ActorIdV2
-  readonly authorAuthorizationDigest: DigestV2
-  readonly checkpointAuthorCredentialCoreDigest: DigestV2
+  readonly checkpointId: Id128
+  readonly authorMemberId: MemberId
+  readonly authorReplicaId: ReplicaId
+  readonly authorActorId: ActorId
+  readonly authorAuthorizationDigest: Digest
+  readonly checkpointAuthorCredentialCoreDigest: Digest
   readonly checkpointAuthorCredentialExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorMembershipSnapshotCoreDigest: DigestV2
+  readonly checkpointAuthorMembershipSnapshotCoreDigest: Digest
   readonly checkpointAuthorMembershipSnapshotExactBytes: Readonly<Uint8Array>
-  readonly checkpointAuthorReservationReceiptCoreDigest: DigestV2
+  readonly checkpointAuthorReservationReceiptCoreDigest: Digest
   readonly checkpointAuthorReservationReceiptExactBytes: Readonly<Uint8Array>
-  readonly serviceTrustBundleCoreDigest: DigestV2
+  readonly serviceTrustBundleCoreDigest: Digest
   readonly serviceTrustBundleExactBytes: Readonly<Uint8Array>
   readonly validationArtifacts: readonly Readonly<{
-    artifact: ValidationArtifactRefV2
+    artifact: ValidationArtifactRef
     exactBytes: Readonly<Uint8Array>
   }>[]
-  signCheckpointCoreDigest(coreDigest: DigestV2): Promise<SignatureV2>
+  signCheckpointCoreDigest(coreDigest: Digest): Promise<Signature>
 }
 
 export interface CanvasGenesisAcceptedBaseV2 {
-  readonly scope: DocumentScopeV2
-  readonly frontier: CausalFrontierV2
-  readonly frontierDigest: DigestV2
-  readonly actorHeads: ReplicaActorHeadSetV2
+  readonly scope: DocumentScope
+  readonly frontier: CausalFrontier
+  readonly frontierDigest: Digest
+  readonly actorHeads: ReplicaActorHeadSet
   readonly fullUpdate: Uint8Array
-  readonly stateVector: StateVectorV2
-  readonly canonicalStateDigest: DigestV2
+  readonly stateVector: StateVector
+  readonly canonicalStateDigest: Digest
 }
 
 export type BuildCanvasGenesisProofCarrierResultV2 =
   | Readonly<{
       status: "built"
-      checkpointObjectDigest: DigestV2
+      checkpointObjectDigest: Digest
       checkpointExactBytes: Readonly<Uint8Array>
       proofCarrierExactBytes: CanvasGenesisProofCarrierExactBytesV2
       acceptedBase: CanvasGenesisAcceptedBaseV2
@@ -274,22 +274,22 @@ export type BuildCanvasGenesisProofCarrierResultV2 =
   | Readonly<{ status: "pending" | "rejected" }>
 
 export async function buildCanvasGenesisProofCarrierV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly runtime: DocumentOwnerRuntimeV2<"canvas">
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
   readonly verifier: CanvasGenesisProofCarrierVerifierV2
-  readonly scope: DocumentScopeV2
-  readonly projectIndexRouteDependencyFrameDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly projectIndexRouteDependencyFrameDigest: Digest
   readonly author: CanvasGenesisBuildAuthorV2
 }): Promise<BuildCanvasGenesisProofCarrierResultV2> {
   try {
-    assertDocumentOwnerRuntimeV2(input.runtime, input.authority)
+    assertDocumentOwnerRuntime(input.runtime, input.authority)
     const canvasArtifactDigest = selectedCanvasArtifact(input.authority)
     if (
       !liveVerifiers.has(input.verifier) ||
       input.verifier.canvasArtifactDigest !== canvasArtifactDigest ||
       input.runtime.artifactDigest !== canvasArtifactDigest
     ) return Object.freeze({ status: "rejected" })
-    const scope = parseDocumentScopeV2(input.scope)
+    const scope = parseDocumentScope(input.scope)
     if (scope.docKind !== "canvas") return Object.freeze({ status: "rejected" })
     const author = parseBuildAuthor(input.author)
     const validationArtifacts = selectedValidationArtifacts(input.authority)
@@ -300,26 +300,26 @@ export async function buildCanvasGenesisProofCarrierV2(input: {
       scope,
       canvasArtifactDigest,
       input.authority.protocolDigest,
-      parseDigestV2(input.projectIndexRouteDependencyFrameDigest),
+      parseDigest(input.projectIndexRouteDependencyFrameDigest),
       author.authorReplicaId,
     )
     try {
-      const fullUpdate = encodeFullUpdateV2(document)
-      const stateVector = encodeStateVectorV2(document)
+      const fullUpdate = encodeFullUpdate(document)
+      const stateVector = encodeStateVector(document)
       const canonicalState = input.runtime.protocolPort.canonicalStateBytes(document)
       if (canonicalState === "rejected") return Object.freeze({ status: "rejected" })
-      const canonicalStateDigest = canonicalStateDigestV2(canvasArtifactDigest, canonicalState)
-      const frontier: CausalFrontierV2 = Object.freeze({ format: "convax.causal-frontier/2", heads: Object.freeze([]) })
-      const actorHeads: ReplicaActorHeadSetV2 = Object.freeze({
+      const canonicalStateDigest = computeCanonicalStateDigest(canvasArtifactDigest, canonicalState)
+      const frontier: CausalFrontier = Object.freeze({ format: "convax.causal-frontier/2", heads: Object.freeze([]) })
+      const actorHeads: ReplicaActorHeadSet = Object.freeze({
         format: "convax.replica-actor-head-set/2",
         scope,
         heads: Object.freeze([]),
       })
-      const validationArtifactSetDigest = structuredDigestV2(
+      const validationArtifactSetDigest = structuredDigest(
         "convax.validation-artifact-set/2",
         { format: "convax.validation-artifact-set/2", artifacts: validationArtifacts },
       )
-      const checkpointCore: ReplicaCheckpointCoreV2 = Object.freeze({
+      const checkpointCore: ReplicaCheckpointCore = Object.freeze({
         format: "convax.replica-checkpoint-core/2",
         scope,
         checkpointId: author.checkpointId,
@@ -328,27 +328,27 @@ export async function buildCanvasGenesisProofCarrierV2(input: {
         authorActorId: author.authorActorId,
         authorAuthorizationDigest: author.authorAuthorizationDigest,
         directParentCheckpointDigests: Object.freeze([]),
-        baseFrontierDigest: causalFrontierDigestV2(frontier),
-        computedFrontierDigest: causalFrontierDigestV2(frontier),
-        actorHeadBoundaryDigest: replicaActorHeadSetDigestV2(actorHeads),
-        stateVectorDigest: stateVectorDigestV2(stateVector),
+        baseFrontierDigest: causalFrontierDigest(frontier),
+        computedFrontierDigest: causalFrontierDigest(frontier),
+        actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
+        stateVectorDigest: stateVectorDigest(stateVector),
         canonicalStateDigest,
-        fullUpdateDigest: yjsUpdateDigestV2(fullUpdate),
-        fullUpdateByteLength: parseUint64V2(String(fullUpdate.byteLength)),
+        fullUpdateDigest: yjsUpdateDigest(fullUpdate),
+        fullUpdateByteLength: parseUint64(String(fullUpdate.byteLength)),
         protocolDigest: input.authority.protocolDigest,
         schemaDigest: canvasArtifactDigest,
         canonicalizerDigest: input.runtime.protocolPort.canonicalizerDigest,
         validationArtifactSetDigest,
       })
-      const coreDigest = replicaCheckpointCoreDigestV2(checkpointCore)
-      const checkpoint: ReplicaCheckpointV2 = parseReplicaCheckpointV2({
+      const coreDigest = replicaCheckpointCoreDigest(checkpointCore)
+      const checkpoint: ReplicaCheckpoint = parseReplicaCheckpoint({
         format: "convax.replica-checkpoint/2",
         core: checkpointCore,
         coreDigest,
-        replicaSignature: parseSignatureV2(await author.signCheckpointCoreDigest(coreDigest)),
+        replicaSignature: parseSignature(await author.signCheckpointCoreDigest(coreDigest)),
       })
-      const checkpointExactBytes = encodeRestrictedJcsV2(checkpoint)
-      const checkpointObjectDigest = replicaCheckpointObjectDigestV2(checkpoint)
+      const checkpointExactBytes = encodeRestrictedJcs(checkpoint)
+      const checkpointObjectDigest = replicaCheckpointObjectDigest(checkpoint)
       const proofCarrierExactBytes = encodeCarrier({
         scope,
         checkpoint,
@@ -369,10 +369,10 @@ export async function buildCanvasGenesisProofCarrierV2(input: {
         acceptedBase: Object.freeze({
           scope,
           frontier,
-          frontierDigest: causalFrontierDigestV2(frontier),
+          frontierDigest: causalFrontierDigest(frontier),
           actorHeads,
           fullUpdate: new Uint8Array(fullUpdate),
-          stateVector: new Uint8Array(stateVector) as StateVectorV2,
+          stateVector: new Uint8Array(stateVector) as StateVector,
           canonicalStateDigest,
         }),
         validatedIdentity: verified.identity,
@@ -386,14 +386,14 @@ export async function buildCanvasGenesisProofCarrierV2(input: {
 }
 
 function createVerifier(
-  authority: VerifiedProtocolAuthorityV2,
-  runtime: DocumentOwnerRuntimeV2<"canvas">,
+  authority: CurrentProtocolAuthority,
+  runtime: DocumentOwnerRuntime<"canvas">,
   authorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2,
 ): CanvasGenesisProofCarrierVerifierV2 {
   const canvasArtifactDigest = runtime.artifactDigest
   const callable = ((inputBytes: Readonly<Uint8Array>): ValidateCanvasGenesisProofCarrierResultV2 => {
     const exactBytes = inputBytes instanceof Uint8Array ? new Uint8Array(inputBytes) : new Uint8Array()
-    const exactBytesSha256 = ordinarySha256V2(exactBytes)
+    const exactBytesSha256 = ordinarySha256(exactBytes)
     const reject = (code: Extract<ValidateCanvasGenesisProofCarrierResultV2, { status: "rejected" }>["code"]) =>
       Object.freeze({ status: "rejected" as const, exactBytesSha256, canvasArtifactDigest, code })
     if (!(inputBytes instanceof Uint8Array)) return reject("canvas-genesis-proof-envelope-invalid")
@@ -416,11 +416,11 @@ function createVerifier(
     } catch {
       return reject("canvas-genesis-proof-section-invalid")
     }
-    let checkpoint: ReplicaCheckpointV2
+    let checkpoint: ReplicaCheckpoint
     try {
-      checkpoint = parseReplicaCheckpointV2(decodeExactJcs(decoded.sections[6]!))
+      checkpoint = parseReplicaCheckpoint(decodeExactJcs(decoded.sections[6]!))
       if (
-        replicaCheckpointObjectDigestV2(checkpoint) !== decoded.index.checkpointObjectDigest ||
+        replicaCheckpointObjectDigest(checkpoint) !== decoded.index.checkpointObjectDigest ||
         !sameScope(checkpoint.core.scope, decoded.index.scope) ||
         checkpoint.core.protocolDigest !== decoded.index.protocolDigest ||
         checkpoint.core.schemaDigest !== decoded.index.ownerSchemaDigest ||
@@ -460,20 +460,20 @@ function createVerifier(
     }
     if (
       authorResult.status !== "verified" ||
-      parseActorIdV2(authorResult.authorActorId) !== checkpoint.core.authorActorId ||
-      parseReplicaIdV2(authorResult.authorReplicaId) !== checkpoint.core.authorReplicaId ||
-      parseDigestV2(authorResult.authorCredentialCoreDigest) !== decoded.index.checkpointAuthorCredentialCoreDigest
+      parseActorId(authorResult.authorActorId) !== checkpoint.core.authorActorId ||
+      parseReplicaId(authorResult.authorReplicaId) !== checkpoint.core.authorReplicaId ||
+      parseDigest(authorResult.authorCredentialCoreDigest) !== decoded.index.checkpointAuthorCredentialCoreDigest
     ) return reject("canvas-genesis-proof-authority-invalid")
 
     const document = createCanvasReconstructionYDocV2()
     try {
       const fullUpdate = decoded.sections[4]!
       const stateVector = decoded.sections[5]!
-      applyUpdateV1V2(document, fullUpdate, Object.freeze({ format: "convax.canvas-genesis-proof-origin/2" }))
-      if (!sameBytes(encodeFullUpdateV2(document), fullUpdate) || !sameBytes(encodeStateVectorV2(document), stateVector)) {
+      applyYjsUpdate(document, fullUpdate, Object.freeze({ format: "convax.canvas-genesis-proof-origin/2" }))
+      if (!sameBytes(encodeFullUpdate(document), fullUpdate) || !sameBytes(encodeStateVector(document), stateVector)) {
         return reject("canvas-genesis-proof-state-invalid")
       }
-      const authorClientId = replicaIdToYjsClientIdV2(authorResult.authorReplicaId)
+      const authorClientId = replicaIdToYjsClientId(authorResult.authorReplicaId)
       const stateClients = [...Y.decodeStateVector(stateVector).keys()]
       if (stateClients.length !== 1 || stateClients[0] !== authorClientId) {
         return reject("canvas-genesis-proof-authority-invalid")
@@ -484,9 +484,9 @@ function createVerifier(
       if (
         canonicalState === "rejected" ||
         !sameBytes(canonicalState, decoded.sections[3]!) ||
-        canonicalStateDigestV2(canvasArtifactDigest, canonicalState) !== decoded.index.canonicalStateDigest ||
-        yjsUpdateDigestV2(fullUpdate) !== decoded.index.fullUpdateDigest ||
-        stateVectorDigestV2(stateVector) !== decoded.index.stateVectorDigest
+        computeCanonicalStateDigest(canvasArtifactDigest, canonicalState) !== decoded.index.canonicalStateDigest ||
+        yjsUpdateDigest(fullUpdate) !== decoded.index.fullUpdateDigest ||
+        stateVectorDigest(stateVector) !== decoded.index.stateVectorDigest
       ) return reject("canvas-genesis-proof-state-invalid")
       const snapshot = validateCanvasYDocV2(document, decoded.index.scope)
       assertCanvasIdentityV2(snapshot.identity, decoded.index.scope)
@@ -514,42 +514,42 @@ function createVerifier(
 }
 
 interface ParsedBuildAuthorV2 extends Omit<CanvasGenesisBuildAuthorV2, "validationArtifacts"> {
-  readonly validationArtifacts: readonly Readonly<{ artifact: ValidationArtifactRefV2; exactBytes: Uint8Array }>[]
+  readonly validationArtifacts: readonly Readonly<{ artifact: ValidationArtifactRef; exactBytes: Uint8Array }>[]
 }
 
 function parseBuildAuthor(author: CanvasGenesisBuildAuthorV2): ParsedBuildAuthorV2 {
   if (typeof author.signCheckpointCoreDigest !== "function") throw new TypeError("Checkpoint signer is invalid")
   return Object.freeze({
     ...author,
-    checkpointId: parseId128V2(author.checkpointId),
-    authorMemberId: parseMemberIdV2(author.authorMemberId),
-    authorReplicaId: parseReplicaIdV2(author.authorReplicaId),
-    authorActorId: parseActorIdV2(author.authorActorId),
-    authorAuthorizationDigest: parseDigestV2(author.authorAuthorizationDigest),
-    checkpointAuthorCredentialCoreDigest: parseDigestV2(author.checkpointAuthorCredentialCoreDigest),
+    checkpointId: parseId128(author.checkpointId),
+    authorMemberId: parseMemberId(author.authorMemberId),
+    authorReplicaId: parseReplicaId(author.authorReplicaId),
+    authorActorId: parseActorId(author.authorActorId),
+    authorAuthorizationDigest: parseDigest(author.authorAuthorizationDigest),
+    checkpointAuthorCredentialCoreDigest: parseDigest(author.checkpointAuthorCredentialCoreDigest),
     checkpointAuthorCredentialExactBytes: cloneBytes(author.checkpointAuthorCredentialExactBytes),
-    checkpointAuthorMembershipSnapshotCoreDigest: parseDigestV2(author.checkpointAuthorMembershipSnapshotCoreDigest),
+    checkpointAuthorMembershipSnapshotCoreDigest: parseDigest(author.checkpointAuthorMembershipSnapshotCoreDigest),
     checkpointAuthorMembershipSnapshotExactBytes: cloneBytes(author.checkpointAuthorMembershipSnapshotExactBytes),
-    checkpointAuthorReservationReceiptCoreDigest: parseDigestV2(author.checkpointAuthorReservationReceiptCoreDigest),
+    checkpointAuthorReservationReceiptCoreDigest: parseDigest(author.checkpointAuthorReservationReceiptCoreDigest),
     checkpointAuthorReservationReceiptExactBytes: cloneBytes(author.checkpointAuthorReservationReceiptExactBytes),
-    serviceTrustBundleCoreDigest: parseDigestV2(author.serviceTrustBundleCoreDigest),
+    serviceTrustBundleCoreDigest: parseDigest(author.serviceTrustBundleCoreDigest),
     serviceTrustBundleExactBytes: cloneBytes(author.serviceTrustBundleExactBytes),
     validationArtifacts: Object.freeze(author.validationArtifacts.map((entry) => Object.freeze({
-      artifact: parseValidationArtifactSetV2({ format: "convax.validation-artifact-set/2", artifacts: [entry.artifact] }).artifacts[0]!,
+      artifact: parseValidationArtifactSet({ format: "convax.validation-artifact-set/2", artifacts: [entry.artifact] }).artifacts[0]!,
       exactBytes: cloneBytes(entry.exactBytes),
     }))),
   })
 }
 
 function encodeCarrier(input: {
-  scope: DocumentScopeV2
-  checkpoint: ReplicaCheckpointV2
-  checkpointObjectDigest: DigestV2
+  scope: DocumentScope
+  checkpoint: ReplicaCheckpoint
+  checkpointObjectDigest: Digest
   canonicalState: Uint8Array
   fullUpdate: Uint8Array
   stateVector: Uint8Array
   author: ParsedBuildAuthorV2
-  validationArtifacts: readonly ValidationArtifactRefV2[]
+  validationArtifacts: readonly ValidationArtifactRef[]
 }): Uint8Array {
   const sectionBytes = [
     input.author.checkpointAuthorCredentialExactBytes,
@@ -558,7 +558,7 @@ function encodeCarrier(input: {
     input.canonicalState,
     input.fullUpdate,
     input.stateVector,
-    encodeRestrictedJcsV2(input.checkpoint),
+    encodeRestrictedJcs(input.checkpoint),
     input.author.serviceTrustBundleExactBytes,
     ...input.author.validationArtifacts.map((entry) => entry.exactBytes),
   ].map((bytes) => new Uint8Array(bytes))
@@ -581,11 +581,11 @@ function encodeCarrier(input: {
       : ["validation-artifact", { kind: "validation-artifact", artifact: input.validationArtifacts[index - 8]! }] as const
     sections.push(Object.freeze({
       kind: semantic[0],
-      ordinal: parseUint32V2(String(index < 8 ? 0 : index - 8)),
+      ordinal: parseUint32(String(index < 8 ? 0 : index - 8)),
       subject: Object.freeze(semantic[1]),
-      byteOffset: parseUint64V2(offset.toString()),
-      byteLength: parseUint64V2(String(bytes.byteLength)),
-      sha256: ordinarySha256V2(bytes),
+      byteOffset: parseUint64(offset.toString()),
+      byteLength: parseUint64(String(bytes.byteLength)),
+      sha256: ordinarySha256(bytes),
     }))
     offset += BigInt(bytes.byteLength)
   }
@@ -605,10 +605,10 @@ function encodeCarrier(input: {
     validationArtifactSetDigest: input.checkpoint.core.validationArtifactSetDigest,
     validationArtifacts: Object.freeze([...input.validationArtifacts]),
     sections: Object.freeze(sections),
-    totalSectionBytes: parseUint64V2(offset.toString()),
+    totalSectionBytes: parseUint64(offset.toString()),
     protocolDigest: input.checkpoint.core.protocolDigest,
   })
-  const indexBytes = encodeRestrictedJcsV2(index)
+  const indexBytes = encodeRestrictedJcs(index)
   const total = MAGIC.byteLength + 8 + indexBytes.byteLength + Number(offset)
   if (total > MAX_CARRIER_BYTES) throw new RangeError("Canvas genesis carrier exceeds the R5 limit")
   const output = new Uint8Array(total)
@@ -634,8 +634,8 @@ function decodeCarrier(exactBytes: Uint8Array): DecodedCarrierV2 {
   if (indexLength > BigInt(exactBytes.byteLength - 16) || indexLength > BigInt(Number.MAX_SAFE_INTEGER)) throw new RangeError("bad index length")
   const indexEnd = 16 + Number(indexLength)
   const indexBytes = exactBytes.slice(16, indexEnd)
-  const decoded = decodeRestrictedJcsV2(indexBytes)
-  if (!sameBytes(encodeRestrictedJcsV2(decoded), indexBytes)) throw new TypeError("non-exact index")
+  const decoded = decodeRestrictedJcs(indexBytes)
+  if (!sameBytes(encodeRestrictedJcs(decoded), indexBytes)) throw new TypeError("non-exact index")
   const index = parseCarrierIndex(decoded)
   if (BigInt(index.totalSectionBytes) !== BigInt(exactBytes.byteLength - indexEnd)) throw new RangeError("trailing section bytes")
   const sections = index.sections.map((section) => {
@@ -643,22 +643,22 @@ function decodeCarrier(exactBytes: Uint8Array): DecodedCarrierV2 {
     const length = BigInt(section.byteLength)
     if (start + length > BigInt(exactBytes.byteLength - indexEnd)) throw new RangeError("section outside envelope")
     const bytes = exactBytes.slice(indexEnd + Number(start), indexEnd + Number(start + length))
-    if (ordinarySha256V2(bytes) !== section.sha256) throw new TypeError("section hash mismatch")
+    if (ordinarySha256(bytes) !== section.sha256) throw new TypeError("section hash mismatch")
     return bytes
   })
   return Object.freeze({ index, sections: Object.freeze(sections) })
 }
 
 function parseCarrierIndex(value: unknown): CanvasGenesisProofCarrierIndexV2 {
-  assertExactKeysV2(value, INDEX_KEYS, "CanvasGenesisProofCarrierIndexV2")
+  assertExactKeys(value, INDEX_KEYS, "CanvasGenesisProofCarrierIndexV2")
   if (value.format !== "convax.canvas-genesis-proof-carrier/2") throw new TypeError("bad format")
-  assertDenseArrayV2(value.validationArtifacts, "Canvas genesis validation artifacts")
-  const artifacts = parseValidationArtifactSetV2({
+  assertDenseArray(value.validationArtifacts, "Canvas genesis validation artifacts")
+  const artifacts = parseValidationArtifactSet({
     format: "convax.validation-artifact-set/2",
     artifacts: value.validationArtifacts,
   }).artifacts
   if (artifacts.length < 4) throw new TypeError("Canvas genesis artifact set is incomplete")
-  assertDenseArrayV2(value.sections, "Canvas genesis sections")
+  assertDenseArray(value.sections, "Canvas genesis sections")
   if (value.sections.length !== 8 + artifacts.length) throw new TypeError("Canvas genesis section count is invalid")
   const sections = value.sections.map(parseSection)
   let offset = 0n
@@ -666,35 +666,35 @@ function parseCarrierIndex(value: unknown): CanvasGenesisProofCarrierIndexV2 {
     if (BigInt(section.byteOffset) !== offset) throw new TypeError("Canvas genesis sections are not contiguous")
     offset += BigInt(section.byteLength)
   }
-  const totalSectionBytes = parseUint64V2(value.totalSectionBytes)
+  const totalSectionBytes = parseUint64(value.totalSectionBytes)
   if (BigInt(totalSectionBytes) !== offset) throw new TypeError("Canvas genesis total section length is invalid")
-  const validationArtifactSetDigest = parseDigestV2(value.validationArtifactSetDigest)
-  if (validationArtifactSetDigest !== structuredDigestV2("convax.validation-artifact-set/2", {
+  const validationArtifactSetDigest = parseDigest(value.validationArtifactSetDigest)
+  if (validationArtifactSetDigest !== structuredDigest("convax.validation-artifact-set/2", {
     format: "convax.validation-artifact-set/2", artifacts,
   })) throw new TypeError("Canvas genesis validation artifact set digest mismatches")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    checkpointObjectDigest: parseDigestV2(value.checkpointObjectDigest),
-    fullUpdateDigest: parseDigestV2(value.fullUpdateDigest),
-    stateVectorDigest: parseDigestV2(value.stateVectorDigest),
-    canonicalStateDigest: parseDigestV2(value.canonicalStateDigest),
-    checkpointAuthorCredentialCoreDigest: parseDigestV2(value.checkpointAuthorCredentialCoreDigest),
-    checkpointAuthorReservationReceiptCoreDigest: parseDigestV2(value.checkpointAuthorReservationReceiptCoreDigest),
-    checkpointAuthorMembershipSnapshotCoreDigest: parseDigestV2(value.checkpointAuthorMembershipSnapshotCoreDigest),
-    serviceTrustBundleCoreDigest: parseDigestV2(value.serviceTrustBundleCoreDigest),
-    ownerSchemaDigest: parseDigestV2(value.ownerSchemaDigest),
-    canonicalizerDigest: parseDigestV2(value.canonicalizerDigest),
+    scope: parseDocumentScope(value.scope),
+    checkpointObjectDigest: parseDigest(value.checkpointObjectDigest),
+    fullUpdateDigest: parseDigest(value.fullUpdateDigest),
+    stateVectorDigest: parseDigest(value.stateVectorDigest),
+    canonicalStateDigest: parseDigest(value.canonicalStateDigest),
+    checkpointAuthorCredentialCoreDigest: parseDigest(value.checkpointAuthorCredentialCoreDigest),
+    checkpointAuthorReservationReceiptCoreDigest: parseDigest(value.checkpointAuthorReservationReceiptCoreDigest),
+    checkpointAuthorMembershipSnapshotCoreDigest: parseDigest(value.checkpointAuthorMembershipSnapshotCoreDigest),
+    serviceTrustBundleCoreDigest: parseDigest(value.serviceTrustBundleCoreDigest),
+    ownerSchemaDigest: parseDigest(value.ownerSchemaDigest),
+    canonicalizerDigest: parseDigest(value.canonicalizerDigest),
     validationArtifactSetDigest,
     validationArtifacts: artifacts,
     sections: Object.freeze(sections),
     totalSectionBytes,
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
   })
 }
 
 function parseSection(value: unknown): CanvasGenesisProofCarrierSectionV2 {
-  assertExactKeysV2(value, ["kind", "ordinal", "subject", "byteOffset", "byteLength", "sha256"], "Canvas genesis section")
+  assertExactKeys(value, ["kind", "ordinal", "subject", "byteOffset", "byteLength", "sha256"], "Canvas genesis section")
   const kinds = new Set<string>([
     "checkpoint-author-credential", "checkpoint-author-membership-snapshot",
     "checkpoint-author-reservation-receipt", "checkpoint-canonical-state", "checkpoint-full-update",
@@ -703,11 +703,11 @@ function parseSection(value: unknown): CanvasGenesisProofCarrierSectionV2 {
   if (typeof value.kind !== "string" || !kinds.has(value.kind)) throw new TypeError("unknown section kind")
   return Object.freeze({
     kind: value.kind as CanvasGenesisProofCarrierSectionV2["kind"],
-    ordinal: parseUint32V2(value.ordinal),
+    ordinal: parseUint32(value.ordinal),
     subject: parseSubject(value.kind, value.subject),
-    byteOffset: parseUint64V2(value.byteOffset),
-    byteLength: parseUint64V2(value.byteLength),
-    sha256: parseDigestV2(value.sha256),
+    byteOffset: parseUint64(value.byteOffset),
+    byteLength: parseUint64(value.byteLength),
+    sha256: parseDigest(value.sha256),
   })
 }
 
@@ -719,9 +719,9 @@ function parseSubject(kind: string, value: unknown): Readonly<Record<string, unk
     "service-trust-bundle": "service-trust-bundle-core",
   }[kind]
   if (coreKind !== undefined) {
-    assertExactKeysV2(value, ["kind", "coreDigest"], "Canvas genesis core subject")
+    assertExactKeys(value, ["kind", "coreDigest"], "Canvas genesis core subject")
     if (value.kind !== coreKind) throw new TypeError("wrong core subject kind")
-    return Object.freeze({ kind: value.kind, coreDigest: parseDigestV2(value.coreDigest) })
+    return Object.freeze({ kind: value.kind, coreDigest: parseDigest(value.coreDigest) })
   }
   const key = {
     "checkpoint-canonical-state": ["canonical-state", "canonicalStateDigest"],
@@ -730,13 +730,13 @@ function parseSubject(kind: string, value: unknown): Readonly<Record<string, unk
     "checkpoint-wrapper": ["replica-checkpoint-object", "checkpointObjectDigest"],
   }[kind]
   if (key !== undefined) {
-    assertExactKeysV2(value, ["kind", key[1]!], "Canvas genesis digest subject")
+    assertExactKeys(value, ["kind", key[1]!], "Canvas genesis digest subject")
     if (value.kind !== key[0]) throw new TypeError("wrong digest subject kind")
-    return Object.freeze({ kind: value.kind, [key[1]!]: parseDigestV2(value[key[1]!]) })
+    return Object.freeze({ kind: value.kind, [key[1]!]: parseDigest(value[key[1]!]) })
   }
-  assertExactKeysV2(value, ["kind", "artifact"], "Canvas genesis artifact subject")
+  assertExactKeys(value, ["kind", "artifact"], "Canvas genesis artifact subject")
   if (value.kind !== "validation-artifact") throw new TypeError("wrong artifact subject kind")
-  const artifact = parseValidationArtifactSetV2({ format: "convax.validation-artifact-set/2", artifacts: [value.artifact] }).artifacts[0]!
+  const artifact = parseValidationArtifactSet({ format: "convax.validation-artifact-set/2", artifacts: [value.artifact] }).artifacts[0]!
   return Object.freeze({ kind: value.kind, artifact })
 }
 
@@ -750,7 +750,7 @@ function validateSectionSubjects(decoded: DecodedCarrierV2): void {
     const section = decoded.index.sections[index]!
     if (section.kind !== kind || section.ordinal !== "0") throw new TypeError("singleton order mismatch")
   })
-  const mirrors: readonly [number, string, DigestV2][] = [
+  const mirrors: readonly [number, string, Digest][] = [
     [0, "coreDigest", decoded.index.checkpointAuthorCredentialCoreDigest],
     [1, "coreDigest", decoded.index.checkpointAuthorMembershipSnapshotCoreDigest],
     [2, "coreDigest", decoded.index.checkpointAuthorReservationReceiptCoreDigest],
@@ -771,20 +771,20 @@ function validateSectionSubjects(decoded: DecodedCarrierV2): void {
   })
 }
 
-function selectedCanvasArtifact(authority: VerifiedProtocolAuthorityV2): DigestV2 {
+function selectedCanvasArtifact(authority: CurrentProtocolAuthority): Digest {
   const artifact = authority.protocolSchemaBundle.core.artifacts.find((entry) => entry.name === "canvas-schema")
   if (!artifact) throw new TypeError("Selected R5 authority has no Canvas artifact")
-  return parseDigestV2(artifact.artifactDigest)
+  return parseDigest(artifact.artifactDigest)
 }
 
-function selectedValidationArtifacts(authority: VerifiedProtocolAuthorityV2): readonly ValidationArtifactRefV2[] {
+function selectedValidationArtifacts(authority: CurrentProtocolAuthority): readonly ValidationArtifactRef[] {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
-  const ref = (owner: ValidationArtifactRefV2["owner"], name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence") => {
+  const ref = (owner: ValidationArtifactRef["owner"], name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence") => {
     const artifact = byName.get(name)
     if (!artifact) throw new TypeError(`Selected R5 authority has no ${name} artifact`)
     return Object.freeze({ owner, format: artifact.format, artifactDigest: artifact.artifactDigest })
   }
-  return parseValidationArtifactSetV2({
+  return parseValidationArtifactSet({
     format: "convax.validation-artifact-set/2",
     artifacts: [
       ref("canvas", "canvas-schema"),
@@ -796,34 +796,34 @@ function selectedValidationArtifacts(authority: VerifiedProtocolAuthorityV2): re
 }
 
 function sameArtifactMaterial(
-  material: readonly Readonly<{ artifact: ValidationArtifactRefV2; exactBytes: Uint8Array }>[],
-  expected: readonly ValidationArtifactRefV2[],
+  material: readonly Readonly<{ artifact: ValidationArtifactRef; exactBytes: Uint8Array }>[],
+  expected: readonly ValidationArtifactRef[],
 ): boolean {
   return material.length === expected.length && material.every((entry, index) =>
     sameJcs(entry.artifact, expected[index]) && entry.exactBytes.byteLength > 0)
 }
 
-function sameArtifacts(left: readonly ValidationArtifactRefV2[], right: readonly ValidationArtifactRefV2[]): boolean {
+function sameArtifacts(left: readonly ValidationArtifactRef[], right: readonly ValidationArtifactRef[]): boolean {
   return left.length === right.length && left.every((entry, index) => sameJcs(entry, right[index]))
 }
 
 function decodeExactJcs(bytes: Uint8Array): unknown {
-  const value = decodeRestrictedJcsV2(bytes)
-  if (!sameBytes(encodeRestrictedJcsV2(value), bytes)) throw new TypeError("JCS bytes are not exact")
+  const value = decodeRestrictedJcs(bytes)
+  if (!sameBytes(encodeRestrictedJcs(value), bytes)) throw new TypeError("JCS bytes are not exact")
   return value
 }
 
-function cloneScope(scope: DocumentScopeV2): DocumentScopeV2 {
-  return Object.freeze({ ...parseDocumentScopeV2(scope) })
+function cloneScope(scope: DocumentScope): DocumentScope {
+  return Object.freeze({ ...parseDocumentScope(scope) })
 }
 
-function sameScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
+function sameScope(left: DocumentScope, right: DocumentScope): boolean {
   return left.projectId === right.projectId && left.projectEpoch === right.projectEpoch &&
     left.docKind === right.docKind && left.docId === right.docId && left.shardEpoch === right.shardEpoch
 }
 
 function sameJcs(left: unknown, right: unknown): boolean {
-  return sameBytes(encodeRestrictedJcsV2(left), encodeRestrictedJcsV2(right))
+  return sameBytes(encodeRestrictedJcs(left), encodeRestrictedJcs(right))
 }
 
 function cloneBytes(value: Readonly<Uint8Array>): Uint8Array {

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  parseDigestV2,
-  parseId128V2,
-  parsePeerIdV2,
-  parseProjectIdV2,
-  parseSignatureV2,
+  encodeBase64url,
+  parseDigest,
+  parseId128,
+  parsePeerId,
+  parseProjectId,
+  parseSignature,
 } from "@convax/collaboration"
 
 import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2 } from "./kernel-integration"
@@ -16,26 +16,26 @@ import {
   peerHandshakeCoreDigestV2,
 } from "./peer-session-codecs"
 
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const digest = (fill: string) => parseDigestV2(fill.repeat(64))
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(7)))
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const digest = (fill: string) => parseDigest(fill.repeat(64))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
 
 describe("R5 peer session codecs", () => {
   const handshakeCore = {
     format: "convax.peer-handshake-core/2" as const,
     connectionId: id(1),
-    projectId: parseProjectIdV2("project-peer-session"),
+    projectId: parseProjectId("project-peer-session"),
     projectEpoch: id(2),
     membershipEpoch: id(3),
     freshnessTicketDigest: digest("a"),
     initiatorCredentialDigest: digest("b"),
     responderCredentialDigest: digest("c"),
-    initiatorPeerId: parsePeerIdV2(`peer_${"a".repeat(26)}`),
-    responderPeerId: parsePeerIdV2(`peer_${"b".repeat(25)}a`),
+    initiatorPeerId: parsePeerId(`peer_${"a".repeat(26)}`),
+    responderPeerId: parsePeerId(`peer_${"b".repeat(25)}a`),
     initiatorNonce: id(4),
     responderNonce: id(5),
     channelContractDigest: digest("d"),
-    protocolDigest: parseDigestV2(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest),
+    protocolDigest: parseDigest(PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest),
   }
 
   test("closes and digest-binds the exact R5 handshake", () => {

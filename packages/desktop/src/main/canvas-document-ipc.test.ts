@@ -9,12 +9,12 @@ import {
 } from "@convax/canvas/collaboration"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
 } from "@convax/collaboration"
 import { parseProjectResourceReferenceV2 } from "@convax/project"
 import {
@@ -38,14 +38,14 @@ const event = { sender: { id: 7 } }
 const document = createCanvasDocument({ id: "canvas-main" })
 const receipt: BoundedOperationReceiptV2 = {
   format: "convax.canvas-operation-receipt/2",
-  actorId: parseActorIdV2("A".repeat(43)),
-  operationId: parseId128V2("A".repeat(22)),
-  intentDigest: parseDigestV2("d".repeat(64)),
-  baseFrontierDigest: parseDigestV2("e".repeat(64)),
+  actorId: parseActorId("A".repeat(43)),
+  operationId: parseId128("A".repeat(22)),
+  intentDigest: parseDigest("d".repeat(64)),
+  baseFrontierDigest: parseDigest("e".repeat(64)),
   intentKind: "canvas.elements.remove/2",
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+  historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 
 beforeEach(() => {
@@ -243,7 +243,7 @@ describe("Canvas text resource IPC", () => {
       })],
     })
     const nextContent = "after"
-    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const compareAndReplaceTextFile = mock(async () => ({ contentRevision: nextRevision }))
     const prepared = {
       items: [{
@@ -340,7 +340,7 @@ describe("Canvas text resource IPC", () => {
   test("finishes ProjectIndex and Canvas publication when retry observes the exact already-written bytes", async () => {
     const fixture = canonicalTextResource("before")
     const nextContent = "after"
-    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const textDocument = createCanvasDocument({
       id: "canvas-main",
       nodes: [createTextNode({
@@ -405,9 +405,9 @@ function commandResult(): CanvasApplicationCommandResult {
 }
 
 function canonicalTextResource(content: string) {
-  const projectId = parseProjectIdV2("project_0123456789abcdef0123456789abcdef")
-  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
-  const digest = ordinarySha256V2(new TextEncoder().encode(content))
+  const projectId = parseProjectId("project_0123456789abcdef0123456789abcdef")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(new TextEncoder().encode(content))
   const fileId = `pf_${"a".repeat(64)}`
   const reference = parseProjectResourceReferenceV2({
     format: "convax.project-resource-reference/2",
@@ -424,7 +424,7 @@ function canonicalTextResource(content: string) {
       byteLength: String(new TextEncoder().encode(content).byteLength) as never,
       mime: "text/markdown",
     },
-    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode(`version:${digest}`)),
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
   return {
     projectId,

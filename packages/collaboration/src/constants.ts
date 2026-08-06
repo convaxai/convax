@@ -1,19 +1,21 @@
-export const COLLABORATION_PROTOCOL_MAJOR_V2 = 2 as const
-export const CAUSAL_EDIT_KIND_CODE_V2 = 1 as const
-export const CAUSAL_EDIT_MAGIC_V2 = "CVXCOLL2" as const
-export const CAUSAL_EDIT_PREFIX_BYTES_V2 = 88 as const
+export const COLLABORATION_PROTOCOL_MAJOR = 2 as const
+export const CAUSAL_EDIT_KIND_CODE = 1 as const
+export const CAUSAL_EDIT_MAGIC = "CVXCOLL2" as const
+export const CAUSAL_EDIT_PREFIX_BYTES = 88 as const
 
-export const PINNED_AUTHORITY_IDENTITIES_V2 = Object.freeze({
-  authorityRevision: "r5",
-  manifestSha256: "2d4fa5170d6501f7049a1f58fc1c691e210a6db92454da4ebc09dad9ab4596ed",
-  protocolBundleSha256: "163cabcd8ab5f45acd1fdf7309c747185a6132c9765585a310515f3c968ca786",
+/**
+ * Identity of the one current collaboration protocol. `protocolDigest` is the
+ * only protocol identity; it is recomputed from this package's own source data
+ * by the current protocol descriptor and must equal this anchor.
+ */
+export const CURRENT_PROTOCOL_IDENTITIES = Object.freeze({
   protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5",
   uriProtocolDigest: "9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38",
   limitsDigest: "88c018e5289f8b9a359f6ae171aed00885d5fa0913f4a1c36274b35e4cee12f7",
   channelContractDigest: "0fa34e8d93f26e585e6d9baa0ecf0c09a38494d03247b91843e2bca0e93df242",
 } as const)
 
-export const PROTOCOL_SCHEMA_ARTIFACTS_V2 = Object.freeze([
+export const PROTOCOL_SCHEMA_ARTIFACTS = Object.freeze([
   Object.freeze({
     artifactDigest: "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36",
     format: "convax.canvas-protocol-schema/2",
@@ -36,7 +38,7 @@ export const PROTOCOL_SCHEMA_ARTIFACTS_V2 = Object.freeze([
   }),
 ] as const)
 
-export const PROTOCOL_TYPE_NAMESPACES_V2 = Object.freeze([
+export const PROTOCOL_TYPE_NAMESPACES = Object.freeze([
   Object.freeze({ namespace: "canvas-schema", imports: Object.freeze(["collaboration-kernel", "control-plane", "global-uri"] as const) }),
   Object.freeze({ namespace: "collaboration-kernel", imports: Object.freeze(["global-uri"] as const) }),
   Object.freeze({ namespace: "control-plane", imports: Object.freeze(["collaboration-kernel", "global-uri", "project-persistence"] as const) }),
@@ -44,7 +46,7 @@ export const PROTOCOL_TYPE_NAMESPACES_V2 = Object.freeze([
   Object.freeze({ namespace: "project-persistence", imports: Object.freeze(["canvas-schema", "collaboration-kernel", "control-plane", "global-uri"] as const) }),
 ] as const)
 
-export const YJS_WIRE_CODEC_V2 = Object.freeze({
+export const YJS_WIRE_CODEC = Object.freeze({
   applyCodec: "Y.applyUpdate",
   format: "convax.yjs-wire-codec/2",
   package: "yjs",
@@ -59,7 +61,7 @@ export const YJS_WIRE_CODEC_V2 = Object.freeze({
  * Sorted closed set of domain separators admitted by the current protocol. It is
  * package-owned source data and participates in the current protocol digest.
  */
-export const PROTOCOL_DIGEST_DOMAIN_REGISTRY_V2 = Object.freeze([
+export const PROTOCOL_DIGEST_DOMAIN_REGISTRY = Object.freeze([
   "convax.active-peer-directory-core/2",
   "convax.actual-write-evidence/2",
   "convax.authorization-mutation-core/2",
@@ -189,7 +191,7 @@ export const PROTOCOL_DIGEST_DOMAIN_REGISTRY_V2 = Object.freeze([
   "convax.yjs-update/2",
 ] as const)
 
-export const KERNEL_LIMITS_V2 = Object.freeze({
+export const KERNEL_LIMITS = Object.freeze({
   actualWriteEvidenceJcsBytes: 256 * 1024,
   causalContextJcsBytes: 64 * 1024,
   causalDependencyRefs: 256,
@@ -219,7 +221,7 @@ export const KERNEL_LIMITS_V2 = Object.freeze({
   yjsUpdateBytes: 1024 * 1024,
 } as const)
 
-export const KERNEL_DIGEST_DOMAINS_V2 = Object.freeze({
+export const KERNEL_DIGEST_DOMAINS = Object.freeze({
   actualWriteEvidence: "convax.actual-write-evidence/2",
   canonicalState: "convax.canonical-state/2",
   causalContext: "convax.causal-context/2",

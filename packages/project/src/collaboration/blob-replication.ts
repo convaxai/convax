@@ -1,23 +1,23 @@
 import {
-  assertExactKeysV2,
+  assertExactKeys,
   isPlainDataObject,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
-  type ActorIdV2,
-  type DigestV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type ReplicaIdV2,
-  type SignatureV2,
-  type Uint64V2,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
+  type ActorId,
+  type Digest,
+  type Id128,
+  type MemberId,
+  type ProjectId,
+  type ReplicaId,
+  type Signature,
+  type Uint64,
 } from "@convax/collaboration"
 import { parseProjectFileId, type ProjectFileId } from "@convax/project-files/identity"
 import type { ProjectResourceReferenceV2, ProjectVersionIdV2 } from "./project-index"
@@ -26,36 +26,36 @@ const VERSION = /^pv_[0-9a-f]{64}$/u
 
 export interface BlobDurableAckCoreV2 {
   readonly format: "convax.blob-durable-ack-core/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
   readonly fileId: ProjectFileId
   readonly versionId: ProjectVersionIdV2
-  readonly blobSha256: DigestV2
-  readonly byteLength: Uint64V2
-  readonly receiverMemberId: MemberIdV2
-  readonly receiverReplicaId: ReplicaIdV2
-  readonly receiverActorId: ActorIdV2
-  readonly receiverAuthorizationDigest: DigestV2
-  readonly protocolDigest: DigestV2
+  readonly blobSha256: Digest
+  readonly byteLength: Uint64
+  readonly receiverMemberId: MemberId
+  readonly receiverReplicaId: ReplicaId
+  readonly receiverActorId: ActorId
+  readonly receiverAuthorizationDigest: Digest
+  readonly protocolDigest: Digest
 }
 
 export interface BlobDurableAckV2 {
   readonly format: "convax.blob-durable-ack/2"
   readonly core: BlobDurableAckCoreV2
-  readonly coreDigest: DigestV2
-  readonly replicaSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly replicaSignature: Signature
 }
 
 export interface ProjectBlobHaveV2 {
-  readonly blobSha256: DigestV2
-  readonly byteLength: Uint64V2
+  readonly blobSha256: Digest
+  readonly byteLength: Uint64
 }
 
 export interface ProjectBlobHolderV2 {
-  readonly memberId: MemberIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly authorizationDigest: DigestV2
+  readonly memberId: MemberId
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly authorizationDigest: Digest
   readonly currentAuthorization: boolean
   readonly have: readonly ProjectBlobHaveV2[]
 }
@@ -79,37 +79,37 @@ export interface ProjectIndexCurrentResourceProjectionEntryV2 {
 /** Browser-safe ProjectIndex owner query used by native GC and blob bootstrap. */
 export interface ProjectIndexCurrentBlobReferencePortV2 {
   queryCurrentResources(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
   }): Promise<readonly ProjectIndexCurrentResourceProjectionEntryV2[]>
   queryCurrentBlobDigests(input: {
-    readonly projectId: ProjectIdV2
-  }): Promise<ReadonlySet<DigestV2>>
+    readonly projectId: ProjectId
+  }): Promise<ReadonlySet<Digest>>
 }
 
-export function blobDurableAckCoreDigestV2(core: BlobDurableAckCoreV2): DigestV2 {
-  return structuredDigestV2("convax.blob-durable-ack-core/2", parseBlobDurableAckCoreV2(core))
+export function blobDurableAckCoreDigestV2(core: BlobDurableAckCoreV2): Digest {
+  return structuredDigest("convax.blob-durable-ack-core/2", parseBlobDurableAckCoreV2(core))
 }
 
 export function createBlobDurableAckV2(
   coreInput: BlobDurableAckCoreV2,
-  replicaSignatureInput: SignatureV2,
+  replicaSignatureInput: Signature,
 ): BlobDurableAckV2 {
   const core = parseBlobDurableAckCoreV2(coreInput)
   return Object.freeze({
     format: "convax.blob-durable-ack/2",
     core,
     coreDigest: blobDurableAckCoreDigestV2(core),
-    replicaSignature: parseSignatureV2(replicaSignatureInput),
+    replicaSignature: parseSignature(replicaSignatureInput),
   })
 }
 
 export function blobDurableAckCoreFromReferenceV2(input: {
   readonly reference: ProjectResourceReferenceV2
-  readonly receiverMemberId: MemberIdV2
-  readonly receiverReplicaId: ReplicaIdV2
-  readonly receiverActorId: ActorIdV2
-  readonly receiverAuthorizationDigest: DigestV2
-  readonly protocolDigest: DigestV2
+  readonly receiverMemberId: MemberId
+  readonly receiverReplicaId: ReplicaId
+  readonly receiverActorId: ActorId
+  readonly receiverAuthorizationDigest: Digest
+  readonly protocolDigest: Digest
 }): BlobDurableAckCoreV2 {
   return parseBlobDurableAckCoreV2({
     format: "convax.blob-durable-ack-core/2",
@@ -129,22 +129,22 @@ export function blobDurableAckCoreFromReferenceV2(input: {
 
 export function parseBlobDurableAckV2(value: unknown): BlobDurableAckV2 {
   if (!isPlainDataObject(value)) throw new TypeError("BlobDurableAckV2 must be a plain object")
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "replicaSignature"], "BlobDurableAckV2")
+  assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "BlobDurableAckV2")
   if (value.format !== "convax.blob-durable-ack/2") throw new TypeError("BlobDurableAckV2 format is invalid")
   const core = parseBlobDurableAckCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
+  const coreDigest = parseDigest(value.coreDigest)
   if (blobDurableAckCoreDigestV2(core) !== coreDigest) throw new TypeError("BlobDurableAckV2 core digest mismatches")
   return Object.freeze({
     format: value.format,
     core,
     coreDigest,
-    replicaSignature: parseSignatureV2(value.replicaSignature),
+    replicaSignature: parseSignature(value.replicaSignature),
   })
 }
 
 export function parseBlobDurableAckCoreV2(value: unknown): BlobDurableAckCoreV2 {
   if (!isPlainDataObject(value)) throw new TypeError("BlobDurableAckCoreV2 must be a plain object")
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "projectId", "projectEpoch", "fileId", "versionId", "blobSha256", "byteLength",
     "receiverMemberId", "receiverReplicaId", "receiverActorId", "receiverAuthorizationDigest", "protocolDigest",
   ], "BlobDurableAckCoreV2")
@@ -152,17 +152,17 @@ export function parseBlobDurableAckCoreV2(value: unknown): BlobDurableAckCoreV2 
   if (typeof value.versionId !== "string" || !VERSION.test(value.versionId)) throw new TypeError("Blob ACK version id is invalid")
   return Object.freeze({
     format: value.format,
-    projectId: parseProjectIdV2(value.projectId),
-    projectEpoch: parseId128V2(value.projectEpoch),
+    projectId: parseProjectId(value.projectId),
+    projectEpoch: parseId128(value.projectEpoch),
     fileId: parseProjectFileId(value.fileId),
     versionId: value.versionId as ProjectVersionIdV2,
-    blobSha256: parseDigestV2(value.blobSha256),
-    byteLength: parseUint64V2(value.byteLength),
-    receiverMemberId: parseMemberIdV2(value.receiverMemberId),
-    receiverReplicaId: parseReplicaIdV2(value.receiverReplicaId),
-    receiverActorId: parseActorIdV2(value.receiverActorId),
-    receiverAuthorizationDigest: parseDigestV2(value.receiverAuthorizationDigest),
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    blobSha256: parseDigest(value.blobSha256),
+    byteLength: parseUint64(value.byteLength),
+    receiverMemberId: parseMemberId(value.receiverMemberId),
+    receiverReplicaId: parseReplicaId(value.receiverReplicaId),
+    receiverActorId: parseActorId(value.receiverActorId),
+    receiverAuthorizationDigest: parseDigest(value.receiverAuthorizationDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
   })
 }
 
@@ -211,8 +211,8 @@ export function planProjectBlobBootstrapV2(input: {
 export function evaluateProjectBlobReplicationStatusV2(input: {
   readonly references: readonly ProjectResourceReferenceV2[]
   readonly frameAckReceivers: readonly Readonly<{
-    receiverReplicaId: ReplicaIdV2
-    receiverAuthorizationDigest: DigestV2
+    receiverReplicaId: ReplicaId
+    receiverAuthorizationDigest: Digest
   }>[]
   readonly blobAcks: readonly BlobDurableAckV2[]
   readonly verifyCurrentAck: (ack: BlobDurableAckV2) => boolean
@@ -238,5 +238,5 @@ export function evaluateProjectBlobReplicationStatusV2(input: {
 }
 
 function haveKey(value: ProjectBlobHaveV2): string {
-  return `${parseDigestV2(value.blobSha256)}:${parseUint64V2(value.byteLength)}`
+  return `${parseDigest(value.blobSha256)}:${parseUint64(value.byteLength)}`
 }

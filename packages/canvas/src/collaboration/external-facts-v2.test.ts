@@ -4,7 +4,7 @@ import {
   pluginStateSchemaDigestInputV1,
   portablePluginStateSchemaFormat,
 } from "@convax/bounded-value"
-import { ordinarySha256V2, parseUint32V2, parseUint64V2, type OwnerExternalFactPortV2 } from "@convax/collaboration"
+import { ordinarySha256, parseUint32, parseUint64, type OwnerExternalFactPort } from "@convax/collaboration"
 import {
   createCanvasExternalFactContextV2,
   decodeCanvasExternalFactRequestV2,
@@ -23,8 +23,8 @@ import { canvasDigestV2, deriveCanvasIdV2, derivedNodeRefV2, makeStampV2 } from 
 import { validateCanvasYDocV2 } from "./ydoc"
 import { context, createAgent, digest, id128, newCanvas, nodeDataGuard, SCOPE } from "./test-fixtures.test"
 
-const U0 = parseUint32V2("0")
-const U1 = parseUint32V2("1")
+const U0 = parseUint32("0")
+const U1 = parseUint32("1")
 
 describe("Canvas R5 external-fact closure", () => {
   test("round-trips all four closed request kinds as exact restricted JCS", () => {
@@ -34,7 +34,7 @@ describe("Canvas R5 external-fact closure", () => {
       uri: `convax-project://project/epochs/${id128(41)}/entries/pf_${"1".repeat(64)}`,
       mediaClass: "image" as const,
       mime: "image/png",
-      byteLength: parseUint64V2("10"),
+      byteLength: parseUint64("10"),
       contentDigest: digest(42),
       ownerProofDigest,
     }
@@ -153,7 +153,7 @@ describe("Canvas R5 external-fact closure", () => {
       additionalProperties: false,
     } as const
     const exactBytes = canonicalPortablePluginStateSchemaBytesV1(schema)
-    const schemaDigest = ordinarySha256V2(pluginStateSchemaDigestInputV1(schema))
+    const schemaDigest = ordinarySha256(pluginStateSchemaDigestInputV1(schema))
     const plugin = {
       format: "convax.canvas-plugin-state/2",
       pluginId: "plugin.example",
@@ -179,7 +179,7 @@ describe("Canvas R5 external-fact closure", () => {
       resolveArtifact: (ref: (typeof dependencies.validationArtifacts)[number]) => ({ status: "resolved" as const, ref, exactBytes }),
       resolveFact: () => ({ status: "rejected" as const, code: "fact-not-declared" as const }),
       consumedDependencies: () => dependencies,
-    } as unknown as OwnerExternalFactPortV2<"canvas">
+    } as unknown as OwnerExternalFactPort<"canvas">
     const facts = createCanvasExternalFactContextV2(context(7, 7, 7), intent, port)
     expect(facts).not.toBe("pending")
     expect(facts).not.toBe("rejected")
@@ -194,7 +194,7 @@ describe("Canvas R5 external-fact closure", () => {
         ref,
         exactBytes: new TextEncoder().encode(` ${new TextDecoder().decode(exactBytes)}`),
       }),
-    } as unknown as OwnerExternalFactPortV2<"canvas">
+    } as unknown as OwnerExternalFactPort<"canvas">
     expect(createCanvasExternalFactContextV2(context(7, 7, 7), intent, noncanonicalPort)).toBe("rejected")
   })
 })

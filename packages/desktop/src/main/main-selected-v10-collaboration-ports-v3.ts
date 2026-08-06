@@ -1,4 +1,4 @@
-import { parseProjectIdV2, type ProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId, type ProjectId } from "@convax/collaboration"
 
 import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
 import type { MainProjectIndexRuntimeRegistryV2 } from "./main-project-index-runtime-registry"
@@ -12,12 +12,12 @@ import type { MainProjectCanvasRouteRuntimeRegistryV2 } from "./project-canvas-r
  * exact runtime.
  */
 export async function openMainSelectedV10CollaborationPortsV3(input: Readonly<{
-  projectId: ProjectIdV2
+  projectId: ProjectId
   projectIndexes: MainProjectIndexRuntimeRegistryV2
   canvasSessions: CanvasCollaborationSessionOwnerV2
   canvasRoutes: Pick<MainProjectCanvasRouteRuntimeRegistryV2, "switchProject" | "quiesceProject">
 }>): Promise<MainSelectedProjectCollaborationPortsV3> {
-  const projectId = parseProjectIdV2(input.projectId)
+  const projectId = parseProjectId(input.projectId)
   await input.canvasRoutes.switchProject(projectId)
   let quiesced = false
   return Object.freeze({

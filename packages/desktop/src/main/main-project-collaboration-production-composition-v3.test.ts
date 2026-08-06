@@ -1,9 +1,9 @@
 import { expect, mock, test } from "bun:test"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import { createMainProjectCollaborationProductionCompositionV3 } from "./main-project-collaboration-production-composition-v3"
 
-const PROJECT = parseProjectIdV2(`project_${"a".repeat(64)}`)
+const PROJECT = parseProjectId(`project_${"a".repeat(64)}`)
 
 function composition() {
   const events: string[] = []

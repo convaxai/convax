@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createWebCryptoEd25519VerifierV2, parseProjectIdV2 } from "@convax/collaboration"
+import { createWebCryptoEd25519Verifier, parseProjectId } from "@convax/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import {
   NodeProjectCollaborationRecoveryServiceV1,
@@ -78,7 +78,7 @@ describe("local Project reset authority", () => {
   test("recovers an exact pristine local-owner bootstrap published beside legacy Canvas bytes", async () => {
     const fixture = await createFixture()
     const owner = await fixture.owners.ensureForDurableProject({
-      projectId: parseProjectIdV2("project_test"),
+      projectId: parseProjectId("project_test"),
       projectRoot: fixture.projectRoot,
     })
     const collaborationDirectory = path.join(fixture.projectRoot, ".convax", "collaboration")
@@ -151,7 +151,7 @@ describe("local Project reset authority", () => {
   test("rejects a formerly pristine bootstrap after any collaboration state appears", async () => {
     const fixture = await createFixture()
     const owner = await fixture.owners.ensureForDurableProject({
-      projectId: parseProjectIdV2("project_test"),
+      projectId: parseProjectId("project_test"),
       projectRoot: fixture.projectRoot,
     })
     const collaborationDirectory = path.join(fixture.projectRoot, ".convax", "collaboration")
@@ -211,7 +211,7 @@ async function createFixture() {
   await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "canvas-main", "document.json"), "document")
   await fs.writeFile(path.join(projectRoot, "Notes", "keep.md"), "keep")
   const authority = await loadHistoricalTestAuthorityV2()
-  const projectId = parseProjectIdV2("project_test")
+  const projectId = parseProjectId("project_test")
   const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), availableStorage)
   const owners = new NodeDurableLocalProjectOwnerAuthorityV2({
     rootDirectory: path.join(userData, "local-project-owner"),
@@ -224,7 +224,7 @@ async function createFixture() {
       },
     },
     vault,
-    verifier: createWebCryptoEd25519VerifierV2(),
+    verifier: createWebCryptoEd25519Verifier(),
   })
   return {
     authority,

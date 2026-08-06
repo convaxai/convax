@@ -2,7 +2,7 @@ export type Awaitable<T> = T | Promise<T>
 
 /**
  * Deployment-neutral transaction port. It deliberately knows nothing about
- * ProjectIdV2, ProjectEpoch, ReplicaIdV2, wire DTOs or portable digests. The
+ * ProjectId, ProjectEpoch, ReplicaId, wire DTOs or portable digests. The
  * second integration round supplies the exact kernel-branded state shape.
  */
 export interface AtomicControlStateTransaction<State extends object> {

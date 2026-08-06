@@ -3,17 +3,17 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseUint64V2,
-  type PublicKeyV2,
+  encodeBase64url,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseUint64,
+  type PublicKey,
 } from "@convax/collaboration"
 
 import {
@@ -29,12 +29,12 @@ import {
 } from "./electron-replica-signing-vault"
 
 const roots: string[] = []
-const protocolDigest = parseDigestV2("a".repeat(64))
-const canvasSchemaDigest = parseDigestV2("b".repeat(64))
-const projectId = parseProjectIdV2("project-a")
+const protocolDigest = parseDigest("a".repeat(64))
+const canvasSchemaDigest = parseDigest("b".repeat(64))
+const projectId = parseProjectId("project-a")
 const projectEpoch = id(1)
-const actorId = parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(2)))
-const replicaId = parseReplicaIdV2("replica_00000001")
+const actorId = parseActorId(encodeBase64url(new Uint8Array(32).fill(2)))
+const replicaId = parseReplicaId("replica_00000001")
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
@@ -44,7 +44,7 @@ describe("durable verified local authority cache", () => {
   test("publishes one canonical current pointer and reopens request-bound offline authority", async () => {
     const root = await temporaryRoot()
     const cache = new NodeDurableLocalReplicaAuthorityCacheV2(path.join(root, "authority"), protocolDigest)
-    const enrollment = await verifiedEnrollment(parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3))))
+    const enrollment = await verifiedEnrollment(parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3))))
     await cache.install(enrollment)
     await cache.install(enrollment)
 
@@ -64,7 +64,7 @@ describe("durable verified local authority cache", () => {
   test("rejects membership rollback and same-sequence equivocation", async () => {
     const root = await temporaryRoot()
     const cache = new NodeDurableLocalReplicaAuthorityCacheV2(path.join(root, "authority"), protocolDigest)
-    const publicKey = parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))
+    const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
     await cache.install(await verifiedEnrollment(publicKey, "2", "c"))
     await expect(cache.install(await verifiedEnrollment(publicKey, "1", "d"))).rejects.toThrow("rollback")
     await expect(cache.install(await verifiedEnrollment(publicKey, "2", "d"))).rejects.toThrow("equivocation")
@@ -74,7 +74,7 @@ describe("durable verified local authority cache", () => {
     const root = await temporaryRoot()
     const authorityRoot = path.join(root, "authority")
     const cache = new NodeDurableLocalReplicaAuthorityCacheV2(authorityRoot, protocolDigest)
-    await cache.install(await verifiedEnrollment(parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))))
+    await cache.install(await verifiedEnrollment(parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))))
     const pointerName = (await fs.readdir(path.join(authorityRoot, "current")))[0]!
     const pointerPath = path.join(authorityRoot, "current", pointerName)
     const canonical = await fs.readFile(pointerPath, "utf8")
@@ -90,7 +90,7 @@ describe("durable verified local authority cache", () => {
     const root = await temporaryRoot()
     const authorityRoot = path.join(root, "authority")
     const cache = new NodeDurableLocalReplicaAuthorityCacheV2(authorityRoot, protocolDigest)
-    await cache.install(await verifiedEnrollment(parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))))
+    await cache.install(await verifiedEnrollment(parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))))
     const bindingName = (await fs.readdir(path.join(authorityRoot, "project-bindings")))[0]!
     const bindingPath = path.join(authorityRoot, "project-bindings", bindingName)
     await fs.appendFile(bindingPath, " ")
@@ -109,7 +109,7 @@ describe("durable verified local authority cache", () => {
         if (failProjectIndex) throw new Error("injected ProjectIndex crash")
       },
     }
-    const prepareEnrollment = async (publicKey: PublicKeyV2) => {
+    const prepareEnrollment = async (publicKey: PublicKey) => {
       events.push("verified-enrollment")
       return verifiedEnrollment(publicKey)
     }
@@ -146,7 +146,7 @@ describe("durable verified local authority cache", () => {
     }
     let projectIndexInstalls = 0
     const projectIndex = { async installProjectIndexBase() { projectIndexInstalls += 1 } }
-    const prepareEnrollment = (publicKey: PublicKeyV2) => verifiedEnrollment(publicKey)
+    const prepareEnrollment = (publicKey: PublicKey) => verifiedEnrollment(publicKey)
 
     await expect(enrollNewLocalProjectReplicaV2({
       identity: { projectId, projectEpoch, replicaId }, vault, prepareEnrollment, projectIndex, cache,
@@ -162,24 +162,24 @@ describe("durable verified local authority cache", () => {
 })
 
 async function verifiedEnrollment(
-  publicKey: PublicKeyV2,
+  publicKey: PublicKey,
   membershipSequence = "1",
   evidenceDigit = "c",
 ): Promise<VerifiedLocalReplicaEnrollmentV2> {
   const factory = createLocalReplicaEnrollmentVerifierFactoryV2({ verifyCurrent: async () => true })
-  const membership = parseDigestV2("1".repeat(64))
-  const credential = parseDigestV2("2".repeat(64))
-  const edit = parseDigestV2("3".repeat(64))
+  const membership = parseDigest("1".repeat(64))
+  const credential = parseDigest("2".repeat(64))
+  const edit = parseDigest("3".repeat(64))
   const candidate: LocalReplicaEnrollmentCandidateV2 = {
     projectId,
     projectEpoch,
     actorId,
-    membershipSequence: parseUint64V2(membershipSequence),
-    controlEvidenceDigest: parseDigestV2(evidenceDigit.repeat(64)),
+    membershipSequence: parseUint64(membershipSequence),
+    controlEvidenceDigest: parseDigest(evidenceDigit.repeat(64)),
     protocolDigest,
     replicaSigningPublicKey: publicKey,
     signerAuthority: {
-      memberId: parseMemberIdV2(id(4)),
+      memberId: parseMemberId(id(4)),
       replicaId,
       actorId,
       memberAuthorizationEpoch: id(5),
@@ -210,18 +210,18 @@ function request() {
       projectId,
       projectEpoch,
       docKind: "canvas" as const,
-      docId: parseCanvasIdV2(`cv_${"4".repeat(64)}`),
+      docId: parseCanvasId(`cv_${"4".repeat(64)}`),
       shardEpoch: id(7),
     },
     actorId,
     operationId: id(8),
-    baseFrontierDigest: parseDigestV2("5".repeat(64)),
+    baseFrontierDigest: parseDigest("5".repeat(64)),
     ownerSchemaDigest: canvasSchemaDigest,
   }
 }
 
 function id(byte: number) {
-  return parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
+  return parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
 }
 
 async function temporaryRoot(): Promise<string> {

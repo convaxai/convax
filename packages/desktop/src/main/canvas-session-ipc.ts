@@ -1,6 +1,6 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
 import type { CanvasRendererCommandV2 } from "@convax/canvas/collaboration"
-import { parseId128V2, type Id128V2 } from "@convax/collaboration"
+import { parseId128, type Id128 } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
 
 import {
@@ -18,7 +18,7 @@ interface CanvasSessionIpcMainV2 {
 
 interface RendererBindingV2 {
   readonly ref: CanvasDocumentRef
-  readonly sessionId: Id128V2
+  readonly sessionId: Id128
   readonly sender: IpcMainInvokeEvent["sender"]
 }
 
@@ -39,8 +39,8 @@ export function registerCanvasSessionIpcV2(
     readonly prepareProject: (projectId: string) => Promise<void>
   },
 ): () => void {
-  const bindings = new Map<Id128V2, RendererBindingV2>()
-  const senderSessions = new Map<number, Set<Id128V2>>()
+  const bindings = new Map<Id128, RendererBindingV2>()
+  const senderSessions = new Map<number, Set<Id128>>()
   const watchedSenders = new Set<number>()
 
   const trusted = (event: IpcMainInvokeEvent) => {
@@ -72,7 +72,7 @@ export function registerCanvasSessionIpcV2(
       throw new Error("Canvas renderer session identity was reused")
     }
     bindings.set(projection.sessionId, { ref, sessionId: projection.sessionId, sender: event.sender })
-    const sessions = owned ?? new Set<Id128V2>()
+    const sessions = owned ?? new Set<Id128>()
     sessions.add(projection.sessionId)
     senderSessions.set(event.sender.id, sessions)
     watchSender(event)
@@ -180,7 +180,7 @@ export function registerCanvasSessionIpcV2(
     })
   }
 
-  function revoke(sessionId: Id128V2): void {
+  function revoke(sessionId: Id128): void {
     const binding = bindings.get(sessionId)
     if (!binding) return
     bindings.delete(sessionId)
@@ -213,7 +213,7 @@ function requireScope(value: unknown): CanvasRendererSessionScopeV2 {
 }
 
 function requireScopeFields(record: Record<string, unknown>): CanvasRendererSessionScopeV2 {
-  return { ref: requireRef(record.ref), sessionId: parseId128V2(record.sessionId) }
+  return { ref: requireRef(record.ref), sessionId: parseId128(record.sessionId) }
 }
 
 function requireRef(value: unknown): CanvasDocumentRef {

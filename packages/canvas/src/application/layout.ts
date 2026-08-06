@@ -1,5 +1,5 @@
 import { setCanvasNodeGeometry } from "../commands"
-import { encodeRestrictedJcsV2, ordinarySha256V2 } from "@convax/collaboration"
+import { encodeRestrictedJcs, ordinarySha256 } from "@convax/collaboration"
 import { getCanvasNodePresentationSize, getCanvasNodeSize } from "../document"
 import type { CanvasDocument, CanvasPoint, CanvasSize } from "../types"
 
@@ -139,7 +139,7 @@ export function createCanvasLayoutSnapshot(document: CanvasDocument): CanvasLayo
       size: getCanvasNodePresentationSize(node),
     })),
   }
-  return { ...geometry, geometryDigest: ordinarySha256V2(encodeRestrictedJcsV2(geometry)) }
+  return { ...geometry, geometryDigest: ordinarySha256(encodeRestrictedJcs(geometry)) }
 }
 
 export const builtinCanvasLayoutProvider: CanvasLayoutProvider<CanvasAutoLayoutOptions> = {

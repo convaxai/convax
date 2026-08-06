@@ -15,37 +15,37 @@ import {
   type CanvasTypedIntentUnionV2,
 } from "@convax/canvas/collaboration"
 import {
-  CollaborationKernelV2,
-  applyUpdateV1V2,
-  canonicalStateDigestV2,
-  causalFrontierDigestV2,
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  encodeBase64urlV2,
-  encodeFullUpdateV2,
-  encodeStateVectorV2,
-  frameObjectRefFromDecodedFrameV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint32V2,
-  parseUint64V2,
-  structuredDigestV2,
-  type ActorIdV2,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type LocalFrameAuthorityV2,
-  type MemberIdV2,
-  type ReplicaIdV2,
-  type ValidationArtifactSetV2,
-  type VerifiedProtocolAuthorityV2,
+  CollaborationKernel,
+  applyYjsUpdate,
+  canonicalStateDigest,
+  causalFrontierDigest,
+  createSelectedDocumentOwnerArtifactFactory,
+  encodeBase64url,
+  encodeFullUpdate,
+  encodeStateVector,
+  frameObjectRefFromDecodedFrame,
+  ordinarySha256,
+  parseActorId,
+  parseCanvasId,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSignature,
+  parseUint32,
+  parseUint64,
+  structuredDigest,
+  type ActorId,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type DocumentScope,
+  type Id128,
+  type LocalFrameAuthority,
+  type MemberId,
+  type ReplicaId,
+  type ValidationArtifactSet,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import {
   NodeCollaborationPersistenceV2,
@@ -77,13 +77,13 @@ type PeerEvent = "open" | "connection" | "error" | "disconnected" | "close"
 
 const roots: string[] = []
 const encoder = new TextEncoder()
-const signature = parseSignatureV2(encodeBase64urlV2(Uint8Array.from(
+const signature = parseSignature(encodeBase64url(Uint8Array.from(
   { length: 64 },
   (_, index) => index === 0 || index === 32 ? 2 : 0,
 )))
-const publicKey = parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(2)))
-const routeDependencyDigest = ordinarySha256V2(encoder.encode("project-index-route"))
-const u0 = parseUint32V2("0")
+const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(2)))
+const routeDependencyDigest = ordinarySha256(encoder.encode("project-index-route"))
+const u0 = parseUint32("0")
 const reconstructionOrigin = Object.freeze({ format: "convax.desktop-real-session-test/1" })
 
 afterEach(async () => {
@@ -211,46 +211,46 @@ describe("real Canvas collaboration session", () => {
   })
 })
 
-function createCanvasRuntime(authority: VerifiedProtocolAuthorityV2): DocumentOwnerRuntimeV2<"canvas"> {
-  const result = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+function createCanvasRuntime(authority: CurrentProtocolAuthority): DocumentOwnerRuntime<"canvas"> {
+  const result = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
     .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
   if ("status" in result) throw new Error(`Canvas owner runtime rejected: ${result.code}`)
   return result
 }
 
-function canvasScope(): DocumentScopeV2 {
+function canvasScope(): DocumentScope {
   return Object.freeze({
-    projectId: parseProjectIdV2("project"),
+    projectId: parseProjectId("project"),
     projectEpoch: id128(1),
     docKind: "canvas",
-    docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`),
+    docId: parseCanvasId(`cv_${"2".repeat(64)}`),
     shardEpoch: id128(2),
   })
 }
 
 function createGenesis(
-  authority: VerifiedProtocolAuthorityV2,
-  runtime: DocumentOwnerRuntimeV2<"canvas">,
-  scope: DocumentScopeV2,
-): { acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">; checkpointBytes: Uint8Array; checkpointDigest: DigestV2 } {
+  authority: CurrentProtocolAuthority,
+  runtime: DocumentOwnerRuntime<"canvas">,
+  scope: DocumentScope,
+): { acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">; checkpointBytes: Uint8Array; checkpointDigest: Digest } {
   const document = createCanvasYDocV2(
     scope,
     CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
     authority.protocolDigest,
     routeDependencyDigest,
-    parseReplicaIdV2("replica_00000001"),
+    parseReplicaId("replica_00000001"),
   )
   try {
-    const fullUpdate = encodeFullUpdateV2(document)
+    const fullUpdate = encodeFullUpdate(document)
     const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
     const acceptedBase = Object.freeze({
       scope,
       frontier,
-      frontierDigest: causalFrontierDigestV2(frontier),
+      frontierDigest: causalFrontierDigest(frontier),
       actorHeads: Object.freeze({ format: "convax.replica-actor-head-set/2" as const, scope, heads: Object.freeze([]) }),
       fullUpdate,
-      stateVector: encodeStateVectorV2(document),
-      canonicalStateDigest: canonicalStateDigestV2(
+      stateVector: encodeStateVector(document),
+      canonicalStateDigest: canonicalStateDigest(
         runtime.protocolPort.schemaDigest,
         encodeCanvasCanonicalStateV2(document),
       ),
@@ -258,7 +258,7 @@ function createGenesis(
     return {
       acceptedBase,
       checkpointBytes: new Uint8Array(fullUpdate),
-      checkpointDigest: ordinarySha256V2(fullUpdate),
+      checkpointDigest: ordinarySha256(fullUpdate),
     }
   } finally {
     document.destroy()
@@ -266,25 +266,25 @@ function createGenesis(
 }
 
 interface ReplicaIdentity {
-  readonly actorId: ActorIdV2
-  readonly memberId: MemberIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly authorizationDigest: DigestV2
+  readonly actorId: ActorId
+  readonly memberId: MemberId
+  readonly replicaId: ReplicaId
+  readonly authorizationDigest: Digest
 }
 
 function replicaIdentity(seed: number): ReplicaIdentity {
   return Object.freeze({
-    actorId: parseActorIdV2(encoded(seed, 32)),
-    memberId: parseMemberIdV2(encoded(seed + 1, 16)),
-    replicaId: parseReplicaIdV2(`replica_${seed.toString(16).padStart(8, "0")}`),
-    authorizationDigest: ordinarySha256V2(encoder.encode(`authorization:${seed}`)),
+    actorId: parseActorId(encoded(seed, 32)),
+    memberId: parseMemberId(encoded(seed + 1, 16)),
+    replicaId: parseReplicaId(`replica_${seed.toString(16).padStart(8, "0")}`),
+    authorizationDigest: ordinarySha256(encoder.encode(`authorization:${seed}`)),
   })
 }
 
 async function openReplica(input: {
-  authority: VerifiedProtocolAuthorityV2
-  runtime: DocumentOwnerRuntimeV2<"canvas">
-  scope: DocumentScopeV2
+  authority: CurrentProtocolAuthority
+  runtime: DocumentOwnerRuntime<"canvas">
+  scope: DocumentScope
   genesis: ReturnType<typeof createGenesis>
   collaborationDirectory: string
   identity: ReplicaIdentity
@@ -330,7 +330,7 @@ async function openReplica(input: {
       }
     },
   })
-  const kernel = await CollaborationKernelV2.open({
+  const kernel = await CollaborationKernel.open({
     authority: input.authority,
     scope: input.scope,
     owner: input.runtime,
@@ -342,7 +342,7 @@ async function openReplica(input: {
   return { kernel, persistence, createFacts }
 }
 
-function createEmptyCanvasFacts(runtime: DocumentOwnerRuntimeV2<"canvas">) {
+function createEmptyCanvasFacts(runtime: DocumentOwnerRuntime<"canvas">) {
   const facts = runtime.externalFactPortFactory.createAttemptPort({
     declared: { validationArtifacts: [], externalFacts: [] },
     resolver: {
@@ -355,16 +355,16 @@ function createEmptyCanvasFacts(runtime: DocumentOwnerRuntimeV2<"canvas">) {
   return facts.port
 }
 
-function localAuthority(authority: VerifiedProtocolAuthorityV2, identity: ReplicaIdentity) {
-  const membershipSnapshotDigest = ordinarySha256V2(encoder.encode(`membership:${identity.memberId}`))
-  const actorCredentialDigest = ordinarySha256V2(encoder.encode(`credential:${identity.actorId}`))
+function localAuthority(authority: CurrentProtocolAuthority, identity: ReplicaIdentity) {
+  const membershipSnapshotDigest = ordinarySha256(encoder.encode(`membership:${identity.memberId}`))
+  const actorCredentialDigest = ordinarySha256(encoder.encode(`credential:${identity.actorId}`))
   const editAuthorizationDigest = identity.authorizationDigest
   return {
     actorId: identity.actorId,
-    async prepareFinalFrameAuthority(): Promise<LocalFrameAuthorityV2> {
+    async prepareFinalFrameAuthority(): Promise<LocalFrameAuthority> {
       return {
         actorId: identity.actorId,
-        actorSequence: parseUint64V2("1"),
+        actorSequence: parseUint64("1"),
         predecessorFrameDigest: null,
         signerAuthority: {
           memberId: identity.memberId,
@@ -388,14 +388,14 @@ function localAuthority(authority: VerifiedProtocolAuthorityV2, identity: Replic
   }
 }
 
-function localAuthoritySource(authority: VerifiedProtocolAuthorityV2, identity: ReplicaIdentity) {
+function localAuthoritySource(authority: CurrentProtocolAuthority, identity: ReplicaIdentity) {
   const port = localAuthority(authority, identity)
   return {
     async resolveCurrent(request: {
-      scope: DocumentScopeV2
-      operationId: Id128V2
-      baseFrontierDigest: DigestV2
-      ownerSchemaDigest: DigestV2
+      scope: DocumentScope
+      operationId: Id128
+      baseFrontierDigest: Digest
+      ownerSchemaDigest: Digest
     }) {
       const prepared = await port.prepareFinalFrameAuthority()
       if (typeof prepared === "string") return prepared
@@ -413,7 +413,7 @@ function localAuthoritySource(authority: VerifiedProtocolAuthorityV2, identity: 
   }
 }
 
-function requiredValidationArtifacts(authority: VerifiedProtocolAuthorityV2): ValidationArtifactSetV2 {
+function requiredValidationArtifacts(authority: CurrentProtocolAuthority): ValidationArtifactSet {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
   const artifact = (
     owner: "canvas" | "control-plane" | "kernel" | "project-index",
@@ -435,11 +435,11 @@ function requiredValidationArtifacts(authority: VerifiedProtocolAuthorityV2): Va
 }
 
 async function commitOneNode(
-  kernel: CollaborationKernelV2,
+  kernel: CollaborationKernel,
   createFacts: () => ReturnType<typeof createEmptyCanvasFacts>,
-  operationId: Id128V2,
+  operationId: Id128,
   title: string,
-): Promise<DigestV2> {
+): Promise<Digest> {
   const result = await kernel.commitLocalIntent({
     operationId,
     prepare: ({ context }) => {
@@ -468,22 +468,22 @@ async function commitOneNode(
 }
 
 class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
-  readonly acks: Array<{ peerId: string; frameDigest: DigestV2; replicaDurableAckCoreDigest: DigestV2 }> = []
-  readonly receivedDurably: DigestV2[] = []
+  readonly acks: Array<{ peerId: string; frameDigest: Digest; replicaDurableAckCoreDigest: Digest }> = []
+  readonly receivedDurably: Digest[] = []
 
   constructor(
     readonly peerId: string,
     readonly identity: ReplicaIdentity,
-    readonly authority: VerifiedProtocolAuthorityV2,
-    readonly kernel: CollaborationKernelV2,
+    readonly authority: CurrentProtocolAuthority,
+    readonly kernel: CollaborationKernel,
     readonly persistence: NodeCollaborationPersistenceV2,
-    readonly scope: DocumentScopeV2,
+    readonly scope: DocumentScope,
   ) {}
 
   async receiveFrame(exactCausalFrameBytes: Readonly<Uint8Array>) {
     const result = await this.kernel.receiveFrame(new Uint8Array(exactCausalFrameBytes))
     if (result.status === "dependency-pending") return { result, replicaDurableAckCoreDigest: null }
-    const ref = frameObjectRefFromDecodedFrameV2(result.frame)
+    const ref = frameObjectRefFromDecodedFrame(result.frame)
     if (!await this.persistence.isFrameDurableForAck(ref)) {
       throw new Error("Kernel reported acceptance before the persistence ACK barrier")
     }
@@ -498,22 +498,22 @@ class RealKernelEndpoint implements CollaborationKernelEndpointV2 {
       receiverActorId: this.identity.actorId,
       receiverAuthorizationDigest: this.identity.authorizationDigest,
       receiverDurableHeadDigest: projection.acceptedHeadDigest,
-      receiverFrontierDigest: causalFrontierDigestV2(projection.frontier),
+      receiverFrontierDigest: causalFrontierDigest(projection.frontier),
       protocolDigest: this.authority.protocolDigest,
     }
     return {
       result,
-      replicaDurableAckCoreDigest: structuredDigestV2("convax.replica-durable-ack-core/2", core),
+      replicaDurableAckCoreDigest: structuredDigest("convax.replica-durable-ack-core/2", core),
     }
   }
 
-  async loadDurableFrame(frameDigest: DigestV2): Promise<Readonly<Uint8Array> | null> {
+  async loadDurableFrame(frameDigest: Digest): Promise<Readonly<Uint8Array> | null> {
     const entry = (await this.persistence.listDurableReplicationOutbox(this.scope))
       .find((candidate) => candidate.ref.frameDigest === frameDigest)
     return entry ? new Uint8Array(entry.exactFrameBytes) : null
   }
 
-  async recordDurableAck(input: { peerId: string; frameDigest: DigestV2; replicaDurableAckCoreDigest: DigestV2 }): Promise<void> {
+  async recordDurableAck(input: { peerId: string; frameDigest: Digest; replicaDurableAckCoreDigest: Digest }): Promise<void> {
     this.acks.push({ ...input })
   }
 }
@@ -596,14 +596,14 @@ class FakePeerNetwork {
 }
 
 function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmissionV2 {
-  const credential = (peerId: string) => ordinarySha256V2(encoder.encode(`credential:${peerId}`))
+  const credential = (peerId: string) => ordinarySha256(encoder.encode(`credential:${peerId}`))
   const currentConnection = () => id128(network.connectionFill)
   return {
     localHandshake: () => encoder.encode(currentConnection()),
     verifyRemoteHandshake: (_peerId, exactBytes) => {
-      const connectionId = parseId128V2(new TextDecoder().decode(exactBytes))
+      const connectionId = parseId128(new TextDecoder().decode(exactBytes))
       if (connectionId !== currentConnection()) return "rejected"
-      const channelOpen = (channel: string) => ordinarySha256V2(encoder.encode(`${connectionId}:${channel}`))
+      const channelOpen = (channel: string) => ordinarySha256(encoder.encode(`${connectionId}:${channel}`))
       const principal: CollaborationPeerSessionPrincipalV2 = {
         connectionId,
         localCredentialDigest: credential(localPeerId),
@@ -665,7 +665,7 @@ async function settle(...orchestrators: CollaborationSessionOrchestratorV2[]): P
 function canonicalCanvasBytes(fullUpdate: Uint8Array): Uint8Array {
   const document = createCanvasReconstructionYDocV2()
   try {
-    applyUpdateV1V2(document, fullUpdate, reconstructionOrigin)
+    applyYjsUpdate(document, fullUpdate, reconstructionOrigin)
     return encodeCanvasCanonicalStateV2(document)
   } finally {
     document.destroy()
@@ -675,7 +675,7 @@ function canonicalCanvasBytes(fullUpdate: Uint8Array): Uint8Array {
 function projectionFromUpdate(fullUpdate: Uint8Array) {
   const document = createCanvasReconstructionYDocV2()
   try {
-    applyUpdateV1V2(document, fullUpdate, reconstructionOrigin)
+    applyYjsUpdate(document, fullUpdate, reconstructionOrigin)
     return buildCanvasProjectionIndexV2(validateCanvasYDocV2(document)).projection
   } finally {
     document.destroy()
@@ -688,10 +688,10 @@ async function temporaryCollaborationDirectory(label: string): Promise<string> {
   return path.join(root, "collaboration")
 }
 
-function id128(seed: number): Id128V2 {
-  return parseId128V2(encoded(seed, 16))
+function id128(seed: number): Id128 {
+  return parseId128(encoded(seed, 16))
 }
 
 function encoded(seed: number, length: number): string {
-  return encodeBase64urlV2(Uint8Array.from({ length }, (_, index) => (seed + index * 17) % 256))
+  return encodeBase64url(Uint8Array.from({ length }, (_, index) => (seed + index * 17) % 256))
 }

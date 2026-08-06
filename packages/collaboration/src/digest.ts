@@ -1,46 +1,46 @@
-import type { DigestV2 } from "./codecs"
-import { parseDigestV2 } from "./codecs"
-import { encodeRestrictedJcsV2 } from "./jcs"
+import type { Digest } from "./codecs"
+import { parseDigest } from "./codecs"
+import { encodeRestrictedJcs } from "./jcs"
 
 const encoder = new TextEncoder()
 
-export function ordinarySha256V2(bytes: Uint8Array): DigestV2 {
+export function ordinarySha256(bytes: Uint8Array): Digest {
   if (!(bytes instanceof Uint8Array)) throw new TypeError("SHA-256 input must be Uint8Array")
   return bytesToHex(sha256Bytes(bytes))
 }
 
-export function structuredDigestV2(domain: `${string}/2`, value: unknown): DigestV2 {
-  return rawDomainDigestV2(domain, encodeRestrictedJcsV2(value))
+export function structuredDigest(domain: `${string}/2`, value: unknown): Digest {
+  return rawDomainDigest(domain, encodeRestrictedJcs(value))
 }
 
-export function rawDomainDigestV2(domain: `${string}/2`, bytes: Uint8Array): DigestV2 {
+export function rawDomainDigest(domain: `${string}/2`, bytes: Uint8Array): Digest {
   const domainBytes = encoder.encode(domain)
   const preimage = new Uint8Array(domainBytes.byteLength + 1 + bytes.byteLength)
   preimage.set(domainBytes)
   preimage[domainBytes.byteLength] = 0
   preimage.set(bytes, domainBytes.byteLength + 1)
-  return ordinarySha256V2(preimage)
+  return ordinarySha256(preimage)
 }
 
-export function decodedDigestPurposeV2(domain: `${string}/2`, digest: DigestV2 | string): Uint8Array {
-  return hexToBytes(rawDomainDigestV2(domain, hexToBytes(parseDigestV2(digest))))
+export function decodedDigestPurpose(domain: `${string}/2`, digest: Digest | string): Uint8Array {
+  return hexToBytes(rawDomainDigest(domain, hexToBytes(parseDigest(digest))))
 }
 
-export function canonicalStateDigestV2(ownerSchemaDigest: DigestV2 | string, exactCanonicalState: Uint8Array): DigestV2 {
+export function canonicalStateDigest(ownerSchemaDigest: Digest | string, exactCanonicalState: Uint8Array): Digest {
   if (!(exactCanonicalState instanceof Uint8Array)) throw new TypeError("Canonical state must be Uint8Array")
   const domain = encoder.encode("convax.canonical-state/2")
-  const schema = hexToBytes(parseDigestV2(ownerSchemaDigest))
+  const schema = hexToBytes(parseDigest(ownerSchemaDigest))
   const preimage = new Uint8Array(domain.byteLength + 1 + schema.byteLength + 1 + exactCanonicalState.byteLength)
   preimage.set(domain)
   preimage[domain.byteLength] = 0
   preimage.set(schema, domain.byteLength + 1)
   preimage[domain.byteLength + 1 + schema.byteLength] = 0
   preimage.set(exactCanonicalState, domain.byteLength + 2 + schema.byteLength)
-  return ordinarySha256V2(preimage)
+  return ordinarySha256(preimage)
 }
 
-export function hexToBytes(value: DigestV2 | string): Uint8Array {
-  const parsed = parseDigestV2(value)
+export function hexToBytes(value: Digest | string): Uint8Array {
+  const parsed = parseDigest(value)
   const result = new Uint8Array(32)
   for (let index = 0; index < result.length; index += 1) {
     result[index] = Number.parseInt(parsed.slice(index * 2, index * 2 + 2), 16)
@@ -48,9 +48,9 @@ export function hexToBytes(value: DigestV2 | string): Uint8Array {
   return result
 }
 
-export function bytesToHex(bytes: Uint8Array): DigestV2 {
+export function bytesToHex(bytes: Uint8Array): Digest {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength !== 32) throw new TypeError("Digest bytes must contain exactly 32 bytes")
-  return parseDigestV2(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""))
+  return parseDigest(Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(""))
 }
 
 const SHA256_INITIAL = Uint32Array.of(

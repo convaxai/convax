@@ -8,7 +8,7 @@ import type {
   CanvasEntityRefV2,
   CanvasSnapshotV2,
 } from "./types"
-import type { OwnerIntentConstructionContextV2 } from "@convax/collaboration"
+import type { OwnerIntentConstructionContext } from "@convax/collaboration"
 import { buildCanvasProjectionIndexV2, projectCanvasDocumentV2 } from "./projection"
 import type { CanvasAuthoritativeCommandV2 } from "./command-construction"
 import { assertResourceProofV2, canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
@@ -29,7 +29,7 @@ export interface CanvasApplicationCommandAdaptationV2 {
 export function adaptCanvasApplicationCommandV2(input: {
   readonly request: CanvasApplicationCommandRequest
   readonly snapshot: CanvasSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
 }): CanvasApplicationCommandAdaptationV2 | "rejected" {
   try {
     const caller = callerFromActorKind(input.request.envelope.actor.kind)

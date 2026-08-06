@@ -1,29 +1,29 @@
 import {
-  CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2,
-  CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES_V2,
-  assertDocumentOwnerRuntimeV2,
-  checkpointContentCertificateCoreDigestV2,
-  parseCheckpointContentCertificateCoreV2,
-  parseCheckpointContentCertificateV2,
-  parseCheckpointValidationCarrierIndexBytesV2,
-  parseCheckpointValidationCarrierPreambleV2,
-  parseSignatureV2,
-  uint64ToBigIntV2,
-  type CheckpointCarrierSectionV2,
-  type CheckpointContentCertificateCoreV2,
-  type CheckpointContentCertificateV2,
-  type CheckpointValidationCarrierIndexV2,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type SignatureV2,
-  type Uint64V2,
-  type VerifiedProtocolAuthorityV2,
+  CHECKPOINT_VALIDATION_CARRIER_LIMITS,
+  CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES,
+  assertDocumentOwnerRuntime,
+  checkpointContentCertificateCoreDigest,
+  parseCheckpointContentCertificateCore,
+  parseCheckpointContentCertificate,
+  parseCheckpointValidationCarrierIndexBytes,
+  parseCheckpointValidationCarrierPreamble,
+  parseSignature,
+  uint64ToBigInt,
+  type CheckpointCarrierSection,
+  type CheckpointContentCertificateCore,
+  type CheckpointContentCertificate,
+  type CheckpointValidationCarrierIndex,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type Signature,
+  type Uint64,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 
 export const CHECKPOINT_ATTESTER_CONTENT_TYPE_V2 = "application/vnd.convax.checkpoint-validation-carrier-v2"
 
 export interface EphemeralCheckpointSectionV2 {
-  readonly descriptor: CheckpointCarrierSectionV2
+  readonly descriptor: CheckpointCarrierSection
   /** Opens process-scoped bytes. The handle becomes invalid when its request is destroyed. */
   open(signal: AbortSignal): Promise<ReadableStream<Uint8Array>>
 }
@@ -32,13 +32,13 @@ export interface EphemeralCheckpointSectionWriterV2 {
   write(bytes: Uint8Array, signal: AbortSignal): Promise<void>
   finish(signal: AbortSignal): Promise<Readonly<{
     handle: EphemeralCheckpointSectionV2
-    byteLength: Uint64V2
-    sha256: DigestV2
+    byteLength: Uint64
+    sha256: Digest
   }>>
 }
 
 export interface EphemeralCheckpointRequestV2 {
-  createSection(descriptor: CheckpointCarrierSectionV2): Promise<EphemeralCheckpointSectionWriterV2>
+  createSection(descriptor: CheckpointCarrierSection): Promise<EphemeralCheckpointSectionWriterV2>
   /** Must invalidate every section handle and destroy all payload bytes. */
   destroy(): Promise<void>
 }
@@ -51,21 +51,21 @@ export interface CheckpointAttesterEphemeralStoreV2 {
 }
 
 export interface VerifiedCheckpointClosureV2 {
-  readonly parentCertificateDigests: readonly DigestV2[]
-  readonly computedFrontierDigest: DigestV2
-  readonly actorHeadBoundaryDigest: DigestV2
-  readonly stateVectorDigest: DigestV2
-  readonly canonicalStateDigest: DigestV2
-  readonly fullUpdateDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly parentCertificateDigests: readonly Digest[]
+  readonly computedFrontierDigest: Digest
+  readonly actorHeadBoundaryDigest: Digest
+  readonly stateVectorDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly fullUpdateDigest: Digest
+  readonly trustBundleDigest: Digest
 }
 
 export interface ResolvedCheckpointValidationAuthorityV2 {
   /** Live exact selected owner runtime instantiated from this carrier's declarative artifact set. */
-  readonly ownerRuntime: DocumentOwnerRuntimeV2
-  readonly validationArtifactSetDigest: DigestV2
+  readonly ownerRuntime: DocumentOwnerRuntime
+  readonly validationArtifactSetDigest: Digest
   verifyCausalClosure(input: Readonly<{
-    index: CheckpointValidationCarrierIndexV2
+    index: CheckpointValidationCarrierIndex
     sections: readonly EphemeralCheckpointSectionV2[]
     signal: AbortSignal
   }>): Promise<VerifiedCheckpointClosureV2 | "rejected" | "unavailable">
@@ -74,7 +74,7 @@ export interface ResolvedCheckpointValidationAuthorityV2 {
 /** Resolves only artifact-bound executable authority; repository-current owner code is not a fallback. */
 export interface CheckpointValidationArtifactResolverV2 {
   resolve(input: Readonly<{
-    index: CheckpointValidationCarrierIndexV2
+    index: CheckpointValidationCarrierIndex
     sections: readonly EphemeralCheckpointSectionV2[]
     signal: AbortSignal
   }>): Promise<ResolvedCheckpointValidationAuthorityV2 | "rejected" | "unavailable">
@@ -82,24 +82,24 @@ export interface CheckpointValidationArtifactResolverV2 {
 
 export interface CheckpointContentCertificateSignerPortV2 {
   serviceKeyId(purpose: "content-attestation"): string
-  signServiceDigest(purpose: "content-attestation", digest: DigestV2): Promise<SignatureV2>
+  signServiceDigest(purpose: "content-attestation", digest: Digest): Promise<Signature>
 }
 
 export interface CheckpointAttesterAuditV2 {
   record(record: Readonly<{
     format: "convax.checkpoint-attester-audit/2"
     requestId: string
-    byteCount: Uint64V2
-    sectionDigests: readonly DigestV2[]
+    byteCount: Uint64
+    sectionDigests: readonly Digest[]
     outcome: "certified" | "rejected" | "unavailable" | "cancelled" | "failed"
-    resultDigest: DigestV2 | null
+    resultDigest: Digest | null
     rejectionCode: string | null
     cleanup: "destroyed" | "failed"
   }>): Promise<void>
 }
 
 export interface CheckpointAttesterOptionsV2 {
-  readonly protocolAuthority: VerifiedProtocolAuthorityV2
+  readonly protocolAuthority: CurrentProtocolAuthority
   readonly ephemeralStore: CheckpointAttesterEphemeralStoreV2
   readonly artifactResolver: CheckpointValidationArtifactResolverV2
   readonly signer: CheckpointContentCertificateSignerPortV2
@@ -108,14 +108,14 @@ export interface CheckpointAttesterOptionsV2 {
 }
 
 interface AttestationResultV2 {
-  readonly certificate: CheckpointContentCertificateV2
+  readonly certificate: CheckpointContentCertificate
   readonly byteCount: bigint
-  readonly sectionDigests: readonly DigestV2[]
+  readonly sectionDigests: readonly Digest[]
 }
 
 interface AttestationProgressV2 {
   byteCount: bigint
-  sectionDigests: readonly DigestV2[]
+  sectionDigests: readonly Digest[]
 }
 
 class AttesterRequestErrorV2 extends Error {
@@ -148,15 +148,15 @@ export function createIsolatedCheckpointAttesterV2Handler(
     } catch {
       return response(400, "content-length-invalid")
     }
-    if (declaredLength !== null && declaredLength > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2.carrierBytes)) {
+    if (declaredLength !== null && declaredLength > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS.carrierBytes)) {
       return response(413, "carrier-too-large")
     }
 
     const requestId = options.createRequestId()
     let ephemeral: EphemeralCheckpointRequestV2 | null = null
     let byteCount = 0n
-    let sectionDigests: readonly DigestV2[] = Object.freeze([])
-    let resultDigest: DigestV2 | null = null
+    let sectionDigests: readonly Digest[] = Object.freeze([])
+    let resultDigest: Digest | null = null
     let outcome: "certified" | "rejected" | "unavailable" | "cancelled" | "failed" = "failed"
     let rejectionCode: string | null = null
     let cleanup: "destroyed" | "failed" = "destroyed"
@@ -197,7 +197,7 @@ export function createIsolatedCheckpointAttesterV2Handler(
         await options.audit.record(Object.freeze({
           format: "convax.checkpoint-attester-audit/2",
           requestId,
-          byteCount: String(byteCount) as Uint64V2,
+          byteCount: String(byteCount) as Uint64,
           sectionDigests,
           outcome,
           resultDigest,
@@ -226,26 +226,26 @@ async function attestCarrier(
   progress: AttestationProgressV2,
 ): Promise<AttestationResultV2> {
   const stream = new CarrierStreamReaderV2(body, signal)
-  let index: CheckpointValidationCarrierIndexV2
+  let index: CheckpointValidationCarrierIndex
   let sections: readonly EphemeralCheckpointSectionV2[]
   try {
-    const preamble = await stream.readExactly(CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES_V2)
-    const { indexByteLength } = parseCheckpointValidationCarrierPreambleV2(preamble)
-    const indexBytes = await stream.readExactly(Number(uint64ToBigIntV2(indexByteLength)))
-    index = parseCheckpointValidationCarrierIndexBytesV2(indexBytes)
+    const preamble = await stream.readExactly(CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES)
+    const { indexByteLength } = parseCheckpointValidationCarrierPreamble(preamble)
+    const indexBytes = await stream.readExactly(Number(uint64ToBigInt(indexByteLength)))
+    index = parseCheckpointValidationCarrierIndexBytes(indexBytes)
     progress.sectionDigests = Object.freeze(index.sections.map((section) => section.sha256))
-    const expectedLength = BigInt(CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES_V2)
-      + uint64ToBigIntV2(indexByteLength)
-      + uint64ToBigIntV2(index.totalSectionBytes)
-    if (expectedLength > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2.carrierBytes)) reject("carrier-too-large", 413)
+    const expectedLength = BigInt(CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES)
+      + uint64ToBigInt(indexByteLength)
+      + uint64ToBigInt(index.totalSectionBytes)
+    if (expectedLength > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS.carrierBytes)) reject("carrier-too-large", 413)
 
     const handles: EphemeralCheckpointSectionV2[] = []
     for (const descriptor of index.sections) {
       throwIfAborted(signal)
       const writer = await ephemeral.createSection(descriptor)
-      await stream.pipeExactly(uint64ToBigIntV2(descriptor.byteLength), writer)
+      await stream.pipeExactly(uint64ToBigInt(descriptor.byteLength), writer)
       const accepted = await writer.finish(signal)
-      if (uint64ToBigIntV2(accepted.byteLength) !== uint64ToBigIntV2(descriptor.byteLength) || accepted.sha256 !== descriptor.sha256) {
+      if (uint64ToBigInt(accepted.byteLength) !== uint64ToBigInt(descriptor.byteLength) || accepted.sha256 !== descriptor.sha256) {
         reject("carrier-section-hash-mismatch", 400)
       }
       if (!sameSectionDescriptor(accepted.handle.descriptor, descriptor)) reject("ephemeral-section-binding-mismatch", 500)
@@ -267,7 +267,7 @@ async function attestCarrier(
   if (authority === "unavailable") unavailable("validation-artifact-authority-unavailable")
   if (authority === "rejected") reject("validation-artifact-authority-rejected", 422)
   try {
-    assertDocumentOwnerRuntimeV2(authority.ownerRuntime, options.protocolAuthority)
+    assertDocumentOwnerRuntime(authority.ownerRuntime, options.protocolAuthority)
   } catch {
     unavailable("selected-owner-runtime-unavailable")
   }
@@ -281,7 +281,7 @@ async function attestCarrier(
   throwIfAborted(signal)
 
   const serviceKeyId = options.signer.serviceKeyId("content-attestation")
-  const core = parseCheckpointContentCertificateCoreV2(Object.freeze({
+  const core = parseCheckpointContentCertificateCore(Object.freeze({
     format: "convax.checkpoint-content-certificate-core/2",
     scope: index.scope,
     checkpointDigest: index.proposalCheckpointDigest,
@@ -299,11 +299,11 @@ async function attestCarrier(
     contentStatus: "service-validated-causal-closure",
     serviceKeyPurpose: "content-attestation",
     serviceKeyId,
-  } satisfies CheckpointContentCertificateCoreV2))
-  const coreDigest = checkpointContentCertificateCoreDigestV2(core)
-  const serviceSignature = parseSignatureV2(await options.signer.signServiceDigest("content-attestation", coreDigest))
+  } satisfies CheckpointContentCertificateCore))
+  const coreDigest = checkpointContentCertificateCoreDigest(core)
+  const serviceSignature = parseSignature(await options.signer.signServiceDigest("content-attestation", coreDigest))
   throwIfAborted(signal)
-  const certificate = parseCheckpointContentCertificateV2(Object.freeze({
+  const certificate = parseCheckpointContentCertificate(Object.freeze({
     format: "convax.checkpoint-content-certificate/2",
     core,
     coreDigest,
@@ -374,7 +374,7 @@ class CarrierStreamReaderV2 {
   private acceptChunk(value: Uint8Array): void {
     if (!(value instanceof Uint8Array) || value.byteLength < 1) reject("carrier-stream-invalid", 400)
     this.byteCount += BigInt(value.byteLength)
-    if (this.byteCount > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2.carrierBytes)) reject("carrier-too-large", 413)
+    if (this.byteCount > BigInt(CHECKPOINT_VALIDATION_CARRIER_LIMITS.carrierBytes)) reject("carrier-too-large", 413)
     this.pending = value
   }
 }
@@ -385,7 +385,7 @@ function declaredContentLength(value: string | null): bigint | null {
   return BigInt(value)
 }
 
-function sameSectionDescriptor(left: CheckpointCarrierSectionV2, right: CheckpointCarrierSectionV2): boolean {
+function sameSectionDescriptor(left: CheckpointCarrierSection, right: CheckpointCarrierSection): boolean {
   return left.ordinal === right.ordinal
     && left.kind === right.kind
     && left.subjectDigest === right.subjectDigest

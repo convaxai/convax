@@ -3,33 +3,33 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  assertDenseArrayV2,
-  assertExactKeysV2,
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseUint64V2,
-  parseValidationArtifactSetV2,
-  uint64ToBigIntV2,
-  type ActorIdV2,
-  type CausalDependencyKindV2,
-  type CausalDependencyRefV2,
-  type CausalSignerAuthorityV2,
-  type DigestV2,
-  type Id128V2,
-  type ProjectIdV2,
-  type PublicKeyV2,
-  type ReplicaIdV2,
-  type Uint64V2,
-  type ValidationArtifactSetV2,
+  assertDenseArray,
+  assertExactKeys,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseUint64,
+  parseValidationArtifactSet,
+  uint64ToBigInt,
+  type ActorId,
+  type CausalDependencyKind,
+  type CausalDependencyRef,
+  type CausalSignerAuthority,
+  type Digest,
+  type Id128,
+  type ProjectId,
+  type PublicKey,
+  type ReplicaId,
+  type Uint64,
+  type ValidationArtifactSet,
 } from "@convax/collaboration"
 
 import type {
@@ -41,7 +41,7 @@ import type { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-v
 const RECORD_FORMAT = "convax.desktop-local-authority-cache-record/1" as const
 const POINTER_FORMAT = "convax.desktop-local-authority-cache-pointer/1" as const
 const PROJECT_BINDING_FORMAT = "convax.desktop-local-replica-project-binding/1" as const
-const dependencyKinds = new Set<CausalDependencyKindV2>([
+const dependencyKinds = new Set<CausalDependencyKind>([
   "membership-snapshot", "replica-actor-credential", "replica-edit-authorization",
   "authorization-mutation", "cutoff-coverage-root", "checkpoint-content-certificate",
   "project-index-proof", "project-resource-proof", "plugin-validation-artifact",
@@ -50,18 +50,18 @@ const dependencyKinds = new Set<CausalDependencyKindV2>([
 
 export interface LocalReplicaAuthorityCacheRecordV2 {
   readonly format: typeof RECORD_FORMAT
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly actorId: ActorIdV2
-  readonly membershipSequence: Uint64V2
-  readonly controlEvidenceDigest: DigestV2
-  readonly protocolDigest: DigestV2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly actorId: ActorId
+  readonly membershipSequence: Uint64
+  readonly controlEvidenceDigest: Digest
+  readonly protocolDigest: Digest
   readonly role: "editor"
   readonly editState: "active-editor"
-  readonly replicaSigningPublicKey: PublicKeyV2
-  readonly signerAuthority: CausalSignerAuthorityV2
-  readonly dependencies: readonly CausalDependencyRefV2[]
-  readonly validationArtifacts: ValidationArtifactSetV2
+  readonly replicaSigningPublicKey: PublicKey
+  readonly signerAuthority: CausalSignerAuthority
+  readonly dependencies: readonly CausalDependencyRef[]
+  readonly validationArtifacts: ValidationArtifactSet
 }
 
 export interface LocalReplicaEnrollmentCandidateV2
@@ -108,9 +108,9 @@ export function createLocalReplicaEnrollmentVerifierFactoryV2(input: {
 export interface DurableLocalReplicaAuthorityCacheV2 extends DurableVerifiedLocalAuthorityCacheV2 {
   install(enrollment: VerifiedLocalReplicaEnrollmentV2): Promise<void>
   resolveLocalProjectActor(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-  }): Promise<Readonly<{ actorId: ActorIdV2; replicaId: ReplicaIdV2 }> | "pending" | "rejected">
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+  }): Promise<Readonly<{ actorId: ActorId; replicaId: ReplicaId }> | "pending" | "rejected">
 }
 
 /**
@@ -119,9 +119,9 @@ export interface DurableLocalReplicaAuthorityCacheV2 extends DurableVerifiedLoca
  * sequence. It contains no session credential, peer id, or private key.
  */
 export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalReplicaAuthorityCacheV2 {
-  constructor(private readonly rootDirectory: string, private readonly protocolDigest: DigestV2) {
+  constructor(private readonly rootDirectory: string, private readonly protocolDigest: Digest) {
     if (!path.isAbsolute(rootDirectory)) throw new TypeError("Local authority cache root must be absolute")
-    parseDigestV2(protocolDigest)
+    parseDigest(protocolDigest)
   }
 
   async install(enrollment: VerifiedLocalReplicaEnrollmentV2): Promise<void> {
@@ -129,13 +129,13 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     const record = parseRecord(enrollment.record)
     if (record.protocolDigest !== this.protocolDigest) throw new Error("Local authority enrollment uses another protocol")
     await ensureLayout(this.rootDirectory)
-    const recordBytes = encodeRestrictedJcsV2(record)
-    const recordDigest = ordinarySha256V2(recordBytes)
+    const recordBytes = encodeRestrictedJcs(record)
+    const recordDigest = ordinarySha256(recordBytes)
     const selector = selectorDigest(record)
     const current = await this.readPointer(selector)
     if (current) {
-      const currentSequence = uint64ToBigIntV2(current.membershipSequence)
-      const nextSequence = uint64ToBigIntV2(record.membershipSequence)
+      const currentSequence = uint64ToBigInt(current.membershipSequence)
+      const nextSequence = uint64ToBigInt(record.membershipSequence)
       if (nextSequence < currentSequence) throw new Error("Local authority cache rejected membership rollback")
       if (nextSequence === currentSequence) {
         if (current.recordDigest !== recordDigest || current.controlEvidenceDigest !== record.controlEvidenceDigest) {
@@ -158,7 +158,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     })
     await writeImmutable(
       path.join(this.rootDirectory, "project-bindings", `${projectSelector}.jcs`),
-      encodeRestrictedJcsV2(binding),
+      encodeRestrictedJcs(binding),
     )
     const pointer: LocalAuthorityPointerV2 = Object.freeze({
       format: POINTER_FORMAT,
@@ -169,19 +169,19 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     })
     await replaceDurably(
       path.join(this.rootDirectory, "current", `${selector}.jcs`),
-      encodeRestrictedJcsV2(pointer),
+      encodeRestrictedJcs(pointer),
     )
   }
 
   async resolveLocalProjectActor(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-  }): Promise<Readonly<{ actorId: ActorIdV2; replicaId: ReplicaIdV2 }> | "pending" | "rejected"> {
-    let projectId: ProjectIdV2
-    let projectEpoch: Id128V2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+  }): Promise<Readonly<{ actorId: ActorId; replicaId: ReplicaId }> | "pending" | "rejected"> {
+    let projectId: ProjectId
+    let projectEpoch: Id128
     try {
-      projectId = parseProjectIdV2(input.projectId)
-      projectEpoch = parseId128V2(input.projectEpoch)
+      projectId = parseProjectId(input.projectId)
+      projectEpoch = parseId128(input.projectEpoch)
     } catch {
       return "rejected"
     }
@@ -190,8 +190,8 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
       const bytes = new Uint8Array(await fs.readFile(
         path.join(this.rootDirectory, "project-bindings", `${selector}.jcs`),
       ))
-      const binding = parseProjectBinding(decodeRestrictedJcsV2(bytes), selector)
-      if (!sameBytes(bytes, encodeRestrictedJcsV2(binding))) return "rejected"
+      const binding = parseProjectBinding(decodeRestrictedJcs(bytes), selector)
+      if (!sameBytes(bytes, encodeRestrictedJcs(binding))) return "rejected"
       const record = await this.readRecord(binding.recordDigest, selectorDigest(binding))
       if (
         record.projectId !== projectId || record.projectEpoch !== projectEpoch ||
@@ -207,10 +207,10 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
   async resolveCurrent(
     request: Parameters<DurableVerifiedLocalAuthorityCacheV2["resolveCurrent"]>[0],
   ): Promise<DurableVerifiedLocalAuthorityCacheEntryV2 | "pending" | "rejected"> {
-    let scope: ReturnType<typeof parseDocumentScopeV2>
-    try { scope = parseDocumentScopeV2(request.scope) } catch { return "rejected" }
-    if (request.actorId !== parseActorIdV2(request.actorId)) return "rejected"
-    if (request.ownerSchemaDigest !== parseDigestV2(request.ownerSchemaDigest)) return "rejected"
+    let scope: ReturnType<typeof parseDocumentScope>
+    try { scope = parseDocumentScope(request.scope) } catch { return "rejected" }
+    if (request.actorId !== parseActorId(request.actorId)) return "rejected"
+    if (request.ownerSchemaDigest !== parseDigest(request.ownerSchemaDigest)) return "rejected"
     const selector = selectorDigest({
       projectId: scope.projectId,
       projectEpoch: scope.projectEpoch,
@@ -231,9 +231,9 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
       ) return "rejected"
       return Object.freeze({
         scope,
-        operationId: parseId128V2(request.operationId),
-        baseFrontierDigest: parseDigestV2(request.baseFrontierDigest),
-        ownerSchemaDigest: parseDigestV2(request.ownerSchemaDigest),
+        operationId: parseId128(request.operationId),
+        baseFrontierDigest: parseDigest(request.baseFrontierDigest),
+        ownerSchemaDigest: parseDigest(request.ownerSchemaDigest),
         signerAuthority: record.signerAuthority,
         dependencies: record.dependencies,
         validationArtifacts: record.validationArtifacts,
@@ -245,20 +245,20 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
     }
   }
 
-  private async readPointer(selector: DigestV2): Promise<LocalAuthorityPointerV2 | null> {
+  private async readPointer(selector: Digest): Promise<LocalAuthorityPointerV2 | null> {
     try {
       const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "current", `${selector}.jcs`)))
-      return parsePointer(decodeRestrictedJcsV2(bytes), selector)
+      return parsePointer(decodeRestrictedJcs(bytes), selector)
     } catch (error) {
       if (isMissing(error)) return null
       throw error
     }
   }
 
-  private async readRecord(recordDigest: DigestV2, selector: DigestV2): Promise<LocalReplicaAuthorityCacheRecordV2> {
+  private async readRecord(recordDigest: Digest, selector: Digest): Promise<LocalReplicaAuthorityCacheRecordV2> {
     const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "records", `${recordDigest}.jcs`)))
-    if (ordinarySha256V2(bytes) !== recordDigest) throw new Error("Local authority cache record digest mismatches")
-    const record = parseRecord(decodeRestrictedJcsV2(bytes))
+    if (ordinarySha256(bytes) !== recordDigest) throw new Error("Local authority cache record digest mismatches")
+    const record = parseRecord(decodeRestrictedJcs(bytes))
     if (selectorDigest(record) !== selector) throw new Error("Local authority cache record crossed identity")
     return record
   }
@@ -267,7 +267,7 @@ export class NodeDurableLocalReplicaAuthorityCacheV2 implements DurableLocalRepl
 export interface LocalProjectIndexEnrollmentInstallPortV2 {
   installProjectIndexBase(input: {
     readonly enrollment: LocalReplicaAuthorityCacheRecordV2
-    readonly replicaSigningPublicKey: PublicKeyV2
+    readonly replicaSigningPublicKey: PublicKey
   }): Promise<void>
 }
 
@@ -278,19 +278,19 @@ export interface LocalProjectIndexEnrollmentInstallPortV2 {
  */
 export async function enrollNewLocalProjectReplicaV2(input: {
   readonly identity: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly replicaId: ReplicaIdV2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly replicaId: ReplicaId
   }
   readonly vault: Pick<ElectronReplicaSigningVaultV2, "createReplicaKey">
-  prepareEnrollment(publicKey: PublicKeyV2): Promise<VerifiedLocalReplicaEnrollmentV2 | "rejected">
+  prepareEnrollment(publicKey: PublicKey): Promise<VerifiedLocalReplicaEnrollmentV2 | "rejected">
   readonly projectIndex: LocalProjectIndexEnrollmentInstallPortV2
   readonly cache: Pick<DurableLocalReplicaAuthorityCacheV2, "install">
-}): Promise<Readonly<{ enrollment: LocalReplicaAuthorityCacheRecordV2; publicKey: PublicKeyV2 }> | "rejected"> {
+}): Promise<Readonly<{ enrollment: LocalReplicaAuthorityCacheRecordV2; publicKey: PublicKey }> | "rejected"> {
   const identity = Object.freeze({
-    projectId: parseProjectIdV2(input.identity.projectId),
-    projectEpoch: parseId128V2(input.identity.projectEpoch),
-    replicaId: parseReplicaIdV2(input.identity.replicaId),
+    projectId: parseProjectId(input.identity.projectId),
+    projectEpoch: parseId128(input.identity.projectEpoch),
+    replicaId: parseReplicaId(input.identity.replicaId),
   })
   const key = await input.vault.createReplicaKey(identity)
   const verified = await input.prepareEnrollment(key.publicKey)
@@ -309,24 +309,24 @@ export async function enrollNewLocalProjectReplicaV2(input: {
 
 interface LocalAuthorityPointerV2 {
   readonly format: typeof POINTER_FORMAT
-  readonly selector: DigestV2
-  readonly membershipSequence: Uint64V2
-  readonly controlEvidenceDigest: DigestV2
-  readonly recordDigest: DigestV2
+  readonly selector: Digest
+  readonly membershipSequence: Uint64
+  readonly controlEvidenceDigest: Digest
+  readonly recordDigest: Digest
 }
 
 interface LocalReplicaProjectBindingV2 {
   readonly format: typeof PROJECT_BINDING_FORMAT
-  readonly selector: DigestV2
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly actorId: ActorIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly recordDigest: DigestV2
+  readonly selector: Digest
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly actorId: ActorId
+  readonly replicaId: ReplicaId
+  readonly recordDigest: Digest
 }
 
 function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecordV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "projectId", "projectEpoch", "actorId", "membershipSequence", "controlEvidenceDigest",
     "protocolDigest", "role", "editState", "replicaSigningPublicKey", "signerAuthority", "dependencies",
     "validationArtifacts",
@@ -334,12 +334,12 @@ function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecordV2 {
   if (value.format !== RECORD_FORMAT || value.role !== "editor" || value.editState !== "active-editor") {
     throw new TypeError("Local authority cache record discriminator is invalid")
   }
-  const projectId = parseProjectIdV2(value.projectId)
-  const projectEpoch = parseId128V2(value.projectEpoch)
-  const actorId = parseActorIdV2(value.actorId)
+  const projectId = parseProjectId(value.projectId)
+  const projectEpoch = parseId128(value.projectEpoch)
+  const actorId = parseActorId(value.actorId)
   const signerAuthority = parseSignerAuthority(value.signerAuthority)
   if (signerAuthority.actorId !== actorId) throw new TypeError("Local authority cache actor binding mismatches")
-  assertDenseArrayV2(value.dependencies, "local authority cache dependencies")
+  assertDenseArray(value.dependencies, "local authority cache dependencies")
   const dependencies = Object.freeze(value.dependencies.map(parseDependency))
   for (let index = 1; index < dependencies.length; index += 1) {
     const previous = `${dependencies[index - 1]!.kind}\u0000${dependencies[index - 1]!.digest}`
@@ -354,75 +354,75 @@ function parseRecord(value: unknown): LocalReplicaAuthorityCacheRecordV2 {
     projectId,
     projectEpoch,
     actorId,
-    membershipSequence: parseUint64V2(value.membershipSequence),
-    controlEvidenceDigest: parseDigestV2(value.controlEvidenceDigest),
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    membershipSequence: parseUint64(value.membershipSequence),
+    controlEvidenceDigest: parseDigest(value.controlEvidenceDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
     role: "editor",
     editState: "active-editor",
-    replicaSigningPublicKey: parsePublicKeyV2(value.replicaSigningPublicKey),
+    replicaSigningPublicKey: parsePublicKey(value.replicaSigningPublicKey),
     signerAuthority,
     dependencies,
-    validationArtifacts: parseValidationArtifactSetV2(value.validationArtifacts),
+    validationArtifacts: parseValidationArtifactSet(value.validationArtifacts),
   })
 }
 
-function parseSignerAuthority(value: unknown): CausalSignerAuthorityV2 {
-  assertExactKeysV2(value, [
+function parseSignerAuthority(value: unknown): CausalSignerAuthority {
+  assertExactKeys(value, [
     "memberId", "replicaId", "actorId", "memberAuthorizationEpoch", "replicaAuthorizationEpoch",
     "membershipSnapshotDigest", "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
   ], "local authority signer authority")
   return Object.freeze({
-    memberId: parseMemberIdV2(value.memberId),
-    replicaId: parseReplicaIdV2(value.replicaId),
-    actorId: parseActorIdV2(value.actorId),
-    memberAuthorizationEpoch: parseId128V2(value.memberAuthorizationEpoch),
-    replicaAuthorizationEpoch: parseId128V2(value.replicaAuthorizationEpoch),
-    membershipSnapshotDigest: parseDigestV2(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigestV2(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigestV2(value.replicaEditAuthorizationCoreDigest),
+    memberId: parseMemberId(value.memberId),
+    replicaId: parseReplicaId(value.replicaId),
+    actorId: parseActorId(value.actorId),
+    memberAuthorizationEpoch: parseId128(value.memberAuthorizationEpoch),
+    replicaAuthorizationEpoch: parseId128(value.replicaAuthorizationEpoch),
+    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
+    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
+    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
   })
 }
 
-function parseDependency(value: unknown): CausalDependencyRefV2 {
-  assertExactKeysV2(value, ["kind", "digest"], "local authority dependency")
-  if (typeof value.kind !== "string" || !dependencyKinds.has(value.kind as CausalDependencyKindV2)) {
+function parseDependency(value: unknown): CausalDependencyRef {
+  assertExactKeys(value, ["kind", "digest"], "local authority dependency")
+  if (typeof value.kind !== "string" || !dependencyKinds.has(value.kind as CausalDependencyKind)) {
     throw new TypeError("Local authority dependency kind is invalid")
   }
-  return Object.freeze({ kind: value.kind as CausalDependencyKindV2, digest: parseDigestV2(value.digest) })
+  return Object.freeze({ kind: value.kind as CausalDependencyKind, digest: parseDigest(value.digest) })
 }
 
-function requireDependency(dependencies: readonly CausalDependencyRefV2[], kind: CausalDependencyKindV2, digest: DigestV2): void {
+function requireDependency(dependencies: readonly CausalDependencyRef[], kind: CausalDependencyKind, digest: Digest): void {
   if (!dependencies.some((dependency) => dependency.kind === kind && dependency.digest === digest)) {
     throw new TypeError(`Local authority cache lacks mandatory ${kind}`)
   }
 }
 
-function selectorDigest(input: { readonly projectId: ProjectIdV2; readonly projectEpoch: Id128V2; readonly actorId: ActorIdV2 }): DigestV2 {
-  return ordinarySha256V2(encodeRestrictedJcsV2(Object.freeze({
-    projectId: parseProjectIdV2(input.projectId),
-    projectEpoch: parseId128V2(input.projectEpoch),
-    actorId: parseActorIdV2(input.actorId),
+function selectorDigest(input: { readonly projectId: ProjectId; readonly projectEpoch: Id128; readonly actorId: ActorId }): Digest {
+  return ordinarySha256(encodeRestrictedJcs(Object.freeze({
+    projectId: parseProjectId(input.projectId),
+    projectEpoch: parseId128(input.projectEpoch),
+    actorId: parseActorId(input.actorId),
   })))
 }
 
-function projectBindingSelectorDigest(input: { readonly projectId: ProjectIdV2; readonly projectEpoch: Id128V2 }): DigestV2 {
-  return ordinarySha256V2(encodeRestrictedJcsV2(Object.freeze({
-    projectId: parseProjectIdV2(input.projectId),
-    projectEpoch: parseId128V2(input.projectEpoch),
+function projectBindingSelectorDigest(input: { readonly projectId: ProjectId; readonly projectEpoch: Id128 }): Digest {
+  return ordinarySha256(encodeRestrictedJcs(Object.freeze({
+    projectId: parseProjectId(input.projectId),
+    projectEpoch: parseId128(input.projectEpoch),
   })))
 }
 
-function parseProjectBinding(value: unknown, selector: DigestV2): LocalReplicaProjectBindingV2 {
-  assertExactKeysV2(
+function parseProjectBinding(value: unknown, selector: Digest): LocalReplicaProjectBindingV2 {
+  assertExactKeys(
     value,
     ["format", "selector", "projectId", "projectEpoch", "actorId", "replicaId", "recordDigest"],
     "local replica Project binding",
   )
-  if (value.format !== PROJECT_BINDING_FORMAT || parseDigestV2(value.selector) !== selector) {
+  if (value.format !== PROJECT_BINDING_FORMAT || parseDigest(value.selector) !== selector) {
     throw new TypeError("Local replica Project binding crossed identity")
   }
-  const projectId = parseProjectIdV2(value.projectId)
-  const projectEpoch = parseId128V2(value.projectEpoch)
+  const projectId = parseProjectId(value.projectId)
+  const projectEpoch = parseId128(value.projectEpoch)
   if (projectBindingSelectorDigest({ projectId, projectEpoch }) !== selector) {
     throw new TypeError("Local replica Project binding selector mismatches")
   }
@@ -431,23 +431,23 @@ function parseProjectBinding(value: unknown, selector: DigestV2): LocalReplicaPr
     selector,
     projectId,
     projectEpoch,
-    actorId: parseActorIdV2(value.actorId),
-    replicaId: parseReplicaIdV2(value.replicaId),
-    recordDigest: parseDigestV2(value.recordDigest),
+    actorId: parseActorId(value.actorId),
+    replicaId: parseReplicaId(value.replicaId),
+    recordDigest: parseDigest(value.recordDigest),
   })
 }
 
-function parsePointer(value: unknown, selector: DigestV2): LocalAuthorityPointerV2 {
-  assertExactKeysV2(value, ["format", "selector", "membershipSequence", "controlEvidenceDigest", "recordDigest"], "local authority pointer")
-  if (value.format !== POINTER_FORMAT || parseDigestV2(value.selector) !== selector) {
+function parsePointer(value: unknown, selector: Digest): LocalAuthorityPointerV2 {
+  assertExactKeys(value, ["format", "selector", "membershipSequence", "controlEvidenceDigest", "recordDigest"], "local authority pointer")
+  if (value.format !== POINTER_FORMAT || parseDigest(value.selector) !== selector) {
     throw new TypeError("Local authority pointer crossed identity")
   }
   return Object.freeze({
     format: POINTER_FORMAT,
     selector,
-    membershipSequence: parseUint64V2(value.membershipSequence),
-    controlEvidenceDigest: parseDigestV2(value.controlEvidenceDigest),
-    recordDigest: parseDigestV2(value.recordDigest),
+    membershipSequence: parseUint64(value.membershipSequence),
+    controlEvidenceDigest: parseDigest(value.controlEvidenceDigest),
+    recordDigest: parseDigest(value.recordDigest),
   })
 }
 

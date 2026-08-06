@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { constants as fsConstants, type BigIntStats } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { parseDigestV2, parseProjectIdV2 } from "@convax/collaboration"
+import { parseDigest, parseProjectId } from "@convax/collaboration"
 import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
 import type { ProjectRootResolver, ProjectManagedAssetStore } from "./project-managed-asset-store"
 
@@ -124,12 +124,12 @@ export class ProjectAssetGc {
   }
 
   async #loadLiveDigests(projectId: string) {
-    const values = await this.#references.queryCurrentBlobDigests({ projectId: parseProjectIdV2(projectId) })
+    const values = await this.#references.queryCurrentBlobDigests({ projectId: parseProjectId(projectId) })
     const result = new Set<string>()
     for (const digest of values) {
       if (!digestPattern.test(digest))
         throw new Error("ProjectIndex current blob-reference query returned an invalid digest")
-      result.add(parseDigestV2(digest))
+      result.add(parseDigest(digest))
     }
     return result
   }

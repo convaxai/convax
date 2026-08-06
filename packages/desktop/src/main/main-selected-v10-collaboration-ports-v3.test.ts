@@ -1,9 +1,9 @@
 import { expect, mock, test } from "bun:test"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import { openMainSelectedV10CollaborationPortsV3 } from "./main-selected-v10-collaboration-ports-v3"
 
-const PROJECT = parseProjectIdV2(`project_${"a".repeat(64)}`)
+const PROJECT = parseProjectId(`project_${"a".repeat(64)}`)
 
 test("V10 selected ports switch before publication and quiesce every V10 owner exactly once", async () => {
   const calls: string[] = []

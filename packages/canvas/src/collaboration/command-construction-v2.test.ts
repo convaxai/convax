@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseUint64V2 } from "@convax/collaboration"
+import { parseUint64 } from "@convax/collaboration"
 import {
   constructCanvasAuthoritativeIntentV2,
   type CanvasPluginCreationGroupCommandV2,
@@ -223,7 +223,7 @@ function resourceProof(seed: "a" | "b"): Extract<CanvasResourceProofRefV2, { mod
         `?blob=sha256%3A${seed.repeat(64)}&path=Generated%2Fimage.png`,
       mediaClass: "image",
       mime: "image/png",
-      byteLength: parseUint64V2("12"),
+      byteLength: parseUint64("12"),
       contentDigest: digest(seed === "a" ? 42 : 43),
       ownerProofDigest,
     },

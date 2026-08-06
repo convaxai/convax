@@ -1,54 +1,53 @@
 import { sha256 } from "@noble/hashes/sha2.js"
 import { bytesToHex } from "@noble/hashes/utils.js"
 import {
-  assertBoundedNfcStringV2,
-  assertDenseArrayV2,
-  assertExactKeysV2,
-  compareBytesV2,
-  compareDecodedBase64urlV2,
-  comparePortableStampsV2,
-  compareUtf8V2,
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parsePortableStampV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint32V2,
-  parseUint64V2,
-  structuredDigestV2,
-  type ActualWriteEvidenceV2,
-  type ActorIdV2,
-  type CanvasIdV2,
-  type DigestV2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
-  type DocumentOwnerProtocolDefinitionV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type OwnerApplyResultV2,
-  type OwnerCanonicalizerDescriptorV2,
-  type OwnerExternalFactPortV2,
-  type OwnerExternalFactRequirementV2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerIntentClosureDefinitionV2,
-  type OwnerIntentDependenciesV2,
-  type OwnerIntentValidationContextV2,
-  type OwnerProcessValueFactoryV2,
-  type OwnerValidatedStateV2,
-  type PortableStampV2,
-  type ProjectIdV2,
-  type SelectedDocumentOwnerArtifactDefinitionV2,
-  type Uint32V2,
-  type Uint64V2,
+  assertBoundedNfcString,
+  assertDenseArray,
+  assertExactKeys,
+  compareBytes,
+  compareDecodedBase64url,
+  comparePortableStamps,
+  compareUtf8,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  ownerCanonicalizerDescriptorDigest,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parseMemberId,
+  parsePortableStamp,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
+  parseUint32,
+  parseUint64,
+  structuredDigest,
+  type ActualWriteEvidence,
+  type ActorId,
+  type CanvasId,
+  type Digest,
+  type DecodedCausalEditFrame,
+  type DocumentOwnerProtocolDefinition,
+  type DocumentScope,
+  type Id128,
+  type OwnerApplyResult,
+  type OwnerCanonicalizerDescriptor,
+  type OwnerExternalFactPort,
+  type OwnerExternalFactRequirement,
+  type OwnerIntentConstructionContext,
+  type OwnerIntentClosureDefinition,
+  type OwnerIntentDependencies,
+  type OwnerIntentValidationContext,
+  type OwnerProcessValueFactory,
+  type OwnerValidatedState,
+  type PortableStamp,
+  type ProjectId,
+  type SelectedDocumentOwnerArtifactDefinition,
+  type Uint32,
+  type Uint64,
 } from "@convax/collaboration"
 import {
   parseProjectDirectoryId,
@@ -85,7 +84,7 @@ export const PROJECT_INDEX_ROOT_KEYS_V2 = Object.freeze([
   "operations",
 ] as const)
 
-export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: DigestV2 = parseDigestV2(
+export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: Digest = parseDigest(
   "38f3d762cfd95a6826758750d3cdb518d900ac0b15b8338aa6dfd58733e9353c",
 )
 
@@ -103,7 +102,7 @@ export type ProjectDirectoryIdV2 = ProjectDirectoryId
 export type ProjectEntryIdV2 = ProjectEntryId
 export type ProjectVersionIdV2 = `pv_${string}`
 export type ProjectFactIdV2 = `${"pl" | "pt" | "pp" | "pr" | "cr"}_${string}`
-export type ProjectIndexScopeV2 = DocumentScopeV2 & { readonly docKind: "project-index"; readonly docId: "project-index" }
+export type ProjectIndexScopeV2 = DocumentScope & { readonly docKind: "project-index"; readonly docId: "project-index" }
 
 export type ProjectContentPolicyV2 = "none" | "immutable" | "conflict-preserving-text" | "overwritable-binary"
 export type ProjectStorageClassV2 = "project-file" | "managed-blob"
@@ -111,13 +110,13 @@ export type ProjectStorageClassV2 = "project-file" | "managed-blob"
 export interface ProjectIndexIdentityRecordV2 {
   readonly format: "convax.project-index-identity/2"
   readonly schema: "convax.project-index.v2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly shardEpoch: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly shardEpoch: Id128
   readonly rootDirectoryId: ProjectDirectoryIdV2
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly uriProtocolDigest: DigestV2
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly uriProtocolDigest: Digest
 }
 
 export interface ProjectEntryRecordV2 {
@@ -133,9 +132,9 @@ export interface ProjectEntryRecordV2 {
     readonly promotionId: ProjectFactIdV2
     readonly reservationId: ProjectFactIdV2
   }
-  readonly createdByActorId: ActorIdV2
-  readonly createdByOperationId: Id128V2
-  readonly createdStamp: PortableStampV2
+  readonly createdByActorId: ActorId
+  readonly createdByOperationId: Id128
+  readonly createdStamp: PortableStamp
 }
 
 export interface ProjectEntryLocationClaimV2 {
@@ -146,7 +145,7 @@ export interface ProjectEntryLocationClaimV2 {
   readonly parentDirectoryId: ProjectDirectoryIdV2
   readonly basename: string
   readonly reason: "create" | "move" | "rename" | "explicit-relink" | "explicit-missing"
-  readonly stamp: PortableStampV2
+  readonly stamp: PortableStamp
 }
 
 export interface ProjectEntryTombstoneV2 {
@@ -154,15 +153,15 @@ export interface ProjectEntryTombstoneV2 {
   readonly tombstoneId: ProjectFactIdV2
   readonly entryId: ProjectEntryIdV2
   readonly reason: "explicit-delete"
-  readonly observedEntryDigest: DigestV2
-  readonly stamp: PortableStampV2
+  readonly observedEntryDigest: Digest
+  readonly stamp: PortableStamp
 }
 
 export interface ProjectBlobRefV2 {
   readonly format: "convax.blob-ref/2"
   readonly algorithm: "sha256"
-  readonly digest: DigestV2
-  readonly byteLength: Uint64V2
+  readonly digest: Digest
+  readonly byteLength: Uint64
   readonly mime: string
 }
 
@@ -174,10 +173,10 @@ export interface ProjectContentVersionRecordV2 {
   readonly blob: ProjectBlobRefV2
   readonly canonicalRevisionUri: string
   readonly supersedesVersionIds: readonly ProjectVersionIdV2[]
-  readonly binaryLogicalCounter: Uint64V2 | null
-  readonly creatorActorId: ActorIdV2
-  readonly creatorOperationId: Id128V2
-  readonly stamp: PortableStampV2
+  readonly binaryLogicalCounter: Uint64 | null
+  readonly creatorActorId: ActorId
+  readonly creatorOperationId: Id128
+  readonly stamp: PortableStamp
 }
 
 export interface ProjectContentPromotionRecordV2 {
@@ -187,19 +186,19 @@ export interface ProjectContentPromotionRecordV2 {
   readonly versionId: ProjectVersionIdV2
   readonly reservedConflictFileId: ProjectFileIdV2
   readonly reservationId: ProjectFactIdV2
-  readonly stamp: PortableStampV2
+  readonly stamp: PortableStamp
 }
 
 export interface ProjectResourceReferenceV2 {
   readonly format: "convax.project-resource-reference/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
   readonly entryFileId: ProjectFileIdV2
   readonly familyPrimaryFileId: ProjectFileIdV2
   readonly versionId: ProjectVersionIdV2
   readonly canonicalUri: string
   readonly blob: ProjectBlobRefV2
-  readonly versionRecordDigest: DigestV2
+  readonly versionRecordDigest: Digest
 }
 
 export interface ProjectPathReservationRecordV2 {
@@ -211,65 +210,65 @@ export interface ProjectPathReservationRecordV2 {
   readonly reservedEntryId: ProjectFileIdV2
   readonly canonicalPath: string
   readonly originalBasenameHint: string
-  readonly stamp: PortableStampV2
+  readonly stamp: PortableStamp
 }
 
 export interface CanvasRouteStageV2 {
   readonly format: "convax.canvas-route-stage/2"
   readonly transitionId: ProjectFactIdV2
-  readonly canvasId: CanvasIdV2
-  readonly shardEpoch: Id128V2
+  readonly canvasId: CanvasId
+  readonly shardEpoch: Id128
   readonly title: string
   readonly reason: "create"
-  readonly stamp: PortableStampV2
+  readonly stamp: PortableStamp
 }
 
 export interface CanvasRouteActivationV2 {
   readonly format: "convax.canvas-route-activation/2"
   readonly transitionId: ProjectFactIdV2
-  readonly canvasId: CanvasIdV2
-  readonly shardEpoch: Id128V2
+  readonly canvasId: CanvasId
+  readonly shardEpoch: Id128
   readonly predecessorActivationDigest: null
-  readonly stageRecordDigest: DigestV2
-  readonly projectIndexRouteDependencyFrameDigest: DigestV2
-  readonly canvasGenesisCheckpointObjectDigest: DigestV2
-  readonly stagedProjectIndexFrontierDigest: DigestV2
-  readonly stamp: PortableStampV2
+  readonly stageRecordDigest: Digest
+  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly canvasGenesisCheckpointObjectDigest: Digest
+  readonly stagedProjectIndexFrontierDigest: Digest
+  readonly stamp: PortableStamp
 }
 
 export interface CanvasRouteMetadataClaimV2 {
   readonly format: "convax.canvas-route-metadata/2"
   readonly transitionId: ProjectFactIdV2
-  readonly canvasId: CanvasIdV2
+  readonly canvasId: CanvasId
   readonly title: string
-  readonly observedActivationDigest: DigestV2
-  readonly stamp: PortableStampV2
+  readonly observedActivationDigest: Digest
+  readonly stamp: PortableStamp
 }
 
 export interface CanvasRouteTombstoneV2 {
   readonly format: "convax.canvas-route-tombstone/2"
   readonly transitionId: ProjectFactIdV2
-  readonly canvasId: CanvasIdV2
-  readonly observedActivationDigest: DigestV2 | null
+  readonly canvasId: CanvasId
+  readonly observedActivationDigest: Digest | null
   readonly reason: "explicit-delete"
-  readonly stamp: PortableStampV2
+  readonly stamp: PortableStamp
 }
 
 export interface CanvasRouteResetCommitV2 {
   readonly format: "convax.canvas-route-reset-commit/2"
   readonly transitionId: ProjectFactIdV2
-  readonly canvasId: CanvasIdV2
-  readonly oldShardEpoch: Id128V2
-  readonly newShardEpoch: Id128V2
-  readonly predecessorActivationDigest: DigestV2
-  readonly stagedGenesisCheckpointObjectDigest: DigestV2
-  readonly stagedGenesisFullUpdateDigest: DigestV2
-  readonly stagedGenesisStateVectorDigest: DigestV2
-  readonly resetClaimCoreDigest: DigestV2
-  readonly confirmationCoreDigest: DigestV2
-  readonly approvalCoreDigest: DigestV2
-  readonly routeCasCoreDigest: DigestV2
-  readonly stamp: PortableStampV2
+  readonly canvasId: CanvasId
+  readonly oldShardEpoch: Id128
+  readonly newShardEpoch: Id128
+  readonly predecessorActivationDigest: Digest
+  readonly stagedGenesisCheckpointObjectDigest: Digest
+  readonly stagedGenesisFullUpdateDigest: Digest
+  readonly stagedGenesisStateVectorDigest: Digest
+  readonly resetClaimCoreDigest: Digest
+  readonly confirmationCoreDigest: Digest
+  readonly approvalCoreDigest: Digest
+  readonly routeCasCoreDigest: Digest
+  readonly stamp: PortableStamp
 }
 
 export type CanvasRouteFactV2 =
@@ -294,34 +293,34 @@ export type ProjectIndexIntentKindV2 =
 
 export interface ProjectOperationReceiptV2 {
   readonly format: "convax.project-operation-receipt/2"
-  readonly actorId: ActorIdV2
-  readonly operationId: Id128V2
+  readonly actorId: ActorId
+  readonly operationId: Id128
   readonly intentKind: ProjectIndexIntentKindV2
-  readonly intentDigest: DigestV2
+  readonly intentDigest: Digest
   readonly allocatedIds: readonly string[]
-  readonly firstWriteOrdinal: Uint32V2
-  readonly writeCount: Uint32V2
-  readonly stampLamport: Uint64V2
+  readonly firstWriteOrdinal: Uint32
+  readonly writeCount: Uint32
+  readonly stampLamport: Uint64
 }
 
 export type ProjectGuardAtomV2 =
   | Readonly<{ kind: "entry-absent"; entryId: ProjectEntryIdV2 }>
-  | Readonly<{ kind: "entry-live"; entryId: ProjectEntryIdV2; entryDigest: DigestV2 }>
-  | Readonly<{ kind: "entry-location"; entryId: ProjectEntryIdV2; projectionDigest: DigestV2 }>
-  | Readonly<{ kind: "directory-live"; directoryId: ProjectDirectoryIdV2; entryDigest: DigestV2 }>
+  | Readonly<{ kind: "entry-live"; entryId: ProjectEntryIdV2; entryDigest: Digest }>
+  | Readonly<{ kind: "entry-location"; entryId: ProjectEntryIdV2; projectionDigest: Digest }>
+  | Readonly<{ kind: "directory-live"; directoryId: ProjectDirectoryIdV2; entryDigest: Digest }>
   | Readonly<{
       kind: "family-live-heads"
       primaryFileId: ProjectFileIdV2
       versionIds: readonly ProjectVersionIdV2[]
-      projectionDigest: DigestV2
+      projectionDigest: Digest
     }>
   | Readonly<{
       kind: "route-state"
-      canvasId: CanvasIdV2
+      canvasId: CanvasId
       state: "absent" | "staged" | "live" | "tombstoned"
-      shardEpoch: Id128V2 | null
-      activationDigest: DigestV2 | null
-      projectionDigest: DigestV2
+      shardEpoch: Id128 | null
+      activationDigest: Digest | null
+      projectionDigest: Digest
     }>
   | Readonly<{
       kind: "fact-absent"
@@ -375,7 +374,7 @@ export interface ProjectContentFamilyViewV2 {
   readonly liveHeadVersionIds: readonly ProjectVersionIdV2[]
   readonly currentVersionId: ProjectVersionIdV2 | null
   readonly currentResourceReference: ProjectResourceReferenceV2 | null
-  readonly currentResourceReferenceDigest: DigestV2 | null
+  readonly currentResourceReferenceDigest: Digest | null
   readonly activeConflictFileIds: readonly ProjectFileIdV2[]
 }
 
@@ -397,9 +396,9 @@ export type ProjectEntryLocationCauseV2 =
 export interface ProjectEntryLocationOutcomeValueV2 {
   readonly format: "convax.project-entry-location-projection/2"
   readonly entryId: ProjectEntryIdV2
-  readonly entryRecordDigest: DigestV2 | null
-  readonly tombstoneRecordDigests: readonly DigestV2[]
-  readonly selectedLocationRecordDigest: DigestV2 | null
+  readonly entryRecordDigest: Digest | null
+  readonly tombstoneRecordDigests: readonly Digest[]
+  readonly selectedLocationRecordDigest: Digest | null
   readonly state:
     | "absent"
     | "dormant-conflict"
@@ -414,19 +413,19 @@ export interface ProjectEntryLocationOutcomeValueV2 {
 }
 
 export interface ProjectEntryLocationProjectionV2 extends ProjectEntryLocationOutcomeValueV2 {
-  readonly resolutionDependencyRecordDigests: readonly DigestV2[]
+  readonly resolutionDependencyRecordDigests: readonly Digest[]
 }
 
 export interface ProjectConflictProjectionV2 {
   readonly format: "convax.project-conflict-projection/2"
   readonly primaryFileId: ProjectFileIdV2
   readonly sourceVersionId: ProjectVersionIdV2
-  readonly sourceVersionRecordDigest: DigestV2
-  readonly promotionRecordDigest: DigestV2
-  readonly reservationRecordDigest: DigestV2
+  readonly sourceVersionRecordDigest: Digest
+  readonly promotionRecordDigest: Digest
+  readonly reservationRecordDigest: Digest
   readonly reservedEntryId: ProjectFileIdV2
-  readonly reservedEntryRecordDigest: DigestV2
-  readonly reservedEntryLocationProjectionDigest: DigestV2 | null
+  readonly reservedEntryRecordDigest: Digest
+  readonly reservedEntryLocationProjectionDigest: Digest | null
   readonly state: "dormant" | "active-reserved-path" | "active-explicit-path" | "tombstoned"
   readonly cause:
     | "promotion-dormant"
@@ -440,25 +439,25 @@ export interface ProjectConflictProjectionV2 {
 export interface ProjectContentFamilyProjectionV2 {
   readonly format: "convax.project-content-family-projection/2"
   readonly primaryFileId: ProjectFileIdV2
-  readonly primaryEntryRecordDigest: DigestV2 | null
+  readonly primaryEntryRecordDigest: Digest | null
   readonly contentPolicy: ProjectContentPolicyV2 | null
-  readonly versions: readonly (readonly [ProjectVersionIdV2, DigestV2])[]
+  readonly versions: readonly (readonly [ProjectVersionIdV2, Digest])[]
   readonly liveHeadVersionIds: readonly ProjectVersionIdV2[]
   readonly currentVersionId: ProjectVersionIdV2 | null
-  readonly activeConflictProjectionDigests: readonly DigestV2[]
+  readonly activeConflictProjectionDigests: readonly Digest[]
 }
 
 export interface ProjectCanvasRouteProjectionV2 {
   readonly format: "convax.project-route-projection/2"
-  readonly canvasId: CanvasIdV2
+  readonly canvasId: CanvasId
   readonly state: "absent" | "staged" | "live" | "tombstoned"
-  readonly stageRecordDigest: DigestV2 | null
-  readonly ancestryRecordDigests: readonly DigestV2[]
-  readonly currentActivationDigest: DigestV2 | null
-  readonly currentShardEpoch: Id128V2 | null
+  readonly stageRecordDigest: Digest | null
+  readonly ancestryRecordDigests: readonly Digest[]
+  readonly currentActivationDigest: Digest | null
+  readonly currentShardEpoch: Id128 | null
   readonly currentTitle: string | null
-  readonly currentTitleRecordDigest: DigestV2 | null
-  readonly currentTombstoneRecordDigest: DigestV2 | null
+  readonly currentTitleRecordDigest: Digest | null
+  readonly currentTombstoneRecordDigest: Digest | null
 }
 
 export interface ProjectIndexProjectionV2 {
@@ -483,12 +482,12 @@ export interface ProjectIndexSnapshotV2 {
 
 export interface ProjectIndexApplyResultV2 {
   readonly format: "convax.project-index-intent-result/2"
-  readonly intentDigest: DigestV2
+  readonly intentDigest: Digest
   readonly inserted: readonly { readonly root: Exclude<(typeof PROJECT_INDEX_ROOT_KEYS_V2)[number], "identity">; readonly key: string; readonly record: object }[]
 }
 
 export interface ProjectIndexExternalFactContextV2 {
-  verifyBlob(versionRecordDigest: DigestV2, blob: ProjectBlobRefV2): boolean
+  verifyBlob(versionRecordDigest: Digest, blob: ProjectBlobRefV2): boolean
   verifyCanvasGenesis(activation: CanvasRouteActivationV2): boolean
   verifyResetAuthorization(input: Extract<ProjectIndexIntentV2, { readonly kind: "project.canvas.route.reset/2" }>["body"]): boolean
 }
@@ -500,11 +499,11 @@ export class ProjectIndexSchemaErrorV2 extends Error {
   }
 }
 
-export function projectIndexOwnerCanonicalizerDescriptorV2(schemaDigest: DigestV2): OwnerCanonicalizerDescriptorV2 {
+export function projectIndexOwnerCanonicalizerDescriptorV2(schemaDigest: Digest): OwnerCanonicalizerDescriptor {
   return Object.freeze({
     format: "convax.owner-canonicalizer-descriptor/2",
     owner: "project-index",
-    ownerSchemaDigest: parseDigestV2(schemaDigest),
+    ownerSchemaDigest: parseDigest(schemaDigest),
     canonicalStateFormat: "convax.project-index-canonical-state/2",
     canonicalStateCodec: "restricted-jcs-utf8",
     exactBytePolicy: "parse-reencode-byte-equal",
@@ -590,7 +589,7 @@ export function extractProjectCanonicalStateV2(document: Y.Doc): ProjectCanonica
 }
 
 export function encodeProjectCanonicalStateV2(document: Y.Doc): Uint8Array {
-  return encodeRestrictedJcsV2(extractProjectCanonicalStateV2(document))
+  return encodeRestrictedJcs(extractProjectCanonicalStateV2(document))
 }
 
 export function projectProjectIndexV2(document: Y.Doc): ProjectIndexProjectionV2 {
@@ -612,7 +611,7 @@ export function projectIndexCurrentBlobReferencesV2(document: Y.Doc): readonly P
  * currentness from native files.
  */
 export function projectIndexCurrentBlobReferencesFromValidatedOwnerStateV2(
-  state: OwnerValidatedStateV2<"project-index">,
+  state: OwnerValidatedState<"project-index">,
 ): readonly ProjectResourceReferenceV2[] {
   const snapshot = projectIndexSnapshotFromValidatedOwnerStateV2(state)
   if (snapshot === null) fail("invalid-owner-state", "ProjectIndex owner returned an invalid validated state")
@@ -636,8 +635,8 @@ function projectIndexCurrentBlobReferencesFromSnapshotV2(
     }
   }
   return Object.freeze(references.sort((left, right) => {
-    const entry = compareUtf8V2(left.entryFileId, right.entryFileId)
-    return entry === 0 ? compareUtf8V2(left.versionId, right.versionId) : entry
+    const entry = compareUtf8(left.entryFileId, right.entryFileId)
+    return entry === 0 ? compareUtf8(left.versionId, right.versionId) : entry
   }))
 }
 
@@ -646,34 +645,34 @@ export function projectProjectIndexSnapshotV2(snapshot: ProjectIndexSnapshotV2):
   const families = projectFamilies(snapshot, tombstoned)
   return Object.freeze({
     identity: snapshot.identity,
-    liveEntryIds: Object.freeze([...snapshot.entries.keys()].filter((id) => !tombstoned.has(id)).sort(compareUtf8V2) as ProjectEntryIdV2[]),
-    tombstonedEntryIds: Object.freeze([...tombstoned].sort(compareUtf8V2) as ProjectEntryIdV2[]),
+    liveEntryIds: Object.freeze([...snapshot.entries.keys()].filter((id) => !tombstoned.has(id)).sort(compareUtf8) as ProjectEntryIdV2[]),
+    tombstonedEntryIds: Object.freeze([...tombstoned].sort(compareUtf8) as ProjectEntryIdV2[]),
     contentFamilies: Object.freeze(families),
     canvasRoutes: Object.freeze(projectRoutes(snapshot)),
   })
 }
 
-export function projectIndexRecordDigestV2(record: { readonly format: string }): DigestV2 {
-  return digestParts(RECORD_DOMAIN, encoder.encode(record.format), Uint8Array.of(0), encodeRestrictedJcsV2(record))
+export function projectIndexRecordDigestV2(record: { readonly format: string }): Digest {
+  return digestParts(RECORD_DOMAIN, encoder.encode(record.format), Uint8Array.of(0), encodeRestrictedJcs(record))
 }
 
-export function projectIndexIntentDigestV2(intent: ProjectIndexIntentV2): DigestV2 {
-  return digestParts(INTENT_DOMAIN, encodeRestrictedJcsV2(intent))
+export function projectIndexIntentDigestV2(intent: ProjectIndexIntentV2): Digest {
+  return digestParts(INTENT_DOMAIN, encodeRestrictedJcs(intent))
 }
 
-export function projectResourceReferenceDigestV2(reference: ProjectResourceReferenceV2): DigestV2 {
-  return digestParts(RESOURCE_REFERENCE_DOMAIN, encodeRestrictedJcsV2(parseProjectResourceReferenceV2(reference)))
+export function projectResourceReferenceDigestV2(reference: ProjectResourceReferenceV2): Digest {
+  return digestParts(RESOURCE_REFERENCE_DOMAIN, encodeRestrictedJcs(parseProjectResourceReferenceV2(reference)))
 }
 
 export function parseProjectResourceReferenceV2(value: unknown): ProjectResourceReferenceV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "projectId", "projectEpoch", "entryFileId", "familyPrimaryFileId",
     "versionId", "canonicalUri", "blob", "versionRecordDigest",
   ], "Project resource reference")
   const record = value as unknown as ProjectResourceReferenceV2
   if (record.format !== "convax.project-resource-reference/2") fail("invalid-resource-reference", "Project resource reference format is invalid")
-  const projectId = parseProjectIdV2(record.projectId)
-  const projectEpoch = parseId128V2(record.projectEpoch)
+  const projectId = parseProjectId(record.projectId)
+  const projectEpoch = parseId128(record.projectEpoch)
   const entryFileId = parseProjectFileId(record.entryFileId)
   const familyPrimaryFileId = parseProjectFileId(record.familyPrimaryFileId)
   const versionId = parseVersionId(record.versionId)
@@ -686,7 +685,7 @@ export function parseProjectResourceReferenceV2(value: unknown): ProjectResource
     uri.projectId !== projectId || uri.projectEpoch !== projectEpoch ||
     uri.entryId !== familyPrimaryFileId || uri.blob !== `sha256:${blob.digest}`
   ) fail("invalid-resource-reference", "Project resource reference URI binding is invalid")
-  const versionRecordDigest = parseDigestV2(record.versionRecordDigest)
+  const versionRecordDigest = parseDigest(record.versionRecordDigest)
   return freezeJcs({
     format: record.format,
     projectId,
@@ -702,26 +701,26 @@ export function parseProjectResourceReferenceV2(value: unknown): ProjectResource
 
 export function projectCanvasRouteProjectionDigestV2(
   projection: ProjectCanvasRouteProjectionV2,
-): DigestV2 {
-  return structuredDigestV2("convax.project-route-projection/2", projection)
+): Digest {
+  return structuredDigest("convax.project-route-projection/2", projection)
 }
 
 export function projectEntryLocationProjectionDigestV2(
   projection: ProjectEntryLocationProjectionV2,
-): DigestV2 {
-  return structuredDigestV2("convax.project-entry-location-projection/2", projection)
+): Digest {
+  return structuredDigest("convax.project-entry-location-projection/2", projection)
 }
 
 export function projectContentFamilyProjectionDigestV2(
   projection: ProjectContentFamilyProjectionV2,
-): DigestV2 {
-  return structuredDigestV2("convax.project-content-family-projection/2", projection)
+): Digest {
+  return structuredDigest("convax.project-content-family-projection/2", projection)
 }
 
 export function projectConflictProjectionDigestV2(
   projection: ProjectConflictProjectionV2,
-): DigestV2 {
-  return structuredDigestV2("convax.project-conflict-projection/2", projection)
+): Digest {
+  return structuredDigest("convax.project-conflict-projection/2", projection)
 }
 
 export function projectEntryLocationProjectionV2(
@@ -730,13 +729,13 @@ export function projectEntryLocationProjectionV2(
 ): ProjectEntryLocationProjectionV2 {
   const entryId = parseProjectEntryId(entryIdInput)
   const base = projectEntryLocationOutcomeV2(snapshot, entryId)
-  const baseBytes = encodeRestrictedJcsV2({
+  const baseBytes = encodeRestrictedJcs({
     format: "convax.project-entry-location-counterfactual-outcome/2",
     status: "valid",
     projection: base,
   })
-  const dependencies: DigestV2[] = []
-  const seen = new Set<DigestV2>()
+  const dependencies: Digest[] = []
+  const seen = new Set<Digest>()
   for (const candidate of locationCounterfactualCandidates(snapshot, entryId)) {
     const digest = projectIndexRecordDigestV2(candidate.record as { readonly format: string })
     if (seen.has(digest)) fail("duplicate-record-digest", "Project location candidates reuse a record digest")
@@ -757,9 +756,9 @@ export function projectEntryLocationProjectionV2(
         reason: "accepted-record-removal-invalidated-resolution",
       }
     }
-    if (compareUint8(baseBytes, encodeRestrictedJcsV2(counterfactual)) !== 0) dependencies.push(digest)
+    if (compareUint8(baseBytes, encodeRestrictedJcs(counterfactual)) !== 0) dependencies.push(digest)
   }
-  dependencies.sort(compareUtf8V2)
+  dependencies.sort(compareUtf8)
   return Object.freeze({ ...base, resolutionDependencyRecordDigests: Object.freeze(dependencies) })
 }
 
@@ -771,11 +770,11 @@ export function projectContentFamilyProjectionV2(
   const entry = snapshot.entries.get(primaryFileId) ?? null
   const versions = [...snapshot.contentFamilies.values()]
     .filter((version) => version.primaryFileId === primaryFileId)
-    .sort((left, right) => compareUtf8V2(left.versionId, right.versionId))
+    .sort((left, right) => compareUtf8(left.versionId, right.versionId))
   const superseded = new Set(versions.flatMap((version) => [...version.supersedesVersionIds]))
   const live = versions
     .filter((version) => !superseded.has(version.versionId))
-    .sort((left, right) => compareUtf8V2(left.versionId, right.versionId))
+    .sort((left, right) => compareUtf8(left.versionId, right.versionId))
   const tombstoned = !isLiveEntry(snapshot, primaryFileId)
   let current: ProjectContentVersionRecordV2 | null = null
   if (!tombstoned) {
@@ -788,7 +787,7 @@ export function projectContentFamilyProjectionV2(
     .map((promotion) => projectConflictProjectionV2(snapshot, promotion))
     .filter((projection) => projection.state !== "dormant")
     .map(projectConflictProjectionDigestV2)
-    .sort(compareUtf8V2)
+    .sort(compareUtf8)
   return Object.freeze({
     format: "convax.project-content-family-projection/2",
     primaryFileId,
@@ -885,7 +884,7 @@ function projectEntryLocationOutcomeV2(
   const tombstones = [...snapshot.entryTombstones.values()]
     .filter((record) => record.entryId === entryId)
     .map(projectIndexRecordDigestV2)
-    .sort(compareUtf8V2)
+    .sort(compareUtf8)
   if (tombstones.length > 0) {
     return locationOutcome(entryId, entryDigest, tombstones, null, "tombstoned", "entry-tombstoned", null, null)
   }
@@ -925,8 +924,8 @@ function resolveLinkedLocationOutcome(
   snapshot: ProjectIndexSnapshotV2,
   entry: ProjectEntryRecordV2,
   selected: ProjectEntryLocationClaimV2,
-  entryDigest: DigestV2,
-  selectedDigest: DigestV2,
+  entryDigest: Digest,
+  selectedDigest: Digest,
 ): ProjectEntryLocationOutcomeValueV2 {
   const chain: Array<Readonly<{ entry: ProjectEntryRecordV2; claim: ProjectEntryLocationClaimV2 }>> = []
   const seen = new Set<ProjectEntryIdV2>([entry.entryId])
@@ -976,9 +975,9 @@ function resolveLinkedLocationOutcome(
 
 function locationOutcome(
   entryId: ProjectEntryIdV2,
-  entryRecordDigest: DigestV2 | null,
-  tombstoneRecordDigests: readonly DigestV2[],
-  selectedLocationRecordDigest: DigestV2 | null,
+  entryRecordDigest: Digest | null,
+  tombstoneRecordDigests: readonly Digest[],
+  selectedLocationRecordDigest: Digest | null,
   state: ProjectEntryLocationOutcomeValueV2["state"],
   cause: ProjectEntryLocationCauseV2,
   portablePath: string | null,
@@ -1015,8 +1014,8 @@ function pathClaimWinner(
         : []
     })
     .sort((left, right) => {
-      const byStamp = comparePortableStampsV2(left.claim.stamp, right.claim.stamp)
-      return byStamp === 0 ? compareUtf8V2(left.entryId, right.entryId) : byStamp
+      const byStamp = comparePortableStamps(left.claim.stamp, right.claim.stamp)
+      return byStamp === 0 ? compareUtf8(left.entryId, right.entryId) : byStamp
     })
   const winner = candidates.at(-1)
   if (!winner) fail("invalid-location", "Linked path has no claim winner")
@@ -1055,11 +1054,11 @@ function locationCounterfactualCandidates(snapshot: ProjectIndexSnapshotV2, entr
   add("contentPromotions", snapshot.contentPromotions)
   add("pathReservations", snapshot.pathReservations)
   return result.sort((left, right) => {
-    const byRoot = compareUtf8V2(left.root, right.root)
+    const byRoot = compareUtf8(left.root, right.root)
     if (byRoot !== 0) return byRoot
-    const byKey = compareUtf8V2(left.key, right.key)
+    const byKey = compareUtf8(left.key, right.key)
     if (byKey !== 0) return byKey
-    return compareUtf8V2(
+    return compareUtf8(
       projectIndexRecordDigestV2(left.record as { readonly format: string }),
       projectIndexRecordDigestV2(right.record as { readonly format: string }),
     )
@@ -1078,40 +1077,40 @@ function snapshotWithoutRecord(
 
 export type ProjectDerivedIdentityKindV2 = "file" | "directory" | "version" | "location" | "tombstone" | "promotion" | "reservation" | "canvas" | "route-transition"
 
-export function deriveProjectIdentityV2(context: OwnerIntentConstructionContextV2, kind: ProjectDerivedIdentityKindV2, ordinalInput: Uint32V2): string {
-  const ordinal = parseUint32V2(ordinalInput)
+export function deriveProjectIdentityV2(context: OwnerIntentConstructionContext, kind: ProjectDerivedIdentityKindV2, ordinalInput: Uint32): string {
+  const ordinal = parseUint32(ordinalInput)
   const core = {
     format: "convax.project-derived-identity-core/2",
     scope: parseProjectIndexScope(context.scope),
-    actorId: parseActorIdV2(context.actorId),
-    operationId: parseId128V2(context.operationId),
+    actorId: parseActorId(context.actorId),
+    operationId: parseId128(context.operationId),
     ordinal,
     kind,
   } as const
-  const suffix = structuredDigestV2(DERIVED_DOMAIN, core)
+  const suffix = structuredDigest(DERIVED_DOMAIN, core)
   const prefix = { file: "pf_", directory: "pd_", version: "pv_", location: "pl_", tombstone: "pt_", promotion: "pp_", reservation: "pr_", canvas: "cv_", "route-transition": "cr_" }[kind]
   return `${prefix}${suffix}`
 }
 
 /** Exact precommit helper for Project-owned default-Canvas creation claims. */
 export function deriveProjectCanvasIdForOperationV2(input: Readonly<{
-  scope: DocumentScopeV2 & { readonly docKind: "project-index" }
-  actorId: ActorIdV2
-  operationId: Id128V2
-}>): CanvasIdV2 {
+  scope: DocumentScope & { readonly docKind: "project-index" }
+  actorId: ActorId
+  operationId: Id128
+}>): CanvasId {
   const core = Object.freeze({
     format: "convax.project-derived-identity-core/2",
     scope: parseProjectIndexScope(input.scope),
-    actorId: parseActorIdV2(input.actorId),
-    operationId: parseId128V2(input.operationId),
-    ordinal: parseUint32V2("0"),
+    actorId: parseActorId(input.actorId),
+    operationId: parseId128(input.operationId),
+    ordinal: parseUint32("0"),
     kind: "canvas" as const,
   })
-  return parseCanvasIdV2(`cv_${structuredDigestV2(DERIVED_DOMAIN, core)}`)
+  return parseCanvasId(`cv_${structuredDigest(DERIVED_DOMAIN, core)}`)
 }
 
 export function projectIndexSnapshotFromValidatedOwnerStateV2(
-  base: OwnerValidatedStateV2<"project-index">,
+  base: OwnerValidatedState<"project-index">,
 ): ProjectIndexSnapshotV2 | null {
   const value = base.value
   if (
@@ -1128,12 +1127,12 @@ export function projectIndexSnapshotFromValidatedOwnerStateV2(
 
 export function constructProjectDirectoryCreateIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly parentDirectoryId: ProjectDirectoryIdV2
   readonly basename: string
 }): Readonly<{ readonly directoryId: ProjectDirectoryIdV2; readonly intent: ProjectIndexIntentV2 }> | "rejected" {
   try {
-    const directoryId = parseProjectDirectoryId(deriveProjectIdentityV2(input.context, "directory", "0" as Uint32V2))
+    const directoryId = parseProjectDirectoryId(deriveProjectIdentityV2(input.context, "directory", "0" as Uint32))
     const entry: ProjectEntryRecordV2 = Object.freeze({
       format: "convax.project-entry/2",
       entryId: directoryId,
@@ -1148,7 +1147,7 @@ export function constructProjectDirectoryCreateIntentV2(input: {
     })
     const location: ProjectEntryLocationClaimV2 = Object.freeze({
       format: "convax.project-entry-location/2",
-      claimId: deriveProjectIdentityV2(input.context, "location", "1" as Uint32V2) as ProjectFactIdV2,
+      claimId: deriveProjectIdentityV2(input.context, "location", "1" as Uint32) as ProjectFactIdV2,
       entryId: directoryId,
       state: "linked",
       parentDirectoryId: parseProjectDirectoryId(input.parentDirectoryId),
@@ -1167,7 +1166,7 @@ export function constructProjectDirectoryCreateIntentV2(input: {
 
 export function constructProjectFileCreateIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly parentDirectoryId: ProjectDirectoryIdV2 | null
   readonly basename: string | null
   readonly blob: ProjectBlobRefV2
@@ -1177,7 +1176,7 @@ export function constructProjectFileCreateIntentV2(input: {
   readonly pathHint?: string
 }): Readonly<{ readonly fileId: ProjectFileIdV2; readonly version: ProjectContentVersionRecordV2; readonly intent: ProjectIndexIntentV2 }> | "rejected" {
   try {
-    const fileId = parseProjectFileId(deriveProjectIdentityV2(input.context, "file", "0" as Uint32V2))
+    const fileId = parseProjectFileId(deriveProjectIdentityV2(input.context, "file", "0" as Uint32))
     const entry: ProjectEntryRecordV2 = Object.freeze({
       format: "convax.project-entry/2",
       entryId: fileId,
@@ -1192,7 +1191,7 @@ export function constructProjectFileCreateIntentV2(input: {
     })
     const location = input.storageClass === "project-file" ? Object.freeze({
       format: "convax.project-entry-location/2" as const,
-      claimId: deriveProjectIdentityV2(input.context, "location", "1" as Uint32V2) as ProjectFactIdV2,
+      claimId: deriveProjectIdentityV2(input.context, "location", "1" as Uint32) as ProjectFactIdV2,
       entryId: fileId,
       state: "linked" as const,
       parentDirectoryId: parseProjectDirectoryId(input.parentDirectoryId),
@@ -1201,7 +1200,7 @@ export function constructProjectFileCreateIntentV2(input: {
       stamp: stampForConstruction(input.context, "1"),
     }) : null
     if (input.storageClass === "managed-blob" && (input.parentDirectoryId !== null || input.basename !== null)) return "rejected"
-    const versionId = deriveProjectIdentityV2(input.context, "version", "2" as Uint32V2) as ProjectVersionIdV2
+    const versionId = deriveProjectIdentityV2(input.context, "version", "2" as Uint32) as ProjectVersionIdV2
     const blob = parseBlob(input.blob)
     const version: ProjectContentVersionRecordV2 = Object.freeze({
       format: "convax.project-content-version/2",
@@ -1211,7 +1210,7 @@ export function constructProjectFileCreateIntentV2(input: {
       blob,
       canonicalRevisionUri: projectRevisionUri(input.snapshot.identity, fileId, blob, input.pathHint),
       supersedesVersionIds: Object.freeze([]),
-      binaryLogicalCounter: input.contentPolicy === "overwritable-binary" ? "0" as Uint64V2 : null,
+      binaryLogicalCounter: input.contentPolicy === "overwritable-binary" ? "0" as Uint64 : null,
       creatorActorId: input.context.actorId,
       creatorOperationId: input.context.operationId,
       stamp: stampForConstruction(input.context, "2"),
@@ -1227,7 +1226,7 @@ export function constructProjectFileCreateIntentV2(input: {
 
 export function constructProjectEntryLocateIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly entryId: ProjectEntryIdV2
   readonly parentDirectoryId: ProjectDirectoryIdV2
   readonly basename: string
@@ -1236,7 +1235,7 @@ export function constructProjectEntryLocateIntentV2(input: {
   try {
     const location: ProjectEntryLocationClaimV2 = Object.freeze({
       format: "convax.project-entry-location/2",
-      claimId: deriveProjectIdentityV2(input.context, "location", "0" as Uint32V2) as ProjectFactIdV2,
+      claimId: deriveProjectIdentityV2(input.context, "location", "0" as Uint32) as ProjectFactIdV2,
       entryId: parseProjectEntryId(input.entryId),
       state: "linked",
       parentDirectoryId: parseProjectDirectoryId(input.parentDirectoryId),
@@ -1250,7 +1249,7 @@ export function constructProjectEntryLocateIntentV2(input: {
 
 export function constructProjectEntryTombstoneIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly entryId: ProjectEntryIdV2
 }): ProjectIndexIntentV2 | "rejected" {
   try {
@@ -1259,7 +1258,7 @@ export function constructProjectEntryTombstoneIntentV2(input: {
     if (!entry) return "rejected"
     const tombstone: ProjectEntryTombstoneV2 = Object.freeze({
       format: "convax.project-entry-tombstone/2",
-      tombstoneId: deriveProjectIdentityV2(input.context, "tombstone", "0" as Uint32V2) as ProjectFactIdV2,
+      tombstoneId: deriveProjectIdentityV2(input.context, "tombstone", "0" as Uint32) as ProjectFactIdV2,
       entryId,
       reason: "explicit-delete",
       observedEntryDigest: projectIndexRecordDigestV2(entry),
@@ -1271,7 +1270,7 @@ export function constructProjectEntryTombstoneIntentV2(input: {
 
 export function constructProjectFileWriteIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly fileId: ProjectFileIdV2
   readonly blob: ProjectBlobRefV2
   readonly pathHint?: string
@@ -1282,7 +1281,7 @@ export function constructProjectFileWriteIntentV2(input: {
     const entry = input.snapshot.entries.get(fileId)
     if (!entry || entry.kind !== "file") return "rejected"
     const family = projectContentFamilyProjectionV2(input.snapshot, fileId)
-    const versionId = deriveProjectIdentityV2(input.context, "version", "0" as Uint32V2) as ProjectVersionIdV2
+    const versionId = deriveProjectIdentityV2(input.context, "version", "0" as Uint32) as ProjectVersionIdV2
     const blob = parseBlob(input.blob)
     if (entry.contentPolicy === "overwritable-binary") {
       const currentId = family.currentVersionId
@@ -1293,7 +1292,7 @@ export function constructProjectFileWriteIntentV2(input: {
         writeClass: "binary-overwrite", blob,
         canonicalRevisionUri: projectRevisionUri(input.snapshot.identity, fileId, blob, input.pathHint),
         supersedesVersionIds: Object.freeze([current.versionId]),
-        binaryLogicalCounter: String(BigInt(current.binaryLogicalCounter ?? "0") + 1n) as Uint64V2,
+        binaryLogicalCounter: String(BigInt(current.binaryLogicalCounter ?? "0") + 1n) as Uint64,
         creatorActorId: input.context.actorId, creatorOperationId: input.context.operationId,
         stamp: stampForConstruction(input.context, "0"),
       })
@@ -1301,9 +1300,9 @@ export function constructProjectFileWriteIntentV2(input: {
       return intent === "rejected" ? "rejected" : Object.freeze({ version, intent })
     }
     if (entry.contentPolicy !== "conflict-preserving-text") return "rejected"
-    const conflictFileId = deriveProjectIdentityV2(input.context, "file", "1" as Uint32V2) as ProjectFileIdV2
-    const promotionId = deriveProjectIdentityV2(input.context, "promotion", "2" as Uint32V2) as ProjectFactIdV2
-    const reservationId = deriveProjectIdentityV2(input.context, "reservation", "3" as Uint32V2) as ProjectFactIdV2
+    const conflictFileId = deriveProjectIdentityV2(input.context, "file", "1" as Uint32) as ProjectFileIdV2
+    const promotionId = deriveProjectIdentityV2(input.context, "promotion", "2" as Uint32) as ProjectFactIdV2
+    const reservationId = deriveProjectIdentityV2(input.context, "reservation", "3" as Uint32) as ProjectFactIdV2
     const version: ProjectContentVersionRecordV2 = Object.freeze({
       format: "convax.project-content-version/2", primaryFileId: fileId, versionId,
       writeClass: "text-write", blob,
@@ -1357,23 +1356,23 @@ function requirePortableBasename(value: string | null): string {
 
 export function constructProjectCanvasRouteStageIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
-  readonly shardEpoch: Id128V2
+  readonly context: OwnerIntentConstructionContext
+  readonly shardEpoch: Id128
   readonly title: string
-}): Readonly<{ readonly canvasId: CanvasIdV2; readonly intent: ProjectIndexIntentV2 }> | "rejected" {
+}): Readonly<{ readonly canvasId: CanvasId; readonly intent: ProjectIndexIntentV2 }> | "rejected" {
   try {
-    const canvasId = parseCanvasIdV2(deriveProjectIdentityV2(input.context, "canvas", parseUint32V2("0")))
+    const canvasId = parseCanvasId(deriveProjectIdentityV2(input.context, "canvas", parseUint32("0")))
     if (routeFacts(input.snapshot, canvasId).length > 0) return "rejected"
     const transitionId = deriveProjectIdentityV2(
       input.context,
       "route-transition",
-      parseUint32V2("1"),
+      parseUint32("1"),
     ) as ProjectFactIdV2
     const stage: CanvasRouteStageV2 = Object.freeze({
       format: "convax.canvas-route-stage/2",
       transitionId,
       canvasId,
-      shardEpoch: parseId128V2(input.shardEpoch),
+      shardEpoch: parseId128(input.shardEpoch),
       title: requireRouteTitle(input.title),
       reason: "create",
       stamp: stampForConstruction(input.context, "1"),
@@ -1399,14 +1398,14 @@ export function constructProjectCanvasRouteStageIntentV2(input: {
 
 export function constructProjectCanvasRouteActivationIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
-  readonly canvasId: CanvasIdV2
-  readonly projectIndexRouteDependencyFrameDigest: DigestV2
-  readonly canvasGenesisCheckpointObjectDigest: DigestV2
-  readonly stagedProjectIndexFrontierDigest: DigestV2
+  readonly context: OwnerIntentConstructionContext
+  readonly canvasId: CanvasId
+  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly canvasGenesisCheckpointObjectDigest: Digest
+  readonly stagedProjectIndexFrontierDigest: Digest
 }): ProjectIndexIntentV2 | "rejected" {
   try {
-    const canvasId = parseCanvasIdV2(input.canvasId)
+    const canvasId = parseCanvasId(input.canvasId)
     const facts = routeFacts(input.snapshot, canvasId)
     const stages = facts.filter((fact): fact is CanvasRouteStageV2 => fact.format === "convax.canvas-route-stage/2")
     if (stages.length !== 1 || facts.some((fact) => fact.format === "convax.canvas-route-tombstone/2")) {
@@ -1418,15 +1417,15 @@ export function constructProjectCanvasRouteActivationIntentV2(input: {
       transitionId: deriveProjectIdentityV2(
         input.context,
         "route-transition",
-        parseUint32V2("0"),
+        parseUint32("0"),
       ) as ProjectFactIdV2,
       canvasId,
       shardEpoch: stage.shardEpoch,
       predecessorActivationDigest: null,
       stageRecordDigest: projectIndexRecordDigestV2(stage),
-      projectIndexRouteDependencyFrameDigest: parseDigestV2(input.projectIndexRouteDependencyFrameDigest),
-      canvasGenesisCheckpointObjectDigest: parseDigestV2(input.canvasGenesisCheckpointObjectDigest),
-      stagedProjectIndexFrontierDigest: parseDigestV2(input.stagedProjectIndexFrontierDigest),
+      projectIndexRouteDependencyFrameDigest: parseDigest(input.projectIndexRouteDependencyFrameDigest),
+      canvasGenesisCheckpointObjectDigest: parseDigest(input.canvasGenesisCheckpointObjectDigest),
+      stagedProjectIndexFrontierDigest: parseDigest(input.stagedProjectIndexFrontierDigest),
       stamp: stampForConstruction(input.context, "0"),
     })
     return Object.freeze({
@@ -1447,12 +1446,12 @@ export function constructProjectCanvasRouteActivationIntentV2(input: {
 
 export function constructProjectCanvasRouteRenameIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
-  readonly canvasId: CanvasIdV2
+  readonly context: OwnerIntentConstructionContext
+  readonly canvasId: CanvasId
   readonly title: string
 }): ProjectIndexIntentV2 | "rejected" {
   try {
-    const canvasId = parseCanvasIdV2(input.canvasId)
+    const canvasId = parseCanvasId(input.canvasId)
     const route = projectRoutes(input.snapshot).find((candidate) => candidate.canvasId === canvasId)
     if (route?.state !== "live" || route.currentActivationDigest === null) return "rejected"
     const metadata: CanvasRouteMetadataClaimV2 = Object.freeze({
@@ -1460,7 +1459,7 @@ export function constructProjectCanvasRouteRenameIntentV2(input: {
       transitionId: deriveProjectIdentityV2(
         input.context,
         "route-transition",
-        parseUint32V2("0"),
+        parseUint32("0"),
       ) as ProjectFactIdV2,
       canvasId,
       title: requireRouteTitle(input.title),
@@ -1485,11 +1484,11 @@ export function constructProjectCanvasRouteRenameIntentV2(input: {
 
 export function constructProjectCanvasRouteTombstoneIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
-  readonly canvasId: CanvasIdV2
+  readonly context: OwnerIntentConstructionContext
+  readonly canvasId: CanvasId
 }): ProjectIndexIntentV2 | "rejected" {
   try {
-    const canvasId = parseCanvasIdV2(input.canvasId)
+    const canvasId = parseCanvasId(input.canvasId)
     const route = projectCanvasRouteProjectionV2(input.snapshot, canvasId)
     if (!route || route.state === "tombstoned") return "rejected"
     const tombstone: CanvasRouteTombstoneV2 = Object.freeze({
@@ -1497,7 +1496,7 @@ export function constructProjectCanvasRouteTombstoneIntentV2(input: {
       transitionId: deriveProjectIdentityV2(
         input.context,
         "route-transition",
-        parseUint32V2("0"),
+        parseUint32("0"),
       ) as ProjectFactIdV2,
       canvasId,
       observedActivationDigest: route.currentActivationDigest,
@@ -1522,7 +1521,7 @@ export function constructProjectCanvasRouteTombstoneIntentV2(input: {
 
 export function constructProjectCanvasRouteResetIntentV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly routeCasCore: DocumentShardResetRouteCasCoreV2
   readonly resetClaim: DocumentShardResetClaimV2
   readonly confirmation: DocumentShardResetConfirmationV2
@@ -1548,7 +1547,7 @@ export function constructProjectCanvasRouteResetIntentV2(input: {
       transitionId: deriveProjectIdentityV2(
         input.context,
         "route-transition",
-        parseUint32V2("0"),
+        parseUint32("0"),
       ) as ProjectFactIdV2,
       canvasId,
       oldShardEpoch: routeCasCore.oldScope.shardEpoch,
@@ -1560,7 +1559,7 @@ export function constructProjectCanvasRouteResetIntentV2(input: {
       resetClaimCoreDigest: resetClaim.coreDigest,
       confirmationCoreDigest: confirmation.coreDigest,
       approvalCoreDigest: approval.coreDigest,
-      routeCasCoreDigest: structuredDigestV2(
+      routeCasCoreDigest: structuredDigest(
         "convax.document-shard-reset-route-cas-core-digest/2",
         routeCasCore,
       ),
@@ -1584,7 +1583,7 @@ export function constructProjectCanvasRouteResetIntentV2(input: {
 
 export function materializeProjectIndexIntentGuardsV2(input: {
   readonly snapshot: ProjectIndexSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly intent: ProjectIndexIntentV2
 }): ProjectIndexIntentV2 | "rejected" {
   try {
@@ -1599,29 +1598,27 @@ export function materializeProjectIndexIntentGuardsV2(input: {
 
 export function applyProjectIndexCandidateIntentV2(
   document: Y.Doc,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   intentInput: ProjectIndexIntentV2,
   facts: ProjectIndexExternalFactContextV2,
 ): ProjectIndexApplyResultV2 | "rejected" {
   try {
     const intent = parseIntent(intentInput)
     const snapshot = validateProjectIndexYDocV2(document, parseProjectIndexScope(context.scope))
-    // A verified V10 -> V3 promotion preserves the historical ProjectIndex
-    // genesis bytes, including their protocol digest. Current frame authority is
-    // validated by the collaboration kernel and promotion bridge; the owner still
-    // binds the exact ProjectIndex schema here.
+    // Current frame authority is validated by the collaboration kernel; the
+    // owner still binds the exact ProjectIndex schema here.
     if (context.ownerSchemaDigest !== snapshot.identity.schemaDigest) return "rejected"
-    // The durable receipt and actual-write evidence bind the selected wire
+    // The durable receipt and actual-write evidence bind the current wire
     // protocol's typed-intent digest. ProjectIndex's domain digest remains for
     // dependency requests and deterministic construction only.
-    const intentDigest = parseDigestV2(context.intentDigest)
+    const intentDigest = parseDigest(context.intentDigest)
     const operationKey = `o:${context.actorId}:${context.operationId}`
     const existing = snapshot.operations.get(operationKey)
     if (existing) return existing.intentDigest === intentDigest && existing.intentKind === intent.kind ? { format: "convax.project-index-intent-result/2", intentDigest, inserted: [] } : "rejected"
     const inserted = recordsForIntent(snapshot, context, intent, facts)
     if (inserted === "rejected") return "rejected"
-    const allocatedIds = [...new Set(inserted.flatMap((item) => allocatedRecordIds(item.record)))].sort(compareUtf8V2)
-    const ordinals = inserted.map((item) => parseUint32V2(recordStamp(item.record).writeOrdinal)).map(Number)
+    const allocatedIds = [...new Set(inserted.flatMap((item) => allocatedRecordIds(item.record)))].sort(compareUtf8)
+    const ordinals = inserted.map((item) => parseUint32(recordStamp(item.record).writeOrdinal)).map(Number)
     const receipt: ProjectOperationReceiptV2 = {
       format: "convax.project-operation-receipt/2",
       actorId: context.actorId,
@@ -1629,8 +1626,8 @@ export function applyProjectIndexCandidateIntentV2(
       intentKind: intent.kind,
       intentDigest,
       allocatedIds,
-      firstWriteOrdinal: String(Math.min(...ordinals)) as Uint32V2,
-      writeCount: String(inserted.length + 1) as Uint32V2,
+      firstWriteOrdinal: String(Math.min(...ordinals)) as Uint32,
+      writeCount: String(inserted.length + 1) as Uint32,
       stampLamport: context.lamport,
     }
     const all = [...inserted, { root: "operations" as const, key: operationKey, record: receipt }]
@@ -1645,29 +1642,29 @@ export function applyProjectIndexCandidateIntentV2(
   }
 }
 
-export const selectedProjectIndexDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinitionV2<"project-index"> = Object.freeze({
+export const selectedProjectIndexDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinition<"project-index"> = Object.freeze({
   owner: "project-index",
-  createDefinitions(processValues: OwnerProcessValueFactoryV2<"project-index">) {
+  createDefinitions(processValues: OwnerProcessValueFactory<"project-index">) {
     return Object.freeze({ protocol: projectIndexProtocolDefinitionV2(processValues), closure: projectIndexClosureDefinitionV2() })
   },
 })
 
-function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactoryV2<"project-index">): DocumentOwnerProtocolDefinitionV2<"project-index"> {
+function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactory<"project-index">): DocumentOwnerProtocolDefinition<"project-index"> {
   const schemaDigest = PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2
   const canonicalizerDescriptor = projectIndexOwnerCanonicalizerDescriptorV2(schemaDigest)
-  const canonicalizerDigest = ownerCanonicalizerDescriptorDigestV2(canonicalizerDescriptor)
+  const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(canonicalizerDescriptor)
   return Object.freeze({
     owner: "project-index",
     schemaDigest,
     canonicalizerDescriptor,
     canonicalizerDigest,
     decodeIntent(exactJcs: Uint8Array) {
-      try { return parseIntent(decodeRestrictedJcsV2(exactJcs)) } catch { return "rejected" }
+      try { return parseIntent(decodeRestrictedJcs(exactJcs)) } catch { return "rejected" }
     },
     validateBase(document: Y.Doc) {
       try { return processValues.wrapValidatedState(validateProjectIndexYDocV2(document)) } catch { return "rejected" }
     },
-    applyIntent(candidate: Y.Doc, context: OwnerIntentValidationContextV2, intent: unknown, externalFacts: OwnerExternalFactPortV2<"project-index">) {
+    applyIntent(candidate: Y.Doc, context: OwnerIntentValidationContext, intent: unknown, externalFacts: OwnerExternalFactPort<"project-index">) {
       try {
         const parsed = parseIntent(intent)
         const dependencies = projectIndexIntentDependenciesV2(context, parsed)
@@ -1677,18 +1674,18 @@ function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactor
         return result === "rejected" ? "rejected" : processValues.wrapApplyResult(Object.freeze({ result, scope: context.scope }))
       } catch { return "rejected" }
     },
-    validatePost(_base: OwnerValidatedStateV2<"project-index">, candidate: Y.Doc, result: OwnerApplyResultV2<"project-index">) {
+    validatePost(_base: OwnerValidatedState<"project-index">, candidate: Y.Doc, result: OwnerApplyResult<"project-index">) {
       return ownerResult(result) === null ? "rejected" : processValues.wrapValidatedState(validateProjectIndexYDocV2(candidate))
     },
     canonicalStateBytes(document: Y.Doc) {
       try { return encodeProjectCanonicalStateV2(document) } catch { return "rejected" }
     },
-    deriveActualWriteEvidence(result: OwnerApplyResultV2<"project-index">) {
+    deriveActualWriteEvidence(result: OwnerApplyResult<"project-index">) {
       const value = ownerResult(result)
       if (value === null) throw new TypeError("ProjectIndex owner result is invalid")
       const writes = value.result.inserted.map((item) => {
         const record = item.record as { readonly format: string }
-        let recordDigest: DigestV2
+        let recordDigest: Digest
         try {
           recordDigest = projectIndexRecordDigestV2(record)
         } catch (error) {
@@ -1702,9 +1699,9 @@ function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactor
           entityKind: `project-index.${item.root}`,
           entityId: item.key,
           field: "record",
-          valueDigest: structuredDigestV2("convax.project-index-write-value/2", { format: "convax.project-index-write-value/2", root: item.root, key: item.key, recordFormat: record.format, recordDigest }),
+          valueDigest: structuredDigest("convax.project-index-write-value/2", { format: "convax.project-index-write-value/2", root: item.root, key: item.key, recordFormat: record.format, recordDigest }),
         }
-      }).sort((left, right) => compareUtf8V2(`${left.entityKind}/${left.entityId}`, `${right.entityKind}/${right.entityId}`))
+      }).sort((left, right) => compareUtf8(`${left.entityKind}/${left.entityId}`, `${right.entityKind}/${right.entityId}`))
       return {
         format: "convax.actual-write-evidence/2",
         scope: value.scope,
@@ -1713,26 +1710,26 @@ function projectIndexProtocolDefinitionV2(processValues: OwnerProcessValueFactor
         intentDigest: value.result.intentDigest,
         changedPaths: writes.map((write) => `${write.entityKind.slice("project-index.".length)}/${write.entityId}`),
         writes,
-      } satisfies ActualWriteEvidenceV2
+      } satisfies ActualWriteEvidence
     },
   })
 }
 
-function projectIndexClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"project-index"> {
+function projectIndexClosureDefinitionV2(): OwnerIntentClosureDefinition<"project-index"> {
   return Object.freeze({
     inspectIntent(intent: unknown) { try { parseIntent(intent); return Object.freeze({ kind: "ordinary" as const }) } catch { return "rejected" } },
-    discoverDependencies(input: Parameters<OwnerIntentClosureDefinitionV2<"project-index">["discoverDependencies"]>[0]) {
+    discoverDependencies(input: Parameters<OwnerIntentClosureDefinition<"project-index">["discoverDependencies"]>[0]) {
       try { return projectIndexIntentDependenciesV2(input.context, parseIntent(input.intent)) } catch { return "rejected" }
     },
     history: null,
   })
 }
 
-export function projectIndexIntentDependenciesV2(context: OwnerIntentValidationContextV2, intent: ProjectIndexIntentV2): OwnerIntentDependenciesV2<"project-index"> {
+export function projectIndexIntentDependenciesV2(context: OwnerIntentValidationContext, intent: ProjectIndexIntentV2): OwnerIntentDependencies<"project-index"> {
   const request = externalFactRequest(context, intent)
   if (request === null) return Object.freeze({ validationArtifacts: Object.freeze([]), externalFacts: Object.freeze([]) })
-  const exactJcs = encodeRestrictedJcsV2(request)
-  const sha256 = ordinarySha256V2(exactJcs)
+  const exactJcs = encodeRestrictedJcs(request)
+  const sha256 = ordinarySha256(exactJcs)
   return Object.freeze({
     validationArtifacts: Object.freeze([]),
     externalFacts: Object.freeze([{ owner: "project-index" as const, kind: request.kind, factDigest: sha256, request: Object.freeze({ sha256, exactJcs }) }]),
@@ -1740,23 +1737,23 @@ export function projectIndexIntentDependenciesV2(context: OwnerIntentValidationC
 }
 
 /** Exact immutable blob closure for ProjectIndex persistence and replication ACK gating. */
-export function requiredProjectIndexBlobDigestsV2(frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3): readonly DigestV2[] {
+export function requiredProjectIndexBlobDigestsV2(frame: DecodedCausalEditFrame): readonly Digest[] {
   if (frame.header.core.scope.docKind !== "project-index") {
     throw new TypeError("ProjectIndex blob dependency extraction received another document owner")
   }
   const exactJcs = new Uint8Array(frame.sections.typedIntentJcs)
-  const intent = parseIntent(decodeRestrictedJcsV2(exactJcs))
+  const intent = parseIntent(decodeRestrictedJcs(exactJcs))
   if (frame.header.core.intentKind !== intent.kind) {
     throw new TypeError("ProjectIndex frame intent kind does not match its exact typed intent")
   }
-  if (compareBytesV2(encodeRestrictedJcsV2(intent), exactJcs) !== 0) {
+  if (compareBytes(encodeRestrictedJcs(intent), exactJcs) !== 0) {
     throw new TypeError("ProjectIndex typed intent bytes are not canonical restricted JCS")
   }
   if (intent.kind === "project.file.create/2") {
-    return Object.freeze([parseDigestV2(intent.body.initialVersion.blob.digest)])
+    return Object.freeze([parseDigest(intent.body.initialVersion.blob.digest)])
   }
   if (intent.kind === "project.file.write-text/2" || intent.kind === "project.file.overwrite-binary/2") {
-    return Object.freeze([parseDigestV2(intent.body.version.blob.digest)])
+    return Object.freeze([parseDigest(intent.body.version.blob.digest)])
   }
   return Object.freeze([])
 }
@@ -1777,22 +1774,22 @@ export interface ProjectIndexCanvasGenesisCurrentnessRequestV2 {
   readonly format: "convax.project-index-external-fact-request/2"
   readonly kind: "canvas-genesis-currentness"
   readonly projectIndexScope: ProjectIndexScopeV2
-  readonly operationId: Id128V2
-  readonly intentDigest: DigestV2
+  readonly operationId: Id128
+  readonly intentDigest: Digest
   readonly canvasScope: CanvasDocumentScopeV2
-  readonly stageRecordDigest: DigestV2
-  readonly routeDependencyFrameDigest: DigestV2
-  readonly genesisCheckpointObjectDigest: DigestV2
-  readonly stagedProjectIndexFrontierDigest: DigestV2
+  readonly stageRecordDigest: Digest
+  readonly routeDependencyFrameDigest: Digest
+  readonly genesisCheckpointObjectDigest: Digest
+  readonly stagedProjectIndexFrontierDigest: Digest
 }
 
 export interface ProjectIndexBlobPublicationCurrentnessRequestV2 {
   readonly format: "convax.project-index-external-fact-request/2"
   readonly kind: "blob-publication-currentness"
   readonly projectIndexScope: ProjectIndexScopeV2
-  readonly operationId: Id128V2
-  readonly intentDigest: DigestV2
-  readonly versionRecordDigest: DigestV2
+  readonly operationId: Id128
+  readonly intentDigest: Digest
+  readonly versionRecordDigest: Digest
   readonly blob: ProjectBlobRefV2
 }
 
@@ -1801,9 +1798,9 @@ export function decodeProjectIndexBlobPublicationCurrentnessRequestV2(
 ): ProjectIndexBlobPublicationCurrentnessRequestV2 | "rejected" {
   try {
     if (!(exactJcs instanceof Uint8Array)) return "rejected"
-    const decoded = decodeRestrictedJcsV2(new Uint8Array(exactJcs))
-    if (compareBytesV2(encodeRestrictedJcsV2(decoded), exactJcs) !== 0) return "rejected"
-    assertExactKeysV2(decoded, [
+    const decoded = decodeRestrictedJcs(new Uint8Array(exactJcs))
+    if (compareBytes(encodeRestrictedJcs(decoded), exactJcs) !== 0) return "rejected"
+    assertExactKeys(decoded, [
       "format", "kind", "projectIndexScope", "operationId", "intentDigest",
       "versionRecordDigest", "blob",
     ], "ProjectIndex blob publication currentness request")
@@ -1811,10 +1808,10 @@ export function decodeProjectIndexBlobPublicationCurrentnessRequestV2(
     return Object.freeze({
       format: decoded.format,
       kind: decoded.kind,
-      projectIndexScope: parseProjectIndexScope(decoded.projectIndexScope as DocumentScopeV2),
-      operationId: parseId128V2(decoded.operationId),
-      intentDigest: parseDigestV2(decoded.intentDigest),
-      versionRecordDigest: parseDigestV2(decoded.versionRecordDigest),
+      projectIndexScope: parseProjectIndexScope(decoded.projectIndexScope as DocumentScope),
+      operationId: parseId128(decoded.operationId),
+      intentDigest: parseDigest(decoded.intentDigest),
+      versionRecordDigest: parseDigest(decoded.versionRecordDigest),
       blob: parseBlob(decoded.blob),
     })
   } catch { return "rejected" }
@@ -1826,9 +1823,9 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequestV2(
 ): ProjectIndexCanvasGenesisCurrentnessRequestV2 | "rejected" {
   try {
     if (!(exactJcs instanceof Uint8Array)) return "rejected"
-    const decoded = decodeRestrictedJcsV2(new Uint8Array(exactJcs))
-    if (compareBytesV2(encodeRestrictedJcsV2(decoded), exactJcs) !== 0) return "rejected"
-    assertExactKeysV2(decoded, [
+    const decoded = decodeRestrictedJcs(new Uint8Array(exactJcs))
+    if (compareBytes(encodeRestrictedJcs(decoded), exactJcs) !== 0) return "rejected"
+    assertExactKeys(decoded, [
       "format", "kind", "projectIndexScope", "operationId", "intentDigest", "canvasScope",
       "stageRecordDigest", "routeDependencyFrameDigest", "genesisCheckpointObjectDigest",
       "stagedProjectIndexFrontierDigest",
@@ -1837,7 +1834,7 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequestV2(
       decoded.format !== "convax.project-index-external-fact-request/2" ||
       decoded.kind !== "canvas-genesis-currentness"
     ) return "rejected"
-    const projectIndexScope = parseProjectIndexScope(decoded.projectIndexScope as DocumentScopeV2)
+    const projectIndexScope = parseProjectIndexScope(decoded.projectIndexScope as DocumentScope)
     const canvasScope = parseCanvasDocumentScopeV2(decoded.canvasScope)
     if (
       projectIndexScope.projectId !== canvasScope.projectId ||
@@ -1847,24 +1844,24 @@ export function decodeProjectIndexCanvasGenesisCurrentnessRequestV2(
       format: decoded.format,
       kind: decoded.kind,
       projectIndexScope,
-      operationId: parseId128V2(decoded.operationId),
-      intentDigest: parseDigestV2(decoded.intentDigest),
+      operationId: parseId128(decoded.operationId),
+      intentDigest: parseDigest(decoded.intentDigest),
       canvasScope,
-      stageRecordDigest: parseDigestV2(decoded.stageRecordDigest),
-      routeDependencyFrameDigest: parseDigestV2(decoded.routeDependencyFrameDigest),
-      genesisCheckpointObjectDigest: parseDigestV2(decoded.genesisCheckpointObjectDigest),
-      stagedProjectIndexFrontierDigest: parseDigestV2(decoded.stagedProjectIndexFrontierDigest),
+      stageRecordDigest: parseDigest(decoded.stageRecordDigest),
+      routeDependencyFrameDigest: parseDigest(decoded.routeDependencyFrameDigest),
+      genesisCheckpointObjectDigest: parseDigest(decoded.genesisCheckpointObjectDigest),
+      stagedProjectIndexFrontierDigest: parseDigest(decoded.stagedProjectIndexFrontierDigest),
     })
   } catch {
     return "rejected"
   }
 }
 
-function externalFactRequest(context: OwnerIntentValidationContextV2, intent: ProjectIndexIntentV2): ProjectIndexExternalFactRequestV2 | null {
+function externalFactRequest(context: OwnerIntentValidationContext, intent: ProjectIndexIntentV2): ProjectIndexExternalFactRequestV2 | null {
   const projectIndexScope = parseProjectIndexScope(context.scope)
-  // The successor frame context binds the selected wire protocol's digest.
-  // External facts are ProjectIndex-domain facts, so their request identity
-  // must remain stable across V2 and V3 framing.
+  // The frame context binds the current wire protocol's digest. External facts
+  // are ProjectIndex-domain facts, so their request identity is derived from the
+  // ProjectIndex domain rather than from framing.
   const base = {
     format: "convax.project-index-external-fact-request/2",
     projectIndexScope,
@@ -1889,7 +1886,7 @@ function externalFactRequest(context: OwnerIntentValidationContextV2, intent: Pr
       claimCoreDigest: resetClaim.coreDigest,
       confirmationCoreDigest: confirmation.coreDigest,
       approvalCoreDigest: approval.coreDigest,
-      routeCasCoreDigest: structuredDigestV2(
+      routeCasCoreDigest: structuredDigest(
         "convax.document-shard-reset-route-cas-core-digest/2",
         routeCasCore,
       ),
@@ -1899,7 +1896,7 @@ function externalFactRequest(context: OwnerIntentValidationContextV2, intent: Pr
   return null
 }
 
-function consumeExternalFacts(dependencies: OwnerIntentDependenciesV2<"project-index">, port: OwnerExternalFactPortV2<"project-index">): ProjectIndexExternalFactContextV2 | "pending" | "rejected" {
+function consumeExternalFacts(dependencies: OwnerIntentDependencies<"project-index">, port: OwnerExternalFactPort<"project-index">): ProjectIndexExternalFactContextV2 | "pending" | "rejected" {
   const verified = new Set<string>()
   for (const requirement of dependencies.externalFacts) {
     const resolved = port.resolveFact(requirement)
@@ -1908,17 +1905,17 @@ function consumeExternalFacts(dependencies: OwnerIntentDependenciesV2<"project-i
     verified.add(requirement.factDigest)
   }
   return Object.freeze({
-    verifyBlob(versionRecordDigest: DigestV2, blob: ProjectBlobRefV2) { return requirementMatches(dependencies.externalFacts, "blob-publication-currentness", versionRecordDigest, blob, verified) },
+    verifyBlob(versionRecordDigest: Digest, blob: ProjectBlobRefV2) { return requirementMatches(dependencies.externalFacts, "blob-publication-currentness", versionRecordDigest, blob, verified) },
     verifyCanvasGenesis(activation: CanvasRouteActivationV2) { return dependencies.externalFacts.some((item) => {
       if (item.kind !== "canvas-genesis-currentness" || !verified.has(item.factDigest)) return false
-      const request = decodeRestrictedJcsV2(item.request.exactJcs)
+      const request = decodeRestrictedJcs(item.request.exactJcs)
       return typeof request === "object" && request !== null && "stageRecordDigest" in request && request.stageRecordDigest === activation.stageRecordDigest
     }) },
     verifyResetAuthorization(
       body: Extract<ProjectIndexIntentV2, { readonly kind: "project.canvas.route.reset/2" }>["body"],
     ) { return dependencies.externalFacts.some((item) => {
       if (item.kind !== "reset-authorization-currentness" || !verified.has(item.factDigest)) return false
-      const request = decodeRestrictedJcsV2(item.request.exactJcs)
+      const request = decodeRestrictedJcs(item.request.exactJcs)
       return typeof request === "object" && request !== null &&
         "claimCoreDigest" in request && request.claimCoreDigest === body.resetClaim.coreDigest &&
         "confirmationCoreDigest" in request && request.confirmationCoreDigest === body.confirmation.coreDigest &&
@@ -1928,22 +1925,22 @@ function consumeExternalFacts(dependencies: OwnerIntentDependenciesV2<"project-i
   })
 }
 
-function validFactResult(value: unknown, requirement: OwnerExternalFactRequirementV2<"project-index">): boolean {
+function validFactResult(value: unknown, requirement: OwnerExternalFactRequirement<"project-index">): boolean {
   try {
-    assertExactKeysV2(value, ["format", "kind", "requestSha256", "factDigest", "decision"], "ProjectIndex external fact")
+    assertExactKeys(value, ["format", "kind", "requestSha256", "factDigest", "decision"], "ProjectIndex external fact")
     return value.format === "convax.project-index-external-fact-result/2" && value.kind === requirement.kind && value.requestSha256 === requirement.request.sha256 && value.factDigest === requirement.factDigest && value.decision === "verified"
   } catch { return false }
 }
 
-function requirementMatches(requirements: readonly OwnerExternalFactRequirementV2<"project-index">[], kind: string, versionRecordDigest: DigestV2, blob: ProjectBlobRefV2, verified: Set<string>): boolean {
+function requirementMatches(requirements: readonly OwnerExternalFactRequirement<"project-index">[], kind: string, versionRecordDigest: Digest, blob: ProjectBlobRefV2, verified: Set<string>): boolean {
   return requirements.some((item) => {
     if (item.kind !== kind || !verified.has(item.factDigest)) return false
-    const request = decodeRestrictedJcsV2(item.request.exactJcs)
+    const request = decodeRestrictedJcs(item.request.exactJcs)
     return typeof request === "object" && request !== null && "versionRecordDigest" in request && "blob" in request && request.versionRecordDigest === versionRecordDigest && encodeEqual(request.blob, blob)
   })
 }
 
-function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntentValidationContextV2, intent: ProjectIndexIntentV2, facts: ProjectIndexExternalFactContextV2): ProjectIndexApplyResultV2["inserted"] | "rejected" {
+function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntentValidationContext, intent: ProjectIndexIntentV2, facts: ProjectIndexExternalFactContextV2): ProjectIndexApplyResultV2["inserted"] | "rejected" {
   const add = (root: ProjectIndexApplyResultV2["inserted"][number]["root"], key: string, record: object) => ({ root, key, record })
   if (!projectGuardsEqualAndHold(snapshot, context, intent)) {
     console.error("ProjectIndex intent guards rejected", { kind: intent.kind, guards: intent.guards, expected: projectIndexRequiredGuardsV2(snapshot, context, intent) })
@@ -1998,7 +1995,7 @@ function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntent
     if (
       !routeGuardsEqual(snapshot, context, intent.guards, stage.canvasId, key) ||
       !recordMatchesContext(stage, context, "route-transition", "1") ||
-      stage.canvasId !== deriveProjectIdentityV2(context, "canvas", "0" as Uint32V2) ||
+      stage.canvasId !== deriveProjectIdentityV2(context, "canvas", "0" as Uint32) ||
       routeFacts(snapshot, stage.canvasId).length > 0
     ) return "rejected"
     return [add("canvasRoutes", key, stage)]
@@ -2063,7 +2060,7 @@ function recordsForIntent(snapshot: ProjectIndexSnapshotV2, context: OwnerIntent
 
 function resetBodyBindingsValid(
   snapshot: ProjectIndexSnapshotV2,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   route: ProjectCanvasRouteProjectionV2,
   body: Extract<ProjectIndexIntentV2, { readonly kind: "project.canvas.route.reset/2" }>["body"],
 ): boolean {
@@ -2071,7 +2068,7 @@ function resetBodyBindingsValid(
   const claim = resetClaim.core
   const confirmationCore = confirmation.core
   const approvalCore = approval.core
-  const routeCasCoreDigest = structuredDigestV2(
+  const routeCasCoreDigest = structuredDigest(
     "convax.document-shard-reset-route-cas-core-digest/2",
     routeCasCore,
   )
@@ -2142,9 +2139,9 @@ function resetBodyBindingsValid(
 
 function routeGuardsEqual(
   snapshot: ProjectIndexSnapshotV2,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   actual: readonly ProjectGuardAtomV2[],
-  canvasId: CanvasIdV2,
+  canvasId: CanvasId,
   insertedRouteKey: string,
 ): boolean {
   return encodeEqual(actual, routeMutationGuards(snapshot, context, canvasId, insertedRouteKey))
@@ -2154,14 +2151,14 @@ function isLiveEntry(snapshot: ProjectIndexSnapshotV2, entryId: string): boolean
   return snapshot.entries.has(entryId) && ![...snapshot.entryTombstones.values()].some((fact) => fact.entryId === entryId)
 }
 
-function routeFacts(snapshot: ProjectIndexSnapshotV2, canvasId: CanvasIdV2): CanvasRouteFactV2[] {
+function routeFacts(snapshot: ProjectIndexSnapshotV2, canvasId: CanvasId): CanvasRouteFactV2[] {
   return [...snapshot.canvasRoutes.values()].filter((fact) => fact.canvasId === canvasId)
 }
 
-function recordMatchesContext(record: object, context: OwnerIntentValidationContextV2, kind: ProjectDerivedIdentityKindV2, ordinal: string): boolean {
+function recordMatchesContext(record: object, context: OwnerIntentValidationContext, kind: ProjectDerivedIdentityKindV2, ordinal: string): boolean {
   const stamp = recordStamp(record)
   const id = allocatedRecordIds(record)[0]
-  return stamp.actorId === context.actorId && stamp.operationId === context.operationId && stamp.lamport === context.lamport && stamp.writeOrdinal === ordinal && id === deriveProjectIdentityV2(context, kind, ordinal as Uint32V2)
+  return stamp.actorId === context.actorId && stamp.operationId === context.operationId && stamp.lamport === context.lamport && stamp.writeOrdinal === ordinal && id === deriveProjectIdentityV2(context, kind, ordinal as Uint32)
 }
 
 function allocatedRecordIds(record: object): string[] {
@@ -2175,33 +2172,33 @@ function allocatedRecordIds(record: object): string[] {
   return []
 }
 
-function recordStamp(record: object): PortableStampV2 {
+function recordStamp(record: object): PortableStamp {
   const value = "stamp" in record ? record.stamp : "createdStamp" in record ? record.createdStamp : null
-  return parsePortableStampV2(value)
+  return parsePortableStamp(value)
 }
 
 function stampForConstruction(
-  context: OwnerIntentConstructionContextV2,
-  writeOrdinal: Uint32V2 | string,
-): PortableStampV2 {
+  context: OwnerIntentConstructionContext,
+  writeOrdinal: Uint32 | string,
+): PortableStamp {
   return Object.freeze({
     format: "convax.portable-stamp/2",
     lamport: context.lamport,
     actorId: context.actorId,
     operationId: context.operationId,
-    writeOrdinal: parseUint32V2(writeOrdinal),
+    writeOrdinal: parseUint32(writeOrdinal),
   })
 }
 
 function requireRouteTitle(value: unknown): string {
-  assertBoundedNfcStringV2(value, 1, 512, "Canvas route title")
+  assertBoundedNfcString(value, 1, 512, "Canvas route title")
   return value
 }
 
 function routeMutationGuards(
   snapshot: ProjectIndexSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
-  canvasId: CanvasIdV2,
+  context: OwnerIntentConstructionContext,
+  canvasId: CanvasId,
   insertedRouteKey: string,
 ): readonly ProjectGuardAtomV2[] {
   const projection = projectCanvasRouteProjectionV2(snapshot, canvasId)
@@ -2225,7 +2222,7 @@ function routeMutationGuards(
 
 function projectIndexRequiredGuardsV2(
   snapshot: ProjectIndexSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   intent: ProjectIndexIntentV2,
 ): readonly ProjectGuardAtomV2[] {
   if (
@@ -2310,7 +2307,7 @@ function projectIndexRequiredGuardsV2(
   return sortProjectGuardsV2(guards)
 }
 
-function operationAbsentGuard(context: OwnerIntentConstructionContextV2): ProjectGuardAtomV2 {
+function operationAbsentGuard(context: OwnerIntentConstructionContext): ProjectGuardAtomV2 {
   return { kind: "fact-absent", map: "operations", key: `o:${context.actorId}:${context.operationId}` }
 }
 
@@ -2348,7 +2345,7 @@ function familyLiveHeadsGuard(snapshot: ProjectIndexSnapshotV2, primaryFileId: P
 
 function projectGuardsEqualAndHold(
   snapshot: ProjectIndexSnapshotV2,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   intent: ProjectIndexIntentV2,
 ): boolean {
   const expected = projectIndexRequiredGuardsV2(snapshot, context, intent)
@@ -2390,11 +2387,11 @@ function sortProjectGuardsV2(guards: readonly ProjectGuardAtomV2[]): readonly Pr
     [...guards]
       .map((guard) => freezeJcs(guard))
       .sort((left, right) => {
-        const byKind = compareUtf8V2(left.kind, right.kind)
+        const byKind = compareUtf8(left.kind, right.kind)
         if (byKind !== 0) return byKind
-        const byPrimary = compareUtf8V2(projectGuardPrimaryId(left), projectGuardPrimaryId(right))
+        const byPrimary = compareUtf8(projectGuardPrimaryId(left), projectGuardPrimaryId(right))
         if (byPrimary !== 0) return byPrimary
-        return compareUint8(encodeRestrictedJcsV2(left), encodeRestrictedJcsV2(right))
+        return compareUint8(encodeRestrictedJcs(left), encodeRestrictedJcs(right))
       }),
   )
 }
@@ -2415,54 +2412,54 @@ function parseProjectGuardV2(value: unknown): ProjectGuardAtomV2 {
   }
   const guard = value as Record<string, unknown>
   if (guard.kind === "entry-absent") {
-    assertExactKeysV2(guard, ["kind", "entryId"], "entry-absent guard")
+    assertExactKeys(guard, ["kind", "entryId"], "entry-absent guard")
     return freezeJcs({ kind: guard.kind, entryId: parseProjectEntryId(guard.entryId) })
   }
   if (guard.kind === "entry-live") {
-    assertExactKeysV2(guard, ["kind", "entryId", "entryDigest"], "entry-live guard")
+    assertExactKeys(guard, ["kind", "entryId", "entryDigest"], "entry-live guard")
     return freezeJcs({
       kind: guard.kind,
       entryId: parseProjectEntryId(guard.entryId),
-      entryDigest: parseDigestV2(guard.entryDigest),
+      entryDigest: parseDigest(guard.entryDigest),
     })
   }
   if (guard.kind === "entry-location") {
-    assertExactKeysV2(guard, ["kind", "entryId", "projectionDigest"], "entry-location guard")
+    assertExactKeys(guard, ["kind", "entryId", "projectionDigest"], "entry-location guard")
     return freezeJcs({
       kind: guard.kind,
       entryId: parseProjectEntryId(guard.entryId),
-      projectionDigest: parseDigestV2(guard.projectionDigest),
+      projectionDigest: parseDigest(guard.projectionDigest),
     })
   }
   if (guard.kind === "directory-live") {
-    assertExactKeysV2(guard, ["kind", "directoryId", "entryDigest"], "directory-live guard")
+    assertExactKeys(guard, ["kind", "directoryId", "entryDigest"], "directory-live guard")
     return freezeJcs({
       kind: guard.kind,
       directoryId: parseProjectDirectoryId(guard.directoryId),
-      entryDigest: parseDigestV2(guard.entryDigest),
+      entryDigest: parseDigest(guard.entryDigest),
     })
   }
   if (guard.kind === "family-live-heads") {
-    assertExactKeysV2(
+    assertExactKeys(
       guard,
       ["kind", "primaryFileId", "versionIds", "projectionDigest"],
       "family-live-heads guard",
     )
-    assertDenseArrayV2(guard.versionIds, "family-live-heads version ids")
+    assertDenseArray(guard.versionIds, "family-live-heads version ids")
     if (guard.versionIds.length > 256) fail("invalid-guard", "family-live-heads exceeds its bound")
     const versionIds = guard.versionIds.map(parseVersionId)
-    if (versionIds.some((id, index) => index > 0 && compareUtf8V2(versionIds[index - 1]!, id) >= 0)) {
+    if (versionIds.some((id, index) => index > 0 && compareUtf8(versionIds[index - 1]!, id) >= 0)) {
       fail("invalid-guard", "family-live-heads version ids are not strict sorted unique")
     }
     return freezeJcs({
       kind: guard.kind,
       primaryFileId: parseProjectFileId(guard.primaryFileId),
       versionIds: Object.freeze(versionIds),
-      projectionDigest: parseDigestV2(guard.projectionDigest),
+      projectionDigest: parseDigest(guard.projectionDigest),
     })
   }
   if (guard.kind === "route-state") {
-    assertExactKeysV2(
+    assertExactKeys(
       guard,
       ["kind", "canvasId", "state", "shardEpoch", "activationDigest", "projectionDigest"],
       "route-state guard",
@@ -2475,9 +2472,9 @@ function parseProjectGuardV2(value: unknown): ProjectGuardAtomV2 {
     ) {
       fail("invalid-guard", "route-state guard state is invalid")
     }
-    const shardEpoch = guard.shardEpoch === null ? null : parseId128V2(guard.shardEpoch)
+    const shardEpoch = guard.shardEpoch === null ? null : parseId128(guard.shardEpoch)
     const activationDigest =
-      guard.activationDigest === null ? null : parseDigestV2(guard.activationDigest)
+      guard.activationDigest === null ? null : parseDigest(guard.activationDigest)
     if (
       (guard.state === "live" && (shardEpoch === null || activationDigest === null)) ||
       (guard.state === "staged" && (shardEpoch === null || activationDigest !== null)) ||
@@ -2488,15 +2485,15 @@ function parseProjectGuardV2(value: unknown): ProjectGuardAtomV2 {
     }
     return freezeJcs({
       kind: guard.kind,
-      canvasId: parseCanvasIdV2(guard.canvasId),
+      canvasId: parseCanvasId(guard.canvasId),
       state: guard.state,
       shardEpoch,
       activationDigest,
-      projectionDigest: parseDigestV2(guard.projectionDigest),
+      projectionDigest: parseDigest(guard.projectionDigest),
     })
   }
   if (guard.kind === "fact-absent") {
-    assertExactKeysV2(guard, ["kind", "map", "key"], "fact-absent guard")
+    assertExactKeys(guard, ["kind", "map", "key"], "fact-absent guard")
     if (
       typeof guard.map !== "string" ||
       guard.map === "identity" ||
@@ -2528,7 +2525,7 @@ function projectFamilies(snapshot: ProjectIndexSnapshotV2, tombstoned: ReadonlyS
   for (const [primaryFileId, versions] of byFamily) {
     const entry = snapshot.entries.get(primaryFileId)
     const superseded = new Set(versions.flatMap((version) => [...version.supersedesVersionIds]))
-    const live = versions.filter((version) => !superseded.has(version.versionId)).sort((left, right) => compareUtf8V2(left.versionId, right.versionId))
+    const live = versions.filter((version) => !superseded.has(version.versionId)).sort((left, right) => compareUtf8(left.versionId, right.versionId))
     let current: ProjectContentVersionRecordV2 | null = null
     if (!tombstoned.has(primaryFileId)) {
       if (entry?.contentPolicy === "overwritable-binary") current = maxBinary(versions)
@@ -2540,7 +2537,7 @@ function projectFamilies(snapshot: ProjectIndexSnapshotV2, tombstoned: ReadonlyS
     result.push(Object.freeze({
       primaryFileId: parseProjectFileId(primaryFileId),
       contentPolicy: entry?.contentPolicy ?? null,
-      versionIds: Object.freeze(versions.map((item) => item.versionId).sort(compareUtf8V2)),
+      versionIds: Object.freeze(versions.map((item) => item.versionId).sort(compareUtf8)),
       liveHeadVersionIds: Object.freeze(live.map((item) => item.versionId)),
       currentVersionId: current?.versionId ?? null,
       currentResourceReference,
@@ -2548,7 +2545,7 @@ function projectFamilies(snapshot: ProjectIndexSnapshotV2, tombstoned: ReadonlyS
       activeConflictFileIds: Object.freeze(active),
     }))
   }
-  return result.sort((left, right) => compareUtf8V2(left.primaryFileId, right.primaryFileId))
+  return result.sort((left, right) => compareUtf8(left.primaryFileId, right.primaryFileId))
 }
 
 function resourceReference(
@@ -2578,11 +2575,11 @@ function activeConflictCopies(snapshot: ProjectIndexSnapshotV2, versions: readon
   const result = new Set<ProjectFileIdV2>()
   for (const source of versions) {
     if (source.writeClass !== "text-write") continue
-    const activated = versions.some((other) => comparePortableStampsV2(other.stamp, source.stamp) > 0 && !reaches(versions, other.versionId, source.versionId) && !reaches(versions, source.versionId, other.versionId))
+    const activated = versions.some((other) => comparePortableStamps(other.stamp, source.stamp) > 0 && !reaches(versions, other.versionId, source.versionId) && !reaches(versions, source.versionId, other.versionId))
     if (!activated) continue
     for (const promotion of snapshot.contentPromotions.values()) if (promotion.primaryFileId === source.primaryFileId && promotion.versionId === source.versionId) result.add(promotion.reservedConflictFileId)
   }
-  return [...result].sort(compareUtf8V2)
+  return [...result].sort(compareUtf8)
 }
 
 function reaches(versions: readonly ProjectContentVersionRecordV2[], descendant: string, ancestor: string, seen = new Set<string>()): boolean {
@@ -2597,20 +2594,20 @@ function maxBinary(versions: readonly ProjectContentVersionRecordV2[]): ProjectC
   return [...versions].sort((left, right) => {
     const counter = BigInt(left.binaryLogicalCounter ?? "0") - BigInt(right.binaryLogicalCounter ?? "0")
     if (counter !== 0n) return counter < 0n ? -1 : 1
-    const actor = compareDecodedBase64urlV2(left.creatorActorId, right.creatorActorId)
-    return actor === 0 ? compareUtf8V2(left.versionId, right.versionId) : actor
+    const actor = compareDecodedBase64url(left.creatorActorId, right.creatorActorId)
+    return actor === 0 ? compareUtf8(left.versionId, right.versionId) : actor
   }).at(-1) ?? null
 }
 
-function maxStamp<T extends { readonly stamp: PortableStampV2 }>(records: readonly T[]): T | null {
-  return [...records].sort((left, right) => comparePortableStampsV2(left.stamp, right.stamp)).at(-1) ?? null
+function maxStamp<T extends { readonly stamp: PortableStamp }>(records: readonly T[]): T | null {
+  return [...records].sort((left, right) => comparePortableStamps(left.stamp, right.stamp)).at(-1) ?? null
 }
 
 export function projectCanvasRouteProjectionV2(
   snapshot: ProjectIndexSnapshotV2,
-  canvasIdInput: CanvasIdV2,
+  canvasIdInput: CanvasId,
 ): ProjectCanvasRouteProjectionV2 {
-  const canvasId = parseCanvasIdV2(canvasIdInput)
+  const canvasId = parseCanvasId(canvasIdInput)
   const facts = routeFacts(snapshot, canvasId)
   if (facts.length === 0) {
     return Object.freeze({
@@ -2666,7 +2663,7 @@ export function projectCanvasRouteProjectionV2(
     (fact): fact is CanvasRouteResetCommitV2 => fact.format === "convax.canvas-route-reset-commit/2",
   )
   const transitionByDigest = new Map<
-    DigestV2,
+    Digest,
     CanvasRouteActivationV2 | CanvasRouteResetCommitV2
   >()
   for (const transition of [...activations, ...resets]) {
@@ -2721,11 +2718,11 @@ export function projectCanvasRouteProjectionV2(
 
 function routeTransitionAncestry(
   head: CanvasRouteActivationV2 | CanvasRouteResetCommitV2,
-  transitions: ReadonlyMap<DigestV2, CanvasRouteActivationV2 | CanvasRouteResetCommitV2>,
-  stageRecordDigest: DigestV2,
-): DigestV2[] {
-  const reverse: DigestV2[] = []
-  const seen = new Set<DigestV2>()
+  transitions: ReadonlyMap<Digest, CanvasRouteActivationV2 | CanvasRouteResetCommitV2>,
+  stageRecordDigest: Digest,
+): Digest[] {
+  const reverse: Digest[] = []
+  const seen = new Set<Digest>()
   let current: CanvasRouteActivationV2 | CanvasRouteResetCommitV2 | undefined = head
   while (current !== undefined) {
     const digest = projectIndexRecordDigestV2(current)
@@ -2742,14 +2739,14 @@ function routeTransitionAncestry(
 }
 
 function projectRoutes(snapshot: ProjectIndexSnapshotV2): ProjectCanvasRouteProjectionV2[] {
-  const grouped = new Map<CanvasIdV2, CanvasRouteFactV2[]>()
+  const grouped = new Map<CanvasId, CanvasRouteFactV2[]>()
   for (const fact of snapshot.canvasRoutes.values()) {
     const list = grouped.get(fact.canvasId) ?? []
     list.push(fact)
     grouped.set(fact.canvasId, list)
   }
   const result = [...grouped.keys()].map((canvasId) => projectCanvasRouteProjectionV2(snapshot, canvasId))
-  return result.sort((left, right) => compareUtf8V2(left.canvasId, right.canvasId))
+  return result.sort((left, right) => compareUtf8(left.canvasId, right.canvasId))
 }
 
 function tombstonedEntries(snapshot: ProjectIndexSnapshotV2): Set<string> {
@@ -2799,9 +2796,9 @@ function validateVersionDag(family: string, versions: readonly ProjectContentVer
 }
 
 function parseIntent(value: unknown): ProjectIndexIntentV2 {
-  assertExactKeysV2(value, ["format", "kind", "guards", "body"], "ProjectIndexIntentV2")
+  assertExactKeys(value, ["format", "kind", "guards", "body"], "ProjectIndexIntentV2")
   if (value.format !== "convax.typed-intent/2" || typeof value.kind !== "string" || !INTENT_KINDS.has(value.kind as ProjectIndexIntentKindV2)) fail("invalid-intent", "ProjectIndex intent tag is invalid")
-  assertDenseArrayV2(value.guards, "ProjectIndex guards")
+  assertDenseArray(value.guards, "ProjectIndex guards")
   if (value.guards.length > 64) fail("invalid-guard", "ProjectIndex guards exceed their bound")
   const guards = value.guards.map(parseProjectGuardV2)
   const canonicalGuards = sortProjectGuardsV2(guards)
@@ -2813,18 +2810,18 @@ function parseIntent(value: unknown): ProjectIndexIntentV2 {
   }
   const intent = { ...value, guards: canonicalGuards } as unknown as ProjectIndexIntentV2
   const body = value.body
-  if (intent.kind === "project.directory.create/2") { assertExactKeysV2(body, ["entry", "location"], "directory body"); parseEntry(body.entry); parseLocation(body.location) }
-  else if (intent.kind === "project.file.create/2") { assertExactKeysV2(body, ["entry", "location", "initialVersion"], "file body"); parseEntry(body.entry); if (body.location !== null) parseLocation(body.location); parseContentVersionWithoutIdentity(body.initialVersion) }
-  else if (intent.kind === "project.entry.locate/2") { assertExactKeysV2(body, ["location"], "locate body"); parseLocation(body.location) }
-  else if (intent.kind === "project.entry.tombstone/2") { assertExactKeysV2(body, ["tombstone"], "entry tombstone body"); parseEntryTombstone(body.tombstone) }
-  else if (intent.kind === "project.file.write-text/2") { assertExactKeysV2(body, ["version", "conflictEntry", "promotion", "reservation"], "text body"); parseContentVersionWithoutIdentity(body.version); parseEntry(body.conflictEntry); parsePromotion(body.promotion); parseReservation(body.reservation) }
-  else if (intent.kind === "project.file.overwrite-binary/2") { assertExactKeysV2(body, ["version"], "binary body"); parseContentVersionWithoutIdentity(body.version) }
-  else if (intent.kind === "project.canvas.route.stage/2") { assertExactKeysV2(body, ["stage"], "stage body"); parseCanvasRoute(body.stage) }
-  else if (intent.kind === "project.canvas.route.activate/2") { assertExactKeysV2(body, ["activation"], "activation body"); parseCanvasRoute(body.activation) }
-  else if (intent.kind === "project.canvas.route.rename/2") { assertExactKeysV2(body, ["metadata"], "rename body"); parseCanvasRoute(body.metadata) }
-  else if (intent.kind === "project.canvas.route.tombstone/2") { assertExactKeysV2(body, ["tombstone"], "route tombstone body"); parseCanvasRoute(body.tombstone) }
+  if (intent.kind === "project.directory.create/2") { assertExactKeys(body, ["entry", "location"], "directory body"); parseEntry(body.entry); parseLocation(body.location) }
+  else if (intent.kind === "project.file.create/2") { assertExactKeys(body, ["entry", "location", "initialVersion"], "file body"); parseEntry(body.entry); if (body.location !== null) parseLocation(body.location); parseContentVersionWithoutIdentity(body.initialVersion) }
+  else if (intent.kind === "project.entry.locate/2") { assertExactKeys(body, ["location"], "locate body"); parseLocation(body.location) }
+  else if (intent.kind === "project.entry.tombstone/2") { assertExactKeys(body, ["tombstone"], "entry tombstone body"); parseEntryTombstone(body.tombstone) }
+  else if (intent.kind === "project.file.write-text/2") { assertExactKeys(body, ["version", "conflictEntry", "promotion", "reservation"], "text body"); parseContentVersionWithoutIdentity(body.version); parseEntry(body.conflictEntry); parsePromotion(body.promotion); parseReservation(body.reservation) }
+  else if (intent.kind === "project.file.overwrite-binary/2") { assertExactKeys(body, ["version"], "binary body"); parseContentVersionWithoutIdentity(body.version) }
+  else if (intent.kind === "project.canvas.route.stage/2") { assertExactKeys(body, ["stage"], "stage body"); parseCanvasRoute(body.stage) }
+  else if (intent.kind === "project.canvas.route.activate/2") { assertExactKeys(body, ["activation"], "activation body"); parseCanvasRoute(body.activation) }
+  else if (intent.kind === "project.canvas.route.rename/2") { assertExactKeys(body, ["metadata"], "rename body"); parseCanvasRoute(body.metadata) }
+  else if (intent.kind === "project.canvas.route.tombstone/2") { assertExactKeys(body, ["tombstone"], "route tombstone body"); parseCanvasRoute(body.tombstone) }
   else {
-    assertExactKeysV2(
+    assertExactKeys(
       body,
       ["resetCommit", "routeCasCore", "resetClaim", "confirmation", "approval"],
       "route reset body",
@@ -2843,19 +2840,19 @@ const INTENT_KINDS = new Set<ProjectIndexIntentKindV2>([
 ])
 
 function parseIdentity(value: unknown): ProjectIndexIdentityRecordV2 {
-  assertExactKeysV2(value, ["format", "schema", "projectId", "projectEpoch", "shardEpoch", "rootDirectoryId", "protocolDigest", "schemaDigest", "uriProtocolDigest"], "ProjectIndex identity")
+  assertExactKeys(value, ["format", "schema", "projectId", "projectEpoch", "shardEpoch", "rootDirectoryId", "protocolDigest", "schemaDigest", "uriProtocolDigest"], "ProjectIndex identity")
   if (value.format !== "convax.project-index-identity/2" || value.schema !== "convax.project-index.v2") fail("invalid-identity", "ProjectIndex identity is not v2")
   const identity = value as unknown as ProjectIndexIdentityRecordV2
-  parseProjectIdV2(identity.projectId); parseId128V2(identity.projectEpoch); parseId128V2(identity.shardEpoch); parseProjectDirectoryId(identity.rootDirectoryId); parseDigestV2(identity.protocolDigest); parseDigestV2(identity.schemaDigest); parseDigestV2(identity.uriProtocolDigest)
+  parseProjectId(identity.projectId); parseId128(identity.projectEpoch); parseId128(identity.shardEpoch); parseProjectDirectoryId(identity.rootDirectoryId); parseDigest(identity.protocolDigest); parseDigest(identity.schemaDigest); parseDigest(identity.uriProtocolDigest)
   if (identity.schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2) fail("schema-mismatch", "ProjectIndex identity does not bind the selected R5 artifact")
   return freezeJcs(identity)
 }
 
 function parseEntry(value: unknown): ProjectEntryRecordV2 {
-  assertExactKeysV2(value, ["format", "entryId", "kind", "storageClass", "contentPolicy", "provenance", "conflictSource", "createdByActorId", "createdByOperationId", "createdStamp"], "Project entry")
+  assertExactKeys(value, ["format", "entryId", "kind", "storageClass", "contentPolicy", "provenance", "conflictSource", "createdByActorId", "createdByOperationId", "createdStamp"], "Project entry")
   const record = value as unknown as ProjectEntryRecordV2
   if (record.format !== "convax.project-entry/2") fail("invalid-entry", "Project entry format is invalid")
-  parseProjectEntryId(record.entryId); parseActorIdV2(record.createdByActorId); parseId128V2(record.createdByOperationId); parsePortableStampV2(record.createdStamp)
+  parseProjectEntryId(record.entryId); parseActorId(record.createdByActorId); parseId128(record.createdByOperationId); parsePortableStamp(record.createdStamp)
   if ((record.kind === "directory") !== record.entryId.startsWith("pd_")) fail("invalid-entry", "Project entry kind/id differ")
   if (record.kind === "directory" ? record.storageClass !== null || record.contentPolicy !== "none" : record.storageClass === null || record.contentPolicy === "none") fail("invalid-entry", "Project entry storage/content policy is invalid")
   if (record.provenance === "content-conflict-copy") { if (record.conflictSource === null) fail("invalid-entry", "Conflict copy lacks source"); parseConflictSource(record.conflictSource) }
@@ -2864,32 +2861,32 @@ function parseEntry(value: unknown): ProjectEntryRecordV2 {
 }
 
 function parseConflictSource(value: unknown): void {
-  assertExactKeysV2(value, ["primaryFileId", "sourceVersionId", "promotionId", "reservationId"], "Conflict source")
+  assertExactKeys(value, ["primaryFileId", "sourceVersionId", "promotionId", "reservationId"], "Conflict source")
   parseProjectFileId(value.primaryFileId); parseVersionId(value.sourceVersionId); parseFactId(value.promotionId, "pp"); parseFactId(value.reservationId, "pr")
 }
 
 function parseLocation(value: unknown): ProjectEntryLocationClaimV2 {
-  assertExactKeysV2(value, ["format", "claimId", "entryId", "state", "parentDirectoryId", "basename", "reason", "stamp"], "Project location")
+  assertExactKeys(value, ["format", "claimId", "entryId", "state", "parentDirectoryId", "basename", "reason", "stamp"], "Project location")
   const record = value as unknown as ProjectEntryLocationClaimV2
   if (record.format !== "convax.project-entry-location/2") fail("invalid-location", "Project location format is invalid")
-  parseFactId(record.claimId, "pl"); parseProjectEntryId(record.entryId); parseProjectDirectoryId(record.parentDirectoryId); assertPortableBasename(record.basename); parsePortableStampV2(record.stamp)
+  parseFactId(record.claimId, "pl"); parseProjectEntryId(record.entryId); parseProjectDirectoryId(record.parentDirectoryId); assertPortableBasename(record.basename); parsePortableStamp(record.stamp)
   if (!(["linked", "declared-missing"] as unknown[]).includes(record.state) || !(["create", "move", "rename", "explicit-relink", "explicit-missing"] as unknown[]).includes(record.reason)) fail("invalid-location", "Project location union is invalid")
   return freezeJcs(record)
 }
 
 function parseEntryTombstone(value: unknown): ProjectEntryTombstoneV2 {
-  assertExactKeysV2(value, ["format", "tombstoneId", "entryId", "reason", "observedEntryDigest", "stamp"], "Project entry tombstone")
+  assertExactKeys(value, ["format", "tombstoneId", "entryId", "reason", "observedEntryDigest", "stamp"], "Project entry tombstone")
   const record = value as unknown as ProjectEntryTombstoneV2
   if (record.format !== "convax.project-entry-tombstone/2" || record.reason !== "explicit-delete") fail("invalid-tombstone", "Project tombstone is invalid")
-  parseFactId(record.tombstoneId, "pt"); parseProjectEntryId(record.entryId); parseDigestV2(record.observedEntryDigest); parsePortableStampV2(record.stamp)
+  parseFactId(record.tombstoneId, "pt"); parseProjectEntryId(record.entryId); parseDigest(record.observedEntryDigest); parsePortableStamp(record.stamp)
   return freezeJcs(record)
 }
 
 function parseBlob(value: unknown): ProjectBlobRefV2 {
-  assertExactKeysV2(value, ["format", "algorithm", "digest", "byteLength", "mime"], "Project blob ref")
+  assertExactKeys(value, ["format", "algorithm", "digest", "byteLength", "mime"], "Project blob ref")
   const blob = value as unknown as ProjectBlobRefV2
   if (blob.format !== "convax.blob-ref/2" || blob.algorithm !== "sha256") fail("invalid-blob", "Blob ref format is invalid")
-  parseDigestV2(blob.digest); parseUint64V2(blob.byteLength)
+  parseDigest(blob.digest); parseUint64(blob.byteLength)
   if (typeof blob.mime !== "string" || !MIME.test(blob.mime) || encoder.encode(blob.mime).byteLength > 255) fail("invalid-blob", "Blob MIME is invalid")
   return freezeJcs(blob)
 }
@@ -2899,15 +2896,15 @@ function parseContentVersionWithoutIdentity(value: unknown): ProjectContentVersi
 }
 
 function parseContentVersion(value: unknown, identity?: ProjectIndexIdentityRecordV2): ProjectContentVersionRecordV2 {
-  assertExactKeysV2(value, ["format", "primaryFileId", "versionId", "writeClass", "blob", "canonicalRevisionUri", "supersedesVersionIds", "binaryLogicalCounter", "creatorActorId", "creatorOperationId", "stamp"], "Project content version")
+  assertExactKeys(value, ["format", "primaryFileId", "versionId", "writeClass", "blob", "canonicalRevisionUri", "supersedesVersionIds", "binaryLogicalCounter", "creatorActorId", "creatorOperationId", "stamp"], "Project content version")
   const record = value as unknown as ProjectContentVersionRecordV2
   if (record.format !== "convax.project-content-version/2") fail("invalid-version", "Content version format is invalid")
-  parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseBlob(record.blob); parseActorIdV2(record.creatorActorId); parseId128V2(record.creatorOperationId); parsePortableStampV2(record.stamp)
-  assertDenseArrayV2(record.supersedesVersionIds, "Superseded versions")
+  parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseBlob(record.blob); parseActorId(record.creatorActorId); parseId128(record.creatorOperationId); parsePortableStamp(record.stamp)
+  assertDenseArray(record.supersedesVersionIds, "Superseded versions")
   if (record.supersedesVersionIds.length > 256) fail("invalid-version", "Superseded versions exceed their bound")
   const parents = record.supersedesVersionIds.map(parseVersionId)
-  if (!isStrictSorted(parents, compareUtf8V2)) fail("invalid-version", "Superseded versions must be sorted unique")
-  if (record.binaryLogicalCounter !== null) parseUint64V2(record.binaryLogicalCounter)
+  if (!isStrictSorted(parents, compareUtf8)) fail("invalid-version", "Superseded versions must be sorted unique")
+  if (record.binaryLogicalCounter !== null) parseUint64(record.binaryLogicalCounter)
   if (record.writeClass === "initial" && record.binaryLogicalCounter !== null && record.binaryLogicalCounter !== "0") fail("invalid-version", "Binary initial counter must be zero")
   if (record.writeClass === "text-write" && record.binaryLogicalCounter !== null) fail("invalid-version", "Text write has a binary counter")
   if (record.writeClass === "binary-overwrite" && record.binaryLogicalCounter === null) fail("invalid-version", "Binary overwrite lacks a counter")
@@ -2918,18 +2915,18 @@ function parseContentVersion(value: unknown, identity?: ProjectIndexIdentityReco
 }
 
 function parsePromotion(value: unknown): ProjectContentPromotionRecordV2 {
-  assertExactKeysV2(value, ["format", "promotionId", "primaryFileId", "versionId", "reservedConflictFileId", "reservationId", "stamp"], "Project promotion")
+  assertExactKeys(value, ["format", "promotionId", "primaryFileId", "versionId", "reservedConflictFileId", "reservationId", "stamp"], "Project promotion")
   const record = value as unknown as ProjectContentPromotionRecordV2
   if (record.format !== "convax.project-content-promotion/2") fail("invalid-promotion", "Promotion format is invalid")
-  parseFactId(record.promotionId, "pp"); parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseProjectFileId(record.reservedConflictFileId); parseFactId(record.reservationId, "pr"); parsePortableStampV2(record.stamp)
+  parseFactId(record.promotionId, "pp"); parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseProjectFileId(record.reservedConflictFileId); parseFactId(record.reservationId, "pr"); parsePortableStamp(record.stamp)
   return freezeJcs(record)
 }
 
 function parseReservation(value: unknown): ProjectPathReservationRecordV2 {
-  assertExactKeysV2(value, ["format", "reservationId", "kind", "primaryFileId", "versionId", "reservedEntryId", "canonicalPath", "originalBasenameHint", "stamp"], "Project reservation")
+  assertExactKeys(value, ["format", "reservationId", "kind", "primaryFileId", "versionId", "reservedEntryId", "canonicalPath", "originalBasenameHint", "stamp"], "Project reservation")
   const record = value as unknown as ProjectPathReservationRecordV2
   if (record.format !== "convax.project-path-reservation/2" || record.kind !== "content-conflict-copy") fail("invalid-reservation", "Reservation format is invalid")
-  parseFactId(record.reservationId, "pr"); parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseProjectFileId(record.reservedEntryId); parsePortableStampV2(record.stamp); assertPortableBasename(record.originalBasenameHint)
+  parseFactId(record.reservationId, "pr"); parseProjectFileId(record.primaryFileId); parseVersionId(record.versionId); parseProjectFileId(record.reservedEntryId); parsePortableStamp(record.stamp); assertPortableBasename(record.originalBasenameHint)
   if (record.canonicalPath !== `.convax-conflicts/${record.reservedEntryId}/content`) fail("invalid-reservation", "Conflict reservation path is not canonical")
   return freezeJcs(record)
 }
@@ -2938,19 +2935,19 @@ function parseCanvasRoute(value: unknown): CanvasRouteFactV2 {
   if (typeof value !== "object" || value === null || !("format" in value)) fail("invalid-route", "Canvas route fact is invalid")
   const format = (value as { format?: unknown }).format
   if (format === "convax.canvas-route-stage/2") {
-    assertExactKeysV2(value, ["format", "transitionId", "canvasId", "shardEpoch", "title", "reason", "stamp"], "Canvas route stage")
-    const record = value as unknown as CanvasRouteStageV2; parseFactId(record.transitionId, "cr"); parseCanvasIdV2(record.canvasId); parseId128V2(record.shardEpoch); assertBoundedNfcStringV2(record.title, 1, 512, "Canvas title"); parsePortableStampV2(record.stamp); if (record.reason !== "create") fail("invalid-route", "Stage reason is invalid"); return freezeJcs(record)
+    assertExactKeys(value, ["format", "transitionId", "canvasId", "shardEpoch", "title", "reason", "stamp"], "Canvas route stage")
+    const record = value as unknown as CanvasRouteStageV2; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); parseId128(record.shardEpoch); assertBoundedNfcString(record.title, 1, 512, "Canvas title"); parsePortableStamp(record.stamp); if (record.reason !== "create") fail("invalid-route", "Stage reason is invalid"); return freezeJcs(record)
   }
   if (format === "convax.canvas-route-activation/2") {
-    assertExactKeysV2(value, ["format", "transitionId", "canvasId", "shardEpoch", "predecessorActivationDigest", "stageRecordDigest", "projectIndexRouteDependencyFrameDigest", "canvasGenesisCheckpointObjectDigest", "stagedProjectIndexFrontierDigest", "stamp"], "Canvas route activation")
-    const record = value as unknown as CanvasRouteActivationV2; parseFactId(record.transitionId, "cr"); parseCanvasIdV2(record.canvasId); parseId128V2(record.shardEpoch); if (record.predecessorActivationDigest !== null) fail("invalid-route", "Initial activation predecessor is not null"); parseDigestV2(record.stageRecordDigest); parseDigestV2(record.projectIndexRouteDependencyFrameDigest); parseDigestV2(record.canvasGenesisCheckpointObjectDigest); parseDigestV2(record.stagedProjectIndexFrontierDigest); parsePortableStampV2(record.stamp); return freezeJcs(record)
+    assertExactKeys(value, ["format", "transitionId", "canvasId", "shardEpoch", "predecessorActivationDigest", "stageRecordDigest", "projectIndexRouteDependencyFrameDigest", "canvasGenesisCheckpointObjectDigest", "stagedProjectIndexFrontierDigest", "stamp"], "Canvas route activation")
+    const record = value as unknown as CanvasRouteActivationV2; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); parseId128(record.shardEpoch); if (record.predecessorActivationDigest !== null) fail("invalid-route", "Initial activation predecessor is not null"); parseDigest(record.stageRecordDigest); parseDigest(record.projectIndexRouteDependencyFrameDigest); parseDigest(record.canvasGenesisCheckpointObjectDigest); parseDigest(record.stagedProjectIndexFrontierDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
   }
   if (format === "convax.canvas-route-metadata/2") {
-    assertExactKeysV2(value, ["format", "transitionId", "canvasId", "title", "observedActivationDigest", "stamp"], "Canvas route metadata")
-    const record = value as unknown as CanvasRouteMetadataClaimV2; parseFactId(record.transitionId, "cr"); parseCanvasIdV2(record.canvasId); assertBoundedNfcStringV2(record.title, 1, 512, "Canvas title"); parseDigestV2(record.observedActivationDigest); parsePortableStampV2(record.stamp); return freezeJcs(record)
+    assertExactKeys(value, ["format", "transitionId", "canvasId", "title", "observedActivationDigest", "stamp"], "Canvas route metadata")
+    const record = value as unknown as CanvasRouteMetadataClaimV2; parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); assertBoundedNfcString(record.title, 1, 512, "Canvas title"); parseDigest(record.observedActivationDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
   }
   if (format === "convax.canvas-route-reset-commit/2") {
-    assertExactKeysV2(value, [
+    assertExactKeys(value, [
       "format", "transitionId", "canvasId", "oldShardEpoch", "newShardEpoch",
       "predecessorActivationDigest", "stagedGenesisCheckpointObjectDigest",
       "stagedGenesisFullUpdateDigest", "stagedGenesisStateVectorDigest",
@@ -2959,46 +2956,46 @@ function parseCanvasRoute(value: unknown): CanvasRouteFactV2 {
     ], "Canvas route reset commit")
     const record = value as unknown as CanvasRouteResetCommitV2
     parseFactId(record.transitionId, "cr")
-    parseCanvasIdV2(record.canvasId)
-    parseId128V2(record.oldShardEpoch)
-    parseId128V2(record.newShardEpoch)
+    parseCanvasId(record.canvasId)
+    parseId128(record.oldShardEpoch)
+    parseId128(record.newShardEpoch)
     if (record.oldShardEpoch === record.newShardEpoch) fail("invalid-route", "Canvas reset must rotate shard epoch")
-    parseDigestV2(record.predecessorActivationDigest)
-    parseDigestV2(record.stagedGenesisCheckpointObjectDigest)
-    parseDigestV2(record.stagedGenesisFullUpdateDigest)
-    parseDigestV2(record.stagedGenesisStateVectorDigest)
-    parseDigestV2(record.resetClaimCoreDigest)
-    parseDigestV2(record.confirmationCoreDigest)
-    parseDigestV2(record.approvalCoreDigest)
-    parseDigestV2(record.routeCasCoreDigest)
-    parsePortableStampV2(record.stamp)
+    parseDigest(record.predecessorActivationDigest)
+    parseDigest(record.stagedGenesisCheckpointObjectDigest)
+    parseDigest(record.stagedGenesisFullUpdateDigest)
+    parseDigest(record.stagedGenesisStateVectorDigest)
+    parseDigest(record.resetClaimCoreDigest)
+    parseDigest(record.confirmationCoreDigest)
+    parseDigest(record.approvalCoreDigest)
+    parseDigest(record.routeCasCoreDigest)
+    parsePortableStamp(record.stamp)
     return freezeJcs(record)
   }
-  assertExactKeysV2(value, ["format", "transitionId", "canvasId", "observedActivationDigest", "reason", "stamp"], "Canvas route tombstone")
+  assertExactKeys(value, ["format", "transitionId", "canvasId", "observedActivationDigest", "reason", "stamp"], "Canvas route tombstone")
   const record = value as unknown as CanvasRouteTombstoneV2
   if (record.format !== "convax.canvas-route-tombstone/2" || record.reason !== "explicit-delete") fail("invalid-route", "Route tombstone is invalid")
-  parseFactId(record.transitionId, "cr"); parseCanvasIdV2(record.canvasId); if (record.observedActivationDigest !== null) parseDigestV2(record.observedActivationDigest); parsePortableStampV2(record.stamp); return freezeJcs(record)
+  parseFactId(record.transitionId, "cr"); parseCanvasId(record.canvasId); if (record.observedActivationDigest !== null) parseDigest(record.observedActivationDigest); parsePortableStamp(record.stamp); return freezeJcs(record)
 }
 
 function parseReceipt(value: unknown): ProjectOperationReceiptV2 {
-  assertExactKeysV2(value, ["format", "actorId", "operationId", "intentKind", "intentDigest", "allocatedIds", "firstWriteOrdinal", "writeCount", "stampLamport"], "Project operation receipt")
+  assertExactKeys(value, ["format", "actorId", "operationId", "intentKind", "intentDigest", "allocatedIds", "firstWriteOrdinal", "writeCount", "stampLamport"], "Project operation receipt")
   const record = value as unknown as ProjectOperationReceiptV2
   if (record.format !== "convax.project-operation-receipt/2" || !INTENT_KINDS.has(record.intentKind)) fail("invalid-receipt", "Operation receipt is invalid")
-  parseActorIdV2(record.actorId); parseId128V2(record.operationId); parseDigestV2(record.intentDigest); parseUint32V2(record.firstWriteOrdinal); parseUint32V2(record.writeCount); parseUint64V2(record.stampLamport); assertDenseArrayV2(record.allocatedIds, "Allocated ids")
+  parseActorId(record.actorId); parseId128(record.operationId); parseDigest(record.intentDigest); parseUint32(record.firstWriteOrdinal); parseUint32(record.writeCount); parseUint64(record.stampLamport); assertDenseArray(record.allocatedIds, "Allocated ids")
   if (record.allocatedIds.length > 8) fail("invalid-receipt", "Allocated ids exceed their bound")
-  if (!isStrictSorted(record.allocatedIds, compareUtf8V2)) fail("invalid-receipt", "Allocated ids are not sorted unique")
+  if (!isStrictSorted(record.allocatedIds, compareUtf8)) fail("invalid-receipt", "Allocated ids are not sorted unique")
   return freezeJcs(record)
 }
 
-function parseProjectIndexScope(value: DocumentScopeV2): ProjectIndexScopeV2 {
+function parseProjectIndexScope(value: DocumentScope): ProjectIndexScopeV2 {
   if (value.docKind !== "project-index" || value.docId !== "project-index") fail("scope-mismatch", "Project owner requires ProjectIndex scope")
-  parseProjectIdV2(value.projectId); parseId128V2(value.projectEpoch); parseId128V2(value.shardEpoch)
+  parseProjectId(value.projectId); parseId128(value.projectEpoch); parseId128(value.shardEpoch)
   return value as ProjectIndexScopeV2
 }
 
 function parseCanvasDocumentScopeV2(value: unknown): CanvasDocumentScopeV2 {
-  const scope = parseDocumentScopeV2(value)
-  if (scope.docKind !== "canvas" || scope.docId !== parseCanvasIdV2(scope.docId)) {
+  const scope = parseDocumentScope(value)
+  if (scope.docKind !== "canvas" || scope.docId !== parseCanvasId(scope.docId)) {
     fail("invalid-reset", "Canvas reset scope is invalid")
   }
   return scope as CanvasDocumentScopeV2
@@ -3018,7 +3015,7 @@ function parseDocumentShardResetReasonV2(value: unknown): DocumentShardResetReas
 function parseDocumentShardResetRouteCasCoreV2(
   value: unknown,
 ): DocumentShardResetRouteCasCoreV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "operationId", "canvasId", "oldScope", "newScope",
     "predecessorActivationDigest", "stagedGenesisCheckpointObjectDigest",
     "stagedGenesisFullUpdateDigest", "stagedGenesisStateVectorDigest",
@@ -3028,7 +3025,7 @@ function parseDocumentShardResetRouteCasCoreV2(
   }
   const oldScope = parseCanvasDocumentScopeV2(value.oldScope)
   const newScope = parseCanvasDocumentScopeV2(value.newScope)
-  const canvasId = parseCanvasIdV2(value.canvasId)
+  const canvasId = parseCanvasId(value.canvasId)
   if (
     oldScope.projectId !== newScope.projectId ||
     oldScope.projectEpoch !== newScope.projectEpoch ||
@@ -3040,19 +3037,19 @@ function parseDocumentShardResetRouteCasCoreV2(
   }
   return freezeJcs({
     format: value.format,
-    operationId: parseId128V2(value.operationId),
+    operationId: parseId128(value.operationId),
     canvasId,
     oldScope,
     newScope,
-    predecessorActivationDigest: parseDigestV2(value.predecessorActivationDigest),
-    stagedGenesisCheckpointObjectDigest: parseDigestV2(value.stagedGenesisCheckpointObjectDigest),
-    stagedGenesisFullUpdateDigest: parseDigestV2(value.stagedGenesisFullUpdateDigest),
-    stagedGenesisStateVectorDigest: parseDigestV2(value.stagedGenesisStateVectorDigest),
+    predecessorActivationDigest: parseDigest(value.predecessorActivationDigest),
+    stagedGenesisCheckpointObjectDigest: parseDigest(value.stagedGenesisCheckpointObjectDigest),
+    stagedGenesisFullUpdateDigest: parseDigest(value.stagedGenesisFullUpdateDigest),
+    stagedGenesisStateVectorDigest: parseDigest(value.stagedGenesisStateVectorDigest),
   })
 }
 
 function parseDocumentShardResetClaimCoreV2(value: unknown): DocumentShardResetClaimCoreV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "projectIndexScope", "oldScope", "newScope", "reason",
     "oldProtocolDigest", "newProtocolDigest", "oldSchemaDigest", "newSchemaDigest",
     "stagedGenesisCheckpointObjectDigest", "stagedGenesisFullUpdateDigest",
@@ -3063,7 +3060,7 @@ function parseDocumentShardResetClaimCoreV2(value: unknown): DocumentShardResetC
   if (value.format !== "convax.document-shard-reset-claim-core/2") {
     fail("invalid-reset", "Canvas reset claim core format is invalid")
   }
-  const projectIndexScope = parseProjectIndexScope(parseDocumentScopeV2(value.projectIndexScope))
+  const projectIndexScope = parseProjectIndexScope(parseDocumentScope(value.projectIndexScope))
   const oldScope = parseCanvasDocumentScopeV2(value.oldScope)
   const newScope = parseCanvasDocumentScopeV2(value.newScope)
   if (
@@ -3082,25 +3079,25 @@ function parseDocumentShardResetClaimCoreV2(value: unknown): DocumentShardResetC
     oldScope,
     newScope,
     reason: parseDocumentShardResetReasonV2(value.reason),
-    oldProtocolDigest: parseDigestV2(value.oldProtocolDigest),
-    newProtocolDigest: parseDigestV2(value.newProtocolDigest),
-    oldSchemaDigest: parseDigestV2(value.oldSchemaDigest),
-    newSchemaDigest: parseDigestV2(value.newSchemaDigest),
-    stagedGenesisCheckpointObjectDigest: parseDigestV2(value.stagedGenesisCheckpointObjectDigest),
-    stagedGenesisFullUpdateDigest: parseDigestV2(value.stagedGenesisFullUpdateDigest),
-    stagedGenesisStateVectorDigest: parseDigestV2(value.stagedGenesisStateVectorDigest),
-    routeCasCoreDigest: parseDigestV2(value.routeCasCoreDigest),
-    initiatorMemberId: parseMemberIdV2(value.initiatorMemberId),
-    initiatorReplicaId: parseReplicaIdV2(value.initiatorReplicaId),
-    initiatorActorId: parseActorIdV2(value.initiatorActorId),
-    adminMemberId: parseMemberIdV2(value.adminMemberId),
-    adminAuthorizationDigest: parseDigestV2(value.adminAuthorizationDigest),
-    explicitConfirmationReceiptDigest: parseDigestV2(value.explicitConfirmationReceiptDigest),
+    oldProtocolDigest: parseDigest(value.oldProtocolDigest),
+    newProtocolDigest: parseDigest(value.newProtocolDigest),
+    oldSchemaDigest: parseDigest(value.oldSchemaDigest),
+    newSchemaDigest: parseDigest(value.newSchemaDigest),
+    stagedGenesisCheckpointObjectDigest: parseDigest(value.stagedGenesisCheckpointObjectDigest),
+    stagedGenesisFullUpdateDigest: parseDigest(value.stagedGenesisFullUpdateDigest),
+    stagedGenesisStateVectorDigest: parseDigest(value.stagedGenesisStateVectorDigest),
+    routeCasCoreDigest: parseDigest(value.routeCasCoreDigest),
+    initiatorMemberId: parseMemberId(value.initiatorMemberId),
+    initiatorReplicaId: parseReplicaId(value.initiatorReplicaId),
+    initiatorActorId: parseActorId(value.initiatorActorId),
+    adminMemberId: parseMemberId(value.adminMemberId),
+    adminAuthorizationDigest: parseDigest(value.adminAuthorizationDigest),
+    explicitConfirmationReceiptDigest: parseDigest(value.explicitConfirmationReceiptDigest),
   })
 }
 
 function parseDocumentShardResetClaimV2(value: unknown): DocumentShardResetClaimV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "core", "coreDigest", "initiatorSignature", "adminApprovalDigest"],
     "Document shard reset claim",
@@ -3109,23 +3106,23 @@ function parseDocumentShardResetClaimV2(value: unknown): DocumentShardResetClaim
     fail("invalid-reset", "Canvas reset claim format is invalid")
   }
   const core = parseDocumentShardResetClaimCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== structuredDigestV2("convax.document-shard-reset-claim-core-digest/2", core)) {
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== structuredDigest("convax.document-shard-reset-claim-core-digest/2", core)) {
     fail("invalid-reset", "Canvas reset claim core digest is invalid")
   }
   return freezeJcs({
     format: value.format,
     core,
     coreDigest,
-    initiatorSignature: parseSignatureV2(value.initiatorSignature),
-    adminApprovalDigest: parseDigestV2(value.adminApprovalDigest),
+    initiatorSignature: parseSignature(value.initiatorSignature),
+    adminApprovalDigest: parseDigest(value.adminApprovalDigest),
   })
 }
 
 function parseDocumentShardResetConfirmationCoreV2(
   value: unknown,
 ): DocumentShardResetConfirmationCoreV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "confirmationId", "projectId", "projectEpoch", "oldScope", "newScope",
     "reason", "routeCasCoreDigest", "predecessorActivationDigest",
     "stagedGenesisCheckpointObjectDigest", "stagedGenesisFullUpdateDigest",
@@ -3141,30 +3138,30 @@ function parseDocumentShardResetConfirmationCoreV2(
   }
   return freezeJcs({
     format: value.format,
-    confirmationId: parseId128V2(value.confirmationId),
-    projectId: parseProjectIdV2(value.projectId),
-    projectEpoch: parseId128V2(value.projectEpoch),
+    confirmationId: parseId128(value.confirmationId),
+    projectId: parseProjectId(value.projectId),
+    projectEpoch: parseId128(value.projectEpoch),
     oldScope: parseCanvasDocumentScopeV2(value.oldScope),
     newScope: parseCanvasDocumentScopeV2(value.newScope),
     reason: parseDocumentShardResetReasonV2(value.reason),
-    routeCasCoreDigest: parseDigestV2(value.routeCasCoreDigest),
-    predecessorActivationDigest: parseDigestV2(value.predecessorActivationDigest),
-    stagedGenesisCheckpointObjectDigest: parseDigestV2(value.stagedGenesisCheckpointObjectDigest),
-    stagedGenesisFullUpdateDigest: parseDigestV2(value.stagedGenesisFullUpdateDigest),
-    stagedGenesisStateVectorDigest: parseDigestV2(value.stagedGenesisStateVectorDigest),
-    initiatorMemberId: parseMemberIdV2(value.initiatorMemberId),
-    initiatorReplicaId: parseReplicaIdV2(value.initiatorReplicaId),
-    initiatorActorId: parseActorIdV2(value.initiatorActorId),
-    initiatorActorCredentialCoreDigest: parseDigestV2(value.initiatorActorCredentialCoreDigest),
+    routeCasCoreDigest: parseDigest(value.routeCasCoreDigest),
+    predecessorActivationDigest: parseDigest(value.predecessorActivationDigest),
+    stagedGenesisCheckpointObjectDigest: parseDigest(value.stagedGenesisCheckpointObjectDigest),
+    stagedGenesisFullUpdateDigest: parseDigest(value.stagedGenesisFullUpdateDigest),
+    stagedGenesisStateVectorDigest: parseDigest(value.stagedGenesisStateVectorDigest),
+    initiatorMemberId: parseMemberId(value.initiatorMemberId),
+    initiatorReplicaId: parseReplicaId(value.initiatorReplicaId),
+    initiatorActorId: parseActorId(value.initiatorActorId),
+    initiatorActorCredentialCoreDigest: parseDigest(value.initiatorActorCredentialCoreDigest),
     confirmationStatement: value.confirmationStatement,
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
   })
 }
 
 function parseDocumentShardResetConfirmationV2(
   value: unknown,
 ): DocumentShardResetConfirmationV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "core", "coreDigest", "initiatorReplicaSignature"],
     "Document shard reset confirmation",
@@ -3173,20 +3170,20 @@ function parseDocumentShardResetConfirmationV2(
     fail("invalid-reset", "Canvas reset confirmation format is invalid")
   }
   const core = parseDocumentShardResetConfirmationCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== structuredDigestV2("convax.document-shard-reset-confirmation-core/2", core)) {
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== structuredDigest("convax.document-shard-reset-confirmation-core/2", core)) {
     fail("invalid-reset", "Canvas reset confirmation core digest is invalid")
   }
   return freezeJcs({
     format: value.format,
     core,
     coreDigest,
-    initiatorReplicaSignature: parseSignatureV2(value.initiatorReplicaSignature),
+    initiatorReplicaSignature: parseSignature(value.initiatorReplicaSignature),
   })
 }
 
 function parseDocumentShardResetApprovalCoreV2(value: unknown): DocumentShardResetApprovalCoreV2 {
-  assertExactKeysV2(value, [
+  assertExactKeys(value, [
     "format", "approvalId", "resetClaimCoreDigest", "confirmationCoreDigest",
     "projectId", "projectEpoch", "oldScope", "newScope", "reason",
     "routeCasCoreDigest", "adminMemberId", "adminMemberAuthorizationEpoch",
@@ -3200,25 +3197,25 @@ function parseDocumentShardResetApprovalCoreV2(value: unknown): DocumentShardRes
   }
   return freezeJcs({
     format: value.format,
-    approvalId: parseId128V2(value.approvalId),
-    resetClaimCoreDigest: parseDigestV2(value.resetClaimCoreDigest),
-    confirmationCoreDigest: parseDigestV2(value.confirmationCoreDigest),
-    projectId: parseProjectIdV2(value.projectId),
-    projectEpoch: parseId128V2(value.projectEpoch),
+    approvalId: parseId128(value.approvalId),
+    resetClaimCoreDigest: parseDigest(value.resetClaimCoreDigest),
+    confirmationCoreDigest: parseDigest(value.confirmationCoreDigest),
+    projectId: parseProjectId(value.projectId),
+    projectEpoch: parseId128(value.projectEpoch),
     oldScope: parseCanvasDocumentScopeV2(value.oldScope),
     newScope: parseCanvasDocumentScopeV2(value.newScope),
     reason: parseDocumentShardResetReasonV2(value.reason),
-    routeCasCoreDigest: parseDigestV2(value.routeCasCoreDigest),
-    adminMemberId: parseMemberIdV2(value.adminMemberId),
-    adminMemberAuthorizationEpoch: parseId128V2(value.adminMemberAuthorizationEpoch),
-    adminCapabilityCoreDigest: parseDigestV2(value.adminCapabilityCoreDigest),
+    routeCasCoreDigest: parseDigest(value.routeCasCoreDigest),
+    adminMemberId: parseMemberId(value.adminMemberId),
+    adminMemberAuthorizationEpoch: parseId128(value.adminMemberAuthorizationEpoch),
+    adminCapabilityCoreDigest: parseDigest(value.adminCapabilityCoreDigest),
     approvalStatement: value.approvalStatement,
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
   })
 }
 
 function parseDocumentShardResetApprovalV2(value: unknown): DocumentShardResetApprovalV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "core", "coreDigest", "adminMemberSignature"],
     "Document shard reset approval",
@@ -3227,15 +3224,15 @@ function parseDocumentShardResetApprovalV2(value: unknown): DocumentShardResetAp
     fail("invalid-reset", "Canvas reset approval format is invalid")
   }
   const core = parseDocumentShardResetApprovalCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== structuredDigestV2("convax.document-shard-reset-approval-core/2", core)) {
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== structuredDigest("convax.document-shard-reset-approval-core/2", core)) {
     fail("invalid-reset", "Canvas reset approval core digest is invalid")
   }
   return freezeJcs({
     format: value.format,
     core,
     coreDigest,
-    adminMemberSignature: parseSignatureV2(value.adminMemberSignature),
+    adminMemberSignature: parseSignature(value.adminMemberSignature),
   })
 }
 
@@ -3250,7 +3247,7 @@ function parseFactId(value: unknown, prefix?: "pl" | "pt" | "pp" | "pr" | "cr"):
 }
 
 function assertPortableBasename(value: string): void {
-  assertBoundedNfcStringV2(value, 1, 255, "Project basename")
+  assertBoundedNfcString(value, 1, 255, "Project basename")
   if (/[\\/\0\u0001-\u001f\u007f]/u.test(value) || value === "." || value === ".." || /[. ]$/u.test(value) || /^(\.convax|\.convax-conflicts)$/iu.test(value) || /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\..*)?$/iu.test(value)) fail("invalid-basename", "Project basename is not portable")
 }
 
@@ -3267,8 +3264,8 @@ function childMap(root: Y.Map<unknown>, key: (typeof PROJECT_INDEX_ROOT_KEYS_V2)
 }
 
 function assertMapKeys(map: Y.Map<unknown>, expected: readonly string[], label: string): void {
-  const actual = [...map.keys()].sort(compareUtf8V2)
-  const wanted = [...expected].sort(compareUtf8V2)
+  const actual = [...map.keys()].sort(compareUtf8)
+  const wanted = [...expected].sort(compareUtf8)
   if (!encodeEqual(actual, wanted)) fail("unknown-root-key", `${label} has unknown or missing keys`)
 }
 
@@ -3286,7 +3283,7 @@ function readFactMap<T>(root: Y.Map<unknown>, name: (typeof PROJECT_INDEX_ROOT_K
 }
 
 function canonicalEntries<T>(map: ReadonlyMap<string, T>): readonly (readonly [string, T])[] {
-  return Object.freeze([...map.entries()].sort(([left], [right]) => compareUtf8V2(left, right)).map(([key, value]) => Object.freeze([key, value] as const)))
+  return Object.freeze([...map.entries()].sort(([left], [right]) => compareUtf8(left, right)).map(([key, value]) => Object.freeze([key, value] as const)))
 }
 
 function putImmutableFact(map: Y.Map<unknown>, key: string, record: object): void {
@@ -3299,7 +3296,7 @@ function putImmutableFact(map: Y.Map<unknown>, key: string, record: object): voi
 }
 
 function freezeJcs<T>(value: T): T {
-  const clone = decodeRestrictedJcsV2(encodeRestrictedJcsV2(value)) as T
+  const clone = decodeRestrictedJcs(encodeRestrictedJcs(value)) as T
   return deepFreeze(clone)
 }
 
@@ -3317,7 +3314,7 @@ function isStrictSorted<T>(values: readonly T[], compare: (left: T, right: T) =>
 }
 
 function encodeEqual(left: unknown, right: unknown): boolean {
-  const a = encodeRestrictedJcsV2(left); const b = encodeRestrictedJcsV2(right)
+  const a = encodeRestrictedJcs(left); const b = encodeRestrictedJcs(right)
   return a.byteLength === b.byteLength && a.every((byte, index) => byte === b[index])
 }
 
@@ -3330,15 +3327,15 @@ function compareUint8(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>): 
   return left.byteLength - right.byteLength
 }
 
-function digestParts(...parts: readonly Uint8Array[]): DigestV2 {
+function digestParts(...parts: readonly Uint8Array[]): Digest {
   const length = parts.reduce((sum, part) => sum + part.byteLength, 0)
   const bytes = new Uint8Array(length)
   let offset = 0
   for (const part of parts) { bytes.set(part, offset); offset += part.byteLength }
-  return parseDigestV2(bytesToHex(sha256(bytes)))
+  return parseDigest(bytesToHex(sha256(bytes)))
 }
 
-function ownerResult(result: OwnerApplyResultV2<"project-index">): { readonly result: ProjectIndexApplyResultV2; readonly scope: ProjectIndexScopeV2 } | null {
+function ownerResult(result: OwnerApplyResult<"project-index">): { readonly result: ProjectIndexApplyResultV2; readonly scope: ProjectIndexScopeV2 } | null {
   const value = result.value
   return typeof value === "object" && value !== null && "result" in value && (value as { result?: { format?: unknown } }).result?.format === "convax.project-index-intent-result/2" ? value as { readonly result: ProjectIndexApplyResultV2; readonly scope: ProjectIndexScopeV2 } : null
 }

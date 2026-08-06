@@ -1,18 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parsePeerIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSessionIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
+  encodeBase64url,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parsePeerId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSessionId,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
 } from "@convax/collaboration"
 import {
   CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
@@ -24,15 +24,15 @@ import {
   type ActivePeerDirectoryEntryV2,
 } from "../collaboration-protocol"
 
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
-const digest = (digit: string) => parseDigestV2(digit.repeat(64))
-const actor = parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(2)))
-const publicKey = parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(4)))
-const projectId = parseProjectIdV2("project-a")
-const memberId = parseMemberIdV2(id(5))
-const replicaId = parseReplicaIdV2("replica_00000001")
-const peerId = parsePeerIdV2("peer_aaaaaaaaaaaaaaaaaaaaaaaaaa")
+const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
+const digest = (digit: string) => parseDigest(digit.repeat(64))
+const actor = parseActorId(encodeBase64url(new Uint8Array(32).fill(2)))
+const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(4)))
+const projectId = parseProjectId("project-a")
+const memberId = parseMemberId(id(5))
+const replicaId = parseReplicaId("replica_00000001")
+const peerId = parsePeerId("peer_aaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 function challenge() {
   const core = {
@@ -45,14 +45,14 @@ function challenge() {
     memberId,
     replicaId,
     actorId: actor,
-    expectedReplicaSessionCounter: parseUint64V2("1"),
+    expectedReplicaSessionCounter: parseUint64("1"),
     serverNonce: id(6),
-    sessionId: parseSessionIdV2(id(7)),
+    sessionId: parseSessionId(id(7)),
     leaseId: id(8),
     peerId,
-    issuedAtUnixMs: parseUint64V2("1000"),
-    expiresAtUnixMs: parseUint64V2("61000"),
-    protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+    issuedAtUnixMs: parseUint64("1000"),
+    expiresAtUnixMs: parseUint64("61000"),
+    protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
     trustBundleDigest: digest("2"),
     serviceKeyPurpose: "membership" as const,
     serviceKeyId: "membership-1",
@@ -60,7 +60,7 @@ function challenge() {
   return {
     format: "convax.session-challenge/2" as const,
     core,
-    coreDigest: structuredDigestV2("convax.session-challenge-core/2", core),
+    coreDigest: structuredDigest("convax.session-challenge-core/2", core),
     serviceSignature: signature,
   }
 }
@@ -72,9 +72,9 @@ function credential() {
     projectId,
     projectEpoch: source.core.projectEpoch,
     membershipEpoch: source.core.membershipEpoch,
-    membershipSequence: parseUint64V2("1"),
+    membershipSequence: parseUint64("1"),
     membershipSnapshotDigest: source.core.membershipSnapshotDigest,
-    registrySequence: parseUint64V2("1"),
+    registrySequence: parseUint64("1"),
     registryRootDigest: digest("3"),
     memberId,
     memberAuthorizationEpoch: id(9),
@@ -90,8 +90,8 @@ function credential() {
     sessionSigningPublicKey: publicKey,
     sessionChallengeDigest: source.coreDigest,
     sessionProofDigest: digest("4"),
-    issuedAtUnixMs: parseUint64V2("2000"),
-    expiresAtUnixMs: parseUint64V2("902000"),
+    issuedAtUnixMs: parseUint64("2000"),
+    expiresAtUnixMs: parseUint64("902000"),
     protocolDigest: source.core.protocolDigest,
     schemaDigest: digest("5"),
     validationArtifactSetDigest: digest("6"),
@@ -102,7 +102,7 @@ function credential() {
   return {
     format: "convax.session-credential/2" as const,
     core,
-    coreDigest: structuredDigestV2("convax.session-credential-core/2", core),
+    coreDigest: structuredDigest("convax.session-credential-core/2", core),
     serviceSignature: signature,
   }
 }
@@ -115,10 +115,10 @@ function directory(peers: readonly ActivePeerDirectoryEntryV2[]) {
     projectEpoch: source.core.projectEpoch,
     membershipEpoch: source.core.membershipEpoch,
     membershipSnapshotDigest: source.core.membershipSnapshotDigest,
-    directorySequence: parseUint64V2("1"),
+    directorySequence: parseUint64("1"),
     peers,
-    issuedAtUnixMs: parseUint64V2("3000"),
-    expiresAtUnixMs: parseUint64V2("33000"),
+    issuedAtUnixMs: parseUint64("3000"),
+    expiresAtUnixMs: parseUint64("33000"),
     protocolDigest: source.core.protocolDigest,
     trustBundleDigest: source.core.trustBundleDigest,
     serviceKeyPurpose: "rendezvous" as const,
@@ -127,7 +127,7 @@ function directory(peers: readonly ActivePeerDirectoryEntryV2[]) {
   return {
     format: "convax.active-peer-directory/2" as const,
     core,
-    coreDigest: structuredDigestV2("convax.active-peer-directory-core/2", core),
+    coreDigest: structuredDigest("convax.active-peer-directory-core/2", core),
     serviceSignature: signature,
   }
 }
@@ -162,11 +162,11 @@ describe("R5 control artifact codecs", () => {
       requesterCredentialDigest: credential().coreDigest,
       responderCredentialDigest: digest("8"),
       requesterPeerId: peerId,
-      responderPeerId: parsePeerIdV2("peer_aeaqcaibaeaqcaibaeaqcaibae"),
-      issuedAtUnixMs: parseUint64V2("4000"),
-      expiresAtUnixMs: parseUint64V2("64000"),
-      channelContractDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest),
-      protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+      responderPeerId: parsePeerId("peer_aeaqcaibaeaqcaibaeaqcaibae"),
+      issuedAtUnixMs: parseUint64("4000"),
+      expiresAtUnixMs: parseUint64("64000"),
+      channelContractDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.channelContractDigest),
+      protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
       trustBundleDigest: digest("2"),
       serviceKeyPurpose: "rendezvous" as const,
       serviceKeyId: "rendezvous-1",
@@ -174,7 +174,7 @@ describe("R5 control artifact codecs", () => {
     const ticket = {
       format: "convax.peer-freshness-ticket/2" as const,
       core,
-      coreDigest: structuredDigestV2("convax.peer-freshness-ticket-core/2", core),
+      coreDigest: structuredDigest("convax.peer-freshness-ticket-core/2", core),
       serviceSignature: signature,
     }
     expect(parsePeerFreshnessTicketV2(ticket)).toEqual(ticket)
@@ -182,7 +182,7 @@ describe("R5 control artifact codecs", () => {
 
   test("rejects a tampered core, unknown field, and duplicate directory identity", () => {
     const source = challenge()
-    expect(() => parseSessionChallengeV2({ ...source, core: { ...source.core, peerId: parsePeerIdV2("peer_aeaqcaibaeaqcaibaeaqcaibae") } })).toThrow("core digest")
+    expect(() => parseSessionChallengeV2({ ...source, core: { ...source.core, peerId: parsePeerId("peer_aeaqcaibaeaqcaibaeaqcaibae") } })).toThrow("core digest")
     expect(() => parseSessionCredentialV2({ ...credential(), injected: true })).toThrow("unknown or missing")
     expect(() => parseActivePeerDirectoryV2(directory([directoryEntry, directoryEntry]))).toThrow("duplicate")
   })

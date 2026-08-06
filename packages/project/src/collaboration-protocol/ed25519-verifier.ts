@@ -75,7 +75,7 @@ function pointFailure(bytes: Uint8Array, subject: "public-key" | "signature-r"):
   return null
 }
 
-export function createWebCryptoEd25519VerifierV2(
+export function createWebCryptoEd25519Verifier(
   subtle: SubtleCrypto | null | undefined = globalThis.crypto?.subtle,
 ): Ed25519VerifierV2 {
   const verifier: Ed25519VerifierV2 = {

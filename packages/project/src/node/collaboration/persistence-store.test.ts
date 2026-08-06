@@ -4,17 +4,17 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type {
-  ActorIdV2,
-  CausalFrontierV2,
-  DecodedCausalEditFrameV2,
-  DigestV2,
-  DocumentScopeV2,
-  FrameObjectRefV2,
-  Id128V2,
-  ReplicaActorHeadSetV2,
-  MemberIdV2,
-  ReplicaIdV2,
-  StateVectorV2,
+  ActorId,
+  CausalFrontier,
+  DecodedCausalEditFrame,
+  Digest,
+  DocumentScope,
+  FrameObjectRef,
+  Id128,
+  ReplicaActorHeadSet,
+  MemberId,
+  ReplicaId,
+  StateVector,
 } from "@convax/collaboration"
 import { deriveDocumentNativeKeyV2, deriveObjectNativeKeyV2 } from "./native-store-keys"
 import {
@@ -566,20 +566,20 @@ describe("NodeCollaborationPersistenceV2", () => {
 })
 
 class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
-  readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRefV2 }>()
+  readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRef }>()
   readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHeadV2, "headDigest"> }>()
   applyCount = 0
 
-  readonly create = (scope: DocumentScopeV2, actorId: ActorIdV2, actorSequence: string, operationId: Id128V2) => {
+  readonly create = (scope: DocumentScope, actorId: ActorId, actorSequence: string, operationId: Id128) => {
     const seed = encoder.encode(`${actorId}:${actorSequence}:${operationId}:${this.records.size}`)
     const frameDigest = digestBytes(seed)
-    const ref = { scope, actorId, actorSequence, operationId, frameDigest } as FrameObjectRefV2
+    const ref = { scope, actorId, actorSequence, operationId, frameDigest } as FrameObjectRef
     const bytes = Uint8Array.from(seed)
     this.records.set(frameDigest, { bytes, ref })
     return { bytes, ref }
   }
 
-  async inspectFrame(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>) {
+  async inspectFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>) {
     const expected = this.records.get(ref.frameDigest)
     if (!expected || !Buffer.from(expected.bytes).equals(Buffer.from(exactBytes))) throw new Error("unknown fake frame")
     return { ref: expected.ref, requiredBlobDigests: [] }
@@ -587,7 +587,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
 
   async applyAcceptedFrame(input: {
     previous: NodeAcceptedReplicaHeadV2
-    ref: FrameObjectRefV2
+    ref: FrameObjectRef
     exactBytes: Readonly<Uint8Array>
   }): Promise<NodeAcceptedReplicaHeadV2> {
     await this.inspectFrame(input.ref, input.exactBytes)
@@ -599,8 +599,8 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
       frameDigest: input.ref.frameDigest,
       lamport: input.ref.actorSequence,
     } as const
-    const frontier = { format: "convax.causal-frontier/2", heads: [head] } as CausalFrontierV2
-    const actorHeads = { format: "convax.replica-actor-head-set/2", scope: input.ref.scope, heads: [head] } as ReplicaActorHeadSetV2
+    const frontier = { format: "convax.causal-frontier/2", heads: [head] } as CausalFrontier
+    const actorHeads = { format: "convax.replica-actor-head-set/2", scope: input.ref.scope, heads: [head] } as ReplicaActorHeadSet
     return {
       scope: input.ref.scope,
       headDigest: input.previous.headDigest,
@@ -608,12 +608,12 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
       frontierDigest: this.frontierDigest(input.ref),
       actorHeads,
       fullUpdate: Uint8Array.from(input.exactBytes),
-      stateVector: Uint8Array.of(Number(input.ref.actorSequence)) as StateVectorV2,
+      stateVector: Uint8Array.of(Number(input.ref.actorSequence)) as StateVector,
       canonicalStateDigest: digestBytes(input.exactBytes),
     }
   }
 
-  actorHeadsDigest(actorHeads: ReplicaActorHeadSetV2): DigestV2 {
+  actorHeadsDigest(actorHeads: ReplicaActorHeadSet): Digest {
     return digest(canonical(actorHeads))
   }
 
@@ -626,20 +626,20 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
       frontierDigest: accepted.frontierDigest,
       actorHeads: accepted.actorHeads,
       fullUpdate: Uint8Array.from(accepted.fullUpdate),
-      stateVector: Uint8Array.from(accepted.stateVector) as StateVectorV2,
+      stateVector: Uint8Array.from(accepted.stateVector) as StateVector,
       canonicalStateDigest: accepted.canonicalStateDigest,
     }
     this.checkpoints.set(objectDigest, { bytes, accepted: value })
     return { objectDigest, exactBytes: bytes, accepted: value }
   }
 
-  async materializeCheckpoint(input: { scope: DocumentScopeV2; checkpointObjectDigest: DigestV2; exactCheckpointBytes: Readonly<Uint8Array> }) {
+  async materializeCheckpoint(input: { scope: DocumentScope; checkpointObjectDigest: Digest; exactCheckpointBytes: Readonly<Uint8Array> }) {
     const value = this.checkpoints.get(input.checkpointObjectDigest)
     if (!value || !Buffer.from(value.bytes).equals(Buffer.from(input.exactCheckpointBytes))) throw new Error("unknown fake checkpoint")
     return value.accepted
   }
 
-  frontierDigest(ref: FrameObjectRefV2): DigestV2 {
+  frontierDigest(ref: FrameObjectRef): Digest {
     return digest(JSON.stringify({
       format: "convax.causal-frontier/2",
       heads: [{
@@ -677,12 +677,12 @@ async function createFixture(
   return { collaborationDirectory, frames, store }
 }
 
-function durableAck(ref: FrameObjectRefV2) {
+function durableAck(ref: FrameObjectRef) {
   return Object.freeze({
     scope: ref.scope,
     frameDigest: ref.frameDigest,
-    receiverMemberId: id128(7) as MemberIdV2,
-    receiverReplicaId: "replica_00000007" as ReplicaIdV2,
+    receiverMemberId: id128(7) as MemberId,
+    receiverReplicaId: "replica_00000007" as ReplicaId,
     receiverActorId: actorId(7),
     receiverAuthorizationDigest: digest("receiver-authorization"),
     ackCoreDigest: digest(`ack:${ref.frameDigest}`),
@@ -690,10 +690,10 @@ function durableAck(ref: FrameObjectRefV2) {
   })
 }
 
-async function initialize(store: NodeCollaborationPersistenceV2, scope: DocumentScopeV2) {
+async function initialize(store: NodeCollaborationPersistenceV2, scope: DocumentScope) {
   const checkpoint = encoder.encode(`checkpoint:${scope.docKind}:${scope.docId}`)
-  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontierV2
-  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSetV2
+  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontier
+  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSet
   return store.initializeShard({
     scope,
     checkpointObjectDigest: digestBytes(checkpoint),
@@ -704,16 +704,16 @@ async function initialize(store: NodeCollaborationPersistenceV2, scope: Document
       frontierDigest: digest(JSON.stringify(frontier)),
       actorHeads,
       fullUpdate: new Uint8Array(),
-      stateVector: Uint8Array.of(0) as StateVectorV2,
+      stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
     },
   })
 }
 
-function genesisProofInput(scope: DocumentScopeV2, proof: string) {
+function genesisProofInput(scope: DocumentScope, proof: string) {
   const checkpoint = encoder.encode(`checkpoint:${scope.docKind}:${scope.docId}`)
-  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontierV2
-  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSetV2
+  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontier
+  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSet
   return {
     scope,
     checkpointObjectDigest: digestBytes(checkpoint),
@@ -725,49 +725,49 @@ function genesisProofInput(scope: DocumentScopeV2, proof: string) {
       frontierDigest: digest(JSON.stringify(frontier)),
       actorHeads,
       fullUpdate: new Uint8Array(),
-      stateVector: Uint8Array.of(0) as StateVectorV2,
+      stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
     },
   }
 }
 
-function projectIndexScope(): DocumentScopeV2 {
+function projectIndexScope(): DocumentScope {
   return {
     projectId: "project-a",
     projectEpoch,
     docKind: "project-index",
     docId: "project-index",
     shardEpoch,
-  } as DocumentScopeV2
+  } as DocumentScope
 }
 
-function canvasScope(): DocumentScopeV2 {
+function canvasScope(): DocumentScope {
   return {
     projectId: "project-a",
     projectEpoch,
     docKind: "canvas",
     docId: `cv_${"c".repeat(64)}`,
     shardEpoch: id128(3),
-  } as DocumentScopeV2
+  } as DocumentScope
 }
 
-function id128(byte: number): Id128V2 {
-  return Buffer.alloc(16, byte).toString("base64url") as Id128V2
+function id128(byte: number): Id128 {
+  return Buffer.alloc(16, byte).toString("base64url") as Id128
 }
 
-function actorId(byte: number): ActorIdV2 {
-  return Buffer.alloc(32, byte).toString("base64url") as ActorIdV2
+function actorId(byte: number): ActorId {
+  return Buffer.alloc(32, byte).toString("base64url") as ActorId
 }
 
-function digest(value: string): DigestV2 {
+function digest(value: string): Digest {
   return digestBytes(encoder.encode(value))
 }
 
-function digestBytes(value: Readonly<Uint8Array>): DigestV2 {
-  return createHash("sha256").update(value).digest("hex") as DigestV2
+function digestBytes(value: Readonly<Uint8Array>): Digest {
+  return createHash("sha256").update(value).digest("hex") as Digest
 }
 
-function decodedFrame(frame: { readonly ref: FrameObjectRefV2; readonly bytes: Uint8Array }): DecodedCausalEditFrameV2 {
+function decodedFrame(frame: { readonly ref: FrameObjectRef; readonly bytes: Uint8Array }): DecodedCausalEditFrame {
   return {
     bytes: frame.bytes,
     frameDigest: frame.ref.frameDigest,
@@ -777,7 +777,7 @@ function decodedFrame(frame: { readonly ref: FrameObjectRefV2; readonly bytes: U
       actorSequence: frame.ref.actorSequence,
       operationId: frame.ref.operationId,
     } },
-  } as unknown as DecodedCausalEditFrameV2
+  } as unknown as DecodedCausalEditFrame
 }
 
 function canonical(value: unknown): string {

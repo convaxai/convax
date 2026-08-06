@@ -3,11 +3,11 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseSignatureV2,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseSignature,
 } from "@convax/collaboration"
 import {
   projectResetConfirmationCoreDigestV2,
@@ -32,7 +32,7 @@ describe.skipIf(process.platform === "win32")("Project reset record store real-f
     const authorized = records("reset-authorized")
     await fs.writeFile(
       path.join(directory, "project-reset-records-v2.jcs.next"),
-      encodeRestrictedJcsV2(authorized),
+      encodeRestrictedJcs(authorized),
     )
     await writeProjectResetRecordsV2(directory, authorized)
     expect((await readProjectResetRecordsV2(directory)).manifest.state).toBe("reset-authorized")
@@ -41,14 +41,14 @@ describe.skipIf(process.platform === "win32")("Project reset record store real-f
 })
 
 function records(state: ProjectResetRecordsV2["manifest"]["state"]): ProjectResetRecordsV2 {
-  const id = parseId128V2("AQEBAQEBAQEBAQEBAQEBAQ")
-  const digest = parseDigestV2("11".repeat(32))
-  const bindingDigest = parseDigestV2("22".repeat(32))
+  const id = parseId128("AQEBAQEBAQEBAQEBAQEBAQ")
+  const digest = parseDigest("11".repeat(32))
+  const bindingDigest = parseDigest("22".repeat(32))
   const core: ProjectResetConfirmationCoreV2 = Object.freeze({
     format: "convax.project-reset-confirmation-core/2",
     resetId: id,
     confirmationId: id,
-    projectId: parseProjectIdV2("project_reset_store"),
+    projectId: parseProjectId("project_reset_store"),
     oldProjectEpoch: null,
     reason: "unsupported-portable-version",
     observedOldPrivateTreeDigest: digest,
@@ -74,7 +74,7 @@ function records(state: ProjectResetRecordsV2["manifest"]["state"]): ProjectRese
       format: "convax.project-reset-confirmation/2",
       core,
       coreDigest,
-      confirmationSignature: parseSignatureV2(Buffer.alloc(64, 3).toString("base64url")),
+      confirmationSignature: parseSignature(Buffer.alloc(64, 3).toString("base64url")),
     }),
     manifest: Object.freeze({
       format: "convax.project-reset-manifest/2",

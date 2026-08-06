@@ -2,37 +2,37 @@ import { createHash, timingSafeEqual } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  canonicalStateDigestV2,
-  causalFrontierDigestV2,
-  applyUpdateV1V2,
-  decodeRestrictedJcsV2,
-  encodeFullUpdateV2,
-  encodeRestrictedJcsV2,
-  encodeStateVectorV2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseReplicaCheckpointV2,
-  parseUint32V2,
-  parseUint64V2,
-  replicaActorHeadSetDigestV2,
-  replicaCheckpointObjectDigestV2,
-  replicaCheckpointCoreDigestV2,
-  stateVectorDigestV2,
-  structuredDigestV2,
-  yjsUpdateDigestV2,
-  type ActorIdV2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ReplicaCheckpointCoreV2,
-  type ReplicaCheckpointV2,
-  type ReplicaIdV2,
+  canonicalStateDigest as computeCanonicalStateDigest,
+  causalFrontierDigest,
+  applyYjsUpdate,
+  decodeRestrictedJcs,
+  encodeFullUpdate,
+  encodeRestrictedJcs,
+  encodeStateVector,
+  ownerCanonicalizerDescriptorDigest,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parseMemberId,
+  parseReplicaId,
+  parseReplicaCheckpoint,
+  parseUint32,
+  parseUint64,
+  replicaActorHeadSetDigest,
+  replicaCheckpointObjectDigest,
+  replicaCheckpointCoreDigest,
+  stateVectorDigest,
+  structuredDigest,
+  yjsUpdateDigest,
+  type ActorId,
+  type Digest,
+  type DocumentScope,
+  type Id128,
+  type MemberId,
+  type ReplicaCheckpointCore,
+  type ReplicaCheckpoint,
+  type ReplicaId,
 } from "@convax/collaboration"
 import type * as Y from "yjs"
 import {
@@ -61,7 +61,7 @@ const MANIFEST_CHECKSUM_BYTES = 32
 const MAX_MANIFEST_PAYLOAD_BYTES = 64 * 1024
 const LOCAL_RECORD_DOMAIN = Buffer.from("convax.local-project-store-record-digest/2\0", "utf8")
 const STORE_IDENTITY = "convax.project-collaboration-native-store/2" as const
-type ProjectIndexDocumentScopeV2 = DocumentScopeV2 & {
+type ProjectIndexDocumentScopeV2 = DocumentScope & {
   readonly docKind: "project-index"
   readonly docId: "project-index"
 }
@@ -70,31 +70,31 @@ export interface ProjectNativeStoreManifestV2 {
   readonly format: "convax.project-native-store-manifest/2"
   readonly storeIdentity: typeof STORE_IDENTITY
   readonly projectIndexScope: ProjectIndexDocumentScopeV2
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly uriProtocolDigest: DigestV2
-  readonly initializationAuthorityDigest: DigestV2
-  readonly emptyProjectIndexCheckpointObjectDigest: DigestV2
-  readonly emptyProjectIndexFullUpdateDigest: DigestV2
-  readonly emptyProjectIndexStateVectorDigest: DigestV2
-  readonly emptyProjectIndexCanonicalStateDigest: DigestV2
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly uriProtocolDigest: Digest
+  readonly initializationAuthorityDigest: Digest
+  readonly emptyProjectIndexCheckpointObjectDigest: Digest
+  readonly emptyProjectIndexFullUpdateDigest: Digest
+  readonly emptyProjectIndexStateVectorDigest: Digest
+  readonly emptyProjectIndexCanonicalStateDigest: Digest
 }
 
 export interface ProjectNativeStoreAuthorityV2 {
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly uriProtocolDigest: DigestV2
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly uriProtocolDigest: Digest
 }
 
 export interface VerifiedEmptyProjectIndexGenesisV2 {
   readonly manifest: ProjectNativeStoreManifestV2
-  readonly manifestLocalRecordDigest: DigestV2
+  readonly manifestLocalRecordDigest: Digest
   readonly checkpointExactBytes: Uint8Array
   readonly acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">
 }
 
 export interface ProjectIndexGenesisCheckpointVerifierV2 {
-  verify(checkpoint: ReplicaCheckpointV2): Promise<boolean>
+  verify(checkpoint: ReplicaCheckpoint): Promise<boolean>
 }
 
 export interface ProjectIndexNativeStoreInitializationFaultsV2 {
@@ -109,25 +109,25 @@ export interface ProjectIndexNativeStoreInitializationFaultsV2 {
  * never assembles Project schema bytes itself.
  */
 export function createEmptyProjectIndexGenesisCandidateV2(input: {
-  readonly scope: DocumentScopeV2
-  readonly actorId: ActorIdV2
-  readonly operationId: Id128V2
-  readonly checkpointId: Id128V2
-  readonly authorMemberId: MemberIdV2
-  readonly authorReplicaId: ReplicaIdV2
-  readonly authorAuthorizationDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly actorId: ActorId
+  readonly operationId: Id128
+  readonly checkpointId: Id128
+  readonly authorMemberId: MemberId
+  readonly authorReplicaId: ReplicaId
+  readonly authorAuthorizationDigest: Digest
+  readonly validationArtifactSetDigest: Digest
   readonly authority: ProjectNativeStoreAuthorityV2
-}): Readonly<{ document: Y.Doc; checkpointCore: ReplicaCheckpointCoreV2 }> {
+}): Readonly<{ document: Y.Doc; checkpointCore: ReplicaCheckpointCore }> {
   const scope = requireProjectIndexScope(input.scope)
-  const actorId = parseActorIdV2(input.actorId)
-  const operationId = parseId128V2(input.operationId)
-  const rootDirectoryId = `pd_${structuredDigestV2("convax.project-derived-identity/2", {
+  const actorId = parseActorId(input.actorId)
+  const operationId = parseId128(input.operationId)
+  const rootDirectoryId = `pd_${structuredDigest("convax.project-derived-identity/2", {
     format: "convax.project-derived-identity-core/2",
     scope,
     actorId,
     operationId,
-    ordinal: parseUint32V2("0"),
+    ordinal: parseUint32("0"),
     kind: "directory",
   })}` as const
   const rootEntry: ProjectEntryRecordV2 = Object.freeze({
@@ -142,10 +142,10 @@ export function createEmptyProjectIndexGenesisCandidateV2(input: {
     createdByOperationId: operationId,
     createdStamp: Object.freeze({
       format: "convax.portable-stamp/2",
-      lamport: parseUint64V2("0"),
+      lamport: parseUint64("0"),
       actorId,
       operationId,
-      writeOrdinal: parseUint32V2("0"),
+      writeOrdinal: parseUint32("0"),
     }),
   })
   const document = createProjectIndexYDocV2(
@@ -156,55 +156,55 @@ export function createEmptyProjectIndexGenesisCandidateV2(input: {
       projectEpoch: scope.projectEpoch,
       shardEpoch: scope.shardEpoch,
       rootDirectoryId,
-      protocolDigest: parseDigestV2(input.authority.protocolDigest),
-      schemaDigest: parseDigestV2(input.authority.schemaDigest),
-      uriProtocolDigest: parseDigestV2(input.authority.uriProtocolDigest),
+      protocolDigest: parseDigest(input.authority.protocolDigest),
+      schemaDigest: parseDigest(input.authority.schemaDigest),
+      uriProtocolDigest: parseDigest(input.authority.uriProtocolDigest),
     }),
     rootEntry,
   )
-  const fullUpdate = encodeFullUpdateV2(document)
-  const stateVector = encodeStateVectorV2(document)
+  const fullUpdate = encodeFullUpdate(document)
+  const stateVector = encodeStateVector(document)
   const canonicalState = encodeProjectCanonicalStateV2(document)
   const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
-  const frontierDigest = causalFrontierDigestV2(frontier)
+  const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
     format: "convax.replica-actor-head-set/2" as const,
     scope,
     heads: Object.freeze([]),
   })
-  const checkpointCore: ReplicaCheckpointCoreV2 = Object.freeze({
+  const checkpointCore: ReplicaCheckpointCore = Object.freeze({
     format: "convax.replica-checkpoint-core/2",
     scope,
-    checkpointId: parseId128V2(input.checkpointId),
-    authorMemberId: parseMemberIdV2(input.authorMemberId),
-    authorReplicaId: parseReplicaIdV2(input.authorReplicaId),
+    checkpointId: parseId128(input.checkpointId),
+    authorMemberId: parseMemberId(input.authorMemberId),
+    authorReplicaId: parseReplicaId(input.authorReplicaId),
     authorActorId: actorId,
-    authorAuthorizationDigest: parseDigestV2(input.authorAuthorizationDigest),
+    authorAuthorizationDigest: parseDigest(input.authorAuthorizationDigest),
     directParentCheckpointDigests: Object.freeze([]),
     baseFrontierDigest: frontierDigest,
     computedFrontierDigest: frontierDigest,
-    actorHeadBoundaryDigest: replicaActorHeadSetDigestV2(actorHeads),
-    stateVectorDigest: stateVectorDigestV2(stateVector),
-    canonicalStateDigest: canonicalStateDigestV2(input.authority.schemaDigest, canonicalState),
-    fullUpdateDigest: yjsUpdateDigestV2(fullUpdate),
-    fullUpdateByteLength: parseUint64V2(String(fullUpdate.byteLength)),
-    protocolDigest: parseDigestV2(input.authority.protocolDigest),
-    schemaDigest: parseDigestV2(input.authority.schemaDigest),
-    canonicalizerDigest: ownerCanonicalizerDescriptorDigestV2(
+    actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
+    stateVectorDigest: stateVectorDigest(stateVector),
+    canonicalStateDigest: computeCanonicalStateDigest(input.authority.schemaDigest, canonicalState),
+    fullUpdateDigest: yjsUpdateDigest(fullUpdate),
+    fullUpdateByteLength: parseUint64(String(fullUpdate.byteLength)),
+    protocolDigest: parseDigest(input.authority.protocolDigest),
+    schemaDigest: parseDigest(input.authority.schemaDigest),
+    canonicalizerDigest: ownerCanonicalizerDescriptorDigest(
       projectIndexOwnerCanonicalizerDescriptorV2(input.authority.schemaDigest),
     ),
-    validationArtifactSetDigest: parseDigestV2(input.validationArtifactSetDigest),
+    validationArtifactSetDigest: parseDigest(input.validationArtifactSetDigest),
   })
   // Parse/digest once here so callers cannot receive a structurally plausible,
   // codec-invalid core and sign it as local-owner authority.
-  replicaCheckpointCoreDigestV2(checkpointCore)
+  replicaCheckpointCoreDigest(checkpointCore)
   return Object.freeze({ document, checkpointCore })
 }
 
 /** Host-private envelope: magic + uint32 JCS length + JCS + ordinary SHA-256 checksum. */
 export function encodeProjectNativeStoreManifestV2(input: ProjectNativeStoreManifestV2): Uint8Array {
   const manifest = parseProjectNativeStoreManifestV2(input)
-  const payload = encodeRestrictedJcsV2(manifest)
+  const payload = encodeRestrictedJcs(manifest)
   if (payload.byteLength > MAX_MANIFEST_PAYLOAD_BYTES) throw new TypeError("Project native manifest is too large")
   const output = Buffer.alloc(MANIFEST_HEADER_BYTES + payload.byteLength + MANIFEST_CHECKSUM_BYTES)
   MANIFEST_MAGIC.copy(output, 0)
@@ -235,30 +235,30 @@ export function decodeProjectNativeStoreManifestV2(exactBytes: Readonly<Uint8Arr
   const checksum = bytes.subarray(MANIFEST_HEADER_BYTES + payloadLength)
   const computed = createHash("sha256").update(payload).digest()
   if (!timingSafeEqual(checksum, computed)) throw new TypeError("Project native manifest checksum mismatches")
-  const manifest = parseProjectNativeStoreManifestV2(decodeRestrictedJcsV2(payload))
-  if (!sameBytes(payload, encodeRestrictedJcsV2(manifest))) {
+  const manifest = parseProjectNativeStoreManifestV2(decodeRestrictedJcs(payload))
+  if (!sameBytes(payload, encodeRestrictedJcs(manifest))) {
     throw new TypeError("Project native manifest JCS bytes are not canonical")
   }
   return manifest
 }
 
-export function projectNativeStoreManifestLocalRecordDigestV2(input: ProjectNativeStoreManifestV2): DigestV2 {
+export function projectNativeStoreManifestLocalRecordDigestV2(input: ProjectNativeStoreManifestV2): Digest {
   const manifest = parseProjectNativeStoreManifestV2(input)
-  return parseDigestV2(
+  return parseDigest(
     createHash("sha256")
       .update(LOCAL_RECORD_DOMAIN)
       .update(Buffer.from(manifest.format, "utf8"))
       .update(Buffer.from("\0", "utf8"))
-      .update(encodeRestrictedJcsV2(manifest))
+      .update(encodeRestrictedJcs(manifest))
       .digest("hex"),
   )
 }
 
 export async function verifyEmptyProjectIndexGenesisV2(input: {
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   readonly document: Y.Doc
   readonly checkpointExactBytes: Readonly<Uint8Array>
-  readonly initializationAuthorityDigest: DigestV2
+  readonly initializationAuthorityDigest: Digest
   readonly verifier: ProjectIndexGenesisCheckpointVerifierV2
 }): Promise<VerifiedEmptyProjectIndexGenesisV2> {
   const scope = requireProjectIndexScope(input.scope)
@@ -277,18 +277,18 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
     throw new TypeError("ProjectIndex genesis is not the exact empty catalog")
   }
   const checkpoint = decodeExactCheckpoint(input.checkpointExactBytes)
-  const fullUpdate = encodeFullUpdateV2(input.document)
-  const stateVector = encodeStateVectorV2(input.document)
+  const fullUpdate = encodeFullUpdate(input.document)
+  const stateVector = encodeStateVector(input.document)
   const canonicalState = encodeProjectCanonicalStateV2(input.document)
-  const canonicalStateDigest = canonicalStateDigestV2(snapshot.identity.schemaDigest, canonicalState)
+  const canonicalStateDigest = computeCanonicalStateDigest(snapshot.identity.schemaDigest, canonicalState)
   const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
-  const frontierDigest = causalFrontierDigestV2(frontier)
+  const frontierDigest = causalFrontierDigest(frontier)
   const actorHeads = Object.freeze({
     format: "convax.replica-actor-head-set/2" as const,
     scope,
     heads: Object.freeze([]),
   })
-  const canonicalizerDigest = ownerCanonicalizerDescriptorDigestV2(
+  const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(
     projectIndexOwnerCanonicalizerDescriptorV2(snapshot.identity.schemaDigest),
   )
   const core = checkpoint.core
@@ -297,9 +297,9 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
     core.directParentCheckpointDigests.length !== 0 ||
     core.baseFrontierDigest !== frontierDigest ||
     core.computedFrontierDigest !== frontierDigest ||
-    core.actorHeadBoundaryDigest !== replicaActorHeadSetDigestV2(actorHeads) ||
-    core.stateVectorDigest !== stateVectorDigestV2(stateVector) ||
-    core.fullUpdateDigest !== yjsUpdateDigestV2(fullUpdate) ||
+    core.actorHeadBoundaryDigest !== replicaActorHeadSetDigest(actorHeads) ||
+    core.stateVectorDigest !== stateVectorDigest(stateVector) ||
+    core.fullUpdateDigest !== yjsUpdateDigest(fullUpdate) ||
     core.fullUpdateByteLength !== String(fullUpdate.byteLength) ||
     core.canonicalStateDigest !== canonicalStateDigest ||
     core.protocolDigest !== snapshot.identity.protocolDigest ||
@@ -310,7 +310,7 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
   }
   if (!(await input.verifier.verify(checkpoint)))
     throw new TypeError("ProjectIndex genesis checkpoint authority is rejected")
-  const checkpointObjectDigest = replicaCheckpointObjectDigestV2(checkpoint)
+  const checkpointObjectDigest = replicaCheckpointObjectDigest(checkpoint)
   const manifest = parseProjectNativeStoreManifestV2({
     format: "convax.project-native-store-manifest/2",
     storeIdentity: STORE_IDENTITY,
@@ -318,10 +318,10 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
     protocolDigest: snapshot.identity.protocolDigest,
     schemaDigest: snapshot.identity.schemaDigest,
     uriProtocolDigest: snapshot.identity.uriProtocolDigest,
-    initializationAuthorityDigest: parseDigestV2(input.initializationAuthorityDigest),
+    initializationAuthorityDigest: parseDigest(input.initializationAuthorityDigest),
     emptyProjectIndexCheckpointObjectDigest: checkpointObjectDigest,
-    emptyProjectIndexFullUpdateDigest: yjsUpdateDigestV2(fullUpdate),
-    emptyProjectIndexStateVectorDigest: stateVectorDigestV2(stateVector),
+    emptyProjectIndexFullUpdateDigest: yjsUpdateDigest(fullUpdate),
+    emptyProjectIndexStateVectorDigest: stateVectorDigest(stateVector),
     emptyProjectIndexCanonicalStateDigest: canonicalStateDigest,
   })
   return Object.freeze({
@@ -346,7 +346,7 @@ export async function verifyEmptyProjectIndexGenesisV2(input: {
  */
 export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
   readonly collaborationDirectory: string
-  readonly localActorId: ActorIdV2
+  readonly localActorId: ActorId
   readonly materializer: NodeReplicaHeadMaterializerV2
   readonly genesis: VerifiedEmptyProjectIndexGenesisV2
   readonly persistenceHooks?: NodeCollaborationPersistenceFaultHooksV2
@@ -402,7 +402,7 @@ export async function initializeUnteamedProjectIndexNativeStoreV2(input: {
  */
 export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   readonly collaborationDirectory: string
-  readonly localActorId: ActorIdV2
+  readonly localActorId: ActorId
   readonly materializer: NodeReplicaHeadMaterializerV2
   readonly manifest: ProjectNativeStoreManifestV2
   readonly verifier: ProjectIndexGenesisCheckpointVerifierV2
@@ -428,7 +428,7 @@ export async function verifyPristineUnteamedProjectIndexNativeStoreV2(input: {
   }
   const document = createProjectIndexReconstructionYDocV2()
   try {
-    applyUpdateV1V2(
+    applyYjsUpdate(
       document,
       installed.fullUpdate,
       Object.freeze({
@@ -484,9 +484,9 @@ export async function readProjectNativeStoreManifestV2(
   const bytes = await readPlainBoundedFile(path.join(collaborationDirectory, "manifest-v2.bin"))
   const manifest = decodeProjectNativeStoreManifestV2(bytes)
   if (
-    manifest.protocolDigest !== parseDigestV2(authority.protocolDigest) ||
-    manifest.schemaDigest !== parseDigestV2(authority.schemaDigest) ||
-    manifest.uriProtocolDigest !== parseDigestV2(authority.uriProtocolDigest)
+    manifest.protocolDigest !== parseDigest(authority.protocolDigest) ||
+    manifest.schemaDigest !== parseDigest(authority.schemaDigest) ||
+    manifest.uriProtocolDigest !== parseDigest(authority.uriProtocolDigest)
   ) {
     throw new TypeError("Project native manifest authority is not current")
   }
@@ -495,7 +495,7 @@ export async function readProjectNativeStoreManifestV2(
 
 export async function describeProjectIndexInstalledBaseV2(input: {
   readonly persistence: Pick<NodeCollaborationPersistenceV2, "loadInstalledBase">
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
 }): Promise<NodeAcceptedReplicaHeadV2> {
   const scope = requireProjectIndexScope(input.scope)
   const installed = await input.persistence.loadInstalledBase(scope)
@@ -526,7 +526,7 @@ function parseProjectNativeStoreManifestV2(value: unknown): ProjectNativeStoreMa
     throw new TypeError("Project native manifest schema is invalid")
   }
   const scope = requireProjectIndexScope(value.projectIndexScope)
-  const schemaDigest = parseDigestV2(value.schemaDigest)
+  const schemaDigest = parseDigest(value.schemaDigest)
   if (schemaDigest !== PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2) {
     throw new TypeError("Project native manifest schema is unsupported")
   }
@@ -534,29 +534,29 @@ function parseProjectNativeStoreManifestV2(value: unknown): ProjectNativeStoreMa
     format: value.format,
     storeIdentity: value.storeIdentity,
     projectIndexScope: scope,
-    protocolDigest: parseDigestV2(value.protocolDigest),
+    protocolDigest: parseDigest(value.protocolDigest),
     schemaDigest,
-    uriProtocolDigest: parseDigestV2(value.uriProtocolDigest),
-    initializationAuthorityDigest: parseDigestV2(value.initializationAuthorityDigest),
-    emptyProjectIndexCheckpointObjectDigest: parseDigestV2(value.emptyProjectIndexCheckpointObjectDigest),
-    emptyProjectIndexFullUpdateDigest: parseDigestV2(value.emptyProjectIndexFullUpdateDigest),
-    emptyProjectIndexStateVectorDigest: parseDigestV2(value.emptyProjectIndexStateVectorDigest),
-    emptyProjectIndexCanonicalStateDigest: parseDigestV2(value.emptyProjectIndexCanonicalStateDigest),
+    uriProtocolDigest: parseDigest(value.uriProtocolDigest),
+    initializationAuthorityDigest: parseDigest(value.initializationAuthorityDigest),
+    emptyProjectIndexCheckpointObjectDigest: parseDigest(value.emptyProjectIndexCheckpointObjectDigest),
+    emptyProjectIndexFullUpdateDigest: parseDigest(value.emptyProjectIndexFullUpdateDigest),
+    emptyProjectIndexStateVectorDigest: parseDigest(value.emptyProjectIndexStateVectorDigest),
+    emptyProjectIndexCanonicalStateDigest: parseDigest(value.emptyProjectIndexCanonicalStateDigest),
   })
 }
 
 function requireProjectIndexScope(value: unknown): ProjectIndexDocumentScopeV2 {
-  const scope = parseDocumentScopeV2(value)
+  const scope = parseDocumentScope(value)
   if (scope.docKind !== "project-index" || scope.docId !== "project-index") {
     throw new TypeError("ProjectIndex scope is invalid")
   }
   return scope as ProjectIndexDocumentScopeV2
 }
 
-function decodeExactCheckpoint(exactBytes: Readonly<Uint8Array>): ReplicaCheckpointV2 {
+function decodeExactCheckpoint(exactBytes: Readonly<Uint8Array>): ReplicaCheckpoint {
   if (!(exactBytes instanceof Uint8Array)) throw new TypeError("ProjectIndex checkpoint must be bytes")
-  const checkpoint = parseReplicaCheckpointV2(decodeRestrictedJcsV2(exactBytes))
-  if (!sameBytes(exactBytes, encodeRestrictedJcsV2(checkpoint))) {
+  const checkpoint = parseReplicaCheckpoint(decodeRestrictedJcs(exactBytes))
+  if (!sameBytes(exactBytes, encodeRestrictedJcs(checkpoint))) {
     throw new TypeError("ProjectIndex checkpoint bytes are not exact restricted JCS")
   }
   return checkpoint
@@ -784,7 +784,7 @@ async function lstatOrNull(target: string) {
   })
 }
 
-function sameScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
+function sameScope(left: DocumentScope, right: DocumentScope): boolean {
   return (
     left.projectId === right.projectId &&
     left.projectEpoch === right.projectEpoch &&

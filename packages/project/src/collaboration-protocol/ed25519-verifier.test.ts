@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { createWebCryptoEd25519VerifierV2 } from "../collaboration-protocol"
+import { createWebCryptoEd25519Verifier } from "../collaboration-protocol"
 
 const scalarOrder = BigInt("0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
 const orderEightPoint = Uint8Array.from(
@@ -27,12 +27,12 @@ describe("strict raw Ed25519 digest verifier", () => {
     )
 
     await expect(
-      createWebCryptoEd25519VerifierV2().verifyDigest({ publicKeyBytes, signatureBytes, purposeDigestBytes }),
+      createWebCryptoEd25519Verifier().verifyDigest({ publicKeyBytes, signatureBytes, purposeDigestBytes }),
     ).resolves.toEqual({ ok: true })
   })
 
   test("rejects malformed lengths before reaching WebCrypto", async () => {
-    const verifier = createWebCryptoEd25519VerifierV2()
+    const verifier = createWebCryptoEd25519Verifier()
     await expect(
       verifier.verifyDigest({
         publicKeyBytes: new Uint8Array(31),
@@ -57,7 +57,7 @@ describe("strict raw Ed25519 digest verifier", () => {
   })
 
   test("rejects canonical small-order and noncanonical point encodings", async () => {
-    const verifier = createWebCryptoEd25519VerifierV2()
+    const verifier = createWebCryptoEd25519Verifier()
     const signature = new Uint8Array(64)
     signature[0] = 2
     signature[32] = 1
@@ -98,7 +98,7 @@ describe("strict raw Ed25519 digest verifier", () => {
     signature[0] = 2
     signature[32] = 1
     await expect(
-      createWebCryptoEd25519VerifierV2(null).verifyDigest({
+      createWebCryptoEd25519Verifier(null).verifyDigest({
         publicKeyBytes: publicKey,
         signatureBytes: signature,
         purposeDigestBytes: new Uint8Array(32),
@@ -114,7 +114,7 @@ describe("strict raw Ed25519 digest verifier", () => {
     signatureBytes.set(littleEndian(scalarOrder, 32), 32)
 
     await expect(
-      createWebCryptoEd25519VerifierV2().verifyDigest({
+      createWebCryptoEd25519Verifier().verifyDigest({
         publicKeyBytes,
         signatureBytes,
         purposeDigestBytes: new Uint8Array(32),
@@ -131,7 +131,7 @@ describe("strict raw Ed25519 digest verifier", () => {
     const signatureBytes = new Uint8Array(await crypto.subtle.sign("Ed25519", pair.privateKey, signedDigest))
 
     await expect(
-      createWebCryptoEd25519VerifierV2().verifyDigest({
+      createWebCryptoEd25519Verifier().verifyDigest({
         publicKeyBytes,
         signatureBytes,
         purposeDigestBytes: replayDigest,

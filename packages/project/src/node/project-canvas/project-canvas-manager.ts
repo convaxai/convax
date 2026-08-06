@@ -1,4 +1,4 @@
-import { parseCanvasIdV2, parseProjectIdV2 } from "@convax/collaboration"
+import { parseCanvasId, parseProjectId } from "@convax/collaboration"
 import {
   parseProjectCanvasCatalogProjectionV2,
   validateProjectCanvasTitleV2,
@@ -33,7 +33,7 @@ export class NodeProjectCanvasManager {
   constructor(private readonly application: ProjectIndexCanvasApplicationPortV2) {}
 
   async getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return parseProjectCanvasCatalogProjectionV2(await this.application.queryCatalog({ projectId }), projectId)
   }
 
@@ -60,7 +60,7 @@ export class NodeProjectCanvasManager {
       {
         format: "convax.project-canvas-route-command/2",
         kind: "project.canvas.route.rename/2",
-        canvasId: parseCanvasIdV2(input.canvasId),
+        canvasId: parseCanvasId(input.canvasId),
         title: validateProjectCanvasTitleV2(input.name),
       },
       input.signal,
@@ -73,7 +73,7 @@ export class NodeProjectCanvasManager {
       {
         format: "convax.project-canvas-route-command/2",
         kind: "project.canvas.route.tombstone/2",
-        canvasId: parseCanvasIdV2(input.canvasId),
+        canvasId: parseCanvasId(input.canvasId),
       },
       input.signal,
     )
@@ -81,12 +81,12 @@ export class NodeProjectCanvasManager {
 
   private async submit(projectIdInput: string, command: ProjectCanvasRouteCommandV2, signal?: AbortSignal) {
     signal?.throwIfAborted()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     const result = await this.application.submitRouteCommand({ projectId, command, signal })
     signal?.throwIfAborted()
     if (result.status === "rejected") throw new ProjectCanvasRouteCommandRejectedErrorV2(result.code)
     return Object.freeze({
-      canvasId: parseCanvasIdV2(result.canvasId),
+      canvasId: parseCanvasId(result.canvasId),
       catalog: parseProjectCanvasCatalogProjectionV2(result.catalog, projectId),
     })
   }

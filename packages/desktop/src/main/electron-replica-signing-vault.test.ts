@@ -3,10 +3,10 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  parseId128V2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
+  parseId128,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
 } from "@convax/collaboration"
 
 import {
@@ -27,9 +27,9 @@ describe("ElectronReplicaSigningVaultV2", () => {
     const directory = path.join(root, "userData", "replica-signing-keys")
     const vault = new ElectronReplicaSigningVaultV2(directory, fakeSafeStorage())
     const identity = {
-      projectId: parseProjectIdV2("project"),
-      projectEpoch: parseId128V2(Buffer.alloc(16, 1).toString("base64url")),
-      replicaId: parseReplicaIdV2("replica_0000002a"),
+      projectId: parseProjectId("project"),
+      projectEpoch: parseId128(Buffer.alloc(16, 1).toString("base64url")),
+      replicaId: parseReplicaId("replica_0000002a"),
     }
     const created = await vault.createReplicaKey(identity)
     const repeated = await vault.createReplicaKey(identity)
@@ -46,7 +46,7 @@ describe("ElectronReplicaSigningVaultV2", () => {
     expect(encrypted.includes(Buffer.from(identity.projectId))).toBe(false)
     expect(await vault.openSigner({
       ...identity,
-      expectedPublicKey: parsePublicKeyV2(Buffer.alloc(32, 9).toString("base64url")),
+      expectedPublicKey: parsePublicKey(Buffer.alloc(32, 9).toString("base64url")),
     })).toBe("rejected")
   })
 
@@ -58,9 +58,9 @@ describe("ElectronReplicaSigningVaultV2", () => {
       getSelectedStorageBackend: () => "basic_text",
     })
     const identity = {
-      projectId: parseProjectIdV2("project"),
-      projectEpoch: parseId128V2(Buffer.alloc(16, 1).toString("base64url")),
-      replicaId: parseReplicaIdV2("replica_0000002a"),
+      projectId: parseProjectId("project"),
+      projectEpoch: parseId128(Buffer.alloc(16, 1).toString("base64url")),
+      replicaId: parseReplicaId("replica_0000002a"),
     }
     await expect(vault.createReplicaKey(identity)).rejects.toThrow("unavailable")
   })
@@ -72,14 +72,14 @@ describe("ElectronReplicaSigningVaultV2", () => {
     const storage = fakeSafeStorage()
     const vault = new ElectronReplicaSigningVaultV2(directory, storage)
     const base = {
-      projectId: parseProjectIdV2("project-pending"),
-      projectEpoch: parseId128V2(Buffer.alloc(16, 2).toString("base64url")),
-      allocationRequestId: parseId128V2(Buffer.alloc(16, 3).toString("base64url")),
+      projectId: parseProjectId("project-pending"),
+      projectEpoch: parseId128(Buffer.alloc(16, 2).toString("base64url")),
+      allocationRequestId: parseId128(Buffer.alloc(16, 3).toString("base64url")),
     }
     const prepared = await vault.prepareReplicaKey(base)
     const restarted = new ElectronReplicaSigningVaultV2(directory, storage)
     expect((await restarted.prepareReplicaKey(base)).publicKey).toBe(prepared.publicKey)
-    const replicaId = parseReplicaIdV2("replica_0000002b")
+    const replicaId = parseReplicaId("replica_0000002b")
     const bound = await restarted.bindPreparedReplicaKey({ ...base, replicaId, expectedPublicKey: prepared.publicKey })
     expect(bound.publicKey).toBe(prepared.publicKey)
     expect(await restarted.openSigner({
@@ -92,7 +92,7 @@ describe("ElectronReplicaSigningVaultV2", () => {
     await expect(restarted.bindPreparedReplicaKey({
       ...base,
       replicaId,
-      expectedPublicKey: parsePublicKeyV2(Buffer.alloc(32, 9).toString("base64url")),
+      expectedPublicKey: parsePublicKey(Buffer.alloc(32, 9).toString("base64url")),
     })).rejects.toThrow("crossed")
   })
 })

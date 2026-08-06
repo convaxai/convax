@@ -1,15 +1,15 @@
 import type {
-  ActorIdV2,
-  DigestV2,
-  Id128V2,
-  MemberIdV2,
-  PeerIdV2,
-  ProjectIdV2,
-  PublicKeyV2,
-  ReplicaIdV2,
-  SessionIdV2,
-  SignatureV2,
-  Uint64V2,
+  ActorId,
+  Digest,
+  Id128,
+  MemberId,
+  PeerId,
+  ProjectId,
+  PublicKey,
+  ReplicaId,
+  SessionId,
+  Signature,
+  Uint64,
 } from "@convax/collaboration"
 
 /** Browser-safe R5 control-plane DTOs. These types carry metadata only. */
@@ -19,23 +19,23 @@ export type CollaborationServiceKeyPurposeV2 = "membership" | "rendezvous"
 
 export interface SessionChallengeCoreV2 {
   readonly format: "convax.session-challenge-core/2"
-  readonly challengeId: Id128V2
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly membershipEpoch: Id128V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly memberId: MemberIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly expectedReplicaSessionCounter: Uint64V2
-  readonly serverNonce: Id128V2
-  readonly sessionId: SessionIdV2
-  readonly leaseId: Id128V2
-  readonly peerId: PeerIdV2
-  readonly issuedAtUnixMs: Uint64V2
-  readonly expiresAtUnixMs: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly challengeId: Id128
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly membershipEpoch: Id128
+  readonly membershipSnapshotDigest: Digest
+  readonly memberId: MemberId
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly expectedReplicaSessionCounter: Uint64
+  readonly serverNonce: Id128
+  readonly sessionId: SessionId
+  readonly leaseId: Id128
+  readonly peerId: PeerId
+  readonly issuedAtUnixMs: Uint64
+  readonly expiresAtUnixMs: Uint64
+  readonly protocolDigest: Digest
+  readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "membership"
   readonly serviceKeyId: string
 }
@@ -43,68 +43,68 @@ export interface SessionChallengeCoreV2 {
 export interface SessionChallengeV2 {
   readonly format: "convax.session-challenge/2"
   readonly core: SessionChallengeCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }
 
 export interface SessionProofCoreV2 {
   readonly format: "convax.session-proof-core/2"
-  readonly challengeDigest: DigestV2
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly membershipEpoch: Id128V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly memberId: MemberIdV2
-  readonly memberAuthorizationEpoch: Id128V2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly replicaAuthorizationEpoch: Id128V2
-  readonly replicaSessionCounter: Uint64V2
-  readonly serverNonce: Id128V2
-  readonly sessionId: SessionIdV2
-  readonly leaseId: Id128V2
-  readonly peerId: PeerIdV2
-  readonly sessionSigningPublicKey: PublicKeyV2
-  readonly requestedExpiresAtUnixMs: Uint64V2
-  readonly protocolDigest: DigestV2
+  readonly challengeDigest: Digest
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly membershipEpoch: Id128
+  readonly membershipSnapshotDigest: Digest
+  readonly memberId: MemberId
+  readonly memberAuthorizationEpoch: Id128
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly replicaAuthorizationEpoch: Id128
+  readonly replicaSessionCounter: Uint64
+  readonly serverNonce: Id128
+  readonly sessionId: SessionId
+  readonly leaseId: Id128
+  readonly peerId: PeerId
+  readonly sessionSigningPublicKey: PublicKey
+  readonly requestedExpiresAtUnixMs: Uint64
+  readonly protocolDigest: Digest
 }
 
 export interface SessionProofV2 {
   readonly format: "convax.session-proof/2"
   readonly core: SessionProofCoreV2
-  readonly coreDigest: DigestV2
-  readonly replicaSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly replicaSignature: Signature
 }
 
 export interface SessionCredentialCoreV2 {
   readonly format: "convax.session-credential-core/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly membershipEpoch: Id128V2
-  readonly membershipSequence: Uint64V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly registrySequence: Uint64V2
-  readonly registryRootDigest: DigestV2
-  readonly memberId: MemberIdV2
-  readonly memberAuthorizationEpoch: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly membershipEpoch: Id128
+  readonly membershipSequence: Uint64
+  readonly membershipSnapshotDigest: Digest
+  readonly registrySequence: Uint64
+  readonly registryRootDigest: Digest
+  readonly memberId: MemberId
+  readonly memberAuthorizationEpoch: Id128
   readonly role: CollaborationRoleV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly replicaAuthorizationEpoch: Id128V2
-  readonly replicaSigningPublicKey: PublicKeyV2
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly replicaAuthorizationEpoch: Id128
+  readonly replicaSigningPublicKey: PublicKey
   readonly editState: CollaborationEditStateV2
-  readonly sessionId: SessionIdV2
-  readonly leaseId: Id128V2
-  readonly peerId: PeerIdV2
-  readonly sessionSigningPublicKey: PublicKeyV2
-  readonly sessionChallengeDigest: DigestV2
-  readonly sessionProofDigest: DigestV2
-  readonly issuedAtUnixMs: Uint64V2
-  readonly expiresAtUnixMs: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly sessionId: SessionId
+  readonly leaseId: Id128
+  readonly peerId: PeerId
+  readonly sessionSigningPublicKey: PublicKey
+  readonly sessionChallengeDigest: Digest
+  readonly sessionProofDigest: Digest
+  readonly issuedAtUnixMs: Uint64
+  readonly expiresAtUnixMs: Uint64
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly validationArtifactSetDigest: Digest
+  readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "membership"
   readonly serviceKeyId: string
 }
@@ -112,33 +112,33 @@ export interface SessionCredentialCoreV2 {
 export interface SessionCredentialV2 {
   readonly format: "convax.session-credential/2"
   readonly core: SessionCredentialCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }
 
 export interface ActivePeerDirectoryEntryV2 {
-  readonly credentialDigest: DigestV2
-  readonly memberId: MemberIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
+  readonly credentialDigest: Digest
+  readonly memberId: MemberId
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
   readonly role: CollaborationRoleV2
   readonly editState: CollaborationEditStateV2
-  readonly peerId: PeerIdV2
-  readonly leaseId: Id128V2
+  readonly peerId: PeerId
+  readonly leaseId: Id128
 }
 
 export interface ActivePeerDirectoryCoreV2 {
   readonly format: "convax.active-peer-directory-core/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly membershipEpoch: Id128V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly directorySequence: Uint64V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly membershipEpoch: Id128
+  readonly membershipSnapshotDigest: Digest
+  readonly directorySequence: Uint64
   readonly peers: readonly ActivePeerDirectoryEntryV2[]
-  readonly issuedAtUnixMs: Uint64V2
-  readonly expiresAtUnixMs: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly issuedAtUnixMs: Uint64
+  readonly expiresAtUnixMs: Uint64
+  readonly protocolDigest: Digest
+  readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "rendezvous"
   readonly serviceKeyId: string
 }
@@ -146,47 +146,47 @@ export interface ActivePeerDirectoryCoreV2 {
 export interface ActivePeerDirectoryV2 {
   readonly format: "convax.active-peer-directory/2"
   readonly core: ActivePeerDirectoryCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }
 
 export interface PeerTicketRequestCoreV2 {
   readonly format: "convax.peer-ticket-request-core/2"
-  readonly requestId: Id128V2
-  readonly connectionId: Id128V2
-  readonly requesterCredentialDigest: DigestV2
-  readonly responderCredentialDigest: DigestV2
-  readonly requesterPeerId: PeerIdV2
-  readonly responderPeerId: PeerIdV2
-  readonly requesterNonce: Id128V2
-  readonly protocolDigest: DigestV2
+  readonly requestId: Id128
+  readonly connectionId: Id128
+  readonly requesterCredentialDigest: Digest
+  readonly responderCredentialDigest: Digest
+  readonly requesterPeerId: PeerId
+  readonly responderPeerId: PeerId
+  readonly requesterNonce: Id128
+  readonly protocolDigest: Digest
 }
 
 export interface PeerTicketRequestV2 {
   readonly format: "convax.peer-ticket-request/2"
   readonly core: PeerTicketRequestCoreV2
-  readonly coreDigest: DigestV2
-  readonly requesterSessionSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly requesterSessionSignature: Signature
 }
 
 export interface PeerFreshnessTicketCoreV2 {
   readonly format: "convax.peer-freshness-ticket-core/2"
-  readonly ticketId: Id128V2
-  readonly requestDigest: DigestV2
-  readonly connectionId: Id128V2
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly membershipEpoch: Id128V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly requesterCredentialDigest: DigestV2
-  readonly responderCredentialDigest: DigestV2
-  readonly requesterPeerId: PeerIdV2
-  readonly responderPeerId: PeerIdV2
-  readonly issuedAtUnixMs: Uint64V2
-  readonly expiresAtUnixMs: Uint64V2
-  readonly channelContractDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly ticketId: Id128
+  readonly requestDigest: Digest
+  readonly connectionId: Id128
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly membershipEpoch: Id128
+  readonly membershipSnapshotDigest: Digest
+  readonly requesterCredentialDigest: Digest
+  readonly responderCredentialDigest: Digest
+  readonly requesterPeerId: PeerId
+  readonly responderPeerId: PeerId
+  readonly issuedAtUnixMs: Uint64
+  readonly expiresAtUnixMs: Uint64
+  readonly channelContractDigest: Digest
+  readonly protocolDigest: Digest
+  readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "rendezvous"
   readonly serviceKeyId: string
 }
@@ -194,6 +194,6 @@ export interface PeerFreshnessTicketCoreV2 {
 export interface PeerFreshnessTicketV2 {
   readonly format: "convax.peer-freshness-ticket/2"
   readonly core: PeerFreshnessTicketCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }

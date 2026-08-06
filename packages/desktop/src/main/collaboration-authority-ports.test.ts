@@ -1,16 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import {
-  causalFrontierDigestV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseUint64V2,
-  type DecodedCausalEditFrameV2,
+  causalFrontierDigest,
+  ordinarySha256,
+  parseActorId,
+  parseCanvasId,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseUint64,
+  type DecodedCausalEditFrame,
 } from "@convax/collaboration"
 
 import {
@@ -20,14 +20,14 @@ import {
 } from "./collaboration-authority-ports"
 
 const encoder = new TextEncoder()
-const digest = (value: string) => ordinarySha256V2(encoder.encode(value))
-const id = (value: number) => parseId128V2(Buffer.alloc(16, value).toString("base64url"))
-const actor = parseActorIdV2(Buffer.alloc(32, 2).toString("base64url"))
+const digest = (value: string) => ordinarySha256(encoder.encode(value))
+const id = (value: number) => parseId128(Buffer.alloc(16, value).toString("base64url"))
+const actor = parseActorId(Buffer.alloc(32, 2).toString("base64url"))
 const scope = Object.freeze({
-  projectId: parseProjectIdV2("project"),
+  projectId: parseProjectId("project"),
   projectEpoch: id(1),
   docKind: "canvas" as const,
-  docId: parseCanvasIdV2(`cv_${"a".repeat(64)}`),
+  docId: parseCanvasId(`cv_${"a".repeat(64)}`),
   shardEpoch: id(2),
 })
 const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
@@ -41,11 +41,11 @@ describe("production collaboration authority adapters", () => {
         return {
           scope,
           operationId,
-          baseFrontierDigest: causalFrontierDigestV2(frontier),
+          baseFrontierDigest: causalFrontierDigest(frontier),
           ownerSchemaDigest,
           signerAuthority: {
-            memberId: parseMemberIdV2(id(4)),
-            replicaId: parseReplicaIdV2("replica_0000002a"),
+            memberId: parseMemberId(id(4)),
+            replicaId: parseReplicaId("replica_0000002a"),
             actorId: actor,
             memberAuthorizationEpoch: id(5),
             replicaAuthorizationEpoch: id(6),
@@ -66,7 +66,7 @@ describe("production collaboration authority adapters", () => {
     if (typeof first === "string") throw new Error("unexpected")
     expect(String(first.actorSequence)).toBe("1")
     expect(first.predecessorFrameDigest).toBeNull()
-    const prior = Object.freeze({ format: "convax.causal-head-ref/2" as const, actorId: actor, actorSequence: parseUint64V2("8"), frameDigest: digest("prior"), lamport: parseUint64V2("9") })
+    const prior = Object.freeze({ format: "convax.causal-head-ref/2" as const, actorId: actor, actorSequence: parseUint64("8"), frameDigest: digest("prior"), lamport: parseUint64("9") })
     const next = await port.prepareFinalFrameAuthority({ scope, operationId, baseFrontier: frontier, previousActorHead: prior, ownerSchemaDigest })
     if (typeof next === "string") throw new Error("unexpected")
     expect(String(next.actorSequence)).toBe("9")
@@ -83,7 +83,7 @@ describe("production collaboration authority adapters", () => {
         replicaActorCredentialCoreDigest: digest("credential"),
         replicaEditAuthorizationCoreDigest: digest("edit"),
       } },
-    } as unknown as DecodedCausalEditFrameV2
+    } as unknown as DecodedCausalEditFrame
     const port = createIncomingReplicaAuthorityVerificationPortV2({
       async verify() {
         return {
@@ -93,7 +93,7 @@ describe("production collaboration authority adapters", () => {
           membershipSnapshotDigest: frame.header.core.membershipSnapshotDigest,
           replicaActorCredentialCoreDigest: frame.header.core.replicaActorCredentialCoreDigest,
           replicaEditAuthorizationCoreDigest: frame.header.core.replicaEditAuthorizationCoreDigest,
-          replicaPublicKey: parsePublicKeyV2(Buffer.alloc(32, 3).toString("base64url")),
+          replicaPublicKey: parsePublicKey(Buffer.alloc(32, 3).toString("base64url")),
         }
       },
     })

@@ -4,21 +4,21 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeBase64urlV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSessionIdV2,
-  parseUint64V2,
+  encodeBase64url,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSessionId,
+  parseUint64,
 } from "@convax/collaboration"
 
 import type { ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
 import { ElectronTeamIdentityVaultV1 } from "./electron-team-identity-vault"
 
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
-const projectId = parseProjectIdV2("project-team-vault")
-const memberId = parseMemberIdV2(id(2))
+const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
+const projectId = parseProjectId("project-team-vault")
+const memberId = parseMemberId(id(2))
 
 describe("ElectronTeamIdentityVaultV1", () => {
   test("keeps member and session keys stable and purpose-separated", async () => {
@@ -31,8 +31,8 @@ describe("ElectronTeamIdentityVaultV1", () => {
     await expect(vault.openMemberSigner({ projectId, memberId, expectedPublicKey: member.publicKey })).resolves.toBeObject()
 
     const sessionIdentity = {
-      projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaIdV2("replica_00000001"), sessionId: parseSessionIdV2(id(4)),
-      expiresAtUnixMs: parseUint64V2("200"),
+      projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaId("replica_00000001"), sessionId: parseSessionId(id(4)),
+      expiresAtUnixMs: parseUint64("200"),
     }
     const session = await vault.ensureSessionKey(sessionIdentity)
     expect(session.publicKey).not.toBe(member.publicKey)
@@ -59,13 +59,13 @@ describe("ElectronTeamIdentityVaultV1", () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-team-vault-"))
     const vault = new ElectronTeamIdentityVaultV1(path.join(root, "keys"), fakeSafeStorage())
     const member = await vault.ensureMemberKey({ projectId, memberId })
-    const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaIdV2("replica_00000001") }
-    const expired = { ...base, sessionId: parseSessionIdV2(id(4)), expiresAtUnixMs: parseUint64V2("100") }
-    const active = { ...base, sessionId: parseSessionIdV2(id(5)), expiresAtUnixMs: parseUint64V2("200") }
+    const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaId("replica_00000001") }
+    const expired = { ...base, sessionId: parseSessionId(id(4)), expiresAtUnixMs: parseUint64("100") }
+    const active = { ...base, sessionId: parseSessionId(id(5)), expiresAtUnixMs: parseUint64("200") }
     const expiredKey = await vault.ensureSessionKey(expired)
     const activeKey = await vault.ensureSessionKey(active)
 
-    await expect(vault.pruneExpiredSessionKeys({ nowUnixMs: parseUint64V2("100") })).resolves.toBe(1)
+    await expect(vault.pruneExpiredSessionKeys({ nowUnixMs: parseUint64("100") })).resolves.toBe(1)
     await expect(vault.openSessionSigner({ ...expired, expectedPublicKey: expiredKey.publicKey })).resolves.toBe("missing")
     await expect(vault.openSessionSigner({ ...active, expectedPublicKey: activeKey.publicKey })).resolves.toBeObject()
     await expect(vault.openMemberSigner({ projectId, memberId, expectedPublicKey: member.publicKey })).resolves.toBeObject()
@@ -79,19 +79,19 @@ describe("ElectronTeamIdentityVaultV1", () => {
     const vault = new ElectronTeamIdentityVaultV1(keyRoot, fakeSafeStorage())
     await vault.ensureMemberKey({ projectId, memberId })
     const memberEntries = new Set(await fs.readdir(keyRoot))
-    const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaIdV2("replica_00000001"), expiresAtUnixMs: parseUint64V2("200") }
-    const first = { ...base, sessionId: parseSessionIdV2(id(4)) }
+    const base = { projectId, memberId, projectEpoch: id(3), replicaId: parseReplicaId("replica_00000001"), expiresAtUnixMs: parseUint64("200") }
+    const first = { ...base, sessionId: parseSessionId(id(4)) }
     const firstKey = await vault.ensureSessionKey(first)
     const firstEntry = (await fs.readdir(keyRoot)).find((entry) => !memberEntries.has(entry))!
     const beforeSecond = new Set(await fs.readdir(keyRoot))
-    const second = { ...base, sessionId: parseSessionIdV2(id(5)) }
+    const second = { ...base, sessionId: parseSessionId(id(5)) }
     await vault.ensureSessionKey(second)
     const secondEntry = (await fs.readdir(keyRoot)).find((entry) => !beforeSecond.has(entry))!
     await fs.copyFile(path.join(keyRoot, secondEntry), path.join(keyRoot, firstEntry))
     await expect(vault.openSessionSigner({ ...first, expectedPublicKey: firstKey.publicKey })).resolves.toBe("rejected")
 
     await fs.symlink(path.join(root, "outside"), path.join(keyRoot, `${"f".repeat(64)}.vault`))
-    await expect(vault.pruneExpiredSessionKeys({ nowUnixMs: parseUint64V2("300") })).rejects.toThrow("untrusted")
+    await expect(vault.pruneExpiredSessionKeys({ nowUnixMs: parseUint64("300") })).rejects.toThrow("untrusted")
   })
 
   test("fails closed for Electron basic_text storage", async () => {

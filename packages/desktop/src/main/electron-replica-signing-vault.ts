@@ -8,21 +8,21 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  decodeRestrictedJcsV2,
-  encodeBase64urlV2,
-  encodeRestrictedJcsTextV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  structuredDigestV2,
-  type Id128V2,
-  type ProjectIdV2,
-  type PublicKeyV2,
-  type ReplicaIdV2,
-  type ReplicaSignerPortV2,
+  decodeRestrictedJcs,
+  encodeBase64url,
+  encodeRestrictedJcsText,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSignature,
+  structuredDigest,
+  type Id128,
+  type ProjectId,
+  type PublicKey,
+  type ReplicaId,
+  type ReplicaSignerPort,
 } from "@convax/collaboration"
 
 import type { OfflineReplicaSigningVaultV2 } from "./collaboration-production-runtime"
@@ -36,23 +36,23 @@ export interface ElectronSafeStoragePortV2 {
 
 interface ReplicaVaultPlaintextV2 {
   readonly format: "convax.desktop-replica-vault-key/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly replicaId: ReplicaIdV2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly replicaId: ReplicaId
   readonly privateKeyPkcs8Base64url: string
 }
 
 interface PendingReplicaVaultPlaintextV2 {
   readonly format: "convax.desktop-pending-replica-vault-key/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly allocationRequestId: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly allocationRequestId: Id128
   readonly privateKeyPkcs8Base64url: string
 }
 
 export interface CreatedReplicaVaultKeyV2 {
-  readonly publicKey: PublicKeyV2
-  readonly signer: ReplicaSignerPortV2
+  readonly publicKey: PublicKey
+  readonly signer: ReplicaSignerPort
 }
 
 /**
@@ -68,9 +68,9 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
   }
 
   async createReplicaKey(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly replicaId: ReplicaIdV2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly replicaId: ReplicaId
   }): Promise<CreatedReplicaVaultKeyV2> {
     const identity = parseIdentity(input)
     this.requireSecureBackend()
@@ -85,7 +85,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
         ...identity,
         privateKeyPkcs8Base64url: privateKeyPkcs8.toString("base64url"),
       })
-      const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsTextV2(record))
+      const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsText(record))
       try {
         await writeNewEncrypted(target, encrypted)
       } catch (error) {
@@ -105,9 +105,9 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
    * carries no replica identity until bindPreparedReplicaKey verifies the receipt.
    */
   async prepareReplicaKey(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly allocationRequestId: Id128V2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly allocationRequestId: Id128
   }): Promise<CreatedReplicaVaultKeyV2> {
     const identity = parsePendingIdentity(input)
     this.requireSecureBackend()
@@ -132,11 +132,11 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
 
   /** Publishes the assigned identity before deleting the recoverable pending key. */
   async bindPreparedReplicaKey(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly allocationRequestId: Id128V2
-    readonly replicaId: ReplicaIdV2
-    readonly expectedPublicKey: PublicKeyV2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly allocationRequestId: Id128
+    readonly replicaId: ReplicaId
+    readonly expectedPublicKey: PublicKey
   }): Promise<CreatedReplicaVaultKeyV2> {
     const pendingIdentity = parsePendingIdentity(input)
     const activeIdentity = parseIdentity(input)
@@ -146,7 +146,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
     const activeTarget = this.target(activeIdentity)
     if (await isFile(activeTarget)) {
       const active = await this.load(activeIdentity, activeTarget)
-      if (active.publicKey !== parsePublicKeyV2(input.expectedPublicKey)) throw new Error("Assigned replica key crossed reservation identity")
+      if (active.publicKey !== parsePublicKey(input.expectedPublicKey)) throw new Error("Assigned replica key crossed reservation identity")
       await fs.unlink(pendingTarget).catch((error) => {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       })
@@ -156,7 +156,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
     const pendingRecord = await this.readPendingRecord(pendingIdentity, pendingTarget)
     const key = keyFromPkcs8(pendingRecord.privateKeyPkcs8Base64url)
     try {
-      if (key.publicKey !== parsePublicKeyV2(input.expectedPublicKey)) throw new Error("Pending replica key mismatches reservation receipt")
+      if (key.publicKey !== parsePublicKey(input.expectedPublicKey)) throw new Error("Pending replica key mismatches reservation receipt")
       await this.writeEncryptedNew(activeTarget, Object.freeze({
         format: "convax.desktop-replica-vault-key/2" as const,
         ...activeIdentity,
@@ -168,25 +168,25 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
       key.privateDer.fill(0)
     }
     const active = await this.load(activeIdentity, activeTarget)
-    if (active.publicKey !== parsePublicKeyV2(input.expectedPublicKey)) throw new Error("Assigned replica key publication mismatches")
+    if (active.publicKey !== parsePublicKey(input.expectedPublicKey)) throw new Error("Assigned replica key publication mismatches")
     await fs.unlink(pendingTarget)
     await syncDirectory(path.dirname(pendingTarget))
     return active
   }
 
   async openSigner(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly replicaId: ReplicaIdV2
-    readonly expectedPublicKey: PublicKeyV2
-  }): Promise<ReplicaSignerPortV2 | "missing" | "unavailable" | "rejected"> {
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly replicaId: ReplicaId
+    readonly expectedPublicKey: PublicKey
+  }): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected"> {
     const identity = parseIdentity(input)
     if (!this.hasSecureBackend()) return "unavailable"
     const target = this.target(identity)
     if (!await isFile(target)) return "missing"
     try {
       const loaded = await this.load(identity, target)
-      if (loaded.publicKey !== parsePublicKeyV2(input.expectedPublicKey)) return "rejected"
+      if (loaded.publicKey !== parsePublicKey(input.expectedPublicKey)) return "rejected"
       return loaded.signer
     } catch {
       return "rejected"
@@ -194,7 +194,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
   }
 
   private async load(
-    identity: Readonly<{ projectId: ProjectIdV2; projectEpoch: Id128V2; replicaId: ReplicaIdV2 }>,
+    identity: Readonly<{ projectId: ProjectId; projectEpoch: Id128; replicaId: ReplicaId }>,
     target: string,
   ): Promise<CreatedReplicaVaultKeyV2> {
     const encrypted = Buffer.from(await fs.readFile(target))
@@ -204,7 +204,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
     } finally {
       encrypted.fill(0)
     }
-    const parsed = parsePlaintext(decodeRestrictedJcsV2(new TextEncoder().encode(plaintext)))
+    const parsed = parsePlaintext(decodeRestrictedJcs(new TextEncoder().encode(plaintext)))
     plaintext = ""
     if (
       parsed.projectId !== identity.projectId ||
@@ -220,13 +220,13 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
       const privateKey = createPrivateKey({ key: privateDer, format: "der", type: "pkcs8" })
       const publicDer = createPublicKey(privateKey).export({ format: "der", type: "spki" }) as Buffer
       if (publicDer.byteLength < 32) throw new Error("Replica vault public key is invalid")
-      const publicKey = parsePublicKeyV2(encodeBase64urlV2(publicDer.subarray(publicDer.byteLength - 32)))
-      const signerPort: ReplicaSignerPortV2 = {
+      const publicKey = parsePublicKey(encodeBase64url(publicDer.subarray(publicDer.byteLength - 32)))
+      const signerPort: ReplicaSignerPort = {
         async sign(digest) {
           if (!(digest instanceof Uint8Array) || digest.byteLength !== 32) {
             throw new TypeError("Replica signer accepts only an exact 32-byte purpose digest")
           }
-          return parseSignatureV2(encodeBase64urlV2(signDigest(null, Buffer.from(digest), privateKey)))
+          return parseSignature(encodeBase64url(signDigest(null, Buffer.from(digest), privateKey)))
         },
       }
       const signer = Object.freeze(signerPort)
@@ -237,7 +237,7 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
   }
 
   private async loadPending(
-    identity: Readonly<{ projectId: ProjectIdV2; projectEpoch: Id128V2; allocationRequestId: Id128V2 }>,
+    identity: Readonly<{ projectId: ProjectId; projectEpoch: Id128; allocationRequestId: Id128 }>,
     target: string,
   ): Promise<CreatedReplicaVaultKeyV2> {
     const record = await this.readPendingRecord(identity, target)
@@ -247,13 +247,13 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
   }
 
   private async readPendingRecord(
-    identity: Readonly<{ projectId: ProjectIdV2; projectEpoch: Id128V2; allocationRequestId: Id128V2 }>,
+    identity: Readonly<{ projectId: ProjectId; projectEpoch: Id128; allocationRequestId: Id128 }>,
     target: string,
   ): Promise<PendingReplicaVaultPlaintextV2> {
     const encrypted = Buffer.from(await fs.readFile(target))
     let plaintext = ""
     try { plaintext = this.safeStorage.decryptString(encrypted) } finally { encrypted.fill(0) }
-    const parsed = parsePendingPlaintext(decodeRestrictedJcsV2(new TextEncoder().encode(plaintext)))
+    const parsed = parsePendingPlaintext(decodeRestrictedJcs(new TextEncoder().encode(plaintext)))
     plaintext = ""
     if (parsed.projectId !== identity.projectId || parsed.projectEpoch !== identity.projectEpoch ||
       parsed.allocationRequestId !== identity.allocationRequestId) throw new Error("Pending replica vault key crossed identity")
@@ -261,18 +261,18 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
   }
 
   private async writeEncryptedNew(target: string, record: ReplicaVaultPlaintextV2 | PendingReplicaVaultPlaintextV2): Promise<void> {
-    const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsTextV2(record))
+    const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsText(record))
     try { await writeNewEncrypted(target, encrypted) } finally { encrypted.fill(0) }
   }
 
-  private target(identity: Readonly<{ projectId: ProjectIdV2; projectEpoch: Id128V2; replicaId: ReplicaIdV2 }>): string {
-    const key = structuredDigestV2("convax.desktop-replica-vault-native-key/2", identity)
-    return path.join(this.rootDirectory, `${parseDigestV2(key)}.vault`)
+  private target(identity: Readonly<{ projectId: ProjectId; projectEpoch: Id128; replicaId: ReplicaId }>): string {
+    const key = structuredDigest("convax.desktop-replica-vault-native-key/2", identity)
+    return path.join(this.rootDirectory, `${parseDigest(key)}.vault`)
   }
 
-  private pendingTarget(identity: Readonly<{ projectId: ProjectIdV2; projectEpoch: Id128V2; allocationRequestId: Id128V2 }>): string {
-    const key = structuredDigestV2("convax.desktop-pending-replica-vault-native-key/2", identity)
-    return path.join(this.rootDirectory, `${parseDigestV2(key)}.pending-vault`)
+  private pendingTarget(identity: Readonly<{ projectId: ProjectId; projectEpoch: Id128; allocationRequestId: Id128 }>): string {
+    const key = structuredDigest("convax.desktop-pending-replica-vault-native-key/2", identity)
+    return path.join(this.rootDirectory, `${parseDigest(key)}.pending-vault`)
   }
 
   private hasSecureBackend(): boolean {
@@ -286,26 +286,26 @@ export class ElectronReplicaSigningVaultV2 implements OfflineReplicaSigningVault
 }
 
 function parseIdentity(input: {
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly replicaId: ReplicaIdV2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly replicaId: ReplicaId
 }) {
   return Object.freeze({
-    projectId: parseProjectIdV2(input.projectId),
-    projectEpoch: parseId128V2(input.projectEpoch),
-    replicaId: parseReplicaIdV2(input.replicaId),
+    projectId: parseProjectId(input.projectId),
+    projectEpoch: parseId128(input.projectEpoch),
+    replicaId: parseReplicaId(input.replicaId),
   })
 }
 
 function parsePendingIdentity(input: {
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly allocationRequestId: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly allocationRequestId: Id128
 }) {
   return Object.freeze({
-    projectId: parseProjectIdV2(input.projectId),
-    projectEpoch: parseId128V2(input.projectEpoch),
-    allocationRequestId: parseId128V2(input.allocationRequestId),
+    projectId: parseProjectId(input.projectId),
+    projectEpoch: parseId128(input.projectEpoch),
+    allocationRequestId: parseId128(input.allocationRequestId),
   })
 }
 
@@ -320,9 +320,9 @@ function parsePlaintext(value: unknown): ReplicaVaultPlaintextV2 {
   ) throw new Error("Replica vault plaintext has unsupported fields")
   return Object.freeze({
     format: record.format,
-    projectId: parseProjectIdV2(record.projectId),
-    projectEpoch: parseId128V2(record.projectEpoch),
-    replicaId: parseReplicaIdV2(record.replicaId),
+    projectId: parseProjectId(record.projectId),
+    projectEpoch: parseId128(record.projectEpoch),
+    replicaId: parseReplicaId(record.replicaId),
     privateKeyPkcs8Base64url: record.privateKeyPkcs8Base64url,
   })
 }
@@ -337,9 +337,9 @@ function parsePendingPlaintext(value: unknown): PendingReplicaVaultPlaintextV2 {
   }
   return Object.freeze({
     format: record.format,
-    projectId: parseProjectIdV2(record.projectId),
-    projectEpoch: parseId128V2(record.projectEpoch),
-    allocationRequestId: parseId128V2(record.allocationRequestId),
+    projectId: parseProjectId(record.projectId),
+    projectEpoch: parseId128(record.projectEpoch),
+    allocationRequestId: parseId128(record.allocationRequestId),
     privateKeyPkcs8Base64url: record.privateKeyPkcs8Base64url,
   })
 }
@@ -359,17 +359,17 @@ function keyFromPkcs8(value: string) {
   return Object.freeze({
     privateDer,
     privateKey,
-    publicKey: parsePublicKeyV2(encodeBase64urlV2(publicDer.subarray(publicDer.byteLength - 32))),
+    publicKey: parsePublicKey(encodeBase64url(publicDer.subarray(publicDer.byteLength - 32))),
   })
 }
 
-function signerFromPrivateKey(privateKey: ReturnType<typeof createPrivateKey>): ReplicaSignerPortV2 {
+function signerFromPrivateKey(privateKey: ReturnType<typeof createPrivateKey>): ReplicaSignerPort {
   return Object.freeze({
     async sign(digest: Uint8Array) {
       if (!(digest instanceof Uint8Array) || digest.byteLength !== 32) {
         throw new TypeError("Replica signer accepts only an exact 32-byte purpose digest")
       }
-      return parseSignatureV2(encodeBase64urlV2(signDigest(null, Buffer.from(digest), privateKey)))
+      return parseSignature(encodeBase64url(signDigest(null, Buffer.from(digest), privateKey)))
     },
   })
 }

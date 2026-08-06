@@ -1,9 +1,9 @@
 import type {
-  OwnerExternalFactPortV2,
-  OwnerIntentConstructionContextV2,
-  OwnerIntentDependenciesV2,
+  OwnerExternalFactPort,
+  OwnerIntentConstructionContext,
+  OwnerIntentDependencies,
 } from "@convax/collaboration"
-import { parseUint32V2 } from "@convax/collaboration"
+import { parseUint32 } from "@convax/collaboration"
 import type { CanvasRendererCommandV2 } from "./session"
 import {
   dataRegisterDigestV2,
@@ -140,7 +140,7 @@ export interface CanvasPluginCreationGroupCommandV2 {
 
 export interface CanvasClosedIntentConstructionV2 {
   readonly intent: CanvasTypedIntentUnionV2
-  readonly dependencies: OwnerIntentDependenciesV2<"canvas">
+  readonly dependencies: OwnerIntentDependencies<"canvas">
 }
 
 /**
@@ -150,7 +150,7 @@ export interface CanvasClosedIntentConstructionV2 {
  */
 export function constructCanvasAuthoritativeIntentV2(input: {
   readonly snapshot: CanvasSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly command: CanvasAuthoritativeCommandV2
 }): CanvasClosedIntentConstructionV2 | "rejected" {
   try {
@@ -165,10 +165,10 @@ export function constructCanvasAuthoritativeIntentV2(input: {
 
 export function discoverCanvasHistoryIntentDependenciesV2(input: {
   readonly snapshot: CanvasSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly direction: "undo" | "redo"
-  readonly rootOperationId: import("./types").Id128V2
-}): OwnerIntentDependenciesV2<"canvas"> | "rejected" {
+  readonly rootOperationId: import("./types").Id128
+}): OwnerIntentDependencies<"canvas"> | "rejected" {
   const intent = materializeCanvasSemanticHistoryIntentV2(
     input.snapshot,
     input.context,
@@ -186,10 +186,10 @@ export function discoverCanvasHistoryIntentDependenciesV2(input: {
  */
 export function constructCanvasHistoryIntentV2(input: {
   readonly snapshot: CanvasSnapshotV2
-  readonly context: OwnerIntentConstructionContextV2
+  readonly context: OwnerIntentConstructionContext
   readonly direction: "undo" | "redo"
-  readonly rootOperationId: import("./types").Id128V2
-  readonly externalFacts: OwnerExternalFactPortV2<"canvas">
+  readonly rootOperationId: import("./types").Id128
+  readonly externalFacts: OwnerExternalFactPort<"canvas">
 }): CanvasClosedIntentConstructionV2 | "pending" | "rejected" {
   const intent = materializeCanvasSemanticHistoryIntentV2(
     input.snapshot,
@@ -210,12 +210,12 @@ export function constructCanvasHistoryIntentV2(input: {
 
 function constructIntent(
   snapshot: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   command: CanvasAuthoritativeCommandV2,
 ): CanvasTypedIntentUnionV2 {
   if (command.kind === "renderer") return rendererIntent(snapshot, command.command)
   if (command.kind === "agent-node-create") {
-    const ordinal = parseUint32V2("0")
+    const ordinal = parseUint32("0")
     const node = derivedNodeRefV2(context, ordinal)
     return Object.freeze({
       format: "convax.typed-intent/2",
@@ -243,7 +243,7 @@ function constructIntent(
   if (command.kind === "resources-create") {
     if (command.items.length < 1 || command.items.length > 85) throw new RangeError("Manual resource count is invalid")
     const nodes = command.items.map((item, index) => {
-      const ordinal = parseUint32V2(String(index))
+      const ordinal = parseUint32(String(index))
       const node = derivedNodeRefV2(context, ordinal)
       return Object.freeze({ ordinal, node, item })
     })
@@ -280,7 +280,7 @@ function constructIntent(
   if (command.kind === "manual-resource-placeholders-create") {
     if (command.items.length < 1 || command.items.length > 85) throw new RangeError("Manual resource count is invalid")
     const nodes = command.items.map((item, index) => {
-      const ordinal = parseUint32V2(String(index))
+      const ordinal = parseUint32(String(index))
       const node = derivedNodeRefV2(context, ordinal)
       return Object.freeze({ ordinal, node, item })
     })
@@ -311,7 +311,7 @@ function constructIntent(
     })
   }
   if (command.kind === "edge-connect") {
-    const ordinal = parseUint32V2("0")
+    const ordinal = parseUint32("0")
     const edge = derivedEdgeRefV2(context, ordinal)
     return Object.freeze({
       format: "convax.typed-intent/2",
@@ -494,7 +494,7 @@ function geometryIntent(
 
 function groupNodesIntent(
   snapshot: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   command: Extract<CanvasAuthoritativeCommandV2, { readonly kind: "nodes-group" }>,
 ): CanvasTypedIntentUnionV2 {
   if (command.children.length < 2 || command.children.length > 256) {
@@ -514,7 +514,7 @@ function groupNodesIntent(
   const maxY = Math.max(...children.map((node) => node.position.y + node.size.height))
   const groupPosition = Object.freeze({ x: minX - padding, y: minY - padding })
   const groupSize = Object.freeze({ width: maxX - minX + padding * 2, height: maxY - minY + padding * 2 })
-  const ordinal = parseUint32V2("0")
+  const ordinal = parseUint32("0")
   const group = derivedNodeRefV2(context, ordinal)
   const childRefs = children.map((node) => Object.freeze({ ...node.ref }))
   const sortedGeometry = children
@@ -552,7 +552,7 @@ function groupNodesIntent(
 
 function ungroupNodesIntent(
   snapshot: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   groupRef: CanvasEntityRefV2 & { readonly kind: "node" },
 ): CanvasTypedIntentUnionV2 {
   const index = buildCanvasProjectionIndexV2(snapshot)
@@ -622,16 +622,16 @@ function rendererIntent(snapshot: CanvasSnapshotV2, command: CanvasRendererComma
 
 function pluginCreationGroupIntent(
   snapshot: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   command: CanvasPluginCreationGroupCommandV2,
 ): CanvasTypedIntentUnionV2 {
   if (command.nodes.length < 1 || command.nodes.length > 85 || command.edges.length > 168) {
     throw new RangeError("Plugin creation group exceeds Canvas bounds")
   }
-  const groupOrdinal = parseUint32V2("0")
+  const groupOrdinal = parseUint32("0")
   const nodes = command.nodes.map((node, index): NodeCreateTemplateV2 => {
     if (!samePluginRequirement(node.plugin, command.plugin)) throw new TypeError("Plugin node requirement mismatch")
-    const ordinal = parseUint32V2(String(index + 1))
+    const ordinal = parseUint32(String(index + 1))
     const ref = derivedNodeRefV2(context, ordinal)
     return Object.freeze({
       ordinal,
@@ -645,7 +645,7 @@ function pluginCreationGroupIntent(
     })
   })
   const edges = command.edges.map((edge, index): EdgeCreateTemplateV2 => {
-    const ordinal = parseUint32V2(String(command.nodes.length + index + 1))
+    const ordinal = parseUint32(String(command.nodes.length + index + 1))
     const ref = derivedEdgeRefV2(context, ordinal)
     return Object.freeze({
       ordinal,
@@ -682,7 +682,7 @@ function pluginCreationGroupIntent(
               throw new TypeError("Plugin resource node requires its exact current proof")
             }
             return [
-              Object.freeze({ createdNodeOrdinal: parseUint32V2(String(index + 1)), proof: structuredClone(node.resourceProof) }),
+              Object.freeze({ createdNodeOrdinal: parseUint32(String(index + 1)), proof: structuredClone(node.resourceProof) }),
             ]
           }
           if (node.resourceProof !== undefined) throw new TypeError("Non-resource Plugin node cannot carry a resource proof")
@@ -702,12 +702,12 @@ function pluginCreationGroupIntent(
 function creationEndpoint(
   endpoint: CanvasPluginCreationGroupCommandV2["edges"][number]["source"],
   nodeCount: number,
-): CanvasEntityRefV2 | { readonly createdNodeOrdinal: import("./types").Uint32V2 } {
+): CanvasEntityRefV2 | { readonly createdNodeOrdinal: import("./types").Uint32 } {
   if (endpoint.mode === "existing") return Object.freeze({ ...endpoint.ref })
   if (!Number.isSafeInteger(endpoint.nodeIndex) || endpoint.nodeIndex < 0 || endpoint.nodeIndex >= nodeCount) {
     throw new RangeError("Plugin creation edge references an unknown created node")
   }
-  return Object.freeze({ createdNodeOrdinal: parseUint32V2(String(endpoint.nodeIndex + 1)) })
+  return Object.freeze({ createdNodeOrdinal: parseUint32(String(endpoint.nodeIndex + 1)) })
 }
 
 function connectableGuard(snapshot: CanvasSnapshotV2, ref: CanvasEntityRefV2 & { readonly kind: "node" }) {
@@ -757,7 +757,7 @@ function edgeLiveGuard(snapshot: CanvasSnapshotV2, ref: CanvasEntityRefV2 & { re
 
 function containmentGuard(
   snapshot: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   ref: CanvasEntityRefV2 & { readonly kind: "node" },
 ) {
   const live = nodeLiveGuard(snapshot, ref)
@@ -773,8 +773,8 @@ function containmentGuard(
   })
 }
 
-function derivedRelationId(context: OwnerIntentConstructionContextV2, ordinal: number): string {
-  return deriveCanvasIdV2("relation", context, parseUint32V2(String(ordinal)))
+function derivedRelationId(context: OwnerIntentConstructionContext, ordinal: number): string {
+  return deriveCanvasIdV2("relation", context, parseUint32(String(ordinal)))
 }
 
 function uniqueNodeRefs(

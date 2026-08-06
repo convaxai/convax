@@ -1,10 +1,9 @@
 import {
-  compareBytesV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
-  type DigestV2,
+  compareBytes,
+  encodeRestrictedJcs,
+  parseDigest,
+  type DecodedCausalEditFrame,
+  type Digest,
 } from "@convax/collaboration"
 
 import { decodeCanvasTypedIntentV2 } from "./intent-validation"
@@ -17,8 +16,8 @@ const MAX_REQUIRED_BLOBS_PER_FRAME = 256
  * Plugin state is opaque and is never scanned as Host resource metadata.
  */
 export function requiredCanvasBlobDigestsV2(
-  frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3,
-): readonly DigestV2[] {
+  frame: DecodedCausalEditFrame,
+): readonly Digest[] {
   if (frame.header.core.scope.docKind !== "canvas") {
     throw new TypeError("Canvas blob dependency extraction received another document owner")
   }
@@ -26,16 +25,16 @@ export function requiredCanvasBlobDigestsV2(
   if (frame.header.core.intentKind !== intent.kind) {
     throw new TypeError("Canvas frame intent kind does not match its exact typed intent")
   }
-  const canonical = encodeRestrictedJcsV2(intent)
-  if (compareBytesV2(canonical, frame.sections.typedIntentJcs) !== 0) {
+  const canonical = encodeRestrictedJcs(intent)
+  if (compareBytes(canonical, frame.sections.typedIntentJcs) !== 0) {
     throw new TypeError("Canvas typed intent bytes are not canonical restricted JCS")
   }
 
-  const digests = new Set<DigestV2>()
+  const digests = new Set<Digest>()
   walkHostValue(intent, (value) => {
     if (value.format !== "convax.canvas-resource-ref/2") return
     assertResourceRefV2(value)
-    digests.add(parseDigestV2(value.contentDigest))
+    digests.add(parseDigest(value.contentDigest))
   })
   const result = [...digests].sort()
   if (result.length > MAX_REQUIRED_BLOBS_PER_FRAME) {

@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto"
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  type ActorIdV2,
-  type DigestV2,
-  type Id128V2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerValidatedStateV2,
-  type ProjectIdV2,
+  encodeBase64url,
+  type ActorId,
+  type Digest,
+  type Id128,
+  type OwnerIntentConstructionContext,
+  type OwnerValidatedState,
+  type ProjectId,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
@@ -25,7 +25,7 @@ import {
 import { ProjectIndexFileApplicationV2 } from "./project-index-file-application"
 import { ProjectIndexCanvasApplicationV2, type ProjectIndexDocumentSessionPortV2 } from "./project-index-application"
 
-const projectId = "project-a" as ProjectIdV2
+const projectId = "project-a" as ProjectId
 const projectEpoch = id128(1)
 const shardEpoch = id128(2)
 const protocolDigest = digest("protocol")
@@ -201,7 +201,7 @@ describe("ProjectIndexFileApplicationV2", () => {
   })
 })
 
-function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContextV2, order: string[]): ProjectIndexDocumentSessionPortV2 {
+function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContext, order: string[]): ProjectIndexDocumentSessionPortV2 {
   const scope = context.scope as ProjectIndexDocumentSessionPortV2["scope"]
   return {
     scope,
@@ -222,8 +222,8 @@ function applyingSession(document: Y.Doc, context: OwnerIntentConstructionContex
   }
 }
 
-function validated(document: Y.Doc): OwnerValidatedStateV2<"project-index"> {
-  return { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedStateV2<"project-index">
+function validated(document: Y.Doc): OwnerValidatedState<"project-index"> {
+  return { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">
 }
 
 function genesis(): Y.Doc {
@@ -253,7 +253,7 @@ function genesis(): Y.Doc {
   }, rootEntry)
 }
 
-function constructionContext(actorId: ActorIdV2, operationId: Id128V2, lamport: string): OwnerIntentConstructionContextV2 {
+function constructionContext(actorId: ActorId, operationId: Id128, lamport: string): OwnerIntentConstructionContext {
   return {
     scope: { projectId, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch },
     actorId,
@@ -267,7 +267,7 @@ function constructionContext(actorId: ActorIdV2, operationId: Id128V2, lamport: 
   }
 }
 
-function id128(byte: number): Id128V2 { return encodeBase64urlV2(Buffer.alloc(16, byte)) as Id128V2 }
-function actor(byte: number): ActorIdV2 { return encodeBase64urlV2(Buffer.alloc(32, byte)) as ActorIdV2 }
-function digest(seed: string): DigestV2 { return digestBytes(new TextEncoder().encode(seed)) }
-function digestBytes(bytes: Readonly<Uint8Array>): DigestV2 { return createHash("sha256").update(new Uint8Array(bytes)).digest("hex") as DigestV2 }
+function id128(byte: number): Id128 { return encodeBase64url(Buffer.alloc(16, byte)) as Id128 }
+function actor(byte: number): ActorId { return encodeBase64url(Buffer.alloc(32, byte)) as ActorId }
+function digest(seed: string): Digest { return digestBytes(new TextEncoder().encode(seed)) }
+function digestBytes(bytes: Readonly<Uint8Array>): Digest { return createHash("sha256").update(new Uint8Array(bytes)).digest("hex") as Digest }

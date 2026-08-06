@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
 import {
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  type Id128V2,
-  type VerifiedProtocolAuthorityV2,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  type Id128,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 import {
@@ -54,7 +54,7 @@ export class TeamProjectResetUnavailableErrorV2 extends Error {
 export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1 {
   constructor(
     private readonly options: {
-      readonly authority: VerifiedProtocolAuthorityV2
+      readonly authority: CurrentProtocolAuthority
       readonly owners: NodeDurableLocalProjectOwnerAuthorityV2
     },
   ) {}
@@ -184,7 +184,7 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
   ): Promise<ResolvedLocalProjectOwnerAuthorityV2 | undefined> {
     assertNoTeamNamespaces(plan)
     throwIfAborted(signal)
-    const projectId = parseProjectIdV2(plan.projectId)
+    const projectId = parseProjectId(plan.projectId)
     const hasCollaborationStore = plan.preview.some(
       ({ path: candidate }) => candidate === ".convax/collaboration" || candidate.startsWith(".convax/collaboration/"),
     )
@@ -248,9 +248,9 @@ export class LocalProjectResetAuthorityV2 implements ProjectResetAuthorityPortV1
       projectId: owner.binding.projectId,
       oldProjectEpoch: null,
       reason: "unsupported-portable-version",
-      observedOldPrivateTreeDigest: parseDigestV2(plan.originalTreeDigest),
-      unsupportedInventoryDigest: parseDigestV2(plan.unsupportedInventoryDigest),
-      privateDeletionSetDigest: parseDigestV2(plan.privateDeletionSetDigest),
+      observedOldPrivateTreeDigest: parseDigest(plan.originalTreeDigest),
+      unsupportedInventoryDigest: parseDigest(plan.unsupportedInventoryDigest),
+      privateDeletionSetDigest: parseDigest(plan.privateDeletionSetDigest),
       stableProjectIdPreserved: true,
       ordinaryProjectFilesPreserved: true,
       deletionStatement: "delete-exact-displayed-private-project-state",
@@ -345,9 +345,9 @@ function createResetManifest(
     newMembershipEpoch: null,
     newProjectIndexShardEpoch: expected.owner.binding.projectIndexShardEpoch,
     reason: "unsupported-portable-version",
-    observedOldPrivateTreeDigest: parseDigestV2(expected.plan.originalTreeDigest),
-    unsupportedInventoryDigest: parseDigestV2(expected.plan.unsupportedInventoryDigest),
-    privateDeletionSetDigest: parseDigestV2(expected.plan.privateDeletionSetDigest),
+    observedOldPrivateTreeDigest: parseDigest(expected.plan.originalTreeDigest),
+    unsupportedInventoryDigest: parseDigest(expected.plan.unsupportedInventoryDigest),
+    privateDeletionSetDigest: parseDigest(expected.plan.privateDeletionSetDigest),
     requestedProtocolDigest: native.protocolDigest,
     requestedSchemaDigest: native.schemaDigest,
     requestedUriProtocolDigest: native.uriProtocolDigest,
@@ -437,14 +437,14 @@ function matchesVerificationInput(
   )
 }
 
-function derivedId128(domain: string, value: unknown): Id128V2 {
-  const digest = createHash("sha256").update(`${domain}\0`, "utf8").update(encodeRestrictedJcsV2(value)).digest()
-  return parseId128V2(digest.subarray(0, 16).toString("base64url"))
+function derivedId128(domain: string, value: unknown): Id128 {
+  const digest = createHash("sha256").update(`${domain}\0`, "utf8").update(encodeRestrictedJcs(value)).digest()
+  return parseId128(digest.subarray(0, 16).toString("base64url"))
 }
 
 function sameExactValue(left: unknown, right: unknown): boolean {
-  const leftBytes = encodeRestrictedJcsV2(left)
-  const rightBytes = encodeRestrictedJcsV2(right)
+  const leftBytes = encodeRestrictedJcs(left)
+  const rightBytes = encodeRestrictedJcs(right)
   return leftBytes.byteLength === rightBytes.byteLength && leftBytes.every((byte, index) => byte === rightBytes[index])
 }
 

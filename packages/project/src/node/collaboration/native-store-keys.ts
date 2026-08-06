@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { DigestV2, DocumentScopeV2 } from "@convax/collaboration"
+import type { Digest, DocumentScope } from "@convax/collaboration"
 
 export type DocumentNativeKeyV2 = string & { readonly __documentNativeKeyV2: true }
 export type ObjectNativeKeyV2 = string & { readonly __objectNativeKeyV2: true }
@@ -13,7 +13,7 @@ const maximumUint64 = (1n << 64n) - 1n
  * Native document names are opaque hashes of the complete portable scope. Raw
  * Project, Canvas and epoch identifiers never become path components.
  */
-export function deriveDocumentNativeKeyV2(scope: DocumentScopeV2): DocumentNativeKeyV2 {
+export function deriveDocumentNativeKeyV2(scope: DocumentScope): DocumentNativeKeyV2 {
   validateDocumentScopeShape(scope)
   return sha256(
     Buffer.from("convax.native-document-store-key/2\0", "utf8"),
@@ -25,7 +25,7 @@ export function deriveDocumentNativeKeyV2(scope: DocumentScopeV2): DocumentNativ
  * Immutable object names bind both the object family and portable digest. This
  * prevents one digest-looking value from aliasing objects in different stores.
  */
-export function deriveObjectNativeKeyV2(objectKind: string, digest: DigestV2 | string): ObjectNativeKeyV2 {
+export function deriveObjectNativeKeyV2(objectKind: string, digest: Digest | string): ObjectNativeKeyV2 {
   if (!/^[a-z][a-z0-9-]{0,63}$/u.test(objectKind)) {
     throw new InvalidCollaborationNativeKeyInputError("Object kind is not canonical ASCII")
   }
@@ -68,7 +68,7 @@ export class InvalidCollaborationNativeKeyInputError extends Error {
   }
 }
 
-function validateDocumentScopeShape(scope: unknown): asserts scope is DocumentScopeV2 {
+function validateDocumentScopeShape(scope: unknown): asserts scope is DocumentScope {
   if (!isPlainObject(scope) || !hasExactKeys(scope, ["docId", "docKind", "projectEpoch", "projectId", "shardEpoch"])) {
     throw new InvalidCollaborationNativeKeyInputError("Document scope has unsupported fields")
   }

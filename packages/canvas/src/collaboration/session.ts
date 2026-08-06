@@ -1,15 +1,15 @@
 import type {
-  ActualWriteEvidenceV2,
-  DigestV2,
-  DocumentOwnerProtocolDefinitionV2,
-  OwnerApplyResultV2,
-  OwnerIntentClosureDefinitionV2,
-  OwnerHistoryMaterializationDefinitionV2,
-  OwnerProcessValueFactoryV2,
-  OwnerIntentValidationContextV2,
-  SelectedDocumentOwnerArtifactDefinitionV2,
+  ActualWriteEvidence,
+  Digest,
+  DocumentOwnerProtocolDefinition,
+  OwnerApplyResult,
+  OwnerIntentClosureDefinition,
+  OwnerHistoryMaterializationDefinition,
+  OwnerProcessValueFactory,
+  OwnerIntentValidationContext,
+  SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
-import { ownerCanonicalizerDescriptorDigestV2, parseDigestV2 } from "@convax/collaboration"
+import { ownerCanonicalizerDescriptorDigest, parseDigest } from "@convax/collaboration"
 import type * as Y from "yjs"
 import type { CanvasNodeGeometryUpdate } from "../commands"
 import { parseCanvasDocument } from "../document"
@@ -31,25 +31,25 @@ import type {
   CanvasSnapshotV2,
   CanvasEntityRefV2,
   CanvasTypedIntentUnionV2,
-  Id128V2,
+  Id128,
 } from "./types"
 import { canvasOwnerCanonicalizerDescriptorV2 } from "./validation"
 import { encodeCanvasCanonicalStateV2, validateCanvasYDocV2 } from "./ydoc"
 
 interface CanvasOwnerResultValueV2 {
   readonly ownerOpaqueResult: CanvasIntentApplyResultV2
-  readonly semanticRootOperationId: Id128V2 | null
-  readonly scope: OwnerIntentValidationContextV2["scope"]
+  readonly semanticRootOperationId: Id128 | null
+  readonly scope: OwnerIntentValidationContext["scope"]
 }
 
-export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: DigestV2 = parseDigestV2(
+export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: Digest = parseDigest(
   "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36",
 )
 
-export const selectedCanvasDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> =
+export const selectedCanvasDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinition<"canvas"> =
   Object.freeze({
     owner: "canvas",
-    createDefinitions(processValues: OwnerProcessValueFactoryV2<"canvas">) {
+    createDefinitions(processValues: OwnerProcessValueFactory<"canvas">) {
       const protocol = createCanvasProtocolDefinitionV2(processValues)
       const closure = createCanvasClosureDefinitionV2()
       return Object.freeze({ protocol, closure })
@@ -57,11 +57,11 @@ export const selectedCanvasDocumentOwnerArtifactDefinitionV2: SelectedDocumentOw
   })
 
 function createCanvasProtocolDefinitionV2(
-  processValues: OwnerProcessValueFactoryV2<"canvas">,
-): DocumentOwnerProtocolDefinitionV2<"canvas"> {
+  processValues: OwnerProcessValueFactory<"canvas">,
+): DocumentOwnerProtocolDefinition<"canvas"> {
   const schemaDigest = CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2
   const canonicalizerDescriptor = canvasOwnerCanonicalizerDescriptorV2(schemaDigest)
-  const canonicalizerDigest = ownerCanonicalizerDescriptorDigestV2(canonicalizerDescriptor)
+  const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(canonicalizerDescriptor)
   return Object.freeze({
     owner: "canvas",
     schemaDigest,
@@ -83,9 +83,9 @@ function createCanvasProtocolDefinitionV2(
     },
     applyIntent(
       candidate: Y.Doc,
-      outerContext: OwnerIntentValidationContextV2,
+      outerContext: OwnerIntentValidationContext,
       intent: unknown,
-      facts: import("@convax/collaboration").OwnerExternalFactPortV2<"canvas">,
+      facts: import("@convax/collaboration").OwnerExternalFactPort<"canvas">,
     ) {
       try {
         assertCanvasTypedIntentV2(intent)
@@ -103,9 +103,9 @@ function createCanvasProtocolDefinitionV2(
       } satisfies CanvasOwnerResultValueV2))
     },
     validatePost(
-      _base: import("@convax/collaboration").OwnerValidatedStateV2<"canvas">,
+      _base: import("@convax/collaboration").OwnerValidatedState<"canvas">,
       candidate: Y.Doc,
-      result: OwnerApplyResultV2<"canvas">,
+      result: OwnerApplyResult<"canvas">,
     ) {
       try {
         const snapshot = validateCanvasYDocV2(candidate)
@@ -122,7 +122,7 @@ function createCanvasProtocolDefinitionV2(
         return "rejected"
       }
     },
-    deriveActualWriteEvidence(result: OwnerApplyResultV2<"canvas">) {
+    deriveActualWriteEvidence(result: OwnerApplyResult<"canvas">) {
       const value = canvasOwnerResultValue(result)
       if (value === null) throw new TypeError("Canvas owner result is invalid")
       const evidence = value.ownerOpaqueResult.actualWriteEvidence
@@ -134,12 +134,12 @@ function createCanvasProtocolDefinitionV2(
         intentDigest: value.ownerOpaqueResult.receipt.intentDigest,
         changedPaths: evidence.changedPaths,
         writes: evidence.writes,
-      } satisfies ActualWriteEvidenceV2
+      } satisfies ActualWriteEvidence
     },
   })
 }
 
-function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canvas"> {
+function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinition<"canvas"> {
   return Object.freeze({
     inspectIntent(intent: unknown) {
       try {
@@ -153,7 +153,7 @@ function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canv
         return "rejected"
       }
     },
-    discoverDependencies(input: Parameters<OwnerIntentClosureDefinitionV2<"canvas">["discoverDependencies"]>[0]) {
+    discoverDependencies(input: Parameters<OwnerIntentClosureDefinition<"canvas">["discoverDependencies"]>[0]) {
       try {
         assertCanvasTypedIntentV2(input.intent)
         return discoverCanvasIntentDependenciesV2(input.context, input.intent)
@@ -162,7 +162,7 @@ function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canv
       }
     },
     history: Object.freeze({
-      discoverDependencies(input: Parameters<OwnerHistoryMaterializationDefinitionV2<"canvas">["discoverDependencies"]>[0]) {
+      discoverDependencies(input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["discoverDependencies"]>[0]) {
         const base = canvasSnapshotFromValidatedOwnerStateV2(input.base)
         if (base === null) return "rejected"
         return discoverCanvasHistoryIntentDependenciesV2({
@@ -172,7 +172,7 @@ function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canv
           rootOperationId: input.rootOperationId,
         })
       },
-      materialize(input: Parameters<OwnerHistoryMaterializationDefinitionV2<"canvas">["materialize"]>[0]) {
+      materialize(input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["materialize"]>[0]) {
         const base = canvasSnapshotFromValidatedOwnerStateV2(input.base)
         if (base === null) return "rejected"
         const constructed = constructCanvasHistoryIntentV2({
@@ -189,7 +189,7 @@ function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canv
 }
 
 export function canvasSnapshotFromValidatedOwnerStateV2(
-  base: import("@convax/collaboration").OwnerValidatedStateV2<"canvas">,
+  base: import("@convax/collaboration").OwnerValidatedState<"canvas">,
 ): CanvasSnapshotV2 | null {
   const value = base.value
   if (
@@ -204,7 +204,7 @@ export function canvasSnapshotFromValidatedOwnerStateV2(
   return value as CanvasSnapshotV2
 }
 
-function canvasOwnerResultValue(result: OwnerApplyResultV2<"canvas">): CanvasOwnerResultValueV2 | null {
+function canvasOwnerResultValue(result: OwnerApplyResult<"canvas">): CanvasOwnerResultValueV2 | null {
   const value = result.value
   return (
     typeof value === "object" &&
@@ -301,9 +301,9 @@ export async function submitCanvasGeometryGestureV2(
 export type CanvasIntentCallerV2 = "ui" | "agent" | "plugin"
 
 export interface CanvasDurableIntentCommitV2 {
-  readonly operationId: Id128V2
+  readonly operationId: Id128
   readonly projection: CanvasProjectionV2
-  readonly semanticRootOperationId: Id128V2 | null
+  readonly semanticRootOperationId: Id128 | null
 }
 
 export interface CanvasIntentCommitPortV2 {

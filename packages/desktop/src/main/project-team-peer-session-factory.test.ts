@@ -1,27 +1,27 @@
 import { describe, expect, mock, test } from "bun:test"
 import { getEventListeners } from "node:events"
 import {
-  encodeBase64urlV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseSignatureV2,
+  encodeBase64url,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseSignature,
 } from "@convax/collaboration"
 
 import type { DesktopCollaborationControlHttpClientV2 } from "./collaboration-control-http-client"
 import type { DesktopTeamAuthorityRecordV1, VerifiedDesktopTeamAuthorityV1 } from "./durable-team-authority-store"
 import { ProductionProjectTeamPeerSessionFactoryV2, waitForTeamRetryV2 } from "./project-team-peer-session-factory"
 
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const projectId = parseProjectIdV2("project-team-factory")
-const memberId = parseMemberIdV2(id(2))
-const publicKey = parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(4)))
-const digest = (fill: string) => parseDigestV2(fill.repeat(64))
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const projectId = parseProjectId("project-team-factory")
+const memberId = parseMemberId(id(2))
+const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(4)))
+const digest = (fill: string) => parseDigest(fill.repeat(64))
 const invitation = Object.freeze({
-  invitationToken: encodeBase64urlV2(new Uint8Array(16).fill(5)),
+  invitationToken: encodeBase64url(new Uint8Array(16).fill(5)),
   projectId,
   initialRole: "editor" as const,
   expiresAtUnixMs: "9999999999999" as const,

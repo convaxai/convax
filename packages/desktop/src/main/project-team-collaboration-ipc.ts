@@ -1,4 +1,4 @@
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
 
 import {
@@ -51,7 +51,7 @@ export function registerProjectTeamCollaborationIpcV2(input: {
     if (disposed) throw new Error("Project team collaboration IPC is disposed")
     if (!input.isTrustedSender(event)) throw new Error("Project team collaboration IPC sender is not trusted")
     const record = exactRecord(value, ["projectId"], "Project team collaboration request")
-    const projectId = parseProjectIdV2(record.projectId)
+    const projectId = parseProjectId(record.projectId)
     if (input.getActiveProjectId() !== projectId) throw new Error("Project team collaboration request is stale")
     return projectId
   }
@@ -70,7 +70,7 @@ export function registerProjectTeamCollaborationIpcV2(input: {
     if (disposed) throw new Error("Project team collaboration IPC is disposed")
     if (!input.isTrustedSender(event)) throw new Error("Project team collaboration IPC sender is not trusted")
     const record = exactRecord(value, ["invitation", "projectId"], "Project team collaboration join request")
-    const projectId = parseProjectIdV2(record.projectId)
+    const projectId = parseProjectId(record.projectId)
     if (input.getActiveProjectId() !== projectId) throw new Error("Project team collaboration request is stale")
     const invitation = parseProjectTeamInvitationV2(record.invitation)
     if (invitation.projectId !== projectId) throw new Error("Project team collaboration invitation crossed Project identity")

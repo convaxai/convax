@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { CanvasProjectionV2, DigestV2 } from "./types"
+import type { CanvasProjectionV2, Digest } from "./types"
 import {
   canvasProjectionPluginIdentityMetadataKeyV2,
   canvasProjectionPluginStateMetadataKeyV2,
@@ -7,7 +7,7 @@ import {
   projectCanvasDocumentV2,
 } from "./projection"
 
-const digest = (value: string) => value.repeat(64).slice(0, 64) as DigestV2
+const digest = (value: string) => value.repeat(64).slice(0, 64) as Digest
 
 function projection(): CanvasProjectionV2 {
   return {

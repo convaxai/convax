@@ -1,15 +1,15 @@
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseUint32V2,
-  parseUint64V2,
+  encodeBase64url,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseReplicaId,
+  parseUint32,
+  parseUint64,
 } from "@convax/collaboration"
-import type { OwnerIntentValidationContextV2 } from "@convax/collaboration"
+import type { OwnerIntentValidationContext } from "@convax/collaboration"
 import * as Y from "yjs"
 import { assertCanvasTypedIntentV2 } from "./intent-validation"
 import {
@@ -24,28 +24,28 @@ import type {
   CanvasExternalFactContextV2,
   CanvasIntentApplyResultV2,
   CanvasTypedIntentUnionV2,
-  DigestV2,
-  DocumentScopeV2,
+  Digest,
+  DocumentScope,
 } from "./types"
 import { derivedNodeRefV2 } from "./validation"
 import { cloneCanvasYDocV2, createCanvasYDocV2, validateCanvasYDocV2 } from "./ydoc"
 
-export const SCHEMA_DIGEST = parseDigestV2("cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36")
-export const PROTOCOL_DIGEST = parseDigestV2("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5")
-export const VALIDATION_ARTIFACT_SET_DIGEST = parseDigestV2(
+export const SCHEMA_DIGEST = parseDigest("cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36")
+export const PROTOCOL_DIGEST = parseDigest("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5")
+export const VALIDATION_ARTIFACT_SET_DIGEST = parseDigest(
   "163cab7b5ca1bd13bb4f96d9b41b4e6e884e29619a4e1fc964ec72d630950db2",
 )
-export const PROJECT_INDEX_ROUTE_DEPENDENCY_FRAME_DIGEST = parseDigestV2(
+export const PROJECT_INDEX_ROUTE_DEPENDENCY_FRAME_DIGEST = parseDigest(
   "9a781f03bd02abed189fb0f7ae93c48448f7ced7eab32e25ac0436e30b7efd2e",
 )
-export const ZERO_DIGEST = parseDigestV2("0".repeat(64))
-export const U0 = parseUint32V2("0")
+export const ZERO_DIGEST = parseDigest("0".repeat(64))
+export const U0 = parseUint32("0")
 
-export const SCOPE: DocumentScopeV2 = Object.freeze({
-  projectId: parseProjectIdV2("project"),
+export const SCOPE: DocumentScope = Object.freeze({
+  projectId: parseProjectId("project"),
   projectEpoch: id128(201),
   docKind: "canvas",
-  docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`),
+  docId: parseCanvasId(`cv_${"2".repeat(64)}`),
   shardEpoch: id128(202),
 })
 
@@ -59,20 +59,20 @@ export const VALID_FACTS: CanvasExternalFactContextV2 = Object.freeze({
 })
 
 export function actor(seed: number) {
-  return parseActorIdV2(encoded(seed, 32))
+  return parseActorId(encoded(seed, 32))
 }
 
 export function id128(seed: number) {
-  return parseId128V2(encoded(seed, 16))
+  return parseId128(encoded(seed, 16))
 }
 
-export function context(actorSeed: number, operationSeed: number, lamport: number): OwnerIntentValidationContextV2 {
+export function context(actorSeed: number, operationSeed: number, lamport: number): OwnerIntentValidationContext {
   return Object.freeze({
     scope: SCOPE,
     actorId: actor(actorSeed),
-    actorSequence: parseUint64V2(String(lamport)),
+    actorSequence: parseUint64(String(lamport)),
     operationId: id128(operationSeed),
-    lamport: parseUint64V2(String(lamport)),
+    lamport: parseUint64(String(lamport)),
     intentDigest: digest(operationSeed),
     baseFrontierDigest: digest(operationSeed + 128),
     protocolDigest: PROTOCOL_DIGEST,
@@ -81,8 +81,8 @@ export function context(actorSeed: number, operationSeed: number, lamport: numbe
   })
 }
 
-export function digest(seed: number): DigestV2 {
-  return parseDigestV2([...bytes(seed, 32)].map((value) => value.toString(16).padStart(2, "0")).join(""))
+export function digest(seed: number): Digest {
+  return parseDigest([...bytes(seed, 32)].map((value) => value.toString(16).padStart(2, "0")).join(""))
 }
 
 export function newCanvas(): Y.Doc {
@@ -91,7 +91,7 @@ export function newCanvas(): Y.Doc {
     SCHEMA_DIGEST,
     PROTOCOL_DIGEST,
     PROJECT_INDEX_ROUTE_DEPENDENCY_FRAME_DIGEST,
-    parseReplicaIdV2("replica_00000001"),
+    parseReplicaId("replica_00000001"),
   )
 }
 
@@ -116,7 +116,7 @@ export function merge(
 
 export function applyOk(
   document: Y.Doc,
-  operationContext: OwnerIntentValidationContextV2,
+  operationContext: OwnerIntentValidationContext,
   intent: CanvasTypedIntentUnionV2,
   facts: CanvasExternalFactContextV2 = VALID_FACTS,
 ): CanvasIntentApplyResultV2 {
@@ -128,7 +128,7 @@ export function applyOk(
 
 export function createAgent(
   document: Y.Doc,
-  operationContext: OwnerIntentValidationContextV2,
+  operationContext: OwnerIntentValidationContext,
   title = `agent-${operationContext.operationId}`,
 ): CanvasEntityRefV2 & { kind: "node" } {
   const node = derivedNodeRefV2(operationContext, U0)
@@ -154,7 +154,7 @@ export function createAgent(
 
 export function createPendingFile(
   document: Y.Doc,
-  operationContext: OwnerIntentValidationContextV2,
+  operationContext: OwnerIntentValidationContext,
   title = `file-${operationContext.operationId}`,
 ): CanvasEntityRefV2 & { kind: "node" } {
   const node = derivedNodeRefV2(operationContext, U0)
@@ -199,7 +199,7 @@ export function nodeLiveGuard(document: Y.Doc, node: CanvasEntityRefV2 & { kind:
 }
 
 function encoded(seed: number, length: number): string {
-  return encodeBase64urlV2(bytes(seed, length))
+  return encodeBase64url(bytes(seed, length))
 }
 
 function bytes(seed: number, length: number): Uint8Array {

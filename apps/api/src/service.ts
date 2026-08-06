@@ -1,4 +1,4 @@
-import { parseCheckpointContentCertificateV2, parseDigestV2, parseDocumentScopeV2, parseId128V2, parseMemberIdV2, parseProjectIdV2, parsePublicKeyV2, parseReplicaIdV2, parseSignatureV2, type MemberIdV2, type ProjectIdV2, type ReplicaIdV2 } from "@convax/collaboration"
+import { parseCheckpointContentCertificate, parseDigest, parseDocumentScope, parseId128, parseMemberId, parseProjectId, parsePublicKey, parseReplicaId, parseSignature, type MemberId, type ProjectId, type ReplicaId } from "@convax/collaboration"
 import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2, parseAuthorizationMutationV2, parseDocumentShardResetApprovalV2, parseEmptyProjectIndexGenesisAttestationV2, parseMembershipMutationProofV2, parseRegistryCutoffCoveragePageV2, parseReplicaIdReservationRequestV2, parseReplicaProjectFloorPageV2, type PeerTicketRequestV2, type SessionProofV2 } from "@convax/project/collaboration-protocol"
 import { PayloadPolicyErrorV2, readControlMetadataJsonV2 } from "./payload-policy"
 import {
@@ -74,55 +74,55 @@ export function createCollaborationApiV2Handler(options?: {
   readonly metadataControl?: CollaborationMetadataControlServiceV2
   readonly authorizeProjectBootstrap?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: ReturnType<typeof parseId128V2>
-    readonly projectIndexShardEpoch: ReturnType<typeof parseId128V2>
-    readonly initializationAuthorityDigest: ReturnType<typeof parseDigestV2>
-    readonly initialProjectIndexCheckpointDigest: ReturnType<typeof parseDigestV2>
-    readonly initialProjectIndexFullUpdateDigest: ReturnType<typeof parseDigestV2>
-    readonly initialProjectIndexStateVectorDigest: ReturnType<typeof parseDigestV2>
-    readonly initialProjectIndexCanonicalStateDigest: ReturnType<typeof parseDigestV2>
-    readonly ownerMemberId: MemberIdV2
-    readonly ownerMemberSigningPublicKey: ReturnType<typeof parsePublicKeyV2>
+    readonly projectId: ProjectId
+    readonly projectEpoch: ReturnType<typeof parseId128>
+    readonly projectIndexShardEpoch: ReturnType<typeof parseId128>
+    readonly initializationAuthorityDigest: ReturnType<typeof parseDigest>
+    readonly initialProjectIndexCheckpointDigest: ReturnType<typeof parseDigest>
+    readonly initialProjectIndexFullUpdateDigest: ReturnType<typeof parseDigest>
+    readonly initialProjectIndexStateVectorDigest: ReturnType<typeof parseDigest>
+    readonly initialProjectIndexCanonicalStateDigest: ReturnType<typeof parseDigest>
+    readonly ownerMemberId: MemberId
+    readonly ownerMemberSigningPublicKey: ReturnType<typeof parsePublicKey>
   }) => Promise<ProjectBootstrapAuthorizationV2 | "rejected">
   readonly authorizeTeamInvitation?: (input: {
     readonly request: Request
     readonly action: "create" | "revoke" | "list-member-add"
-    readonly projectId: ProjectIdV2
-    readonly requesterCredentialDigest: ReturnType<typeof parseDigestV2>
+    readonly projectId: ProjectId
+    readonly requesterCredentialDigest: ReturnType<typeof parseDigest>
     readonly invitationToken: string | null
   }) => Promise<TeamInvitationAuthorizationV1 | "rejected">
   readonly authorizeSessionChallenge?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
-    readonly memberId: MemberIdV2
-    readonly replicaId: ReplicaIdV2
+    readonly projectId: ProjectId
+    readonly memberId: MemberId
+    readonly replicaId: ReplicaId
   }) => Promise<SessionChallengeAuthorizationV2 | "rejected">
   readonly authorizeSessionDirectory?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly credentialDigest: string
   }) => Promise<SessionDirectoryAuthorizationV2 | "rejected">
   readonly authorizeCheckpointAttestation?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
-    readonly certificate: ReturnType<typeof parseCheckpointContentCertificateV2>
+    readonly projectId: ProjectId
+    readonly certificate: ReturnType<typeof parseCheckpointContentCertificate>
   }) => Promise<CheckpointAttestationAdmissionV2 | "rejected">
   readonly authorizeProjectFloorManifest?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
-    readonly manifestDigest: ReturnType<typeof parseDigestV2>
-    readonly requiredScopes: readonly ReturnType<typeof parseDocumentScopeV2>[]
+    readonly projectId: ProjectId
+    readonly manifestDigest: ReturnType<typeof parseDigest>
+    readonly requiredScopes: readonly ReturnType<typeof parseDocumentScope>[]
   }) => Promise<ProjectFloorManifestAdmissionV2 | "rejected">
   readonly authorizeExactControlCommit?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly kind: "cutoff" | "shard-reset"
-    readonly digest: ReturnType<typeof parseDigestV2>
+    readonly digest: ReturnType<typeof parseDigest>
   }) => Promise<ExactControlCommitAdmissionV2 | "rejected">
   readonly authorizeEmptyProjectIndexGenesisAttestation?: (input: {
     readonly request: Request
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly attestation: ReturnType<typeof parseEmptyProjectIndexGenesisAttestationV2>
   }) => Promise<EmptyProjectIndexGenesisAttestationAdmissionV2 | "rejected">
 }): (request: Request) => Promise<Response> {
@@ -154,16 +154,16 @@ export function createCollaborationApiV2Handler(options?: {
           const value = requireBootstrapRecord(metadata)
           if (!options.authorizeProjectBootstrap) return json(503, { format: "convax.api-error/2", code: "bootstrap-auth-adapter-unavailable" })
           const bootstrapRequest = {
-            projectId: parseProjectIdV2(matched.projectId),
-            projectEpoch: parseId128V2(value.projectEpoch),
-            projectIndexShardEpoch: parseId128V2(value.projectIndexShardEpoch),
-            initializationAuthorityDigest: parseDigestV2(value.initializationAuthorityDigest),
-            initialProjectIndexCheckpointDigest: parseDigestV2(value.initialProjectIndexCheckpointDigest),
-            initialProjectIndexFullUpdateDigest: parseDigestV2(value.initialProjectIndexFullUpdateDigest),
-            initialProjectIndexStateVectorDigest: parseDigestV2(value.initialProjectIndexStateVectorDigest),
-            initialProjectIndexCanonicalStateDigest: parseDigestV2(value.initialProjectIndexCanonicalStateDigest),
-            ownerMemberId: parseMemberIdV2(value.ownerMemberId),
-            ownerMemberSigningPublicKey: parsePublicKeyV2(value.ownerMemberSigningPublicKey),
+            projectId: parseProjectId(matched.projectId),
+            projectEpoch: parseId128(value.projectEpoch),
+            projectIndexShardEpoch: parseId128(value.projectIndexShardEpoch),
+            initializationAuthorityDigest: parseDigest(value.initializationAuthorityDigest),
+            initialProjectIndexCheckpointDigest: parseDigest(value.initialProjectIndexCheckpointDigest),
+            initialProjectIndexFullUpdateDigest: parseDigest(value.initialProjectIndexFullUpdateDigest),
+            initialProjectIndexStateVectorDigest: parseDigest(value.initialProjectIndexStateVectorDigest),
+            initialProjectIndexCanonicalStateDigest: parseDigest(value.initialProjectIndexCanonicalStateDigest),
+            ownerMemberId: parseMemberId(value.ownerMemberId),
+            ownerMemberSigningPublicKey: parsePublicKey(value.ownerMemberSigningPublicKey),
           }
           const authorization = await options.authorizeProjectBootstrap({ request, ...bootstrapRequest })
           if (authorization === "rejected") return json(403, { format: "convax.api-error/2", code: "not-active" })
@@ -175,8 +175,8 @@ export function createCollaborationApiV2Handler(options?: {
         if (matched.segment === "mutation-challenges") {
           const intent = parseMutationChallengeIntent(metadata)
           const challenge = intent.purpose === "member-add" || intent.purpose === "replica-enroll" || intent.purpose === "replica-activate-editor"
-            ? await options.membership.issueMutationChallenge(parseProjectIdV2(matched.projectId), intent)
-            : await options.membership.issueCutoffChallenge(parseProjectIdV2(matched.projectId), intent)
+            ? await options.membership.issueMutationChallenge(parseProjectId(matched.projectId), intent)
+            : await options.membership.issueCutoffChallenge(parseProjectId(matched.projectId), intent)
           return json(200, challenge as unknown as Readonly<Record<string, unknown>>)
         }
         if (matched.segment === "membership-mutations") {
@@ -186,36 +186,36 @@ export function createCollaborationApiV2Handler(options?: {
           const value = requireExactRecord(metadata, ["invitationToken", "requestDigest", "kind", "signature"])
           if (typeof value.invitationToken !== "string" || (value.kind !== "admin" && value.kind !== "target-possession")) throw new TypeError("Member-add signature half metadata is invalid")
           return json(200, await options.membership.submitMemberAddSignatureHalf({
-            projectId: parseProjectIdV2(matched.projectId),
+            projectId: parseProjectId(matched.projectId),
             invitationToken: value.invitationToken,
-            requestDigest: parseDigestV2(value.requestDigest),
+            requestDigest: parseDigest(value.requestDigest),
             kind: value.kind,
-            signature: parseSignatureV2(value.signature),
+            signature: parseSignature(value.signature),
           }) as unknown as Readonly<Record<string, unknown>>)
         }
         if (matched.segment === "invitations") {
           const value = requireInvitationRecord(metadata)
-          const projectId = parseProjectIdV2(matched.projectId)
+          const projectId = parseProjectId(matched.projectId)
           if (value.action === "prepare") {
             return json(200, await options.membership.prepareInvitation({
               projectId,
               invitationToken: value.invitationToken,
-              mutationId: parseId128V2(value.mutationId),
-              targetMemberId: parseMemberIdV2(value.targetMemberId),
-              targetMemberSigningPublicKey: parsePublicKeyV2(value.targetMemberSigningPublicKey),
+              mutationId: parseId128(value.mutationId),
+              targetMemberId: parseMemberId(value.targetMemberId),
+              targetMemberSigningPublicKey: parsePublicKey(value.targetMemberSigningPublicKey),
             }) as unknown as Readonly<Record<string, unknown>>)
           }
           if (!options.authorizeTeamInvitation) return json(503, { format: "convax.api-error/2", code: "invitation-auth-adapter-unavailable" })
-          const requesterCredentialDigest = parseDigestV2(value.requesterCredentialDigest)
+          const requesterCredentialDigest = parseDigest(value.requesterCredentialDigest)
           const invitationToken = value.action === "revoke" ? value.invitationToken : null
           const authorization = await options.authorizeTeamInvitation({ request, action: value.action, projectId, requesterCredentialDigest, invitationToken })
           if (authorization === "rejected") return json(403, { format: "convax.api-error/2", code: "not-active" })
           if (value.action === "create") {
             if (value.initialRole !== "viewer" && value.initialRole !== "editor") throw new TypeError("Invitation role is invalid")
-            return json(200, await options.membership.createInvitation({ projectId, requesterCredentialDigest, adminCapabilityDigest: parseDigestV2(value.adminCapabilityDigest), initialRole: value.initialRole }, authorization) as unknown as Readonly<Record<string, unknown>>)
+            return json(200, await options.membership.createInvitation({ projectId, requesterCredentialDigest, adminCapabilityDigest: parseDigest(value.adminCapabilityDigest), initialRole: value.initialRole }, authorization) as unknown as Readonly<Record<string, unknown>>)
           }
           if (value.action === "list-member-add") {
-            return json(200, { invitations: await options.membership.listOwnerMemberAddInvitations({ projectId, requesterCredentialDigest, adminCapabilityDigest: parseDigestV2(value.adminCapabilityDigest) }, authorization) })
+            return json(200, { invitations: await options.membership.listOwnerMemberAddInvitations({ projectId, requesterCredentialDigest, adminCapabilityDigest: parseDigest(value.adminCapabilityDigest) }, authorization) })
           }
           await options.membership.revokeInvitation({ projectId, requesterCredentialDigest, invitationToken: value.invitationToken }, authorization)
           return json(200, { status: "revoked" })
@@ -224,11 +224,11 @@ export function createCollaborationApiV2Handler(options?: {
           const value = requireRecord(metadata)
           if (value.action === "challenge") {
             exactKeys(value, ["action", "confirmation", "approval"])
-            return json(200, await options.membership.issueTeamEpochRolloverChallenge({ projectId: parseProjectIdV2(matched.projectId), confirmation: value.confirmation, approval: value.approval }) as unknown as Readonly<Record<string, unknown>>)
+            return json(200, await options.membership.issueTeamEpochRolloverChallenge({ projectId: parseProjectId(matched.projectId), confirmation: value.confirmation, approval: value.approval }) as unknown as Readonly<Record<string, unknown>>)
           }
           if (value.action === "commit") {
             exactKeys(value, ["action", "proof", "attestation"])
-            const projectId = parseProjectIdV2(matched.projectId)
+            const projectId = parseProjectId(matched.projectId)
             const attestation = parseEmptyProjectIndexGenesisAttestationV2(value.attestation)
             if (!options.authorizeEmptyProjectIndexGenesisAttestation) return json(503, { format: "convax.api-error/2", code: "empty-genesis-attestation-adapter-unavailable" })
             const admission = await options.authorizeEmptyProjectIndexGenesisAttestation({ request, projectId, attestation })
@@ -248,9 +248,9 @@ export function createCollaborationApiV2Handler(options?: {
         if (matched.segment === "session-challenges") {
           const value = requireSessionChallengeRecord(metadata)
           const challengeRequest = {
-            projectId: matched.projectId as ProjectIdV2,
-            memberId: value.memberId as MemberIdV2,
-            replicaId: value.replicaId as ReplicaIdV2,
+            projectId: matched.projectId as ProjectId,
+            memberId: value.memberId as MemberId,
+            replicaId: value.replicaId as ReplicaId,
           }
           if (!options.authorizeSessionChallenge) {
             return json(503, { format: "convax.api-error/2", code: "challenge-auth-adapter-unavailable" })
@@ -273,21 +273,21 @@ export function createCollaborationApiV2Handler(options?: {
           }
           const authorization = await options.authorizeSessionDirectory({
             request,
-            projectId: matched.projectId as ProjectIdV2,
+            projectId: matched.projectId as ProjectId,
             credentialDigest: value.credentialDigest,
           })
           if (authorization === "rejected") {
             return json(403, { format: "convax.api-error/2", code: "not-active" })
           }
           const directory = await options.rendezvous.getActivePeerDirectory(
-            matched.projectId as ProjectIdV2,
+            matched.projectId as ProjectId,
             authorization,
           )
           return json(200, directory as unknown as Readonly<Record<string, unknown>>)
         }
         if (matched.segment === "peer-tickets") {
           const ticket = await options.rendezvous.issuePeerFreshnessTicket(
-            matched.projectId as ProjectIdV2,
+            matched.projectId as ProjectId,
             metadata as PeerTicketRequestV2,
           )
           return json(200, ticket as unknown as Readonly<Record<string, unknown>>)
@@ -300,9 +300,9 @@ export function createCollaborationApiV2Handler(options?: {
     }
     if (options?.metadataControl) {
       try {
-        const projectId = parseProjectIdV2(matched.projectId)
+        const projectId = parseProjectId(matched.projectId)
         if (matched.segment === "checkpoint-certificates") {
-          const certificate = parseCheckpointContentCertificateV2(metadata)
+          const certificate = parseCheckpointContentCertificate(metadata)
           if (!options.authorizeCheckpointAttestation) return json(503, { format: "convax.api-error/2", code: "attestation-auth-adapter-unavailable" })
           const admission = await options.authorizeCheckpointAttestation({ request, projectId, certificate })
           if (admission === "rejected") return json(403, { format: "convax.api-error/2", code: "not-active" })
@@ -317,12 +317,12 @@ export function createCollaborationApiV2Handler(options?: {
           const value = requireExactRecord(metadata, ["targetMemberId", "targetReplicaId", "manifestDigest", "pages"])
           if (!Array.isArray(value.pages)) throw new TypeError("Project floor pages must be an array")
           const pages = value.pages.map(parseReplicaProjectFloorPageV2)
-          const manifestDigest = parseDigestV2(value.manifestDigest)
+          const manifestDigest = parseDigest(value.manifestDigest)
           const requiredScopes = pages.flatMap((page) => page.core.entries.map((entry) => entry.scope))
           if (!options.authorizeProjectFloorManifest) return json(503, { format: "convax.api-error/2", code: "project-floor-auth-adapter-unavailable" })
           const admission = await options.authorizeProjectFloorManifest({ request, projectId, manifestDigest, requiredScopes })
           if (admission === "rejected") return json(403, { format: "convax.api-error/2", code: "not-active" })
-          return json(200, await options.metadataControl.publishProjectFloor({ projectId, targetMemberId: parseMemberIdV2(value.targetMemberId), targetReplicaId: parseReplicaIdV2(value.targetReplicaId), manifestDigest, pages }, admission) as unknown as Readonly<Record<string, unknown>>)
+          return json(200, await options.metadataControl.publishProjectFloor({ projectId, targetMemberId: parseMemberId(value.targetMemberId), targetReplicaId: parseReplicaId(value.targetReplicaId), manifestDigest, pages }, admission) as unknown as Readonly<Record<string, unknown>>)
         }
         if (matched.segment === "replica-floor-acks") {
           return json(200, await options.metadataControl.admitReplicaFloorAck(projectId, metadata) as unknown as Readonly<Record<string, unknown>>)
@@ -391,35 +391,35 @@ function parseMutationChallengeIntent(value: unknown): SupportedMutationChalleng
   if (record.purpose === "member-add") {
     exactKeys(record, ["purpose", "mutationId", "requesterCredentialDigest", "adminCapabilityDigest", "targetMemberId", "targetMemberSigningPublicKey", "initialRole"])
     if (record.initialRole !== "viewer" && record.initialRole !== "editor") throw new TypeError("Initial member role is invalid")
-    return Object.freeze({ purpose: "member-add", mutationId: parseId128V2(record.mutationId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), adminCapabilityDigest: parseDigestV2(record.adminCapabilityDigest), targetMemberId: parseMemberIdV2(record.targetMemberId), targetMemberSigningPublicKey: parsePublicKeyV2(record.targetMemberSigningPublicKey), initialRole: record.initialRole })
+    return Object.freeze({ purpose: "member-add", mutationId: parseId128(record.mutationId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), adminCapabilityDigest: parseDigest(record.adminCapabilityDigest), targetMemberId: parseMemberId(record.targetMemberId), targetMemberSigningPublicKey: parsePublicKey(record.targetMemberSigningPublicKey), initialRole: record.initialRole })
   }
   if (record.purpose === "replica-enroll") {
     exactKeys(record, ["purpose", "mutationId", "requesterCredentialDigest", "replicaIdReservationReceiptDigest"])
-    return Object.freeze({ purpose: "replica-enroll", mutationId: parseId128V2(record.mutationId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), replicaIdReservationReceiptDigest: parseDigestV2(record.replicaIdReservationReceiptDigest) })
+    return Object.freeze({ purpose: "replica-enroll", mutationId: parseId128(record.mutationId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), replicaIdReservationReceiptDigest: parseDigest(record.replicaIdReservationReceiptDigest) })
   }
   if (record.purpose === "replica-activate-editor") {
     exactKeys(record, ["purpose", "mutationId", "requesterCredentialDigest", "currentReplicaId", "installedFloorSetDigest"])
-    return Object.freeze({ purpose: "replica-activate-editor", mutationId: parseId128V2(record.mutationId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), currentReplicaId: parseReplicaIdV2(record.currentReplicaId), installedFloorSetDigest: parseDigestV2(record.installedFloorSetDigest) })
+    return Object.freeze({ purpose: "replica-activate-editor", mutationId: parseId128(record.mutationId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), currentReplicaId: parseReplicaId(record.currentReplicaId), installedFloorSetDigest: parseDigest(record.installedFloorSetDigest) })
   }
   if (record.purpose === "replica-rotate") {
     exactKeys(record, ["purpose", "mutationId", "cutoffId", "requesterCredentialDigest", "currentReplicaId", "replicaIdReservationReceiptDigest", "pages"])
     if (!Array.isArray(record.pages)) throw new TypeError("Replica rotation cutoff pages must be an array")
-    return Object.freeze({ purpose: "replica-rotate", mutationId: parseId128V2(record.mutationId), cutoffId: parseId128V2(record.cutoffId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), currentReplicaId: parseReplicaIdV2(record.currentReplicaId), replicaIdReservationReceiptDigest: parseDigestV2(record.replicaIdReservationReceiptDigest), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
+    return Object.freeze({ purpose: "replica-rotate", mutationId: parseId128(record.mutationId), cutoffId: parseId128(record.cutoffId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), currentReplicaId: parseReplicaId(record.currentReplicaId), replicaIdReservationReceiptDigest: parseDigest(record.replicaIdReservationReceiptDigest), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
   }
   if (record.purpose === "replica-revoke") {
     exactKeys(record, ["purpose", "mutationId", "cutoffId", "requesterCredentialDigest", "currentReplicaId", "pages"])
     if (!Array.isArray(record.pages)) throw new TypeError("Replica revoke cutoff pages must be an array")
-    return Object.freeze({ purpose: "replica-revoke", mutationId: parseId128V2(record.mutationId), cutoffId: parseId128V2(record.cutoffId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), currentReplicaId: parseReplicaIdV2(record.currentReplicaId), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
+    return Object.freeze({ purpose: "replica-revoke", mutationId: parseId128(record.mutationId), cutoffId: parseId128(record.cutoffId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), currentReplicaId: parseReplicaId(record.currentReplicaId), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
   }
   if (record.purpose === "member-role-change") {
     exactKeys(record, ["purpose", "mutationId", "cutoffId", "requesterCredentialDigest", "adminCapabilityDigest", "targetMemberId", "nextRole", "pages"])
     if (record.nextRole !== "viewer" || !Array.isArray(record.pages)) throw new TypeError("Member role cutoff metadata is invalid")
-    return Object.freeze({ purpose: "member-role-change", mutationId: parseId128V2(record.mutationId), cutoffId: parseId128V2(record.cutoffId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), adminCapabilityDigest: parseDigestV2(record.adminCapabilityDigest), targetMemberId: parseMemberIdV2(record.targetMemberId), nextRole: "viewer", pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
+    return Object.freeze({ purpose: "member-role-change", mutationId: parseId128(record.mutationId), cutoffId: parseId128(record.cutoffId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), adminCapabilityDigest: parseDigest(record.adminCapabilityDigest), targetMemberId: parseMemberId(record.targetMemberId), nextRole: "viewer", pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
   }
   if (record.purpose === "member-revoke") {
     exactKeys(record, ["purpose", "mutationId", "cutoffId", "requesterCredentialDigest", "adminCapabilityDigest", "targetMemberId", "pages"])
     if (!Array.isArray(record.pages)) throw new TypeError("Member revoke cutoff pages must be an array")
-    return Object.freeze({ purpose: "member-revoke", mutationId: parseId128V2(record.mutationId), cutoffId: parseId128V2(record.cutoffId), requesterCredentialDigest: parseDigestV2(record.requesterCredentialDigest), adminCapabilityDigest: parseDigestV2(record.adminCapabilityDigest), targetMemberId: parseMemberIdV2(record.targetMemberId), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
+    return Object.freeze({ purpose: "member-revoke", mutationId: parseId128(record.mutationId), cutoffId: parseId128(record.cutoffId), requesterCredentialDigest: parseDigest(record.requesterCredentialDigest), adminCapabilityDigest: parseDigest(record.adminCapabilityDigest), targetMemberId: parseMemberId(record.targetMemberId), pages: Object.freeze(record.pages.map(parseRegistryCutoffCoveragePageV2)) })
   }
   throw new TypeError("Mutation challenge purpose is invalid")
 }

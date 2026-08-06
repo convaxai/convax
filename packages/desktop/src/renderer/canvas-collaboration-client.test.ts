@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "@convax/canvas"
 import type { CanvasRendererCommandV2 } from "@convax/canvas/collaboration"
-import { encodeBase64urlV2, parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
+import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
 import type {
   CanvasRendererSessionTransportV2,
   CanvasSessionInvalidationDtoV2,
@@ -10,8 +10,8 @@ import type {
 import { openDesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
 
 const ref = { canvasId: "canvas-one", scopeId: "project-one" }
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const actor = (fill: number) => parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(fill)))
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
 const sessionId = id(1)
 const entity = { kind: "node" as const, id: "node-one", incarnation: id(2) }
 const receipt = {
@@ -19,11 +19,11 @@ const receipt = {
   actorId: actor(3),
   operationId: id(4),
   intentKind: "canvas.nodes.set-geometry/2" as const,
-  intentDigest: parseDigestV2("a".repeat(64)),
-  baseFrontierDigest: parseDigestV2("b".repeat(64)),
+  intentDigest: parseDigest("a".repeat(64)),
+  baseFrontierDigest: parseDigest("b".repeat(64)),
   resultEntities: [entity],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("c".repeat(64)),
+  historyMaterialDigest: parseDigest("c".repeat(64)),
 }
 
 function projection(x: number, overrides: Partial<CanvasSessionProjectionDtoV2> = {}): CanvasSessionProjectionDtoV2 {

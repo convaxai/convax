@@ -1,4 +1,4 @@
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import {
   parseProjectTeamBootstrapResultV2,
@@ -66,7 +66,7 @@ export class ProjectTeamCollaborationManagerV2 {
 
   /** Activates the Project shell without probing or starting any Team runtime. */
   activateLocalProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     return this.serialize(async () => {
       this.requireLive()
       this.activeGeneration = {}
@@ -81,13 +81,13 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 
   activateProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     if (this.activeProjectId === projectId && this.session) return Promise.resolve(this.requireStatus(projectId))
     return this.replaceProject(projectId, (signal) => this.factory.openExisting({ projectId, signal }))
   }
 
   async bootstrapTeam(projectIdInput: string): Promise<ProjectTeamBootstrapResultV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     this.requireActiveProject(projectId)
     let invitation: ProjectTeamInvitationCarrierV2 | null = null
     const status = await this.replaceProject(projectId, async (signal) => {
@@ -102,7 +102,7 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 
   joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrierV2 }): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     this.requireActiveProject(projectId)
     const invitation = parseProjectTeamInvitationV2(input.invitation)
     if (invitation.projectId !== projectId) {
@@ -112,7 +112,7 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 
   async quiesceProject(projectIdInput: string): Promise<void> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     await this.serialize(async () => {
       if (this.activeProjectId !== projectId) return
       this.activeGeneration = null
@@ -125,7 +125,7 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 
   getStatus(projectIdInput: string): ProjectTeamCollaborationStatusV2 {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     return this.statuses.get(projectId) ?? status(projectId, "local-only", false, 0, null)
   }
 
@@ -195,7 +195,7 @@ export class ProjectTeamCollaborationManagerV2 {
       if (result.status === "attention") {
         return this.publish(status(projectId, "attention", false, 0, result.reason))
       }
-      if (parseProjectIdV2(result.session.projectId) !== projectId) {
+      if (parseProjectId(result.session.projectId) !== projectId) {
         await result.session.quiesce()
         this.publish(status(projectId, "attention", false, 0, "protocol-rejected"))
         throw new Error("Project team session crossed Project identity")

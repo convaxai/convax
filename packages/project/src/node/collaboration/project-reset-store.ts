@@ -2,14 +2,14 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  type DigestV2,
-  type Id128V2,
-  type ProjectIdV2,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  type Digest,
+  type Id128,
+  type ProjectId,
 } from "@convax/collaboration"
 
 import {
@@ -32,28 +32,28 @@ export type ProjectResetManifestStateV2 =
 
 export interface ProjectResetManifestV2 {
   readonly format: "convax.project-reset-manifest/2"
-  readonly resetId: Id128V2
-  readonly projectId: ProjectIdV2
-  readonly oldProjectEpoch: Id128V2 | null
-  readonly newProjectEpoch: Id128V2
-  readonly newMembershipEpoch: Id128V2 | null
-  readonly newProjectIndexShardEpoch: Id128V2
+  readonly resetId: Id128
+  readonly projectId: ProjectId
+  readonly oldProjectEpoch: Id128 | null
+  readonly newProjectEpoch: Id128
+  readonly newMembershipEpoch: Id128 | null
+  readonly newProjectIndexShardEpoch: Id128
   readonly reason: ProjectResetReasonV2
-  readonly observedOldPrivateTreeDigest: DigestV2
-  readonly unsupportedInventoryDigest: DigestV2
-  readonly privateDeletionSetDigest: DigestV2
-  readonly requestedProtocolDigest: DigestV2
-  readonly requestedSchemaDigest: DigestV2
-  readonly requestedUriProtocolDigest: DigestV2
-  readonly emptyProjectIndexCheckpointDigest: DigestV2
-  readonly emptyProjectIndexFullUpdateDigest: DigestV2
-  readonly emptyProjectIndexStateVectorDigest: DigestV2
-  readonly emptyProjectIndexCanonicalStateDigest: DigestV2
-  readonly projectResetConfirmationCoreDigest: DigestV2
-  readonly projectResetApprovalCoreDigest: DigestV2 | null
-  readonly teamEpochRolloverRequestDigest: DigestV2 | null
-  readonly emptyProjectIndexGenesisAttestationCoreDigest: DigestV2 | null
-  readonly teamEpochRolloverReceiptCoreDigest: DigestV2 | null
+  readonly observedOldPrivateTreeDigest: Digest
+  readonly unsupportedInventoryDigest: Digest
+  readonly privateDeletionSetDigest: Digest
+  readonly requestedProtocolDigest: Digest
+  readonly requestedSchemaDigest: Digest
+  readonly requestedUriProtocolDigest: Digest
+  readonly emptyProjectIndexCheckpointDigest: Digest
+  readonly emptyProjectIndexFullUpdateDigest: Digest
+  readonly emptyProjectIndexStateVectorDigest: Digest
+  readonly emptyProjectIndexCanonicalStateDigest: Digest
+  readonly projectResetConfirmationCoreDigest: Digest
+  readonly projectResetApprovalCoreDigest: Digest | null
+  readonly teamEpochRolloverRequestDigest: Digest | null
+  readonly emptyProjectIndexGenesisAttestationCoreDigest: Digest | null
+  readonly teamEpochRolloverReceiptCoreDigest: Digest | null
   readonly state: ProjectResetManifestStateV2
 }
 
@@ -76,7 +76,7 @@ export async function readProjectResetRecordsV2(
   collaborationDirectory: string,
 ): Promise<ProjectResetRecordsV2> {
   const directory = await requireCollaborationDirectory(collaborationDirectory)
-  const value = decodeRestrictedJcsV2(await readBoundedPlainFile(path.join(directory, RECORDS_FILE)))
+  const value = decodeRestrictedJcs(await readBoundedPlainFile(path.join(directory, RECORDS_FILE)))
   if (!isPlainRecord(value) || !hasExactKeys(value, ["format", "manifest", "confirmation"]) ||
     value.format !== "convax.project-reset-records/2") throw new TypeError("Project reset records schema is invalid")
   const normalized = normalizeRecords({
@@ -103,24 +103,24 @@ export function parseProjectResetManifestV2(value: unknown): ProjectResetManifes
   }
   return Object.freeze({
     format: value.format,
-    resetId: parseId128V2(value.resetId),
-    projectId: parseProjectIdV2(value.projectId),
-    oldProjectEpoch: value.oldProjectEpoch === null ? null : parseId128V2(value.oldProjectEpoch),
-    newProjectEpoch: parseId128V2(value.newProjectEpoch),
-    newMembershipEpoch: value.newMembershipEpoch === null ? null : parseId128V2(value.newMembershipEpoch),
-    newProjectIndexShardEpoch: parseId128V2(value.newProjectIndexShardEpoch),
+    resetId: parseId128(value.resetId),
+    projectId: parseProjectId(value.projectId),
+    oldProjectEpoch: value.oldProjectEpoch === null ? null : parseId128(value.oldProjectEpoch),
+    newProjectEpoch: parseId128(value.newProjectEpoch),
+    newMembershipEpoch: value.newMembershipEpoch === null ? null : parseId128(value.newMembershipEpoch),
+    newProjectIndexShardEpoch: parseId128(value.newProjectIndexShardEpoch),
     reason: value.reason,
-    observedOldPrivateTreeDigest: parseDigestV2(value.observedOldPrivateTreeDigest),
-    unsupportedInventoryDigest: parseDigestV2(value.unsupportedInventoryDigest),
-    privateDeletionSetDigest: parseDigestV2(value.privateDeletionSetDigest),
-    requestedProtocolDigest: parseDigestV2(value.requestedProtocolDigest),
-    requestedSchemaDigest: parseDigestV2(value.requestedSchemaDigest),
-    requestedUriProtocolDigest: parseDigestV2(value.requestedUriProtocolDigest),
-    emptyProjectIndexCheckpointDigest: parseDigestV2(value.emptyProjectIndexCheckpointDigest),
-    emptyProjectIndexFullUpdateDigest: parseDigestV2(value.emptyProjectIndexFullUpdateDigest),
-    emptyProjectIndexStateVectorDigest: parseDigestV2(value.emptyProjectIndexStateVectorDigest),
-    emptyProjectIndexCanonicalStateDigest: parseDigestV2(value.emptyProjectIndexCanonicalStateDigest),
-    projectResetConfirmationCoreDigest: parseDigestV2(value.projectResetConfirmationCoreDigest),
+    observedOldPrivateTreeDigest: parseDigest(value.observedOldPrivateTreeDigest),
+    unsupportedInventoryDigest: parseDigest(value.unsupportedInventoryDigest),
+    privateDeletionSetDigest: parseDigest(value.privateDeletionSetDigest),
+    requestedProtocolDigest: parseDigest(value.requestedProtocolDigest),
+    requestedSchemaDigest: parseDigest(value.requestedSchemaDigest),
+    requestedUriProtocolDigest: parseDigest(value.requestedUriProtocolDigest),
+    emptyProjectIndexCheckpointDigest: parseDigest(value.emptyProjectIndexCheckpointDigest),
+    emptyProjectIndexFullUpdateDigest: parseDigest(value.emptyProjectIndexFullUpdateDigest),
+    emptyProjectIndexStateVectorDigest: parseDigest(value.emptyProjectIndexStateVectorDigest),
+    emptyProjectIndexCanonicalStateDigest: parseDigest(value.emptyProjectIndexCanonicalStateDigest),
+    projectResetConfirmationCoreDigest: parseDigest(value.projectResetConfirmationCoreDigest),
     projectResetApprovalCoreDigest: nullableDigest(value.projectResetApprovalCoreDigest),
     teamEpochRolloverRequestDigest: nullableDigest(value.teamEpochRolloverRequestDigest),
     emptyProjectIndexGenesisAttestationCoreDigest: nullableDigest(value.emptyProjectIndexGenesisAttestationCoreDigest),
@@ -153,7 +153,7 @@ function normalizeRecords(records: ProjectResetRecordsV2): ProjectResetRecordsV2
 }
 
 function encodeBounded(value: unknown): Uint8Array {
-  const bytes = encodeRestrictedJcsV2(value)
+  const bytes = encodeRestrictedJcs(value)
   if (bytes.byteLength < 1 || bytes.byteLength > MAX_RECORD_BYTES) throw new TypeError("Project reset record is too large")
   return bytes
 }
@@ -201,8 +201,8 @@ async function readBoundedPlainFile(target: string): Promise<Uint8Array> {
   return bytes
 }
 
-function nullableDigest(value: unknown): DigestV2 | null {
-  return value === null ? null : parseDigestV2(value)
+function nullableDigest(value: unknown): Digest | null {
+  return value === null ? null : parseDigest(value)
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

@@ -1,4 +1,4 @@
-import { parseProjectIdV2, type ProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId, type ProjectId } from "@convax/collaboration"
 
 import type { NodeDurableTeamAuthorityStoreV1 } from "./durable-team-authority-store"
 import type { ProjectTeamCollaborationStatusV2 } from "../project-team-collaboration-contracts"
@@ -19,7 +19,7 @@ export async function activateProjectSharingFromDurableBindingV2(input: {
   readonly sharing: Pick<NodeDurableTeamAuthorityStoreV1, "open">
   readonly service: ProjectSharingActivationServiceV2
 }): Promise<ProjectTeamCollaborationStatusV2> {
-  const projectId: ProjectIdV2 = parseProjectIdV2(input.projectId)
+  const projectId: ProjectId = parseProjectId(input.projectId)
   const binding = await input.sharing.open(projectId)
   return binding === "missing"
     ? input.service.activateLocalProject(projectId)

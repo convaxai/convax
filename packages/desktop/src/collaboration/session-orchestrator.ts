@@ -1,17 +1,17 @@
 import {
-  documentScopeDigestV2,
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parseUint32V2,
-  parseUint64V2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type IncomingFrameResultV2,
-  type SignatureV2,
+  documentScopeDigest,
+  encodeBase64url,
+  ordinarySha256,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parseUint32,
+  parseUint64,
+  type Digest,
+  type DocumentScope,
+  type Id128,
+  type IncomingFrameResult,
+  type Signature,
 } from "@convax/collaboration"
 import {
   CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
@@ -55,18 +55,18 @@ export interface CollaborationSessionDataPlaneLifecycleV2 {
  * verified channel opens. PeerJS metadata and peerId are never a substitute.
  */
 export interface CollaborationPeerSessionPrincipalV2 {
-  readonly connectionId: Id128V2
-  readonly localCredentialDigest: DigestV2
-  readonly remoteCredentialDigest: DigestV2
-  readonly channelOpenDigests: Readonly<Record<PeerChannelNameV2, DigestV2>>
+  readonly connectionId: Id128
+  readonly localCredentialDigest: Digest
+  readonly remoteCredentialDigest: Digest
+  readonly channelOpenDigests: Readonly<Record<PeerChannelNameV2, Digest>>
   signMessageCoreDigest(input: {
     readonly channel: PeerChannelNameV2
-    readonly coreDigest: DigestV2
-  }): Promise<SignatureV2> | SignatureV2
+    readonly coreDigest: Digest
+  }): Promise<Signature> | Signature
   verifyRemoteMessageCoreDigest(input: {
     readonly channel: PeerChannelNameV2
-    readonly coreDigest: DigestV2
-    readonly signature: SignatureV2
+    readonly coreDigest: Digest
+    readonly signature: Signature
   }): Promise<boolean> | boolean
 }
 
@@ -81,20 +81,20 @@ export interface CollaborationPeerAdmissionV2 {
 }
 
 export interface CollaborationKernelFrameAdmissionV2 {
-  readonly result: IncomingFrameResultV2
+  readonly result: IncomingFrameResult
   /** Required only when result is accepted/duplicate and already durably reconstructed. */
-  readonly replicaDurableAckCoreDigest: DigestV2 | null
+  readonly replicaDurableAckCoreDigest: Digest | null
 }
 
-/** Main-only seam around one owner-composed CollaborationKernelV2 registry entry. */
+/** Main-only seam around one owner-composed CollaborationKernel registry entry. */
 export interface CollaborationKernelEndpointV2 {
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   receiveFrame(exactCausalFrameBytes: Readonly<Uint8Array>): Promise<CollaborationKernelFrameAdmissionV2>
-  loadDurableFrame(frameDigest: DigestV2): Promise<Readonly<Uint8Array> | null>
+  loadDurableFrame(frameDigest: Digest): Promise<Readonly<Uint8Array> | null>
   recordDurableAck(input: {
     readonly peerId: string
-    readonly frameDigest: DigestV2
-    readonly replicaDurableAckCoreDigest: DigestV2
+    readonly frameDigest: Digest
+    readonly replicaDurableAckCoreDigest: Digest
   }): Promise<void>
 }
 
@@ -107,7 +107,7 @@ export interface CollaborationSessionOrchestratorOptionsV2 {
   readonly admission: CollaborationPeerAdmissionV2
   /** Production injects the exact Project protocol export; tests may inject a fake. */
   readonly peerCodec?: PeerControlCodecV2
-  readonly createProtocolId?: () => Id128V2
+  readonly createProtocolId?: () => Id128
   readonly awareness?: {
     receive(input: {
       readonly peerId: string
@@ -143,8 +143,8 @@ export interface CollaborationSessionOrchestratorOptionsV2 {
 }
 
 interface PendingFrameV2 {
-  readonly scopeKey: DigestV2
-  readonly frameDigest: DigestV2
+  readonly scopeKey: Digest
+  readonly frameDigest: Digest
 }
 
 interface OutboundTransferV2 {
@@ -162,8 +162,8 @@ interface InboundTransferV2 {
 }
 
 interface CompletedInboundTransferV2 {
-  readonly manifestDigest: DigestV2
-  readonly durabilityProofDigest: DigestV2
+  readonly manifestDigest: Digest
+  readonly durabilityProofDigest: Digest
 }
 
 interface PeerSessionRouteV2 {
@@ -175,23 +175,23 @@ interface PeerSessionRouteV2 {
   readonly outboundSequence: Record<PeerChannelNameV2, bigint>
   readonly inboundSequence: Record<PeerChannelNameV2, bigint>
   readonly pendingFrames: Map<string, PendingFrameV2>
-  readonly outboundTransfers: Map<Id128V2, OutboundTransferV2>
-  readonly outboundTransferByFrame: Map<string, Id128V2>
-  readonly inboundTransfers: Map<Id128V2, InboundTransferV2>
-  readonly seenTransferManifestById: Map<Id128V2, DigestV2>
-  readonly completedInbound: Map<Id128V2, CompletedInboundTransferV2>
+  readonly outboundTransfers: Map<Id128, OutboundTransferV2>
+  readonly outboundTransferByFrame: Map<string, Id128>
+  readonly inboundTransfers: Map<Id128, InboundTransferV2>
+  readonly seenTransferManifestById: Map<Id128, Digest>
+  readonly completedInbound: Map<Id128, CompletedInboundTransferV2>
 }
 
 export class CollaborationSessionOrchestratorV2 {
   readonly #localPeerId: string
   readonly #admission: CollaborationPeerAdmissionV2
   readonly #codec: PeerControlCodecV2
-  readonly #createProtocolId: () => Id128V2
+  readonly #createProtocolId: () => Id128
   readonly #awareness?: CollaborationSessionOrchestratorOptionsV2["awareness"]
   readonly #blob?: CollaborationSessionOrchestratorOptionsV2["blob"]
   readonly #onError?: CollaborationSessionOrchestratorOptionsV2["onError"]
   readonly #transport: CollaborationSessionDataPlaneV2
-  readonly #endpoints = new Map<DigestV2, CollaborationKernelEndpointV2>()
+  readonly #endpoints = new Map<Digest, CollaborationKernelEndpointV2>()
   readonly #routes = new Map<string, PeerSessionRouteV2>()
   readonly #lanes = new Map<string, Promise<void>>()
   #disposed = false
@@ -224,8 +224,8 @@ export class CollaborationSessionOrchestratorV2 {
 
   registerEndpoint(endpoint: CollaborationKernelEndpointV2): () => void {
     this.#assertLive()
-    const scope = parseDocumentScopeV2(endpoint.scope)
-    const scopeKey = documentScopeDigestV2(scope)
+    const scope = parseDocumentScope(endpoint.scope)
+    const scopeKey = documentScopeDigest(scope)
     if (this.#endpoints.has(scopeKey)) throw new Error("Collaboration endpoint scope is already registered")
     this.#endpoints.set(scopeKey, endpoint)
     return () => {
@@ -247,10 +247,10 @@ export class CollaborationSessionOrchestratorV2 {
   }
 
   /** Retains only a durable object identity while offline; exact bytes are reloaded for every offer. */
-  async announceLocalFrame(scopeInput: DocumentScopeV2, frameDigestInput: DigestV2): Promise<void> {
+  async announceLocalFrame(scopeInput: DocumentScope, frameDigestInput: Digest): Promise<void> {
     this.#assertLive()
-    const scopeKey = documentScopeDigestV2(parseDocumentScopeV2(scopeInput))
-    const frameDigest = parseDigestV2(frameDigestInput)
+    const scopeKey = documentScopeDigest(parseDocumentScope(scopeInput))
+    const frameDigest = parseDigest(frameDigestInput)
     const endpoint = this.#endpoints.get(scopeKey)
     if (!endpoint || await endpoint.loadDurableFrame(frameDigest) === null) throw new Error("Only an exact durable causal frame can be announced")
     const pending = Object.freeze({ scopeKey, frameDigest })
@@ -265,15 +265,15 @@ export class CollaborationSessionOrchestratorV2 {
    * Starts known-object reconciliation without inventing an inventory root/page.
    * Full inventory discovery stays absent from this production API.
    */
-  async requestFrames(peerId: string, frameDigests: readonly DigestV2[]): Promise<boolean> {
+  async requestFrames(peerId: string, frameDigests: readonly Digest[]): Promise<boolean> {
     const route = this.#routes.get(peerId)
     if (!route?.admitted) return false
-    const digests = [...frameDigests].map(parseDigestV2).sort()
+    const digests = [...frameDigests].map(parseDigest).sort()
     if (digests.length === 0 || digests.length > 256 || new Set(digests).size !== digests.length) throw new Error("Frame request digests are invalid")
     return this.#sendControl(route, {
       format: "convax.peer-control/2",
       kind: "object-request",
-      requestId: parseId128V2(this.#createProtocolId()),
+      requestId: parseId128(this.#createProtocolId()),
       objectKind: "frame",
       digests: Object.freeze(digests),
     })
@@ -459,17 +459,17 @@ export class CollaborationSessionOrchestratorV2 {
       const manifest = createPeerTransferManifestV2({
         format: "convax.peer-transfer-manifest-core/2",
         connectionId: principal.connectionId,
-        transferId: parseId128V2(this.#createProtocolId()),
+        transferId: parseId128(this.#createProtocolId()),
         channel: "update",
         kind: "causal-frame",
-        scope: parseDocumentScopeV2(endpoint.scope),
+        scope: parseDocumentScope(endpoint.scope),
         subjectDigest: pending.frameDigest,
-        byteLength: parseUint64V2(String(exactFrameBytes.byteLength)),
-        sha256: ordinarySha256V2(exactFrameBytes),
-        chunkBytes: parseUint32V2(String(Math.min(causalFrameChunkBytes, exactFrameBytes.byteLength))),
-        chunkCount: parseUint32V2(String(Math.ceil(exactFrameBytes.byteLength / causalFrameChunkBytes))),
+        byteLength: parseUint64(String(exactFrameBytes.byteLength)),
+        sha256: ordinarySha256(exactFrameBytes),
+        chunkBytes: parseUint32(String(Math.min(causalFrameChunkBytes, exactFrameBytes.byteLength))),
+        chunkCount: parseUint32(String(Math.ceil(exactFrameBytes.byteLength / causalFrameChunkBytes))),
         compression: "none",
-        protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+        protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
       })
       const transfer: OutboundTransferV2 = { pending, manifest, exactFrameBytes, state: "offered" }
       route.outboundTransfers.set(manifest.core.transferId, transfer)
@@ -515,7 +515,7 @@ export class CollaborationSessionOrchestratorV2 {
       await this.#sendNack(route, manifest, "unsupported-kind")
       return
     }
-    const scopeKey = documentScopeDigestV2(scope)
+    const scopeKey = documentScopeDigest(scope)
     if (!this.#endpoints.has(scopeKey)) {
       await this.#sendNack(route, manifest, "scope-mismatch")
       return
@@ -528,7 +528,7 @@ export class CollaborationSessionOrchestratorV2 {
     await this.#sendControl(route, { format: "convax.peer-control/2", kind: "transfer-accept", transferId: manifest.core.transferId, manifestDigest: manifest.coreDigest })
   }
 
-  async #sendAcceptedTransfer(route: PeerSessionRouteV2, transferId: Id128V2, manifestDigest: DigestV2): Promise<void> {
+  async #sendAcceptedTransfer(route: PeerSessionRouteV2, transferId: Id128, manifestDigest: Digest): Promise<void> {
     const transfer = route.outboundTransfers.get(transferId)
     if (!transfer || transfer.manifest.coreDigest !== manifestDigest) return
     transfer.state = "accepted"
@@ -539,10 +539,10 @@ export class CollaborationSessionOrchestratorV2 {
         format: "convax.peer-transfer-chunk/2",
         transferId,
         manifestDigest,
-        chunkIndex: parseUint32V2(String(index)),
-        byteOffset: parseUint64V2(String(offset)),
-        byteLength: parseUint32V2(String(rawChunk.byteLength)),
-        chunkSha256: ordinarySha256V2(rawChunk),
+        chunkIndex: parseUint32(String(index)),
+        byteOffset: parseUint64(String(offset)),
+        byteLength: parseUint32(String(rawChunk.byteLength)),
+        chunkSha256: ordinarySha256(rawChunk),
       }
       const body = this.#codec.encodeTransferChunk(header, rawChunk, "update")
       if (!await this.#sendPeerMessage(route, "update", "update.transfer-chunk", body)) {
@@ -593,13 +593,13 @@ export class CollaborationSessionOrchestratorV2 {
   async #completeInboundTransfer(route: PeerSessionRouteV2, transfer: InboundTransferV2): Promise<void> {
     const manifest = transfer.manifest
     const exact = concatenate(transfer.chunks, transfer.receivedBytes)
-    if (BigInt(exact.byteLength) !== BigInt(manifest.core.byteLength) || ordinarySha256V2(exact) !== manifest.core.sha256) {
+    if (BigInt(exact.byteLength) !== BigInt(manifest.core.byteLength) || ordinarySha256(exact) !== manifest.core.sha256) {
       route.inboundTransfers.delete(manifest.core.transferId)
       await this.#sendNack(route, manifest, "hash-mismatch")
       return
     }
     const scope = manifest.core.scope
-    const endpoint = scope ? this.#endpoints.get(documentScopeDigestV2(scope)) : undefined
+    const endpoint = scope ? this.#endpoints.get(documentScopeDigest(scope)) : undefined
     if (!endpoint) {
       route.inboundTransfers.delete(manifest.core.transferId)
       await this.#sendNack(route, manifest, "scope-mismatch")
@@ -625,7 +625,7 @@ export class CollaborationSessionOrchestratorV2 {
         await this.#sendNack(route, manifest, "durability-failed")
         return
       }
-      const durabilityProofDigest = parseDigestV2(admission.replicaDurableAckCoreDigest)
+      const durabilityProofDigest = parseDigest(admission.replicaDurableAckCoreDigest)
       route.inboundTransfers.delete(manifest.core.transferId)
       route.completedInbound.set(manifest.core.transferId, { manifestDigest: manifest.coreDigest, durabilityProofDigest })
       trimMap(route.completedInbound, maximumRememberedTransfersPerPeer)
@@ -645,9 +645,9 @@ export class CollaborationSessionOrchestratorV2 {
 
   async #acceptTransferAck(
     route: PeerSessionRouteV2,
-    transferId: Id128V2,
-    manifestDigest: DigestV2,
-    durabilityProofDigest: DigestV2 | null,
+    transferId: Id128,
+    manifestDigest: Digest,
+    durabilityProofDigest: Digest | null,
   ): Promise<void> {
     const transfer = route.outboundTransfers.get(transferId)
     if (!transfer || transfer.manifest.coreDigest !== manifestDigest) return
@@ -661,7 +661,7 @@ export class CollaborationSessionOrchestratorV2 {
       await endpoint.recordDurableAck({
         peerId: route.peerId,
         frameDigest: transfer.pending.frameDigest,
-        replicaDurableAckCoreDigest: parseDigestV2(durabilityProofDigest),
+        replicaDurableAckCoreDigest: parseDigest(durabilityProofDigest),
       })
       route.pendingFrames.delete(frameKey(transfer.pending))
       this.#dropOutboundTransfer(route, transferId, manifestDigest)
@@ -681,14 +681,14 @@ export class CollaborationSessionOrchestratorV2 {
     })
   }
 
-  #dropOutboundTransfer(route: PeerSessionRouteV2, transferId: Id128V2, manifestDigest: DigestV2): void {
+  #dropOutboundTransfer(route: PeerSessionRouteV2, transferId: Id128, manifestDigest: Digest): void {
     const transfer = route.outboundTransfers.get(transferId)
     if (!transfer || transfer.manifest.coreDigest !== manifestDigest) return
     route.outboundTransfers.delete(transferId)
     route.outboundTransferByFrame.delete(frameKey(transfer.pending))
   }
 
-  async #findDurableFrame(frameDigest: DigestV2): Promise<PendingFrameV2 | null> {
+  async #findDurableFrame(frameDigest: Digest): Promise<PendingFrameV2 | null> {
     for (const [scopeKey, endpoint] of this.#endpoints) {
       if (await endpoint.loadDurableFrame(frameDigest) !== null) return Object.freeze({ scopeKey, frameDigest })
     }
@@ -719,7 +719,7 @@ export class CollaborationSessionOrchestratorV2 {
       channel,
       senderCredentialDigest: principal.localCredentialDigest,
       receiverCredentialDigest: principal.remoteCredentialDigest,
-      messageSequence: parseUint64V2(nextSequence.toString()),
+      messageSequence: parseUint64(nextSequence.toString()),
       bodyKind,
       body: exactBody,
       signCoreDigest: ({ coreDigest }) => principal.signMessageCoreDigest({ channel, coreDigest }),
@@ -776,15 +776,15 @@ export class CollaborationSessionOrchestratorV2 {
 
 function parseSessionPrincipal(principal: CollaborationPeerSessionPrincipalV2): CollaborationPeerSessionPrincipalV2 {
   const channelOpenDigests = Object.freeze({
-    control: parseDigestV2(principal.channelOpenDigests.control),
-    update: parseDigestV2(principal.channelOpenDigests.update),
-    blob: parseDigestV2(principal.channelOpenDigests.blob),
-    awareness: parseDigestV2(principal.channelOpenDigests.awareness),
+    control: parseDigest(principal.channelOpenDigests.control),
+    update: parseDigest(principal.channelOpenDigests.update),
+    blob: parseDigest(principal.channelOpenDigests.blob),
+    awareness: parseDigest(principal.channelOpenDigests.awareness),
   })
   return Object.freeze({
-    connectionId: parseId128V2(principal.connectionId),
-    localCredentialDigest: parseDigestV2(principal.localCredentialDigest),
-    remoteCredentialDigest: parseDigestV2(principal.remoteCredentialDigest),
+    connectionId: parseId128(principal.connectionId),
+    localCredentialDigest: parseDigest(principal.localCredentialDigest),
+    remoteCredentialDigest: parseDigest(principal.remoteCredentialDigest),
     channelOpenDigests,
     signMessageCoreDigest: principal.signMessageCoreDigest,
     verifyRemoteMessageCoreDigest: principal.verifyRemoteMessageCoreDigest,
@@ -805,7 +805,7 @@ function frameKey(frame: PendingFrameV2): string {
   return `${frame.scopeKey}:${frame.frameDigest}`
 }
 
-function rememberTransfer(route: PeerSessionRouteV2, transferId: Id128V2, manifestDigest: DigestV2): void {
+function rememberTransfer(route: PeerSessionRouteV2, transferId: Id128, manifestDigest: Digest): void {
   route.seenTransferManifestById.set(transferId, manifestDigest)
   trimMap(route.seenTransferManifestById, maximumRememberedTransfersPerPeer)
 }
@@ -850,9 +850,9 @@ function requirePeerRouteId(peerId: string): void {
   if (typeof peerId !== "string" || peerId.length === 0 || peerId.length > 256) throw new Error("peerId is invalid")
 }
 
-function createRandomProtocolId(): Id128V2 {
+function createRandomProtocolId(): Id128 {
   const bytes = new Uint8Array(16)
   if (!globalThis.crypto?.getRandomValues) throw new Error("Web Crypto is required for protocol identities")
   globalThis.crypto.getRandomValues(bytes)
-  return parseId128V2(encodeBase64urlV2(bytes))
+  return parseId128(encodeBase64url(bytes))
 }

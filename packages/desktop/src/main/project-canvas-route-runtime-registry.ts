@@ -1,12 +1,12 @@
 import type { CanvasDocumentRef } from "@convax/canvas/application"
 import {
-  parseCanvasIdV2,
-  parseProjectIdV2,
-  type CollaborationKernelOptionsV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type OwnerValidatedStateV2,
-  type VerifiedProtocolAuthorityV2,
+  parseCanvasId,
+  parseProjectId,
+  type CollaborationKernelOptions,
+  type DocumentScope,
+  type Id128,
+  type OwnerValidatedState,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import {
   parseProjectCanvasCatalogProjectionV2,
@@ -19,9 +19,7 @@ import type {
 
 import {
   createKernelBackedMainCollaborationDocumentSessionV2,
-  createKernelBackedMainCollaborationDocumentSessionV3,
   type MainCollaborationDocumentSessionV2,
-  type MainCollaborationDocumentSessionV3,
 } from "./collaboration-document-session"
 import {
   createMainCollaborationProductionRuntimeV2,
@@ -34,29 +32,20 @@ import type {
 } from "./collaboration-authority-ports"
 
 export interface ProjectCanvasCatalogResolverV2 {
-  queryCatalog(input: { readonly projectId: ReturnType<typeof parseProjectIdV2> }): Promise<ProjectCanvasCatalogProjectionV2>
+  queryCatalog(input: { readonly projectId: ReturnType<typeof parseProjectId> }): Promise<ProjectCanvasCatalogProjectionV2>
 }
 
 export interface CanvasRouteRuntimeHandleV2 {
-  readonly protocol: "v2"
   readonly session: MainCollaborationDocumentSessionV2<"canvas">
   dispose(): void
 }
 
-export interface CanvasRouteRuntimeHandleV3 {
-  readonly protocol: "v3"
-  readonly session: MainCollaborationDocumentSessionV3<"canvas">
-  dispose(): void
-}
-
-export type CanvasRouteRuntimeHandleV2OrV3 = CanvasRouteRuntimeHandleV2 | CanvasRouteRuntimeHandleV3
-
 export interface CanvasRouteRuntimeOpenerV2 {
   open(input: {
     readonly ref: CanvasDocumentRef
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+    readonly scope: DocumentScope & { readonly docKind: "canvas" }
     readonly project: ProjectCollaborationRuntimeLeaseV2
-  }): Promise<CanvasRouteRuntimeHandleV2OrV3>
+  }): Promise<CanvasRouteRuntimeHandleV2>
 }
 
 export type ProjectCanvasRouteRuntimeErrorCodeV2 =
@@ -73,10 +62,10 @@ export class ProjectCanvasRouteRuntimeErrorV2 extends Error {
 }
 
 interface ExactRouteIdentityV2 {
-  readonly projectId: ReturnType<typeof parseProjectIdV2>
-  readonly projectEpoch: Id128V2
-  readonly canvasId: ReturnType<typeof parseCanvasIdV2>
-  readonly shardEpoch: Id128V2
+  readonly projectId: ReturnType<typeof parseProjectId>
+  readonly projectEpoch: Id128
+  readonly canvasId: ReturnType<typeof parseCanvasId>
+  readonly shardEpoch: Id128
   readonly activationDigest: string
   readonly routeProjectionDigest: string
 }
@@ -84,9 +73,9 @@ interface ExactRouteIdentityV2 {
 interface OpenRouteEntryV2 {
   readonly generation: object
   readonly identity: ExactRouteIdentityV2
-  readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+  readonly scope: DocumentScope & { readonly docKind: "canvas" }
   readonly project: ProjectCollaborationRuntimeLeaseV2
-  readonly runtime: CanvasRouteRuntimeHandleV2OrV3
+  readonly runtime: CanvasRouteRuntimeHandleV2
   references: number
   revoked: boolean
 }
@@ -98,7 +87,7 @@ interface OpenRouteEntryV2 {
 export class MainProjectCanvasRouteRuntimeRegistryV2 {
   private readonly entries = new Map<string, OpenRouteEntryV2>()
   private readonly lanes = new Map<string, Promise<void>>()
-  private activeProjectId: ReturnType<typeof parseProjectIdV2> | null = null
+  private activeProjectId: ReturnType<typeof parseProjectId> | null = null
   private disposed = false
 
   constructor(private readonly options: {
@@ -110,7 +99,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
   /** Project switch is a revocation barrier, not a hint for a later open. */
   async switchProject(projectId: string | null): Promise<void> {
     this.requireLive()
-    const next = projectId === null ? null : parseProjectIdV2(projectId)
+    const next = projectId === null ? null : parseProjectId(projectId)
     this.activeProjectId = next
     await Promise.all([...this.entries.entries()]
       .filter(([, entry]) => entry.identity.projectId !== next)
@@ -120,7 +109,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
   /** Main-only Project reset barrier; revokes the exact Project without touching others. */
   async quiesceProject(projectIdInput: string): Promise<void> {
     this.requireLive()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     if (this.activeProjectId === projectId) this.activeProjectId = null
     await Promise.all([...this.entries.entries()]
       .filter(([, entry]) => entry.identity.projectId === projectId)
@@ -133,10 +122,10 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
    */
   async openDocumentSession(
     ref: CanvasDocumentRef,
-  ): Promise<MainCollaborationDocumentSessionV2<"canvas"> | MainCollaborationDocumentSessionV3<"canvas">> {
+  ): Promise<MainCollaborationDocumentSessionV2<"canvas">> {
     this.requireLive()
-    const projectId = parseProjectIdV2(ref.scopeId)
-    const canvasId = parseCanvasIdV2(ref.canvasId)
+    const projectId = parseProjectId(ref.scopeId)
+    const canvasId = parseCanvasId(ref.canvasId)
     const key = routeKey(projectId, canvasId)
     return this.serialize(key, async () => {
       this.requireLive()
@@ -150,7 +139,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
       }
       if (!entry) {
         const project = await this.options.projects.acquire(projectId)
-        let runtime: CanvasRouteRuntimeHandleV2OrV3 | undefined
+        let runtime: CanvasRouteRuntimeHandleV2 | undefined
         try {
           const scope = Object.freeze({
             projectId,
@@ -184,7 +173,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
   /** Re-read ProjectIndex and synchronously revoke every non-exact route. */
   async reconcileProject(projectIdInput: string): Promise<void> {
     this.requireLive()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     const catalog = parseProjectCanvasCatalogProjectionV2(
       await this.options.catalogs.queryCatalog({ projectId }), projectId,
     )
@@ -207,8 +196,8 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
   }
 
   private async resolveLiveRoute(
-    projectId: ReturnType<typeof parseProjectIdV2>,
-    canvasId: ReturnType<typeof parseCanvasIdV2>,
+    projectId: ReturnType<typeof parseProjectId>,
+    canvasId: ReturnType<typeof parseCanvasId>,
   ): Promise<ExactRouteIdentityV2> {
     const catalog = parseProjectCanvasCatalogProjectionV2(
       await this.options.catalogs.queryCatalog({ projectId }), projectId,
@@ -243,7 +232,7 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
     entry.project.release()
   }
 
-  private requireActive(projectId: ReturnType<typeof parseProjectIdV2>): void {
+  private requireActive(projectId: ReturnType<typeof parseProjectId>): void {
     if (this.activeProjectId !== projectId) {
       throw new ProjectCanvasRouteRuntimeErrorV2("inactive-project", "Canvas route does not belong to the active Project")
     }
@@ -269,15 +258,15 @@ export class MainProjectCanvasRouteRuntimeRegistryV2 {
 
 /** Production opener: exact scope is supplied only by the route registry above. */
 export function createProductionCanvasRouteRuntimeOpenerV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
   readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
   readonly materializers: ProjectCollaborationMaterializerRegistryV2
-  readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
-  readonly createOperationId: () => Id128V2
+  readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
+  readonly createOperationId: () => Id128
   readonly describeCanvas: (input: {
     readonly ref: CanvasDocumentRef
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+    readonly scope: DocumentScope & { readonly docKind: "canvas" }
   }) => Omit<OpenProjectCollaborationDocumentV2<"canvas">, "scope">
 }): CanvasRouteRuntimeOpenerV2 {
   return Object.freeze({
@@ -306,7 +295,7 @@ export function createProductionCanvasRouteRuntimeOpenerV2(input: {
           signatureVerifier: input.signatureVerifier,
           createOperationId: input.createOperationId,
         })
-        return Object.freeze({ protocol: "v2" as const, session, dispose() { session.dispose(); runtime.dispose() } })
+        return Object.freeze({ session, dispose() { session.dispose(); runtime.dispose() } })
       } catch (error) {
         runtime.dispose()
         throw error
@@ -345,10 +334,8 @@ function routeKey(projectId: string, canvasId: string): string {
 function leaseSession(
   entry: OpenRouteEntryV2,
   release: () => Promise<void>,
-): MainCollaborationDocumentSessionV2<"canvas"> | MainCollaborationDocumentSessionV3<"canvas"> {
-  return entry.runtime.protocol === "v2"
-    ? leaseSessionV2(entry, entry.runtime.session, release)
-    : leaseSessionV3(entry, entry.runtime.session, release)
+): MainCollaborationDocumentSessionV2<"canvas"> {
+  return leaseSessionV2(entry, entry.runtime.session, release)
 }
 
 function leaseSessionV2(
@@ -362,7 +349,7 @@ function leaseSessionV2(
   }
   return Object.freeze({
     scope: entry.scope,
-    query<T>(project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> {
+    query<T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> {
       requireLive(); return session.query(project)
     },
     submit(input: Parameters<MainCollaborationDocumentSessionV2<"canvas">["submit"]>[0]) {
@@ -380,31 +367,3 @@ function leaseSessionV2(
   })
 }
 
-function leaseSessionV3(
-  entry: OpenRouteEntryV2,
-  session: MainCollaborationDocumentSessionV3<"canvas">,
-  release: () => Promise<void>,
-): MainCollaborationDocumentSessionV3<"canvas"> {
-  let live = true
-  const requireLive = () => {
-    if (!live || entry.revoked) throw new ProjectCanvasRouteRuntimeErrorV2("route-changed", "Canvas route session was revoked")
-  }
-  return Object.freeze({
-    scope: entry.scope,
-    query<T>(project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> {
-      requireLive(); return session.query(project)
-    },
-    submit(input: Parameters<MainCollaborationDocumentSessionV3<"canvas">["submit"]>[0]) {
-      requireLive(); return session.submit(input)
-    },
-    flush() { requireLive(); return session.flush() },
-    subscribe(listener: Parameters<MainCollaborationDocumentSessionV3<"canvas">["subscribe"]>[0]) {
-      requireLive(); return session.subscribe(listener)
-    },
-    dispose() {
-      if (!live) return
-      live = false
-      void release()
-    },
-  })
-}

@@ -3,34 +3,32 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import type {
-  ActorIdV2,
-  CausalFrontierV2,
-  CollaborationPersistencePortV2,
-  CompareAndCommitReplicaHeadPortResultV2,
-  DecodedCausalEditFrameV2,
-  DecodedCausalEditFrameV3,
-  DigestV2,
-  DocumentScopeV2,
-  FrameObjectRefV2,
-  Id128V2,
-  JournalAppendPortEvidenceV2,
-  KernelQuarantineReasonV2,
-  MemberIdV2,
-  OperationLookupV2,
-  PendingFrameReasonV2,
-  PendingInboxPortV2,
-  ReplicaActorHeadSetV2,
-  ReplicaIdV2,
-  StateVectorV2,
+  ActorId,
+  CausalFrontier,
+  CollaborationPersistencePort,
+  CompareAndCommitReplicaHeadPortResult,
+  DecodedCausalEditFrame,
+  Digest,
+  DocumentScope,
+  FrameObjectRef,
+  Id128,
+  JournalAppendPortEvidence,
+  KernelQuarantineReason,
+  MemberId,
+  OperationLookup,
+  PendingFrameReason,
+  PendingInboxPort,
+  ReplicaActorHeadSet,
+  ReplicaId,
+  StateVector,
 } from "@convax/collaboration"
 import {
-  frameObjectRefFromDecodedFrameV2,
-  frameObjectRefFromDecodedFrameV3,
-  parseActorIdV2,
-  parseDigestV2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseUint64V2,
+  frameObjectRefFromDecodedFrame,
+  parseActorId,
+  parseDigest,
+  parseMemberId,
+  parseReplicaId,
+  parseUint64,
 } from "@convax/collaboration"
 import {
   deriveDocumentNativeKeyV2,
@@ -56,40 +54,40 @@ const MAX_PENDING_ACTOR_FRAMES = 512
 const MAX_PENDING_ACTOR_BYTES = 32 * 1024 * 1024
 
 export interface NodeAcceptedReplicaHeadV2 {
-  readonly scope: DocumentScopeV2
-  readonly headDigest: DigestV2
-  readonly frontier: CausalFrontierV2
-  readonly frontierDigest: DigestV2
-  readonly actorHeads: ReplicaActorHeadSetV2
+  readonly scope: DocumentScope
+  readonly headDigest: Digest
+  readonly frontier: CausalFrontier
+  readonly frontierDigest: Digest
+  readonly actorHeads: ReplicaActorHeadSet
   readonly fullUpdate: Uint8Array
-  readonly stateVector: StateVectorV2
-  readonly canonicalStateDigest: DigestV2
+  readonly stateVector: StateVector
+  readonly canonicalStateDigest: Digest
 }
 
 export interface NodeInspectedFrameV2 {
-  readonly ref: FrameObjectRefV2
-  readonly requiredBlobDigests: readonly DigestV2[]
+  readonly ref: FrameObjectRef
+  readonly requiredBlobDigests: readonly Digest[]
 }
 
 export interface NodeDurableReplicationOutboxEntryV2 {
-  readonly ref: FrameObjectRefV2
+  readonly ref: FrameObjectRef
   readonly exactFrameBytes: Uint8Array
-  readonly requiredBlobDigests: readonly DigestV2[]
+  readonly requiredBlobDigests: readonly Digest[]
 }
 
 export interface NodeAcceptedFrameObjectV2 {
-  readonly ref: FrameObjectRefV2
+  readonly ref: FrameObjectRef
   readonly exactFrameBytes: Uint8Array
 }
 
 export interface NodeVerifiedReplicaDurableAckV2 {
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly receiverMemberId: MemberIdV2
-  readonly receiverReplicaId: ReplicaIdV2
-  readonly receiverActorId: ActorIdV2
-  readonly receiverAuthorizationDigest: DigestV2
-  readonly ackCoreDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly receiverMemberId: MemberId
+  readonly receiverReplicaId: ReplicaId
+  readonly receiverActorId: ActorId
+  readonly receiverAuthorizationDigest: Digest
+  readonly ackCoreDigest: Digest
   readonly exactAckBytes: Readonly<Uint8Array>
 }
 
@@ -104,25 +102,25 @@ export interface NodeReplicaDurableAckVerifierV2 {
  * owns only native durability/recovery.
  */
 export interface NodeReplicaHeadMaterializerV2 {
-  inspectFrame(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>): Promise<NodeInspectedFrameV2>
+  inspectFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>): Promise<NodeInspectedFrameV2>
   applyAcceptedFrame(input: {
     readonly previous: NodeAcceptedReplicaHeadV2
-    readonly ref: FrameObjectRefV2
+    readonly ref: FrameObjectRef
     readonly exactBytes: Readonly<Uint8Array>
   }): Promise<NodeAcceptedReplicaHeadV2>
   /** Updates disposable causal lookup state only after the frame is reachable from the durable head. */
-  observeAcceptedFrame?(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>): void
+  observeAcceptedFrame?(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>): void
   /** Reconstructs the exact portable checkpoint payload without consulting native metadata order. */
   materializeCheckpoint?(input: {
-    readonly scope: DocumentScopeV2
-    readonly checkpointObjectDigest: DigestV2
+    readonly scope: DocumentScope
+    readonly checkpointObjectDigest: Digest
     readonly exactCheckpointBytes: Readonly<Uint8Array>
   }): Promise<Omit<NodeAcceptedReplicaHeadV2, "headDigest">>
-  actorHeadsDigest(actorHeads: ReplicaActorHeadSetV2): DigestV2
+  actorHeadsDigest(actorHeads: ReplicaActorHeadSet): Digest
 }
 
 export interface NodeImmutableCheckpointObjectV2 {
-  readonly objectDigest: DigestV2
+  readonly objectDigest: Digest
   readonly exactBytes: Readonly<Uint8Array>
 }
 
@@ -133,9 +131,9 @@ export interface NodeCheckpointInstallationVerifierV2 {
    * interprets portable certificate bytes on its own.
    */
   verifyCurrent(input: {
-    readonly scope: DocumentScopeV2
+    readonly scope: DocumentScope
     readonly currentAcceptedHead: NodeAcceptedReplicaHeadV2
-    readonly bootstrapCheckpointObjectDigest: DigestV2
+    readonly bootstrapCheckpointObjectDigest: Digest
     readonly checkpointObjects: readonly NodeImmutableCheckpointObjectV2[]
     readonly contentCertificateObjects: readonly NodeImmutableCheckpointObjectV2[]
     readonly prunableSetCertificateObjects: readonly NodeImmutableCheckpointObjectV2[]
@@ -143,9 +141,9 @@ export interface NodeCheckpointInstallationVerifierV2 {
 }
 
 export interface InstallNativeCheckpointSetV2 {
-  readonly scope: DocumentScopeV2
-  readonly expectedReplicaHeadRecordDigest: DigestV2
-  readonly bootstrapCheckpointObjectDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly expectedReplicaHeadRecordDigest: Digest
+  readonly bootstrapCheckpointObjectDigest: Digest
   readonly checkpointObjects: readonly NodeImmutableCheckpointObjectV2[]
   readonly contentCertificateObjects: readonly NodeImmutableCheckpointObjectV2[]
   readonly prunableSetCertificateObjects: readonly NodeImmutableCheckpointObjectV2[]
@@ -154,9 +152,9 @@ export interface InstallNativeCheckpointSetV2 {
 export type InstallNativeCheckpointSetResultV2 =
   | Readonly<{
       status: "committed"
-      installedCheckpointSetDigest: DigestV2
-      journalRecordDigest: DigestV2
-      resultingReplicaHeadRecordDigest: DigestV2
+      installedCheckpointSetDigest: Digest
+      journalRecordDigest: Digest
+      resultingReplicaHeadRecordDigest: Digest
     }>
   | Readonly<{ status: "rejected"; code: "head-stale" | "verification-failed" | "durability-failed" | "store-corrupt" }>
 
@@ -164,45 +162,45 @@ export type NodePrunableObjectKindV2 = "frame" | "checkpoint"
 
 export interface NodePrunableObjectV2 {
   readonly kind: NodePrunableObjectKindV2
-  readonly objectDigest: DigestV2
+  readonly objectDigest: Digest
   readonly exactByteLength: string
 }
 
 export interface NodeCheckpointPruneRootScanV2 {
   readonly complete: boolean
-  readonly rootSetDigest: DigestV2
-  readonly retainedObjectDigests: readonly DigestV2[]
+  readonly rootSetDigest: Digest
+  readonly retainedObjectDigests: readonly Digest[]
 }
 
 export interface NodeCheckpointPruneRootScannerV2 {
   scanComplete(input: {
-    readonly scope: DocumentScopeV2
-    readonly durableHeadRecordDigest: DigestV2
-    readonly installedCheckpointSetDigest: DigestV2
+    readonly scope: DocumentScope
+    readonly durableHeadRecordDigest: Digest
+    readonly installedCheckpointSetDigest: Digest
   }): Promise<NodeCheckpointPruneRootScanV2>
 }
 
 export interface NodeCheckpointPruneAuthorityV2 {
   verifyCurrent(input: {
-    readonly scope: DocumentScopeV2
-    readonly durableHeadRecordDigest: DigestV2
-    readonly installedCheckpointSetDigest: DigestV2
-    readonly prunableSetCertificateObjectDigest: DigestV2
-    readonly causalFloorObjectDigest: DigestV2
+    readonly scope: DocumentScope
+    readonly durableHeadRecordDigest: Digest
+    readonly installedCheckpointSetDigest: Digest
+    readonly prunableSetCertificateObjectDigest: Digest
+    readonly causalFloorObjectDigest: Digest
     readonly causalFloorExactBytes: Readonly<Uint8Array>
-    readonly retainedRootSetDigest: DigestV2
+    readonly retainedRootSetDigest: Digest
     readonly candidateDeleteObjects: readonly NodePrunableObjectV2[]
   }): Promise<Readonly<{ verified: false }> | Readonly<{
     verified: true
-    expectedPostBarrierRootSetDigest: DigestV2
+    expectedPostBarrierRootSetDigest: Digest
   }>>
 }
 
 export interface PruneNativeCheckpointHistoryV2 {
-  readonly scope: DocumentScopeV2
-  readonly expectedReplicaHeadRecordDigest: DigestV2
-  readonly prunableSetCertificateObjectDigest: DigestV2
-  readonly causalFloorObjectDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly expectedReplicaHeadRecordDigest: Digest
+  readonly prunableSetCertificateObjectDigest: Digest
+  readonly causalFloorObjectDigest: Digest
   readonly causalFloorExactBytes: Readonly<Uint8Array>
   readonly candidateDeleteObjects: readonly NodePrunableObjectV2[]
 }
@@ -211,12 +209,12 @@ export type PruneNativeCheckpointHistoryResultV2 = Readonly<{
   status: "deleted" | "postponed" | "rejected"
   code?: "head-stale" | "roots-changed" | "verification-failed" | "capacity-exceeded" | "durability-failed" | "store-corrupt"
   deletedObjectCount: number
-  prunePlanDigest?: DigestV2
+  prunePlanDigest?: Digest
 }>
 
 export interface InitializeNativeCollaborationShardV2 {
-  readonly scope: DocumentScopeV2
-  readonly checkpointObjectDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly checkpointObjectDigest: Digest
   readonly checkpointExactBytes: Readonly<Uint8Array>
   readonly acceptedBase: Omit<NodeAcceptedReplicaHeadV2, "headDigest">
 }
@@ -261,126 +259,126 @@ export class NodeCollaborationPersistenceErrorV2 extends Error {
 
 interface LocalReplicationOutboxRefV2 {
   readonly format: "convax.local-replication-outbox-ref/2"
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly actorId: ActorIdV2
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly actorId: ActorId
   readonly actorSequence: string
-  readonly operationId: Id128V2
-  readonly requiredBlobDigests: readonly DigestV2[]
+  readonly operationId: Id128
+  readonly requiredBlobDigests: readonly Digest[]
 }
 
 interface LocalJournalRecordV2 {
   readonly format: "convax.local-journal-record/2"
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   readonly localRecordSequence: string
-  readonly priorJournalRecordDigest: DigestV2 | null
+  readonly priorJournalRecordDigest: Digest | null
   readonly transition: "accept-local-frame" | "accept-remote-frame" | "install-checkpoint-set" | "record-durable-ack" | "start-prunable-journal-base"
-  readonly objectDigests: readonly DigestV2[]
-  readonly outboxRefDigest: DigestV2 | null
-  readonly resultingFrontierDigest: DigestV2
-  readonly operationRef: { readonly actorId: ActorIdV2; readonly operationId: Id128V2 } | null
+  readonly objectDigests: readonly Digest[]
+  readonly outboxRefDigest: Digest | null
+  readonly resultingFrontierDigest: Digest
+  readonly operationRef: { readonly actorId: ActorId; readonly operationId: Id128 } | null
 }
 
 interface LocalReplicaDurableAckRecordV2 {
   readonly format: "convax.local-replica-durable-ack/2"
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly receiverMemberId: MemberIdV2
-  readonly receiverReplicaId: ReplicaIdV2
-  readonly receiverActorId: ActorIdV2
-  readonly receiverAuthorizationDigest: DigestV2
-  readonly ackCoreDigest: DigestV2
-  readonly exactAckSha256: DigestV2
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly receiverMemberId: MemberId
+  readonly receiverReplicaId: ReplicaId
+  readonly receiverActorId: ActorId
+  readonly receiverAuthorizationDigest: Digest
+  readonly ackCoreDigest: Digest
+  readonly exactAckSha256: Digest
   readonly exactAckByteLength: string
   readonly exactAckBase64: string
 }
 
 interface LocalDurableHeadV2 {
   readonly format: "convax.local-durable-head/2"
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   readonly localHeadGeneration: string
-  readonly priorHeadDigest: DigestV2 | null
-  readonly journalBaseDigest: DigestV2
-  readonly journalTailDigest: DigestV2
-  readonly installedCheckpointSetDigest: DigestV2
-  readonly acceptedFrontierDigest: DigestV2
-  readonly acceptedActorHeadsDigest: DigestV2
+  readonly priorHeadDigest: Digest | null
+  readonly journalBaseDigest: Digest
+  readonly journalTailDigest: Digest
+  readonly installedCheckpointSetDigest: Digest
+  readonly acceptedFrontierDigest: Digest
+  readonly acceptedActorHeadsDigest: Digest
 }
 
 interface LocalInstalledCheckpointSetV2 {
   readonly format: "convax.local-installed-checkpoint-set/2"
-  readonly scope: DocumentScopeV2
-  readonly checkpointObjectDigests: readonly DigestV2[]
-  readonly bootstrapCheckpointObjectDigest: DigestV2
-  readonly contentCertificateObjectDigests: readonly DigestV2[]
-  readonly prunableSetCertificateObjectDigests: readonly DigestV2[]
+  readonly scope: DocumentScope
+  readonly checkpointObjectDigests: readonly Digest[]
+  readonly bootstrapCheckpointObjectDigest: Digest
+  readonly contentCertificateObjectDigests: readonly Digest[]
+  readonly prunableSetCertificateObjectDigests: readonly Digest[]
 }
 
 interface LocalJournalBaseRecordV2 {
   readonly format: "convax.local-journal-base/2"
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   readonly baseLocalRecordSequence: string
-  readonly checkpointObjectDigest: DigestV2
-  readonly installedCheckpointSetDigest: DigestV2
-  readonly frontier: CausalFrontierV2
-  readonly frontierDigest: DigestV2
-  readonly actorHeads: ReplicaActorHeadSetV2
-  readonly actorHeadsDigest: DigestV2
-  readonly canonicalStateDigest: DigestV2
-  readonly fullUpdateDigest: DigestV2
+  readonly checkpointObjectDigest: Digest
+  readonly installedCheckpointSetDigest: Digest
+  readonly frontier: CausalFrontier
+  readonly frontierDigest: Digest
+  readonly actorHeads: ReplicaActorHeadSet
+  readonly actorHeadsDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly fullUpdateDigest: Digest
   readonly fullUpdateByteLength: string
-  readonly stateVectorDigest: DigestV2
+  readonly stateVectorDigest: Digest
   readonly stateVectorByteLength: string
 }
 
 interface LocalPrunePlanV2 {
   readonly format: "convax.local-prune-plan/2"
-  readonly scope: DocumentScopeV2
-  readonly expectedDurableHeadRecordDigest: DigestV2
-  readonly installedCheckpointSetDigest: DigestV2
-  readonly prunableSetCertificateObjectDigest: DigestV2
-  readonly causalFloorObjectDigest: DigestV2
-  readonly retainedRootSetDigest: DigestV2
-  readonly expectedPostBarrierRootSetDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly expectedDurableHeadRecordDigest: Digest
+  readonly installedCheckpointSetDigest: Digest
+  readonly prunableSetCertificateObjectDigest: Digest
+  readonly causalFloorObjectDigest: Digest
+  readonly retainedRootSetDigest: Digest
+  readonly expectedPostBarrierRootSetDigest: Digest
   readonly candidateDeleteObjects: readonly NodePrunableObjectV2[]
-  readonly newJournalBaseDigest: DigestV2
-  readonly startJournalRecordDigest: DigestV2
-  readonly candidateDurableHeadRecordDigest: DigestV2
+  readonly newJournalBaseDigest: Digest
+  readonly startJournalRecordDigest: Digest
+  readonly candidateDurableHeadRecordDigest: Digest
 }
 
 interface LocalActivePrunePlanV2 {
   readonly format: "convax.local-active-prune-plan/2"
-  readonly scope: DocumentScopeV2
-  readonly prunePlanDigest: DigestV2
+  readonly scope: DocumentScope
+  readonly prunePlanDigest: Digest
   readonly phase: "prepared" | "head-published" | "deleted" | "abandoned"
 }
 
 interface LocalOperationObjectRefV2 {
   readonly format: "convax.local-operation-object-ref/2"
-  readonly ref: FrameObjectRefV2
+  readonly ref: FrameObjectRef
 }
 
 interface LocalPendingFrameRecordV2 {
   readonly format: "convax.local-pending-frame/2"
-  readonly ref: FrameObjectRefV2
-  readonly reason: PendingFrameReasonV2
+  readonly ref: FrameObjectRef
+  readonly reason: PendingFrameReason
   readonly frameByteLength: string
 }
 
 interface LocalQuarantineCommitV2 {
   readonly format: "convax.local-quarantine-commit/2"
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly reason: KernelQuarantineReasonV2 | "stale-replica-head"
-  readonly observedReplicaHeadRecordDigest: DigestV2
-  readonly journalRecordDigest: DigestV2 | null
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly reason: KernelQuarantineReason | "stale-replica-head"
+  readonly observedReplicaHeadRecordDigest: Digest
+  readonly journalRecordDigest: Digest | null
 }
 
 interface LocalShardDispositionHeadV2 {
   readonly format: "convax.local-shard-disposition-head/2"
-  readonly scope: DocumentScopeV2
+  readonly scope: DocumentScope
   readonly state: "read-only-quarantine"
-  readonly quarantineCommitRecordDigest: DigestV2
+  readonly quarantineCommitRecordDigest: Digest
 }
 
 interface DocumentLayoutV2 {
@@ -406,14 +404,14 @@ interface DocumentLayoutV2 {
 }
 
 interface LoadedJournalBaseV2 {
-  readonly digest: DigestV2
+  readonly digest: Digest
   readonly record: LocalJournalBaseRecordV2
   readonly fullUpdate: Uint8Array
-  readonly stateVector: StateVectorV2
+  readonly stateVector: StateVector
 }
 
 interface LoadedJournalV2 {
-  readonly digest: DigestV2
+  readonly digest: Digest
   readonly record: LocalJournalRecordV2
 }
 
@@ -429,13 +427,13 @@ const rootWriterLeases = new Set<string>()
  * writer for one already-bound Project collaboration directory; it serves the
  * ProjectIndex shard and every per-Canvas shard through opaque document keys.
  */
-export class NodeCollaborationPersistenceV2 implements CollaborationPersistencePortV2, PendingInboxPortV2 {
+export class NodeCollaborationPersistenceV2 implements CollaborationPersistencePort, PendingInboxPort {
   private readonly queues = new Map<string, Promise<void>>()
   private disposed = false
 
   private constructor(
     private readonly collaborationDirectory: string,
-    private readonly localActorId: ActorIdV2,
+    private readonly localActorId: ActorId,
     private readonly materializer: NodeReplicaHeadMaterializerV2,
     private readonly replicaDurableAckVerifier: NodeReplicaDurableAckVerifierV2 | undefined,
     private readonly checkpointInstallationVerifier: NodeCheckpointInstallationVerifierV2 | undefined,
@@ -447,7 +445,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   static async open(input: {
     readonly collaborationDirectory: string
-    readonly localActorId: ActorIdV2
+    readonly localActorId: ActorId
     readonly materializer: NodeReplicaHeadMaterializerV2
     readonly replicaDurableAckVerifier?: NodeReplicaDurableAckVerifierV2
     readonly checkpointInstallationVerifier?: NodeCheckpointInstallationVerifierV2
@@ -518,7 +516,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return this.initializeShardWithGenesisProofInternal(input, new Uint8Array(input.proofCarrierExactBytes))
   }
 
-  async readGenesisProof(scope: DocumentScopeV2, checkpointObjectDigest: DigestV2): Promise<Uint8Array> {
+  async readGenesisProof(scope: DocumentScope, checkpointObjectDigest: Digest): Promise<Uint8Array> {
     this.requireLive()
     validateDigest(checkpointObjectDigest, "Canvas genesis checkpoint digest")
     const layout = this.layout(scope)
@@ -733,14 +731,14 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return freezeHead(input.acceptedBase, durable.digest)
   }
 
-  async loadReplicaHead(scope: DocumentScopeV2): Promise<unknown> {
+  async loadReplicaHead(scope: DocumentScope): Promise<unknown> {
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => this.loadAcceptedHeadInternal(layout, scope, true))
   }
 
   /** Exact installed checkpoint base; no accepted suffix frame is applied. */
-  async loadInstalledBase(scope: DocumentScopeV2): Promise<NodeAcceptedReplicaHeadV2> {
+  async loadInstalledBase(scope: DocumentScope): Promise<NodeAcceptedReplicaHeadV2> {
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => {
@@ -774,7 +772,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     const checkpointObjects = normalizePortableObjects(input.checkpointObjects, 1, 8, "checkpoint")
     const contentCertificates = normalizePortableObjects(input.contentCertificateObjects, 1, 8, "content certificate")
     const prunableCertificates = normalizePortableObjects(input.prunableSetCertificateObjects, 0, 8, "prunable-set certificate")
-    const bootstrapDigest = parseDigestV2(input.bootstrapCheckpointObjectDigest)
+    const bootstrapDigest = parseDigest(input.bootstrapCheckpointObjectDigest)
     if (!checkpointObjects.some((entry) => entry.objectDigest === bootstrapDigest)) {
       invalid("Bootstrap checkpoint is absent from the installed set")
     }
@@ -879,8 +877,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   async pruneCheckpointHistory(input: PruneNativeCheckpointHistoryV2): Promise<PruneNativeCheckpointHistoryResultV2> {
     this.requireLive()
     validateDigest(input.expectedReplicaHeadRecordDigest, "Expected replica head digest")
-    const certificateDigest = parseDigestV2(input.prunableSetCertificateObjectDigest)
-    const floorDigest = parseDigestV2(input.causalFloorObjectDigest)
+    const certificateDigest = parseDigest(input.prunableSetCertificateObjectDigest)
+    const floorDigest = parseDigest(input.causalFloorObjectDigest)
     if (!(input.causalFloorExactBytes instanceof Uint8Array) || input.causalFloorExactBytes.byteLength < 1 || input.causalFloorExactBytes.byteLength > 64 * 1024) {
       invalid("Causal floor object bytes are outside the 64 KiB bound")
     }
@@ -928,7 +926,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
           candidateDeleteObjects: candidates,
         })
         if (!proof.verified) return { status: "rejected", code: "verification-failed", deletedObjectCount: 0 }
-        const expectedPostBarrierRootSetDigest = parseDigestV2(proof.expectedPostBarrierRootSetDigest)
+        const expectedPostBarrierRootSetDigest = parseDigest(proof.expectedPostBarrierRootSetDigest)
         const nextSequence = incrementUint64(current.record.localHeadGeneration)
         const baseRecord: LocalJournalBaseRecordV2 = {
           format: "convax.local-journal-base/2",
@@ -1018,7 +1016,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   /** Returns bytes only when the frame is in the sole durable accepted journal closure. */
-  async readAcceptedFrame(scope: DocumentScopeV2, frameDigest: DigestV2): Promise<Uint8Array | null> {
+  async readAcceptedFrame(scope: DocumentScope, frameDigest: Digest): Promise<Uint8Array | null> {
     this.requireLive()
     validateDigest(frameDigest, "Accepted frame digest")
     const layout = this.layout(scope)
@@ -1036,7 +1034,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   /** Journal order is recovery metadata only; callers build causal closure from exact frame contexts. */
-  async listAcceptedFrames(scope: DocumentScopeV2): Promise<readonly NodeAcceptedFrameObjectV2[]> {
+  async listAcceptedFrames(scope: DocumentScope): Promise<readonly NodeAcceptedFrameObjectV2[]> {
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => {
@@ -1057,14 +1055,12 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   async retainExactFrame(
-    frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3,
-    reason: PendingFrameReasonV2,
+    frame: DecodedCausalEditFrame,
+    reason: PendingFrameReason,
   ): Promise<"retained" | "capacity-exceeded"> {
     this.requireLive()
     if (!isPendingReason(reason)) invalid("Pending frame reason is invalid")
-    const ref = frame.header.format === "convax.causal-edit-frame/3"
-      ? frameObjectRefFromDecodedFrameV3(frame as DecodedCausalEditFrameV3)
-      : frameObjectRefFromDecodedFrameV2(frame as DecodedCausalEditFrameV2)
+    const ref = frameObjectRefFromDecodedFrame(frame)
     validateFrameRef(ref)
     if (!(frame.bytes instanceof Uint8Array) || frame.bytes.byteLength < 1 || frame.bytes.byteLength > MAX_FRAME_BYTES) {
       invalid("Pending frame bytes must be a non-empty causal envelope within 2 MiB")
@@ -1094,7 +1090,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async putImmutableFrame(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>): Promise<void> {
+  async putImmutableFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>): Promise<void> {
     this.requireLive()
     validateFrameRef(ref)
     if (!(exactBytes instanceof Uint8Array) || exactBytes.byteLength < 1 || exactBytes.byteLength > MAX_FRAME_BYTES) {
@@ -1116,7 +1112,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async putReplicationOutboxRef(ref: FrameObjectRefV2): Promise<void> {
+  async putReplicationOutboxRef(ref: FrameObjectRef): Promise<void> {
     this.requireLive()
     validateFrameRef(ref)
     const layout = this.layout(ref.scope)
@@ -1142,7 +1138,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async appendFrameJournal(ref: FrameObjectRefV2): Promise<JournalAppendPortEvidenceV2> {
+  async appendFrameJournal(ref: FrameObjectRef): Promise<JournalAppendPortEvidence> {
     this.requireLive()
     validateFrameRef(ref)
     const layout = this.layout(ref.scope)
@@ -1181,11 +1177,11 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   }
 
   async compareAndCommitReplicaHead(input: {
-    readonly ref: FrameObjectRefV2
-    readonly journal: JournalAppendPortEvidenceV2
-    readonly expectedReplicaHeadRecordDigest: DigestV2
-    readonly resultingFrontierDigest: DigestV2
-  }): Promise<CompareAndCommitReplicaHeadPortResultV2> {
+    readonly ref: FrameObjectRef
+    readonly journal: JournalAppendPortEvidence
+    readonly expectedReplicaHeadRecordDigest: Digest
+    readonly resultingFrontierDigest: Digest
+  }): Promise<CompareAndCommitReplicaHeadPortResult> {
     this.requireLive()
     validateFrameRef(input.ref)
     assertSameFrameRef(input.journal.ref, input.ref)
@@ -1246,7 +1242,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async isReachableFromAcceptedHead(ref: FrameObjectRefV2): Promise<boolean> {
+  async isReachableFromAcceptedHead(ref: FrameObjectRef): Promise<boolean> {
     this.requireLive()
     const layout = this.layout(ref.scope)
     return this.serial(layout.directory, async () => {
@@ -1256,9 +1252,9 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async lookupOperation(actorId: ActorIdV2, operationId: Id128V2): Promise<OperationLookupV2> {
+  async lookupOperation(actorId: ActorId, operationId: Id128): Promise<OperationLookup> {
     this.requireLive()
-    const matches: Array<{ ref: FrameObjectRefV2; bytes: Uint8Array; layout: DocumentLayoutV2 }> = []
+    const matches: Array<{ ref: FrameObjectRef; bytes: Uint8Array; layout: DocumentLayoutV2 }> = []
     const documents = path.join(this.collaborationDirectory, "documents")
     for (const documentName of await readDirectoryNames(documents)) {
       const layout = this.layoutFromDirectory(path.join(documents, documentName))
@@ -1287,7 +1283,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     }
   }
 
-  async scanDurableReferences(frameDigest: DigestV2): Promise<{ readonly complete: boolean; readonly reachable: boolean }> {
+  async scanDurableReferences(frameDigest: Digest): Promise<{ readonly complete: boolean; readonly reachable: boolean }> {
     this.requireLive()
     validateDigest(frameDigest, "Frame digest")
     const documents = path.join(this.collaborationDirectory, "documents")
@@ -1314,7 +1310,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     }
   }
 
-  async quarantineExactObject(frameDigest: DigestV2, reason: KernelQuarantineReasonV2): Promise<void> {
+  async quarantineExactObject(frameDigest: Digest, reason: KernelQuarantineReason): Promise<void> {
     this.requireLive()
     validateDigest(frameDigest, "Frame digest")
     const documents = path.join(this.collaborationDirectory, "documents")
@@ -1332,7 +1328,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     if (!found) corrupt("Cannot quarantine an unknown frame object")
   }
 
-  async isFrameDurableForAck(ref: FrameObjectRefV2): Promise<boolean> {
+  async isFrameDurableForAck(ref: FrameObjectRef): Promise<boolean> {
     this.requireLive()
     validateFrameRef(ref)
     const layout = this.layout(ref.scope)
@@ -1351,7 +1347,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
    * replication outbox. ACK retirement is a separate policy; this reader never
    * mutates or silently skips malformed, orphaned, or over-capacity entries.
    */
-  async listDurableReplicationOutbox(scope: DocumentScopeV2): Promise<readonly NodeDurableReplicationOutboxEntryV2[]> {
+  async listDurableReplicationOutbox(scope: DocumentScope): Promise<readonly NodeDurableReplicationOutboxEntryV2[]> {
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => {
@@ -1372,11 +1368,11 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
       for (const name of names) {
         const record = parseOutbox(decodeRecord(await fs.readFile(path.join(layout.outboxFrames, name))))
         assertSameScope(record.scope, scope)
-        const ref: FrameObjectRefV2 = Object.freeze({
+        const ref: FrameObjectRef = Object.freeze({
           scope: record.scope,
           frameDigest: record.frameDigest,
           actorId: record.actorId,
-          actorSequence: parseUint64V2(record.actorSequence),
+          actorSequence: parseUint64(record.actorSequence),
           operationId: record.operationId,
         })
         validateFrameRef(ref)
@@ -1403,7 +1399,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
    * journal/head barrier as document metadata. The frame outbox is retired only
    * after the durable head references the ACK journal.
    */
-  async recordVerifiedReplicaDurableAck(input: NodeVerifiedReplicaDurableAckV2): Promise<DigestV2> {
+  async recordVerifiedReplicaDurableAck(input: NodeVerifiedReplicaDurableAckV2): Promise<Digest> {
     this.requireLive()
     const normalized = normalizeReplicaDurableAckInput(input)
     const verifier = this.replicaDurableAckVerifier
@@ -1462,7 +1458,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     })
   }
 
-  async listDurableReplicaAcks(scope: DocumentScopeV2): Promise<readonly NodeVerifiedReplicaDurableAckV2[]> {
+  async listDurableReplicaAcks(scope: DocumentScope): Promise<readonly NodeVerifiedReplicaDurableAckV2[]> {
     this.requireLive()
     const verifier = this.replicaDurableAckVerifier
     if (!verifier) invalid("Replica durable ACK verifier is unavailable")
@@ -1487,7 +1483,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async loadAcceptedHeadInternal(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
+    scope: DocumentScope,
     reconcileJournalBelowHead: boolean,
   ): Promise<NodeAcceptedReplicaHeadV2> {
     await this.assertReadableDocument(layout)
@@ -1512,7 +1508,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async applyDispositionHead(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
+    scope: DocumentScope,
     accepted: NodeAcceptedReplicaHeadV2,
   ): Promise<NodeAcceptedReplicaHeadV2> {
     if (!(await fileExists(layout.dispositionHead))) return accepted
@@ -1534,9 +1530,9 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async commitRecoveredJournal(
     layout: DocumentLayoutV2,
-    current: { readonly record: LocalDurableHeadV2; readonly digest: DigestV2 },
+    current: { readonly record: LocalDurableHeadV2; readonly digest: Digest },
     journal: LoadedJournalV2,
-    ref: FrameObjectRefV2,
+    ref: FrameObjectRef,
   ): Promise<void> {
     assertJournalRef(journal.record, ref)
     await this.readOutbox(layout, ref)
@@ -1564,9 +1560,9 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async reconstructHead(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
+    scope: DocumentScope,
     head: LocalDurableHeadV2,
-    headDigest: DigestV2,
+    headDigest: Digest,
   ): Promise<NodeAcceptedReplicaHeadV2> {
     await this.readInstalledCheckpointSet(layout, head.installedCheckpointSetDigest, scope)
     const base = await readJournalBase(layout.journalBases, head.journalBaseDigest, scope)
@@ -1607,14 +1603,14 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async readReachableJournals(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
+    scope: DocumentScope,
     head: LocalDurableHeadV2,
   ): Promise<readonly LoadedJournalV2[]> {
     const base = await readJournalBase(layout.journalBases, head.journalBaseDigest, scope)
     const first = BigInt(base.record.baseLocalRecordSequence) + 1n
     const last = BigInt(head.localHeadGeneration)
     const records: LoadedJournalV2[] = []
-    let prior: DigestV2 = base.digest
+    let prior: Digest = base.digest
     for (let sequence = first; sequence <= last; sequence += 1n) {
       const loaded = await readJournalRecord(
         path.join(layout.journalSegments, deriveJournalSegmentNativeKeyV2(sequence.toString())),
@@ -1629,7 +1625,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return records
   }
 
-  private async refForJournal(layout: DocumentLayoutV2, journal: LocalJournalRecordV2): Promise<FrameObjectRefV2> {
+  private async refForJournal(layout: DocumentLayoutV2, journal: LocalJournalRecordV2): Promise<FrameObjectRef> {
     if (!isFrameJournal(journal)) return corrupt("Metadata journal has no frame reference")
     const frameDigest = journal.objectDigests[0]
     if (!frameDigest) corrupt("Frame journal is empty")
@@ -1641,7 +1637,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return corrupt("Journal operation reference is missing")
   }
 
-  private async readFrame(layout: DocumentLayoutV2, ref: FrameObjectRefV2): Promise<Uint8Array> {
+  private async readFrame(layout: DocumentLayoutV2, ref: FrameObjectRef): Promise<Uint8Array> {
     const target = path.join(layout.frames, `${deriveObjectNativeKeyV2("frame", ref.frameDigest)}.bin`)
     const bytes = Uint8Array.from(await fs.readFile(target).catch((error) => {
       throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "Referenced frame object is missing", { cause: error })
@@ -1651,7 +1647,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return bytes
   }
 
-  private async readOutbox(layout: DocumentLayoutV2, ref: FrameObjectRefV2): Promise<LocalReplicationOutboxRefV2> {
+  private async readOutbox(layout: DocumentLayoutV2, ref: FrameObjectRef): Promise<LocalReplicationOutboxRefV2> {
     const record = parseOutbox(decodeRecord(await fs.readFile(this.outboxPath(layout, ref)).catch((error) => {
       throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "Referenced outbox record is missing", { cause: error })
     })))
@@ -1659,13 +1655,13 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return record
   }
 
-  private outboxPath(layout: DocumentLayoutV2, ref: FrameObjectRefV2): string {
+  private outboxPath(layout: DocumentLayoutV2, ref: FrameObjectRef): string {
     return path.join(layout.outboxFrames, `${deriveObjectNativeKeyV2("outbox-ref", ref.frameDigest)}.ref`)
   }
 
   private async commitRecoveredMetadataJournal(
     layout: DocumentLayoutV2,
-    current: { readonly record: LocalDurableHeadV2; readonly digest: DigestV2 },
+    current: { readonly record: LocalDurableHeadV2; readonly digest: Digest },
     journal: LoadedJournalV2,
   ): Promise<void> {
     if (journal.record.resultingFrontierDigest !== current.record.acceptedFrontierDigest) corrupt("Metadata journal changes the accepted frontier")
@@ -1719,7 +1715,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     if (ack) await this.retireFrameOutbox(layout, ack.frameDigest)
   }
 
-  private async readAckRecord(layout: DocumentLayoutV2, digest: DigestV2): Promise<LocalReplicaDurableAckRecordV2> {
+  private async readAckRecord(layout: DocumentLayoutV2, digest: Digest): Promise<LocalReplicaDurableAckRecordV2> {
     const target = path.join(layout.acks, `${deriveObjectNativeKeyV2("ack", digest)}.bin`)
     const record = parseAckRecord(decodeRecord(await fs.readFile(target).catch((error) => {
       throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "ACK journal references a missing ACK object", { cause: error })
@@ -1730,8 +1726,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async readInstalledCheckpointSet(
     layout: DocumentLayoutV2,
-    digest: DigestV2,
-    scope: DocumentScopeV2,
+    digest: Digest,
+    scope: DocumentScope,
   ): Promise<LocalInstalledCheckpointSetV2> {
     const target = path.join(layout.checkpointSets, `${deriveObjectNativeKeyV2("checkpoint-set", digest)}.bin`)
     const record = parseInstalledCheckpointSet(decodeRecord(await fs.readFile(target).catch((error) => {
@@ -1761,7 +1757,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async materializeInstalledCheckpointBase(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
+    scope: DocumentScope,
     installed: LocalInstalledCheckpointSetV2,
   ): Promise<NodeAcceptedReplicaHeadV2> {
     const materialize = this.materializer.materializeCheckpoint
@@ -1820,7 +1816,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return deleted
   }
 
-  private async retireFrameOutbox(layout: DocumentLayoutV2, frameDigest: DigestV2): Promise<void> {
+  private async retireFrameOutbox(layout: DocumentLayoutV2, frameDigest: Digest): Promise<void> {
     const target = path.join(layout.outboxFrames, `${deriveObjectNativeKeyV2("outbox-ref", frameDigest)}.ref`)
     await fs.unlink(target).catch((error) => {
       if (!isNodeError(error) || error.code !== "ENOENT") throw error
@@ -1828,7 +1824,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     await fsyncProjectDirectoryV2(layout.outboxFrames)
   }
 
-  private async findJournalForFrame(layout: DocumentLayoutV2, frameDigest: DigestV2): Promise<boolean> {
+  private async findJournalForFrame(layout: DocumentLayoutV2, frameDigest: Digest): Promise<boolean> {
     for (const name of await readDirectoryNames(layout.journalSegments)) {
       const record = await readJournalRecord(path.join(layout.journalSegments, name))
       if (record.record.objectDigests.includes(frameDigest)) return true
@@ -1839,8 +1835,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
   private async quarantineStaleHead(
     layout: DocumentLayoutV2,
     input: Parameters<NodeCollaborationPersistenceV2["compareAndCommitReplicaHead"]>[0],
-    observedHeadDigest: DigestV2,
-  ): Promise<CompareAndCommitReplicaHeadPortResultV2> {
+    observedHeadDigest: Digest,
+  ): Promise<CompareAndCommitReplicaHeadPortResult> {
     const quarantine = await this.writeQuarantine(
       layout,
       input.ref.scope,
@@ -1864,12 +1860,12 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async writeQuarantine(
     layout: DocumentLayoutV2,
-    scope: DocumentScopeV2,
-    frameDigest: DigestV2,
+    scope: DocumentScope,
+    frameDigest: Digest,
     reason: LocalQuarantineCommitV2["reason"],
-    observedHeadDigest: DigestV2,
-    journalRecordDigest: DigestV2 | null,
-  ): Promise<{ quarantineDigest: DigestV2; dispositionDigest: DigestV2 }> {
+    observedHeadDigest: Digest,
+    journalRecordDigest: Digest | null,
+  ): Promise<{ quarantineDigest: Digest; dispositionDigest: Digest }> {
     const record: LocalQuarantineCommitV2 = {
       format: "convax.local-quarantine-commit/2",
       scope,
@@ -1890,7 +1886,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return { quarantineDigest, dispositionDigest: localRecordDigest(disposition) }
   }
 
-  private async readDurableHead(layout: DocumentLayoutV2, scope?: DocumentScopeV2) {
+  private async readDurableHead(layout: DocumentLayoutV2, scope?: DocumentScope) {
     const value = decodeRecord(await fs.readFile(layout.durableHead).catch((error) => {
       throw new NodeCollaborationPersistenceErrorV2("document-not-found", "Durable replica head is missing", { cause: error })
     }))
@@ -1929,7 +1925,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
   private async pendingInboxCapacity(
     layout: DocumentLayoutV2,
-    incomingActorId: ActorIdV2,
+    incomingActorId: ActorId,
     incomingBytes: number,
   ): Promise<boolean> {
     const names = await readDirectoryNames(layout.pendingInbox)
@@ -1955,7 +1951,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     return true
   }
 
-  private pendingFramePath(layout: DocumentLayoutV2, frameDigest: DigestV2): string {
+  private pendingFramePath(layout: DocumentLayoutV2, frameDigest: Digest): string {
     return path.join(layout.pendingInbox, `${deriveObjectNativeKeyV2("pending-frame", frameDigest)}.bin`)
   }
 
@@ -1989,7 +1985,7 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
     await fsyncProjectDirectoryV2(path.dirname(layout.directory))
   }
 
-  private layout(scope: DocumentScopeV2): DocumentLayoutV2 {
+  private layout(scope: DocumentScope): DocumentLayoutV2 {
     return this.layoutFromDirectory(path.join(this.collaborationDirectory, "documents", deriveDocumentNativeKeyV2(scope)))
   }
 
@@ -2041,8 +2037,8 @@ export class NodeCollaborationPersistenceV2 implements CollaborationPersistenceP
 
 function committedEvidence(
   input: Parameters<NodeCollaborationPersistenceV2["compareAndCommitReplicaHead"]>[0],
-  resultingReplicaHeadRecordDigest: DigestV2,
-): CompareAndCommitReplicaHeadPortResultV2 {
+  resultingReplicaHeadRecordDigest: Digest,
+): CompareAndCommitReplicaHeadPortResult {
   return {
     status: "committed",
     evidence: {
@@ -2057,7 +2053,7 @@ function committedEvidence(
 
 function freezeHead(
   input: Omit<NodeAcceptedReplicaHeadV2, "headDigest"> | NodeAcceptedReplicaHeadV2,
-  headDigest: DigestV2,
+  headDigest: Digest,
 ): NodeAcceptedReplicaHeadV2 {
   return Object.freeze({
     scope: input.scope,
@@ -2066,12 +2062,12 @@ function freezeHead(
     frontierDigest: input.frontierDigest,
     actorHeads: input.actorHeads,
     fullUpdate: Uint8Array.from(input.fullUpdate),
-    stateVector: Uint8Array.from(input.stateVector) as StateVectorV2,
+    stateVector: Uint8Array.from(input.stateVector) as StateVector,
     canonicalStateDigest: input.canonicalStateDigest,
   })
 }
 
-function validateAcceptedBase(input: Omit<NodeAcceptedReplicaHeadV2, "headDigest"> | NodeAcceptedReplicaHeadV2, scope: DocumentScopeV2): void {
+function validateAcceptedBase(input: Omit<NodeAcceptedReplicaHeadV2, "headDigest"> | NodeAcceptedReplicaHeadV2, scope: DocumentScope): void {
   assertSameScope(input.scope, scope)
   if (!(input.fullUpdate instanceof Uint8Array) || !(input.stateVector instanceof Uint8Array)) invalid("Accepted head binary values are invalid")
   validateDigest(input.frontierDigest, "Frontier digest")
@@ -2106,7 +2102,7 @@ function normalizePortableObjects(
   }
   const normalized = input.map((object) => {
     if (!isPlainObject(object)) invalid(`${label} object is invalid`)
-    const objectDigest = parseDigestV2(object.objectDigest)
+    const objectDigest = parseDigest(object.objectDigest)
     if (!(object.exactBytes instanceof Uint8Array) || object.exactBytes.byteLength < 1 || object.exactBytes.byteLength > MAX_GENESIS_PROOF_BYTES) {
       invalid(`${label} object bytes are outside the native bound`)
     }
@@ -2122,7 +2118,7 @@ function normalizePrunableObjects(input: readonly NodePrunableObjectV2[]): reado
   if (!Array.isArray(input)) invalid("Prune candidate set is invalid")
   const normalized = input.map((object) => {
     if (!isPlainObject(object) || (object.kind !== "frame" && object.kind !== "checkpoint")) invalid("Prune candidate kind is invalid")
-    const objectDigest = parseDigestV2(object.objectDigest)
+    const objectDigest = parseDigest(object.objectDigest)
     validateUint64(object.exactByteLength, "Prune candidate exact byte length")
     if (BigInt(object.exactByteLength) < 1n) invalid("Prune candidate cannot be empty")
     return Object.freeze({ kind: object.kind, objectDigest, exactByteLength: object.exactByteLength })
@@ -2135,14 +2131,14 @@ function normalizePrunableObjects(input: readonly NodePrunableObjectV2[]): reado
 
 function normalizePruneRootScan(input: NodeCheckpointPruneRootScanV2): NodeCheckpointPruneRootScanV2 {
   if (!isPlainObject(input) || typeof input.complete !== "boolean") invalid("Prune root scan result is invalid")
-  const rootSetDigest = parseDigestV2(input.rootSetDigest)
+  const rootSetDigest = parseDigest(input.rootSetDigest)
   const retainedObjectDigests = parseSortedDigestArray(input.retainedObjectDigests, 0, 65_536, "Prune retained root set")
   return Object.freeze({ complete: input.complete, rootSetDigest, retainedObjectDigests })
 }
 
 function activePrunePlan(
-  scope: DocumentScopeV2,
-  prunePlanDigest: DigestV2,
+  scope: DocumentScope,
+  prunePlanDigest: Digest,
   phase: LocalActivePrunePlanV2["phase"],
 ): LocalActivePrunePlanV2 {
   return Object.freeze({ format: "convax.local-active-prune-plan/2", scope, prunePlanDigest, phase })
@@ -2153,9 +2149,9 @@ function parseSortedDigestArray(
   minimum: number,
   maximum: number,
   label: string,
-): readonly DigestV2[] {
+): readonly Digest[] {
   if (!Array.isArray(value) || value.length < minimum || value.length > maximum) corrupt(`${label} count is outside ${minimum}..${maximum}`)
-  const parsed = value.map((digest) => parseDigestV2(digest))
+  const parsed = value.map((digest) => parseDigest(digest))
   const sorted = [...parsed].sort()
   if (parsed.some((digest, index) => digest !== sorted[index]) || new Set(parsed).size !== parsed.length) {
     corrupt(`${label} is not sorted and unique`)
@@ -2165,7 +2161,7 @@ function parseSortedDigestArray(
 
 async function writeJournalBase(
   directory: string,
-  digest: DigestV2,
+  digest: Digest,
   record: LocalJournalBaseRecordV2,
   fullUpdate: Readonly<Uint8Array>,
   stateVector: Readonly<Uint8Array>,
@@ -2201,7 +2197,7 @@ function encodePendingFrame(
 
 async function readPendingFrame(
   target: string,
-  expectedScope?: DocumentScopeV2,
+  expectedScope?: DocumentScope,
 ): Promise<LoadedPendingFrameV2> {
   const envelope = Uint8Array.from(await fs.readFile(target).catch((error) => {
     throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "Pending frame object is missing", { cause: error })
@@ -2224,7 +2220,7 @@ async function readPendingFrame(
   return Object.freeze({ record, exactFrameBytes })
 }
 
-async function readJournalBase(directory: string, digest: DigestV2, expectedScope: DocumentScopeV2): Promise<LoadedJournalBaseV2> {
+async function readJournalBase(directory: string, digest: Digest, expectedScope: DocumentScope): Promise<LoadedJournalBaseV2> {
   const target = path.join(directory, `${deriveObjectNativeKeyV2("journal-base", digest)}.bin`)
   const envelope = Uint8Array.from(await fs.readFile(target).catch((error) => {
     throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "Journal base is missing", { cause: error })
@@ -2241,13 +2237,13 @@ async function readJournalBase(directory: string, digest: DigestV2, expectedScop
   assertSameScope(record.scope, expectedScope)
   if (localRecordDigest(record) !== digest) corrupt("Journal base record digest mismatches its pointer")
   const fullUpdate = Uint8Array.from(envelope.subarray(BASE_PREFIX_BYTES + headerLength, BASE_PREFIX_BYTES + headerLength + fullUpdateLength))
-  const stateVector = Uint8Array.from(envelope.subarray(BASE_PREFIX_BYTES + headerLength + fullUpdateLength)) as StateVectorV2
+  const stateVector = Uint8Array.from(envelope.subarray(BASE_PREFIX_BYTES + headerLength + fullUpdateLength)) as StateVector
   if (ordinaryDigest(fullUpdate) !== record.fullUpdateDigest || String(fullUpdate.byteLength) !== record.fullUpdateByteLength) corrupt("Journal base full update mismatches")
   if (ordinaryDigest(stateVector) !== record.stateVectorDigest || String(stateVector.byteLength) !== record.stateVectorByteLength) corrupt("Journal base state vector mismatches")
   return { digest, record, fullUpdate, stateVector }
 }
 
-async function readJournalRecord(target: string, expectedScope?: DocumentScopeV2): Promise<LoadedJournalV2> {
+async function readJournalRecord(target: string, expectedScope?: DocumentScope): Promise<LoadedJournalV2> {
   const record = parseJournal(decodeRecord(await fs.readFile(target).catch((error) => {
     throw new NodeCollaborationPersistenceErrorV2("store-corrupt", "Journal record is missing", { cause: error })
   })))
@@ -2282,7 +2278,7 @@ function parseInstalledCheckpointSet(value: unknown): LocalInstalledCheckpointSe
   const checkpointObjectDigests = parseSortedDigestArray(record.checkpointObjectDigests, 1, 8, "Installed checkpoint set")
   const contentCertificateObjectDigests = parseSortedDigestArray(record.contentCertificateObjectDigests, 0, 8, "Content certificate set")
   const prunableSetCertificateObjectDigests = parseSortedDigestArray(record.prunableSetCertificateObjectDigests, 0, 8, "Prunable certificate set")
-  const bootstrapCheckpointObjectDigest = parseDigestV2(record.bootstrapCheckpointObjectDigest)
+  const bootstrapCheckpointObjectDigest = parseDigest(record.bootstrapCheckpointObjectDigest)
   if (!checkpointObjectDigests.includes(bootstrapCheckpointObjectDigest)) corrupt("Bootstrap checkpoint is absent from installed set")
   return Object.freeze({
     ...record,
@@ -2321,8 +2317,8 @@ function parseJournal(value: unknown): LocalJournalRecordV2 {
 
 function isFrameJournal(record: LocalJournalRecordV2): record is LocalJournalRecordV2 & {
   readonly transition: "accept-local-frame" | "accept-remote-frame"
-  readonly outboxRefDigest: DigestV2
-  readonly operationRef: { readonly actorId: ActorIdV2; readonly operationId: Id128V2 }
+  readonly outboxRefDigest: Digest
+  readonly operationRef: { readonly actorId: ActorId; readonly operationId: Id128 }
 } {
   return record.transition === "accept-local-frame" || record.transition === "accept-remote-frame"
 }
@@ -2333,12 +2329,12 @@ function normalizeReplicaDurableAckInput(input: NodeVerifiedReplicaDurableAckV2)
   if (bytes.byteLength < 1 || bytes.byteLength > 64 * 1024) invalid("Replica durable ACK bytes exceed bounds")
   return Object.freeze({
     scope: input.scope,
-    frameDigest: parseDigestV2(input.frameDigest),
-    receiverMemberId: parseMemberIdV2(input.receiverMemberId),
-    receiverReplicaId: parseReplicaIdV2(input.receiverReplicaId),
-    receiverActorId: parseActorIdV2(input.receiverActorId),
-    receiverAuthorizationDigest: parseDigestV2(input.receiverAuthorizationDigest),
-    ackCoreDigest: parseDigestV2(input.ackCoreDigest),
+    frameDigest: parseDigest(input.frameDigest),
+    receiverMemberId: parseMemberId(input.receiverMemberId),
+    receiverReplicaId: parseReplicaId(input.receiverReplicaId),
+    receiverActorId: parseActorId(input.receiverActorId),
+    receiverAuthorizationDigest: parseDigest(input.receiverAuthorizationDigest),
+    ackCoreDigest: parseDigest(input.ackCoreDigest),
     exactAckBytes: bytes,
   })
 }
@@ -2368,13 +2364,13 @@ function parseAckRecord(value: unknown): LocalReplicaDurableAckRecordV2 {
   ])
   const record = value as unknown as LocalReplicaDurableAckRecordV2
   deriveDocumentNativeKeyV2(record.scope)
-  parseDigestV2(record.frameDigest)
-  parseMemberIdV2(record.receiverMemberId)
-  parseReplicaIdV2(record.receiverReplicaId)
-  parseActorIdV2(record.receiverActorId)
-  parseDigestV2(record.receiverAuthorizationDigest)
-  parseDigestV2(record.ackCoreDigest)
-  parseDigestV2(record.exactAckSha256)
+  parseDigest(record.frameDigest)
+  parseMemberId(record.receiverMemberId)
+  parseReplicaId(record.receiverReplicaId)
+  parseActorId(record.receiverActorId)
+  parseDigest(record.receiverAuthorizationDigest)
+  parseDigest(record.ackCoreDigest)
+  parseDigest(record.exactAckSha256)
   validateUint64(record.exactAckByteLength, "ACK byte length")
   if (BigInt(record.exactAckByteLength) < 1n || BigInt(record.exactAckByteLength) > 64n * 1024n) corrupt("ACK byte length exceeds bounds")
   const exact = Buffer.from(record.exactAckBase64, "base64url")
@@ -2489,17 +2485,17 @@ function requireFormat(value: unknown, format: string, keys: readonly string[]):
   if (!isPlainObject(value) || value.format !== format || !hasExactKeys(value, keys)) corrupt(`Invalid ${format} record`)
 }
 
-function localRecordDigest(record: { readonly format: string }): DigestV2 {
+function localRecordDigest(record: { readonly format: string }): Digest {
   return createHash("sha256")
     .update(LOCAL_RECORD_DOMAIN)
     .update(Buffer.from(record.format, "utf8"))
     .update(Buffer.from("\0", "utf8"))
     .update(encodeRecord(record))
-    .digest("hex") as DigestV2
+    .digest("hex") as Digest
 }
 
-function ordinaryDigest(bytes: Readonly<Uint8Array>): DigestV2 {
-  return createHash("sha256").update(bytes).digest("hex") as DigestV2
+function ordinaryDigest(bytes: Readonly<Uint8Array>): Digest {
+  return createHash("sha256").update(bytes).digest("hex") as Digest
 }
 
 function sameExactBytes(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>): boolean {
@@ -2510,7 +2506,7 @@ function sameExactBytes(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>)
   return true
 }
 
-function operationIndexKey(actorId: ActorIdV2, operationId: Id128V2): string {
+function operationIndexKey(actorId: ActorId, operationId: Id128): string {
   return createHash("sha256")
     .update(OPERATION_INDEX_DOMAIN)
     .update(Buffer.from(restrictedJcs({ actorId, operationId }), "utf8"))
@@ -2545,14 +2541,14 @@ function restrictedJcs(value: unknown): string {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${restrictedJcs(value[key])}`).join(",")}}`
 }
 
-async function putImmutableRecord(directory: string, kind: string, digest: DigestV2, record: unknown): Promise<void> {
+async function putImmutableRecord(directory: string, kind: string, digest: Digest, record: unknown): Promise<void> {
   await putImmutableExact(directory, kind, digest, encodeRecord(record))
 }
 
 async function putImmutableExact(
   directory: string,
   kind: string,
-  digest: DigestV2,
+  digest: Digest,
   exactBytes: Readonly<Uint8Array>,
 ): Promise<void> {
   await ensureTrustedDirectory(directory)
@@ -2675,7 +2671,7 @@ async function directoryExists(target: string): Promise<boolean> {
   }
 }
 
-function normalizeDigestSet(values: readonly DigestV2[], maximum: number): readonly DigestV2[] {
+function normalizeDigestSet(values: readonly Digest[], maximum: number): readonly Digest[] {
   if (!Array.isArray(values) || values.length > maximum) invalid("Digest set exceeds its bound")
   const result = [...values]
   for (const value of result) validateDigest(value, "Digest set value")
@@ -2686,7 +2682,7 @@ function normalizeDigestSet(values: readonly DigestV2[], maximum: number): reado
   return Object.freeze(result)
 }
 
-function assertJournalRef(record: LocalJournalRecordV2, ref: FrameObjectRefV2): void {
+function assertJournalRef(record: LocalJournalRecordV2, ref: FrameObjectRef): void {
   if (!isFrameJournal(record) || record.operationRef === null) corrupt("Metadata journal cannot bind a frame")
   assertSameScope(record.scope, ref.scope)
   if (
@@ -2695,7 +2691,7 @@ function assertJournalRef(record: LocalJournalRecordV2, ref: FrameObjectRefV2): 
   ) corrupt("Journal record does not bind the exact frame ref")
 }
 
-function assertOutboxRef(record: LocalReplicationOutboxRefV2, ref: FrameObjectRefV2): void {
+function assertOutboxRef(record: LocalReplicationOutboxRefV2, ref: FrameObjectRef): void {
   assertSameScope(record.scope, ref.scope)
   if (
     record.frameDigest !== ref.frameDigest || record.actorId !== ref.actorId ||
@@ -2703,7 +2699,7 @@ function assertOutboxRef(record: LocalReplicationOutboxRefV2, ref: FrameObjectRe
   ) corrupt("Outbox record does not bind the exact frame ref")
 }
 
-function assertSameFrameRef(left: FrameObjectRefV2, right: FrameObjectRefV2): void {
+function assertSameFrameRef(left: FrameObjectRef, right: FrameObjectRef): void {
   assertSameScope(left.scope, right.scope)
   if (
     left.frameDigest !== right.frameDigest || left.actorId !== right.actorId ||
@@ -2711,7 +2707,7 @@ function assertSameFrameRef(left: FrameObjectRefV2, right: FrameObjectRefV2): vo
   ) corrupt("Frame bytes and persistence ref differ")
 }
 
-function validateFrameRef(ref: FrameObjectRefV2): void {
+function validateFrameRef(ref: FrameObjectRef): void {
   if (!isPlainObject(ref) || !hasExactKeys(ref, ["actorId", "actorSequence", "frameDigest", "operationId", "scope"])) invalid("Frame ref has unsupported fields")
   deriveDocumentNativeKeyV2(ref.scope)
   validateDigest(ref.frameDigest, "Frame digest")
@@ -2720,11 +2716,11 @@ function validateFrameRef(ref: FrameObjectRefV2): void {
   if (typeof ref.actorId !== "string" || typeof ref.operationId !== "string") invalid("Frame actor/operation identity is invalid")
 }
 
-function assertSameScope(left: DocumentScopeV2, right: DocumentScopeV2): void {
+function assertSameScope(left: DocumentScope, right: DocumentScope): void {
   if (restrictedJcs(left) !== restrictedJcs(right)) corrupt("Document scope mismatch")
 }
 
-function validateDigest(value: unknown, label: string): asserts value is DigestV2 {
+function validateDigest(value: unknown, label: string): asserts value is Digest {
   if (typeof value !== "string" || !ORDINARY_SHA256.test(value)) invalid(`${label} must be lowercase SHA-256`)
 }
 
@@ -2739,7 +2735,7 @@ function incrementUint64(value: string): string {
   return next.toString()
 }
 
-function isPendingReason(value: unknown): value is PendingFrameReasonV2 {
+function isPendingReason(value: unknown): value is PendingFrameReason {
   return value === "missing-predecessor" || value === "missing-base" || value === "missing-proof" || value === "missing-artifact"
 }
 

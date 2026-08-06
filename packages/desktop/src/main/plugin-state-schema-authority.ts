@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 
-import { parseDigestV2, type DigestV2, type ValidationArtifactRefV2 } from "@convax/collaboration"
+import { parseDigest, type Digest, type ValidationArtifactRef } from "@convax/collaboration"
 import {
   assertPortablePluginStateValueV1,
   canonicalPortablePluginStateSchemaBytesV1,
@@ -26,9 +26,9 @@ export interface PluginStateSchemaRuntimePort {
 
 export interface ResolvedPluginStateSchemaV1 {
   readonly exactBytes: Readonly<Uint8Array>
-  readonly pluginStateSchemaDigest: DigestV2
+  readonly pluginStateSchemaDigest: Digest
   readonly schema: PortableBoundedValueSchemaV1
-  readonly validationArtifact: ValidationArtifactRefV2
+  readonly validationArtifact: ValidationArtifactRef
 }
 
 /**
@@ -84,7 +84,7 @@ export class PluginStateSchemaAuthorityV1 {
    * recomputed from the normalized schema, so transport metadata alone never
    * establishes artifact authority.
    */
-  admitExactArtifact(ref: ValidationArtifactRefV2, exactBytesInput: Readonly<Uint8Array>): boolean {
+  admitExactArtifact(ref: ValidationArtifactRef, exactBytesInput: Readonly<Uint8Array>): boolean {
     if (ref.owner !== "plugin" || ref.format !== portablePluginStateSchemaFormat || !digestPattern.test(ref.artifactDigest)) {
       return false
     }
@@ -102,7 +102,7 @@ export class PluginStateSchemaAuthorityV1 {
     }
   }
 
-  resolveArtifact(ref: ValidationArtifactRefV2) {
+  resolveArtifact(ref: ValidationArtifactRef) {
     if (ref.owner !== "plugin" || ref.format !== portablePluginStateSchemaFormat || !digestPattern.test(ref.artifactDigest)) {
       return Object.freeze({ status: "rejected" as const, code: "artifact-invalid" as const })
     }
@@ -134,8 +134,8 @@ export class PluginStateSchemaAuthorityV1 {
   }
 }
 
-function stateSchemaDigest(schema: PortableBoundedValueSchemaV1): DigestV2 {
-  return parseDigestV2(createHash("sha256").update(pluginStateSchemaDigestInputV1(schema)).digest("hex"))
+function stateSchemaDigest(schema: PortableBoundedValueSchemaV1): Digest {
+  return parseDigest(createHash("sha256").update(pluginStateSchemaDigestInputV1(schema)).digest("hex"))
 }
 
 function sameBytes(left: Readonly<Uint8Array>, right: Readonly<Uint8Array>): boolean {

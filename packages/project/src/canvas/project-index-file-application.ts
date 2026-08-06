@@ -1,12 +1,12 @@
 import {
-  ordinarySha256V2,
-  parseId128V2,
-  parseProjectIdV2,
-  type Id128V2,
-  type OwnerIntentConstructionContextV2,
-  type PreparedLocalIntentV2,
-  type ProjectIdV2,
-  type Uint64V2,
+  ordinarySha256,
+  parseId128,
+  parseProjectId,
+  type Id128,
+  type OwnerIntentConstructionContext,
+  type PreparedLocalIntent,
+  type ProjectId,
+  type Uint64,
 } from "@convax/collaboration"
 import { parseProjectEntryId, type ProjectEntryId, type ProjectFileId } from "@convax/project-files/identity"
 import {
@@ -69,13 +69,13 @@ export type ProjectIndexFileMutationResultV2 =
     }>
 
 export interface ProjectIndexFileApplicationPortV2 {
-  createDirectory(input: { readonly projectId: ProjectIdV2; readonly path: string }): Promise<ProjectIndexFileMutationResultV2>
+  createDirectory(input: { readonly projectId: ProjectId; readonly path: string }): Promise<ProjectIndexFileMutationResultV2>
   admitManagedBlob(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly admission: ProjectIndexManagedBlobAdmissionV2
   }): Promise<ProjectIndexFileMutationResultV2>
   publishFile(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly path: string
     readonly exactBytes: Readonly<Uint8Array>
     readonly mime: string
@@ -83,12 +83,12 @@ export interface ProjectIndexFileApplicationPortV2 {
     readonly provenance?: "user" | "generated"
   }): Promise<ProjectIndexFileMutationResultV2>
   relocateEntry(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly currentPath: string
     readonly nextPath: string
     readonly reason: "move" | "rename"
   }): Promise<ProjectIndexFileMutationResultV2>
-  tombstoneEntry(input: { readonly projectId: ProjectIdV2; readonly path: string }): Promise<ProjectIndexFileMutationResultV2>
+  tombstoneEntry(input: { readonly projectId: ProjectId; readonly path: string }): Promise<ProjectIndexFileMutationResultV2>
 }
 
 export interface ProjectIndexFileMaterializationEntryV2 {
@@ -99,7 +99,7 @@ export interface ProjectIndexFileMaterializationEntryV2 {
 }
 
 export interface ProjectIndexFileMaterializationPlanV2 {
-  readonly projectId: ProjectIdV2
+  readonly projectId: ProjectId
   readonly entries: readonly ProjectIndexFileMaterializationEntryV2[]
 }
 
@@ -110,7 +110,7 @@ export interface ProjectIndexFileMaterializationPlanV2 {
  */
 export interface ProjectIndexFileMaterializationProjectionPortV2 {
   queryFileMaterializationPlan(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
   }): Promise<ProjectIndexFileMaterializationPlanV2>
 }
 
@@ -119,10 +119,10 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     readonly session: ProjectIndexDocumentSessionPortV2
     readonly facts: ProjectIndexFactResolutionPortV2
     readonly blobs: ProjectIndexBlobPublicationPortV2
-    readonly createOperationId: () => Id128V2
+    readonly createOperationId: () => Id128
   }) {}
 
-  async queryFileMaterializationPlan(input: { readonly projectId: ProjectIdV2 }): Promise<ProjectIndexFileMaterializationPlanV2> {
+  async queryFileMaterializationPlan(input: { readonly projectId: ProjectId }): Promise<ProjectIndexFileMaterializationPlanV2> {
     this.requireProject(input.projectId)
     return this.options.session.query((state) => {
       const snapshot = requireSnapshot(state)
@@ -152,14 +152,14 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     })
   }
 
-  async createDirectory(input: { readonly projectId: ProjectIdV2; readonly path: string }): Promise<ProjectIndexFileMutationResultV2> {
+  async createDirectory(input: { readonly projectId: ProjectId; readonly path: string }): Promise<ProjectIndexFileMutationResultV2> {
     this.requireProject(input.projectId)
     const target = parsePortablePath(input.path)
     if (target.basename === "") return { status: "partial-success", code: "path-kind-mismatch" }
     let directoryId: ProjectDirectoryIdV2 | undefined
     try {
       await this.options.session.submit({
-        operationId: parseId128V2(this.options.createOperationId()),
+        operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
           const parent = resolvePath(snapshot, target.parentPath)
@@ -185,8 +185,8 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     const blob: ProjectBlobRefV2 = Object.freeze({
       format: "convax.blob-ref/2",
       algorithm: "sha256",
-      digest: ordinarySha256V2(exactBytes),
-      byteLength: String(exactBytes.byteLength) as Uint64V2,
+      digest: ordinarySha256(exactBytes),
+      byteLength: String(exactBytes.byteLength) as Uint64,
       mime: input.mime,
     })
     let entryId: ProjectFileId | undefined
@@ -194,7 +194,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     let committedReference: ProjectResourceReferenceV2 | undefined
     try {
       await this.options.session.submit({
-        operationId: parseId128V2(this.options.createOperationId()),
+        operationId: parseId128(this.options.createOperationId()),
         prepare: async ({ base, context }) => {
           const snapshot = requireSnapshot(base)
           const existing = resolvePath(snapshot, target.path)
@@ -285,7 +285,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     let committedReference: ProjectResourceReferenceV2 | undefined
     try {
       await this.options.session.submit({
-        operationId: parseId128V2(this.options.createOperationId()),
+        operationId: parseId128(this.options.createOperationId()),
         prepare: async ({ base, context }) => {
           const snapshot = requireSnapshot(base)
           const constructed = constructProjectFileCreateIntentV2({
@@ -326,7 +326,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     let entryId: ProjectEntryId | undefined
     try {
       await this.options.session.submit({
-        operationId: parseId128V2(this.options.createOperationId()),
+        operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
           const current = resolvePath(snapshot, currentPath)
@@ -350,7 +350,7 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     let entryId: ProjectEntryId | undefined
     try {
       await this.options.session.submit({
-        operationId: parseId128V2(this.options.createOperationId()),
+        operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
           const current = resolvePath(snapshot, path)
@@ -366,15 +366,15 @@ export class ProjectIndexFileApplicationV2 implements ProjectIndexFileApplicatio
     } catch (error) { return rejectFileMutation(error) }
   }
 
-  private async prepare(context: OwnerIntentConstructionContextV2, typedIntent: ProjectIndexIntentV2): Promise<PreparedLocalIntentV2> {
+  private async prepare(context: OwnerIntentConstructionContext, typedIntent: ProjectIndexIntentV2): Promise<PreparedLocalIntent> {
     const dependencies = projectIndexIntentDependenciesV2({ ...context, intentDigest: projectIndexIntentDigestV2(typedIntent) }, typedIntent)
     const resolved = await this.options.facts.resolve({ dependencies })
     if (resolved.status !== "resolved") throw new FileApplicationError("index-commit-failed")
     return Object.freeze({ typedIntent, externalFacts: resolved.port })
   }
 
-  private requireProject(projectId: ProjectIdV2): void {
-    if (this.options.session.scope.projectId !== parseProjectIdV2(projectId)) throw new TypeError("ProjectIndex session belongs to another Project")
+  private requireProject(projectId: ProjectId): void {
+    if (this.options.session.scope.projectId !== parseProjectId(projectId)) throw new TypeError("ProjectIndex session belongs to another Project")
   }
 }
 

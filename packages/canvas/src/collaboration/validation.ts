@@ -1,28 +1,28 @@
 import {
-  assertBoundedNfcStringV2,
-  assertDenseArrayV2,
-  assertExactKeysV2,
-  comparePortableStampsV2,
-  compareUtf8V2,
-  decodeBase64urlV2,
-  documentScopeDigestV2,
-  encodeBase64urlV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parsePortableStampV2,
-  parseUint32V2,
-  parseUint64V2,
-  structuredDigestV2,
-  uint32ToNumberV2,
+  assertBoundedNfcString,
+  assertDenseArray,
+  assertExactKeys,
+  comparePortableStamps,
+  compareUtf8,
+  decodeBase64url,
+  documentScopeDigest,
+  encodeBase64url,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  ownerCanonicalizerDescriptorDigest,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parsePortableStamp,
+  parseUint32,
+  parseUint64,
+  structuredDigest,
+  uint32ToNumber,
 } from "@convax/collaboration"
 import { canonicalize as canonicalizeUri } from "@convax/uri"
 import type {
-  ActorIdV2,
+  ActorId,
   BoundedOperationReceiptV2,
   CanvasActualWriteV2,
   CanvasCanonicalSemanticHistoryValueV2,
@@ -43,7 +43,7 @@ import type {
   CanvasSizeV2,
   ContainmentChoiceV2,
   CreationGroupRefV2,
-  DigestV2,
+  Digest,
   GenerationBeginV2,
   GenerationDismissalV2,
   GenerationRecoveryFailureV2,
@@ -53,11 +53,11 @@ import type {
   PluginStateEnvelopeV2,
   StampedClaimV2,
   TombstoneFactV2,
-  Uint32V2,
+  Uint32,
 } from "./types"
 import type {
-  OwnerCanonicalizerDescriptorV2,
-  OwnerIntentConstructionContextV2,
+  OwnerCanonicalizerDescriptor,
+  OwnerIntentConstructionContext,
 } from "@convax/collaboration"
 
 export const CANVAS_DIGEST_DOMAINS_V2 = Object.freeze([
@@ -104,15 +104,15 @@ export class CanvasSchemaErrorV2 extends Error {
   }
 }
 
-export function canvasDigestV2(domain: CanvasDigestDomainV2, value: unknown): DigestV2 {
-  return structuredDigestV2(domain, value)
+export function canvasDigestV2(domain: CanvasDigestDomainV2, value: unknown): Digest {
+  return structuredDigest(domain, value)
 }
 
-export function canvasOwnerCanonicalizerDescriptorV2(ownerSchemaDigest: DigestV2): OwnerCanonicalizerDescriptorV2 {
+export function canvasOwnerCanonicalizerDescriptorV2(ownerSchemaDigest: Digest): OwnerCanonicalizerDescriptor {
   return Object.freeze({
     format: "convax.owner-canonicalizer-descriptor/2",
     owner: "canvas",
-    ownerSchemaDigest: parseDigestV2(ownerSchemaDigest),
+    ownerSchemaDigest: parseDigest(ownerSchemaDigest),
     canonicalStateFormat: "convax.canvas-canonical-state/2",
     canonicalStateCodec: "restricted-jcs-utf8",
     exactBytePolicy: "parse-reencode-byte-equal",
@@ -120,8 +120,8 @@ export function canvasOwnerCanonicalizerDescriptorV2(ownerSchemaDigest: DigestV2
   })
 }
 
-export function canvasOwnerCanonicalizerDigestV2(ownerSchemaDigest: DigestV2): DigestV2 {
-  return ownerCanonicalizerDescriptorDigestV2(canvasOwnerCanonicalizerDescriptorV2(ownerSchemaDigest))
+export function canvasOwnerCanonicalizerDigestV2(ownerSchemaDigest: Digest): Digest {
+  return ownerCanonicalizerDescriptorDigest(canvasOwnerCanonicalizerDescriptorV2(ownerSchemaDigest))
 }
 
 export function canvasGenesisCoreV2(identity: Omit<CanvasIdentityV2, "genesisDigest">): CanvasGenesisCoreV2 {
@@ -138,9 +138,9 @@ export function canvasGenesisCoreV2(identity: Omit<CanvasIdentityV2, "genesisDig
 
 export function assertCanvasIdentityV2(
   value: unknown,
-  scope?: import("@convax/collaboration").DocumentScopeV2,
+  scope?: import("@convax/collaboration").DocumentScope,
 ): asserts value is CanvasIdentityV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "format",
@@ -156,13 +156,13 @@ export function assertCanvasIdentityV2(
   )
   if (value.format !== "convax.canvas.v2") fail("invalid-format", "Canvas identity format is not v2")
   const identity = value as unknown as CanvasIdentityV2
-  parseDigestV2(identity.scopeId)
-  parseCanvasIdV2(identity.canvasId)
-  parseDigestV2(identity.ownerSchemaDigest)
-  parseDigestV2(identity.protocolDigest)
-  parseDigestV2(identity.canonicalizerDigest)
-  parseDigestV2(identity.projectIndexRouteDependencyFrameDigest)
-  parseDigestV2(identity.genesisDigest)
+  parseDigest(identity.scopeId)
+  parseCanvasId(identity.canvasId)
+  parseDigest(identity.ownerSchemaDigest)
+  parseDigest(identity.protocolDigest)
+  parseDigest(identity.canonicalizerDigest)
+  parseDigest(identity.projectIndexRouteDependencyFrameDigest)
+  parseDigest(identity.genesisDigest)
   if (identity.canonicalizerDigest !== canvasOwnerCanonicalizerDigestV2(identity.ownerSchemaDigest)) {
     fail("canonicalizer-mismatch", "Canvas identity canonicalizer digest is not the selected owner descriptor")
   }
@@ -173,7 +173,7 @@ export function assertCanvasIdentityV2(
     if (
       scope.docKind !== "canvas" ||
       scope.docId !== identity.canvasId ||
-      documentScopeDigestV2(scope) !== identity.scopeId
+      documentScopeDigest(scope) !== identity.scopeId
     ) {
       fail("scope-mismatch", "Canvas identity is not byte-equal to its outer Canvas document scope")
     }
@@ -199,19 +199,19 @@ export function assertDerivedIdV2(
   if (typeof value !== "string" || !value.startsWith(prefix) || !ENTITY_SUFFIX.test(value.slice(prefix.length))) {
     fail("invalid-derived-id", `${label} is not a canonical ${prefix} derived id`)
   }
-  if (decodeBase64urlV2(value.slice(prefix.length)).byteLength !== 32)
+  if (decodeBase64url(value.slice(prefix.length)).byteLength !== 32)
     fail("invalid-derived-id", `${label} has the wrong decoded length`)
 }
 
 export function deriveCanvasIdV2(
   kind: "node" | "incarnation" | "edge" | "edgeIncarnation" | "generation" | "relation" | "creationGroup",
-  context: OwnerIntentConstructionContextV2,
-  ordinal: Uint32V2,
+  context: OwnerIntentConstructionContext,
+  ordinal: Uint32,
 ): string {
-  const scope = hexBytes(documentScopeDigestV2(context.scope))
-  const actor = decodeBase64urlV2(context.actorId)
-  const operation = decodeBase64urlV2(context.operationId)
-  const number = uint32ToNumberV2(parseUint32V2(ordinal))
+  const scope = hexBytes(documentScopeDigest(context.scope))
+  const actor = decodeBase64url(context.actorId)
+  const operation = decodeBase64url(context.operationId)
+  const number = uint32ToNumber(parseUint32(ordinal))
   const preimagePrefix = new TextEncoder().encode("convax.canvas-derived-id/2\0")
   const preimage = new Uint8Array(preimagePrefix.length + 1 + 32 + 32 + 16 + 4)
   preimage.set(preimagePrefix)
@@ -224,7 +224,7 @@ export function deriveCanvasIdV2(
   preimage.set(operation, offset)
   offset += 16
   new DataView(preimage.buffer).setUint32(offset, number, false)
-  const encoded = encodeBase64urlV2(hexBytes(ordinarySha256V2(preimage)))
+  const encoded = encodeBase64url(hexBytes(ordinarySha256(preimage)))
   const prefix =
     kind === "node"
       ? "n_"
@@ -243,8 +243,8 @@ export function deriveCanvasIdV2(
 }
 
 export function derivedNodeRefV2(
-  context: OwnerIntentConstructionContextV2,
-  ordinal: Uint32V2,
+  context: OwnerIntentConstructionContext,
+  ordinal: Uint32,
 ): CanvasEntityRefV2 & { readonly kind: "node" } {
   return {
     kind: "node",
@@ -254,8 +254,8 @@ export function derivedNodeRefV2(
 }
 
 export function derivedEdgeRefV2(
-  context: OwnerIntentConstructionContextV2,
-  ordinal: Uint32V2,
+  context: OwnerIntentConstructionContext,
+  ordinal: Uint32,
 ): CanvasEntityRefV2 & { readonly kind: "edge" } {
   return {
     kind: "edge",
@@ -270,7 +270,7 @@ export function canvasEntityKeyV2(ref: CanvasEntityRefV2): string {
 }
 
 export function assertEntityRefV2(value: unknown, expectedKind?: "node" | "edge"): asserts value is CanvasEntityRefV2 {
-  assertExactKeysV2(value, ["kind", "id", "incarnation"], "CanvasEntityRefV2")
+  assertExactKeys(value, ["kind", "id", "incarnation"], "CanvasEntityRefV2")
   if (value.kind !== "node" && value.kind !== "edge") fail("invalid-entity-ref", "Entity kind is invalid")
   if (expectedKind !== undefined && value.kind !== expectedKind)
     fail("invalid-entity-ref", `Expected a ${expectedKind} ref`)
@@ -284,13 +284,13 @@ export function assertEntityRefV2(value: unknown, expectedKind?: "node" | "edge"
 }
 
 export function assertPointV2(value: unknown, label = "CanvasPointV2"): asserts value is CanvasPointV2 {
-  assertExactKeysV2(value, ["x", "y"], label)
+  assertExactKeys(value, ["x", "y"], label)
   assertCoordinate(value.x, `${label}.x`)
   assertCoordinate(value.y, `${label}.y`)
 }
 
 export function assertSizeV2(value: unknown, label = "CanvasSizeV2"): asserts value is CanvasSizeV2 {
-  assertExactKeysV2(value, ["width", "height"], label)
+  assertExactKeys(value, ["width", "height"], label)
   for (const [key, component] of [
     ["width", value.width],
     ["height", value.height],
@@ -305,7 +305,7 @@ export function assertResourceRefV2(
   value: unknown,
   label = "CanvasResourceRefV2",
 ): asserts value is CanvasResourceRefV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "uri", "mediaClass", "mime", "byteLength", "contentDigest", "ownerProofDigest"],
     label,
@@ -316,9 +316,9 @@ export function assertResourceRefV2(
   if (!new Set(["text", "image", "video", "audio", "file"]).has(value.mediaClass as string))
     fail("invalid-resource", `${label}.mediaClass is invalid`)
   assertText(value.mime, 1, 4096, `${label}.mime`)
-  parseUint64V2(value.byteLength)
-  parseDigestV2(value.contentDigest)
-  parseDigestV2(value.ownerProofDigest)
+  parseUint64(value.byteLength)
+  parseDigest(value.contentDigest)
+  parseDigest(value.ownerProofDigest)
 }
 
 export function assertResourceProofV2(
@@ -328,7 +328,7 @@ export function assertResourceProofV2(
   if (typeof value !== "object" || value === null) fail("invalid-proof", "Resource proof must be an object")
   const mode = (value as { mode?: unknown }).mode
   if (mode === "current-owner-state") {
-    assertExactKeysV2(
+    assertExactKeys(
       value,
       ["format", "mode", "resource", "ownerProofDigest", "requireCurrentLiveVersion"],
       "current resource proof",
@@ -336,13 +336,13 @@ export function assertResourceProofV2(
     if (value.format !== "convax.canvas-resource-proof-ref/2" || value.requireCurrentLiveVersion !== true)
       fail("invalid-proof", "Current proof discriminator is invalid")
     assertResourceRefV2(value.resource)
-    if (parseDigestV2(value.ownerProofDigest) !== value.resource.ownerProofDigest)
+    if (parseDigest(value.ownerProofDigest) !== value.resource.ownerProofDigest)
       fail("invalid-proof", "Current proof digest does not match resource")
     return
   }
   if (mode !== "retained-canvas-history" || !allowRetained)
     fail("invalid-proof", "Retained resource proof is not admitted here")
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "format",
@@ -364,9 +364,9 @@ export function assertResourceProofV2(
     )
   )
     fail("invalid-proof", "Retained source state is invalid")
-  parseId128V2(value.sourceOperationId)
+  parseId128(value.sourceOperationId)
   assertEntityRefV2(value.sourceNode, "node")
-  parseDigestV2(value.sourceDataDigest)
+  parseDigest(value.sourceDataDigest)
   assertResourceRefV2(value.resource)
 }
 
@@ -374,21 +374,21 @@ export function assertPluginRequirementV2(
   value: unknown,
   label = "PluginRequirementV2",
 ): asserts value is PluginRequirementV2 {
-  assertExactKeysV2(value, ["pluginId", "snapshotDigest", "pluginStateSchemaDigest", "validationArtifact"], label)
+  assertExactKeys(value, ["pluginId", "snapshotDigest", "pluginStateSchemaDigest", "validationArtifact"], label)
   assertText(value.pluginId, 1, 4096, `${label}.pluginId`)
-  parseDigestV2(value.snapshotDigest)
-  parseDigestV2(value.pluginStateSchemaDigest)
-  assertExactKeysV2(value.validationArtifact, ["owner", "format", "artifactDigest"], `${label}.validationArtifact`)
+  parseDigest(value.snapshotDigest)
+  parseDigest(value.pluginStateSchemaDigest)
+  assertExactKeys(value.validationArtifact, ["owner", "format", "artifactDigest"], `${label}.validationArtifact`)
   if (value.validationArtifact.owner !== "plugin") fail("invalid-plugin", `${label}.validationArtifact.owner must be plugin`)
   assertText(value.validationArtifact.format, 1, 4096, `${label}.validationArtifact.format`)
-  parseDigestV2(value.validationArtifact.artifactDigest)
+  parseDigest(value.validationArtifact.artifactDigest)
 }
 
 export function assertPluginStateV2(
   value: unknown,
   label = "PluginStateEnvelopeV2",
 ): asserts value is PluginStateEnvelopeV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "pluginId", "snapshotDigest", "pluginStateSchemaDigest", "validationArtifact", "state"],
     label,
@@ -408,91 +408,91 @@ export function assertNodeDataV2(value: unknown, label = "NodeDataEnvelopeV2"): 
   const candidate = value as Record<string, unknown>
   if (candidate.format !== "convax.canvas-node-data/2") fail("invalid-format", `${label}.format is invalid`)
   if (candidate.kind === "agent") {
-    assertExactKeysV2(value, ["format", "kind", "title", "instructions"], label)
+    assertExactKeys(value, ["format", "kind", "title", "instructions"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     if (value.instructions !== null) assertText(value.instructions, 0, 64 * 1024, `${label}.instructions`)
   } else if (candidate.kind === "group") {
-    assertExactKeysV2(value, ["format", "kind", "title"], label)
+    assertExactKeys(value, ["format", "kind", "title"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
   } else if (candidate.kind === "resource") {
-    assertExactKeysV2(value, ["format", "kind", "title", "resource"], label)
+    assertExactKeys(value, ["format", "kind", "title", "resource"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertResourceRefV2(value.resource)
   } else if (candidate.kind === "placeholder" && candidate.owner === "generation") {
-    assertExactKeysV2(value, ["format", "kind", "owner", "title", "expectedClass"], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "manual-pending") {
-    assertExactKeysV2(value, ["format", "kind", "owner", "title", "expectedClass", "state"], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", "state"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
     if (typeof value.state !== "object" || value.state === null) fail("invalid-node-data", `${label}.state is invalid`)
     if ((value.state as { phase?: unknown }).phase === "pending")
-      assertExactKeysV2(value.state, ["phase"], `${label}.state`)
+      assertExactKeys(value.state, ["phase"], `${label}.state`)
     else {
-      assertExactKeysV2(value.state, ["phase", "failureCode", "publicMessage"], `${label}.state`)
+      assertExactKeys(value.state, ["phase", "failureCode", "publicMessage"], `${label}.state`)
       if (value.state.phase !== "failed") fail("invalid-node-data", `${label}.state phase is invalid`)
       assertText(value.state.failureCode, 1, 4096, `${label}.failureCode`)
       if (value.state.publicMessage !== null) assertText(value.state.publicMessage, 0, 4096, `${label}.publicMessage`)
     }
   } else fail("invalid-node-data", `${label}.kind/owner is invalid`)
-  if (encodeRestrictedJcsV2(value).byteLength > 64 * 1024) fail("value-too-large", `${label} exceeds 64 KiB`)
+  if (encodeRestrictedJcs(value).byteLength > 64 * 1024) fail("value-too-large", `${label} exceeds 64 KiB`)
 }
 
 export function assertEdgeDataV2(value: unknown): asserts value is CanvasEdgeDataV2 {
-  assertExactKeysV2(value, ["format", "kind", "label"], "CanvasEdgeDataV2")
+  assertExactKeys(value, ["format", "kind", "label"], "CanvasEdgeDataV2")
   if (value.format !== "convax.canvas-edge-data/2" || value.kind !== "business")
     fail("invalid-edge-data", "Edge data discriminator is invalid")
   if (value.label !== null) assertText(value.label, 0, 4096, "edge label")
 }
 
 export function assertNodeIdentityV2(value: unknown): asserts value is CanvasNodeIdentityV2 {
-  assertExactKeysV2(value, ["format", "ref", "role", "createdBy"], "CanvasNodeIdentityV2")
+  assertExactKeys(value, ["format", "ref", "role", "createdBy"], "CanvasNodeIdentityV2")
   if (value.format !== "convax.canvas-node-identity/2" || (value.role !== "file" && value.role !== "agent"))
     fail("invalid-node-identity", "Node identity is invalid")
   assertEntityRefV2(value.ref, "node")
-  parseId128V2(value.createdBy)
+  parseId128(value.createdBy)
 }
 
 export function assertEdgeIdentityV2(value: unknown): asserts value is CanvasEdgeIdentityV2 {
-  assertExactKeysV2(value, ["format", "ref", "source", "target", "createdBy"], "CanvasEdgeIdentityV2")
+  assertExactKeys(value, ["format", "ref", "source", "target", "createdBy"], "CanvasEdgeIdentityV2")
   if (value.format !== "convax.canvas-edge-identity/2") fail("invalid-edge-identity", "Edge identity format is invalid")
   assertEntityRefV2(value.ref, "edge")
   assertEntityRefV2(value.source, "node")
   assertEntityRefV2(value.target, "node")
-  parseId128V2(value.createdBy)
+  parseId128(value.createdBy)
 }
 
 export function assertStampedClaimV2<T>(
   value: unknown,
   validate: (input: unknown) => asserts input is T,
 ): asserts value is StampedClaimV2<T> {
-  assertExactKeysV2(value, ["format", "stamp", "value"], "StampedClaimV2")
+  assertExactKeys(value, ["format", "stamp", "value"], "StampedClaimV2")
   if (value.format !== "convax.canvas-stamped-claim/2") fail("invalid-format", "Stamped claim format is invalid")
-  parsePortableStampV2(value.stamp)
+  parsePortableStamp(value.stamp)
   validate(value.value)
 }
 
 export function assertTombstoneV2(value: unknown, ownerRef?: CanvasEntityRefV2): asserts value is TombstoneFactV2 {
-  assertExactKeysV2(value, ["format", "entity", "stamp"], "TombstoneFactV2")
+  assertExactKeys(value, ["format", "entity", "stamp"], "TombstoneFactV2")
   if (value.format !== "convax.canvas-tombstone/2") fail("invalid-format", "Tombstone format is invalid")
   assertEntityRefV2(value.entity)
-  parsePortableStampV2(value.stamp)
+  parsePortableStamp(value.stamp)
   if (ownerRef !== undefined && canvasEntityKeyV2(value.entity) !== canvasEntityKeyV2(ownerRef))
     fail("tombstone-owner-mismatch", "Tombstone entity does not match record")
 }
 
 export function assertContainmentChoiceV2(value: unknown): asserts value is ContainmentChoiceV2 {
-  assertExactKeysV2(value, ["format", "relationId", "child", "parent", "stamp"], "ContainmentChoiceV2")
+  assertExactKeys(value, ["format", "relationId", "child", "parent", "stamp"], "ContainmentChoiceV2")
   if (value.format !== "convax.canvas-containment-choice/2") fail("invalid-format", "Containment format is invalid")
   assertDerivedIdV2(value.relationId, "r_", "relationId")
   assertEntityRefV2(value.child, "node")
   if (value.parent !== null) assertEntityRefV2(value.parent, "node")
-  parsePortableStampV2(value.stamp)
+  parsePortableStamp(value.stamp)
 }
 
 export function assertCreationGroupV2(value: unknown): asserts value is CreationGroupRefV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "groupId", "source", "sourceDataDigest", "plugin", "memberSetDigest"],
     "CreationGroupRefV2",
@@ -500,13 +500,13 @@ export function assertCreationGroupV2(value: unknown): asserts value is Creation
   if (value.format !== "convax.canvas-creation-group-ref/2") fail("invalid-format", "Creation-group format is invalid")
   assertDerivedIdV2(value.groupId, "cg_", "creation group id")
   assertEntityRefV2(value.source, "node")
-  parseDigestV2(value.sourceDataDigest)
+  parseDigest(value.sourceDataDigest)
   assertPluginRequirementV2(value.plugin)
-  parseDigestV2(value.memberSetDigest)
+  parseDigest(value.memberSetDigest)
 }
 
 export function assertGenerationBeginV2(value: unknown): asserts value is GenerationBeginV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "format",
@@ -526,22 +526,22 @@ export function assertGenerationBeginV2(value: unknown): asserts value is Genera
   if (value.format !== "convax.canvas-generation-begin/2") fail("invalid-format", "Generation begin format is invalid")
   assertDerivedIdV2(value.generationId, "g_", "generation id")
   assertEntityRefV2(value.node, "node")
-  parseActorIdV2(value.beginActorId)
-  parseDigestV2(value.beginAuthorizationEpochDigest)
-  const begin = parsePortableStampV2(value.beginStamp)
-  const output = parsePortableStampV2(value.outputClaimStamp)
+  parseActorId(value.beginActorId)
+  parseDigest(value.beginAuthorizationEpochDigest)
+  const begin = parsePortableStamp(value.beginStamp)
+  const output = parsePortableStamp(value.outputClaimStamp)
   if (begin.actorId !== value.beginActorId || output.actorId !== value.beginActorId)
     fail("generation-actor-mismatch", "Generation stamps do not match begin actor")
-  parseDigestV2(value.toolRefDigest)
+  parseDigest(value.toolRefDigest)
   assertText(value.prompt, 0, 64 * 1024, "generation prompt")
-  parseDigestV2(value.targetEffectiveDataDigest)
-  if (value.targetPluginDigest !== null) parseDigestV2(value.targetPluginDigest)
+  parseDigest(value.targetEffectiveDataDigest)
+  if (value.targetPluginDigest !== null) parseDigest(value.targetPluginDigest)
 }
 
 export function assertGenerationTerminalV2(value: unknown): asserts value is OwnerGenerationTerminalV2 {
   if (typeof value !== "object" || value === null) fail("invalid-terminal", "Generation terminal must be an object")
   if ((value as { phase?: unknown }).phase === "succeeded") {
-    assertExactKeysV2(
+    assertExactKeys(
       value,
       ["format", "phase", "generationId", "node", "beginDigest", "beginActorId", "outputData", "outputProofDigest"],
       "succeeded terminal",
@@ -550,9 +550,9 @@ export function assertGenerationTerminalV2(value: unknown): asserts value is Own
     assertNodeDataV2(value.outputData)
     if (value.outputData.kind !== "resource")
       fail("invalid-terminal", "Succeeded terminal output must be resource data")
-    parseDigestV2(value.outputProofDigest)
+    parseDigest(value.outputProofDigest)
   } else {
-    assertExactKeysV2(
+    assertExactKeys(
       value,
       ["format", "phase", "generationId", "node", "beginDigest", "beginActorId", "failureCode", "publicMessage"],
       "failed terminal",
@@ -564,20 +564,20 @@ export function assertGenerationTerminalV2(value: unknown): asserts value is Own
   }
   assertDerivedIdV2(value.generationId, "g_", "generation id")
   assertEntityRefV2(value.node, "node")
-  parseDigestV2(value.beginDigest)
-  parseActorIdV2(value.beginActorId)
+  parseDigest(value.beginDigest)
+  parseActorId(value.beginActorId)
 }
 
 export function assertGenerationDismissalV2(value: unknown): asserts value is GenerationDismissalV2 {
-  assertExactKeysV2(value, ["format", "generationId", "beginDigest", "marker"], "GenerationDismissalV2")
+  assertExactKeys(value, ["format", "generationId", "beginDigest", "marker"], "GenerationDismissalV2")
   if (value.format !== "convax.canvas-generation-dismissal/2" || value.marker !== "dismissed")
     fail("invalid-dismissal", "Generation dismissal is invalid")
   assertDerivedIdV2(value.generationId, "g_", "generation id")
-  parseDigestV2(value.beginDigest)
+  parseDigest(value.beginDigest)
 }
 
 export function assertGenerationRecoveryFailureV2(value: unknown): asserts value is GenerationRecoveryFailureV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["format", "generationId", "beginDigest", "proofDigest", "failureCode"],
     "GenerationRecoveryFailureV2",
@@ -588,12 +588,12 @@ export function assertGenerationRecoveryFailureV2(value: unknown): asserts value
   )
     fail("invalid-recovery", "Generation recovery failure is invalid")
   assertDerivedIdV2(value.generationId, "g_", "generation id")
-  parseDigestV2(value.beginDigest)
-  parseDigestV2(value.proofDigest)
+  parseDigest(value.beginDigest)
+  parseDigest(value.proofDigest)
 }
 
 export function assertOperationReceiptV2(value: unknown): asserts value is BoundedOperationReceiptV2 {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "format",
@@ -610,21 +610,21 @@ export function assertOperationReceiptV2(value: unknown): asserts value is Bound
   )
   if (value.format !== "convax.canvas-operation-receipt/2")
     fail("invalid-format", "Operation receipt format is invalid")
-  parseId128V2(value.operationId)
-  parseActorIdV2(value.actorId)
-  parseDigestV2(value.intentDigest)
-  parseDigestV2(value.baseFrontierDigest)
-  assertDenseArrayV2(value.resultEntities, "resultEntities")
+  parseId128(value.operationId)
+  parseActorId(value.actorId)
+  parseDigest(value.intentDigest)
+  parseDigest(value.baseFrontierDigest)
+  assertDenseArray(value.resultEntities, "resultEntities")
   let prior: string | undefined
   for (const ref of value.resultEntities) {
     assertEntityRefV2(ref)
     const key = canvasEntityKeyV2(ref)
-    if (prior !== undefined && compareUtf8V2(prior, key) >= 0)
+    if (prior !== undefined && compareUtf8(prior, key) >= 0)
       fail("invalid-set-order", "Result entities are not sorted unique")
     prior = key
   }
   if (typeof value.semanticRoot !== "boolean") fail("invalid-receipt", "semanticRoot must be boolean")
-  if (value.historyMaterialDigest !== null) parseDigestV2(value.historyMaterialDigest)
+  if (value.historyMaterialDigest !== null) parseDigest(value.historyMaterialDigest)
   if (value.semanticRoot !== (value.historyMaterialDigest !== null))
     fail("invalid-receipt", "History digest presence disagrees with semanticRoot")
 }
@@ -633,7 +633,7 @@ export function assertSemanticHistoryValueV2(value: unknown): asserts value is C
   if (typeof value !== "object" || value === null) fail("invalid-history", "History value must be an object")
   const format = (value as { format?: unknown }).format
   if (format === "convax.canvas-semantic-history-root/2") {
-    assertExactKeysV2(
+    assertExactKeys(
       value,
       [
         "format",
@@ -648,20 +648,20 @@ export function assertSemanticHistoryValueV2(value: unknown): asserts value is C
       ],
       "SemanticHistoryRootV2",
     )
-    parseId128V2(value.rootOperationId)
-    parseDigestV2(value.sourceIntentDigest)
-    parseDigestV2(value.materialDigest)
+    parseId128(value.rootOperationId)
+    parseDigest(value.sourceIntentDigest)
+    parseDigest(value.materialDigest)
     if (!UNDOABLE_INTENT_KINDS.has(value.sourceIntentKind as string))
       fail("invalid-history", "History root source intent is not one of the 14 undoable families")
-    assertDenseArrayV2(value.initialBindings, "history initialBindings")
+    assertDenseArray(value.initialBindings, "history initialBindings")
     assertHistoryBindingsV2(value.initialBindings)
-    assertDenseArrayV2(value.inverseTemplate, "history inverseTemplate")
-    assertDenseArrayV2(value.forwardTemplate, "history forwardTemplate")
+    assertDenseArray(value.inverseTemplate, "history inverseTemplate")
+    assertDenseArray(value.forwardTemplate, "history forwardTemplate")
     for (const template of value.inverseTemplate) assertHistoryTemplateV2(template)
     for (const template of value.forwardTemplate) assertHistoryTemplateV2(template)
     if (value.inverseTemplate.length === 0 || value.forwardTemplate.length === 0)
       fail("invalid-history", "Both history directions must be non-empty")
-    assertDenseArrayV2(value.retainedResources, "history retainedResources")
+    assertDenseArray(value.retainedResources, "history retainedResources")
     assertSortedRetainedResources(value.retainedResources)
     const core = {
       format: "convax.canvas-history-material/2",
@@ -678,7 +678,7 @@ export function assertSemanticHistoryValueV2(value: unknown): asserts value is C
     return
   }
   if (format === "convax.canvas-semantic-history-transition/2") {
-    assertExactKeysV2(
+    assertExactKeys(
       value,
       [
         "format",
@@ -693,14 +693,14 @@ export function assertSemanticHistoryValueV2(value: unknown): asserts value is C
       ],
       "SemanticHistoryTransitionV2",
     )
-    parseId128V2(value.rootOperationId)
-    parseId128V2(value.transitionOperationId)
-    parsePortableStampV2(value.stamp)
-    parseDigestV2(value.priorHistoryDigest)
-    parseDigestV2(value.materializationDigest)
-    parseDigestV2(value.resultFootprintDigest)
+    parseId128(value.rootOperationId)
+    parseId128(value.transitionOperationId)
+    parsePortableStamp(value.stamp)
+    parseDigest(value.priorHistoryDigest)
+    parseDigest(value.materializationDigest)
+    parseDigest(value.resultFootprintDigest)
     if (value.mode !== "undone" && value.mode !== "redone") fail("invalid-history", "Transition mode is invalid")
-    assertDenseArrayV2(value.resultBindings, "history resultBindings")
+    assertDenseArray(value.resultBindings, "history resultBindings")
     assertHistoryBindingsV2(value.resultBindings)
     return
   }
@@ -729,22 +729,22 @@ export function assertHistoryTemplateV2(value: unknown): asserts value is Canvas
   const op = (value as { op?: unknown }).op
   switch (op) {
     case "node.create":
-      assertExactKeysV2(value, ["op", "handle", "snapshot"], "history node.create")
+      assertExactKeys(value, ["op", "handle", "snapshot"], "history node.create")
       assertHistoryHandle(value.handle, "node")
       assertHistoryNodeSnapshot(value.snapshot)
       return
     case "node.tombstone":
-      assertExactKeysV2(value, ["op", "handle"], "history node.tombstone")
+      assertExactKeys(value, ["op", "handle"], "history node.tombstone")
       assertHistoryHandle(value.handle, "node")
       return
     case "node.geometry":
-      assertExactKeysV2(value, ["op", "handle", "position", "size"], "history node.geometry")
+      assertExactKeys(value, ["op", "handle", "position", "size"], "history node.geometry")
       assertHistoryHandle(value.handle, "node")
       assertPointV2(value.position)
       assertSizeV2(value.size)
       return
     case "node.data":
-      assertExactKeysV2(value, ["op", "handle", "data", "resource"], "history node.data")
+      assertExactKeys(value, ["op", "handle", "data", "resource"], "history node.data")
       assertHistoryHandle(value.handle, "node")
       assertNodeDataV2(value.data)
       if (value.resource !== null) assertResourceRefV2(value.resource)
@@ -756,43 +756,43 @@ export function assertHistoryTemplateV2(value: unknown): asserts value is Canvas
         fail("invalid-history", "History node.data resource does not match data")
       return
     case "node.plugin":
-      assertExactKeysV2(value, ["op", "handle", "plugin"], "history node.plugin")
+      assertExactKeys(value, ["op", "handle", "plugin"], "history node.plugin")
       assertHistoryHandle(value.handle, "node")
       if (value.plugin !== null) assertPluginStateV2(value.plugin)
       return
     case "edge.create":
-      assertExactKeysV2(value, ["op", "handle", "snapshot"], "history edge.create")
+      assertExactKeys(value, ["op", "handle", "snapshot"], "history edge.create")
       assertHistoryHandle(value.handle, "edge")
       assertHistoryEdgeSnapshot(value.snapshot)
       return
     case "edge.tombstone":
-      assertExactKeysV2(value, ["op", "handle"], "history edge.tombstone")
+      assertExactKeys(value, ["op", "handle"], "history edge.tombstone")
       assertHistoryHandle(value.handle, "edge")
       return
     case "containment.set":
-      assertExactKeysV2(value, ["op", "child", "parent"], "history containment.set")
+      assertExactKeys(value, ["op", "child", "parent"], "history containment.set")
       assertHistoryTarget(value.child)
       if (value.parent !== null) assertHistoryTarget(value.parent)
       return
     case "metadata.set":
-      assertExactKeysV2(value, ["op", "field", "value"], "history metadata.set")
+      assertExactKeys(value, ["op", "field", "value"], "history metadata.set")
       if (value.field !== "title" && value.field !== "description" && value.field !== "tags")
         fail("invalid-history", "History metadata field is invalid")
       if (value.field === "tags") assertHistoryTags(value.value)
       else if (value.value !== null) assertText(value.value, 0, 64 * 1024, "history metadata value")
       return
     case "creation-group.restore":
-      assertExactKeysV2(
+      assertExactKeys(
         value,
         ["op", "groupHandle", "source", "sourceDataDigest", "plugin", "nodes", "edges"],
         "history creation-group.restore",
       )
       assertGroupHandle(value.groupHandle)
       assertHistoryTarget(value.source)
-      parseDigestV2(value.sourceDataDigest)
+      parseDigest(value.sourceDataDigest)
       assertPluginRequirementV2(value.plugin)
-      assertDenseArrayV2(value.nodes, "history creation-group nodes")
-      assertDenseArrayV2(value.edges, "history creation-group edges")
+      assertDenseArray(value.nodes, "history creation-group nodes")
+      assertDenseArray(value.edges, "history creation-group edges")
       if (value.nodes.length + value.edges.length === 0)
         fail("invalid-history", "History creation group must contain a member")
       assertSortedHistoryMembers(value.nodes, "node")
@@ -803,13 +803,13 @@ export function assertHistoryTemplateV2(value: unknown): asserts value is Canvas
         assertHistoryEdgeSnapshot(item.snapshot)
       return
     case "pending-generation.restore":
-      assertExactKeysV2(
+      assertExactKeys(
         value,
         ["op", "node", "edges", "generationId", "fallbackTitle", "expectedClass", "position", "size"],
         "history pending-generation.restore",
       )
       assertHistoryHandle(value.node, "node")
-      assertDenseArrayV2(value.edges, "history pending generation edges")
+      assertDenseArray(value.edges, "history pending generation edges")
       assertSortedHistoryMembers(value.edges, "edge")
       for (const item of value.edges as readonly { readonly snapshot: unknown }[])
         assertHistoryEdgeSnapshot(item.snapshot)
@@ -827,7 +827,7 @@ export function assertHistoryTemplateV2(value: unknown): asserts value is Canvas
 function assertHistoryBindingsV2(bindings: readonly unknown[]): void {
   let prior: string | undefined
   for (const value of bindings) {
-    assertExactKeysV2(value, ["handle", "ref"], "CanvasHistoryBindingV2")
+    assertExactKeys(value, ["handle", "ref"], "CanvasHistoryBindingV2")
     const binding = value as unknown as CanvasHistoryBindingV2
     assertHistoryHandle(binding.handle)
     if (binding.ref !== null) {
@@ -835,7 +835,7 @@ function assertHistoryBindingsV2(bindings: readonly unknown[]): void {
       if (binding.handle.startsWith("n/") !== (binding.ref.kind === "node"))
         fail("invalid-history", "History binding handle/ref kinds disagree")
     }
-    if (prior !== undefined && compareUtf8V2(prior, binding.handle) >= 0)
+    if (prior !== undefined && compareUtf8(prior, binding.handle) >= 0)
       fail("invalid-history", "History bindings must be handle-sorted and duplicate-free")
     prior = binding.handle
   }
@@ -844,17 +844,17 @@ function assertHistoryBindingsV2(bindings: readonly unknown[]): void {
 function assertHistoryTarget(value: unknown): asserts value is CanvasHistoryNodeTargetV2 {
   if (typeof value !== "object" || value === null) fail("invalid-history", "History target must be an object")
   if ((value as { mode?: unknown }).mode === "handle") {
-    assertExactKeysV2(value, ["mode", "handle"], "history handle target")
+    assertExactKeys(value, ["mode", "handle"], "history handle target")
     assertHistoryHandle(value.handle, "node")
     return
   }
-  assertExactKeysV2(value, ["mode", "ref"], "history external target")
+  assertExactKeys(value, ["mode", "ref"], "history external target")
   if (value.mode !== "external") fail("invalid-history", "History target mode is invalid")
   assertEntityRefV2(value.ref, "node")
 }
 
 function assertHistoryNodeSnapshot(value: unknown): asserts value is CanvasHistoryNodeSnapshotV2 {
-  assertExactKeysV2(value, ["role", "position", "size", "data", "plugin", "resource"], "CanvasHistoryNodeSnapshotV2")
+  assertExactKeys(value, ["role", "position", "size", "data", "plugin", "resource"], "CanvasHistoryNodeSnapshotV2")
   if (value.role !== "file" && value.role !== "agent") fail("invalid-history", "History node role is invalid")
   assertPointV2(value.position)
   assertSizeV2(value.size)
@@ -872,7 +872,7 @@ function assertHistoryNodeSnapshot(value: unknown): asserts value is CanvasHisto
 }
 
 function assertHistoryEdgeSnapshot(value: unknown): void {
-  assertExactKeysV2(value, ["source", "target", "data"], "CanvasHistoryEdgeSnapshotV2")
+  assertExactKeys(value, ["source", "target", "data"], "CanvasHistoryEdgeSnapshotV2")
   assertHistoryTarget(value.source)
   assertHistoryTarget(value.target)
   assertEdgeDataV2(value.data)
@@ -881,9 +881,9 @@ function assertHistoryEdgeSnapshot(value: unknown): void {
 function assertSortedHistoryMembers(values: readonly unknown[], kind: "node" | "edge"): void {
   let prior: string | undefined
   for (const value of values) {
-    assertExactKeysV2(value, ["handle", "snapshot"], `history ${kind} member`)
+    assertExactKeys(value, ["handle", "snapshot"], `history ${kind} member`)
     assertHistoryHandle(value.handle, kind)
-    if (prior !== undefined && compareUtf8V2(prior, value.handle) >= 0)
+    if (prior !== undefined && compareUtf8(prior, value.handle) >= 0)
       fail("invalid-history", "History members must be handle-sorted and duplicate-free")
     prior = value.handle
   }
@@ -895,11 +895,11 @@ function assertSortedRetainedResources(resources: readonly unknown[]): void {
     assertResourceRefV2(resource)
     if (prior !== undefined) {
       const order =
-        compareUtf8V2(prior.contentDigest, resource.contentDigest) ||
-        compareUtf8V2(prior.uri, resource.uri) ||
-        compareUtf8V2(
-          new TextDecoder().decode(encodeRestrictedJcsV2(prior)),
-          new TextDecoder().decode(encodeRestrictedJcsV2(resource)),
+        compareUtf8(prior.contentDigest, resource.contentDigest) ||
+        compareUtf8(prior.uri, resource.uri) ||
+        compareUtf8(
+          new TextDecoder().decode(encodeRestrictedJcs(prior)),
+          new TextDecoder().decode(encodeRestrictedJcs(resource)),
         )
       if (order >= 0) fail("invalid-history", "Retained resources must be sorted and complete-value unique")
       if (prior.contentDigest === resource.contentDigest && !sameCanonicalValueV2(prior, resource))
@@ -912,7 +912,7 @@ function assertSortedRetainedResources(resources: readonly unknown[]): void {
 function assertHistoryHandle(value: unknown, expected?: "node" | "edge"): asserts value is string {
   if (typeof value !== "string" || !/^[ne]\/(0|[1-9]\d*)$/u.test(value))
     fail("invalid-history", "History handle is invalid")
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
   if ((expected === "node" && !value.startsWith("n/")) || (expected === "edge" && !value.startsWith("e/")))
     fail("invalid-history", "History handle kind is invalid")
 }
@@ -920,7 +920,7 @@ function assertHistoryHandle(value: unknown, expected?: "node" | "edge"): assert
 function assertGroupHandle(value: unknown): asserts value is string {
   if (typeof value !== "string" || !/^g\/(0|[1-9]\d*)$/u.test(value))
     fail("invalid-history", "History creation-group handle is invalid")
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function assertHistoryTags(value: unknown): void {
@@ -928,34 +928,34 @@ function assertHistoryTags(value: unknown): void {
   let prior: string | undefined
   for (const tag of value) {
     assertText(tag, 0, 256, "history tag")
-    if (prior !== undefined && compareUtf8V2(prior, tag) >= 0)
+    if (prior !== undefined && compareUtf8(prior, tag) >= 0)
       fail("invalid-history", "History tags must be sorted and unique")
     prior = tag
   }
 }
 
-export function operationKeyV2(actorId: ActorIdV2, operationId: CanvasOperationIdV2): string {
-  return `operation/${parseActorIdV2(actorId)}/${parseId128V2(operationId)}`
+export function operationKeyV2(actorId: ActorId, operationId: CanvasOperationIdV2): string {
+  return `operation/${parseActorId(actorId)}/${parseId128(operationId)}`
 }
 
 export function historyRootKeyV2(operationId: CanvasOperationIdV2): string {
-  return `root/${parseId128V2(operationId)}`
+  return `root/${parseId128(operationId)}`
 }
 
 export function historyTransitionKeyV2(
   root: CanvasOperationIdV2,
-  actor: ActorIdV2,
+  actor: ActorId,
   operation: CanvasOperationIdV2,
 ): string {
-  return `transition/${parseId128V2(root)}/actor/${parseActorIdV2(actor)}/operation/${parseId128V2(operation)}`
+  return `transition/${parseId128(root)}/actor/${parseActorId(actor)}/operation/${parseId128(operation)}`
 }
 
-export function containmentKeyV2(child: CanvasEntityRefV2 & { readonly kind: "node" }, actorId: ActorIdV2): string {
-  return `${canvasEntityKeyV2(child)}/actor/${parseActorIdV2(actorId)}`
+export function containmentKeyV2(child: CanvasEntityRefV2 & { readonly kind: "node" }, actorId: ActorId): string {
+  return `${canvasEntityKeyV2(child)}/actor/${parseActorId(actorId)}`
 }
 
 export function compareClaimsV2<T>(left: StampedClaimV2<T>, right: StampedClaimV2<T>): number {
-  return comparePortableStampsV2(left.stamp, right.stamp)
+  return comparePortableStamps(left.stamp, right.stamp)
 }
 
 export function maxClaimV2<T>(claims: readonly StampedClaimV2<T>[]): StampedClaimV2<T> | null {
@@ -965,15 +965,15 @@ export function maxClaimV2<T>(claims: readonly StampedClaimV2<T>[]): StampedClai
 }
 
 export function makeStampV2(
-  context: OwnerIntentConstructionContextV2,
-  writeOrdinal: Uint32V2,
-): import("@convax/collaboration").PortableStampV2 {
+  context: OwnerIntentConstructionContext,
+  writeOrdinal: Uint32,
+): import("@convax/collaboration").PortableStamp {
   return {
     format: "convax.portable-stamp/2",
     lamport: context.lamport,
     actorId: context.actorId,
     operationId: context.operationId,
-    writeOrdinal: parseUint32V2(writeOrdinal),
+    writeOrdinal: parseUint32(writeOrdinal),
   }
 }
 
@@ -981,7 +981,7 @@ export function actualWriteValueDigestV2(
   path: string,
   write: Omit<CanvasActualWriteV2, "valueDigest">,
   value: unknown,
-): DigestV2 {
+): Digest {
   const stored = value === null ? { presence: "present-null", value: null } : { presence: "present-value", value }
   return canvasDigestV2("convax.canvas-actual-write-value/2", {
     format: "convax.canvas-actual-write-value/2",
@@ -997,15 +997,15 @@ export function strictSortedUnique<T>(values: readonly T[], key: (value: T) => s
   let previous: string | undefined
   for (const value of values) {
     const current = key(value)
-    if (previous !== undefined && compareUtf8V2(previous, current) >= 0)
+    if (previous !== undefined && compareUtf8(previous, current) >= 0)
       fail("invalid-set-order", `${label} must be UTF-8 sorted and duplicate-free`)
     previous = current
   }
 }
 
 export function sameCanonicalValueV2(left: unknown, right: unknown): boolean {
-  const a = encodeRestrictedJcsV2(left)
-  const b = encodeRestrictedJcsV2(right)
+  const a = encodeRestrictedJcs(left)
+  const b = encodeRestrictedJcs(right)
   if (a.length !== b.length) return false
   return a.every((byte, index) => byte === b[index])
 }
@@ -1021,7 +1021,7 @@ function assertMediaClass(value: unknown, label: string): void {
 }
 
 function assertText(value: unknown, minimum: number, maximum: number, label: string): asserts value is string {
-  assertBoundedNfcStringV2(value, minimum, maximum, label)
+  assertBoundedNfcString(value, minimum, maximum, label)
 }
 
 function assertJsonBound(
@@ -1040,11 +1040,11 @@ function assertJsonBound(
       for (const item of Object.values(input)) visit(item, depth + 1)
   }
   visit(value, 0)
-  if (encodeRestrictedJcsV2(value).byteLength > maximumBytes) fail("value-too-large", `${label} exceeds encoded bounds`)
+  if (encodeRestrictedJcs(value).byteLength > maximumBytes) fail("value-too-large", `${label} exceeds encoded bounds`)
 }
 
-function hexBytes(value: DigestV2 | string): Uint8Array {
-  const digest = parseDigestV2(value)
+function hexBytes(value: Digest | string): Uint8Array {
+  const digest = parseDigest(value)
   const bytes = new Uint8Array(32)
   for (let index = 0; index < 32; index += 1) bytes[index] = Number.parseInt(digest.slice(index * 2, index * 2 + 2), 16)
   return bytes
@@ -1056,7 +1056,7 @@ function fail(code: string, message: string): never {
 
 if (
   CANVAS_DIGEST_DOMAINS_V2.length !== 29 ||
-  [...CANVAS_DIGEST_DOMAINS_V2].sort(compareUtf8V2).some((domain, index) => domain !== CANVAS_DIGEST_DOMAINS_V2[index])
+  [...CANVAS_DIGEST_DOMAINS_V2].sort(compareUtf8).some((domain, index) => domain !== CANVAS_DIGEST_DOMAINS_V2[index])
 ) {
   throw new Error("Canvas R5 digest ledger is not the exact sorted 29-domain set")
 }

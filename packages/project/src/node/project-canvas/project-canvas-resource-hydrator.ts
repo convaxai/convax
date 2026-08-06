@@ -6,7 +6,7 @@ import {
   type CanvasResourceRefV2,
 } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 import type { ProjectDirectoryListing, ProjectFileInfo, ProjectTextFileContents } from "@convax/project-files"
 import type { ProjectIndexCurrentBlobReferencePortV2 } from "../../collaboration/blob-replication"
 import {
@@ -131,7 +131,7 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
     })
     if (resources.size === 0) return { document: input.document, unavailableNodeIds: new Set() }
 
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     const currentResources = await this.#currentResources.queryCurrentResources({ projectId })
     const currentByUri = new Map(
       currentResources.map((entry) => [entry.reference.canonicalUri, entry] as const),

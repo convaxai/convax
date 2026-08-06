@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import type { DigestV2, DocumentScopeV2 } from "@convax/collaboration"
+import type { Digest, DocumentScope } from "@convax/collaboration"
 import {
   deriveDocumentNativeKeyV2,
   deriveJournalSegmentNativeKeyV2,
@@ -15,7 +15,7 @@ const scope = {
   docKind: "project-index",
   docId: "project-index",
   shardEpoch: id(2),
-} as DocumentScopeV2
+} as DocumentScope
 
 describe("R5 native collaboration keys", () => {
   test("derives stable opaque document and kind-separated object keys", () => {
@@ -24,7 +24,7 @@ describe("R5 native collaboration keys", () => {
     expect(documentKey).not.toContain("project-a")
     expect(deriveDocumentNativeKeyV2({ ...scope })).toBe(documentKey)
 
-    const digest = "a".repeat(64) as DigestV2
+    const digest = "a".repeat(64) as Digest
     expect(deriveObjectNativeKeyV2("frame", digest)).toMatch(/^[0-9a-f]{64}$/)
     expect(deriveObjectNativeKeyV2("frame", digest)).not.toBe(deriveObjectNativeKeyV2("checkpoint", digest))
   })
@@ -42,7 +42,7 @@ describe("R5 native collaboration keys", () => {
       ...scope,
       docKind: "canvas",
       docId: `cv_${"b".repeat(64)}`,
-    } as DocumentScopeV2
+    } as DocumentScope
     expect(deriveDocumentNativeKeyV2(canvas)).not.toBe(deriveDocumentNativeKeyV2(scope))
     expect(() => deriveDocumentNativeKeyV2({ ...canvas, docId: "canvas-main" } as never)).toThrow(
       InvalidCollaborationNativeKeyInputError,

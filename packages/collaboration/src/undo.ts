@@ -1,71 +1,71 @@
-import type { Id128V2 } from "./codecs"
-import { parseId128V2 } from "./codecs"
-import { CollaborationKernelErrorV2 } from "./errors"
+import type { Id128 } from "./codecs"
+import { parseId128 } from "./codecs"
+import { CollaborationKernelError } from "./errors"
 
-export type SessionUndoClearReasonV2 = "restart" | "rebuild" | "scope-change" | "unmount" | "post-commit-cursor-failure"
+export type SessionUndoClearReason = "restart" | "rebuild" | "scope-change" | "unmount" | "post-commit-cursor-failure"
 
-export interface SessionUndoCursorV2 {
-  readonly rootOperationId: Id128V2
-  readonly cursorToken: Id128V2
+export interface SessionUndoCursor {
+  readonly rootOperationId: Id128
+  readonly cursorToken: Id128
 }
 
-export interface SessionUndoCoordinatorV2 {
-  recordDurableRoot(rootOperationId: Id128V2): void
-  peekUndo(): SessionUndoCursorV2 | null
-  peekRedo(): SessionUndoCursorV2 | null
-  commitUndo(cursorToken: Id128V2, durableInverseOperationId: Id128V2): void
-  commitRedo(cursorToken: Id128V2, durableForwardOperationId: Id128V2): void
-  clear(reason: SessionUndoClearReasonV2): void
+export interface SessionUndoCoordinator {
+  recordDurableRoot(rootOperationId: Id128): void
+  peekUndo(): SessionUndoCursor | null
+  peekRedo(): SessionUndoCursor | null
+  commitUndo(cursorToken: Id128, durableInverseOperationId: Id128): void
+  commitRedo(cursorToken: Id128, durableForwardOperationId: Id128): void
+  clear(reason: SessionUndoClearReason): void
 }
 
-export interface SessionUndoCoordinatorOptionsV2 {
-  createCursorToken(): Id128V2
+export interface SessionUndoCoordinatorOptions {
+  createCursorToken(): Id128
 }
 
 interface PendingCursor {
   readonly direction: "undo" | "redo"
-  readonly rootOperationId: Id128V2
-  readonly cursorToken: Id128V2
+  readonly rootOperationId: Id128
+  readonly cursorToken: Id128
 }
 
-export class TransientSessionUndoCoordinatorV2 implements SessionUndoCoordinatorV2 {
+export class TransientSessionUndoCoordinator implements SessionUndoCoordinator {
   private pending: PendingCursor | null = null
-  private readonly redo: Id128V2[] = []
-  private readonly undo: Id128V2[] = []
+  private readonly redo: Id128[] = []
+  private readonly undo: Id128[] = []
 
-  constructor(private readonly options: SessionUndoCoordinatorOptionsV2) {}
+  constructor(private readonly options: SessionUndoCoordinatorOptions) {}
 
-  recordDurableRoot(rootOperationId: Id128V2): void {
+  recordDurableRoot(rootOperationId: Id128): void {
     this.requireNoPending()
-    this.undo.push(parseId128V2(rootOperationId))
+    this.undo.push(parseId128(rootOperationId))
     this.redo.length = 0
   }
 
-  peekUndo(): SessionUndoCursorV2 | null {
+  peekUndo(): SessionUndoCursor | null {
     return this.peek("undo", this.undo)
   }
 
-  peekRedo(): SessionUndoCursorV2 | null {
+  peekRedo(): SessionUndoCursor | null {
     return this.peek("redo", this.redo)
   }
 
-  commitUndo(cursorToken: Id128V2, durableInverseOperationId: Id128V2): void {
-    parseId128V2(durableInverseOperationId)
+  commitUndo(cursorToken: Id128, durableInverseOperationId: Id128): void {
+    parseId128(durableInverseOperationId)
     this.commit("undo", cursorToken, this.undo, this.redo)
   }
 
-  commitRedo(cursorToken: Id128V2, durableForwardOperationId: Id128V2): void {
-    parseId128V2(durableForwardOperationId)
+  commitRedo(cursorToken: Id128, durableForwardOperationId: Id128): void {
+    parseId128(durableForwardOperationId)
     this.commit("redo", cursorToken, this.redo, this.undo)
   }
 
-  clear(_reason: SessionUndoClearReasonV2): void {
+  clear(_reason: SessionUndoClearReason): void {
     this.pending = null
     this.undo.length = 0
     this.redo.length = 0
   }
 
-  getSnapshot(): Readonly<{ undo: readonly Id128V2[]; redo: readonly Id128V2[]; pending: SessionUndoCursorV2 | null }> {
+  getSnapshot(): Readonly<{ undo: readonly Id128[]; redo: readonly Id128[]; pending: SessionUndoCursor | null }> {
     return Object.freeze({
       undo: Object.freeze([...this.undo]),
       redo: Object.freeze([...this.redo]),
@@ -73,23 +73,23 @@ export class TransientSessionUndoCoordinatorV2 implements SessionUndoCoordinator
     })
   }
 
-  private peek(direction: PendingCursor["direction"], stack: readonly Id128V2[]): SessionUndoCursorV2 | null {
+  private peek(direction: PendingCursor["direction"], stack: readonly Id128[]): SessionUndoCursor | null {
     if (this.pending !== null) {
-      if (this.pending.direction !== direction) throw new CollaborationKernelErrorV2("invalid-owner-result", "Another session undo cursor is active")
+      if (this.pending.direction !== direction) throw new CollaborationKernelError("invalid-owner-result", "Another session undo cursor is active")
       return Object.freeze({ rootOperationId: this.pending.rootOperationId, cursorToken: this.pending.cursorToken })
     }
     const rootOperationId = stack.at(-1)
     if (rootOperationId === undefined) return null
-    const cursorToken = parseId128V2(this.options.createCursorToken())
+    const cursorToken = parseId128(this.options.createCursorToken())
     this.pending = Object.freeze({ direction, rootOperationId, cursorToken })
     return Object.freeze({ rootOperationId, cursorToken })
   }
 
-  private commit(direction: PendingCursor["direction"], cursorToken: Id128V2, source: Id128V2[], destination: Id128V2[]): void {
-    const parsedToken = parseId128V2(cursorToken)
+  private commit(direction: PendingCursor["direction"], cursorToken: Id128, source: Id128[], destination: Id128[]): void {
+    const parsedToken = parseId128(cursorToken)
     const pending = this.pending
     if (pending === null || pending.direction !== direction || pending.cursorToken !== parsedToken || source.at(-1) !== pending.rootOperationId) {
-      throw new CollaborationKernelErrorV2("invalid-owner-result", "Session undo cursor is stale or mismatched")
+      throw new CollaborationKernelError("invalid-owner-result", "Session undo cursor is stale or mismatched")
     }
     source.pop()
     destination.push(pending.rootOperationId)
@@ -97,6 +97,6 @@ export class TransientSessionUndoCoordinatorV2 implements SessionUndoCoordinator
   }
 
   private requireNoPending(): void {
-    if (this.pending !== null) throw new CollaborationKernelErrorV2("invalid-owner-result", "A session undo cursor is active")
+    if (this.pending !== null) throw new CollaborationKernelError("invalid-owner-result", "A session undo cursor is active")
   }
 }

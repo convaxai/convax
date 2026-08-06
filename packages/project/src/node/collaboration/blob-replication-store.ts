@@ -3,20 +3,20 @@ import { constants as fsConstants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseUint32V2,
-  parseUint64V2,
-  type DigestV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type Uint64V2,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseUint32,
+  parseUint64,
+  type Digest,
+  type Id128,
+  type MemberId,
+  type ProjectId,
+  type Uint64,
 } from "@convax/collaboration"
 import {
   blobDurableAckCoreFromReferenceV2,
@@ -51,16 +51,16 @@ const gcMaximumBytes = 16n * 1024n * 1024n * 1024n
 export interface ProjectBlobRootScanPortV2 {
   /** Must include every ProjectIndex/Canvas/history/outbox/recovery root or throw. */
   scanCompleteRoots(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-  }): Promise<Readonly<{ complete: true; digests: ReadonlySet<DigestV2> }>>
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+  }): Promise<Readonly<{ complete: true; digests: ReadonlySet<Digest> }>>
 }
 
 export interface ProjectBlobRootContributorV2 {
   scanRoots(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-  }): Promise<Readonly<{ complete: true; digests: ReadonlySet<DigestV2> }>>
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+  }): Promise<Readonly<{ complete: true; digests: ReadonlySet<Digest> }>>
 }
 
 /**
@@ -89,16 +89,16 @@ export function createCompleteProjectBlobRootScanPortV2(
     throw new TypeError("Complete Project blob root contributors are unavailable")
   }
   return Object.freeze({
-    async scanCompleteRoots(input: { readonly projectId: ProjectIdV2; readonly projectEpoch: Id128V2 }) {
-      const projectId = parseProjectIdV2(input.projectId)
-      const projectEpoch = parseId128V2(input.projectEpoch)
+    async scanCompleteRoots(input: { readonly projectId: ProjectId; readonly projectEpoch: Id128 }) {
+      const projectId = parseProjectId(input.projectId)
+      const projectEpoch = parseId128(input.projectEpoch)
       const results = await Promise.all(ordered.map((contributor) => contributor.scanRoots({ projectId, projectEpoch })))
-      const digests = new Set<DigestV2>()
+      const digests = new Set<Digest>()
       for (const result of results) {
         if (!result || result.complete !== true || !result.digests || typeof result.digests[Symbol.iterator] !== "function") {
           throw new Error("Project blob root contributor returned an incomplete scan")
         }
-        for (const digest of result.digests) digests.add(parseDigestV2(digest))
+        for (const digest of result.digests) digests.add(parseDigest(digest))
       }
       return Object.freeze({ complete: true as const, digests })
     },
@@ -106,17 +106,17 @@ export function createCompleteProjectBlobRootScanPortV2(
 }
 
 export interface ProjectBlobReceiveProgressV2 {
-  readonly transferId: Id128V2
-  readonly manifestDigest: DigestV2
+  readonly transferId: Id128
+  readonly manifestDigest: Digest
   readonly nextChunkIndex: string
-  readonly acceptedByteLength: Uint64V2
+  readonly acceptedByteLength: Uint64
   readonly complete: boolean
 }
 
 export interface ProjectBlobDurabilityEvidenceV2 {
   readonly format: "convax.local-blob-durability-evidence/2"
   readonly reference: ProjectResourceReferenceV2
-  readonly presenceGeneration: Uint64V2
+  readonly presenceGeneration: Uint64
   readonly verifiedObjectKey: string
 }
 
@@ -126,44 +126,44 @@ export interface ProjectBlobSendPlanV2 {
 }
 
 interface PresenceEntryV2 {
-  readonly blobSha256: DigestV2
-  readonly byteLength: Uint64V2
+  readonly blobSha256: Digest
+  readonly byteLength: Uint64
   readonly locationKind: "replication-cache"
   readonly verifiedObjectKey: string
-  readonly verifiedGeneration: Uint64V2
+  readonly verifiedGeneration: Uint64
 }
 
 interface PresenceIndexV2 {
   readonly format: "convax.local-blob-presence-index/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly generation: Uint64V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly generation: Uint64
   readonly entries: readonly PresenceEntryV2[]
 }
 
 interface TransferRecordV2 {
   readonly format: "convax.local-blob-transfer/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly sourceMemberId: MemberIdV2
-  readonly transferId: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly sourceMemberId: MemberId
+  readonly transferId: Id128
   readonly manifest: PeerTransferManifestV2
   readonly reference: ProjectResourceReferenceV2
   readonly nextChunkIndex: string
-  readonly acceptedByteLength: Uint64V2
+  readonly acceptedByteLength: Uint64
   readonly state: "receiving" | "published"
 }
 
 interface BlobGcEntryV2 {
   readonly firstUnreferencedUnixMs: string
-  readonly firstStoreGeneration: Uint64V2
-  readonly lastScanGeneration: Uint64V2
+  readonly firstStoreGeneration: Uint64
+  readonly lastScanGeneration: Uint64
 }
 
 interface BlobGcStateV2 {
   readonly format: "convax.local-blob-gc/2"
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
   readonly lastScanUnixMs: string
   readonly entries: Readonly<Record<string, BlobGcEntryV2>>
 }
@@ -175,19 +175,19 @@ export class ProjectBlobReplicationStoreV2 {
   readonly #acksRoot: string
   readonly #presencePath: string
   readonly #gcPath: string
-  readonly #projectId: ProjectIdV2
-  readonly #projectEpoch: Id128V2
-  readonly #protocolDigest: DigestV2
+  readonly #projectId: ProjectId
+  readonly #projectEpoch: Id128
+  readonly #protocolDigest: Digest
   readonly #now: () => number
   #presence: PresenceIndexV2
   #queue: Promise<void> = Promise.resolve()
-  readonly #publishedListeners = new Set<(digest: DigestV2) => void>()
+  readonly #publishedListeners = new Set<(digest: Digest) => void>()
 
   private constructor(input: {
     root: string
-    projectId: ProjectIdV2
-    projectEpoch: Id128V2
-    protocolDigest: DigestV2
+    projectId: ProjectId
+    projectEpoch: Id128
+    protocolDigest: Digest
     now: () => number
     presence: PresenceIndexV2
   }) {
@@ -206,15 +206,15 @@ export class ProjectBlobReplicationStoreV2 {
 
   static async open(input: {
     readonly collaborationDirectory: string
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly protocolDigest: DigestV2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly protocolDigest: Digest
     readonly now?: () => number
   }): Promise<ProjectBlobReplicationStoreV2> {
     if (!path.isAbsolute(input.collaborationDirectory)) throw new TypeError("Collaboration directory must be absolute")
-    const projectId = parseProjectIdV2(input.projectId)
-    const projectEpoch = parseId128V2(input.projectEpoch)
-    const protocolDigest = parseDigestV2(input.protocolDigest)
+    const projectId = parseProjectId(input.projectId)
+    const projectEpoch = parseId128(input.projectEpoch)
+    const protocolDigest = parseDigest(input.protocolDigest)
     const collaboration = await requireRealDirectory(input.collaborationDirectory, "Collaboration directory")
     const root = path.join(collaboration, "blob-replication")
     await ensureRealDirectory(root)
@@ -224,7 +224,7 @@ export class ProjectBlobReplicationStoreV2 {
     await ensureRealDirectory(path.join(root, "acks"))
     const presencePath = path.join(root, "presence-index-v2.bin")
     const previous = await readPresenceIndex(presencePath, projectId, projectEpoch).catch(() => null)
-    const generation = String(BigInt(previous?.generation ?? "0") + 1n) as Uint64V2
+    const generation = String(BigInt(previous?.generation ?? "0") + 1n) as Uint64
     const rebuilt = await rebuildPresence(path.join(root, "cache", "sha256"), projectId, projectEpoch, generation)
     await replaceJcs(presencePath, rebuilt)
     return new ProjectBlobReplicationStoreV2({
@@ -237,9 +237,9 @@ export class ProjectBlobReplicationStoreV2 {
     })
   }
 
-  get generation(): Uint64V2 { return this.#presence.generation }
+  get generation(): Uint64 { return this.#presence.generation }
 
-  subscribePublished(listener: (digest: DigestV2) => void): () => void {
+  subscribePublished(listener: (digest: Digest) => void): () => void {
     if (typeof listener !== "function") throw new TypeError("Blob publication listener is required")
     this.#publishedListeners.add(listener)
     return () => this.#publishedListeners.delete(listener)
@@ -271,7 +271,7 @@ export class ProjectBlobReplicationStoreV2 {
     const bytes = new Uint8Array(bytesInput)
     return this.#serial(async () => {
       this.#validateReference(reference)
-      if (BigInt(bytes.byteLength) !== BigInt(reference.blob.byteLength) || ordinarySha256V2(bytes) !== reference.blob.digest) {
+      if (BigInt(bytes.byteLength) !== BigInt(reference.blob.byteLength) || ordinarySha256(bytes) !== reference.blob.digest) {
         throw new Error("Blob admission bytes do not match the ProjectIndex reference")
       }
       const staging = path.join(this.#transfersRoot, `admit-${randomUUID()}.part`)
@@ -337,8 +337,8 @@ export class ProjectBlobReplicationStoreV2 {
     return this.#serial(async () => {
       const result: ProjectBlobHaveV2[] = []
       for (const blob of blobs) {
-        const digest = parseDigestV2(blob.blobSha256)
-        const byteLength = parseUint64V2(blob.byteLength)
+        const digest = parseDigest(blob.blobSha256)
+        const byteLength = parseUint64(blob.byteLength)
         const entry = this.#presence.entries.find((candidate) => candidate.blobSha256 === digest && candidate.byteLength === byteLength)
         if (!entry) continue
         try {
@@ -363,8 +363,8 @@ export class ProjectBlobReplicationStoreV2 {
 
   async prepareSend(input: {
     readonly reference: ProjectResourceReferenceV2
-    readonly connectionId: Id128V2
-    readonly transferId: Id128V2
+    readonly connectionId: Id128
+    readonly transferId: Id128
   }): Promise<ProjectBlobSendPlanV2> {
     return this.#serial(async () => {
       this.#validateReference(input.reference)
@@ -374,8 +374,8 @@ export class ProjectBlobReplicationStoreV2 {
       const chunkCount = (BigInt(input.reference.blob.byteLength) + BigInt(chunkBytes) - 1n) / BigInt(chunkBytes)
       const manifest = createPeerTransferManifestV2({
         format: "convax.peer-transfer-manifest-core/2",
-        connectionId: parseId128V2(input.connectionId),
-        transferId: parseId128V2(input.transferId),
+        connectionId: parseId128(input.connectionId),
+        transferId: parseId128(input.transferId),
         channel: "blob",
         kind: "project-blob",
         scope: null,
@@ -397,7 +397,7 @@ export class ProjectBlobReplicationStoreV2 {
   }>> {
     return this.#serial(async () => {
       this.#validateReference(plan.reference)
-      const index = BigInt(parseUint32V2(chunkIndexInput))
+      const index = BigInt(parseUint32(chunkIndexInput))
       const chunkCount = BigInt(plan.manifest.core.chunkCount)
       if (index >= chunkCount) throw new Error("Blob send chunk index is out of range")
       if (plan.manifest.core.subjectDigest !== projectResourceReferenceDigestV2(plan.reference)) throw new Error("Blob send plan is stale")
@@ -417,7 +417,7 @@ export class ProjectBlobReplicationStoreV2 {
           chunkIndex: index.toString() as never,
           byteOffset: offset.toString() as never,
           byteLength: String(length) as never,
-          chunkSha256: ordinarySha256V2(rawChunk),
+          chunkSha256: ordinarySha256(rawChunk),
         })
         return Object.freeze({ header, rawChunk })
       } finally {
@@ -427,13 +427,13 @@ export class ProjectBlobReplicationStoreV2 {
   }
 
   async beginReceive(input: {
-    readonly sourceMemberId: MemberIdV2
+    readonly sourceMemberId: MemberId
     readonly manifest: PeerTransferManifestV2
     readonly reference: ProjectResourceReferenceV2
   }): Promise<ProjectBlobReceiveProgressV2> {
     return this.#serial(async () => {
       this.#validateReference(input.reference)
-      const sourceMemberId = parseMemberIdV2(input.sourceMemberId)
+      const sourceMemberId = parseMemberId(input.sourceMemberId)
       this.#validateManifest(input.manifest, input.reference)
       const key = transferKey(this.#projectId, this.#projectEpoch, sourceMemberId, input.manifest.core.transferId)
       const metadataPath = path.join(this.#transfersRoot, `${key}.bin`)
@@ -458,24 +458,24 @@ export class ProjectBlobReplicationStoreV2 {
         manifest: input.manifest,
         reference: input.reference,
         nextChunkIndex: "0",
-        acceptedByteLength: "0" as Uint64V2,
+        acceptedByteLength: "0" as Uint64,
         state: "receiving",
       })
       await writeNewDurable(partialPath, new Uint8Array())
-      await writeNewDurable(metadataPath, encodeRestrictedJcsV2(record))
+      await writeNewDurable(metadataPath, encodeRestrictedJcs(record))
       return progress(record)
     })
   }
 
   async receiveChunk(input: {
-    readonly sourceMemberId: MemberIdV2
-    readonly transferId: Id128V2
+    readonly sourceMemberId: MemberId
+    readonly transferId: Id128
     readonly header: PeerTransferChunkHeaderV2
     readonly rawChunk: Readonly<Uint8Array>
   }): Promise<ProjectBlobReceiveProgressV2> {
     return this.#serial(async () => {
-      const sourceMemberId = parseMemberIdV2(input.sourceMemberId)
-      const transferId = parseId128V2(input.transferId)
+      const sourceMemberId = parseMemberId(input.sourceMemberId)
+      const transferId = parseId128(input.transferId)
       const key = transferKey(this.#projectId, this.#projectEpoch, sourceMemberId, transferId)
       const metadataPath = path.join(this.#transfersRoot, `${key}.bin`)
       const partialPath = path.join(this.#transfersRoot, `${key}.part`)
@@ -483,20 +483,20 @@ export class ProjectBlobReplicationStoreV2 {
       this.#validateTransferRecord(record, sourceMemberId, transferId)
       if (record.state === "published") return progress(record)
       if (input.header.transferId !== transferId || input.header.manifestDigest !== record.manifest.coreDigest) throw new Error("Blob chunk transfer binding mismatches")
-      const index = BigInt(parseUint32V2(input.header.chunkIndex))
+      const index = BigInt(parseUint32(input.header.chunkIndex))
       const rawChunk = new Uint8Array(input.rawChunk)
       const chunkCount = BigInt(record.manifest.core.chunkCount)
       const chunkBytes = BigInt(record.manifest.core.chunkBytes)
       if (index >= chunkCount || BigInt(input.header.byteOffset) !== index * chunkBytes) throw new Error("Blob chunk position is invalid")
       const expectedLength = Number(index + 1n === chunkCount ? BigInt(record.manifest.core.byteLength) - index * chunkBytes : chunkBytes)
-      if (rawChunk.byteLength !== expectedLength || BigInt(input.header.byteLength) !== BigInt(expectedLength) || ordinarySha256V2(rawChunk) !== input.header.chunkSha256) {
+      if (rawChunk.byteLength !== expectedLength || BigInt(input.header.byteLength) !== BigInt(expectedLength) || ordinarySha256(rawChunk) !== input.header.chunkSha256) {
         throw new Error("Blob chunk bytes are invalid")
       }
       const next = BigInt(record.nextChunkIndex)
       if (index > next) throw new Error("Blob chunks must be contiguous")
       if (index < next) {
         const existing = await readRange(partialPath, Number(BigInt(input.header.byteOffset)), expectedLength)
-        if (ordinarySha256V2(existing) !== input.header.chunkSha256) throw new Error("Duplicate blob chunk storage is corrupt")
+        if (ordinarySha256(existing) !== input.header.chunkSha256) throw new Error("Duplicate blob chunk storage is corrupt")
         return progress(record)
       }
       const handle = await fs.open(partialPath, "r+")
@@ -507,7 +507,7 @@ export class ProjectBlobReplicationStoreV2 {
       const nextRecord: TransferRecordV2 = Object.freeze({
         ...record,
         nextChunkIndex: String(index + 1n),
-        acceptedByteLength: (BigInt(record.acceptedByteLength) + BigInt(expectedLength)).toString() as Uint64V2,
+        acceptedByteLength: (BigInt(record.acceptedByteLength) + BigInt(expectedLength)).toString() as Uint64,
       })
       await replaceJcs(metadataPath, nextRecord)
       return progress(nextRecord)
@@ -515,12 +515,12 @@ export class ProjectBlobReplicationStoreV2 {
   }
 
   async finalizeReceive(input: {
-    readonly sourceMemberId: MemberIdV2
-    readonly transferId: Id128V2
+    readonly sourceMemberId: MemberId
+    readonly transferId: Id128
   }): Promise<ProjectBlobDurabilityEvidenceV2> {
     return this.#serial(async () => {
-      const sourceMemberId = parseMemberIdV2(input.sourceMemberId)
-      const transferId = parseId128V2(input.transferId)
+      const sourceMemberId = parseMemberId(input.sourceMemberId)
+      const transferId = parseId128(input.transferId)
       const key = transferKey(this.#projectId, this.#projectEpoch, sourceMemberId, transferId)
       const metadataPath = path.join(this.#transfersRoot, `${key}.bin`)
       const partialPath = path.join(this.#transfersRoot, `${key}.part`)
@@ -566,7 +566,7 @@ export class ProjectBlobReplicationStoreV2 {
         throw new Error("Remote blob ACK scope is invalid")
       }
       if (!(await input.verifyCurrentAck(ack))) throw new Error("Remote blob ACK is not current and verified")
-      await writeNewOrVerify(path.join(this.#acksRoot, `${ack.coreDigest}.bin`), encodeRestrictedJcsV2(ack))
+      await writeNewOrVerify(path.join(this.#acksRoot, `${ack.coreDigest}.bin`), encodeRestrictedJcs(ack))
     })
   }
 
@@ -585,14 +585,14 @@ export class ProjectBlobReplicationStoreV2 {
     })
   }
 
-  async runConservativeGc(roots: ProjectBlobRootScanPortV2): Promise<Readonly<{ deleted: readonly DigestV2[] }>> {
+  async runConservativeGc(roots: ProjectBlobRootScanPortV2): Promise<Readonly<{ deleted: readonly Digest[] }>> {
     return this.#serial(async () => {
       const now = this.#now()
       if (!Number.isSafeInteger(now) || now < 0) throw new Error("Blob GC clock is invalid")
       const first = await roots.scanCompleteRoots({ projectId: this.#projectId, projectEpoch: this.#projectEpoch })
       if (first.complete !== true) throw new Error("Blob root scan is incomplete")
       const activeTransferDigests = await this.#activeTransferDigests()
-      const live = new Set<DigestV2>([...first.digests, ...activeTransferDigests])
+      const live = new Set<Digest>([...first.digests, ...activeTransferDigests])
       const inventory = await this.#verifiedInventory()
       const loaded = await readGcState(this.#gcPath, this.#projectId, this.#projectEpoch).catch(() => null)
       const rollback = loaded !== null && BigInt(loaded.lastScanUnixMs) > BigInt(now)
@@ -623,7 +623,7 @@ export class ProjectBlobReplicationStoreV2 {
       if (due.length === 0) return Object.freeze({ deleted: Object.freeze([]) })
       const second = await roots.scanCompleteRoots({ projectId: this.#projectId, projectEpoch: this.#projectEpoch })
       if (second.complete !== true) throw new Error("Second blob root scan is incomplete")
-      const liveAgain = new Set<DigestV2>([...second.digests, ...(await this.#activeTransferDigests())])
+      const liveAgain = new Set<Digest>([...second.digests, ...(await this.#activeTransferDigests())])
       const selected: typeof due = []
       let bytes = 0n
       for (const item of due) {
@@ -633,9 +633,9 @@ export class ProjectBlobReplicationStoreV2 {
       }
       // Timing state is durable before unlink. A failed unlink keeps the entry for retry.
       await replaceJcs(this.#gcPath, state)
-      const deleted: DigestV2[] = []
+      const deleted: Digest[] = []
       for (const item of selected) {
-        await verifyFile(this.#blobPath(item.digest), item.digest, item.byteLength.toString() as Uint64V2)
+        await verifyFile(this.#blobPath(item.digest), item.digest, item.byteLength.toString() as Uint64)
         await fs.unlink(this.#blobPath(item.digest))
         delete entries[item.digest]
         deleted.push(item.digest)
@@ -686,7 +686,7 @@ export class ProjectBlobReplicationStoreV2 {
     return Object.freeze({ format: "convax.local-blob-durability-evidence/2", reference, presenceGeneration: this.#presence.generation, verifiedObjectKey: entry.verifiedObjectKey })
   }
 
-  async #removePresence(digest: DigestV2) { await this.#replacePresence(this.#presence.entries.filter((entry) => entry.blobSha256 !== digest)) }
+  async #removePresence(digest: Digest) { await this.#replacePresence(this.#presence.entries.filter((entry) => entry.blobSha256 !== digest)) }
 
   async #replacePresence(entries: readonly PresenceEntryV2[]) {
     const next: PresenceIndexV2 = Object.freeze({
@@ -699,8 +699,8 @@ export class ProjectBlobReplicationStoreV2 {
 
   #validateReference(reference: ProjectResourceReferenceV2) {
     if (reference.projectId !== this.#projectId || reference.projectEpoch !== this.#projectEpoch) throw new Error("Project blob reference scope mismatches store")
-    parseDigestV2(reference.blob.digest)
-    const length = BigInt(parseUint64V2(reference.blob.byteLength))
+    parseDigest(reference.blob.digest)
+    const length = BigInt(parseUint64(reference.blob.byteLength))
     if (length > maximumBlobBytes) throw new Error("Project blob exceeds 64 GiB")
   }
 
@@ -712,7 +712,7 @@ export class ProjectBlobReplicationStoreV2 {
     }
   }
 
-  #validateTransferRecord(record: TransferRecordV2, sourceMemberId?: MemberIdV2, transferId?: Id128V2) {
+  #validateTransferRecord(record: TransferRecordV2, sourceMemberId?: MemberId, transferId?: Id128) {
     if (
       record.projectId !== this.#projectId || record.projectEpoch !== this.#projectEpoch ||
       (sourceMemberId !== undefined && record.sourceMemberId !== sourceMemberId) ||
@@ -723,10 +723,10 @@ export class ProjectBlobReplicationStoreV2 {
     if (record.manifest.core.transferId !== record.transferId) throw new Error("Blob transfer metadata identity is invalid")
   }
 
-  #blobPath(digest: DigestV2) { return path.join(this.#cacheRoot, digest.slice(0, 2), digest) }
+  #blobPath(digest: Digest) { return path.join(this.#cacheRoot, digest.slice(0, 2), digest) }
 
-  async #activeTransferDigests(): Promise<ReadonlySet<DigestV2>> {
-    const result = new Set<DigestV2>()
+  async #activeTransferDigests(): Promise<ReadonlySet<Digest>> {
+    const result = new Set<Digest>()
     for (const entry of await fs.readdir(this.#transfersRoot, { withFileTypes: true })) {
       if (!entry.isFile() || !/^[0-9a-f]{64}\.bin$/u.test(entry.name)) continue
       const record = parseTransferRecord(await readRequiredJcs(path.join(this.#transfersRoot, entry.name)))
@@ -736,16 +736,16 @@ export class ProjectBlobReplicationStoreV2 {
     return result
   }
 
-  async #verifiedInventory(): Promise<readonly { digest: DigestV2; byteLength: bigint }[]> {
-    const result: { digest: DigestV2; byteLength: bigint }[] = []
+  async #verifiedInventory(): Promise<readonly { digest: Digest; byteLength: bigint }[]> {
+    const result: { digest: Digest; byteLength: bigint }[] = []
     for (const prefix of await fs.readdir(this.#cacheRoot, { withFileTypes: true })) {
       if (!prefix.isDirectory() || prefix.isSymbolicLink() || !/^[0-9a-f]{2}$/u.test(prefix.name)) continue
       const directory = path.join(this.#cacheRoot, prefix.name)
       for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
         if (!entry.isFile() || entry.isSymbolicLink() || !digestPattern.test(entry.name) || entry.name.slice(0, 2) !== prefix.name) continue
         const stat = await fs.lstat(path.join(directory, entry.name), { bigint: true })
-        await verifyFile(path.join(directory, entry.name), entry.name as DigestV2, stat.size.toString() as Uint64V2)
-        result.push({ digest: entry.name as DigestV2, byteLength: stat.size })
+        await verifyFile(path.join(directory, entry.name), entry.name as Digest, stat.size.toString() as Uint64)
+        result.push({ digest: entry.name as Digest, byteLength: stat.size })
       }
     }
     return result
@@ -776,14 +776,14 @@ function parseTransferRecord(value: unknown): TransferRecordV2 {
   const input = value as TransferRecordV2
   const record: TransferRecordV2 = Object.freeze({
     format: input.format,
-    projectId: parseProjectIdV2(input.projectId),
-    projectEpoch: parseId128V2(input.projectEpoch),
-    sourceMemberId: parseMemberIdV2(input.sourceMemberId),
-    transferId: parseId128V2(input.transferId),
+    projectId: parseProjectId(input.projectId),
+    projectEpoch: parseId128(input.projectEpoch),
+    sourceMemberId: parseMemberId(input.sourceMemberId),
+    transferId: parseId128(input.transferId),
     manifest: parsePeerTransferManifestV2(input.manifest),
     reference: parseProjectResourceReferenceV2(input.reference),
-    nextChunkIndex: parseUint32V2(input.nextChunkIndex),
-    acceptedByteLength: parseUint64V2(input.acceptedByteLength),
+    nextChunkIndex: parseUint32(input.nextChunkIndex),
+    acceptedByteLength: parseUint64(input.acceptedByteLength),
     state: input.state,
   })
   if (record.format !== "convax.local-blob-transfer/2" || (record.state !== "receiving" && record.state !== "published")) throw new Error("Blob transfer metadata is invalid")
@@ -799,14 +799,14 @@ async function normalizePartial(partialPath: string, record: TransferRecordV2) {
   if (stat.size > accepted) await fs.truncate(partialPath, Number(accepted))
 }
 
-function transferKey(projectId: ProjectIdV2, projectEpoch: Id128V2, sourceMemberId: MemberIdV2, transferId: Id128V2): string {
+function transferKey(projectId: ProjectId, projectEpoch: Id128, sourceMemberId: MemberId, transferId: Id128): string {
   const hash = createHash("sha256")
   hash.update("convax.local-blob-transfer-key/2\0")
-  hash.update(encodeRestrictedJcsV2({ projectId, projectEpoch, sourceMemberId, transferId }))
+  hash.update(encodeRestrictedJcs({ projectId, projectEpoch, sourceMemberId, transferId }))
   return hash.digest("hex")
 }
 
-async function rebuildPresence(cacheRoot: string, projectId: ProjectIdV2, projectEpoch: Id128V2, generation: Uint64V2): Promise<PresenceIndexV2> {
+async function rebuildPresence(cacheRoot: string, projectId: ProjectId, projectEpoch: Id128, generation: Uint64): Promise<PresenceIndexV2> {
   const entries: PresenceEntryV2[] = []
   for (const prefix of await fs.readdir(cacheRoot, { withFileTypes: true })) {
     if (!prefix.isDirectory() || prefix.isSymbolicLink() || !/^[0-9a-f]{2}$/u.test(prefix.name)) continue
@@ -815,31 +815,31 @@ async function rebuildPresence(cacheRoot: string, projectId: ProjectIdV2, projec
       if (!entry.isFile() || entry.isSymbolicLink() || !digestPattern.test(entry.name) || entry.name.slice(0, 2) !== prefix.name) continue
       const target = path.join(directory, entry.name)
       const stat = await fs.lstat(target, { bigint: true })
-      await verifyFile(target, entry.name as DigestV2, stat.size.toString() as Uint64V2)
-      entries.push({ blobSha256: entry.name as DigestV2, byteLength: stat.size.toString() as Uint64V2, locationKind: "replication-cache", verifiedObjectKey: `sha256/${prefix.name}/${entry.name}`, verifiedGeneration: generation })
+      await verifyFile(target, entry.name as Digest, stat.size.toString() as Uint64)
+      entries.push({ blobSha256: entry.name as Digest, byteLength: stat.size.toString() as Uint64, locationKind: "replication-cache", verifiedObjectKey: `sha256/${prefix.name}/${entry.name}`, verifiedGeneration: generation })
     }
   }
   return Object.freeze({ format: "convax.local-blob-presence-index/2", projectId, projectEpoch, generation, entries: Object.freeze(entries.sort((a, b) => a.blobSha256.localeCompare(b.blobSha256, "en-US"))) })
 }
 
-async function readPresenceIndex(target: string, projectId: ProjectIdV2, projectEpoch: Id128V2): Promise<PresenceIndexV2> {
+async function readPresenceIndex(target: string, projectId: ProjectId, projectEpoch: Id128): Promise<PresenceIndexV2> {
   const value = await readRequiredJcs(target) as PresenceIndexV2
   if (value.format !== "convax.local-blob-presence-index/2" || value.projectId !== projectId || value.projectEpoch !== projectEpoch || !Array.isArray(value.entries)) throw new Error("Blob presence index is invalid")
-  parseUint64V2(value.generation)
+  parseUint64(value.generation)
   return value
 }
 
-async function readGcState(target: string, projectId: ProjectIdV2, projectEpoch: Id128V2): Promise<BlobGcStateV2> {
+async function readGcState(target: string, projectId: ProjectId, projectEpoch: Id128): Promise<BlobGcStateV2> {
   const value = await readRequiredJcs(target) as BlobGcStateV2
   if (value.format !== "convax.local-blob-gc/2" || value.projectId !== projectId || value.projectEpoch !== projectEpoch || !value.entries || typeof value.entries !== "object") throw new Error("Blob GC state is invalid")
   BigInt(value.lastScanUnixMs)
   for (const [digest, entry] of Object.entries(value.entries)) {
-    parseDigestV2(digest); BigInt(entry.firstUnreferencedUnixMs); parseUint64V2(entry.firstStoreGeneration); parseUint64V2(entry.lastScanGeneration)
+    parseDigest(digest); BigInt(entry.firstUnreferencedUnixMs); parseUint64(entry.firstStoreGeneration); parseUint64(entry.lastScanGeneration)
   }
   return value
 }
 
-async function verifyFile(target: string, digest: DigestV2, byteLength: Uint64V2) {
+async function verifyFile(target: string, digest: Digest, byteLength: Uint64) {
   const before = await fs.lstat(target, { bigint: true })
   if (!before.isFile() || before.isSymbolicLink() || before.size !== BigInt(byteLength)) throw new Error("Blob file shape or length is invalid")
   const handle = await openReadNoFollow(target)
@@ -902,7 +902,7 @@ async function writeNewOrVerify(target: string, bytes: Uint8Array) {
 async function replaceJcs(target: string, value: unknown) {
   const temporary = `${target}.${randomUUID()}.tmp`
   try {
-    await writeNewDurable(temporary, encodeRestrictedJcsV2(value))
+    await writeNewDurable(temporary, encodeRestrictedJcs(value))
     await fs.rename(temporary, target)
     await fsyncProjectDirectoryV2(path.dirname(target))
   } finally { await fs.rm(temporary, { force: true }).catch(() => undefined) }
@@ -911,7 +911,7 @@ async function replaceJcs(target: string, value: unknown) {
 async function readRequiredJcs(target: string): Promise<unknown> {
   const stat = await fs.lstat(target)
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 8 * 1024 * 1024) throw new Error("Blob metadata file is invalid")
-  return decodeRestrictedJcsV2(await fs.readFile(target))
+  return decodeRestrictedJcs(await fs.readFile(target))
 }
 
 async function readJcsIfPresent(target: string): Promise<unknown | null> {

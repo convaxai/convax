@@ -3,33 +3,33 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
 } from "@convax/collaboration"
 import { CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2 } from "../../collaboration-protocol/control-descriptor"
 import { createBlobDurableAckV2 } from "../../collaboration/blob-replication"
 import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
 import { createCompleteProjectBlobRootScanPortV2, ProjectBlobReplicationStoreV2 } from "./blob-replication-store"
 
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const actor = (fill: number) => parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(fill)))
-const projectId = parseProjectIdV2("project-a")
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
+const projectId = parseProjectId("project-a")
 const projectEpoch = id(1)
-const sourceMemberId = parseMemberIdV2(id(2))
+const sourceMemberId = parseMemberId(id(2))
 const receiver = {
-  receiverMemberId: parseMemberIdV2(id(3)),
-  receiverReplicaId: parseReplicaIdV2("replica_00000003"),
+  receiverMemberId: parseMemberId(id(3)),
+  receiverReplicaId: parseReplicaId("replica_00000003"),
   receiverActorId: actor(3),
-  receiverAuthorizationDigest: ordinarySha256V2(new TextEncoder().encode("authorization")),
+  receiverAuthorizationDigest: ordinarySha256(new TextEncoder().encode("authorization")),
 }
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(9)))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(9)))
 const durabilityTest = test.skipIf(process.platform === "win32")
 
 describe("Project/node blob replication store", () => {
@@ -78,7 +78,7 @@ describe("Project/node blob replication store", () => {
       await receiverStore.beginReceive({ sourceMemberId, manifest: plan.manifest, reference })
       const chunk = await sender.readSendChunk(plan, "0")
       await expect(receiverStore.receiveChunk({ sourceMemberId, transferId: plan.manifest.core.transferId, header: chunk.header, rawChunk: new Uint8Array(chunk.rawChunk).fill(8) })).rejects.toThrow("invalid")
-      await expect(receiverStore.beginReceive({ sourceMemberId, manifest: { ...plan.manifest, coreDigest: ordinarySha256V2(new TextEncoder().encode("other")) }, reference })).rejects.toThrow()
+      await expect(receiverStore.beginReceive({ sourceMemberId, manifest: { ...plan.manifest, coreDigest: ordinarySha256(new TextEncoder().encode("other")) }, reference })).rejects.toThrow()
     } finally { await fs.rm(root, { recursive: true, force: true }) }
   })
 
@@ -154,7 +154,7 @@ describe("Project/node blob replication store", () => {
       const bytes = new TextEncoder().encode("orphan")
       const reference = resource(bytes)
       await store.admitVerifiedBytes(reference, bytes)
-      const emptyRoots = { scanCompleteRoots: async () => ({ complete: true as const, digests: new Set<ReturnType<typeof ordinarySha256V2>>() }) }
+      const emptyRoots = { scanCompleteRoots: async () => ({ complete: true as const, digests: new Set<ReturnType<typeof ordinarySha256>>() }) }
       expect((await store.runConservativeGc(emptyRoots)).deleted).toEqual([])
       now += 8 * 24 * 60 * 60 * 1000
       store = await open(directory, () => now)
@@ -169,8 +169,8 @@ describe("Project/node blob replication store", () => {
   })
 
   test("requires every portable and durability root contributor before native GC receives a complete union", async () => {
-    const a = ordinarySha256V2(new TextEncoder().encode("root-a"))
-    const b = ordinarySha256V2(new TextEncoder().encode("root-b"))
+    const a = ordinarySha256(new TextEncoder().encode("root-a"))
+    const b = ordinarySha256(new TextEncoder().encode("root-b"))
     const contributor = (digests: ReadonlySet<typeof a>) => ({ scanRoots: async () => ({ complete: true as const, digests }) })
     const port = createCompleteProjectBlobRootScanPortV2({
       projectIndex: contributor(new Set([a])),
@@ -198,17 +198,17 @@ async function collaborationDirectory(root: string, name: string) {
 }
 
 function open(directory: string, now?: () => number) {
-  return ProjectBlobReplicationStoreV2.open({ collaborationDirectory: directory, projectId, projectEpoch, protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest), now })
+  return ProjectBlobReplicationStoreV2.open({ collaborationDirectory: directory, projectId, projectEpoch, protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest), now })
 }
 
 function resource(bytes: Uint8Array, family = "a"): ProjectResourceReferenceV2 {
-  const digest = ordinarySha256V2(bytes)
+  const digest = ordinarySha256(bytes)
   return Object.freeze({
     format: "convax.project-resource-reference/2", projectId, projectEpoch,
     entryFileId: `pf_${family.repeat(64)}` as never, familyPrimaryFileId: `pf_${family.repeat(64)}` as never,
     versionId: `pv_${digest}`,
     canonicalUri: `convax-project://project-a/epochs/${projectEpoch}/entries/pf_${family.repeat(64)}?blob=sha256%3A${digest}`,
     blob: { format: "convax.blob-ref/2" as const, algorithm: "sha256" as const, digest, byteLength: String(bytes.byteLength) as never, mime: "application/octet-stream" },
-    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode(`version:${digest}`)),
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
 }

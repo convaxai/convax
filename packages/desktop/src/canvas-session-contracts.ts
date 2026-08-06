@@ -5,7 +5,7 @@ import type {
   CanvasRendererCommandV2,
 } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
-import type { Id128V2 } from "@convax/collaboration"
+import type { Id128 } from "@convax/collaboration"
 
 export const canvasSessionIpcChannels = {
   close: "canvas:session-close",
@@ -22,7 +22,7 @@ export interface CanvasSessionProjectionDtoV2 {
   readonly format: "convax.canvas-session-projection/2"
   readonly ref: CanvasDocumentRef
   /** Renderer mount identity only; never a document version or mutation guard. */
-  readonly sessionId: Id128V2
+  readonly sessionId: Id128
   readonly document: CanvasDocument
   readonly nodeEntities: readonly Readonly<{
     readonly nodeId: string
@@ -35,7 +35,7 @@ export interface CanvasSessionProjectionDtoV2 {
 export interface CanvasSessionInvalidationDtoV2 {
   readonly format: "convax.canvas-session-invalidation/2"
   readonly ref: CanvasDocumentRef
-  readonly sessionId: Id128V2
+  readonly sessionId: Id128
 }
 
 export interface CanvasRendererSessionMutationResultV2 {
@@ -45,7 +45,7 @@ export interface CanvasRendererSessionMutationResultV2 {
 
 export interface CanvasRendererSessionScopeV2 {
   readonly ref: CanvasDocumentRef
-  readonly sessionId: Id128V2
+  readonly sessionId: Id128
 }
 
 /** Closed renderer/preload surface. It cannot carry raw Yjs updates or owner facts. */

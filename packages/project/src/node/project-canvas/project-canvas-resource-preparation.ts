@@ -1,5 +1,5 @@
 import path from "node:path"
-import { ordinarySha256V2, parseProjectIdV2 } from "@convax/collaboration"
+import { ordinarySha256, parseProjectId } from "@convax/collaboration"
 import { getCanvasTextFileFormat, type CanvasMediaKind, type CanvasUploadItem } from "@convax/canvas/core"
 import { canvasResourceProofMetadataKeyV2, type CanvasResourceProofRefV2 } from "@convax/canvas/collaboration"
 import type {
@@ -360,7 +360,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     readonly projectId: string
   }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
     if (!this.indexFiles) return undefined
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     return this.publishProjectFileProof({
       exactBytes: new TextEncoder().encode(input.content),
       mediaClass: "text",
@@ -378,7 +378,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     readonly projectId: string
   }): Promise<Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> | undefined> {
     if (!this.indexFiles) return undefined
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     const contents =
       input.exactBytes === undefined
         ? await this.project.readFile({ path: input.path, projectId: input.projectId })
@@ -398,7 +398,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
       existing?.reference &&
-      existing.reference.blob.digest === ordinarySha256V2(bytes) &&
+      existing.reference.blob.digest === ordinarySha256(bytes) &&
       existing.reference.blob.byteLength === String(bytes.byteLength) &&
       existing.reference.blob.mime === input.mime
     ) {
@@ -467,7 +467,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     })
     try {
       const result = await this.indexFiles.admitManagedBlob({
-        projectId: parseProjectIdV2(input.projectId),
+        projectId: parseProjectId(input.projectId),
         admission,
       })
       if (result.status !== "committed" || result.reference == null) {
@@ -480,7 +480,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   }
 
   private async ensureProjectIndexDirectories(
-    projectId: ReturnType<typeof parseProjectIdV2>,
+    projectId: ReturnType<typeof parseProjectId>,
     filePath: string,
     initialPlan: ProjectIndexFileMaterializationPlanV2,
   ): Promise<ProjectIndexFileMaterializationPlanV2> {

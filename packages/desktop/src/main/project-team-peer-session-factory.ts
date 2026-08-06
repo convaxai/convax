@@ -1,15 +1,15 @@
 import {
-  incrementUint64V2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  type DigestV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type ReplicaSignerPortV2,
-  type ValidationArtifactSetV2,
+  incrementUint64,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  type Digest,
+  type Id128,
+  type MemberId,
+  type ProjectId,
+  type ReplicaSignerPort,
+  type ValidationArtifactSet,
 } from "@convax/collaboration"
 import {
   membershipMutationProofCoreDigestV2,
@@ -44,11 +44,11 @@ import type {
 } from "./project-team-collaboration-manager"
 
 export interface ProjectTeamMemberIdentityPortV2 {
-  resolve(projectId: ProjectIdV2): Promise<MemberIdV2>
+  resolve(projectId: ProjectId): Promise<MemberId>
 }
 
 export interface ProjectTeamNativeBootstrapFactsPortV2 {
-  resolve(projectId: ProjectIdV2): Promise<DesktopProjectBootstrapInitializationV2>
+  resolve(projectId: ProjectId): Promise<DesktopProjectBootstrapInitializationV2>
 }
 
 export interface ProjectTeamActiveSessionPortV2 {
@@ -58,8 +58,8 @@ export interface ProjectTeamActiveSessionPortV2 {
 export interface ProjectTeamFloorActivationPortV2 {
   activate(input: {
     readonly record: DesktopTeamAuthorityRecordV1
-    readonly memberSigner: ReplicaSignerPortV2
-    readonly replicaSigner: ReplicaSignerPortV2
+    readonly memberSigner: ReplicaSignerPort
+    readonly replicaSigner: ReplicaSignerPort
     readonly signal: AbortSignal
   }): Promise<DesktopMembershipMutationResultV2 | "pending">
 }
@@ -88,8 +88,8 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
     readonly floor: ProjectTeamFloorActivationPortV2
     readonly localEnrollment: LocalReplicaEnrollmentVerifierFactoryV2
     readonly localAuthority: Pick<DurableLocalReplicaAuthorityCacheV2, "install">
-    readonly validationArtifacts: ValidationArtifactSetV2
-    readonly createId: () => Id128V2
+    readonly validationArtifacts: ValidationArtifactSet
+    readonly createId: () => Id128
   }) {}
 
   async provision(recordInput: DesktopTeamAuthorityRecordV1, signal: AbortSignal): Promise<ProjectTeamReplicaProvisioningResultV2> {
@@ -116,10 +116,10 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
 
   private async enrollReplica(
     record: DesktopTeamAuthorityRecordV1,
-    memberSigner: ReplicaSignerPortV2,
+    memberSigner: ReplicaSignerPort,
     signal: AbortSignal,
   ): Promise<DesktopTeamAuthorityRecordV1> {
-    const allocationRequestId = parseId128V2(this.options.createId())
+    const allocationRequestId = parseId128(this.options.createId())
     const projectEpoch = record.membershipSnapshot.core.projectEpoch
     const prepared = await this.options.replicaVault.prepareReplicaKey({ projectId: record.projectId, projectEpoch, allocationRequestId })
     const member = record.membershipSnapshot.core.members.find((candidate) => candidate.memberId === record.memberId)
@@ -160,7 +160,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
       projectId: record.projectId,
       intent: {
         purpose: "replica-enroll",
-        mutationId: parseId128V2(this.options.createId()),
+        mutationId: parseId128(this.options.createId()),
         requesterCredentialDigest: record.memberCredential.coreDigest,
         replicaIdReservationReceiptDigest: reserved.coreDigest,
       },
@@ -176,7 +176,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
       expectedMembershipSequence: challenge.core.expectedMembershipSequence,
       requesterMemberId: record.memberId,
       targetMemberId: record.memberId,
-      targetMemberMutationCounter: incrementUint64V2(challenge.core.expectedTargetMemberMutationCounter),
+      targetMemberMutationCounter: incrementUint64(challenge.core.expectedTargetMemberMutationCounter),
       serverNonce: challenge.core.serverNonce,
       purpose: "replica-enroll" as const,
       currentReplicaId: null,
@@ -201,7 +201,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
 
   private async installMutationForLocalMember(
     result: DesktopMembershipMutationResultV2,
-    memberId: MemberIdV2,
+    memberId: MemberId,
     previous?: DesktopTeamAuthorityRecordV1,
   ) {
     const credential = result.targetMemberCredential.core.memberId === memberId
@@ -259,7 +259,7 @@ export class DesktopProjectTeamReplicaProvisionerV2 {
     await this.options.localAuthority.install(enrollment)
   }
 
-  private async openMemberSigner(record: DesktopTeamAuthorityRecordV1): Promise<ReplicaSignerPortV2> {
+  private async openMemberSigner(record: DesktopTeamAuthorityRecordV1): Promise<ReplicaSignerPort> {
     const signer = await this.options.memberVault.openMemberSigner({
       projectId: record.projectId,
       memberId: record.memberId,
@@ -281,16 +281,16 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     readonly nativeFacts: ProjectTeamNativeBootstrapFactsPortV2
     readonly provisioner: Pick<DesktopProjectTeamReplicaProvisionerV2, "provision">
     readonly sessions: ProjectTeamActiveSessionPortV2
-    readonly protocolDigest: DigestV2
-    readonly trustBundleDigest: DigestV2
-    readonly createId: () => Id128V2
-    readonly afterAuthorityChange: (projectId: ProjectIdV2) => Promise<void>
+    readonly protocolDigest: Digest
+    readonly trustBundleDigest: Digest
+    readonly createId: () => Id128
+    readonly afterAuthorityChange: (projectId: ProjectId) => Promise<void>
     readonly wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>
     readonly nowUnixMs?: () => bigint
   }) {}
 
   async openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     const current = await this.options.teamStore.open(projectId)
     if (current === "missing") return Object.freeze({ status: "local-only" })
     if (current === "rejected") return attention("protocol-rejected")
@@ -306,7 +306,7 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
   }
 
   async bootstrapTeam(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerBootstrapOpenResultV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     const existing = await this.options.teamStore.open(projectId)
     if (existing !== "missing") {
       return Object.freeze({
@@ -318,14 +318,14 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
     }
     const initialization = await this.options.nativeFacts.resolve(projectId)
     if (initialization.projectId !== projectId) throw new Error("Project bootstrap facts crossed Project identity")
-    const memberId = parseMemberIdV2(await this.options.memberIdentity.resolve(projectId))
+    const memberId = parseMemberId(await this.options.memberIdentity.resolve(projectId))
     const memberKey = await this.options.memberVault.ensureMemberKey({ projectId, memberId })
     const bootstrap = await this.options.control.bootstrapTeam({
       ...initialization,
       ownerMemberId: memberId,
       ownerMemberSigningPublicKey: memberKey.publicKey,
-      expectedProtocolDigest: parseDigestV2(this.options.protocolDigest),
-      expectedTrustBundleDigest: parseDigestV2(this.options.trustBundleDigest),
+      expectedProtocolDigest: parseDigest(this.options.protocolDigest),
+      expectedTrustBundleDigest: parseDigest(this.options.trustBundleDigest),
       signal: input.signal,
     })
     if (bootstrap.status !== "ok") return Object.freeze({ invitation: null, session: controlAttention(bootstrap) })
@@ -343,12 +343,12 @@ export class ProductionProjectTeamPeerSessionFactoryV2 implements ProjectTeamPee
   }
 
   async joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrierV2; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2> {
-    const projectId = parseProjectIdV2(input.projectId)
-    const memberId = parseMemberIdV2(await this.options.memberIdentity.resolve(projectId))
+    const projectId = parseProjectId(input.projectId)
+    const memberId = parseMemberId(await this.options.memberIdentity.resolve(projectId))
     const memberKey = await this.options.memberVault.ensureMemberKey({ projectId, memberId })
     const prepared = await this.options.control.prepareInvitation({
       invitation: input.invitation,
-      mutationId: parseId128V2(this.options.createId()),
+      mutationId: parseId128(this.options.createId()),
       targetMemberId: memberId,
       targetMemberSigningPublicKey: memberKey.publicKey,
       signal: input.signal,

@@ -7,148 +7,103 @@ const temporary = mkdtempSync(join(packageRoot, ".convax-collaboration-pack-"))
 const isolatedEnvironment = { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary }
 const descriptorPath = join(packageRoot, "protocol", "current.json")
 const expectedRuntimeKeys = Object.freeze([
-  "CHECKPOINT_VALIDATION_CARRIER_LIMITS_V2",
-  "CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES_V2",
+  "CHECKPOINT_VALIDATION_CARRIER_LIMITS",
+  "CHECKPOINT_VALIDATION_CARRIER_PREAMBLE_BYTES",
   "CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME",
   "CURRENT_PROTOCOL_DESCRIPTOR_FORMAT",
-  "CollaborationKernelV2",
-  "TransientSessionUndoCoordinatorV2",
-  "applyUpdateV1V2",
-  "assertBoundedNfcStringV2",
-  "assertDenseArrayV2",
-  "assertDocumentOwnerRuntimeV2",
-  "assertExactPruningCoverageV2",
-  "assertExactKeysV2",
-  "assertNfcScalarStringV2",
-  "assertOwnerExternalFactPortV2",
-  "assertRemoteImmutableIngressObjectReceiptV2",
-  "assertRemoteTransferAttemptBindingV2",
-  "compareBytesV2",
-  "compareDecodedBase64urlV2",
-  "comparePortableStampsV2",
-  "compareUtf8V2",
-  "createRemoteIngressCapabilityFactoryV2",
-  "createSelectedDocumentOwnerArtifactFactoryV2",
-  "createWebCryptoEd25519VerifierV2",
-  "createYjsDocumentV2",
-  "causalFrontierDigestV2",
-  "causalHeadRefFromDecodedFrameV2",
-  "canonicalStateDigestV2",
-  "checkpointContentCertificateCoreDigestV2",
-  "checkpointContentCertificateObjectDigestV2",
-  "decodeCausalEditFrameV2",
-  "decodeBase64urlV2",
-  "decodeCheckpointValidationCarrierV2",
-  "decodeRestrictedJcsV2",
-  "documentScopeDigestV2",
-  "encodeBase64urlV2",
-  "encodeFullUpdateV2",
-  "encodeCheckpointValidationCarrierV2",
-  "encodeRestrictedJcsTextV2",
-  "encodeRestrictedJcsV2",
-  "encodeStateVectorV2",
-  "frameObjectRefFromDecodedFrameV2",
-  "incrementUint64V2",
-  "incomingFrameClosureV2",
-  "inspectAcceptedFrameObjectV2",
+  "CollaborationKernel",
+  "TransientSessionUndoCoordinator",
+  "applyYjsUpdate",
+  "assertBoundedNfcString",
+  "assertDenseArray",
+  "assertDocumentOwnerRuntime",
+  "assertExactPruningCoverage",
+  "assertExactKeys",
+  "assertNfcScalarString",
+  "assertOwnerExternalFactPort",
+  "assertRemoteImmutableIngressObjectReceipt",
+  "assertRemoteTransferAttemptBinding",
+  "compareBytes",
+  "compareDecodedBase64url",
+  "comparePortableStamps",
+  "compareUtf8",
+  "createRemoteIngressCapabilityFactory",
+  "createSelectedDocumentOwnerArtifactFactory",
+  "createWebCryptoEd25519Verifier",
+  "createYjsDocument",
+  "causalFrontierDigest",
+  "causalHeadRefFromDecodedFrame",
+  "canonicalStateDigest",
+  "checkpointContentCertificateCoreDigest",
+  "checkpointContentCertificateObjectDigest",
+  "decodeCausalEditFrame",
+  "decodeBase64url",
+  "decodeCheckpointValidationCarrier",
+  "decodeRestrictedJcs",
+  "documentScopeDigest",
+  "encodeBase64url",
+  "encodeFullUpdate",
+  "encodeCheckpointValidationCarrier",
+  "encodeRestrictedJcsText",
+  "encodeRestrictedJcs",
+  "encodeStateVector",
+  "frameObjectRefFromDecodedFrame",
+  "incrementUint64",
+  "incomingFrameClosure",
+  "inspectAcceptedFrameObject",
   "isPlainDataObject",
-  "ordinarySha256V2",
-  "rawDomainDigestV2",
-  "ownerCanonicalizerDescriptorDigestV2",
-  "materializeAcceptedFrameV2",
-  "maxCausalFrontierV2",
-  "parseActorIdV2",
-  "parseCanvasIdV2",
-  "parseCheckpointContentCertificateCoreV2",
-  "parseCheckpointContentCertificateV2",
-  "parseCheckpointValidationCarrierIndexBytesV2",
-  "parseCheckpointValidationCarrierIndexV2",
-  "parseCheckpointValidationCarrierPreambleV2",
-  "parseDigestV2",
-  "parseDocumentScopeV2",
-  "parseId128V2",
-  "parseMemberIdV2",
-  "parsePeerIdV2",
-  "parsePortableStampV2",
-  "parsePrunableCheckpointSetCertificateCoreV2",
-  "parsePrunableCheckpointSetCertificateV2",
-  "parseProjectIdV2",
-  "parsePublicKeyV2",
-  "parseReplicaIdV2",
-  "parseReplicaCausalFloorAckCoreV2",
-  "parseReplicaCausalFloorAckV2",
-  "parseReplicaCheckpointCoreV2",
-  "parseReplicaCheckpointV2",
-  "parseSessionIdV2",
-  "parseSignatureV2",
-  "parseUint32V2",
-  "parseUint64V2",
-  "parseValidationArtifactSetV2",
-  "parseStableCheckpointSetCoreV2",
-  "prunableCheckpointSetCertificateCoreDigestV2",
-  "prunableCheckpointSetCertificateObjectDigestV2",
-  "replicaCausalFloorAckCoreDigestV2",
-  "replicaCausalFloorAckObjectDigestV2",
-  "replicaCheckpointCoreDigestV2",
-  "replicaCheckpointObjectDigestV2",
-  "replicaIdToYjsClientIdV2",
-  "replicaActorHeadSetDigestV2",
+  "ordinarySha256",
+  "rawDomainDigest",
+  "ownerCanonicalizerDescriptorDigest",
+  "materializeAcceptedFrame",
+  "maxCausalFrontier",
+  "parseActorId",
+  "parseCanvasId",
+  "parseCheckpointContentCertificateCore",
+  "parseCheckpointContentCertificate",
+  "parseCheckpointValidationCarrierIndexBytes",
+  "parseCheckpointValidationCarrierIndex",
+  "parseCheckpointValidationCarrierPreamble",
+  "parseDigest",
+  "parseDocumentScope",
+  "parseId128",
+  "parseMemberId",
+  "parsePeerId",
+  "parsePortableStamp",
+  "parsePrunableCheckpointSetCertificateCore",
+  "parsePrunableCheckpointSetCertificate",
+  "parseProjectId",
+  "parsePublicKey",
+  "parseReplicaId",
+  "parseReplicaCausalFloorAckCore",
+  "parseReplicaCausalFloorAck",
+  "parseReplicaCheckpointCore",
+  "parseReplicaCheckpoint",
+  "parseSessionId",
+  "parseSignature",
+  "parseUint32",
+  "parseUint64",
+  "parseValidationArtifactSet",
+  "parseStableCheckpointSetCore",
+  "prunableCheckpointSetCertificateCoreDigest",
+  "prunableCheckpointSetCertificateObjectDigest",
+  "replicaCausalFloorAckCoreDigest",
+  "replicaCausalFloorAckObjectDigest",
+  "replicaCheckpointCoreDigest",
+  "replicaCheckpointObjectDigest",
+  "replicaIdToYjsClientId",
+  "replicaActorHeadSetDigest",
   "currentProtocolDescriptor",
   "encodeCurrentProtocolDescriptor",
   "installCurrentProtocolAuthority",
   "parseCurrentProtocolDescriptor",
-  "selectedSuccessorValidationArtifactSetV3",
-  "stableCheckpointSetCoreDigestV2",
-  "stateVectorDigestV2",
-  "structuredDigestV2",
-  "typedIntentDigestV3",
-  "uint32ToNumberV2",
-  "uint64ToBigIntV2",
-  "yjsUpdateDigestV2",
-  "CollaborationKernelV3",
-  "InMemoryProjectSharingHandoffSubmissionV3",
-  "SUCCESSOR_AUTHORITY_DOMAINS_V3",
-  "SUCCESSOR_CAUSAL_EDIT_MAGIC_V3",
-  "SUCCESSOR_PROMOTION_DOMAINS_V3",
-  "assertLocalOwnerAuthorityClosureV3",
-  "causalHeadRefFromDecodedFrameV3",
-  "causalSignerAuthorityDigestV3",
-  "createCandidateIncomingFrameAdmissionStrategyV3",
-  "createSelectedIncomingAuthorityVerificationPortV3",
-  "decodeCausalEditFrameV3",
-  "decodeSelectedCausalEditFrame",
-  "frameObjectRefFromDecodedFrameV3",
-  "incomingFrameClosureV3",
-  "inspectAcceptedFrameObjectV3",
-  "localOwnerEditAuthorizationCoreDigestV3",
-  "localOwnerEditAuthorizationSignatureDigestV3",
-  "localProjectOwnerBindingCoreDigestV3",
-  "localProjectOwnerBindingSignatureDigestV3",
-  "localProjectOwnerKeyIdV3",
-  "materializeAcceptedFrameV3",
-  "parseCausalAuthorityDependenciesV3",
-  "parseCausalSignerAuthorityV3",
-  "parseLocalOwnerActorSequenceAllocationPolicyV3",
-  "parseLocalOwnerEditAuthorizationCoreV3",
-  "parseLocalOwnerEditAuthorizationV3",
-  "parseLocalOwnerGenesisAuthorizationPolicyV3",
-  "parseLocalProjectOwnerBindingCoreV3",
-  "parseLocalProjectOwnerBindingV3",
-  "parseProjectSharingHandoffCoreV3",
-  "parseProjectSharingHandoffProposalV3",
-  "parseProjectSharingHandoffReceiptV3",
-  "parseProtocolPromotionBridgeCoreV3",
-  "parseProtocolPromotionBridgeV3",
-  "parseProtocolPromotionSourceV3",
-  "projectSharingHandoffCoreDigestV3",
-  "projectSharingHandoffSignatureDigestV3",
-  "protocolPromotionBridgeCoreDigestV3",
-  "protocolPromotionBridgeSignatureDigestV3",
-  "verifyLocalOwnerAuthorityV3",
-  "verifyExactEd25519V2",
-  "verifyProjectSharingHandoffProposalV3",
-  "verifyProjectSharingHandoffReceiptV3",
-  "verifyProtocolPromotionBridgeV3",
+  "stableCheckpointSetCoreDigest",
+  "stateVectorDigest",
+  "structuredDigest",
+  "uint32ToNumber",
+  "uint64ToBigInt",
+  "yjsUpdateDigest",
+  "verifyExactEd25519",
 ].sort())
 
 try {
@@ -214,33 +169,33 @@ import {
   parseCurrentProtocolDescriptor,
 } from "@convax/collaboration"
 import {
-  canonicalStateDigestV2,
-  checkpointContentCertificateObjectDigestV2,
-  decodeCheckpointValidationCarrierV2,
-  createYjsDocumentV2,
-  CollaborationKernelV2,
-  createRemoteIngressCapabilityFactoryV2,
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseReplicaCheckpointV2,
-  parseCheckpointValidationCarrierPreambleV2,
-  rawDomainDigestV2,
-  materializeAcceptedFrameV2,
-  structuredDigestV2,
-  stateVectorDigestV2,
-  yjsUpdateDigestV2,
+  canonicalStateDigest,
+  checkpointContentCertificateObjectDigest,
+  decodeCheckpointValidationCarrier,
+  createYjsDocument,
+  CollaborationKernel,
+  createRemoteIngressCapabilityFactory,
+  createSelectedDocumentOwnerArtifactFactory,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseReplicaCheckpoint,
+  parseCheckpointValidationCarrierPreamble,
+  rawDomainDigest,
+  materializeAcceptedFrame,
+  structuredDigest,
+  stateVectorDigest,
+  yjsUpdateDigest,
 } from "@convax/collaboration"
 import type {
-  CollaborationPersistencePortV2,
+  CollaborationPersistencePort,
   CurrentProtocolArtifactDescriptor,
   CurrentProtocolDescriptor,
   CurrentProtocolTypeNamespaceDescriptor,
   CurrentProtocolYjsWireCodecDescriptor,
-  DocumentOwnerRuntimeV2,
-  RemoteIngressCapabilityFactoryV2,
-  CheckpointValidationCarrierIndexV2,
-  SelectedDocumentOwnerArtifactDefinitionV2,
+  DocumentOwnerRuntime,
+  RemoteIngressCapabilityFactory,
+  CheckpointValidationCarrierIndex,
+  SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
 declare const descriptor: CurrentProtocolDescriptor
 void descriptor
@@ -250,23 +205,23 @@ void currentProtocolDescriptor
 void encodeCurrentProtocolDescriptor
 void installCurrentProtocolAuthority
 void parseCurrentProtocolDescriptor
-void CollaborationKernelV2
-void canonicalStateDigestV2
-void checkpointContentCertificateObjectDigestV2
-void decodeCheckpointValidationCarrierV2
-void createYjsDocumentV2
-void createRemoteIngressCapabilityFactoryV2
-void createSelectedDocumentOwnerArtifactFactoryV2
-void encodeRestrictedJcsV2
-void parseDigestV2
-void parseReplicaCheckpointV2
-void parseCheckpointValidationCarrierPreambleV2
-void rawDomainDigestV2
-void materializeAcceptedFrameV2
-void structuredDigestV2
-void stateVectorDigestV2
-void yjsUpdateDigestV2
-void (undefined as CheckpointValidationCarrierIndexV2 | CollaborationPersistencePortV2 | DocumentOwnerRuntimeV2 | RemoteIngressCapabilityFactoryV2 | SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> | undefined)
+void CollaborationKernel
+void canonicalStateDigest
+void checkpointContentCertificateObjectDigest
+void decodeCheckpointValidationCarrier
+void createYjsDocument
+void createRemoteIngressCapabilityFactory
+void createSelectedDocumentOwnerArtifactFactory
+void encodeRestrictedJcs
+void parseDigest
+void parseReplicaCheckpoint
+void parseCheckpointValidationCarrierPreamble
+void rawDomainDigest
+void materializeAcceptedFrame
+void structuredDigest
+void stateVectorDigest
+void yjsUpdateDigest
+void (undefined as CheckpointValidationCarrierIndex | CollaborationPersistencePort | DocumentOwnerRuntime | RemoteIngressCapabilityFactory | SelectedDocumentOwnerArtifactDefinition<"canvas"> | undefined)
 void (undefined as CurrentProtocolArtifactDescriptor | CurrentProtocolTypeNamespaceDescriptor | CurrentProtocolYjsWireCodecDescriptor | undefined)
 `)
   await Bun.write(join(consumer, "tsconfig.json"), JSON.stringify({
@@ -277,11 +232,11 @@ void (undefined as CurrentProtocolArtifactDescriptor | CurrentProtocolTypeNamesp
   requireSuccess(typecheck, "external consumer positive typecheck")
 
   await Bun.write(join(consumer, "negative.ts"), `
-import { signCausalEditCoreV2, verifyFrozenProtocolAuthorityV2 } from "@convax/collaboration"
-import type { CollaborationFailureCodeV2, ProtocolAuthorityErrorV2 } from "@convax/collaboration"
-void signCausalEditCoreV2
-void verifyFrozenProtocolAuthorityV2
-void (undefined as CollaborationFailureCodeV2 | ProtocolAuthorityErrorV2 | undefined)
+import { signCausalEditCore, verifyFrozenProtocolAuthority } from "@convax/collaboration"
+import type { CollaborationFailureCode, ProtocolAuthorityError } from "@convax/collaboration"
+void signCausalEditCore
+void verifyFrozenProtocolAuthority
+void (undefined as CollaborationFailureCode | ProtocolAuthorityError | undefined)
 `)
   await Bun.write(join(consumer, "tsconfig-negative.json"), JSON.stringify({
     compilerOptions: { lib: ["ES2022", "DOM"], module: "ESNext", moduleResolution: "Bundler", noEmit: true, skipLibCheck: false, strict: true, target: "ES2022", types: [] },
@@ -290,7 +245,7 @@ void (undefined as CollaborationFailureCodeV2 | ProtocolAuthorityErrorV2 | undef
   const negative = Bun.spawnSync({ cmd: [join(packageRoot, "node_modules", ".bin", "tsc"), "-p", "tsconfig-negative.json"], cwd: consumer, env: isolatedEnvironment, stdout: "pipe", stderr: "pipe" })
   if (negative.exitCode === 0) throw new Error("Legacy sign, verify, and error imports unexpectedly compiled")
   const negativeOutput = `${negative.stdout.toString()}\n${negative.stderr.toString()}`
-  for (const forbidden of ["signCausalEditCoreV2", "verifyFrozenProtocolAuthorityV2", "CollaborationFailureCodeV2", "ProtocolAuthorityErrorV2"]) {
+  for (const forbidden of ["signCausalEditCore", "verifyFrozenProtocolAuthority", "CollaborationFailureCode", "ProtocolAuthorityError"]) {
     if (!negativeOutput.includes(forbidden)) throw new Error(`Negative typecheck did not reject ${forbidden}`)
   }
 
@@ -319,12 +274,12 @@ function assertExactRootDeclaration(text: string): void {
   }
   if (JSON.stringify(runtimeNames.sort()) !== JSON.stringify(expectedRuntimeKeys)) throw new Error("Packed root runtime declarations are not the exact Task 3 closure")
   for (const required of [
-    "ActorIdV2", "DigestV2", "DocumentOwnerRuntimeV2", "DocumentScopeV2", "Id128V2", "MemberIdV2",
-    "PeerIdV2", "ProjectIdV2", "ReplicaIdV2", "SelectedDocumentOwnerArtifactDefinitionV2", "SignatureV2",
-    "CheckpointContentCertificateV2", "CollaborationPersistencePortV2", "RemoteIngressCapabilityFactoryV2",
-    "CheckpointCarrierSectionV2", "CheckpointValidationCarrierIndexV2", "CheckpointValidationCarrierPreambleV2",
-    "ReplicaCheckpointV2", "Uint64V2", "ValidationArtifactSetV2",
-    "YjsDocumentFactoryV2",
+    "ActorId", "Digest", "DocumentOwnerRuntime", "DocumentScope", "Id128", "MemberId",
+    "PeerId", "ProjectId", "ReplicaId", "SelectedDocumentOwnerArtifactDefinition", "Signature",
+    "CheckpointContentCertificate", "CollaborationPersistencePort", "RemoteIngressCapabilityFactory",
+    "CheckpointCarrierSection", "CheckpointValidationCarrierIndex", "CheckpointValidationCarrierPreamble",
+    "ReplicaCheckpoint", "Uint64", "ValidationArtifactSet",
+    "YjsDocumentFactory",
   ]) if (!typeNames.has(required)) throw new Error(`Packed root declaration omits required type ${required}`)
   if (/\bexport\s*\*/u.test(text) || /\bdefault\b/u.test(text)) throw new Error("Packed root declaration contains wildcard or default exports")
 }

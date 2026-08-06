@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
+  encodeBase64url,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
 } from "@convax/collaboration"
 import {
   CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
@@ -43,17 +43,17 @@ import {
   type ControlRandomSource,
 } from "../src"
 
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(44)))
-const otherSignature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(45)))
-const publicKey = (byte: number) => parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(byte)))
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
-const digest = (digit: string) => parseDigestV2(digit.repeat(64))
-const protocolDigest = parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(44)))
+const otherSignature = parseSignature(encodeBase64url(new Uint8Array(64).fill(45)))
+const publicKey = (byte: number) => parsePublicKey(encodeBase64url(new Uint8Array(32).fill(byte)))
+const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
+const digest = (digit: string) => parseDigest(digit.repeat(64))
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
 
 const bootstrapInput = (
-  projectId: ReturnType<typeof parseProjectIdV2>,
-  ownerMemberId: ReturnType<typeof parseMemberIdV2>,
-  ownerMemberSigningPublicKey: ReturnType<typeof parsePublicKeyV2>,
+  projectId: ReturnType<typeof parseProjectId>,
+  ownerMemberId: ReturnType<typeof parseMemberId>,
+  ownerMemberSigningPublicKey: ReturnType<typeof parsePublicKey>,
   salt: number,
 ) => Object.freeze({
   projectId,
@@ -91,10 +91,10 @@ describe("team control vertical slice", () => {
   test("rejects a bootstrap epoch mismatch before the Project partition is written", async () => {
     const store = new InMemoryAtomicControlStateStore<CollaborationControlProjectStateV2>()
     const membership = new CollaborationMembershipServiceV2(store, new FakeClock(), new DeterministicRandom(), signatures, {
-      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+      registrySequence: parseUint64("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
-    const projectId = parseProjectIdV2("bootstrap-epoch-mismatch")
-    const ownerMemberId = parseMemberIdV2(id(19))
+    const projectId = parseProjectId("bootstrap-epoch-mismatch")
+    const ownerMemberId = parseMemberId(id(19))
     const exact = bootstrapInput(projectId, ownerMemberId, publicKey(19), 20)
     const factory = createProjectBootstrapAuthorizationFactoryV2({ verify: async () => true })
     const authorization = await factory.authorize({ ...exact, evidence: "verified-project-manifest" })
@@ -109,10 +109,10 @@ describe("team control vertical slice", () => {
   test("recovers byte-identical bootstrap artifacts after a lost response and rejects a conflicting retry", async () => {
     const store = new InMemoryAtomicControlStateStore<CollaborationControlProjectStateV2>()
     const membership = new CollaborationMembershipServiceV2(store, new FakeClock(), new DeterministicRandom(), signatures, {
-      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+      registrySequence: parseUint64("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
-    const projectId = parseProjectIdV2("bootstrap-response-loss")
-    const ownerMemberId = parseMemberIdV2(id(18))
+    const projectId = parseProjectId("bootstrap-response-loss")
+    const ownerMemberId = parseMemberId(id(18))
     const exact = bootstrapInput(projectId, ownerMemberId, publicKey(18), 24)
     const factory = createProjectBootstrapAuthorizationFactoryV2({ verify: async () => true })
     const authorize = async (input: typeof exact) => {
@@ -146,11 +146,11 @@ describe("team control vertical slice", () => {
     const store = new InMemoryAtomicControlStateStore<CollaborationControlProjectStateV2>()
     const clock = new FakeClock()
     const membership = new CollaborationMembershipServiceV2(store, clock, new DeterministicRandom(), signatures, {
-      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+      registrySequence: parseUint64("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
-    const projectId = parseProjectIdV2("invitation-project")
-    const ownerMemberId = parseMemberIdV2(id(20))
-    const targetMemberId = parseMemberIdV2(id(21))
+    const projectId = parseProjectId("invitation-project")
+    const ownerMemberId = parseMemberId(id(20))
+    const targetMemberId = parseMemberId(id(21))
     const bootstrapFactory = createProjectBootstrapAuthorizationFactoryV2({ verify: async () => true })
     const firstBootstrap = bootstrapInput(projectId, ownerMemberId, publicKey(20), 30)
     const auth = await bootstrapFactory.authorize({ ...firstBootstrap, evidence: "owner" })
@@ -163,7 +163,7 @@ describe("team control vertical slice", () => {
     await membership.revokeInvitation({ projectId, requesterCredentialDigest: bootstrap.ownerCredential.coreDigest, invitationToken: bootstrap.invitation.invitationToken }, revokeAuth)
     await expect(membership.commitMembershipMutation({ format: "convax.mutation-proof/2", core: prepared.proofCore, requestDigest: prepared.requestDigest, signatures: { purpose: "member-add", adminSignature: signature, targetMemberPossessionSignature: signature } })).rejects.toMatchObject({ code: "not-active" })
 
-    const secondProjectId = parseProjectIdV2("expired-invitation-project")
+    const secondProjectId = parseProjectId("expired-invitation-project")
     const secondBootstrap = bootstrapInput(secondProjectId, ownerMemberId, publicKey(20), 32)
     const secondAuth = await bootstrapFactory.authorize({ ...secondBootstrap, evidence: "owner" })
     if (secondAuth === "rejected") throw new Error("test bootstrap rejected")
@@ -181,11 +181,11 @@ describe("team control vertical slice", () => {
       verifyPublicKeyDigest: async (key) => { verifiedKeys.push(key); return true },
     }
     const membership = new CollaborationMembershipServiceV2(store, clock, new DeterministicRandom(), port, {
-      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+      registrySequence: parseUint64("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
-    const projectId = parseProjectIdV2("member-add-half-project")
-    const ownerMemberId = parseMemberIdV2(id(60))
-    const targetMemberId = parseMemberIdV2(id(61))
+    const projectId = parseProjectId("member-add-half-project")
+    const ownerMemberId = parseMemberId(id(60))
+    const targetMemberId = parseMemberId(id(61))
     const ownerKey = publicKey(20)
     const targetKey = publicKey(21)
     const bootstrapFactory = createProjectBootstrapAuthorizationFactoryV2({ verify: async () => true })
@@ -200,7 +200,7 @@ describe("team control vertical slice", () => {
     expect(pending?.team?.currentSnapshot.core.members).toHaveLength(1)
     expect(pending?.team?.memberAddSignatureHalves).toHaveLength(1)
     const restarted = new CollaborationMembershipServiceV2(store, clock, new DeterministicRandom(), port, {
-      registrySequence: parseUint64V2("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
+      registrySequence: parseUint64("0"), registryRootDigest: digest("1"), schemaDigest: digest("2"), validationArtifactSetDigest: digest("3"), uriProtocolDigest: digest("6"), trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
     const listFactory = createTeamInvitationAuthorizationFactoryV1({ verify: async () => true })
     const listAuthorization = await listFactory.authorize({ action: "list-member-add", projectId, requesterCredentialDigest: bootstrap.ownerCredential.coreDigest, invitationToken: null, evidence: "restarted-owner-session" })
@@ -229,7 +229,7 @@ describe("team control vertical slice", () => {
     const clock = new FakeClock()
     const random = new DeterministicRandom()
     const membership = new CollaborationMembershipServiceV2(store, clock, random, signatures, {
-      registrySequence: parseUint64V2("0"),
+      registrySequence: parseUint64("0"),
       registryRootDigest: digest("1"),
       schemaDigest: digest("2"),
       validationArtifactSetDigest: digest("3"),
@@ -237,9 +237,9 @@ describe("team control vertical slice", () => {
       trustBundleDigest: digest("4"),
     }, { verifyInstalledCurrentFloor: async () => true })
     const rendezvous = new CollaborationRendezvousServiceV2(store, clock, random, signatures)
-    const projectId = parseProjectIdV2("team-project")
-    const ownerMemberId = parseMemberIdV2(id(1))
-    const targetMemberId = parseMemberIdV2(id(2))
+    const projectId = parseProjectId("team-project")
+    const ownerMemberId = parseMemberId(id(1))
+    const targetMemberId = parseMemberId(id(2))
     const ownerKey = publicKey(1)
     const targetKey = publicKey(2)
     const replicaKey = publicKey(3)
@@ -291,7 +291,7 @@ describe("team control vertical slice", () => {
       expectedMembershipSequence: join.membershipSnapshot.core.membershipSequence,
       requesterMemberId: targetMemberId,
       targetMemberId,
-      expectedTargetMemberMutationCounter: parseUint64V2("1"),
+      expectedTargetMemberMutationCounter: parseUint64("1"),
       requesterCredentialDigest: join.targetMemberCredential.coreDigest,
       currentReplicaId: null,
       newReplicaSigningPublicKey: replicaKey,
@@ -304,7 +304,7 @@ describe("team control vertical slice", () => {
       coreDigest: replicaIdReservationRequestCoreDigestV2(reservationCore),
       memberSignature: signature,
     }
-    const staleReservationCore = { ...reservationCore, allocationRequestId: id(14), expectedMembershipSequence: parseUint64V2("1") }
+    const staleReservationCore = { ...reservationCore, allocationRequestId: id(14), expectedMembershipSequence: parseUint64("1") }
     await expect(membership.reserveReplicaId({ ...reservationRequest, core: staleReservationCore, coreDigest: replicaIdReservationRequestCoreDigestV2(staleReservationCore) })).rejects.toMatchObject({ code: "stale-counter" })
     const reservation = await membership.reserveReplicaId(reservationRequest)
     expect(parseReplicaIdReservationReceiptV2(reservation)).toEqual(reservation)
@@ -328,7 +328,7 @@ describe("team control vertical slice", () => {
       expectedMembershipSequence: enrollChallenge.core.expectedMembershipSequence,
       requesterMemberId: targetMemberId,
       targetMemberId,
-      targetMemberMutationCounter: parseUint64V2("2"),
+      targetMemberMutationCounter: parseUint64("2"),
       serverNonce: enrollChallenge.core.serverNonce,
       purpose: "replica-enroll" as const,
       currentReplicaId: null,
@@ -362,7 +362,7 @@ describe("team control vertical slice", () => {
       expectedMembershipSequence: activationChallenge.core.expectedMembershipSequence,
       requesterMemberId: targetMemberId,
       targetMemberId,
-      targetMemberMutationCounter: parseUint64V2("3"),
+      targetMemberMutationCounter: parseUint64("3"),
       serverNonce: activationChallenge.core.serverNonce,
       purpose: "replica-activate-editor" as const,
       currentReplicaId: reservation.core.assignedReplicaId,
@@ -396,10 +396,10 @@ describe("team control vertical slice", () => {
       leaseId: sessionChallenge.core.leaseId,
       peerId: sessionChallenge.core.peerId,
       sessionSigningPublicKey: publicKey(4),
-      requestedExpiresAtUnixMs: parseUint64V2("1600000"),
+      requestedExpiresAtUnixMs: parseUint64("1600000"),
       protocolDigest,
     }
-    const sessionProof: SessionProofV2 = { format: "convax.session-proof/2", core: sessionCore, coreDigest: structuredDigestV2("convax.session-proof-core/2", sessionCore), replicaSignature: signature }
+    const sessionProof: SessionProofV2 = { format: "convax.session-proof/2", core: sessionCore, coreDigest: structuredDigest("convax.session-proof-core/2", sessionCore), replicaSignature: signature }
     const session = await rendezvous.issueSessionCredential(sessionProof)
     expect(session.core.editState).toBe("active-editor")
     expect(session.core.peerId).toBe(sessionChallenge.core.peerId)
@@ -520,6 +520,6 @@ describe("team control vertical slice", () => {
     expect(afterReset?.tickets).toEqual([])
     expect(afterReset?.metadata?.registryEntries).toEqual([])
     expect(afterReset?.metadata?.projectResetRolloverReceipts).toEqual([rollover.receipt])
-    expect(afterReset?.team?.projectResetCounter).toBe(parseUint64V2("1"))
+    expect(afterReset?.team?.projectResetCounter).toBe(parseUint64("1"))
   })
 })

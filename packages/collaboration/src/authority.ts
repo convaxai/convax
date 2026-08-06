@@ -1,41 +1,33 @@
-import { parseDigestV2, type DigestV2 } from "./codecs"
+import { parseDigest, type Digest } from "./codecs"
 import {
-  KERNEL_DIGEST_DOMAINS_V2,
-  PINNED_AUTHORITY_IDENTITIES_V2,
-  PROTOCOL_SCHEMA_ARTIFACTS_V2,
-  PROTOCOL_TYPE_NAMESPACES_V2,
+  KERNEL_DIGEST_DOMAINS,
+  CURRENT_PROTOCOL_IDENTITIES,
+  PROTOCOL_SCHEMA_ARTIFACTS,
+  PROTOCOL_TYPE_NAMESPACES,
 } from "./constants"
-import type { ProtocolSchemaBundleCoreV2, ProtocolSchemaBundleV2 } from "./contracts"
-import { structuredDigestV2 } from "./digest"
-import { ProtocolAuthorityErrorV2 } from "./errors"
-import { assertDenseArrayV2, assertExactKeysV2, encodeRestrictedJcsV2, isPlainDataObject, sameBytes } from "./jcs"
+import type { ProtocolSchemaBundleCore, ProtocolSchemaBundle } from "./contracts"
+import { structuredDigest } from "./digest"
+import { ProtocolAuthorityError } from "./errors"
+import { assertDenseArray, assertExactKeys, encodeRestrictedJcs, isPlainDataObject, sameBytes } from "./jcs"
 
 const validAuthorities = new WeakSet<object>()
 
 /**
- * Process-local proof that the implementation selected by the exact R5 release is
- * installed. The shape is intentionally insufficient: every consumer also checks
- * the module-private live registry, so a structural clone has no authority.
+ * Process-local proof that the current protocol implementation is installed. The
+ * shape is intentionally insufficient: every consumer also checks the
+ * module-private live registry, so a structural clone has no authority.
  */
-export interface VerifiedProtocolAuthorityV2 {
-  readonly format: "convax.protocol-authority-verification/2"
-  readonly authorityId: "collaboration-v10"
-  readonly revision: "r5"
-  readonly sequence: "1"
-  readonly protocolDigest: DigestV2
-  readonly artifactDigests: readonly DigestV2[]
-  readonly protocolSchemaBundle: ProtocolSchemaBundleV2
+export interface CurrentProtocolAuthority {
+  readonly protocolDigest: Digest
+  readonly artifactDigests: readonly Digest[]
+  readonly protocolSchemaBundle: ProtocolSchemaBundle
 }
 
-/** Called only by the exact release selector after its copy-owning snapshot check. */
-export function installVerifiedProtocolAuthorityV2(bundleValue: unknown): VerifiedProtocolAuthorityV2 {
+/** Called only by the current protocol descriptor after it verifies its own bytes. */
+export function installProtocolAuthority(bundleValue: unknown): CurrentProtocolAuthority {
   try {
     const protocolSchemaBundle = parseVerifiedBundle(bundleValue)
     const authority = Object.freeze({
-      format: "convax.protocol-authority-verification/2" as const,
-      authorityId: "collaboration-v10" as const,
-      revision: "r5" as const,
-      sequence: "1" as const,
       protocolDigest: protocolSchemaBundle.protocolDigest,
       artifactDigests: Object.freeze(protocolSchemaBundle.core.artifacts.map((artifact) => artifact.artifactDigest)),
       protocolSchemaBundle,
@@ -43,25 +35,25 @@ export function installVerifiedProtocolAuthorityV2(bundleValue: unknown): Verifi
     validAuthorities.add(authority)
     return authority
   } catch (error) {
-    if (error instanceof ProtocolAuthorityErrorV2) throw error
-    unavailable("The selected collaboration implementation cannot be installed", { cause: error })
+    if (error instanceof ProtocolAuthorityError) throw error
+    unavailable("The current collaboration protocol implementation cannot be installed", { cause: error })
   }
 }
 
-export function assertVerifiedProtocolAuthorityV2(value: unknown): asserts value is VerifiedProtocolAuthorityV2 {
+export function assertCurrentProtocolAuthority(value: unknown): asserts value is CurrentProtocolAuthority {
   if (typeof value !== "object" || value === null || !validAuthorities.has(value)) {
-    unavailable("A live selection of the exact R5 collaboration authority is required")
+    unavailable("A live installation of the current collaboration protocol authority is required")
   }
 }
 
-function parseVerifiedBundle(value: unknown): ProtocolSchemaBundleV2 {
-  assertExactKeysV2(value, ["core", "coreDigest", "format", "protocolDigest"], "ProtocolSchemaBundleV2")
-  if (value.format !== "convax.protocol-schema-bundle/2") unavailable("ProtocolSchemaBundleV2 format is invalid")
+function parseVerifiedBundle(value: unknown): ProtocolSchemaBundle {
+  assertExactKeys(value, ["core", "coreDigest", "format", "protocolDigest"], "ProtocolSchemaBundle")
+  if (value.format !== "convax.protocol-schema-bundle/2") unavailable("ProtocolSchemaBundle format is invalid")
   const core = parseVerifiedBundleCore(value.core)
-  const coreDigest = structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.protocolSchemaBundleCore, core)
-  requireEqual(coreDigest, PINNED_AUTHORITY_IDENTITIES_V2.protocolDigest, "ProtocolSchemaBundleV2 core digest")
-  requireEqual(value.coreDigest, coreDigest, "ProtocolSchemaBundleV2 coreDigest")
-  requireEqual(value.protocolDigest, coreDigest, "ProtocolSchemaBundleV2 protocolDigest")
+  const coreDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.protocolSchemaBundleCore, core)
+  requireEqual(coreDigest, CURRENT_PROTOCOL_IDENTITIES.protocolDigest, "ProtocolSchemaBundle core digest")
+  requireEqual(value.coreDigest, coreDigest, "ProtocolSchemaBundle coreDigest")
+  requireEqual(value.protocolDigest, coreDigest, "ProtocolSchemaBundle protocolDigest")
   return Object.freeze({
     core,
     coreDigest,
@@ -70,8 +62,8 @@ function parseVerifiedBundle(value: unknown): ProtocolSchemaBundleV2 {
   })
 }
 
-function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCoreV2 {
-  assertExactKeysV2(
+function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
+  assertExactKeys(
     value,
     [
       "artifacts",
@@ -84,21 +76,21 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCoreV2 {
       "uriProtocolDigest",
       "yjsWireCodec",
     ],
-    "ProtocolSchemaBundleCoreV2",
+    "ProtocolSchemaBundleCore",
   )
   if (value.format !== "convax.protocol-schema-bundle-core/2" || value.protocolMajor !== "2") {
-    unavailable("ProtocolSchemaBundleV2 core discriminators are invalid")
+    unavailable("ProtocolSchemaBundle core discriminators are invalid")
   }
-  if (!sameBytes(encodeRestrictedJcsV2(value.artifacts), encodeRestrictedJcsV2(PROTOCOL_SCHEMA_ARTIFACTS_V2))) {
-    unavailable("ProtocolSchemaBundleV2 artifact tuple differs from R5")
+  if (!sameBytes(encodeRestrictedJcs(value.artifacts), encodeRestrictedJcs(PROTOCOL_SCHEMA_ARTIFACTS))) {
+    unavailable("ProtocolSchemaBundle artifact tuple differs from the current protocol")
   }
-  if (!sameBytes(encodeRestrictedJcsV2(value.typeNamespaces), encodeRestrictedJcsV2(PROTOCOL_TYPE_NAMESPACES_V2))) {
-    unavailable("ProtocolSchemaBundleV2 namespace tuple differs from R5")
+  if (!sameBytes(encodeRestrictedJcs(value.typeNamespaces), encodeRestrictedJcs(PROTOCOL_TYPE_NAMESPACES))) {
+    unavailable("ProtocolSchemaBundle namespace tuple differs from the current protocol")
   }
-  assertDenseArrayV2(value.domainRegistry, "ProtocolSchemaBundleV2 domainRegistry")
+  assertDenseArray(value.domainRegistry, "ProtocolSchemaBundle domainRegistry")
   const domainRegistry = value.domainRegistry.map((domain) => {
     if (typeof domain !== "string" || !domain.endsWith("/2")) {
-      unavailable("ProtocolSchemaBundleV2 has an invalid digest domain")
+      unavailable("ProtocolSchemaBundle has an invalid digest domain")
     }
     return domain
   })
@@ -106,9 +98,9 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCoreV2 {
     domainRegistry.length !== 127 ||
     domainRegistry.some((domain, index) => index > 0 && domainRegistry[index - 1]! >= domain)
   ) {
-    unavailable("ProtocolSchemaBundleV2 domain registry is not the exact sorted R5 set")
+    unavailable("ProtocolSchemaBundle domain registry is not the exact sorted current domain set")
   }
-  if (!isPlainDataObject(value.yjsWireCodec)) unavailable("ProtocolSchemaBundleV2 Yjs codec is invalid")
+  if (!isPlainDataObject(value.yjsWireCodec)) unavailable("ProtocolSchemaBundle Yjs codec is invalid")
   const yjsWireCodec = Object.freeze({
     applyCodec: requireLiteral(value.yjsWireCodec.applyCodec, "Y.applyUpdate", "Yjs apply codec"),
     format: requireLiteral(value.yjsWireCodec.format, "convax.yjs-wire-codec/2", "Yjs codec format"),
@@ -125,28 +117,28 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCoreV2 {
   })
   return Object.freeze({
     artifacts: Object.freeze([
-      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS_V2[0], artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[0].artifactDigest) }),
-      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS_V2[1], artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[1].artifactDigest) }),
-      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS_V2[2], artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[2].artifactDigest) }),
-      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS_V2[3], artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[3].artifactDigest) }),
+      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS[0], artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest) }),
+      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS[1], artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[1].artifactDigest) }),
+      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS[2], artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[2].artifactDigest) }),
+      Object.freeze({ ...PROTOCOL_SCHEMA_ARTIFACTS[3], artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[3].artifactDigest) }),
     ] as const),
     channelContractDigest: requirePinnedDigest(
       value.channelContractDigest,
-      PINNED_AUTHORITY_IDENTITIES_V2.channelContractDigest,
+      CURRENT_PROTOCOL_IDENTITIES.channelContractDigest,
       "channel contract digest",
     ),
     domainRegistry: Object.freeze(domainRegistry),
     format: value.format,
     limitsDigest: requirePinnedDigest(
       value.limitsDigest,
-      PINNED_AUTHORITY_IDENTITIES_V2.limitsDigest,
+      CURRENT_PROTOCOL_IDENTITIES.limitsDigest,
       "limits digest",
     ),
     protocolMajor: value.protocolMajor,
-    typeNamespaces: PROTOCOL_TYPE_NAMESPACES_V2,
+    typeNamespaces: PROTOCOL_TYPE_NAMESPACES,
     uriProtocolDigest: requirePinnedDigest(
       value.uriProtocolDigest,
-      PINNED_AUTHORITY_IDENTITIES_V2.uriProtocolDigest,
+      CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest,
       "URI protocol digest",
     ),
     yjsWireCodec,
@@ -154,20 +146,20 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCoreV2 {
 }
 
 function requireLiteral<T extends string>(value: unknown, expected: T, label: string): T {
-  if (value !== expected) unavailable(`${label} differs from R5`)
+  if (value !== expected) unavailable(`${label} differs from the current protocol`)
   return expected
 }
 
-function requirePinnedDigest(value: unknown, expected: string, label: string): DigestV2 {
+function requirePinnedDigest(value: unknown, expected: string, label: string): Digest {
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/u.test(value)) unavailable(`${label} is not a digest`)
   requireEqual(value, expected, label)
-  return value as DigestV2
+  return value as Digest
 }
 
 function requireEqual(actual: unknown, expected: string, label: string): void {
-  if (actual !== expected) unavailable(`${label} differs from R5`)
+  if (actual !== expected) unavailable(`${label} differs from the current protocol`)
 }
 
 function unavailable(message: string, options?: ErrorOptions): never {
-  throw new ProtocolAuthorityErrorV2("protocol-schema-bundle-unavailable", message, options)
+  throw new ProtocolAuthorityError("protocol-schema-bundle-unavailable", message, options)
 }

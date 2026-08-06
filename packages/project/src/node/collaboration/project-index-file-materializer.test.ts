@@ -3,7 +3,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
-import type { DigestV2, ProjectIdV2 } from "@convax/collaboration"
+import type { Digest, ProjectId } from "@convax/collaboration"
 import type {
   ProjectIndexFileMaterializationPlanV2,
   ProjectIndexFileMaterializationProjectionPortV2,
@@ -11,7 +11,7 @@ import type {
 import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
 import { ProjectIndexFileMaterializerV2 } from "./project-index-file-materializer"
 
-const projectId = `project_${"1".repeat(32)}` as ProjectIdV2
+const projectId = `project_${"1".repeat(32)}` as ProjectId
 const projectEpoch = "2".repeat(32) as ProjectResourceReferenceV2["projectEpoch"]
 const encoder = new TextEncoder()
 let temporaryRoot: string
@@ -84,7 +84,7 @@ describe.skipIf(process.platform === "win32")("ProjectIndexFileMaterializerV2 re
 
   test("waits for a missing blob and succeeds after durable publication", async () => {
     const bytes = encoder.encode("later\n")
-    const available = new Map<DigestV2, Uint8Array>()
+    const available = new Map<Digest, Uint8Array>()
     const state = projection(plan([file("later.md", bytes, 1)]))
     const materializer = await ProjectIndexFileMaterializerV2.open({ projectId, projectRoot, projection: state.port, blobs: blobPort(available) })
     expect((await materializer.reconcile()).pendingPaths).toEqual([{ path: "later.md", code: "blob-unavailable" }])
@@ -128,11 +128,11 @@ function reference(bytes: Uint8Array, id: number): ProjectResourceReferenceV2 {
     versionId: `pv_${"4".repeat(64)}`,
     canonicalUri: "convax-project://placeholder",
     blob: { format: "convax.blob-ref/2", algorithm: "sha256", digest: blobDigest, byteLength: String(bytes.byteLength) as never, mime: "text/markdown" },
-    versionRecordDigest: "5".repeat(64) as DigestV2,
+    versionRecordDigest: "5".repeat(64) as Digest,
   }
 }
 
-function blobPort(available: Map<DigestV2, Uint8Array>) {
+function blobPort(available: Map<Digest, Uint8Array>) {
   return {
     async copyVerifiedBytesTo(reference: ProjectResourceReferenceV2, stagingPath: string) {
       const bytes = available.get(reference.blob.digest)
@@ -142,7 +142,7 @@ function blobPort(available: Map<DigestV2, Uint8Array>) {
   }
 }
 
-function digest(bytes: Uint8Array): DigestV2 { return createHash("sha256").update(bytes).digest("hex") as DigestV2 }
+function digest(bytes: Uint8Array): Digest { return createHash("sha256").update(bytes).digest("hex") as Digest }
 function fileId(id: number) { return `pf_${id.toString(16).padStart(64, "0")}` as const }
 function directoryId(id: number) { return `pd_${id.toString(16).padStart(64, "0")}` as const }
 async function exists(target: string) { return fs.lstat(target).then(() => true, () => false) }

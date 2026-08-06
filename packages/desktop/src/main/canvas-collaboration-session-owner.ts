@@ -25,20 +25,17 @@ import {
 } from "@convax/canvas/application"
 import type { CanvasDocument } from "@convax/canvas"
 import {
-  TransientSessionUndoCoordinatorV2,
-  parseId128V2,
-  type Id128V2,
-  type DocumentScopeV2,
-  type OwnerExternalFactPortV2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerIntentDependenciesV2,
-  type OwnerValidatedStateV2,
+  TransientSessionUndoCoordinator,
+  parseId128,
+  type Id128,
+  type DocumentScope,
+  type OwnerExternalFactPort,
+  type OwnerIntentConstructionContext,
+  type OwnerIntentDependencies,
+  type OwnerValidatedState,
 } from "@convax/collaboration"
 
-import type {
-  MainCollaborationDocumentSessionV2,
-  MainCollaborationDocumentSessionV3,
-} from "./collaboration-document-session"
+import type { MainCollaborationDocumentSessionV2 } from "./collaboration-document-session"
 import type {
   CanvasRendererSessionMutationResultV2,
   CanvasSessionInvalidationDtoV2,
@@ -69,24 +66,24 @@ export interface CanvasApplicationCommandAdapterV2 {
   construct(input: {
     readonly request: CanvasApplicationCommandRequest
     readonly snapshot: CanvasSnapshotV2
-    readonly context: OwnerIntentConstructionContextV2
+    readonly context: OwnerIntentConstructionContext
   }): Readonly<{ caller: CanvasIntentCallerV2; command: CanvasAuthoritativeCommandV2 }> | "rejected"
 }
 
 export type CanvasFactResolutionV2 =
-  | Readonly<{ status: "resolved"; port: OwnerExternalFactPortV2<"canvas"> }>
+  | Readonly<{ status: "resolved"; port: OwnerExternalFactPort<"canvas"> }>
   | Readonly<{ status: "pending" | "stale" | "rejected" }>
 
 export interface CreateCanvasCollaborationSessionOwnerOptionsV2 {
-  readonly createSessionId: () => Id128V2
-  readonly createCursorToken: () => Id128V2
+  readonly createSessionId: () => Id128
+  readonly createCursorToken: () => Id128
   readonly openDocumentSession: (
     ref: CanvasDocumentRef,
-  ) => Promise<MainCanvasCollaborationDocumentSessionV2OrV3>
+  ) => Promise<MainCanvasCollaborationDocumentSessionV2>
   readonly resolveFacts: (input: {
     readonly ref: CanvasDocumentRef
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
-    readonly dependencies: OwnerIntentDependenciesV2<"canvas">
+    readonly scope: DocumentScope & { readonly docKind: "canvas" }
+    readonly dependencies: OwnerIntentDependencies<"canvas">
     readonly signal?: AbortSignal
   }) => Promise<CanvasFactResolutionV2>
   readonly applicationCommands: CanvasApplicationCommandAdapterV2
@@ -94,11 +91,11 @@ export interface CreateCanvasCollaborationSessionOwnerOptionsV2 {
 
 export interface CanvasCollaborationSessionOwnerV2 extends CanvasCollaborationApplicationPort {
   open(input: { readonly ref: CanvasDocumentRef; readonly actor: CanvasCommandActor }): Promise<CanvasSessionProjectionDtoV2>
-  close(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128V2 }): void
-  queryRenderer(ref: CanvasDocumentRef, sessionId: Id128V2): Promise<CanvasSessionProjectionDtoV2>
+  close(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128 }): void
+  queryRenderer(ref: CanvasDocumentRef, sessionId: Id128): Promise<CanvasSessionProjectionDtoV2>
   submitRenderer(input: {
     readonly ref: CanvasDocumentRef
-    readonly sessionId: Id128V2
+    readonly sessionId: Id128
     readonly commandId: string
     readonly command: CanvasRendererCommandV2
     readonly signal?: AbortSignal
@@ -114,9 +111,9 @@ export interface CanvasCollaborationSessionOwnerV2 extends CanvasCollaborationAp
     readonly command: CanvasAuthoritativeCommandV2
     readonly signal?: AbortSignal
   }): Promise<CanvasAuthoritativeSubmitResultV2>
-  undo(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128V2; readonly commandId: string; readonly signal?: AbortSignal }): Promise<CanvasRendererSubmitResultV2 | null>
-  redo(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128V2; readonly commandId: string; readonly signal?: AbortSignal }): Promise<CanvasRendererSubmitResultV2 | null>
-  flush(ref: CanvasDocumentRef, sessionId?: Id128V2): Promise<void>
+  undo(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128; readonly commandId: string; readonly signal?: AbortSignal }): Promise<CanvasRendererSubmitResultV2 | null>
+  redo(input: { readonly ref: CanvasDocumentRef; readonly sessionId: Id128; readonly commandId: string; readonly signal?: AbortSignal }): Promise<CanvasRendererSubmitResultV2 | null>
+  flush(ref: CanvasDocumentRef, sessionId?: Id128): Promise<void>
   /** Main-only reset barrier. No new session for this Project may open until resumed. */
   quiesceProject(scopeId: string): Promise<void>
   /** Re-enables lazy opens after the Project reset/open transition has completed. */
@@ -125,22 +122,20 @@ export interface CanvasCollaborationSessionOwnerV2 extends CanvasCollaborationAp
   dispose(): void
 }
 
-export type MainCanvasCollaborationDocumentSessionV2OrV3 =
-  | MainCollaborationDocumentSessionV2<"canvas">
-  | MainCollaborationDocumentSessionV3<"canvas">
+export type MainCanvasCollaborationDocumentSessionV2 = MainCollaborationDocumentSessionV2<"canvas">
 
 interface CanvasDocumentEntryV2 {
   readonly ref: CanvasDocumentRef
-  readonly document: MainCanvasCollaborationDocumentSessionV2OrV3
-  readonly leases: Map<Id128V2, CanvasRendererLeaseV2>
+  readonly document: MainCanvasCollaborationDocumentSessionV2
+  readonly leases: Map<Id128, CanvasRendererLeaseV2>
   readonly unsubscribe: () => void
 }
 
 interface CanvasRendererLeaseV2 {
   readonly owner: CanvasDocumentEntryV2
-  readonly sessionId: Id128V2
+  readonly sessionId: Id128
   readonly actor: CanvasCommandActor
-  readonly undo: TransientSessionUndoCoordinatorV2
+  readonly undo: TransientSessionUndoCoordinator
   readonly abort: AbortController
 }
 
@@ -148,7 +143,7 @@ export function createCanvasCollaborationSessionOwnerV2(
   options: CreateCanvasCollaborationSessionOwnerOptionsV2,
 ): CanvasCollaborationSessionOwnerV2 {
   const documents = new Map<string, Promise<CanvasDocumentEntryV2>>()
-  const leases = new Map<Id128V2, CanvasRendererLeaseV2>()
+  const leases = new Map<Id128, CanvasRendererLeaseV2>()
   const leaseLanes = new WeakMap<CanvasRendererLeaseV2, Promise<void>>()
   const listeners = new Set<(event: CanvasSessionInvalidationDtoV2) => void>()
   const quiescedProjects = new Set<string>()
@@ -311,7 +306,7 @@ export function createCanvasCollaborationSessionOwnerV2(
 
   async function openDocumentEntry(ref: CanvasDocumentRef): Promise<CanvasDocumentEntryV2> {
     const document = await options.openDocumentSession(ref)
-    const entry = { ref, document, leases: new Map<Id128V2, CanvasRendererLeaseV2>() } as
+    const entry = { ref, document, leases: new Map<Id128, CanvasRendererLeaseV2>() } as
       Omit<CanvasDocumentEntryV2, "unsubscribe"> & { unsubscribe?: () => void }
     entry.unsubscribe = document.subscribe(() => publishDocument(entry as CanvasDocumentEntryV2))
     return Object.freeze({ ...entry, unsubscribe: entry.unsubscribe }) as CanvasDocumentEntryV2
@@ -322,7 +317,7 @@ export function createCanvasCollaborationSessionOwnerV2(
     lease: CanvasRendererLeaseV2 | undefined,
     caller: CanvasIntentCallerV2,
     command: CanvasAuthoritativeCommandV2,
-    operationId: Id128V2 | undefined,
+    operationId: Id128 | undefined,
     signal: AbortSignal | undefined,
   ): Promise<Readonly<{ operationReceipt: BoundedOperationReceiptV2; snapshot: CanvasSnapshotV2 }>> {
     const committed = await current.document.submit({
@@ -360,7 +355,7 @@ export function createCanvasCollaborationSessionOwnerV2(
   async function prepareCanvasCommand(
     current: CanvasDocumentEntryV2,
     snapshot: CanvasSnapshotV2,
-    context: OwnerIntentConstructionContextV2,
+    context: OwnerIntentConstructionContext,
     command: CanvasAuthoritativeCommandV2,
     signal?: AbortSignal,
   ) {
@@ -390,7 +385,7 @@ export function createCanvasCollaborationSessionOwnerV2(
         ? Object.freeze({ operationReceipt: existing.operationReceipt, projection: projectSnapshot(lease.owner, lease, existing.snapshot) })
         : null
     }
-    const cursorHolder: { value: ReturnType<TransientSessionUndoCoordinatorV2["peekUndo"]> } = { value: null }
+    const cursorHolder: { value: ReturnType<TransientSessionUndoCoordinator["peekUndo"]> } = { value: null }
     const committed = await lease.owner.document.submit({
       operationId,
       signal: leaseSignal(lease, signal),
@@ -428,14 +423,14 @@ export function createCanvasCollaborationSessionOwnerV2(
     return Object.freeze({ operationReceipt: result.operationReceipt, projection: projectSnapshot(lease.owner, lease, result.snapshot) })
   }
 
-  async function resultForCommit(current: CanvasDocumentEntryV2, operationId: Id128V2): Promise<Readonly<{ operationReceipt: BoundedOperationReceiptV2; snapshot: CanvasSnapshotV2 }>> {
+  async function resultForCommit(current: CanvasDocumentEntryV2, operationId: Id128): Promise<Readonly<{ operationReceipt: BoundedOperationReceiptV2; snapshot: CanvasSnapshotV2 }>> {
     const snapshot = await current.document.query(requireCanvasSnapshot)
     const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === operationId)
     if (!receipt) throw new Error("Durable Canvas operation receipt is absent from the authoritative projection")
     return Object.freeze({ operationReceipt: structuredClone(receipt), snapshot })
   }
 
-  async function resultForOperationIfPresent(current: CanvasDocumentEntryV2, operationId: Id128V2): Promise<Readonly<{ operationReceipt: BoundedOperationReceiptV2; snapshot: CanvasSnapshotV2 }> | null> {
+  async function resultForOperationIfPresent(current: CanvasDocumentEntryV2, operationId: Id128): Promise<Readonly<{ operationReceipt: BoundedOperationReceiptV2; snapshot: CanvasSnapshotV2 }> | null> {
     const snapshot = await current.document.query(requireCanvasSnapshot)
     const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === operationId)
     return receipt ? Object.freeze({ operationReceipt: structuredClone(receipt), snapshot }) : null
@@ -473,13 +468,13 @@ export function createCanvasCollaborationSessionOwnerV2(
   function createLease(current: CanvasDocumentEntryV2, actorInput: CanvasCommandActor): CanvasRendererLeaseV2 {
     const actor = normalizeActor(actorInput)
     for (let attempt = 0; attempt < 8; attempt += 1) {
-      const sessionId = parseId128V2(options.createSessionId())
+      const sessionId = parseId128(options.createSessionId())
       if (leases.has(sessionId)) continue
       const lease = Object.freeze({
         owner: current,
         sessionId,
         actor,
-        undo: new TransientSessionUndoCoordinatorV2({ createCursorToken: options.createCursorToken }),
+        undo: new TransientSessionUndoCoordinator({ createCursorToken: options.createCursorToken }),
         abort: new AbortController(),
       })
       current.leases.set(sessionId, lease)
@@ -490,10 +485,10 @@ export function createCanvasCollaborationSessionOwnerV2(
     throw new Error("Canvas renderer session identity allocation exhausted")
   }
 
-  function requireLease(refInput: CanvasDocumentRef, sessionIdInput: Id128V2): CanvasRendererLeaseV2 {
+  function requireLease(refInput: CanvasDocumentRef, sessionIdInput: Id128): CanvasRendererLeaseV2 {
     requireLive()
     const ref = normalizeRef(refInput)
-    const sessionId = parseId128V2(sessionIdInput)
+    const sessionId = parseId128(sessionIdInput)
     const lease = leases.get(sessionId)
     if (!lease || refKey(lease.owner.ref) !== refKey(ref)) throw new Error("Canvas renderer session is stale")
     return lease
@@ -523,7 +518,7 @@ export function createCanvasCollaborationSessionOwnerV2(
   }
 }
 
-function requireCanvasSnapshot(state: OwnerValidatedStateV2<"canvas">): CanvasSnapshotV2 {
+function requireCanvasSnapshot(state: OwnerValidatedState<"canvas">): CanvasSnapshotV2 {
   const snapshot = canvasSnapshotFromValidatedOwnerStateV2(state)
   if (!snapshot) throw new Error("Selected Canvas owner returned an invalid validated snapshot")
   return snapshot

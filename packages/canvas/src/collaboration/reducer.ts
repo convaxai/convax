@@ -1,12 +1,12 @@
 import {
-  compareUtf8V2,
-  comparePortableStampsV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseUint32V2,
-  uint32ToNumberV2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerIntentValidationContextV2,
+  compareUtf8,
+  comparePortableStamps,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseUint32,
+  uint32ToNumber,
+  type OwnerIntentConstructionContext,
+  type OwnerIntentValidationContext,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import type {
@@ -33,12 +33,12 @@ import type {
   CanvasTypedIntentUnionV2,
   CanvasUndoableIntentKindV2,
   CreationGroupRefV2,
-  DigestV2,
+  Digest,
   NodeDataEnvelopeV2,
   PluginRequirementV2,
   SemanticHistoryRootV2,
   SemanticHistoryTransitionV2,
-  Uint32V2,
+  Uint32,
 } from "./types"
 import {
   buildCanvasProjectionIndexV2,
@@ -81,7 +81,7 @@ interface PlannedWrite {
   readonly entityKind: CanvasActualWriteV2["entityKind"]
   readonly entityId: string
   readonly field: string
-  readonly value: (ordinal: Uint32V2) => unknown
+  readonly value: (ordinal: Uint32) => unknown
   readonly apply: (value: unknown) => void
 }
 
@@ -109,7 +109,7 @@ interface ProvisionalHistoryNodeV2 {
   readonly plugin: import("./types").PluginStateEnvelopeV2 | null
   readonly position: import("./types").CanvasPointV2
   readonly size: import("./types").CanvasSizeV2
-  readonly dataWriteOrdinal: Uint32V2
+  readonly dataWriteOrdinal: Uint32
   readonly createdBy: CanvasOperationIdV2
 }
 
@@ -119,7 +119,7 @@ interface ProvisionalHistoryNodeV2 {
  */
 export function materializeCanvasSemanticHistoryIntentV2(
   base: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   direction: "undo" | "redo",
   rootOperationId: CanvasOperationIdV2,
 ): CanvasTypedIntentUnionV2 | "rejected" {
@@ -185,7 +185,7 @@ export function materializeCanvasSemanticHistoryIntentV2(
         template,
         bindings,
       )
-      const operationIndex = parseUint32V2(String(index))
+      const operationIndex = parseUint32(String(index))
       const guardDigest = canvasDigestV2("convax.canvas-semantic-guard/2", {
         format: "convax.canvas-semantic-guard/2",
         rootOperationId,
@@ -231,7 +231,7 @@ export function materializeCanvasSemanticHistoryIntentV2(
 
 function reduceCanvasIntentInternalV2(
   candidate: Y.Doc,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   intent: CanvasTypedIntentUnionV2,
   externalFacts: CanvasExternalFactContextV2,
 ): CanvasReducerOutcomeV2 {
@@ -265,7 +265,7 @@ function reduceCanvasIntentInternalV2(
       invalidatedMetaFields,
     )
     if (fact !== "valid") return fact === "pending" ? "pending" : "rejected"
-    writes.sort((left, right) => compareUtf8V2(left.path, right.path))
+    writes.sort((left, right) => compareUtf8(left.path, right.path))
     strictSortedUnique(writes, (write) => write.path, "Canvas actual changed paths")
 
     let historyRoot: SemanticHistoryRootV2 | null = null
@@ -326,7 +326,7 @@ function reduceCanvasIntentInternalV2(
       writes.push(logicalValueWrite(`operations/${receiptKey}`, "operation", receiptKey, "receipt", receipt))
     }, `canvas-intent:${intent.kind}`)
 
-    writes.sort((left, right) => compareUtf8V2(left.path, right.path))
+    writes.sort((left, right) => compareUtf8(left.path, right.path))
     if (writes.length > 512)
       throw new CanvasSchemaErrorV2("write-count-overflow", "Canvas intent exceeds 512 logical writes")
     const changedPaths = writes.map((write) => write.path)
@@ -342,7 +342,7 @@ function reduceCanvasIntentInternalV2(
       changedPaths,
       writes: actualWrites,
     }
-    if (encodeRestrictedJcsV2(evidence).byteLength > 256 * 1024)
+    if (encodeRestrictedJcs(evidence).byteLength > 256 * 1024)
       throw new CanvasSchemaErrorV2("evidence-too-large", "Canvas write evidence exceeds 256 KiB")
     validateCanvasYDocV2(candidate)
     const receipt = getCanvasChildMapV2(candidate, "operations").get(
@@ -354,7 +354,7 @@ function reduceCanvasIntentInternalV2(
       actualWriteEvidence: evidence,
       semanticHistoryRoot: historyRoot,
       invalidatedEntities: sortedRefs(invalidatedEntities),
-      invalidatedMetaFields: [...new Set(invalidatedMetaFields)].sort(compareUtf8V2),
+      invalidatedMetaFields: [...new Set(invalidatedMetaFields)].sort(compareUtf8),
     })
   } catch (error) {
     if (error instanceof CanvasPendingFactError) return "pending"
@@ -368,7 +368,7 @@ function planIntent(
   intent: CanvasTypedIntentUnionV2,
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   facts: CanvasExternalFactContextV2,
   writes: PlannedWrite[],
   results: CanvasEntityRefV2[],
@@ -660,7 +660,7 @@ function planIntent(
         const parent = requireNode(base, index, intent.guard.parent)
         if (effectiveNodeDataV2(base, parent).data.kind !== "group") return "invalid"
       }
-      const expectedRelation = deriveCanvasIdV2("relation", context, "0" as Uint32V2)
+      const expectedRelation = deriveCanvasIdV2("relation", context, "0" as Uint32)
       if (intent.body.relationId !== expectedRelation) return "invalid"
       planContainment(writes, intent.body.child, intent.body.parent, intent.body.relationId, context)
       results.push(intent.body.child)
@@ -677,7 +677,7 @@ function planIntent(
       if (
         intent.body.group.ordinal !== "0" ||
         intent.body.relationIds.some(
-          (relationId, index) => relationId !== deriveCanvasIdV2("relation", context, String(index + 1) as Uint32V2),
+          (relationId, index) => relationId !== deriveCanvasIdV2("relation", context, String(index + 1) as Uint32),
         )
       )
         return "invalid"
@@ -697,7 +697,7 @@ function planIntent(
           )
           return { node: ref, position: effectivePosition(node), size: effectiveSize(node) }
         })
-        .sort((a, b) => compareUtf8V2(canvasEntityKeyV2(a.node), canvasEntityKeyV2(b.node)))
+        .sort((a, b) => compareUtf8(canvasEntityKeyV2(a.node), canvasEntityKeyV2(b.node)))
       const planDigest = canvasDigestV2("convax.canvas-group-geometry-plan/2", {
         format: "convax.canvas-group-geometry-plan/2",
         children: childGeometry,
@@ -727,7 +727,7 @@ function planIntent(
       const group = requireNode(base, index, intent.guard.group)
       if (
         intent.body.nullRelationIds.some(
-          (relationId, position) => relationId !== deriveCanvasIdV2("relation", context, String(position) as Uint32V2),
+          (relationId, position) => relationId !== deriveCanvasIdV2("relation", context, String(position) as Uint32),
         )
       )
         return "invalid"
@@ -737,7 +737,7 @@ function planIntent(
           ([, choice]) => choice?.parent !== null && choice !== null && canvasEntityKeyV2(choice.parent) === group.key,
         )
         .map(([key]) => base.nodes.get(key)!.identity.ref)
-        .sort((a, b) => compareUtf8V2(canvasEntityKeyV2(a), canvasEntityKeyV2(b)))
+        .sort((a, b) => compareUtf8(canvasEntityKeyV2(a), canvasEntityKeyV2(b)))
       const digest = canvasDigestV2("convax.canvas-effective-child-set/2", {
         format: "convax.canvas-effective-child-set/2",
         group: group.identity.ref,
@@ -824,7 +824,7 @@ function planIntent(
         base.generationBegins.has(begin.generationId)
       )
         return "invalid"
-      if (deriveCanvasIdV2("generation", context, "0" as Uint32V2) !== begin.generationId) return "invalid"
+      if (deriveCanvasIdV2("generation", context, "0" as Uint32) !== begin.generationId) return "invalid"
       requireFact(facts.validateGenerationBegin(begin))
       planJsonWrite(
         writes,
@@ -1051,7 +1051,7 @@ function planSemanticOperations(
   >,
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   facts: CanvasExternalFactContextV2,
   writes: PlannedWrite[],
   results: CanvasEntityRefV2[],
@@ -1479,7 +1479,7 @@ function historyDerivedCountV2(template: CanvasHistoryTemplateV2): number {
 function historyDerivedObjectV2(
   planned: ReturnType<typeof planCanvasHistoryDerivedOrdinalsV2>[number],
   template: CanvasHistoryTemplateV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
 ): CanvasHistoryDerivedObjectV2 {
   if (planned.kind === "node")
     return Object.freeze({ kind: "node", handle: planned.handle, ordinal: planned.ordinal, ref: derivedNodeRefV2(context, planned.ordinal) })
@@ -1506,8 +1506,8 @@ function historyPlannedWriteOrdinalsV2(
   templates: readonly CanvasHistoryTemplateV2[],
   derivedByOperation: readonly (readonly CanvasHistoryDerivedObjectV2[])[],
   initialBindings: readonly CanvasHistoryBindingV2[],
-  context: OwnerIntentConstructionContextV2,
-): ReadonlyMap<string, Uint32V2> {
+  context: OwnerIntentConstructionContext,
+): ReadonlyMap<string, Uint32> {
   const bindings = new Map(initialBindings.map((binding) => [binding.handle, binding.ref] as const))
   const paths: string[] = []
   const addNode = (ref: CanvasEntityRefV2 & { kind: "node" }) => {
@@ -1558,14 +1558,14 @@ function historyPlannedWriteOrdinalsV2(
     } else if (template.op === "metadata.set") paths.push(`meta/${template.field}/actor/${context.actorId}`)
     publishHistoryBindingRefsV2(template, derived, bindings)
   }
-  paths.sort(compareUtf8V2)
+  paths.sort(compareUtf8)
   strictSortedUnique(paths, (path) => path, "History planned write paths")
-  return new Map(paths.map((path, index) => [path, parseUint32V2(String(index))] as const))
+  return new Map(paths.map((path, index) => [path, parseUint32(String(index))] as const))
 }
 
 function materializedHistoryGuardV2(
   base: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   root: SemanticHistoryRootV2,
   template: CanvasHistoryTemplateV2,
   bindings: ReadonlyMap<string, CanvasEntityRefV2 | null>,
@@ -1665,8 +1665,8 @@ function publishHistoryProvisionalResultsV2(
   derived: readonly CanvasHistoryDerivedObjectV2[],
   bindings: Map<string, CanvasEntityRefV2 | null>,
   provisionalNodes: Map<string, ProvisionalHistoryNodeV2>,
-  writeOrdinals: ReadonlyMap<string, Uint32V2>,
-  context: OwnerIntentConstructionContextV2,
+  writeOrdinals: ReadonlyMap<string, Uint32>,
+  context: OwnerIntentConstructionContext,
 ): void {
   publishHistoryBindingRefsV2(template, derived, bindings)
   const publishNode = (handle: string, snapshot: CanvasHistoryNodeSnapshotV2) => {
@@ -1805,7 +1805,7 @@ function historyNodeLiveGuardV2(
 
 function historyNodeDataGuardForTargetV2(
   base: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   bindings: ReadonlyMap<string, CanvasEntityRefV2 | null>,
   provisionalNodes: ReadonlyMap<string, ProvisionalHistoryNodeV2>,
   target: CanvasHistoryNodeTargetV2,
@@ -1846,7 +1846,7 @@ function historyNodeDataGuardV2(
   bindings: ReadonlyMap<string, CanvasEntityRefV2 | null>,
   provisionalNodes: ReadonlyMap<string, ProvisionalHistoryNodeV2>,
   handle: string,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
 ) {
   return historyNodeDataGuardForTargetV2(base, context, bindings, provisionalNodes, { mode: "handle", handle })
 }
@@ -1868,7 +1868,7 @@ function historyConnectableGuardV2(
 
 function historyContainmentGuardV2(
   base: CanvasSnapshotV2,
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   bindings: ReadonlyMap<string, CanvasEntityRefV2 | null>,
   provisionalNodes: ReadonlyMap<string, ProvisionalHistoryNodeV2>,
   target: CanvasHistoryNodeTargetV2,
@@ -1881,7 +1881,7 @@ function historyContainmentGuardV2(
   })
 }
 
-function pluginRequirementDigestV2(plugin: import("./types").PluginStateEnvelopeV2 | null): DigestV2 | null {
+function pluginRequirementDigestV2(plugin: import("./types").PluginStateEnvelopeV2 | null): Digest | null {
   return plugin === null
     ? null
     : canvasDigestV2("convax.canvas-effective-plugin/2", { format: "convax.canvas-effective-plugin/2", plugin })
@@ -1937,7 +1937,7 @@ function retainedHistoryProofsV2(
     sources.push({ handle: template.node, data })
   }
   const proofByResource = new Map<string, Extract<CanvasResourceProofRefV2, { mode: "retained-canvas-history" }>>()
-  for (const source of sources.sort((left, right) => compareUtf8V2(left.handle, right.handle))) {
+  for (const source of sources.sort((left, right) => compareUtf8(left.handle, right.handle))) {
     if (source.data.kind !== "resource") continue
     const sourceNode = originalHistoryRefV2(base, root, source.handle)
     if (sourceNode?.kind !== "node")
@@ -1956,12 +1956,12 @@ function retainedHistoryProofsV2(
       resource: source.data.resource,
       requireExactRetainedMaterial: true as const,
     })
-    const key = new TextDecoder().decode(encodeRestrictedJcsV2(source.data.resource))
+    const key = new TextDecoder().decode(encodeRestrictedJcs(source.data.resource))
     if (!proofByResource.has(key)) proofByResource.set(key, proof)
   }
   void bindings
   return [...proofByResource.values()].sort((left, right) =>
-    compareUtf8V2(new TextDecoder().decode(encodeRestrictedJcsV2(left.resource)), new TextDecoder().decode(encodeRestrictedJcsV2(right.resource))),
+    compareUtf8(new TextDecoder().decode(encodeRestrictedJcs(left.resource)), new TextDecoder().decode(encodeRestrictedJcs(right.resource))),
   )
 }
 
@@ -2134,14 +2134,14 @@ function assertCurrentHistoryPhaseV2(
         .filter((candidate): candidate is Extract<CanvasHistoryTemplateV2, { op: "containment.set" }> => candidate.op === "containment.set")
         .filter((candidate) => candidate.parent?.mode === "handle" && candidate.parent.handle === item.handle)
         .map((candidate) => historyTargetSortKey(candidate.child))
-        .sort(compareUtf8V2)
+        .sort(compareUtf8)
       const actualChildren = [...index.selectedContainments.entries()]
         .filter(([, choice]) => choice?.parent !== null && choice !== null && canvasEntityKeyV2(choice.parent) === canvasEntityKeyV2(group))
         .map(([childKey]) => {
           const handle = handles.get(childKey)
           return handle === undefined ? historyTargetSortKey({ mode: "external", ref: base.nodes.get(childKey)!.identity.ref }) : historyTargetSortKey({ mode: "handle", handle })
         })
-        .sort(compareUtf8V2)
+        .sort(compareUtf8)
       if (!sameCanonicalValueV2(actualChildren, expectedChildren))
         throw new CanvasSchemaErrorV2("history-conflict", "History group effective child set changed")
     }
@@ -2151,7 +2151,7 @@ function assertCurrentHistoryPhaseV2(
 function validateSemanticDerivedIdentities(
   values: readonly CanvasHistoryDerivedObjectV2[],
   base: CanvasSnapshotV2,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
 ): boolean {
   for (const value of values) {
     if (value.kind === "node") {
@@ -2171,7 +2171,7 @@ function captureHistoryRootV2(
   base: CanvasSnapshotV2,
   post: CanvasSnapshotV2,
   intent: CanvasTypedIntentUnionV2,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   results: readonly CanvasEntityRefV2[],
 ): SemanticHistoryRootV2 {
   const sourceIntentKind = intent.kind as CanvasUndoableIntentKindV2
@@ -2194,7 +2194,7 @@ function captureHistoryRootV2(
           : postIndex.isEdgeLive(ref as CanvasEntityRefV2 & { kind: "edge" })
       return { handle: handles.get(canvasEntityKeyV2(ref))!, ref: live ? ref : null }
     })
-    .sort((a, b) => compareUtf8V2(a.handle, b.handle))
+    .sort((a, b) => compareUtf8(a.handle, b.handle))
   const inverseTemplate: CanvasHistoryTemplateV2[] = []
   const forwardTemplate: CanvasHistoryTemplateV2[] = []
 
@@ -2386,7 +2386,7 @@ function captureHistoryRootV2(
       forwardTemplate.push({ op: "edge.tombstone", handle: handles.get(canvasEntityKeyV2(ref))! })
     }
     for (const [index, bucket] of [...grouped.values()]
-      .sort((left, right) => compareUtf8V2(left.ref.groupId, right.ref.groupId))
+      .sort((left, right) => compareUtf8(left.ref.groupId, right.ref.groupId))
       .entries()) {
       inverseTemplate.push({
         op: "creation-group.restore",
@@ -2478,7 +2478,7 @@ function createHistoryTransitionV2(
     CanvasTypedIntentUnionV2,
     { kind: "canvas.undo.semantic-inverse/2" | "canvas.redo.semantic-forward/2" }
   >,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
 ): SemanticHistoryTransitionV2 {
   const root = snapshot.semanticHistory.get(historyRootKeyV2(intent.guard.rootOperationId)) as SemanticHistoryRootV2
   const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === root.rootOperationId)!
@@ -2520,7 +2520,7 @@ function createHistoryTransitionV2(
     mode: intent.kind === "canvas.undo.semantic-inverse/2" ? "undone" : "redone",
     priorHistoryDigest: prior.digest,
     transitionOperationId: context.operationId,
-    stamp: makeStampV2(context, "0" as Uint32V2),
+    stamp: makeStampV2(context, "0" as Uint32),
     materializationDigest: canvasDigestV2("convax.canvas-history-materialization/2", materialCore),
     resultFootprintDigest: canvasDigestV2("convax.canvas-history-footprint/2", footprint),
     resultBindings,
@@ -2531,7 +2531,7 @@ function planNodeCreate(
   writes: PlannedWrite[],
   ref: CanvasEntityRefV2 & { kind: "node" },
   template: { role: "file" | "agent"; position: unknown; size: unknown; data: unknown; plugin: unknown },
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   creationGroup: CreationGroupRefV2 | null,
 ): void {
   const key = canvasEntityKeyV2(ref)
@@ -2560,7 +2560,7 @@ function planEdgeCreate(
   source: CanvasEntityRefV2 & { kind: "node" },
   target: CanvasEntityRefV2 & { kind: "node" },
   data: unknown,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   creationGroup: CreationGroupRefV2 | null,
 ): void {
   const key = canvasEntityKeyV2(ref)
@@ -2583,9 +2583,9 @@ function planEdgeCreate(
 
 let applyingDocument: Y.Doc | null = null
 
-function applyPlannedWrites(writes: readonly PlannedWrite[], context: OwnerIntentValidationContextV2): void {
+function applyPlannedWrites(writes: readonly PlannedWrite[], context: OwnerIntentValidationContext): void {
   for (const [index, write] of writes.entries()) {
-    const value = write.value(String(index) as Uint32V2)
+    const value = write.value(String(index) as Uint32)
     write.apply(value)
   }
   void context
@@ -2597,7 +2597,7 @@ function planClaim(
   ref: CanvasEntityRefV2,
   field: string,
   raw: unknown,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   recordFactory?: () => Y.Map<unknown>,
 ): void {
   const key = canvasEntityKeyV2(ref)
@@ -2618,7 +2618,7 @@ function planClaim(
   })
 }
 
-function planTombstone(writes: PlannedWrite[], ref: CanvasEntityRefV2, context: OwnerIntentValidationContextV2): void {
+function planTombstone(writes: PlannedWrite[], ref: CanvasEntityRefV2, context: OwnerIntentValidationContext): void {
   const key = canvasEntityKeyV2(ref)
   const root = ref.kind === "node" ? "nodes" : "edges"
   const path = `${root}/${key}/tombstones/${context.actorId}`
@@ -2641,7 +2641,7 @@ function planContainment(
   child: CanvasEntityRefV2 & { kind: "node" },
   parent: (CanvasEntityRefV2 & { kind: "node" }) | null,
   relationId: string,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
 ): void {
   const key = containmentKeyV2(child, context.actorId)
   planJsonWrite(
@@ -2650,7 +2650,7 @@ function planContainment(
     "containment",
     key,
     "choice",
-    (ordinal: Uint32V2) => ({
+    (ordinal: Uint32) => ({
       format: "convax.canvas-containment-choice/2",
       relationId,
       child,
@@ -2666,7 +2666,7 @@ function planMetadata(
   canvasId: string,
   field: "title" | "description" | "tags",
   raw: unknown,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
 ): void {
   const path = `meta/${field}/actor/${context.actorId}`
   writes.push({
@@ -2697,7 +2697,7 @@ function planJsonWrite(
     entityKind,
     entityId,
     field,
-    value: typeof value === "function" ? (value as (ordinal: Uint32V2) => unknown) : () => value,
+    value: typeof value === "function" ? (value as (ordinal: Uint32) => unknown) : () => value,
     apply,
   })
 }
@@ -2770,7 +2770,7 @@ function writeJson(map: Y.Map<unknown>, key: string, value: unknown): void {
 // replicaDoc. It intentionally does not own clone/commit/durability; the kernel does.
 export function applyCanvasCandidateIntentV2(
   candidate: Y.Doc,
-  context: OwnerIntentValidationContextV2,
+  context: OwnerIntentValidationContext,
   intent: CanvasTypedIntentUnionV2,
   facts: CanvasExternalFactContextV2,
 ): CanvasReducerOutcomeV2 {
@@ -2790,7 +2790,7 @@ export const reduceCanvasIntentV2 = applyCanvasCandidateIntentV2
 function requireNode(
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: DigestV2 },
+  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: Digest },
 ): CanvasNodeSnapshotV2 {
   const node = base.nodes.get(canvasEntityKeyV2(guard.node))
   if (
@@ -2807,9 +2807,9 @@ function requireNodeData(
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
   guard: {
     node: CanvasEntityRefV2 & { kind: "node" }
-    expectedIdentityDigest: DigestV2
-    expectedEffectiveDataDigest: DigestV2
-    expectedDataRegisterDigest: DigestV2
+    expectedIdentityDigest: Digest
+    expectedEffectiveDataDigest: Digest
+    expectedDataRegisterDigest: Digest
   },
 ): CanvasNodeSnapshotV2 {
   const node = requireNode(base, index, guard)
@@ -2824,7 +2824,7 @@ function requireNodeData(
 function requireEdge(
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  guard: { edge: CanvasEntityRefV2 & { kind: "edge" }; expectedIdentityDigest: DigestV2 },
+  guard: { edge: CanvasEntityRefV2 & { kind: "edge" }; expectedIdentityDigest: Digest },
 ): CanvasEdgeSnapshotV2 {
   const edge = base.edges.get(canvasEntityKeyV2(guard.edge))
   if (
@@ -2839,7 +2839,7 @@ function requireEdge(
 function requireConnectable(
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: DigestV2 },
+  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: Digest },
 ): CanvasNodeSnapshotV2 {
   const node = requireNode(base, index, guard)
   if (effectiveNodeDataV2(base, node).data.kind === "group")
@@ -2871,13 +2871,13 @@ function requireGenerationGuard(
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
   guard: {
     node: CanvasEntityRefV2 & { kind: "node" }
-    expectedIdentityDigest: DigestV2
+    expectedIdentityDigest: Digest
     generationId: string
-    beginDigest: DigestV2
-    expectedLifecycleDigest: DigestV2
-    expectedTerminalDigest: DigestV2 | null
-    expectedDismissalDigest: DigestV2 | null
-    expectedRecoveryFailureDigest: DigestV2 | null
+    beginDigest: Digest
+    expectedLifecycleDigest: Digest
+    expectedTerminalDigest: Digest | null
+    expectedDismissalDigest: Digest | null
+    expectedRecoveryFailureDigest: Digest | null
   },
 ): CanvasNodeSnapshotV2 {
   const node = requireNode(base, index, guard)
@@ -2902,9 +2902,9 @@ function requireGenerationGuard(
 
 function requireDerivedNode(
   base: CanvasSnapshotV2,
-  context: OwnerIntentValidationContextV2,
-  guard: { ordinal: Uint32V2; node: CanvasEntityRefV2 },
-  template: { ordinal: Uint32V2; nodeId: string; incarnation: string },
+  context: OwnerIntentValidationContext,
+  guard: { ordinal: Uint32; node: CanvasEntityRefV2 },
+  template: { ordinal: Uint32; nodeId: string; incarnation: string },
 ): CanvasEntityRefV2 & { kind: "node" } {
   const derived = derivedNodeRefV2(context, guard.ordinal)
   if (
@@ -2920,9 +2920,9 @@ function requireDerivedNode(
 
 function requireDerivedEdge(
   base: CanvasSnapshotV2,
-  context: OwnerIntentValidationContextV2,
-  guard: { ordinal: Uint32V2; edge: CanvasEntityRefV2 },
-  template: { ordinal: Uint32V2; edgeId: string; incarnation: string },
+  context: OwnerIntentValidationContext,
+  guard: { ordinal: Uint32; edge: CanvasEntityRefV2 },
+  template: { ordinal: Uint32; edgeId: string; incarnation: string },
 ): CanvasEntityRefV2 & { kind: "edge" } {
   const derived = derivedEdgeRefV2(context, guard.ordinal)
   if (
@@ -2938,7 +2938,7 @@ function requireDerivedEdge(
 
 function requirePlacement(
   base: CanvasSnapshotV2,
-  placement: { obstacleProjectionDigest: DigestV2; gap: number },
+  placement: { obstacleProjectionDigest: Digest; gap: number },
 ): void {
   if (placement.gap !== 24 || obstacleProjectionDigestV2(base) !== placement.obstacleProjectionDigest)
     throw new CanvasSchemaErrorV2("stale-placement", "Causal placement obstacle projection is stale")
@@ -2947,14 +2947,14 @@ function requirePlacement(
 function placeCreatedNodes(
   base: CanvasSnapshotV2,
   anchor: { x: number; y: number },
-  specs: readonly { ordinal: Uint32V2; size: { width: number; height: number } }[],
+  specs: readonly { ordinal: Uint32; size: { width: number; height: number } }[],
 ): { x: number; y: number }[] {
   const projection = buildCanvasProjectionIndexV2(base).projection
   const obstacles = projection.nodes
     .filter((node) => node.parent === null)
     .map((node) => ({ ...node.position, ...node.size }))
   const result = new Map<string, { x: number; y: number }>()
-  for (const spec of [...specs].sort((a, b) => uint32ToNumberV2(a.ordinal) - uint32ToNumberV2(b.ordinal))) {
+  for (const spec of [...specs].sort((a, b) => uint32ToNumber(a.ordinal) - uint32ToNumber(b.ordinal))) {
     let position = { ...anchor }
     let iterations = 0
     while (true) {
@@ -2977,7 +2977,7 @@ function placeCreatedNodes(
 }
 
 function resolveEndpoint(
-  value: CanvasEntityRefV2 | { createdNodeOrdinal: Uint32V2 },
+  value: CanvasEntityRefV2 | { createdNodeOrdinal: Uint32 },
   created: ReadonlyMap<string, CanvasEntityRefV2 & { kind: "node" }>,
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
@@ -3001,23 +3001,23 @@ function requireFact(result: "valid" | "pending" | "invalid"): void {
   if (result === "invalid") throw new CanvasSchemaErrorV2("external-fact-invalid", "External fact failed closed")
 }
 
-function hasContiguousCreationOrdinals(values: readonly { readonly ordinal: Uint32V2 }[]): boolean {
+function hasContiguousCreationOrdinals(values: readonly { readonly ordinal: Uint32 }[]): boolean {
   const decoded = values
-    .map((value) => uint32ToNumberV2(parseUint32V2(value.ordinal)))
+    .map((value) => uint32ToNumber(parseUint32(value.ordinal)))
     .sort((left, right) => left - right)
   return decoded.every((value, index) => value === index)
 }
 
 class CanvasPendingFactError extends Error {}
 
-function assertContext(context: OwnerIntentValidationContextV2): void {
+function assertContext(context: OwnerIntentValidationContext): void {
   if (context.scope.docKind !== "canvas")
     throw new CanvasSchemaErrorV2("invalid-context", "Canvas operation context does not select the Canvas owner")
-  parseDigestV2(context.intentDigest)
-  parseDigestV2(context.baseFrontierDigest)
-  parseDigestV2(context.protocolDigest)
-  parseDigestV2(context.ownerSchemaDigest)
-  parseDigestV2(context.validationArtifactSetDigest)
+  parseDigest(context.intentDigest)
+  parseDigest(context.baseFrontierDigest)
+  parseDigest(context.protocolDigest)
+  parseDigest(context.ownerSchemaDigest)
+  parseDigest(context.validationArtifactSetDigest)
 }
 
 function nullableDigest(
@@ -3026,7 +3026,7 @@ function nullableDigest(
     | "convax.canvas-generation-dismissal/2"
     | "convax.canvas-generation-recovery-failure/2",
   value: unknown,
-): DigestV2 | null {
+): Digest | null {
   return value === null ? null : canvasDigestV2(domain, value)
 }
 
@@ -3044,7 +3044,7 @@ function ownContainmentSlotDigest(
   base: CanvasSnapshotV2,
   child: CanvasEntityRefV2 & { kind: "node" },
   actorId: string,
-): DigestV2 | null {
+): Digest | null {
   const choice = base.containments.get(`${canvasEntityKeyV2(child)}/actor/${actorId}`)
   return choice === undefined
     ? null
@@ -3058,11 +3058,11 @@ function metadataEffectiveValue(
   const entries = base.meta[field]
   if (entries.length === 0) return field === "tags" ? [] : null
   return entries.reduce((winner, next) =>
-    comparePortableStampsV2(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
+    comparePortableStamps(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
   )[1].value
 }
 
-function metadataEffectiveDigest(base: CanvasSnapshotV2, field: "title" | "description" | "tags"): DigestV2 {
+function metadataEffectiveDigest(base: CanvasSnapshotV2, field: "title" | "description" | "tags"): Digest {
   return canvasDigestV2("convax.canvas-metadata-effective/2", {
     format: "convax.canvas-metadata-effective/2",
     field,
@@ -3074,7 +3074,7 @@ function metadataOwnSlotDigest(
   base: CanvasSnapshotV2,
   field: "title" | "description" | "tags",
   actorId: string,
-): DigestV2 | null {
+): Digest | null {
   const claim = base.meta[field].find(([actor]) => actor === actorId)?.[1]
   return claim === undefined
     ? null
@@ -3083,12 +3083,12 @@ function metadataOwnSlotDigest(
 
 function effectivePosition(node: CanvasNodeSnapshotV2) {
   return node.position.reduce((winner, next) =>
-    comparePortableStampsV2(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
+    comparePortableStamps(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
   )[1].value
 }
 function effectiveSize(node: CanvasNodeSnapshotV2) {
   return node.size.reduce((winner, next) =>
-    comparePortableStampsV2(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
+    comparePortableStamps(winner[1].stamp, next[1].stamp) < 0 ? next : winner,
   )[1].value
 }
 
@@ -3185,11 +3185,11 @@ function collectResources(...sets: readonly (readonly CanvasHistoryTemplateV2[])
   }
   resources.sort(
     (a, b) =>
-      compareUtf8V2(a.contentDigest, b.contentDigest) ||
-      compareUtf8V2(a.uri, b.uri) ||
-      compareUtf8V2(
-        new TextDecoder().decode(encodeRestrictedJcsV2(a)),
-        new TextDecoder().decode(encodeRestrictedJcsV2(b)),
+      compareUtf8(a.contentDigest, b.contentDigest) ||
+      compareUtf8(a.uri, b.uri) ||
+      compareUtf8(
+        new TextDecoder().decode(encodeRestrictedJcs(a)),
+        new TextDecoder().decode(encodeRestrictedJcs(b)),
       ),
   )
   return resources.filter((resource, index) => index === 0 || !sameCanonicalValueV2(resource, resources[index - 1]))
@@ -3199,19 +3199,19 @@ function semanticHistoryState(
   base: CanvasSnapshotV2,
   root: SemanticHistoryRootV2,
   receipt: BoundedOperationReceiptV2,
-): { mode: "applied" | "undone"; bindings: readonly CanvasHistoryBindingV2[]; digest: DigestV2 } {
+): { mode: "applied" | "undone"; bindings: readonly CanvasHistoryBindingV2[]; digest: Digest } {
   const entries = [...base.semanticHistory.entries()]
     .filter(
       (entry): entry is [string, SemanticHistoryTransitionV2] =>
         entry[1].format === "convax.canvas-semantic-history-transition/2" &&
         entry[1].rootOperationId === root.rootOperationId,
     )
-    .sort((left, right) => compareUtf8V2(left[0], right[0]))
+    .sort((left, right) => compareUtf8(left[0], right[0]))
   const transitions = entries.map(([, transition]) => transition)
   const effectiveEntry = entries.reduce<(typeof entries)[number] | null>((winner, candidate) => {
     if (winner === null) return candidate
-    const stampOrder = comparePortableStampsV2(winner[1].stamp, candidate[1].stamp)
-    return stampOrder < 0 || (stampOrder === 0 && compareUtf8V2(winner[0], candidate[0]) < 0) ? candidate : winner
+    const stampOrder = comparePortableStamps(winner[1].stamp, candidate[1].stamp)
+    return stampOrder < 0 || (stampOrder === 0 && compareUtf8(winner[0], candidate[0]) < 0) ? candidate : winner
   }, null)
   const effective = effectiveEntry?.[1] ?? null
   const mode = effective?.mode === "undone" ? "undone" : "applied"
@@ -3261,7 +3261,7 @@ function historyFootprint(
                   )
                 return handle
               })
-              .sort(compareUtf8V2)
+              .sort(compareUtf8)
       entities.push({
         kind: "node",
         handle: binding.handle,
@@ -3282,7 +3282,7 @@ function historyFootprint(
   }
   entities.sort((left, right) => {
     const rank = (left.kind === "node" ? 0 : 1) - (right.kind === "node" ? 0 : 1)
-    return rank || compareUtf8V2(left.handle, right.handle)
+    return rank || compareUtf8(left.handle, right.handle)
   })
 
   const metadataFields = [...root.inverseTemplate, ...root.forwardTemplate]
@@ -3338,7 +3338,7 @@ function historyTargetSortKey(target: CanvasHistoryNodeTargetV2): string {
 }
 
 function compareHistoryTargets(left: CanvasHistoryNodeTargetV2, right: CanvasHistoryNodeTargetV2): number {
-  return compareUtf8V2(historyTargetSortKey(left), historyTargetSortKey(right))
+  return compareUtf8(historyTargetSortKey(left), historyTargetSortKey(right))
 }
 
 function isNodeRef(value: CanvasEntityRefV2 | null): value is CanvasEntityRefV2 & { kind: "node" } {
@@ -3366,7 +3366,7 @@ function resolveHistoryTarget(
 function requireHistoryNode(
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: DigestV2 },
+  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: Digest },
   derived: readonly CanvasHistoryDerivedObjectV2[],
   operations: readonly CanvasSemanticOperationV2[],
   requireGroup: boolean,
@@ -3389,7 +3389,7 @@ function requireHistoryNode(
 function requireHistoryConnectable(
   base: CanvasSnapshotV2,
   index: ReturnType<typeof buildCanvasProjectionIndexV2>,
-  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: DigestV2 },
+  guard: { node: CanvasEntityRefV2 & { kind: "node" }; expectedIdentityDigest: Digest },
   derived: readonly CanvasHistoryDerivedObjectV2[],
   operations: readonly CanvasSemanticOperationV2[],
 ): void {
@@ -3484,8 +3484,8 @@ function findDerivedEdge(
 }
 
 function derivedGuardsMatch(
-  nodeGuards: readonly { ordinal: Uint32V2; node: CanvasEntityRefV2 }[],
-  edgeGuards: readonly { ordinal: Uint32V2; edge: CanvasEntityRefV2 }[],
+  nodeGuards: readonly { ordinal: Uint32; node: CanvasEntityRefV2 }[],
+  edgeGuards: readonly { ordinal: Uint32; edge: CanvasEntityRefV2 }[],
   derived: readonly CanvasHistoryDerivedObjectV2[],
 ): boolean {
   const nodes = derived.filter(
@@ -3509,8 +3509,8 @@ function derivedGuardsMatch(
 function operationIndex(
   operations: readonly CanvasSemanticOperationV2[],
   operation: CanvasSemanticOperationV2,
-): Uint32V2 {
-  return String(operations.indexOf(operation)) as Uint32V2
+): Uint32 {
+  return String(operations.indexOf(operation)) as Uint32
 }
 function sortedRefs(refs: readonly CanvasEntityRefV2[]): CanvasEntityRefV2[] {
   return [...refs]
@@ -3518,13 +3518,13 @@ function sortedRefs(refs: readonly CanvasEntityRefV2[]): CanvasEntityRefV2[] {
     .filter((ref, index, all) => index === 0 || canvasEntityKeyV2(ref) !== canvasEntityKeyV2(all[index - 1]!))
 }
 function refCompare(left: CanvasEntityRefV2, right: CanvasEntityRefV2): number {
-  return compareUtf8V2(canvasEntityKeyV2(left), canvasEntityKeyV2(right))
+  return compareUtf8(canvasEntityKeyV2(left), canvasEntityKeyV2(right))
 }
 function compareActualWrites(left: CanvasActualWriteV2, right: CanvasActualWriteV2): number {
   return (
-    compareUtf8V2(left.entityKind, right.entityKind) ||
-    compareUtf8V2(left.entityId, right.entityId) ||
-    compareUtf8V2(left.field, right.field)
+    compareUtf8(left.entityKind, right.entityKind) ||
+    compareUtf8(left.entityId, right.entityId) ||
+    compareUtf8(left.field, right.field)
   )
 }
 

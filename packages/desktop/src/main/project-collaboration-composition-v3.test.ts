@@ -4,7 +4,7 @@ import type {
   CanvasApplicationCommandResult,
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
-import { encodeBase64urlV2, parseId128V2, parseProjectIdV2, type DigestV2 } from "@convax/collaboration"
+import { encodeBase64url, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
 import type { ProjectCanvasCatalogProjectionV2, ProjectCanvasRouteCommandResultV2 } from "@convax/project/canvas"
 
 import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
@@ -14,9 +14,9 @@ import {
   type MainSelectedProjectCollaborationPortsV3,
 } from "./project-collaboration-composition-v3"
 
-const PROJECT_A = parseProjectIdV2(`project_${"a".repeat(64)}`)
-const PROJECT_B = parseProjectIdV2(`project_${"b".repeat(64)}`)
-const SESSION_A = parseId128V2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => 1)))
+const PROJECT_A = parseProjectId(`project_${"a".repeat(64)}`)
+const PROJECT_B = parseProjectId(`project_${"b".repeat(64)}`)
+const SESSION_A = parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => 1)))
 
 describe("V3 selected Project collaboration composition facade", () => {
   test("routes catalog and document calls to one persisted selection without replacing results", async () => {
@@ -43,7 +43,7 @@ describe("V3 selected Project collaboration composition facade", () => {
 
   test("binds renderer sessions to the selected owner and forwards only matching invalidations", async () => {
     const first = fakeRuntime(PROJECT_A, "v11-r1-local-owner")
-    const second = fakeRuntime(PROJECT_B, "v10-r5", parseId128V2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => 2))))
+    const second = fakeRuntime(PROJECT_B, "v10-r5", parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => 2))))
     const facade = createMainProjectCollaborationCompositionFacadeV3({
       async resolve(projectId) { return { status: "ready", ports: projectId === PROJECT_A ? first.ports : second.ports } },
     })
@@ -133,7 +133,7 @@ function fakeRuntime(
     projectIndexes: Object.freeze({
       queryCatalog: mock(async () => catalog),
       submitRouteCommand: mock(async () => routeResult),
-      queryCurrentBlobDigests: mock(async () => new Set<DigestV2>()),
+      queryCurrentBlobDigests: mock(async () => new Set<Digest>()),
       queryCurrentResources: mock(async () => []),
       admitManagedBlob: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),
       createDirectory: mock(async () => Object.freeze({ status: "partial-success", code: "entry-not-found" }) as never),

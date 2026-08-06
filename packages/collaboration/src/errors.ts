@@ -1,4 +1,4 @@
-export type CollaborationFailureCodeV2 =
+export type CollaborationFailureCode =
   | "protocol-schema-bundle-unavailable"
   | "canonical-authority-conflict"
   | "unsupported-yjs-codec"
@@ -18,9 +18,9 @@ export type CollaborationFailureCodeV2 =
   | "cancelled"
   | "disposed"
 
-export class CollaborationErrorV2 extends Error {
+export class CollaborationError extends Error {
   constructor(
-    readonly code: CollaborationFailureCodeV2,
+    readonly code: CollaborationFailureCode,
     message: string,
     options?: ErrorOptions,
   ) {
@@ -29,15 +29,15 @@ export class CollaborationErrorV2 extends Error {
   }
 }
 
-export class ProtocolAuthorityErrorV2 extends CollaborationErrorV2 {}
-export class CollaborationCodecErrorV2 extends CollaborationErrorV2 {}
-export class CollaborationFrameErrorV2 extends CollaborationErrorV2 {}
-export class CollaborationKernelErrorV2 extends CollaborationErrorV2 {}
+export class ProtocolAuthorityError extends CollaborationError {}
+export class CollaborationCodecError extends CollaborationError {}
+export class CollaborationFrameError extends CollaborationError {}
+export class CollaborationKernelError extends CollaborationError {}
 
 export function failCodec(message: string, options?: ErrorOptions): never {
-  throw new CollaborationCodecErrorV2("invalid-codec", message, options)
+  throw new CollaborationCodecError("invalid-codec", message, options)
 }
 
 export function failFrame(message: string, options?: ErrorOptions): never {
-  throw new CollaborationFrameErrorV2("invalid-causal-frame", message, options)
+  throw new CollaborationFrameError("invalid-causal-frame", message, options)
 }

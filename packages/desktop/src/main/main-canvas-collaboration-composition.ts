@@ -4,11 +4,11 @@ import {
   selectedCanvasDocumentOwnerArtifactDefinitionV2,
 } from "@convax/canvas/collaboration"
 import {
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  type CollaborationKernelOptionsV2,
-  type DocumentOwnerRuntimeV2,
-  type Id128V2,
-  type VerifiedProtocolAuthorityV2,
+  createSelectedDocumentOwnerArtifactFactory,
+  type CollaborationKernelOptions,
+  type DocumentOwnerRuntime,
+  type Id128,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import type { ProjectIndexCanvasApplicationPortV2 } from "@convax/project/canvas"
 import type { NodeProjectCollaborationRuntimeCoordinatorV2 } from "@convax/project/node"
@@ -41,9 +41,9 @@ export interface MainCanvasCollaborationCompositionV2 {
 }
 
 export function createMainCanvasOwnerRuntimeV2(
-  authority: VerifiedProtocolAuthorityV2,
-): DocumentOwnerRuntimeV2<"canvas"> {
-  const selected = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+  authority: CurrentProtocolAuthority,
+): DocumentOwnerRuntime<"canvas"> {
+  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
     .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
   if ("status" in selected) throw new Error(`Canvas owner runtime is ${selected.code}`)
   return selected
@@ -54,19 +54,19 @@ export function createMainCanvasOwnerRuntimeV2(
  * Desktop never casts an old reducer command or mints a proof.
  */
 export function createMainCanvasCollaborationCompositionV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
+  readonly authority: CurrentProtocolAuthority
   /** Share this runtime with Canvas genesis build/verification when available. */
-  readonly canvasOwner?: DocumentOwnerRuntimeV2<"canvas">
+  readonly canvasOwner?: DocumentOwnerRuntime<"canvas">
   readonly projects: Pick<NodeProjectCollaborationRuntimeCoordinatorV2, "acquire">
   readonly projectIndexes: ProjectIndexCanvasApplicationPortV2
   readonly materializers: ProjectCollaborationMaterializerRegistryV2
   readonly localAuthority: CurrentLocalReplicaAuthoritySourceV2
   readonly incomingAuthority: IncomingReplicaAuthoritySourceV2
-  readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
+  readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
   readonly applicationCommands: CanvasApplicationCommandAdapterV2
-  readonly createOperationId: () => Id128V2
-  readonly createSessionId: () => Id128V2
-  readonly createCursorToken: () => Id128V2
+  readonly createOperationId: () => Id128
+  readonly createSessionId: () => Id128
+  readonly createCursorToken: () => Id128
   readonly artifactAuthority?: CanvasRouteArtifactAuthorityV2
   readonly factAuthority?: CanvasRouteExternalFactAuthorityV2
 }): MainCanvasCollaborationCompositionV2 {

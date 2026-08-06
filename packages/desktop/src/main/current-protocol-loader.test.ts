@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { encodeCurrentProtocolDescriptor, parseDigestV2 } from "@convax/collaboration";
+import { encodeCurrentProtocolDescriptor, parseDigest } from "@convax/collaboration";
 
 import { loadCurrentCollaborationProtocol, nodeCurrentProtocolDescriptorSource } from "./current-protocol-loader";
 
@@ -21,7 +21,7 @@ describe("Desktop staged current protocol loader", () => {
     const authority = await loadCurrentCollaborationProtocol({ explicitProtocolRoot: root });
 
     expect(authority.protocolDigest).toBe(
-      parseDigestV2("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
+      parseDigest("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
     );
   });
 

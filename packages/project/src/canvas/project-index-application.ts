@@ -1,30 +1,20 @@
 import {
-  encodeRestrictedJcsV2,
-  parseId128V2,
-  typedIntentDigestV3,
-  type CanvasIdV2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
-  type DigestV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type LocalCommitResultV2,
-  type LocalCommitResultV3,
-  type OwnerExternalFactPortV2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerIntentDependenciesV2,
-  type OwnerValidatedStateV2,
-  type PreparedLocalIntentV2,
-  type ProjectIdV2,
+  encodeRestrictedJcs,
+  parseId128,
+  type CanvasId,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentScope,
+  type Id128,
+  type LocalCommitResult,
+  type OwnerExternalFactPort,
+  type OwnerIntentConstructionContext,
+  type OwnerIntentDependencies,
+  type OwnerValidatedState,
+  type PreparedLocalIntent,
+  type ProjectId,
 } from "@convax/collaboration"
 
-/**
- * Protocol-neutral owner application result. Each member retains its decoded
- * frame identity; callers must dispatch by the closed frame/header format and
- * must never cast, transcode, or re-sign a V2 frame as V3.
- */
-export type ProjectDecodedCausalEditFrameV2OrV3 = DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3
-export type ProjectLocalCommitResultV2OrV3 = LocalCommitResultV2 | LocalCommitResultV3
 import {
   constructProjectCanvasRouteActivationIntentV2,
   constructProjectCanvasRouteRenameIntentV2,
@@ -50,26 +40,26 @@ import {
 } from "./application"
 
 export interface ProjectIndexDocumentSessionPortV2 {
-  readonly scope: DocumentScopeV2 & { readonly docKind: "project-index" }
-  query<T>(project: (state: OwnerValidatedStateV2<"project-index">) => T): Promise<T>
+  readonly scope: DocumentScope & { readonly docKind: "project-index" }
+  query<T>(project: (state: OwnerValidatedState<"project-index">) => T): Promise<T>
   submit(input: {
-    readonly operationId?: Id128V2
+    readonly operationId?: Id128
     readonly prepare: (input: {
-      readonly base: OwnerValidatedStateV2<"project-index">
-      readonly context: OwnerIntentConstructionContextV2
+      readonly base: OwnerValidatedState<"project-index">
+      readonly context: OwnerIntentConstructionContext
       readonly signal?: AbortSignal
-    }) => Promise<PreparedLocalIntentV2> | PreparedLocalIntentV2
+    }) => Promise<PreparedLocalIntent> | PreparedLocalIntent
     readonly signal?: AbortSignal
-  }): Promise<ProjectLocalCommitResultV2OrV3>
+  }): Promise<LocalCommitResult>
 }
 
 export type ProjectIndexFactResolutionResultV2 =
-  | Readonly<{ status: "resolved"; port: OwnerExternalFactPortV2<"project-index"> }>
+  | Readonly<{ status: "resolved"; port: OwnerExternalFactPort<"project-index"> }>
   | Readonly<{ status: "pending" | "rejected" }>
 
 export interface ProjectIndexFactResolutionPortV2 {
   resolve(input: {
-    readonly dependencies: OwnerIntentDependenciesV2<"project-index">
+    readonly dependencies: OwnerIntentDependencies<"project-index">
     readonly signal?: AbortSignal
   }): Promise<ProjectIndexFactResolutionResultV2>
 }
@@ -77,21 +67,21 @@ export interface ProjectIndexFactResolutionPortV2 {
 export interface ProjectCanvasGenesisStagingPortV2 {
   /** Product preflight only: avoids writing F when no author can possibly produce G. */
   preflightCanvasGenesis(input: {
-    readonly projectIndexScope: DocumentScopeV2 & { readonly docKind: "project-index" }
+    readonly projectIndexScope: DocumentScope & { readonly docKind: "project-index" }
     readonly signal?: AbortSignal
   }): Promise<"ready" | "pending" | "rejected">
   stageCanvasGenesis(input: {
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
+    readonly scope: DocumentScope & { readonly docKind: "canvas" }
     readonly predecessor: {
-      readonly frame: ProjectDecodedCausalEditFrameV2OrV3
-      readonly acceptedFrontierDigest: DigestV2
+      readonly frame: DecodedCausalEditFrame
+      readonly acceptedFrontierDigest: Digest
     }
     readonly signal?: AbortSignal
   }): Promise<
     | Readonly<{
-        readonly predecessorFrameDigest: DigestV2
-        readonly stagedProjectIndexFrontierDigest: DigestV2
-        readonly checkpointObjectDigest: DigestV2
+        readonly predecessorFrameDigest: Digest
+        readonly stagedProjectIndexFrontierDigest: Digest
+        readonly checkpointObjectDigest: Digest
       }>
     | "pending"
     | "rejected"
@@ -102,120 +92,8 @@ export interface CreateProjectIndexCanvasApplicationOptionsV2 {
   readonly session: ProjectIndexDocumentSessionPortV2
   readonly facts: ProjectIndexFactResolutionPortV2
   readonly genesis: ProjectCanvasGenesisStagingPortV2
-  readonly createOperationId: () => Id128V2
-  readonly createShardEpoch: () => Id128V2
-}
-
-export interface ProjectIndexGenesisRoutePublicationV3 {
-  inspect(input: {
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
-  }): Promise<"absent" | "staged" | "live" | "rejected">
-  stage(input: {
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
-    readonly operationId: Id128V2
-    readonly title: string
-  }): Promise<ProjectLocalCommitResultV2OrV3>
-  activate(input: {
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
-    readonly operationId: Id128V2
-    readonly predecessorFrameDigest: DigestV2
-    readonly stagedProjectIndexFrontierDigest: DigestV2
-    readonly canvasGenesisCheckpointObjectDigest: DigestV2
-  }): Promise<ProjectLocalCommitResultV2OrV3 | "already-live">
-}
-
-/**
- * Owner-defined exact stage/activate seam used by the V3 native provisioner.
- * It exposes no Y.Doc and accepts no frame bytes; Desktop only supplies the
- * precommitted scope and native durability identities.
- */
-export function createProjectIndexGenesisRoutePublicationV3(input: {
-  readonly session: ProjectIndexDocumentSessionPortV2
-  readonly facts: ProjectIndexFactResolutionPortV2
-}): ProjectIndexGenesisRoutePublicationV3 {
-  const prepare = async (
-    context: OwnerIntentConstructionContextV2,
-    typedIntent: Parameters<typeof projectIndexIntentDependenciesV2>[1],
-    signal?: AbortSignal,
-  ): Promise<PreparedLocalIntentV2> => {
-    let exactIntent: Uint8Array
-    try {
-      exactIntent = encodeRestrictedJcsV2(typedIntent)
-    } catch (error) {
-      console.error("ProjectIndex V3 intent JCS rejected", typedIntent)
-      throw error
-    }
-    let dependencies: OwnerIntentDependenciesV2<"project-index">
-    try {
-      dependencies = projectIndexIntentDependenciesV2(
-        { ...context, intentDigest: typedIntentDigestV3(exactIntent) },
-        typedIntent,
-      )
-    } catch (error) {
-      console.error("ProjectIndex V3 dependency construction failed", typedIntent, context)
-      throw error
-    }
-    let resolved: ProjectIndexFactResolutionResultV2
-    try {
-      resolved = await input.facts.resolve({ dependencies, signal })
-    } catch (error) {
-      console.error("ProjectIndex V3 fact resolution failed", dependencies)
-      throw error
-    }
-    if (resolved.status !== "resolved") throw new Error(`ProjectIndex genesis route dependency is ${resolved.status}`)
-    return Object.freeze({ typedIntent, externalFacts: resolved.port })
-  }
-  const inspect: ProjectIndexGenesisRoutePublicationV3["inspect"] = async ({ scope }) => {
-    if (scope.projectId !== input.session.scope.projectId || scope.projectEpoch !== input.session.scope.projectEpoch) return "rejected"
-    return input.session.query((state) => {
-      const snapshot = requireProjectIndexSnapshotV2(state)
-      const projection = projectCanvasRouteProjectionV2(snapshot, scope.docId as CanvasIdV2)
-      if (projection.state === "absent") return "absent" as const
-      if (projection.currentShardEpoch !== scope.shardEpoch) return "rejected" as const
-      return projection.state === "staged" ? "staged" as const : projection.state === "live" ? "live" as const : "rejected" as const
-    })
-  }
-  return Object.freeze({
-    inspect,
-    async stage({ scope, operationId, title }: Parameters<ProjectIndexGenesisRoutePublicationV3["stage"]>[0]) {
-      if (await inspect({ scope }) !== "absent") throw new Error("ProjectIndex genesis route is not absent")
-      let derivedCanvasId: CanvasIdV2 | undefined
-      const committed = await input.session.submit({
-        operationId: parseId128V2(operationId),
-        prepare: async ({ base, context, signal }) => {
-          const constructed = constructProjectCanvasRouteStageIntentV2({
-            snapshot: requireProjectIndexSnapshotV2(base), context,
-            shardEpoch: scope.shardEpoch, title: validateProjectCanvasTitleV2(title),
-          })
-          if (constructed === "rejected") throw new Error("ProjectIndex default Canvas route stage was rejected")
-          derivedCanvasId = constructed.canvasId
-          if (constructed.canvasId !== scope.docId) throw new Error("Default Canvas claim does not match its stage operation")
-          return prepare(context, constructed.intent, signal)
-        },
-      })
-      if (derivedCanvasId !== scope.docId) throw new Error("ProjectIndex default Canvas route crossed its precommitted scope")
-      return committed
-    },
-    async activate({ scope, operationId, predecessorFrameDigest, stagedProjectIndexFrontierDigest, canvasGenesisCheckpointObjectDigest }: Parameters<ProjectIndexGenesisRoutePublicationV3["activate"]>[0]) {
-      const current = await inspect({ scope })
-      if (current === "live") return "already-live"
-      if (current !== "staged") throw new Error("ProjectIndex Canvas route is not staged")
-      return input.session.submit({
-        operationId: parseId128V2(operationId),
-        prepare: async ({ base, context, signal }) => {
-          const intent = constructProjectCanvasRouteActivationIntentV2({
-            snapshot: requireProjectIndexSnapshotV2(base), context,
-            canvasId: scope.docId as CanvasIdV2,
-            projectIndexRouteDependencyFrameDigest: predecessorFrameDigest,
-            canvasGenesisCheckpointObjectDigest,
-            stagedProjectIndexFrontierDigest,
-          })
-          if (intent === "rejected") throw new Error("ProjectIndex default Canvas route activation was rejected")
-          return prepare(context, intent, signal)
-        },
-      })
-    },
-  })
+  readonly createOperationId: () => Id128
+  readonly createShardEpoch: () => Id128
 }
 
 class ProjectCanvasApplicationAttemptErrorV2 extends Error {
@@ -235,7 +113,7 @@ class ProjectCanvasApplicationAttemptErrorV2 extends Error {
 export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplicationPortV2, ProjectIndexCurrentBlobReferencePortV2 {
   constructor(private readonly options: CreateProjectIndexCanvasApplicationOptionsV2) {}
 
-  async queryCatalog(input: { readonly projectId: ProjectIdV2 }): Promise<ProjectCanvasCatalogProjectionV2> {
+  async queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjectionV2> {
     this.requireProject(input.projectId)
     const snapshot = await this.options.session.query(requireProjectIndexSnapshotV2)
     const preflight = await this.options.genesis.preflightCanvasGenesis({
@@ -251,13 +129,13 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     )
   }
 
-  async queryCurrentBlobDigests(input: { readonly projectId: ProjectIdV2 }): Promise<ReadonlySet<DigestV2>> {
+  async queryCurrentBlobDigests(input: { readonly projectId: ProjectId }): Promise<ReadonlySet<Digest>> {
     this.requireProject(input.projectId)
     return new Set((await this.queryCurrentResources(input)).map(({ reference }) => reference.blob.digest))
   }
 
   async queryCurrentResources(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
   }) {
     this.requireProject(input.projectId)
     return this.options.session.query((state) => {
@@ -287,7 +165,7 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
       if (input.command.kind === "project.canvas.route.create/2") {
         return await this.createCanvas(input.projectId, input.command.title, input.signal)
       }
-      const operationId = parseId128V2(this.options.createOperationId())
+      const operationId = parseId128(this.options.createOperationId())
       const canvasId = input.command.canvasId
       await this.options.session.submit({
         operationId,
@@ -313,7 +191,7 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
   }
 
   private async createCanvas(
-    projectId: ProjectIdV2,
+    projectId: ProjectId,
     titleInput: string,
     signal?: AbortSignal,
   ): Promise<ProjectCanvasRouteCommandResultV2> {
@@ -325,9 +203,9 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     if (preflight === "pending") return { status: "rejected", code: "dependency-pending" }
     if (preflight === "rejected") return { status: "rejected", code: "read-only-recovery-required" }
     if (signal?.aborted) return { status: "rejected", code: "cancelled" }
-    const stageOperationId = parseId128V2(this.options.createOperationId())
-    const shardEpoch = parseId128V2(this.options.createShardEpoch())
-    let stagedCanvasId: CanvasIdV2 | undefined
+    const stageOperationId = parseId128(this.options.createOperationId())
+    const shardEpoch = parseId128(this.options.createShardEpoch())
+    let stagedCanvasId: CanvasId | undefined
     const staged = await this.options.session.submit({
       operationId: stageOperationId,
       signal,
@@ -363,7 +241,7 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     if (genesis === "rejected") return { status: "rejected", code: "read-only-recovery-required" }
     if (signal?.aborted) return { status: "rejected", code: "cancelled" }
 
-    const activationOperationId = parseId128V2(this.options.createOperationId())
+    const activationOperationId = parseId128(this.options.createOperationId())
     await this.options.session.submit({
       operationId: activationOperationId,
       signal,
@@ -389,10 +267,10 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
   }
 
   private async prepareIntent(
-    context: OwnerIntentConstructionContextV2,
+    context: OwnerIntentConstructionContext,
     typedIntent: Parameters<typeof projectIndexIntentDependenciesV2>[1],
     signal?: AbortSignal,
-  ): Promise<PreparedLocalIntentV2> {
+  ): Promise<PreparedLocalIntent> {
     const dependencies = projectIndexIntentDependenciesV2(
       { ...context, intentDigest: projectIndexIntentDigestV2(typedIntent) },
       typedIntent,
@@ -418,7 +296,7 @@ export class ProjectIndexCanvasApplicationV2 implements ProjectIndexCanvasApplic
     throw error
   }
 
-  private requireProject(projectId: ProjectIdV2): void {
+  private requireProject(projectId: ProjectId): void {
     if (this.options.session.scope.projectId !== projectId) {
       throw new TypeError("ProjectIndex session belongs to another Project")
     }
@@ -432,7 +310,7 @@ class ProjectCanvasRouteRejectionV2 extends Error {
   }
 }
 
-function routeRejection(snapshot: ProjectIndexSnapshotV2, canvasId: CanvasIdV2) {
+function routeRejection(snapshot: ProjectIndexSnapshotV2, canvasId: CanvasId) {
   const route = projectProjectIndexSnapshotV2(snapshot).canvasRoutes.find(
     (candidate) => candidate.canvasId === canvasId,
   )
@@ -462,7 +340,7 @@ function projectCanvasCatalogFromSnapshotV2(
   }), snapshot.identity.projectId)
 }
 
-function requireProjectIndexSnapshotV2(state: OwnerValidatedStateV2<"project-index">): ProjectIndexSnapshotV2 {
+function requireProjectIndexSnapshotV2(state: OwnerValidatedState<"project-index">): ProjectIndexSnapshotV2 {
   const snapshot = projectIndexSnapshotFromValidatedOwnerStateV2(state)
   if (snapshot === null) throw new Error("ProjectIndex owner returned an invalid validated state")
   return snapshot

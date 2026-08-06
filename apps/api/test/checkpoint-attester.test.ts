@@ -1,21 +1,21 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  encodeCheckpointValidationCarrierV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseCanvasIdV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseUint32V2,
-  parseUint64V2,
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  type CheckpointCarrierSectionKindV2,
-  type CheckpointValidationCarrierIndexV2,
-  type DigestV2,
-  type OwnerProcessValueFactoryV2,
-  type SelectedDocumentOwnerArtifactDefinitionV2,
+  encodeBase64url,
+  encodeCheckpointValidationCarrier,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  ownerCanonicalizerDescriptorDigest,
+  parseCanvasId,
+  parseId128,
+  parseProjectId,
+  parseUint32,
+  parseUint64,
+  createSelectedDocumentOwnerArtifactFactory,
+  type CheckpointCarrierSectionKind,
+  type CheckpointValidationCarrierIndex,
+  type Digest,
+  type OwnerProcessValueFactory,
+  type SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
 import {
   CHECKPOINT_ATTESTER_CONTENT_TYPE_V2,
@@ -30,13 +30,13 @@ import {
 import { loadApiTestProtocolAuthorityV2 } from "./authority-fixture"
 
 const encoder = new TextEncoder()
-const digest = (label: string) => ordinarySha256V2(encoder.encode(label))
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => byte)))
-const signature = encodeBase64urlV2(Uint8Array.from({ length: 64 }, () => 9)) as never
+const digest = (label: string) => ordinarySha256(encoder.encode(label))
+const id = (byte: number) => parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => byte)))
+const signature = encodeBase64url(Uint8Array.from({ length: 64 }, () => 9)) as never
 
 function carrierFixture(): Readonly<{
   carrier: Uint8Array
-  index: CheckpointValidationCarrierIndexV2
+  index: CheckpointValidationCarrierIndex
 }> {
   const values = [
     ["proposal-checkpoint", "proposal-checkpoint", "checkpoint"],
@@ -45,29 +45,29 @@ function carrierFixture(): Readonly<{
     ["validation-artifact", "kernel-artifact", "kernel"],
     ["validation-artifact", "control-artifact", "control"],
     ["validation-artifact", "project-artifact", "project"],
-  ] as const satisfies readonly (readonly [CheckpointCarrierSectionKindV2, string, string])[]
+  ] as const satisfies readonly (readonly [CheckpointCarrierSectionKind, string, string])[]
   const sectionBytes = values.map(([, , body]) => encoder.encode(body))
   let offset = 0
   const sections = values.map(([kind, subject], ordinal) => {
     const bytes = sectionBytes[ordinal]!
     const section = {
-      ordinal: parseUint32V2(String(ordinal)),
+      ordinal: parseUint32(String(ordinal)),
       kind,
       subjectDigest: digest(subject),
-      byteOffset: parseUint64V2(String(offset)),
-      byteLength: parseUint64V2(String(bytes.byteLength)),
-      sha256: ordinarySha256V2(bytes),
+      byteOffset: parseUint64(String(offset)),
+      byteLength: parseUint64(String(bytes.byteLength)),
+      sha256: ordinarySha256(bytes),
     }
     offset += bytes.byteLength
     return section
   })
-  const index: CheckpointValidationCarrierIndexV2 = {
+  const index: CheckpointValidationCarrierIndex = {
     format: "convax.checkpoint-validation-carrier-index/2",
     scope: {
-      projectId: parseProjectIdV2("project"),
+      projectId: parseProjectId("project"),
       projectEpoch: id(1),
       docKind: "canvas",
-      docId: parseCanvasIdV2(`cv_${"3".repeat(64)}`),
+      docId: parseCanvasId(`cv_${"3".repeat(64)}`),
       shardEpoch: id(2),
     },
     proposalCheckpointDigest: digest("proposal-checkpoint"),
@@ -76,13 +76,13 @@ function carrierFixture(): Readonly<{
     validationArtifactSetDigest: digest("artifact-set"),
     sections,
     totalSectionBytes: String(offset) as never,
-    protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5" as DigestV2,
+    protocolDigest: "de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5" as Digest,
   }
-  return { carrier: encodeCheckpointValidationCarrierV2(index, sectionBytes), index }
+  return { carrier: encodeCheckpointValidationCarrier(index, sectionBytes), index }
 }
 
-function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> {
-  const schemaDigest = "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36" as DigestV2
+function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
+  const schemaDigest = "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36" as Digest
   const descriptor = Object.freeze({
     format: "convax.owner-canonicalizer-descriptor/2" as const,
     owner: "canvas" as const,
@@ -92,16 +92,16 @@ function fakeOwnerDefinition(): SelectedDocumentOwnerArtifactDefinitionV2<"canva
     exactBytePolicy: "parse-reencode-byte-equal" as const,
     unknownStatePolicy: "reject" as const,
   })
-  return { owner: "canvas", createDefinitions(process: OwnerProcessValueFactoryV2<"canvas">) { return { protocol: {
+  return { owner: "canvas", createDefinitions(process: OwnerProcessValueFactory<"canvas">) { return { protocol: {
     owner: "canvas",
     schemaDigest,
     canonicalizerDescriptor: descriptor,
-    canonicalizerDigest: ownerCanonicalizerDescriptorDigestV2(descriptor),
+    canonicalizerDigest: ownerCanonicalizerDescriptorDigest(descriptor),
     decodeIntent: () => ({ kind: "noop" }),
     validateBase: () => process.wrapValidatedState(null),
     applyIntent: () => process.wrapApplyResult(null),
     validatePost: () => process.wrapValidatedState(null),
-    canonicalStateBytes: () => encodeRestrictedJcsV2({ format: descriptor.canonicalStateFormat }),
+    canonicalStateBytes: () => encodeRestrictedJcs({ format: descriptor.canonicalStateFormat }),
     deriveActualWriteEvidence: () => { throw new Error("not used") },
   }, closure: {
     inspectIntent: () => ({ kind: "ordinary" }),
@@ -141,7 +141,7 @@ class MemoryEphemeralStore implements CheckpointAttesterEphemeralStoreV2 {
                 return new ReadableStream({ start(controller) { controller.enqueue(bytes.slice()); controller.close() } })
               },
             }
-            return { handle, byteLength: parseUint64V2(String(bytes.byteLength)), sha256: ordinarySha256V2(bytes) }
+            return { handle, byteLength: parseUint64(String(bytes.byteLength)), sha256: ordinarySha256(bytes) }
           },
         }
         return writer
@@ -165,7 +165,7 @@ async function options(overrides?: Partial<CheckpointAttesterOptionsV2>): Promis
   const audits: Parameters<CheckpointAttesterAuditV2["record"]>[0][] = []
   const signCalls = { value: 0 }
   const protocolAuthority = await loadApiTestProtocolAuthorityV2()
-  const ownerRuntime = createSelectedDocumentOwnerArtifactFactoryV2(protocolAuthority, "canvas").createRuntime(fakeOwnerDefinition())
+  const ownerRuntime = createSelectedDocumentOwnerArtifactFactory(protocolAuthority, "canvas").createRuntime(fakeOwnerDefinition())
   if ("status" in ownerRuntime) throw new Error(ownerRuntime.code)
   const value: CheckpointAttesterOptionsV2 = {
     protocolAuthority,

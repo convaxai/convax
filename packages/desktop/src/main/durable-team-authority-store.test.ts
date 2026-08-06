@@ -3,15 +3,15 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeBase64urlV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
+  encodeBase64url,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
 } from "@convax/collaboration"
 import {
   CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2,
@@ -26,13 +26,13 @@ import {
   type DesktopTeamAuthorityCandidateV1,
 } from "./durable-team-authority-store"
 
-const id = (byte: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(byte)))
-const digest = (digit: string) => parseDigestV2(digit.repeat(64))
-const projectId = parseProjectIdV2("project-team-authority")
-const memberId = parseMemberIdV2(id(2))
-const publicKey = parsePublicKeyV2(encodeBase64urlV2(new Uint8Array(32).fill(3)))
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(4)))
-const protocolDigest = parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
+const id = (byte: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(byte)))
+const digest = (digit: string) => parseDigest(digit.repeat(64))
+const projectId = parseProjectId("project-team-authority")
+const memberId = parseMemberId(id(2))
+const publicKey = parsePublicKey(encodeBase64url(new Uint8Array(32).fill(3)))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(4)))
+const protocolDigest = parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest)
 const trustBundleDigest = digest("2")
 
 describe("NodeDurableTeamAuthorityStoreV1", () => {
@@ -91,14 +91,14 @@ function candidate(sequence: string, membershipEpoch = id(6)): DesktopTeamAuthor
   const memberAuthorizationEpoch = id(5)
   const snapshotCore = {
     format: "convax.membership-snapshot-core/2" as const,
-    projectId, projectEpoch: id(4), membershipEpoch, membershipSequence: parseUint64V2(sequence),
-    registrySequence: parseUint64V2("1"), registryRootDigest: digest("3"),
-    members: [{ memberId, memberSigningPublicKey: publicKey, role: "editor" as const, state: "active" as const, memberAuthorizationEpoch, memberMutationCounter: parseUint64V2(sequence) }],
+    projectId, projectEpoch: id(4), membershipEpoch, membershipSequence: parseUint64(sequence),
+    registrySequence: parseUint64("1"), registryRootDigest: digest("3"),
+    members: [{ memberId, memberSigningPublicKey: publicKey, role: "editor" as const, state: "active" as const, memberAuthorizationEpoch, memberMutationCounter: parseUint64(sequence) }],
     replicas: [], protocolDigest, trustBundleDigest, serviceKeyPurpose: "membership" as const, serviceKeyId: "membership-1",
   }
   const membershipSnapshot: MembershipSnapshotV2 = {
     format: "convax.membership-snapshot/2", core: snapshotCore,
-    coreDigest: structuredDigestV2("convax.membership-snapshot-core/2", snapshotCore), serviceSignature: signature,
+    coreDigest: structuredDigest("convax.membership-snapshot-core/2", snapshotCore), serviceSignature: signature,
   }
   const adminCore = {
     format: "convax.project-admin-capability-core/2" as const,
@@ -109,7 +109,7 @@ function candidate(sequence: string, membershipEpoch = id(6)): DesktopTeamAuthor
   }
   const adminCapability: ProjectAdminCapabilityV2 = {
     format: "convax.project-admin-capability/2", core: adminCore,
-    coreDigest: structuredDigestV2("convax.project-admin-capability-core/2", adminCore), serviceSignature: signature,
+    coreDigest: structuredDigest("convax.project-admin-capability-core/2", adminCore), serviceSignature: signature,
   }
   const credentialCore = {
     format: "convax.member-credential-core/2" as const,
@@ -120,7 +120,7 @@ function candidate(sequence: string, membershipEpoch = id(6)): DesktopTeamAuthor
   }
   const memberCredential: MemberCredentialV2 = {
     format: "convax.member-credential/2", core: credentialCore,
-    coreDigest: structuredDigestV2("convax.member-credential-core/2", credentialCore), serviceSignature: signature,
+    coreDigest: structuredDigest("convax.member-credential-core/2", credentialCore), serviceSignature: signature,
   }
   return { membershipSnapshot, memberCredential, adminCapability, replicaActorCredential: null, replicaEditAuthorization: null }
 }

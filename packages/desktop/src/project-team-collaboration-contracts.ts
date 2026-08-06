@@ -1,4 +1,4 @@
-import { parseProjectIdV2, parseUint64V2 } from "@convax/collaboration"
+import { parseProjectId, parseUint64 } from "@convax/collaboration"
 
 export const projectTeamCollaborationIpcChannelsV2 = Object.freeze({
   getStatus: "project:team-collaboration-status",
@@ -99,9 +99,9 @@ export function parseProjectTeamInvitationV2(value: unknown): ProjectTeamInvitat
   }
   return Object.freeze({
     invitationToken: record.invitationToken,
-    projectId: parseProjectIdV2(record.projectId),
+    projectId: parseProjectId(record.projectId),
     initialRole: record.initialRole,
-    expiresAtUnixMs: parseUint64V2(record.expiresAtUnixMs),
+    expiresAtUnixMs: parseUint64(record.expiresAtUnixMs),
   })
 }
 

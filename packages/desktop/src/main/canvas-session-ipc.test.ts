@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test"
-import { encodeBase64urlV2, parseId128V2 } from "@convax/collaboration"
+import { encodeBase64url, parseId128 } from "@convax/collaboration"
 import type { IpcMainInvokeEvent } from "electron"
 
 import { canvasSessionIpcChannels } from "../canvas-session-contracts"
@@ -7,7 +7,7 @@ import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-s
 import { registerCanvasSessionIpcV2 } from "./canvas-session-ipc"
 
 const ref = Object.freeze({ canvasId: "canvas-one", scopeId: "project-one" })
-const sessionId = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
+const sessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
 
 type Handler = (event: IpcMainInvokeEvent, input: unknown) => unknown
 type DestroyListener = () => void

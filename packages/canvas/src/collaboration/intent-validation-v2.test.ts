@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { encodeRestrictedJcsV2 } from "@convax/collaboration"
+import { encodeRestrictedJcs } from "@convax/collaboration"
 import { assertCanvasTypedIntentV2, CANVAS_INTENT_KINDS_V2, decodeCanvasTypedIntentV2 } from "./intent-validation"
 import { applyCanvasCandidateIntentV2 } from "./reducer"
 import type { CanvasTypedIntentUnionV2 } from "./types"
@@ -12,7 +12,7 @@ describe("Canvas v2 closed typed-intent admission", () => {
     expect(CANVAS_INTENT_KINDS_V2).toHaveLength(22)
     const intent = nodeCreateIntent()
     expect(() => assertCanvasTypedIntentV2(intent)).not.toThrow()
-    expect(decodeCanvasTypedIntentV2(encodeRestrictedJcsV2(intent))).toEqual(intent)
+    expect(decodeCanvasTypedIntentV2(encodeRestrictedJcs(intent))).toEqual(intent)
 
     for (const extra of [
       { document: {} },

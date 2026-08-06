@@ -3,27 +3,27 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  decodeRestrictedJcsV2,
-  encodeBase64urlV2,
-  encodeRestrictedJcsTextV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSessionIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  structuredDigestV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type PublicKeyV2,
-  type ReplicaIdV2,
-  type ReplicaSignerPortV2,
-  type SessionIdV2,
-  type Uint64V2,
+  decodeRestrictedJcs,
+  encodeBase64url,
+  encodeRestrictedJcsText,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSessionId,
+  parseSignature,
+  parseUint64,
+  structuredDigest,
+  type Id128,
+  type MemberId,
+  type ProjectId,
+  type PublicKey,
+  type ReplicaId,
+  type ReplicaSignerPort,
+  type SessionId,
+  type Uint64,
 } from "@convax/collaboration"
 
 import type { ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault"
@@ -31,28 +31,28 @@ import type { ElectronSafeStoragePortV2 } from "./electron-replica-signing-vault
 interface TeamIdentityVaultRecordV2 {
   readonly format: "convax.desktop-team-identity-key/2"
   readonly purpose: "member" | "session"
-  readonly projectId: ProjectIdV2
-  readonly memberId: MemberIdV2
-  readonly projectEpoch: Id128V2 | null
-  readonly replicaId: ReplicaIdV2 | null
-  readonly sessionId: SessionIdV2 | null
-  readonly expiresAtUnixMs: Uint64V2 | null
+  readonly projectId: ProjectId
+  readonly memberId: MemberId
+  readonly projectEpoch: Id128 | null
+  readonly replicaId: ReplicaId | null
+  readonly sessionId: SessionId | null
+  readonly expiresAtUnixMs: Uint64 | null
   readonly privateKeyPkcs8Base64url: string
 }
 
 export interface TeamIdentitySigningKeyV1 {
-  readonly publicKey: PublicKeyV2
-  readonly signer: ReplicaSignerPortV2
+  readonly publicKey: PublicKey
+  readonly signer: ReplicaSignerPort
 }
 
-type MemberKeyIdentityV1 = Readonly<{ projectId: ProjectIdV2; memberId: MemberIdV2 }>
+type MemberKeyIdentityV1 = Readonly<{ projectId: ProjectId; memberId: MemberId }>
 type SessionKeyIdentityV1 = Readonly<{
-  projectId: ProjectIdV2
-  projectEpoch: Id128V2
-  memberId: MemberIdV2
-  replicaId: ReplicaIdV2
-  sessionId: SessionIdV2
-  expiresAtUnixMs: Uint64V2
+  projectId: ProjectId
+  projectEpoch: Id128
+  memberId: MemberId
+  replicaId: ReplicaId
+  sessionId: SessionId
+  expiresAtUnixMs: Uint64
 }>
 
 /** Main-private OS-vault key owner for long-lived member and per-session signing identities. */
@@ -67,8 +67,8 @@ export class ElectronTeamIdentityVaultV1 {
   ensureMemberKey(input: MemberKeyIdentityV1): Promise<TeamIdentitySigningKeyV1> {
     const identity = Object.freeze({
       purpose: "member" as const,
-      projectId: parseProjectIdV2(input.projectId),
-      memberId: parseMemberIdV2(input.memberId),
+      projectId: parseProjectId(input.projectId),
+      memberId: parseMemberId(input.memberId),
       projectEpoch: null,
       replicaId: null,
       sessionId: null,
@@ -77,11 +77,11 @@ export class ElectronTeamIdentityVaultV1 {
     return this.ensure(identity)
   }
 
-  openMemberSigner(input: MemberKeyIdentityV1 & { readonly expectedPublicKey: PublicKeyV2 }) {
+  openMemberSigner(input: MemberKeyIdentityV1 & { readonly expectedPublicKey: PublicKey }) {
     return this.open(Object.freeze({
       purpose: "member" as const,
-      projectId: parseProjectIdV2(input.projectId),
-      memberId: parseMemberIdV2(input.memberId),
+      projectId: parseProjectId(input.projectId),
+      memberId: parseMemberId(input.memberId),
       projectEpoch: null,
       replicaId: null,
       sessionId: null,
@@ -93,7 +93,7 @@ export class ElectronTeamIdentityVaultV1 {
     return this.ensure(parseSessionIdentity(input))
   }
 
-  openSessionSigner(input: SessionKeyIdentityV1 & { readonly expectedPublicKey: PublicKeyV2 }) {
+  openSessionSigner(input: SessionKeyIdentityV1 & { readonly expectedPublicKey: PublicKey }) {
     return this.open(parseSessionIdentity(input), input.expectedPublicKey)
   }
 
@@ -110,11 +110,11 @@ export class ElectronTeamIdentityVaultV1 {
   }
 
   async pruneExpiredSessionKeys(input: {
-    readonly nowUnixMs: Uint64V2
+    readonly nowUnixMs: Uint64
     readonly maximumEntries?: number
   }): Promise<number> {
     this.requireSecureBackend()
-    const now = BigInt(parseUint64V2(input.nowUnixMs))
+    const now = BigInt(parseUint64(input.nowUnixMs))
     const maximumEntries = input.maximumEntries ?? 1_024
     if (!Number.isSafeInteger(maximumEntries) || maximumEntries < 1 || maximumEntries > 4_096) {
       throw new TypeError("Team identity vault prune bound is invalid")
@@ -148,7 +148,7 @@ export class ElectronTeamIdentityVaultV1 {
         ...identity,
         privateKeyPkcs8Base64url: privateKeyPkcs8.toString("base64url"),
       })
-      const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsTextV2(record))
+      const encrypted = this.safeStorage.encryptString(encodeRestrictedJcsText(record))
       try {
         await writeNewEncrypted(target, encrypted)
       } catch (error) {
@@ -164,14 +164,14 @@ export class ElectronTeamIdentityVaultV1 {
 
   private async open(
     identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">,
-    expectedPublicKey: PublicKeyV2,
-  ): Promise<ReplicaSignerPortV2 | "missing" | "unavailable" | "rejected"> {
+    expectedPublicKey: PublicKey,
+  ): Promise<ReplicaSignerPort | "missing" | "unavailable" | "rejected"> {
     if (!this.hasSecureBackend()) return "unavailable"
     const target = this.target(identity)
     if (!await isFile(target)) return "missing"
     try {
       const loaded = await this.load(identity, target)
-      return loaded.publicKey === parsePublicKeyV2(expectedPublicKey) ? loaded.signer : "rejected"
+      return loaded.publicKey === parsePublicKey(expectedPublicKey) ? loaded.signer : "rejected"
     } catch {
       return "rejected"
     }
@@ -192,13 +192,13 @@ export class ElectronTeamIdentityVaultV1 {
       const privateKey = createPrivateKey({ key: privateDer, format: "der", type: "pkcs8" })
       const publicDer = createPublicKey(privateKey).export({ format: "der", type: "spki" }) as Buffer
       if (publicDer.byteLength < 32) throw new Error("Team identity vault public key is invalid")
-      const publicKey = parsePublicKeyV2(encodeBase64urlV2(publicDer.subarray(publicDer.byteLength - 32)))
-      const signer: ReplicaSignerPortV2 = Object.freeze({
+      const publicKey = parsePublicKey(encodeBase64url(publicDer.subarray(publicDer.byteLength - 32)))
+      const signer: ReplicaSignerPort = Object.freeze({
         async sign(digest: Uint8Array) {
           if (!(digest instanceof Uint8Array) || digest.byteLength !== 32) {
             throw new TypeError("Team identity signer accepts only an exact 32-byte purpose digest")
           }
-          return parseSignatureV2(encodeBase64urlV2(signDigest(null, Buffer.from(digest), privateKey)))
+          return parseSignature(encodeBase64url(signDigest(null, Buffer.from(digest), privateKey)))
         },
       })
       return Object.freeze({ publicKey, signer })
@@ -213,7 +213,7 @@ export class ElectronTeamIdentityVaultV1 {
     let plaintext = ""
     try { plaintext = this.safeStorage.decryptString(encrypted) } finally { encrypted.fill(0) }
     try {
-      return parseRecord(decodeRestrictedJcsV2(new TextEncoder().encode(plaintext)))
+      return parseRecord(decodeRestrictedJcs(new TextEncoder().encode(plaintext)))
     } finally {
       plaintext = ""
     }
@@ -221,8 +221,8 @@ export class ElectronTeamIdentityVaultV1 {
 
   private target(identity: Omit<TeamIdentityVaultRecordV2, "format" | "privateKeyPkcs8Base64url">): string {
     const { expiresAtUnixMs: _expiry, ...nativeIdentity } = identity
-    const digest = structuredDigestV2("convax.desktop-team-identity-native-key-v3/2", nativeIdentity)
-    return path.join(this.rootDirectory, `${parseDigestV2(digest)}.vault`)
+    const digest = structuredDigest("convax.desktop-team-identity-native-key-v3/2", nativeIdentity)
+    return path.join(this.rootDirectory, `${parseDigest(digest)}.vault`)
   }
 
   private hasSecureBackend(): boolean {
@@ -237,12 +237,12 @@ export class ElectronTeamIdentityVaultV1 {
 function parseSessionIdentity(input: SessionKeyIdentityV1) {
   return Object.freeze({
     purpose: "session" as const,
-    projectId: parseProjectIdV2(input.projectId),
-    memberId: parseMemberIdV2(input.memberId),
-    projectEpoch: parseId128V2(input.projectEpoch),
-    replicaId: parseReplicaIdV2(input.replicaId),
-    sessionId: parseSessionIdV2(input.sessionId),
-    expiresAtUnixMs: parseUint64V2(input.expiresAtUnixMs),
+    projectId: parseProjectId(input.projectId),
+    memberId: parseMemberId(input.memberId),
+    projectEpoch: parseId128(input.projectEpoch),
+    replicaId: parseReplicaId(input.replicaId),
+    sessionId: parseSessionId(input.sessionId),
+    expiresAtUnixMs: parseUint64(input.expiresAtUnixMs),
   })
 }
 
@@ -259,8 +259,8 @@ function parseRecord(value: unknown): TeamIdentityVaultRecordV2 {
   const base = {
     format: "convax.desktop-team-identity-key/2" as const,
     purpose: record.purpose,
-    projectId: parseProjectIdV2(record.projectId),
-    memberId: parseMemberIdV2(record.memberId),
+    projectId: parseProjectId(record.projectId),
+    memberId: parseMemberId(record.memberId),
     privateKeyPkcs8Base64url: record.privateKeyPkcs8Base64url,
   }
   if (record.purpose === "member") {
@@ -271,10 +271,10 @@ function parseRecord(value: unknown): TeamIdentityVaultRecordV2 {
   return Object.freeze({
     ...base,
     purpose: "session",
-    projectEpoch: parseId128V2(record.projectEpoch),
-    replicaId: parseReplicaIdV2(record.replicaId),
-    sessionId: parseSessionIdV2(record.sessionId),
-    expiresAtUnixMs: parseUint64V2(record.expiresAtUnixMs),
+    projectEpoch: parseId128(record.projectEpoch),
+    replicaId: parseReplicaId(record.replicaId),
+    sessionId: parseSessionId(record.sessionId),
+    expiresAtUnixMs: parseUint64(record.expiresAtUnixMs),
   })
 }
 

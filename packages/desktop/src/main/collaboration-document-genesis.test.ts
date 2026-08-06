@@ -8,20 +8,20 @@ import {
   type CanvasGenesisBuildAuthorV2,
 } from "@convax/canvas/collaboration"
 import {
-  createSelectedDocumentOwnerArtifactFactoryV2,
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  replicaActorHeadSetDigestV2,
-  type DecodedCausalEditFrameV2,
-  type DocumentScopeV2,
-  type StateVectorV2,
+  createSelectedDocumentOwnerArtifactFactory,
+  encodeBase64url,
+  ordinarySha256,
+  parseActorId,
+  parseCanvasId,
+  parseId128,
+  parseProjectId,
+  parseMemberId,
+  parseReplicaId,
+  parseSignature,
+  replicaActorHeadSetDigest,
+  type DecodedCausalEditFrame,
+  type DocumentScope,
+  type StateVector,
 } from "@convax/collaboration"
 import {
   NodeCollaborationPersistenceV2,
@@ -36,31 +36,31 @@ import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-su
 const bytes = new TextEncoder()
 const projectEpoch = id(1)
 const canvasScope = Object.freeze({
-  projectId: parseProjectIdV2("project"),
+  projectId: parseProjectId("project"),
   projectEpoch,
   docKind: "canvas" as const,
-  docId: parseCanvasIdV2(`cv_${"c".repeat(64)}`),
+  docId: parseCanvasId(`cv_${"c".repeat(64)}`),
   shardEpoch: id(2),
 })
-const projectIndexScope: DocumentScopeV2 = Object.freeze({
+const projectIndexScope: DocumentScope = Object.freeze({
   projectId: canvasScope.projectId,
   projectEpoch,
   docKind: "project-index",
   docId: "project-index",
   shardEpoch: id(3),
-}) as DocumentScopeV2
+}) as DocumentScope
 const predecessor = Object.freeze({
   frame: {
     frameDigest: digest("stage-frame"),
     header: { core: { scope: projectIndexScope } },
-  } as unknown as DecodedCausalEditFrameV2,
+  } as unknown as DecodedCausalEditFrame,
   acceptedFrontierDigest: digest("stage-frontier"),
 })
 
 describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact Canvas CVXCGP02 candidate through the real Node sole-writer barrier", async () => {
     const authority = await loadHistoricalTestAuthorityV2()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas")
+    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
       .createRuntime(selectedCanvasDocumentOwnerArtifactDefinitionV2)
     if ("status" in runtimeResult) throw new Error(runtimeResult.code)
     const author = canvasGenesisAuthor(authority)
@@ -95,7 +95,7 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
       materializer: {
         inspectFrame: async () => { throw new Error("genesis must not inspect a causal frame") },
         applyAcceptedFrame: async () => { throw new Error("genesis must not apply a causal frame") },
-        actorHeadsDigest: replicaActorHeadSetDigestV2,
+        actorHeadsDigest: replicaActorHeadSetDigest,
       },
     })
     try {
@@ -152,8 +152,8 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
       predecessorFrameDigest: predecessor.frame.frameDigest,
       stagedProjectIndexFrontierDigest: predecessor.acceptedFrontierDigest,
       checkpointObjectDigest: digest("G"),
-      checkpointExactBytesSha256: ordinarySha256V2(checkpoint),
-      proofCarrierExactBytesSha256: ordinarySha256V2(carrier),
+      checkpointExactBytesSha256: ordinarySha256(checkpoint),
+      proofCarrierExactBytesSha256: ordinarySha256(carrier),
       durableHeadDigest: digest("durable-head"),
     })
     expect(installedCheckpoint).not.toBe(checkpoint)
@@ -178,8 +178,8 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
       ...predecessor,
       frame: {
         ...predecessor.frame,
-        header: { core: { scope: { ...projectIndexScope, projectId: parseProjectIdV2("other") } } },
-      } as unknown as DecodedCausalEditFrameV2,
+        header: { core: { scope: { ...projectIndexScope, projectId: parseProjectId("other") } } },
+      } as unknown as DecodedCausalEditFrame,
     }
     await expect(stageDurableProjectDocumentGenesisV2({
       scope: canvasScope,
@@ -191,10 +191,10 @@ describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   })
 })
 
-function canvasGenesisAuthor(authority: import("@convax/collaboration").VerifiedProtocolAuthorityV2): CanvasGenesisBuildAuthorV2 {
+function canvasGenesisAuthor(authority: import("@convax/collaboration").CurrentProtocolAuthority): CanvasGenesisBuildAuthorV2 {
   const byName = new Map(authority.protocolSchemaBundle.core.artifacts.map((artifact) => [artifact.name, artifact]))
   const artifact = (
-    owner: import("@convax/collaboration").ValidationArtifactOwnerV2,
+    owner: import("@convax/collaboration").ValidationArtifactOwner,
     name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence",
   ) => {
     const selected = byName.get(name)!
@@ -205,9 +205,9 @@ function canvasGenesisAuthor(authority: import("@convax/collaboration").Verified
   }
   return Object.freeze({
     checkpointId: id(11),
-    authorMemberId: parseMemberIdV2(encodedIdentity(12, 16)),
-    authorReplicaId: parseReplicaIdV2("replica_00000001"),
-    authorActorId: parseActorIdV2(encodedIdentity(13, 32)),
+    authorMemberId: parseMemberId(encodedIdentity(12, 16)),
+    authorReplicaId: parseReplicaId("replica_00000001"),
+    authorActorId: parseActorId(encodedIdentity(13, 32)),
     authorAuthorizationDigest: digest("authorization"),
     checkpointAuthorCredentialCoreDigest: digest("credential-core"),
     checkpointAuthorCredentialExactBytes: bytes.encode("credential"),
@@ -223,17 +223,17 @@ function canvasGenesisAuthor(authority: import("@convax/collaboration").Verified
       artifact("kernel", "collaboration-kernel"),
       artifact("project-index", "project-persistence"),
     ]),
-    signCheckpointCoreDigest: async () => parseSignatureV2(encodeBase64urlV2(Uint8Array.from(
+    signCheckpointCoreDigest: async () => parseSignature(encodeBase64url(Uint8Array.from(
       { length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0,
     ))),
   })
 }
 
 function encodedIdentity(seed: number, length: number): string {
-  return encodeBase64urlV2(Uint8Array.from({ length }, (_, index) => (seed * 17 + index * 29) & 0xff))
+  return encodeBase64url(Uint8Array.from({ length }, (_, index) => (seed * 17 + index * 29) & 0xff))
 }
 
-function base(scope: DocumentScopeV2) {
+function base(scope: DocumentScope) {
   const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
   return Object.freeze({
     scope,
@@ -241,15 +241,15 @@ function base(scope: DocumentScopeV2) {
     frontierDigest: digest("empty-frontier"),
     actorHeads: Object.freeze({ format: "convax.replica-actor-head-set/2" as const, scope, heads: Object.freeze([]) }),
     fullUpdate: bytes.encode("full-update"),
-    stateVector: bytes.encode("state-vector") as StateVectorV2,
+    stateVector: bytes.encode("state-vector") as StateVector,
     canonicalStateDigest: digest("canonical"),
   })
 }
 
 function digest(value: string) {
-  return ordinarySha256V2(bytes.encode(value))
+  return ordinarySha256(bytes.encode(value))
 }
 
 function id(value: number) {
-  return parseId128V2(Buffer.alloc(16, value).toString("base64url"))
+  return parseId128(Buffer.alloc(16, value).toString("base64url"))
 }

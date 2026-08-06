@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { parseDigestV2 } from "@convax/collaboration"
+import { parseDigest } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
   CANVAS_DIGEST_DOMAINS_V2,
@@ -75,32 +75,32 @@ describe("CanvasYDoc v2 closed canonical schema", () => {
     expect([...CANVAS_DIGEST_DOMAINS_V2].sort()).toEqual([...CANVAS_DIGEST_DOMAINS_V2])
     expect(
       canvasOwnerCanonicalizerDigestV2(
-        parseDigestV2("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+        parseDigest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
       ),
-    ).toBe(parseDigestV2("043f386edb26fd29d9eebffc5d5154dceb263df6451eb3b2228890ce455291cd"))
+    ).toBe(parseDigest("043f386edb26fd29d9eebffc5d5154dceb263df6451eb3b2228890ce455291cd"))
     expect(
       canvasDigestV2("convax.canvas-effective-data/2", {
         format: "convax.canvas-effective-data/2",
         data: { format: "convax.canvas-node-data/2", kind: "agent", title: "A", instructions: null },
       }),
-    ).toBe(parseDigestV2("8175e6a7eede34bec6869d37ed6629135741bb7727eb97d2bd93f36000e2a42f"))
+    ).toBe(parseDigest("8175e6a7eede34bec6869d37ed6629135741bb7727eb97d2bd93f36000e2a42f"))
     expect(
       canvasDigestV2("convax.canvas-obstacle-projection/2", {
         format: "convax.canvas-obstacle-projection/2",
         obstacles: [],
       }),
-    ).toBe(parseDigestV2("5317e3704fa88e76024939abdfabe5dea30ef67301dd37ab626bc8f5dfa72874"))
+    ).toBe(parseDigest("5317e3704fa88e76024939abdfabe5dea30ef67301dd37ab626bc8f5dfa72874"))
     expect(
       canvasDigestV2("convax.canvas-metadata-effective/2", {
         format: "convax.canvas-metadata-effective/2",
         field: "description",
         value: null,
       }),
-    ).toBe(parseDigestV2("21d7c073cf0c363eb1d884bf7ad77f9fc087750679d00580c427c24154a91f9a"))
+    ).toBe(parseDigest("21d7c073cf0c363eb1d884bf7ad77f9fc087750679d00580c427c24154a91f9a"))
     const entityId = `node/n_${"A".repeat(43)}/ni_${"A".repeat(43)}`
     const path = `nodes/${entityId}/creationGroup`
     expect(actualWriteValueDigestV2(path, { entityKind: "node", entityId, field: "creationGroup" }, null)).toBe(
-      parseDigestV2("fffb72be980a00d8ed0acebf5768d73a0da53dfef751887b8a78bb7b8ae4dd52"),
+      parseDigest("fffb72be980a00d8ed0acebf5768d73a0da53dfef751887b8a78bb7b8ae4dd52"),
     )
   })
 })

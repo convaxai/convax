@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { comparePortableStampsV2, compareUtf8V2, parseUint32V2, parseUint64V2 } from "@convax/collaboration"
+import { comparePortableStamps, compareUtf8, parseUint32, parseUint64 } from "@convax/collaboration"
 import {
   buildCanvasProjectionIndexV2,
   effectiveDataDigestV2,
@@ -47,8 +47,8 @@ import {
   VALID_FACTS,
 } from "./test-fixtures.test"
 
-const U1 = parseUint32V2("1")
-const U2 = parseUint32V2("2")
+const U1 = parseUint32("1")
+const U2 = parseUint32("2")
 
 describe("Canvas v2 reducer and merge invariants", () => {
   test("emits an exact sorted eight-write ledger for node create", () => {
@@ -310,7 +310,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
         uri: `convax-project://project/epochs/${context(1, 1, 1).operationId}/entries/pf_${"3".repeat(64)}`,
         mediaClass: "image" as const,
         mime: "image/png",
-        byteLength: parseUint64V2("12"),
+        byteLength: parseUint64("12"),
         contentDigest: digest(170),
         ownerProofDigest: digest(171),
       }
@@ -354,8 +354,8 @@ describe("Canvas v2 reducer and merge invariants", () => {
       node,
       beginActorId: rootContext.actorId,
       beginAuthorizationEpochDigest: digest(172),
-      beginStamp: makeStampV2(rootContext, parseUint32V2("5")),
-      outputClaimStamp: makeStampV2(rootContext, parseUint32V2("6")),
+      beginStamp: makeStampV2(rootContext, parseUint32("5")),
+      outputClaimStamp: makeStampV2(rootContext, parseUint32("6")),
       toolRefDigest: digest(173),
       prompt: "generate once",
       targetEffectiveDataDigest: canvasDigestV2("convax.canvas-effective-data/2", { format: "convax.canvas-effective-data/2", data: pendingData }),
@@ -688,7 +688,7 @@ describe("Canvas v2 reducer and merge invariants", () => {
       uri: `convax-project://project/epochs/${context(1, 1, 1).operationId}/entries/pf_${"1".repeat(64)}`,
       mediaClass: "image" as const,
       mime: "image/png",
-      byteLength: parseUint64V2("10"),
+      byteLength: parseUint64("10"),
       contentDigest: digest(103),
       ownerProofDigest: digest(104),
     }
@@ -852,12 +852,12 @@ function semanticStateGuard(document: ReturnType<typeof newCanvas>, root: Semant
         entry[1].format === "convax.canvas-semantic-history-transition/2" &&
         entry[1].rootOperationId === root.rootOperationId,
     )
-    .sort((left, right) => compareUtf8V2(left[0], right[0]))
+    .sort((left, right) => compareUtf8(left[0], right[0]))
   const transitions = entries.map(([, transition]) => transition)
   const effective = entries.reduce<(typeof entries)[number] | null>((winner, candidate) => {
     if (winner === null) return candidate
-    const stampOrder = comparePortableStampsV2(winner[1].stamp, candidate[1].stamp)
-    return stampOrder < 0 || (stampOrder === 0 && compareUtf8V2(winner[0], candidate[0]) < 0) ? candidate : winner
+    const stampOrder = comparePortableStamps(winner[1].stamp, candidate[1].stamp)
+    return stampOrder < 0 || (stampOrder === 0 && compareUtf8(winner[0], candidate[0]) < 0) ? candidate : winner
   }, null)?.[1]
   const effectiveBindings: readonly CanvasHistoryBindingV2[] = effective?.resultBindings ?? root.initialBindings
   const effectiveMode = effective?.mode === "undone" ? "undone" : "applied"

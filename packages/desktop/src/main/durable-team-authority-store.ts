@@ -3,20 +3,20 @@ import { constants } from "node:fs"
 import fs from "node:fs/promises"
 import path from "node:path"
 import {
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseUint64V2,
-  uint64ToBigIntV2,
-  type DigestV2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type PublicKeyV2,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseUint64,
+  uint64ToBigInt,
+  type Digest,
+  type MemberId,
+  type ProjectId,
+  type PublicKey,
 } from "@convax/collaboration"
 import {
   parseMemberCredentialV2,
@@ -37,9 +37,9 @@ const POINTER_FORMAT = "convax.desktop-team-authority-pointer/1" as const
 
 export interface DesktopTeamAuthorityRecordV1 {
   readonly format: typeof RECORD_FORMAT
-  readonly projectId: ProjectIdV2
-  readonly memberId: MemberIdV2
-  readonly memberSigningPublicKey: PublicKeyV2
+  readonly projectId: ProjectId
+  readonly memberId: MemberId
+  readonly memberSigningPublicKey: PublicKey
   readonly membershipSnapshot: MembershipSnapshotV2
   readonly memberCredential: MemberCredentialV2
   readonly adminCapability: ProjectAdminCapabilityV2 | null
@@ -60,11 +60,11 @@ const liveAuthorities = new WeakSet<object>()
 /** Re-verifies the exact portable graph before it can become the durable local selector. */
 export function createDesktopTeamAuthorityAdmissionV1(input: {
   readonly verifier: PinnedControlServiceVerifierV2
-  readonly protocolDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+  readonly protocolDigest: Digest
+  readonly trustBundleDigest: Digest
 }) {
-  const protocolDigest = parseDigestV2(input.protocolDigest)
-  const trustBundleDigest = parseDigestV2(input.trustBundleDigest)
+  const protocolDigest = parseDigest(input.protocolDigest)
+  const trustBundleDigest = parseDigest(input.trustBundleDigest)
   return Object.freeze({
     async admit(candidateInput: DesktopTeamAuthorityCandidateV1): Promise<VerifiedDesktopTeamAuthorityV1 | "rejected"> {
       let record: DesktopTeamAuthorityRecordV1
@@ -105,12 +105,12 @@ export class NodeDurableTeamAuthorityStoreV1 {
     const record = parseRecord(authority.record)
     await ensureLayout(this.rootDirectory)
     const selector = selectorDigest(record.projectId)
-    const bytes = encodeRestrictedJcsV2(record)
-    const recordDigest = ordinarySha256V2(bytes)
+    const bytes = encodeRestrictedJcs(record)
+    const recordDigest = ordinarySha256(bytes)
     const current = await this.readPointer(selector)
     if (current) {
-      const sequence = uint64ToBigIntV2(record.membershipSnapshot.core.membershipSequence)
-      const currentSequence = uint64ToBigIntV2(current.membershipSequence)
+      const sequence = uint64ToBigInt(record.membershipSnapshot.core.membershipSequence)
+      const currentSequence = uint64ToBigInt(current.membershipSequence)
       if (sequence < currentSequence) throw new Error("Team authority store rejected membership rollback")
       if (sequence === currentSequence) {
         if (recordDigest !== current.recordDigest) throw new Error("Team authority store rejected same-sequence equivocation")
@@ -128,12 +128,12 @@ export class NodeDurableTeamAuthorityStoreV1 {
       membershipSnapshotDigest: record.membershipSnapshot.coreDigest,
       recordDigest,
     })
-    await replaceDurably(path.join(this.rootDirectory, "current", `${selector}.jcs`), encodeRestrictedJcsV2(pointer))
+    await replaceDurably(path.join(this.rootDirectory, "current", `${selector}.jcs`), encodeRestrictedJcs(pointer))
   }
 
-  async open(projectIdInput: ProjectIdV2): Promise<DesktopTeamAuthorityRecordV1 | "missing" | "rejected"> {
-    let projectId: ProjectIdV2
-    try { projectId = parseProjectIdV2(projectIdInput) } catch { return "rejected" }
+  async open(projectIdInput: ProjectId): Promise<DesktopTeamAuthorityRecordV1 | "missing" | "rejected"> {
+    let projectId: ProjectId
+    try { projectId = parseProjectId(projectIdInput) } catch { return "rejected" }
     const selector = selectorDigest(projectId)
     try {
       const pointer = await this.readPointer(selector)
@@ -148,11 +148,11 @@ export class NodeDurableTeamAuthorityStoreV1 {
     }
   }
 
-  private async readPointer(selector: DigestV2): Promise<TeamAuthorityPointerV1 | null> {
+  private async readPointer(selector: Digest): Promise<TeamAuthorityPointerV1 | null> {
     try {
       const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "current", `${selector}.jcs`)))
-      const pointer = parsePointer(decodeRestrictedJcsV2(bytes), selector)
-      if (!sameBytes(bytes, encodeRestrictedJcsV2(pointer))) throw new Error("Team authority pointer is noncanonical")
+      const pointer = parsePointer(decodeRestrictedJcs(bytes), selector)
+      if (!sameBytes(bytes, encodeRestrictedJcs(pointer))) throw new Error("Team authority pointer is noncanonical")
       return pointer
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null
@@ -160,23 +160,23 @@ export class NodeDurableTeamAuthorityStoreV1 {
     }
   }
 
-  private async readRecord(recordDigest: DigestV2, projectId: ProjectIdV2): Promise<DesktopTeamAuthorityRecordV1> {
+  private async readRecord(recordDigest: Digest, projectId: ProjectId): Promise<DesktopTeamAuthorityRecordV1> {
     const bytes = new Uint8Array(await fs.readFile(path.join(this.rootDirectory, "records", `${recordDigest}.jcs`)))
-    if (ordinarySha256V2(bytes) !== recordDigest) throw new Error("Team authority record digest mismatches")
-    const record = parseRecord(decodeRestrictedJcsV2(bytes))
-    if (record.projectId !== projectId || !sameBytes(bytes, encodeRestrictedJcsV2(record))) throw new Error("Team authority record crossed identity")
+    if (ordinarySha256(bytes) !== recordDigest) throw new Error("Team authority record digest mismatches")
+    const record = parseRecord(decodeRestrictedJcs(bytes))
+    if (record.projectId !== projectId || !sameBytes(bytes, encodeRestrictedJcs(record))) throw new Error("Team authority record crossed identity")
     return record
   }
 }
 
 interface TeamAuthorityPointerV1 {
   readonly format: typeof POINTER_FORMAT
-  readonly selector: DigestV2
-  readonly projectId: ProjectIdV2
+  readonly selector: Digest
+  readonly projectId: ProjectId
   readonly projectEpoch: MembershipSnapshotV2["core"]["projectEpoch"]
   readonly membershipSequence: MembershipSnapshotV2["core"]["membershipSequence"]
-  readonly membershipSnapshotDigest: DigestV2
-  readonly recordDigest: DigestV2
+  readonly membershipSnapshotDigest: Digest
+  readonly recordDigest: Digest
 }
 
 function parseCandidate(value: DesktopTeamAuthorityCandidateV1): DesktopTeamAuthorityRecordV1 {
@@ -202,9 +202,9 @@ function parseRecord(value: unknown): DesktopTeamAuthorityRecordV1 {
   if (Object.keys(source).sort().join("\0") !== keys.sort().join("\0") || source.format !== RECORD_FORMAT) throw new TypeError("Team authority record has unsupported fields")
   const record: DesktopTeamAuthorityRecordV1 = Object.freeze({
     format: RECORD_FORMAT,
-    projectId: parseProjectIdV2(source.projectId),
-    memberId: parseMemberIdV2(source.memberId),
-    memberSigningPublicKey: parsePublicKeyV2(source.memberSigningPublicKey),
+    projectId: parseProjectId(source.projectId),
+    memberId: parseMemberId(source.memberId),
+    memberSigningPublicKey: parsePublicKey(source.memberSigningPublicKey),
     membershipSnapshot: parseMembershipSnapshotV2(source.membershipSnapshot),
     memberCredential: parseMemberCredentialV2(source.memberCredential),
     adminCapability: source.adminCapability === null ? null : parseProjectAdminCapabilityV2(source.adminCapability),
@@ -248,23 +248,23 @@ function validGraph(record: DesktopTeamAuthorityRecordV1): boolean {
     edit.core.actorId === replica.actorId && edit.core.replicaAuthorizationEpoch === replica.replicaAuthorizationEpoch
 }
 
-function selectorDigest(projectId: ProjectIdV2): DigestV2 {
-  return ordinarySha256V2(encodeRestrictedJcsV2(Object.freeze({ projectId: parseProjectIdV2(projectId) })))
+function selectorDigest(projectId: ProjectId): Digest {
+  return ordinarySha256(encodeRestrictedJcs(Object.freeze({ projectId: parseProjectId(projectId) })))
 }
 
-function parsePointer(value: unknown, selector: DigestV2): TeamAuthorityPointerV1 {
+function parsePointer(value: unknown, selector: Digest): TeamAuthorityPointerV1 {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Team authority pointer is invalid")
   const source = value as Record<string, unknown>
   const keys = ["format", "membershipSequence", "membershipSnapshotDigest", "projectEpoch", "projectId", "recordDigest", "selector"]
-  if (Object.keys(source).sort().join("\0") !== keys.sort().join("\0") || source.format !== POINTER_FORMAT || parseDigestV2(source.selector) !== selector) throw new TypeError("Team authority pointer has unsupported fields")
-  const projectId = parseProjectIdV2(source.projectId)
+  if (Object.keys(source).sort().join("\0") !== keys.sort().join("\0") || source.format !== POINTER_FORMAT || parseDigest(source.selector) !== selector) throw new TypeError("Team authority pointer has unsupported fields")
+  const projectId = parseProjectId(source.projectId)
   if (selectorDigest(projectId) !== selector) throw new TypeError("Team authority pointer selector mismatches")
   return Object.freeze({
     format: POINTER_FORMAT, selector, projectId,
-    projectEpoch: parseId128V2(source.projectEpoch),
-    membershipSequence: parseUint64V2(source.membershipSequence),
-    membershipSnapshotDigest: parseDigestV2(source.membershipSnapshotDigest),
-    recordDigest: parseDigestV2(source.recordDigest),
+    projectEpoch: parseId128(source.projectEpoch),
+    membershipSequence: parseUint64(source.membershipSequence),
+    membershipSnapshotDigest: parseDigest(source.membershipSnapshotDigest),
+    recordDigest: parseDigest(source.recordDigest),
   })
 }
 

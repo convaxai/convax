@@ -1,18 +1,18 @@
 import {
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parsePublicKeyV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  type DigestV2,
-  type Id128V2,
-  type MemberIdV2,
-  type ProjectIdV2,
-  type PublicKeyV2,
-  type ReplicaIdV2,
-  type SignatureV2,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parsePublicKey,
+  parseReplicaId,
+  parseSignature,
+  type Digest,
+  type Id128,
+  type MemberId,
+  type ProjectId,
+  type PublicKey,
+  type ReplicaId,
+  type Signature,
 } from "@convax/collaboration"
 import {
   membershipMutationProofCoreDigestV2,
@@ -85,21 +85,21 @@ export interface DesktopTeamBootstrapResultV2 {
 }
 
 export interface DesktopProjectBootstrapInitializationV2 {
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly projectIndexShardEpoch: Id128V2
-  readonly initializationAuthorityDigest: DigestV2
-  readonly initialProjectIndexCheckpointDigest: DigestV2
-  readonly initialProjectIndexFullUpdateDigest: DigestV2
-  readonly initialProjectIndexStateVectorDigest: DigestV2
-  readonly initialProjectIndexCanonicalStateDigest: DigestV2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly projectIndexShardEpoch: Id128
+  readonly initializationAuthorityDigest: Digest
+  readonly initialProjectIndexCheckpointDigest: Digest
+  readonly initialProjectIndexFullUpdateDigest: Digest
+  readonly initialProjectIndexStateVectorDigest: Digest
+  readonly initialProjectIndexCanonicalStateDigest: Digest
 }
 
 export interface DesktopPreparedTeamInvitationV1 {
   readonly invitation: ProjectTeamInvitationCarrierV2
   readonly challenge: MutationChallengeV2
   readonly proofCore: Extract<MembershipMutationProofCoreV2, { readonly purpose: "member-add" }>
-  readonly requestDigest: DigestV2
+  readonly requestDigest: Digest
 }
 
 export interface DesktopMembershipMutationResultV2 {
@@ -113,56 +113,56 @@ export interface DesktopMembershipMutationResultV2 {
 }
 
 export type DesktopMemberAddSignatureHalfResultV2 =
-  | Readonly<{ status: "pending-other-signature"; requestDigest: DigestV2 }>
-  | Readonly<{ status: "committed"; requestDigest: DigestV2; result: DesktopMembershipMutationResultV2 }>
+  | Readonly<{ status: "pending-other-signature"; requestDigest: Digest }>
+  | Readonly<{ status: "committed"; requestDigest: Digest; result: DesktopMembershipMutationResultV2 }>
 
 export type DesktopMutationChallengeIntentV2 =
-  | Readonly<{ purpose: "member-add"; mutationId: Id128V2; requesterCredentialDigest: DigestV2; adminCapabilityDigest: DigestV2; targetMemberId: MemberIdV2; targetMemberSigningPublicKey: PublicKeyV2; initialRole: "viewer" | "editor" }>
-  | Readonly<{ purpose: "replica-enroll"; mutationId: Id128V2; requesterCredentialDigest: DigestV2; replicaIdReservationReceiptDigest: DigestV2 }>
-  | Readonly<{ purpose: "replica-activate-editor"; mutationId: Id128V2; requesterCredentialDigest: DigestV2; currentReplicaId: ReplicaIdV2; installedFloorSetDigest: DigestV2 }>
+  | Readonly<{ purpose: "member-add"; mutationId: Id128; requesterCredentialDigest: Digest; adminCapabilityDigest: Digest; targetMemberId: MemberId; targetMemberSigningPublicKey: PublicKey; initialRole: "viewer" | "editor" }>
+  | Readonly<{ purpose: "replica-enroll"; mutationId: Id128; requesterCredentialDigest: Digest; replicaIdReservationReceiptDigest: Digest }>
+  | Readonly<{ purpose: "replica-activate-editor"; mutationId: Id128; requesterCredentialDigest: Digest; currentReplicaId: ReplicaId; installedFloorSetDigest: Digest }>
 
 export interface DesktopCollaborationControlHttpClientV2 {
   bootstrapTeam(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly projectIndexShardEpoch: Id128V2
-    readonly initializationAuthorityDigest: DigestV2
-    readonly initialProjectIndexCheckpointDigest: DigestV2
-    readonly initialProjectIndexFullUpdateDigest: DigestV2
-    readonly initialProjectIndexStateVectorDigest: DigestV2
-    readonly initialProjectIndexCanonicalStateDigest: DigestV2
-    readonly ownerMemberId: MemberIdV2
-    readonly ownerMemberSigningPublicKey: PublicKeyV2
-    readonly expectedProtocolDigest: DigestV2
-    readonly expectedTrustBundleDigest: DigestV2
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly projectIndexShardEpoch: Id128
+    readonly initializationAuthorityDigest: Digest
+    readonly initialProjectIndexCheckpointDigest: Digest
+    readonly initialProjectIndexFullUpdateDigest: Digest
+    readonly initialProjectIndexStateVectorDigest: Digest
+    readonly initialProjectIndexCanonicalStateDigest: Digest
+    readonly ownerMemberId: MemberId
+    readonly ownerMemberSigningPublicKey: PublicKey
+    readonly expectedProtocolDigest: Digest
+    readonly expectedTrustBundleDigest: Digest
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<DesktopTeamBootstrapResultV2>>
   createInvitation(input: {
-    readonly projectId: ProjectIdV2
-    readonly requesterCredentialDigest: DigestV2
-    readonly adminCapabilityDigest: DigestV2
+    readonly projectId: ProjectId
+    readonly requesterCredentialDigest: Digest
+    readonly adminCapabilityDigest: Digest
     readonly initialRole: "viewer" | "editor"
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<ProjectTeamInvitationCarrierV2>>
   prepareInvitation(input: {
     readonly invitation: ProjectTeamInvitationCarrierV2
-    readonly mutationId: Id128V2
-    readonly targetMemberId: MemberIdV2
-    readonly targetMemberSigningPublicKey: PublicKeyV2
+    readonly mutationId: Id128
+    readonly targetMemberId: MemberId
+    readonly targetMemberSigningPublicKey: PublicKey
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<DesktopPreparedTeamInvitationV1>>
   revokeInvitation(input: {
-    readonly projectId: ProjectIdV2
-    readonly requesterCredentialDigest: DigestV2
+    readonly projectId: ProjectId
+    readonly requesterCredentialDigest: Digest
     readonly invitationToken: string
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<Readonly<{ status: "revoked" }>>>
   submitMemberAddSignatureHalf(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly invitationToken: string
-    readonly requestDigest: DigestV2
+    readonly requestDigest: Digest
     readonly kind: "admin" | "target-possession"
-    readonly signature: SignatureV2
+    readonly signature: Signature
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<DesktopMemberAddSignatureHalfResultV2>>
   reserveReplicaId(input: {
@@ -170,7 +170,7 @@ export interface DesktopCollaborationControlHttpClientV2 {
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<ReplicaIdReservationReceiptV2>>
   requestMutationChallenge(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly intent: DesktopMutationChallengeIntentV2
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<MutationChallengeV2>>
@@ -179,9 +179,9 @@ export interface DesktopCollaborationControlHttpClientV2 {
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<DesktopMembershipMutationResultV2>>
   requestSessionChallenge(input: {
-    readonly projectId: ProjectIdV2
-    readonly memberId: MemberIdV2
-    readonly replicaId: ReplicaIdV2
+    readonly projectId: ProjectId
+    readonly memberId: MemberId
+    readonly replicaId: ReplicaId
     readonly expected: Pick<SessionChallengeV2["core"],
       "projectEpoch" | "membershipEpoch" | "membershipSnapshotDigest" | "actorId" | "protocolDigest">
     readonly signal?: AbortSignal
@@ -199,7 +199,7 @@ export interface DesktopCollaborationControlHttpClientV2 {
     readonly request: PeerTicketRequestV2
     readonly requesterCredential: SessionCredentialV2
     readonly responderCredential: SessionCredentialV2
-    readonly expectedChannelContractDigest: DigestV2
+    readonly expectedChannelContractDigest: Digest
     readonly signal?: AbortSignal
   }): Promise<CollaborationControlCallResultV2<PeerFreshnessTicketV2>>
 }
@@ -212,7 +212,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
   readonly nowUnixMs?: () => bigint
   readonly requestHeaders?: (input: {
     readonly operation: ControlOperationV2
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
   }) => Promise<Readonly<Record<string, string>>>
 }): DesktopCollaborationControlHttpClientV2 {
   const baseUrl = input.serviceBaseUrl === null || input.serviceBaseUrl === undefined || !input.serviceBaseUrl.trim()
@@ -223,9 +223,9 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
 
   const client: DesktopCollaborationControlHttpClientV2 = {
     async bootstrapTeam(request) {
-      const projectId = parseProjectIdV2(request.projectId)
-      const ownerMemberId = parseMemberIdV2(request.ownerMemberId)
-      const ownerMemberSigningPublicKey = parsePublicKeyV2(request.ownerMemberSigningPublicKey)
+      const projectId = parseProjectId(request.projectId)
+      const ownerMemberId = parseMemberId(request.ownerMemberId)
+      const ownerMemberSigningPublicKey = parsePublicKey(request.ownerMemberSigningPublicKey)
       const initialization = parseProjectBootstrapInitialization({
         projectId,
         projectEpoch: request.projectEpoch,
@@ -236,8 +236,8 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         initialProjectIndexStateVectorDigest: request.initialProjectIndexStateVectorDigest,
         initialProjectIndexCanonicalStateDigest: request.initialProjectIndexCanonicalStateDigest,
       })
-      const expectedProtocolDigest = parseDigestV2(request.expectedProtocolDigest)
-      const expectedTrustBundleDigest = parseDigestV2(request.expectedTrustBundleDigest)
+      const expectedProtocolDigest = parseDigest(request.expectedProtocolDigest)
+      const expectedTrustBundleDigest = parseDigest(request.expectedTrustBundleDigest)
       const result = await post("team-bootstrap", projectId, "bootstrap", {
         projectEpoch: initialization.projectEpoch,
         projectIndexShardEpoch: initialization.projectIndexShardEpoch,
@@ -284,9 +284,9 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async createInvitation(request) {
-      const projectId = parseProjectIdV2(request.projectId)
-      const requesterCredentialDigest = parseDigestV2(request.requesterCredentialDigest)
-      const adminCapabilityDigest = parseDigestV2(request.adminCapabilityDigest)
+      const projectId = parseProjectId(request.projectId)
+      const requesterCredentialDigest = parseDigest(request.requesterCredentialDigest)
+      const adminCapabilityDigest = parseDigest(request.adminCapabilityDigest)
       if (request.initialRole !== "viewer" && request.initialRole !== "editor") throw new TypeError("Invitation role is invalid")
       const result = await post("invitation-create", projectId, "invitations", {
         action: "create", requesterCredentialDigest, adminCapabilityDigest, initialRole: request.initialRole,
@@ -300,10 +300,10 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     async prepareInvitation(request) {
       const invitation = parseProjectTeamInvitationV2(request.invitation)
       if (BigInt(invitation.expiresAtUnixMs) <= now()) return rejected("expired")
-      const mutationId = parseId128V2(request.mutationId)
-      const targetMemberId = parseMemberIdV2(request.targetMemberId)
-      const targetMemberSigningPublicKey = parsePublicKeyV2(request.targetMemberSigningPublicKey)
-      const result = await post("invitation-prepare", parseProjectIdV2(invitation.projectId), "invitations", {
+      const mutationId = parseId128(request.mutationId)
+      const targetMemberId = parseMemberId(request.targetMemberId)
+      const targetMemberSigningPublicKey = parsePublicKey(request.targetMemberSigningPublicKey)
+      const result = await post("invitation-prepare", parseProjectId(invitation.projectId), "invitations", {
         action: "prepare", invitationToken: invitation.invitationToken, mutationId,
         targetMemberId, targetMemberSigningPublicKey,
       }, parsePreparedTeamInvitation, request.signal)
@@ -329,19 +329,19 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async revokeInvitation(request) {
-      const projectId = parseProjectIdV2(request.projectId)
-      const requesterCredentialDigest = parseDigestV2(request.requesterCredentialDigest)
+      const projectId = parseProjectId(request.projectId)
+      const requesterCredentialDigest = parseDigest(request.requesterCredentialDigest)
       return post("invitation-revoke", projectId, "invitations", {
         action: "revoke", requesterCredentialDigest, invitationToken: parseInvitationToken(request.invitationToken),
       }, parseRevoked, request.signal)
     },
 
     async submitMemberAddSignatureHalf(request) {
-      const projectId = parseProjectIdV2(request.projectId)
+      const projectId = parseProjectId(request.projectId)
       const invitationToken = parseInvitationToken(request.invitationToken)
-      const requestDigest = parseDigestV2(request.requestDigest)
+      const requestDigest = parseDigest(request.requestDigest)
       if (request.kind !== "admin" && request.kind !== "target-possession") throw new TypeError("Member-add signature-half kind is invalid")
-      const signature = parseSignatureV2(request.signature)
+      const signature = parseSignature(request.signature)
       const result = await post("member-add-signature-half", projectId, "member-add-signature-halves", {
         invitationToken, requestDigest, kind: request.kind, signature,
       }, parseMemberAddSignatureHalfResult, request.signal)
@@ -379,7 +379,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async requestMutationChallenge(request) {
-      const projectId = parseProjectIdV2(request.projectId)
+      const projectId = parseProjectId(request.projectId)
       const intent = normalizeMutationIntent(request.intent)
       const result = await post("mutation-challenge", projectId, "mutation-challenges", intent,
         parseMutationChallengeV2, request.signal)
@@ -440,9 +440,9 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
     },
 
     async requestSessionChallenge(request: Parameters<DesktopCollaborationControlHttpClientV2["requestSessionChallenge"]>[0]) {
-      const projectId = parseProjectIdV2(request.projectId)
-      const memberId = parseMemberIdV2(request.memberId)
-      const replicaId = parseReplicaIdV2(request.replicaId)
+      const projectId = parseProjectId(request.projectId)
+      const memberId = parseMemberId(request.memberId)
+      const replicaId = parseReplicaId(request.replicaId)
       const result = await post<SessionChallengeV2>("session-challenge", projectId, "session-challenges", {
         memberId, replicaId,
       }, parseSessionChallengeV2, request.signal)
@@ -541,7 +541,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
         core.membershipSnapshotDigest !== requester.core.membershipSnapshotDigest ||
         core.requesterCredentialDigest !== requester.coreDigest || core.responderCredentialDigest !== responder.coreDigest ||
         core.requesterPeerId !== requester.core.peerId || core.responderPeerId !== responder.core.peerId ||
-        core.channelContractDigest !== parseDigestV2(request.expectedChannelContractDigest) ||
+        core.channelContractDigest !== parseDigest(request.expectedChannelContractDigest) ||
         core.protocolDigest !== requester.core.protocolDigest) {
         return rejected("identity-mismatch")
       }
@@ -552,7 +552,7 @@ export function createDesktopCollaborationControlHttpClientV2(input: {
 
   async function post<T>(
     operation: ControlOperationV2,
-    projectId: ProjectIdV2,
+    projectId: ProjectId,
     segment: string,
     body: unknown,
     parse: (value: unknown) => T,
@@ -610,7 +610,7 @@ function requirePeerTicketRequest(value: PeerTicketRequestV2): PeerTicketRequest
 
 async function verifyArtifact<T extends {
   readonly core: { readonly issuedAtUnixMs: string; readonly expiresAtUnixMs: string; readonly serviceKeyPurpose: "membership" | "rendezvous"; readonly serviceKeyId: string }
-  readonly coreDigest: DigestV2
+  readonly coreDigest: Digest
   readonly serviceSignature: SessionChallengeV2["serviceSignature"]
 }>(artifact: T, now: bigint, verifier: PinnedControlServiceVerifierV2): Promise<CollaborationControlCallResultV2<T>> {
   const issued = BigInt(artifact.core.issuedAtUnixMs)
@@ -627,7 +627,7 @@ async function verifyArtifact<T extends {
 
 async function verifySignedArtifact<T extends {
   readonly core: { readonly serviceKeyPurpose: "membership" | "rendezvous"; readonly serviceKeyId: string }
-  readonly coreDigest: DigestV2
+  readonly coreDigest: Digest
   readonly serviceSignature: SessionChallengeV2["serviceSignature"]
 }>(artifact: T, verifier: PinnedControlServiceVerifierV2): Promise<CollaborationControlCallResultV2<T>> {
   if (!(await verifier.verify({
@@ -671,14 +671,14 @@ function parseProjectBootstrapInitialization(value: unknown): DesktopProjectBoot
     "initializationAuthorityDigest", "projectEpoch", "projectId", "projectIndexShardEpoch",
   ], "Project bootstrap initialization")
   return Object.freeze({
-    projectId: parseProjectIdV2(record.projectId),
-    projectEpoch: parseId128V2(record.projectEpoch),
-    projectIndexShardEpoch: parseId128V2(record.projectIndexShardEpoch),
-    initializationAuthorityDigest: parseDigestV2(record.initializationAuthorityDigest),
-    initialProjectIndexCheckpointDigest: parseDigestV2(record.initialProjectIndexCheckpointDigest),
-    initialProjectIndexFullUpdateDigest: parseDigestV2(record.initialProjectIndexFullUpdateDigest),
-    initialProjectIndexStateVectorDigest: parseDigestV2(record.initialProjectIndexStateVectorDigest),
-    initialProjectIndexCanonicalStateDigest: parseDigestV2(record.initialProjectIndexCanonicalStateDigest),
+    projectId: parseProjectId(record.projectId),
+    projectEpoch: parseId128(record.projectEpoch),
+    projectIndexShardEpoch: parseId128(record.projectIndexShardEpoch),
+    initializationAuthorityDigest: parseDigest(record.initializationAuthorityDigest),
+    initialProjectIndexCheckpointDigest: parseDigest(record.initialProjectIndexCheckpointDigest),
+    initialProjectIndexFullUpdateDigest: parseDigest(record.initialProjectIndexFullUpdateDigest),
+    initialProjectIndexStateVectorDigest: parseDigest(record.initialProjectIndexStateVectorDigest),
+    initialProjectIndexCanonicalStateDigest: parseDigest(record.initialProjectIndexCanonicalStateDigest),
   })
 }
 
@@ -699,7 +699,7 @@ function parsePreparedTeamInvitation(value: unknown): DesktopPreparedTeamInvitat
   const record = exactRecord(value, ["challenge", "invitation", "proofCore", "requestDigest"], "Prepared team invitation")
   const proofCore = parseMembershipMutationProofCoreV2(record.proofCore)
   if (proofCore.purpose !== "member-add") throw new TypeError("Prepared invitation proof purpose is invalid")
-  const requestDigest = parseDigestV2(record.requestDigest)
+  const requestDigest = parseDigest(record.requestDigest)
   if (membershipMutationProofCoreDigestV2(proofCore) !== requestDigest) throw new TypeError("Prepared invitation request digest is invalid")
   return Object.freeze({
     invitation: parseProjectTeamInvitationV2(record.invitation),
@@ -730,11 +730,11 @@ function parseMemberAddSignatureHalfResult(value: unknown): DesktopMemberAddSign
   const status = (value as Record<string, unknown>).status
   if (status === "pending-other-signature") {
     const record = exactRecord(value, ["requestDigest", "status"], "Pending member-add signature-half result")
-    return Object.freeze({ status, requestDigest: parseDigestV2(record.requestDigest) })
+    return Object.freeze({ status, requestDigest: parseDigest(record.requestDigest) })
   }
   if (status === "committed") {
     const record = exactRecord(value, ["requestDigest", "result", "status"], "Committed member-add signature-half result")
-    return Object.freeze({ status, requestDigest: parseDigestV2(record.requestDigest), result: parseMembershipMutationResult(record.result) })
+    return Object.freeze({ status, requestDigest: parseDigest(record.requestDigest), result: parseMembershipMutationResult(record.result) })
   }
   throw new TypeError("Member-add signature-half result status is invalid")
 }
@@ -750,18 +750,18 @@ function normalizeMutationIntent(value: DesktopMutationChallengeIntentV2): Deskt
   if (purpose === "member-add") {
     if (value.initialRole !== "viewer" && value.initialRole !== "editor") throw new TypeError("Initial member role is invalid")
     return Object.freeze({
-      purpose, mutationId: parseId128V2(value.mutationId), requesterCredentialDigest: parseDigestV2(value.requesterCredentialDigest),
-      adminCapabilityDigest: parseDigestV2(value.adminCapabilityDigest), targetMemberId: parseMemberIdV2(value.targetMemberId),
-      targetMemberSigningPublicKey: parsePublicKeyV2(value.targetMemberSigningPublicKey), initialRole: value.initialRole,
+      purpose, mutationId: parseId128(value.mutationId), requesterCredentialDigest: parseDigest(value.requesterCredentialDigest),
+      adminCapabilityDigest: parseDigest(value.adminCapabilityDigest), targetMemberId: parseMemberId(value.targetMemberId),
+      targetMemberSigningPublicKey: parsePublicKey(value.targetMemberSigningPublicKey), initialRole: value.initialRole,
     })
   }
   if (purpose === "replica-enroll") return Object.freeze({
-    purpose, mutationId: parseId128V2(value.mutationId), requesterCredentialDigest: parseDigestV2(value.requesterCredentialDigest),
-    replicaIdReservationReceiptDigest: parseDigestV2(value.replicaIdReservationReceiptDigest),
+    purpose, mutationId: parseId128(value.mutationId), requesterCredentialDigest: parseDigest(value.requesterCredentialDigest),
+    replicaIdReservationReceiptDigest: parseDigest(value.replicaIdReservationReceiptDigest),
   })
   if (purpose === "replica-activate-editor") return Object.freeze({
-    purpose, mutationId: parseId128V2(value.mutationId), requesterCredentialDigest: parseDigestV2(value.requesterCredentialDigest),
-    currentReplicaId: parseReplicaIdV2(value.currentReplicaId), installedFloorSetDigest: parseDigestV2(value.installedFloorSetDigest),
+    purpose, mutationId: parseId128(value.mutationId), requesterCredentialDigest: parseDigest(value.requesterCredentialDigest),
+    currentReplicaId: parseReplicaId(value.currentReplicaId), installedFloorSetDigest: parseDigest(value.installedFloorSetDigest),
   })
   throw new TypeError("Mutation challenge purpose is unsupported")
 }

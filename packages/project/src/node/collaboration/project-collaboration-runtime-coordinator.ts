@@ -1,5 +1,5 @@
 import path from "node:path"
-import { parseActorIdV2, type ActorIdV2 } from "@convax/collaboration"
+import { parseActorId, type ActorId } from "@convax/collaboration"
 import {
   NodeCollaborationPersistenceV2,
   type NodeReplicaHeadMaterializerV2,
@@ -30,13 +30,13 @@ export interface ProjectCollaborationRuntimeIdentityPortV2 {
   resolveLocalActorId(input: {
     readonly projectId: string
     readonly projectRoot: string
-  }): Promise<ActorIdV2>
+  }): Promise<ActorId>
 }
 
 export interface ProjectCollaborationWriterFactoryV2 {
   open(input: {
     readonly collaborationDirectory: string
-    readonly localActorId: ActorIdV2
+    readonly localActorId: ActorId
     readonly materializer: NodeReplicaHeadMaterializerV2
   }): Promise<NodeCollaborationPersistenceV2>
 }
@@ -46,7 +46,7 @@ export interface ProjectCollaborationRuntimeLeaseV2 {
   readonly projectRoot: string
   readonly collaborationDirectory: string
   readonly persistence: NodeCollaborationPersistenceV2
-  readonly localActorId: ActorIdV2
+  readonly localActorId: ActorId
   release(): void
 }
 
@@ -77,13 +77,13 @@ interface OpenProjectRuntimeV2 {
   readonly collaborationDirectory: string
   readonly persistence: NodeCollaborationPersistenceV2
   readonly projectRoot: string
-  readonly localActorId: ActorIdV2
+  readonly localActorId: ActorId
   leaseCount: number
 }
 
 interface ProjectRuntimeBindingV2 {
   readonly projectRoot: string
-  readonly localActorId: ActorIdV2
+  readonly localActorId: ActorId
 }
 
 /**
@@ -122,7 +122,7 @@ export class NodeProjectCollaborationRuntimeCoordinatorV2
     return this.serialize(projectId, async () => {
       this.requireLive()
       const projectRoot = await this.resolveCanonicalProjectRoot(projectId)
-      const localActorId = parseActorIdV2(await this.options.identity.resolveLocalActorId({ projectId, projectRoot }))
+      const localActorId = parseActorId(await this.options.identity.resolveLocalActorId({ projectId, projectRoot }))
       const collaborationDirectory = path.join(projectRoot, ".convax", "collaboration")
       const binding = this.bindings.get(projectId)
       if (binding && (binding.projectRoot !== projectRoot || binding.localActorId !== localActorId)) {

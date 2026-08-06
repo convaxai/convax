@@ -1,10 +1,10 @@
 import { describe, expect, mock, test } from "bun:test"
 import {
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  type DocumentScopeV2,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  type DocumentScope,
 } from "@convax/collaboration"
 import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
 
@@ -15,9 +15,9 @@ import {
   type CanvasRouteRuntimeHandleV2,
 } from "./project-canvas-route-runtime-registry"
 
-const projectId = parseProjectIdV2("project-a")
-const otherProjectId = parseProjectIdV2("project-b")
-const canvasId = parseCanvasIdV2(`cv_${"1".repeat(64)}`)
+const projectId = parseProjectId("project-a")
+const otherProjectId = parseProjectId("project-b")
+const canvasId = parseCanvasId(`cv_${"1".repeat(64)}`)
 const projectEpoch = id(1)
 const shardEpoch = id(2)
 
@@ -109,10 +109,10 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
     persistence: {} as never,
     release() { projectReleases += 1 },
   }))
-  const open = mock(async ({ scope }: { scope: DocumentScopeV2 & { docKind: "canvas" } }): Promise<CanvasRouteRuntimeHandleV2> => {
+  const open = mock(async ({ scope }: { scope: DocumentScope & { docKind: "canvas" } }): Promise<CanvasRouteRuntimeHandleV2> => {
     await options.beforeOpen?.()
     const session = fakeSession(scope)
-    return Object.freeze({ protocol: "v2" as const, session, dispose() { runtimeDisposals += 1; session.dispose() } })
+    return Object.freeze({ session, dispose() { runtimeDisposals += 1; session.dispose() } })
   })
   const fixture = {
     catalog: liveCatalog(), acquire, open,
@@ -128,7 +128,7 @@ function createFixture(options: { beforeOpen?: () => Promise<void> } = {}) {
   return fixture
 }
 
-function fakeSession(scope: DocumentScopeV2 & { readonly docKind: "canvas" }): MainCollaborationDocumentSessionV2<"canvas"> {
+function fakeSession(scope: DocumentScope & { readonly docKind: "canvas" }): MainCollaborationDocumentSessionV2<"canvas"> {
   let live = true
   return {
     scope,
@@ -183,9 +183,9 @@ function tombstoneCatalog(): ProjectCanvasCatalogProjectionV2 {
 }
 
 function id(byte: number) {
-  return parseId128V2(Buffer.alloc(16, byte).toString("base64url"))
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
 }
 
 function digest(character: string) {
-  return parseDigestV2(character.repeat(64))
+  return parseDigest(character.repeat(64))
 }

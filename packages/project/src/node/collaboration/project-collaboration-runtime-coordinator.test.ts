@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import type { ActorIdV2, ReplicaActorHeadSetV2 } from "@convax/collaboration"
+import type { ActorId, ReplicaActorHeadSet } from "@convax/collaboration"
 import type { NodeReplicaHeadMaterializerV2 } from "./persistence-store"
 import {
   NodeProjectCollaborationRuntimeCoordinatorV2,
@@ -11,8 +11,8 @@ import {
 } from "./project-collaboration-runtime-coordinator"
 
 const roots: string[] = []
-const localActorId = Buffer.alloc(32, 7).toString("base64url") as ActorIdV2
-const otherActorId = Buffer.alloc(32, 8).toString("base64url") as ActorIdV2
+const localActorId = Buffer.alloc(32, 7).toString("base64url") as ActorId
+const otherActorId = Buffer.alloc(32, 8).toString("base64url") as ActorId
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
@@ -249,7 +249,7 @@ function createCoordinator(projectRoot: string, quiesceProject: () => Promise<vo
 
 function inertMaterializer(): NodeReplicaHeadMaterializerV2 {
   return {
-    actorHeadsDigest(_actorHeads: ReplicaActorHeadSetV2) {
+    actorHeadsDigest(_actorHeads: ReplicaActorHeadSet) {
       return "0".repeat(64) as ReturnType<NodeReplicaHeadMaterializerV2["actorHeadsDigest"]>
     },
     async applyAcceptedFrame() {

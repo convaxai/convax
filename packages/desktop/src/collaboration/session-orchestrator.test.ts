@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseSignatureV2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type IncomingFrameResultV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseId128,
+  parseProjectId,
+  parseSignature,
+  type Digest,
+  type DocumentScope,
+  type IncomingFrameResult,
 } from "@convax/collaboration"
 import { peerControlCodecV2 } from "@convax/project/collaboration-protocol"
 
@@ -121,15 +121,15 @@ class FakePeerNetwork {
 }
 
 class FakeKernelEndpoint implements CollaborationKernelEndpointV2 {
-  readonly durable = new Map<DigestV2, Uint8Array>()
-  readonly accepted = new Set<DigestV2>()
+  readonly durable = new Map<Digest, Uint8Array>()
+  readonly accepted = new Set<Digest>()
   readonly received: Uint8Array[] = []
-  readonly acks: Array<{ peerId: string; frameDigest: DigestV2; replicaDurableAckCoreDigest: DigestV2 }> = []
+  readonly acks: Array<{ peerId: string; frameDigest: Digest; replicaDurableAckCoreDigest: Digest }> = []
 
-  constructor(readonly scope: DocumentScopeV2) {}
+  constructor(readonly scope: DocumentScope) {}
 
-  localEdit(exactFrameBytes: Uint8Array): DigestV2 {
-    const frameDigest = ordinarySha256V2(exactFrameBytes)
+  localEdit(exactFrameBytes: Uint8Array): Digest {
+    const frameDigest = ordinarySha256(exactFrameBytes)
     this.durable.set(frameDigest, new Uint8Array(exactFrameBytes))
     this.accepted.add(frameDigest)
     return frameDigest
@@ -137,40 +137,40 @@ class FakeKernelEndpoint implements CollaborationKernelEndpointV2 {
 
   async receiveFrame(exactCausalFrameBytes: Readonly<Uint8Array>) {
     const exact = new Uint8Array(exactCausalFrameBytes)
-    const frameDigest = ordinarySha256V2(exact)
+    const frameDigest = ordinarySha256(exact)
     const status = this.accepted.has(frameDigest) ? "duplicate" : "accepted"
     this.received.push(exact)
     this.accepted.add(frameDigest)
     this.durable.set(frameDigest, exact)
-    const result = { status, frame: { frameDigest } } as unknown as IncomingFrameResultV2
-    return { result, replicaDurableAckCoreDigest: ordinarySha256V2(new TextEncoder().encode(`durable:${frameDigest}`)) }
+    const result = { status, frame: { frameDigest } } as unknown as IncomingFrameResult
+    return { result, replicaDurableAckCoreDigest: ordinarySha256(new TextEncoder().encode(`durable:${frameDigest}`)) }
   }
 
-  async loadDurableFrame(frameDigest: DigestV2): Promise<Readonly<Uint8Array> | null> {
+  async loadDurableFrame(frameDigest: Digest): Promise<Readonly<Uint8Array> | null> {
     const bytes = this.durable.get(frameDigest)
     return bytes ? new Uint8Array(bytes) : null
   }
 
-  async recordDurableAck(input: { peerId: string; frameDigest: DigestV2; replicaDurableAckCoreDigest: DigestV2 }): Promise<void> {
+  async recordDurableAck(input: { peerId: string; frameDigest: Digest; replicaDurableAckCoreDigest: Digest }): Promise<void> {
     this.acks.push({ ...input })
   }
 }
 
-const deterministicSignature = parseSignatureV2(
-  encodeBase64urlV2(Uint8Array.from({ length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0)),
+const deterministicSignature = parseSignature(
+  encodeBase64url(Uint8Array.from({ length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0)),
 )
 
 function admission(localPeerId: string, remotePeerId: string, network: FakePeerNetwork): CollaborationPeerAdmissionV2 {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
-  const credential = (peerId: string) => ordinarySha256V2(encoder.encode(`credential:${peerId}`))
-  const currentConnection = () => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(network.connectionFill)))
+  const credential = (peerId: string) => ordinarySha256(encoder.encode(`credential:${peerId}`))
+  const currentConnection = () => parseId128(encodeBase64url(new Uint8Array(16).fill(network.connectionFill)))
   return {
     localHandshake: () => encoder.encode(currentConnection()),
     verifyRemoteHandshake: (_peerId, exactBytes) => {
-      const connectionId = parseId128V2(decoder.decode(exactBytes))
+      const connectionId = parseId128(decoder.decode(exactBytes))
       if (connectionId !== currentConnection()) return "rejected"
-      const channelOpen = (channel: string) => ordinarySha256V2(encoder.encode(`${connectionId}:${channel}`))
+      const channelOpen = (channel: string) => ordinarySha256(encoder.encode(`${connectionId}:${channel}`))
       const principal: CollaborationPeerSessionPrincipalV2 = {
         connectionId,
         localCredentialDigest: credential(localPeerId),
@@ -200,7 +200,7 @@ function createOrchestrator(input: {
   return new CollaborationSessionOrchestratorV2({
     localPeerId: input.localPeerId,
     admission: admission(input.localPeerId, input.remotePeerId, input.network),
-    createProtocolId: () => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(idFill++))),
+    createProtocolId: () => parseId128(encodeBase64url(new Uint8Array(16).fill(idFill++))),
     createDataPlane: ({ ingress, lifecycle }) => {
       const capturingIngress: CollaborationPeerWireIngress = {
         receivePeerWireBytes(message) {
@@ -234,12 +234,12 @@ describe("Main R5 collaboration session orchestrator", () => {
     const omegaWire: Array<{ channel: string; bytes: Uint8Array }> = []
     const alpha = createOrchestrator({ localPeerId: "alpha", remotePeerId: "omega", network, capturedWire: alphaWire, idFillStart: 30 })
     const omega = createOrchestrator({ localPeerId: "omega", remotePeerId: "alpha", network, capturedWire: omegaWire, idFillStart: 80 })
-    const scope: DocumentScopeV2 = {
-      projectId: parseProjectIdV2("project"),
-      projectEpoch: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1))),
+    const scope: DocumentScope = {
+      projectId: parseProjectId("project"),
+      projectEpoch: parseId128(encodeBase64url(new Uint8Array(16).fill(1))),
       docKind: "project-index",
       docId: "project-index",
-      shardEpoch: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(2))),
+      shardEpoch: parseId128(encodeBase64url(new Uint8Array(16).fill(2))),
     }
     const alphaEndpoint = new FakeKernelEndpoint(scope)
     const omegaEndpoint = new FakeKernelEndpoint(scope)
@@ -286,7 +286,7 @@ describe("Main R5 collaboration session orchestrator", () => {
     }
     await alpha.announceLocalFrame(scope, alphaDigest)
     await settle(alpha, omega)
-    expect(omegaEndpoint.received.filter((bytes) => ordinarySha256V2(bytes) === alphaDigest)).toHaveLength(2)
+    expect(omegaEndpoint.received.filter((bytes) => ordinarySha256(bytes) === alphaDigest)).toHaveLength(2)
     expect(alphaEndpoint.accepted).toEqual(omegaEndpoint.accepted)
 
     alpha.dispose()

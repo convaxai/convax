@@ -1,18 +1,18 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  encodeRestrictedJcsV2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  structuredDigestV2,
-  type ActorIdV2,
-  type DigestV2,
-  type DecodedCausalEditFrameV2,
-  type Id128V2,
-  type OwnerIntentValidationContextV2,
-  type PortableStampV2,
-  type Uint32V2,
+  encodeBase64url,
+  encodeRestrictedJcs,
+  parseMemberId,
+  parseReplicaId,
+  parseSignature,
+  structuredDigest,
+  type ActorId,
+  type Digest,
+  type DecodedCausalEditFrame,
+  type Id128,
+  type OwnerIntentValidationContext,
+  type PortableStamp,
+  type Uint32,
 } from "@convax/collaboration"
 import { fromProjectUri } from "@convax/uri"
 import * as Y from "yjs"
@@ -135,8 +135,8 @@ describe("ProjectIndex R5 owner schema", () => {
   test("requires exact guards for directory and file create", () => {
     const document = genesis()
     const directoryContext = draftContext(actor(5), id128(71), "1")
-    const directoryId = deriveProjectIdentityV2(directoryContext, "directory", "0" as Uint32V2) as `pd_${string}`
-    const locationId = deriveProjectIdentityV2(directoryContext, "location", "1" as Uint32V2) as `pl_${string}`
+    const directoryId = deriveProjectIdentityV2(directoryContext, "directory", "0" as Uint32) as `pd_${string}`
+    const locationId = deriveProjectIdentityV2(directoryContext, "location", "1" as Uint32) as `pl_${string}`
     const directoryIntent = {
       format: "convax.typed-intent/2",
       kind: "project.directory.create/2",
@@ -176,9 +176,9 @@ describe("ProjectIndex R5 owner schema", () => {
     expect(applyProjectIndexCandidateIntentV2(document, builtDirectory.context, builtDirectory.intent, facts)).not.toBe("rejected")
 
     const fileContext = draftContext(actor(5), id128(72), "2")
-    const fileId = deriveProjectIdentityV2(fileContext, "file", "0" as Uint32V2) as `pf_${string}`
-    const fileLocationId = deriveProjectIdentityV2(fileContext, "location", "1" as Uint32V2) as `pl_${string}`
-    const versionId = deriveProjectIdentityV2(fileContext, "version", "2" as Uint32V2) as `pv_${string}`
+    const fileId = deriveProjectIdentityV2(fileContext, "file", "0" as Uint32) as `pf_${string}`
+    const fileLocationId = deriveProjectIdentityV2(fileContext, "location", "1" as Uint32) as `pl_${string}`
+    const versionId = deriveProjectIdentityV2(fileContext, "version", "2" as Uint32) as `pv_${string}`
     const blob = blobRef("guarded-create")
     const fileIntent = {
       format: "convax.typed-intent/2",
@@ -213,7 +213,7 @@ describe("ProjectIndex R5 owner schema", () => {
     const document = genesis()
     const created = createFile(document, "conflict-preserving-text", actor(1), id128(73), "1", "move.md")
     const locateContext = draftContext(actor(2), id128(74), "2")
-    const claimId = deriveProjectIdentityV2(locateContext, "location", "0" as Uint32V2) as `pl_${string}`
+    const claimId = deriveProjectIdentityV2(locateContext, "location", "0" as Uint32) as `pl_${string}`
     const locateIntent = {
       format: "convax.typed-intent/2", kind: "project.entry.locate/2", guards: [],
       body: { location: {
@@ -230,7 +230,7 @@ describe("ProjectIndex R5 owner schema", () => {
     expect(applyProjectIndexCandidateIntentV2(document, builtLocate.context, builtLocate.intent, facts)).not.toBe("rejected")
 
     const tombstoneContext = draftContext(actor(2), id128(75), "3")
-    const tombstoneId = deriveProjectIdentityV2(tombstoneContext, "tombstone", "0" as Uint32V2) as `pt_${string}`
+    const tombstoneId = deriveProjectIdentityV2(tombstoneContext, "tombstone", "0" as Uint32) as `pt_${string}`
     const entry = validateProjectIndexYDocV2(document).entries.get(created.fileId)!
     const tombstoneIntent = {
       format: "convax.typed-intent/2", kind: "project.entry.tombstone/2", guards: [],
@@ -252,10 +252,10 @@ describe("ProjectIndex R5 owner schema", () => {
     const textDocument = genesis()
     const textCreated = createFile(textDocument, "conflict-preserving-text", actor(1), id128(76), "1", "guarded.md")
     const textContext = draftContext(actor(2), id128(77), "2")
-    const textVersionId = deriveProjectIdentityV2(textContext, "version", "0" as Uint32V2) as `pv_${string}`
-    const conflictFileId = deriveProjectIdentityV2(textContext, "file", "1" as Uint32V2) as `pf_${string}`
-    const promotionId = deriveProjectIdentityV2(textContext, "promotion", "2" as Uint32V2) as `pp_${string}`
-    const reservationId = deriveProjectIdentityV2(textContext, "reservation", "3" as Uint32V2) as `pr_${string}`
+    const textVersionId = deriveProjectIdentityV2(textContext, "version", "0" as Uint32) as `pv_${string}`
+    const conflictFileId = deriveProjectIdentityV2(textContext, "file", "1" as Uint32) as `pf_${string}`
+    const promotionId = deriveProjectIdentityV2(textContext, "promotion", "2" as Uint32) as `pp_${string}`
+    const reservationId = deriveProjectIdentityV2(textContext, "reservation", "3" as Uint32) as `pr_${string}`
     const textVersion = version(textCreated.fileId, textVersionId, "text-write", blobRef("guarded-text"), [textCreated.initialVersionId], null, textContext, "0")
     const textIntent = {
       format: "convax.typed-intent/2", kind: "project.file.write-text/2", guards: [],
@@ -298,7 +298,7 @@ describe("ProjectIndex R5 owner schema", () => {
     const binaryDocument = genesis()
     const binaryCreated = createFile(binaryDocument, "overwritable-binary", actor(1), id128(78), "1", "guarded.png")
     const binaryContext = draftContext(actor(3), id128(79), "2")
-    const binaryVersionId = deriveProjectIdentityV2(binaryContext, "version", "0" as Uint32V2) as `pv_${string}`
+    const binaryVersionId = deriveProjectIdentityV2(binaryContext, "version", "0" as Uint32) as `pv_${string}`
     const binaryIntent = {
       format: "convax.typed-intent/2", kind: "project.file.overwrite-binary/2", guards: [],
       body: { version: version(binaryCreated.fileId, binaryVersionId, "binary-overwrite", blobRef("guarded-binary"), [binaryCreated.initialVersionId], "1", binaryContext, "0") },
@@ -382,7 +382,7 @@ describe("ProjectIndex R5 owner schema", () => {
       body: {
         metadata: {
           format: "convax.canvas-route-metadata/2",
-          transitionId: deriveProjectIdentityV2(mutationContext, "route-transition", "0" as Uint32V2),
+          transitionId: deriveProjectIdentityV2(mutationContext, "route-transition", "0" as Uint32),
           canvasId: staged.canvasId,
           title: "Must not rename staged",
           observedActivationDigest: digest("invented-activation"),
@@ -451,13 +451,13 @@ describe("ProjectIndex R5 owner schema", () => {
       stagedGenesisFullUpdateDigest: digest("reset-genesis-update"),
       stagedGenesisStateVectorDigest: digest("reset-genesis-vector"),
     }
-    const routeCasCoreDigest = structuredDigestV2(
+    const routeCasCoreDigest = structuredDigest(
       "convax.document-shard-reset-route-cas-core-digest/2",
       routeCasCore,
     )
-    const initiatorMemberId = parseMemberIdV2(id128(66))
-    const initiatorReplicaId = parseReplicaIdV2("replica_00000042")
-    const adminMemberId = parseMemberIdV2(id128(67))
+    const initiatorMemberId = parseMemberId(id128(66))
+    const initiatorReplicaId = parseReplicaId("replica_00000042")
+    const adminMemberId = parseMemberId(id128(67))
     const adminCapabilityCoreDigest = digest("reset-admin-capability")
     const reason = "incompatible-canvas-schema" as const
     const confirmationCore = {
@@ -483,7 +483,7 @@ describe("ProjectIndex R5 owner schema", () => {
     const confirmation = {
       format: "convax.document-shard-reset-confirmation/2" as const,
       core: confirmationCore,
-      coreDigest: structuredDigestV2("convax.document-shard-reset-confirmation-core/2", confirmationCore),
+      coreDigest: structuredDigest("convax.document-shard-reset-confirmation-core/2", confirmationCore),
       initiatorReplicaSignature: signature(),
     }
     const claimCore = {
@@ -507,7 +507,7 @@ describe("ProjectIndex R5 owner schema", () => {
       adminAuthorizationDigest: adminCapabilityCoreDigest,
       explicitConfirmationReceiptDigest: confirmation.coreDigest,
     }
-    const claimCoreDigest = structuredDigestV2(
+    const claimCoreDigest = structuredDigest(
       "convax.document-shard-reset-claim-core-digest/2",
       claimCore,
     )
@@ -531,7 +531,7 @@ describe("ProjectIndex R5 owner schema", () => {
     const approval = {
       format: "convax.document-shard-reset-approval/2" as const,
       core: approvalCore,
-      coreDigest: structuredDigestV2("convax.document-shard-reset-approval-core/2", approvalCore),
+      coreDigest: structuredDigest("convax.document-shard-reset-approval-core/2", approvalCore),
       adminMemberSignature: signature(),
     }
     const resetClaim = {
@@ -724,11 +724,11 @@ function genesis(): Y.Doc {
   }, rootEntry)
 }
 
-function createFile(doc: Y.Doc, policy: "conflict-preserving-text" | "overwritable-binary", actorId: ActorIdV2, operationId: Id128V2, lamport: string, basename: string) {
+function createFile(doc: Y.Doc, policy: "conflict-preserving-text" | "overwritable-binary", actorId: ActorId, operationId: Id128, lamport: string, basename: string) {
   const draft = draftContext(actorId, operationId, lamport)
-  const fileId = deriveProjectIdentityV2(draft, "file", "0" as Uint32V2) as ProjectEntryRecordV2["entryId"] & `pf_${string}`
-  const locationId = deriveProjectIdentityV2(draft, "location", "1" as Uint32V2) as `pl_${string}`
-  const versionId = deriveProjectIdentityV2(draft, "version", "2" as Uint32V2) as `pv_${string}`
+  const fileId = deriveProjectIdentityV2(draft, "file", "0" as Uint32) as ProjectEntryRecordV2["entryId"] & `pf_${string}`
+  const locationId = deriveProjectIdentityV2(draft, "location", "1" as Uint32) as `pl_${string}`
+  const versionId = deriveProjectIdentityV2(draft, "version", "2" as Uint32) as `pv_${string}`
   const entry: ProjectEntryRecordV2 = { format: "convax.project-entry/2", entryId: fileId, kind: "file", storageClass: "project-file", contentPolicy: policy, provenance: "user", conflictSource: null, createdByActorId: actorId, createdByOperationId: operationId, createdStamp: stamp(draft, "0") }
   const blob = blobRef(`initial-${basename}`)
   const initialVersion: ProjectContentVersionRecordV2 = version(fileId, versionId, "initial", blob, [], policy === "overwritable-binary" ? "0" : null, draft, "2")
@@ -742,19 +742,19 @@ function createFile(doc: Y.Doc, policy: "conflict-preserving-text" | "overwritab
   return { fileId, initialVersionId: versionId, blobDigest: blob.digest, intent: built.intent }
 }
 
-function frameFor(intent: ProjectIndexIntentV2): DecodedCausalEditFrameV2 {
+function frameFor(intent: ProjectIndexIntentV2): DecodedCausalEditFrame {
   return {
     header: { core: { scope: draftContext(actor(9), id128(99), "9").scope, intentKind: intent.kind } },
-    sections: { typedIntentJcs: encodeRestrictedJcsV2(intent) },
-  } as unknown as DecodedCausalEditFrameV2
+    sections: { typedIntentJcs: encodeRestrictedJcs(intent) },
+  } as unknown as DecodedCausalEditFrame
 }
 
-function textWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`, actorId: ActorIdV2, operationId: Id128V2, lamport: string, content: string) {
+function textWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`, actorId: ActorId, operationId: Id128, lamport: string, content: string) {
   const draft = draftContext(actorId, operationId, lamport)
-  const versionId = deriveProjectIdentityV2(draft, "version", "0" as Uint32V2) as `pv_${string}`
-  const conflictFileId = deriveProjectIdentityV2(draft, "file", "1" as Uint32V2) as `pf_${string}`
-  const promotionId = deriveProjectIdentityV2(draft, "promotion", "2" as Uint32V2) as `pp_${string}`
-  const reservationId = deriveProjectIdentityV2(draft, "reservation", "3" as Uint32V2) as `pr_${string}`
+  const versionId = deriveProjectIdentityV2(draft, "version", "0" as Uint32) as `pv_${string}`
+  const conflictFileId = deriveProjectIdentityV2(draft, "file", "1" as Uint32) as `pf_${string}`
+  const promotionId = deriveProjectIdentityV2(draft, "promotion", "2" as Uint32) as `pp_${string}`
+  const reservationId = deriveProjectIdentityV2(draft, "reservation", "3" as Uint32) as `pr_${string}`
   const blob = blobRef(content)
   const versionRecord = version(fileId, versionId, "text-write", blob, [parent], null, draft, "0")
   const conflictEntry: ProjectEntryRecordV2 = { format: "convax.project-entry/2", entryId: conflictFileId, kind: "file", storageClass: "project-file", contentPolicy: "conflict-preserving-text", provenance: "content-conflict-copy", conflictSource: { primaryFileId: fileId, sourceVersionId: versionId, promotionId, reservationId }, createdByActorId: actorId, createdByOperationId: operationId, createdStamp: stamp(draft, "1") }
@@ -768,9 +768,9 @@ function textWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`, a
   return { versionId, actorId }
 }
 
-function binaryWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`, actorId: ActorIdV2, operationId: Id128V2, lamport: string) {
+function binaryWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`, actorId: ActorId, operationId: Id128, lamport: string) {
   const draft = draftContext(actorId, operationId, lamport)
-  const versionId = deriveProjectIdentityV2(draft, "version", "0" as Uint32V2) as `pv_${string}`
+  const versionId = deriveProjectIdentityV2(draft, "version", "0" as Uint32) as `pv_${string}`
   const record = version(fileId, versionId, "binary-overwrite", blobRef(versionId), [parent], "1", draft, "0")
   const unguarded = { format: "convax.typed-intent/2", kind: "project.file.overwrite-binary/2", guards: [], body: { version: record } } as ProjectIndexIntentV2
   const guarded = materializeProjectIndexIntentGuardsV2({ snapshot: validateProjectIndexYDocV2(doc), context: draft, intent: unguarded })
@@ -780,29 +780,29 @@ function binaryWrite(doc: Y.Doc, fileId: `pf_${string}`, parent: `pv_${string}`,
   return { versionId }
 }
 
-function version(fileId: `pf_${string}`, versionId: `pv_${string}`, writeClass: ProjectContentVersionRecordV2["writeClass"], blob: ProjectBlobRefV2, supersedesVersionIds: readonly `pv_${string}`[], binaryLogicalCounter: string | null, context: OwnerIntentValidationContextV2, ordinal: string): ProjectContentVersionRecordV2 {
+function version(fileId: `pf_${string}`, versionId: `pv_${string}`, writeClass: ProjectContentVersionRecordV2["writeClass"], blob: ProjectBlobRefV2, supersedesVersionIds: readonly `pv_${string}`[], binaryLogicalCounter: string | null, context: OwnerIntentValidationContext, ordinal: string): ProjectContentVersionRecordV2 {
   return { format: "convax.project-content-version/2", primaryFileId: fileId, versionId, writeClass, blob, canonicalRevisionUri: fromProjectUri({ projectId: "project-a", projectEpoch, entryId: fileId, blob: `sha256:${blob.digest}` }).toString(), supersedesVersionIds, binaryLogicalCounter: binaryLogicalCounter as never, creatorActorId: context.actorId, creatorOperationId: context.operationId, stamp: stamp(context, ordinal) }
 }
 
-function withDigest<T extends ProjectIndexIntentV2>(context: OwnerIntentValidationContextV2, intent: T) {
+function withDigest<T extends ProjectIndexIntentV2>(context: OwnerIntentValidationContext, intent: T) {
   return { intent, context: { ...context, intentDigest: projectIndexIntentDigestV2(intent) } }
 }
 
-function draftContext(actorId: ActorIdV2, operationId: Id128V2, lamport: string): OwnerIntentValidationContextV2 {
+function draftContext(actorId: ActorId, operationId: Id128, lamport: string): OwnerIntentValidationContext {
   return { scope: { projectId: "project-a" as never, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch }, actorId, actorSequence: "1" as never, operationId, lamport: lamport as never, baseFrontierDigest: digest("frontier"), protocolDigest, ownerSchemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2, validationArtifactSetDigest: digest("artifacts"), intentDigest: digest("draft") }
 }
 
-function stamp(context: OwnerIntentValidationContextV2, writeOrdinal: string): PortableStampV2 {
-  return { format: "convax.portable-stamp/2", lamport: context.lamport, actorId: context.actorId, operationId: context.operationId, writeOrdinal: writeOrdinal as Uint32V2 }
+function stamp(context: OwnerIntentValidationContext, writeOrdinal: string): PortableStamp {
+  return { format: "convax.portable-stamp/2", lamport: context.lamport, actorId: context.actorId, operationId: context.operationId, writeOrdinal: writeOrdinal as Uint32 }
 }
 
 function blobRef(seed: string): ProjectBlobRefV2 {
   return { format: "convax.blob-ref/2", algorithm: "sha256", digest: digest(seed), byteLength: String(seed.length) as never, mime: "application/octet-stream" }
 }
 
-function digest(seed: string): DigestV2 {
+function digest(seed: string): Digest {
   const bytes = new TextEncoder().encode(seed)
-  return Array.from(new Uint8Array(awaitlessSha(bytes))).map((byte) => byte.toString(16).padStart(2, "0")).join("") as DigestV2
+  return Array.from(new Uint8Array(awaitlessSha(bytes))).map((byte) => byte.toString(16).padStart(2, "0")).join("") as Digest
 }
 
 function awaitlessSha(bytes: Uint8Array): ArrayBuffer {
@@ -812,15 +812,15 @@ function awaitlessSha(bytes: Uint8Array): ArrayBuffer {
   return result.buffer
 }
 
-function id128(byte: number): Id128V2 { return Buffer.alloc(16, byte).toString("base64url") as Id128V2 }
-function actor(byte: number): ActorIdV2 { return Buffer.alloc(32, byte).toString("base64url") as ActorIdV2 }
+function id128(byte: number): Id128 { return Buffer.alloc(16, byte).toString("base64url") as Id128 }
+function actor(byte: number): ActorId { return Buffer.alloc(32, byte).toString("base64url") as ActorId }
 function signature() {
-  return parseSignatureV2(
-    encodeBase64urlV2(
+  return parseSignature(
+    encodeBase64url(
       Uint8Array.from({ length: 64 }, (_, index) => index < 32 ? 3 : index === 32 ? 1 : 0),
     ),
   )
 }
 
 // Keep the JCS codec exercised by the convergence fixture and silence accidental non-JCS additions.
-void encodeRestrictedJcsV2
+void encodeRestrictedJcs

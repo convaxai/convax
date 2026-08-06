@@ -3,25 +3,25 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  causalFrontierDigestV2,
-  canonicalStateDigestV2,
-  encodeBase64urlV2,
-  encodeFullUpdateV2,
-  encodeRestrictedJcsV2,
-  encodeStateVectorV2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  replicaActorHeadSetDigestV2,
-  replicaCheckpointCoreDigestV2,
-  stateVectorDigestV2,
-  yjsUpdateDigestV2,
-  type DocumentScopeV2,
-  type ReplicaCheckpointV2,
+  causalFrontierDigest,
+  canonicalStateDigest,
+  encodeBase64url,
+  encodeFullUpdate,
+  encodeRestrictedJcs,
+  encodeStateVector,
+  ownerCanonicalizerDescriptorDigest,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseReplicaId,
+  parseSignature,
+  replicaActorHeadSetDigest,
+  replicaCheckpointCoreDigest,
+  stateVectorDigest,
+  yjsUpdateDigest,
+  type DocumentScope,
+  type ReplicaCheckpoint,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
@@ -58,9 +58,9 @@ const scope = {
   shardEpoch,
 }
 const authority = {
-  protocolDigest: parseDigestV2("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
+  protocolDigest: parseDigest("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
   schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  uriProtocolDigest: parseDigestV2("9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38"),
+  uriProtocolDigest: parseDigest("9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38"),
 }
 const localActor = actor(7)
 const durabilityTest = test.skipIf(process.platform === "win32")
@@ -143,7 +143,7 @@ describe("ProjectIndex native genesis store", () => {
   test("reconstruction factory binds only the owner root and validation rejects an unknown root", () => {
     const reconstructed = createProjectIndexReconstructionYDocV2()
     expect(reconstructed.gc).toBe(false)
-    Y.applyUpdate(reconstructed, encodeFullUpdateV2(genesisDocument()))
+    Y.applyUpdate(reconstructed, encodeFullUpdate(genesisDocument()))
     expect(validateProjectIndexYDocV2(reconstructed, scope).entries.size).toBe(1)
     reconstructed.getMap("rogue")
     expect(() => validateProjectIndexYDocV2(reconstructed, scope)).toThrow("exactly convax.project-index.v2")
@@ -160,12 +160,12 @@ async function createFixture(overrides: { projectEpoch?: ReturnType<typeof id>; 
   const candidateScope = {
     ...scope,
     projectEpoch: overrides.projectEpoch ?? projectEpoch,
-  } as DocumentScopeV2
+  } as DocumentScope
   const checkpoint = checkpointFor(candidate, candidateScope)
   const genesis = await verifyEmptyProjectIndexGenesisV2({
     scope: candidateScope,
     document: candidate,
-    checkpointExactBytes: encodeRestrictedJcsV2(checkpoint),
+    checkpointExactBytes: encodeRestrictedJcs(checkpoint),
     initializationAuthorityDigest: digest("enrollment"),
     verifier: { async verify() { return true } },
   })
@@ -215,9 +215,9 @@ function genesisDocument(epoch = projectEpoch) {
   }, rootEntry)
 }
 
-function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScopeV2): ReplicaCheckpointV2 {
-  const fullUpdate = encodeFullUpdateV2(candidate)
-  const stateVector = encodeStateVectorV2(candidate)
+function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScope): ReplicaCheckpoint {
+  const fullUpdate = encodeFullUpdate(candidate)
+  const stateVector = encodeStateVector(candidate)
   const canonical = encodeProjectCanonicalStateV2(candidate)
   const frontier = { format: "convax.causal-frontier/2" as const, heads: [] }
   const actorHeads = { format: "convax.replica-actor-head-set/2" as const, scope: candidateScope, heads: [] }
@@ -225,21 +225,21 @@ function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScopeV2): Repli
     format: "convax.replica-checkpoint-core/2" as const,
     scope: candidateScope,
     checkpointId: id(4),
-    authorMemberId: parseMemberIdV2(encodeBase64urlV2(Buffer.alloc(16, 5))),
-    authorReplicaId: parseReplicaIdV2("replica_0000002a"),
+    authorMemberId: parseMemberId(encodeBase64url(Buffer.alloc(16, 5))),
+    authorReplicaId: parseReplicaId("replica_0000002a"),
     authorActorId: localActor,
     authorAuthorizationDigest: digest("authorization"),
     directParentCheckpointDigests: [],
-    baseFrontierDigest: causalFrontierDigestV2(frontier),
-    computedFrontierDigest: causalFrontierDigestV2(frontier),
-    actorHeadBoundaryDigest: replicaActorHeadSetDigestV2(actorHeads),
-    stateVectorDigest: stateVectorDigestV2(stateVector),
-    canonicalStateDigest: canonicalStateDigestV2(authority.schemaDigest, canonical),
-    fullUpdateDigest: yjsUpdateDigestV2(fullUpdate),
+    baseFrontierDigest: causalFrontierDigest(frontier),
+    computedFrontierDigest: causalFrontierDigest(frontier),
+    actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
+    stateVectorDigest: stateVectorDigest(stateVector),
+    canonicalStateDigest: canonicalStateDigest(authority.schemaDigest, canonical),
+    fullUpdateDigest: yjsUpdateDigest(fullUpdate),
     fullUpdateByteLength: String(fullUpdate.byteLength) as never,
     protocolDigest: authority.protocolDigest,
     schemaDigest: authority.schemaDigest,
-    canonicalizerDigest: ownerCanonicalizerDescriptorDigestV2(
+    canonicalizerDigest: ownerCanonicalizerDescriptorDigest(
       projectIndexOwnerCanonicalizerDescriptorV2(authority.schemaDigest),
     ),
     validationArtifactSetDigest: digest("artifacts"),
@@ -247,8 +247,8 @@ function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScopeV2): Repli
   return {
     format: "convax.replica-checkpoint/2",
     core,
-    coreDigest: replicaCheckpointCoreDigestV2(core),
-    replicaSignature: parseSignatureV2(encodeBase64urlV2(Uint8Array.from(
+    coreDigest: replicaCheckpointCoreDigest(core),
+    replicaSignature: parseSignature(encodeBase64url(Uint8Array.from(
       { length: 64 }, (_, index) => index < 32 ? 3 : index === 32 ? 1 : 0,
     ))),
   }
@@ -257,7 +257,7 @@ function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScopeV2): Repli
 const materializer: NodeReplicaHeadMaterializerV2 = {
   async inspectFrame() { throw new Error("unused") },
   async applyAcceptedFrame() { throw new Error("unused") },
-  actorHeadsDigest: replicaActorHeadSetDigestV2,
+  actorHeadsDigest: replicaActorHeadSetDigest,
 }
 
 function reconstruct(fullUpdate: Uint8Array) {
@@ -280,13 +280,13 @@ async function findFirst(root: string, predicate: (value: string) => boolean): P
 }
 
 function id(byte: number) {
-  return parseId128V2(Buffer.alloc(16, byte).toString("base64url"))
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
 }
 
 function actor(byte: number) {
-  return parseActorIdV2(Buffer.alloc(32, byte).toString("base64url"))
+  return parseActorId(Buffer.alloc(32, byte).toString("base64url"))
 }
 
 function digest(seed: string) {
-  return parseDigestV2(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
+  return parseDigest(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
 }

@@ -1,4 +1,4 @@
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import {
   parseProjectTeamBootstrapResultV2,
@@ -31,10 +31,10 @@ export function createProjectTeamCollaborationPreloadClientV2(
   const client: ProjectTeamCollaborationClientV2 = {
     getStatus: ({ projectId }: { readonly projectId: string }) =>
       invokeStatus(projectTeamCollaborationIpcChannelsV2.getStatus, {
-        projectId: parseProjectIdV2(projectId),
+        projectId: parseProjectId(projectId),
       }),
     async bootstrapTeam({ projectId }: { readonly projectId: string }) {
-      const exactProjectId = parseProjectIdV2(projectId)
+      const exactProjectId = parseProjectId(projectId)
       const result = parseProjectTeamBootstrapResultV2(
         await ipc.invoke(projectTeamCollaborationIpcChannelsV2.bootstrapTeam, { projectId: exactProjectId }),
       )
@@ -44,7 +44,7 @@ export function createProjectTeamCollaborationPreloadClientV2(
       return result
     },
     async joinTeam({ invitation, projectId }) {
-      const exactProjectId = parseProjectIdV2(projectId)
+      const exactProjectId = parseProjectId(projectId)
       const exactInvitation = parseProjectTeamInvitationV2(invitation)
       if (exactInvitation.projectId !== exactProjectId) {
         throw new TypeError("Project team invitation crossed Project identity")

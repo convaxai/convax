@@ -3,10 +3,10 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  createWebCryptoEd25519VerifierV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
+  createWebCryptoEd25519Verifier,
+  parseId128,
+  parseProjectId,
+  parseReplicaId,
 } from "@convax/collaboration"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
 
@@ -74,7 +74,7 @@ async function createFixture(options: { safeStorage?: ElectronSafeStoragePortV2 
   const projectRoot = path.join(root, "project")
   await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
   const authority = await loadHistoricalTestAuthorityV2()
-  const projectId = parseProjectIdV2("project-local-owner")
+  const projectId = parseProjectId("project-local-owner")
   const vault = new ElectronReplicaSigningVaultV2(
     path.join(userData, "vault"),
     options.safeStorage ?? availableStorage,
@@ -94,9 +94,9 @@ async function createFixture(options: { safeStorage?: ElectronSafeStoragePortV2 
           return projectRoot
         } },
         vault,
-        verifier: createWebCryptoEd25519VerifierV2(),
-        createId: () => parseId128V2(Buffer.alloc(16, idByte++).toString("base64url")),
-        createReplicaId: () => parseReplicaIdV2(`replica_${(replica++).toString(16).padStart(8, "0")}`),
+        verifier: createWebCryptoEd25519Verifier(),
+        createId: () => parseId128(Buffer.alloc(16, idByte++).toString("base64url")),
+        createReplicaId: () => parseReplicaId(`replica_${(replica++).toString(16).padStart(8, "0")}`),
         ...(faults ? { faults } : {}),
       }),
   }

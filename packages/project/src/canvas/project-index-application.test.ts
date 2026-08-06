@@ -1,16 +1,15 @@
 import { describe, expect, test } from "bun:test"
 import {
-  parseDigestV2,
-  type ActorIdV2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
-  type Id128V2,
-  type OwnerExternalFactPortV2,
-  type OwnerIntentConstructionContextV2,
-  type OwnerIntentValidationContextV2,
-  type OwnerValidatedStateV2,
-  type ProjectIdV2,
-  type Uint32V2,
+  parseDigest,
+  type ActorId,
+  type DecodedCausalEditFrame,
+  type Id128,
+  type OwnerExternalFactPort,
+  type OwnerIntentConstructionContext,
+  type OwnerIntentValidationContext,
+  type OwnerValidatedState,
+  type ProjectId,
+  type Uint32,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
@@ -28,7 +27,7 @@ import {
   type ProjectIndexDocumentSessionPortV2,
 } from "./project-index-application"
 
-const projectId = "project-a" as ProjectIdV2
+const projectId = "project-a" as ProjectId
 const projectEpoch = id(1)
 const projectShardEpoch = id(2)
 const protocolDigest = digest("protocol")
@@ -39,7 +38,7 @@ describe("ProjectIndexCanvasApplicationV2", () => {
     const fixture = createFixture()
     const application = fixture.application({ stageCanvasGenesis: async () => "rejected" })
     expect(await application.queryCurrentBlobDigests({ projectId })).toEqual(new Set())
-    await expect(application.queryCurrentBlobDigests({ projectId: "project-other" as ProjectIdV2 })).rejects.toThrow("another Project")
+    await expect(application.queryCurrentBlobDigests({ projectId: "project-other" as ProjectId })).rejects.toThrow("another Project")
   })
 
   test("creates only after stage frame and Canvas genesis are durable", async () => {
@@ -76,32 +75,6 @@ describe("ProjectIndexCanvasApplicationV2", () => {
       "project.canvas.route.stage/2",
       "project.canvas.route.activate/2",
     ])
-  })
-
-  test("forwards a decoded V3 stage frame by identity without V2 casting or re-encoding", async () => {
-    const fixture = createFixture(3)
-    let observed: DecodedCausalEditFrameV3 | undefined
-    const application = fixture.application({
-      async stageCanvasGenesis(input) {
-        const latest = fixture.lastFrame()
-        if (!latest) throw new Error("missing submitted frame")
-        expect(input.predecessor.frame).toBe(latest)
-        expect(input.predecessor.frame.header.format).toBe("convax.causal-edit-frame/3")
-        if (!isDecodedV3(input.predecessor.frame)) throw new Error("expected V3 frame")
-        observed = input.predecessor.frame
-        return {
-          predecessorFrameDigest: input.predecessor.frame.frameDigest,
-          stagedProjectIndexFrontierDigest: input.predecessor.acceptedFrontierDigest,
-          checkpointObjectDigest: digest("canvas-v3-G"),
-        }
-      },
-    })
-    const result = await application.submitRouteCommand({
-      projectId,
-      command: { format: "convax.project-canvas-route-command/2", kind: "project.canvas.route.create/2", title: "Local V3" },
-    })
-    expect(result.status).toBe("committed")
-    expect(observed).toBeDefined()
   })
 
   test("leaves a staged route invisible when genesis is pending", async () => {
@@ -209,15 +182,15 @@ describe("ProjectIndexCanvasApplicationV2", () => {
   })
 })
 
-function createFixture(protocolMajor: 2 | 3 = 2) {
+function createFixture() {
   const document = genesis()
   const submittedKinds: string[] = []
   let submission = 0
   let operation = 10
-  let latestFrame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3 | undefined
+  let latestFrame: DecodedCausalEditFrame | undefined
   const externalFacts = {
     resolveFact: () => ({ status: "rejected" as const }),
-  } as unknown as OwnerExternalFactPortV2<"project-index">
+  } as unknown as OwnerExternalFactPort<"project-index">
   const session: ProjectIndexDocumentSessionPortV2 = {
     scope: {
       projectId,
@@ -227,19 +200,19 @@ function createFixture(protocolMajor: 2 | 3 = 2) {
       shardEpoch: projectShardEpoch,
     },
     async query(project) {
-      return project({ owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedStateV2<"project-index">)
+      return project({ owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">)
     },
     async submit(input) {
       submission += 1
       const context = constructionContext(input.operationId ?? id(200 + submission), String(submission))
       const prepared = await input.prepare({
-        base: { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedStateV2<"project-index">,
+        base: { owner: "project-index", value: validateProjectIndexYDocV2(document) } as OwnerValidatedState<"project-index">,
         context,
         signal: input.signal,
       })
       const typedIntent = prepared.typedIntent as ProjectIndexIntentV2
       submittedKinds.push(typedIntent.kind)
-      const validationContext: OwnerIntentValidationContextV2 = {
+      const validationContext: OwnerIntentValidationContext = {
         ...context,
         intentDigest: projectIndexIntentDigestV2(typedIntent),
       }
@@ -250,22 +223,10 @@ function createFixture(protocolMajor: 2 | 3 = 2) {
       })
       if (applied === "rejected") throw new Error("fake ProjectIndex session rejected intent")
       const frameDigest = digest(`frame-${submission}`)
-      if (protocolMajor === 2) {
-        const frame = {
-          frameDigest,
-          header: { format: "convax.causal-edit-frame/2", core: { scope: session.scope, operationId: context.operationId } },
-        } as unknown as DecodedCausalEditFrameV2
-        latestFrame = frame
-        return {
-          status: "saved-locally" as const,
-          acceptedFrontierDigest: digest(`frontier-${submission}`),
-          frame,
-        }
-      }
       const frame = {
         frameDigest,
-        header: { format: "convax.causal-edit-frame/3", core: { scope: session.scope, operationId: context.operationId } },
-      } as unknown as DecodedCausalEditFrameV3
+        header: { format: "convax.causal-edit-frame/2", core: { scope: session.scope, operationId: context.operationId } },
+      } as unknown as DecodedCausalEditFrame
       latestFrame = frame
       return {
         status: "saved-locally" as const,
@@ -314,7 +275,7 @@ function genesis(): Y.Doc {
       lamport: context.lamport,
       actorId: context.actorId,
       operationId: context.operationId,
-      writeOrdinal: "0" as Uint32V2,
+      writeOrdinal: "0" as Uint32,
     },
   }
   return createProjectIndexYDocV2({
@@ -330,7 +291,7 @@ function genesis(): Y.Doc {
   }, rootEntry)
 }
 
-function constructionContext(operationId: Id128V2, lamport: string): OwnerIntentConstructionContextV2 {
+function constructionContext(operationId: Id128, lamport: string): OwnerIntentConstructionContext {
   return {
     scope: { projectId, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch: projectShardEpoch },
     actorId,
@@ -344,18 +305,14 @@ function constructionContext(operationId: Id128V2, lamport: string): OwnerIntent
   }
 }
 
-function id(byte: number): Id128V2 {
-  return Buffer.alloc(16, byte).toString("base64url") as Id128V2
+function id(byte: number): Id128 {
+  return Buffer.alloc(16, byte).toString("base64url") as Id128
 }
 
-function actor(byte: number): ActorIdV2 {
-  return Buffer.alloc(32, byte).toString("base64url") as ActorIdV2
+function actor(byte: number): ActorId {
+  return Buffer.alloc(32, byte).toString("base64url") as ActorId
 }
 
 function digest(seed: string) {
-  return parseDigestV2(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
-}
-
-function isDecodedV3(frame: DecodedCausalEditFrameV2 | DecodedCausalEditFrameV3): frame is DecodedCausalEditFrameV3 {
-  return frame.header.format === "convax.causal-edit-frame/3"
+  return parseDigest(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
 }

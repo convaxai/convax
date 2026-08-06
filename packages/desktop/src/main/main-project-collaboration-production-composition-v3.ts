@@ -1,4 +1,4 @@
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import type { CanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
 import type { MainProjectIndexRuntimeRegistryV2 } from "./main-project-index-runtime-registry"
@@ -21,7 +21,7 @@ export function createMainProjectCollaborationProductionCompositionV3(input: Rea
 }>): MainProjectCollaborationCompositionFacadeV3 {
   return createMainProjectCollaborationCompositionFacadeV3({
     async resolve(projectIdInput) {
-      const projectId = parseProjectIdV2(projectIdInput)
+      const projectId = parseProjectId(projectIdInput)
       return Object.freeze({
         status: "ready" as const,
         ports: await openMainSelectedV10CollaborationPortsV3({

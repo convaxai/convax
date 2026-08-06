@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeRestrictedJcsV2,
-  parseUint64V2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
+  encodeRestrictedJcs,
+  parseUint64,
+  type DecodedCausalEditFrame,
 } from "@convax/collaboration"
 
 import { requiredCanvasBlobDigestsV2 } from "./blob-dependencies"
@@ -12,12 +11,6 @@ import { derivedNodeRefV2 } from "./validation"
 import { context, digest, U0 } from "./test-fixtures.test"
 
 describe("Canvas required blob dependency extraction", () => {
-  test("admits native V3 frames without a V2 transcode boundary", () => {
-    const successorExtractor: (frame: DecodedCausalEditFrameV3) => readonly string[] =
-      requiredCanvasBlobDigestsV2
-    expect(successorExtractor).toBe(requiredCanvasBlobDigestsV2)
-  })
-
   test("extracts, sorts and deduplicates Host resource content while ignoring opaque Plugin state", () => {
     const operation = context(4, 5, 6)
     const node = derivedNodeRefV2(operation, U0)
@@ -26,7 +19,7 @@ describe("Canvas required blob dependency extraction", () => {
       uri: `convax-project://project/epochs/${operation.scope.projectEpoch}/entries/pf_${"1".repeat(64)}?blob=sha256%3A${"a".repeat(64)}`,
       mediaClass: "image" as const,
       mime: "image/png",
-      byteLength: parseUint64V2("12"),
+      byteLength: parseUint64("12"),
       contentDigest: digest(42),
       ownerProofDigest: digest(43),
     }
@@ -77,10 +70,10 @@ describe("Canvas required blob dependency extraction", () => {
 function frame(
   intent: CanvasTypedIntentUnionV2,
   overrides: { docKind?: "canvas" | "project-index"; intentKind?: string } = {},
-): DecodedCausalEditFrameV2 {
+): DecodedCausalEditFrame {
   const operation = context(1, 2, 3)
   return {
     header: { core: { scope: { ...operation.scope, docKind: overrides.docKind ?? "canvas" }, intentKind: overrides.intentKind ?? intent.kind } },
-    sections: { typedIntentJcs: encodeRestrictedJcsV2(intent) },
-  } as unknown as DecodedCausalEditFrameV2
+    sections: { typedIntentJcs: encodeRestrictedJcs(intent) },
+  } as unknown as DecodedCausalEditFrame
 }

@@ -1,30 +1,30 @@
 import {
-  assertExactPruningCoverageV2,
-  encodeRestrictedJcsTextV2,
-  incrementUint64V2,
-  parseCheckpointContentCertificateV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseMemberIdV2,
-  parsePrunableCheckpointSetCertificateV2,
-  parseReplicaCausalFloorAckV2,
-  parseReplicaIdV2,
-  parseStableCheckpointSetCoreV2,
-  parseUint32V2,
-  stableCheckpointSetCoreDigestV2,
-  structuredDigestV2,
-  type CheckpointContentCertificateV2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type MemberIdV2,
-  type PrunableCheckpointSetCertificateCoreV2,
-  type PrunableCheckpointSetCertificateV2,
-  type ProjectIdV2,
-  type PublicKeyV2,
-  type ReplicaCausalFloorAckV2,
-  type ReplicaIdV2,
-  type SignatureV2,
-  type StableCheckpointSetCoreV2,
+  assertExactPruningCoverage,
+  encodeRestrictedJcsText,
+  incrementUint64,
+  parseCheckpointContentCertificate,
+  parseDigest,
+  parseDocumentScope,
+  parseMemberId,
+  parsePrunableCheckpointSetCertificate,
+  parseReplicaCausalFloorAck,
+  parseReplicaId,
+  parseStableCheckpointSetCore,
+  parseUint32,
+  stableCheckpointSetCoreDigest,
+  structuredDigest,
+  type CheckpointContentCertificate,
+  type Digest,
+  type DocumentScope,
+  type MemberId,
+  type PrunableCheckpointSetCertificateCore,
+  type PrunableCheckpointSetCertificate,
+  type ProjectId,
+  type PublicKey,
+  type ReplicaCausalFloorAck,
+  type ReplicaId,
+  type Signature,
+  type StableCheckpointSetCore,
 } from "@convax/collaboration"
 import {
   authorizationMutationCoreDigestV2,
@@ -66,17 +66,17 @@ const MAX_REGISTRY_ENTRIES = 4_096
 
 export interface CollaborationMetadataControlStateV2 {
   readonly format: "convax.metadata-control-state/2"
-  readonly contentCertificates: readonly CheckpointContentCertificateV2[]
+  readonly contentCertificates: readonly CheckpointContentCertificate[]
   readonly stableSets: readonly Readonly<{
-    stableSetCore: StableCheckpointSetCoreV2
-    floorAcks: readonly ReplicaCausalFloorAckV2[]
-    certificate: PrunableCheckpointSetCertificateV2
+    stableSetCore: StableCheckpointSetCore
+    floorAcks: readonly ReplicaCausalFloorAck[]
+    certificate: PrunableCheckpointSetCertificate
   }>[]
   readonly projectFloors: readonly Readonly<{
     pages: readonly ReplicaProjectFloorPageV2[]
     root: ReplicaProjectFloorRootV2
   }>[]
-  readonly replicaFloorAcks: readonly ReplicaCausalFloorAckV2[]
+  readonly replicaFloorAcks: readonly ReplicaCausalFloorAck[]
   readonly registrationClaims: readonly DocumentRegistrationClaimV2[]
   readonly registrationAbandonments: readonly DocumentRegistrationAbandonmentV2[]
   readonly registryEntries: readonly CollaborationScopeEntryV2[]
@@ -92,20 +92,20 @@ export interface CollaborationMetadataControlStateV2 {
 
 export interface MetadataControlSignaturePortV2 {
   serviceKeyId(purpose: "checkpoint-stability" | "registry-cutoff"): string
-  signServiceDigest(purpose: "checkpoint-stability" | "registry-cutoff", digest: DigestV2): Promise<SignatureV2>
-  verifyPublicKeyDigest(publicKey: PublicKeyV2, digest: DigestV2, signature: SignatureV2): Promise<boolean>
+  signServiceDigest(purpose: "checkpoint-stability" | "registry-cutoff", digest: Digest): Promise<Signature>
+  verifyPublicKeyDigest(publicKey: PublicKey, digest: Digest, signature: Signature): Promise<boolean>
 }
 
 declare const attestationAdmissionBrand: unique symbol
 export interface CheckpointAttestationAdmissionV2 { readonly [attestationAdmissionBrand]: true }
-const liveAttestationAdmissions = new WeakMap<object, DigestV2>()
+const liveAttestationAdmissions = new WeakMap<object, Digest>()
 
 export function createCheckpointAttestationAdmissionFactoryV2(verifier: {
-  verify(input: { readonly certificate: CheckpointContentCertificateV2; readonly evidence: unknown }): Promise<boolean>
-}): { authorize(input: { readonly certificate: CheckpointContentCertificateV2; readonly evidence: unknown }): Promise<CheckpointAttestationAdmissionV2 | "rejected"> } {
+  verify(input: { readonly certificate: CheckpointContentCertificate; readonly evidence: unknown }): Promise<boolean>
+}): { authorize(input: { readonly certificate: CheckpointContentCertificate; readonly evidence: unknown }): Promise<CheckpointAttestationAdmissionV2 | "rejected"> } {
   return Object.freeze({
     async authorize(input) {
-      const certificate = parseCheckpointContentCertificateV2(input.certificate)
+      const certificate = parseCheckpointContentCertificate(input.certificate)
       if (!await verifier.verify({ certificate, evidence: input.evidence })) return "rejected"
       const capability = Object.freeze({}) as CheckpointAttestationAdmissionV2
       liveAttestationAdmissions.set(capability, certificate.coreDigest)
@@ -116,15 +116,15 @@ export function createCheckpointAttestationAdmissionFactoryV2(verifier: {
 
 declare const projectFloorManifestAdmissionBrand: unique symbol
 export interface ProjectFloorManifestAdmissionV2 { readonly [projectFloorManifestAdmissionBrand]: true }
-const liveFloorManifestAdmissions = new WeakMap<object, Readonly<{ digest: DigestV2; scopeKeys: readonly string[] }>>()
+const liveFloorManifestAdmissions = new WeakMap<object, Readonly<{ digest: Digest; scopeKeys: readonly string[] }>>()
 
 export function createProjectFloorManifestAdmissionFactoryV2(verifier: {
-  verify(input: { readonly manifestDigest: DigestV2; readonly requiredScopes: readonly DocumentScopeV2[]; readonly evidence: unknown }): Promise<boolean>
-}): { authorize(input: { readonly manifestDigest: DigestV2; readonly requiredScopes: readonly DocumentScopeV2[]; readonly evidence: unknown }): Promise<ProjectFloorManifestAdmissionV2 | "rejected"> } {
+  verify(input: { readonly manifestDigest: Digest; readonly requiredScopes: readonly DocumentScope[]; readonly evidence: unknown }): Promise<boolean>
+}): { authorize(input: { readonly manifestDigest: Digest; readonly requiredScopes: readonly DocumentScope[]; readonly evidence: unknown }): Promise<ProjectFloorManifestAdmissionV2 | "rejected"> } {
   return Object.freeze({
     async authorize(input) {
-      const digest = parseDigestV2(input.manifestDigest)
-      const requiredScopes = Object.freeze(input.requiredScopes.map(parseDocumentScopeV2))
+      const digest = parseDigest(input.manifestDigest)
+      const requiredScopes = Object.freeze(input.requiredScopes.map(parseDocumentScope))
       if (!await verifier.verify({ manifestDigest: digest, requiredScopes, evidence: input.evidence })) return "rejected"
       const capability = Object.freeze({}) as ProjectFloorManifestAdmissionV2
       liveFloorManifestAdmissions.set(capability, Object.freeze({ digest, scopeKeys: Object.freeze(requiredScopes.map(scopeKey)) }))
@@ -135,15 +135,15 @@ export function createProjectFloorManifestAdmissionFactoryV2(verifier: {
 
 declare const exactControlCommitAdmissionBrand: unique symbol
 export interface ExactControlCommitAdmissionV2 { readonly [exactControlCommitAdmissionBrand]: true }
-const liveExactControlCommitAdmissions = new WeakMap<object, Readonly<{ kind: "cutoff" | "shard-reset"; digest: DigestV2 }>>()
+const liveExactControlCommitAdmissions = new WeakMap<object, Readonly<{ kind: "cutoff" | "shard-reset"; digest: Digest }>>()
 
 /** Converts an isolated exact verifier/transaction receipt into a one-shot metadata admission. */
 export function createExactControlCommitAdmissionFactoryV2(verifier: {
-  verify(input: { readonly kind: "cutoff" | "shard-reset"; readonly digest: DigestV2; readonly evidence: unknown }): Promise<boolean>
-}): { authorize(input: { readonly kind: "cutoff" | "shard-reset"; readonly digest: DigestV2; readonly evidence: unknown }): Promise<ExactControlCommitAdmissionV2 | "rejected"> } {
+  verify(input: { readonly kind: "cutoff" | "shard-reset"; readonly digest: Digest; readonly evidence: unknown }): Promise<boolean>
+}): { authorize(input: { readonly kind: "cutoff" | "shard-reset"; readonly digest: Digest; readonly evidence: unknown }): Promise<ExactControlCommitAdmissionV2 | "rejected"> } {
   return Object.freeze({
     async authorize(input) {
-      const normalized = Object.freeze({ kind: input.kind, digest: parseDigestV2(input.digest) })
+      const normalized = Object.freeze({ kind: input.kind, digest: parseDigest(input.digest) })
       if (!await verifier.verify({ ...normalized, evidence: input.evidence })) return "rejected"
       const capability = Object.freeze({}) as ExactControlCommitAdmissionV2
       liveExactControlCommitAdmissions.set(capability, normalized)
@@ -158,8 +158,8 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     private readonly signatures: MetadataControlSignaturePortV2,
   ) {}
 
-  async admitCheckpointCertificate(projectId: ProjectIdV2, input: unknown, admission: CheckpointAttestationAdmissionV2): Promise<CheckpointContentCertificateV2> {
-    const certificate = parseCheckpointContentCertificateV2(input)
+  async admitCheckpointCertificate(projectId: ProjectId, input: unknown, admission: CheckpointAttestationAdmissionV2): Promise<CheckpointContentCertificate> {
+    const certificate = parseCheckpointContentCertificate(input)
     const admittedDigest = liveAttestationAdmissions.get(admission)
     if (admittedDigest !== certificate.coreDigest) fail("invalid-proof", "A live exact attestation admission is required")
     liveAttestationAdmissions.delete(admission)
@@ -175,9 +175,9 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     })
   }
 
-  async publishStableCheckpointSet(projectId: ProjectIdV2, stableInput: unknown, floorAckInputs: readonly unknown[]): Promise<PrunableCheckpointSetCertificateV2> {
-    const stableSetCore = parseStableCheckpointSetCoreV2(stableInput)
-    const floorAcks = Object.freeze(floorAckInputs.map(parseReplicaCausalFloorAckV2))
+  async publishStableCheckpointSet(projectId: ProjectId, stableInput: unknown, floorAckInputs: readonly unknown[]): Promise<PrunableCheckpointSetCertificate> {
+    const stableSetCore = parseStableCheckpointSetCore(stableInput)
+    const floorAcks = Object.freeze(floorAckInputs.map(parseReplicaCausalFloorAck))
     return this.store.transact(projectId, async (transaction) => {
       const state = requireProject(transaction.read(), projectId)
       const team = requireTeam(state)
@@ -185,8 +185,8 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
       if (stableSetCore.membershipSnapshotDigest !== team.currentSnapshot.coreDigest) fail("stale-counter", "Stable set membership snapshot is stale")
       if (stableSetCore.validationArtifactSetDigest !== state.seed.validationArtifactSetDigest) fail("invalid-proof", "Stable set validation artifacts mismatch")
       const metadata = metadataState(state)
-      const stableDigest = stableCheckpointSetCoreDigestV2(stableSetCore)
-      const existing = metadata.stableSets.find((item) => stableCheckpointSetCoreDigestV2(item.stableSetCore) === stableDigest)
+      const stableDigest = stableCheckpointSetCoreDigest(stableSetCore)
+      const existing = metadata.stableSets.find((item) => stableCheckpointSetCoreDigest(item.stableSetCore) === stableDigest)
       if (existing) return existing.certificate
       const contentCertificates = stableSetCore.contentCertificateDigests.map((digest) => {
         const certificate = metadata.contentCertificates.find((item) => item.coreDigest === digest)
@@ -198,24 +198,24 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
       if (floorAcks.length !== activeEditorReplicas.length) fail("invalid-proof", "Floor ACKs do not exactly cover active editors")
       for (const ack of floorAcks) await verifyFloorAck(ack, stableDigest, state, this.signatures)
       const serviceKeyId = this.signatures.serviceKeyId("checkpoint-stability")
-      const core: PrunableCheckpointSetCertificateCoreV2 = Object.freeze({ format: "convax.prunable-checkpoint-set-certificate-core/2", stableSetCore, floorAckDigests: Object.freeze(floorAcks.map((ack) => ack.coreDigest).sort()), contentStatus: "service-validated-and-all-editors-acknowledged", trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "checkpoint-stability", serviceKeyId })
-      const coreDigest = structuredDigestV2("convax.prunable-checkpoint-set-certificate-core/2", core)
-      const certificate = parsePrunableCheckpointSetCertificateV2(Object.freeze({ format: "convax.prunable-checkpoint-set-certificate/2", core, coreDigest, serviceSignature: await this.signatures.signServiceDigest("checkpoint-stability", coreDigest) }))
-      assertExactPruningCoverageV2({ certificate, contentCertificates, floorAcks: floorAcks.map((ack) => Object.freeze({ ackDigest: ack.coreDigest, ack })), activeEditorReplicaIds: activeEditorReplicas.map((replica) => replica.replicaId) })
+      const core: PrunableCheckpointSetCertificateCore = Object.freeze({ format: "convax.prunable-checkpoint-set-certificate-core/2", stableSetCore, floorAckDigests: Object.freeze(floorAcks.map((ack) => ack.coreDigest).sort()), contentStatus: "service-validated-and-all-editors-acknowledged", trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "checkpoint-stability", serviceKeyId })
+      const coreDigest = structuredDigest("convax.prunable-checkpoint-set-certificate-core/2", core)
+      const certificate = parsePrunableCheckpointSetCertificate(Object.freeze({ format: "convax.prunable-checkpoint-set-certificate/2", core, coreDigest, serviceSignature: await this.signatures.signServiceDigest("checkpoint-stability", coreDigest) }))
+      assertExactPruningCoverage({ certificate, contentCertificates, floorAcks: floorAcks.map((ack) => Object.freeze({ ackDigest: ack.coreDigest, ack })), activeEditorReplicaIds: activeEditorReplicas.map((replica) => replica.replicaId) })
       const acceptedAcks = Object.freeze([...metadata.replicaFloorAcks, ...floorAcks.filter((ack) => !metadata.replicaFloorAcks.some((existingAck) => existingAck.coreDigest === ack.coreDigest))])
       writeMetadata(transaction, state, { ...metadata, stableSets: Object.freeze([...metadata.stableSets, Object.freeze({ stableSetCore, floorAcks, certificate })]), replicaFloorAcks: acceptedAcks })
       return certificate
     })
   }
 
-  async admitReplicaFloorAck(projectId: ProjectIdV2, input: unknown): Promise<ReplicaCausalFloorAckV2> {
-    const ack = parseReplicaCausalFloorAckV2(input)
+  async admitReplicaFloorAck(projectId: ProjectId, input: unknown): Promise<ReplicaCausalFloorAck> {
+    const ack = parseReplicaCausalFloorAck(input)
     return this.store.transact(projectId, async (transaction) => {
       const state = requireProject(transaction.read(), projectId)
       const metadata = metadataState(state)
       const existing = metadata.replicaFloorAcks.find((value) => value.coreDigest === ack.coreDigest)
       if (existing) return existing
-      const stable = metadata.stableSets.find((value) => stableCheckpointSetCoreDigestV2(value.stableSetCore) === ack.core.stableSetCoreDigest)
+      const stable = metadata.stableSets.find((value) => stableCheckpointSetCoreDigest(value.stableSetCore) === ack.core.stableSetCoreDigest)
       if (!stable) fail("not-found", "Replica floor ACK stable set is unavailable")
       if (stable.stableSetCore.membershipSnapshotDigest !== requireTeam(state).currentSnapshot.coreDigest) fail("stale-counter", "Replica floor ACK stable set membership is stale")
       await verifyFloorAck(ack, ack.core.stableSetCoreDigest, state, this.signatures, true)
@@ -225,16 +225,16 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
   }
 
   async publishProjectFloor(input: {
-    readonly projectId: ProjectIdV2
-    readonly targetMemberId: MemberIdV2
-    readonly targetReplicaId: ReplicaIdV2
-    readonly manifestDigest: DigestV2
+    readonly projectId: ProjectId
+    readonly targetMemberId: MemberId
+    readonly targetReplicaId: ReplicaId
+    readonly manifestDigest: Digest
     readonly pages: readonly unknown[]
   }, admission: ProjectFloorManifestAdmissionV2): Promise<ReplicaProjectFloorRootV2> {
     const projectId = input.projectId
-    const targetMemberId = parseMemberIdV2(input.targetMemberId)
-    const targetReplicaId = parseReplicaIdV2(input.targetReplicaId)
-    const manifestDigest = parseDigestV2(input.manifestDigest)
+    const targetMemberId = parseMemberId(input.targetMemberId)
+    const targetReplicaId = parseReplicaId(input.targetReplicaId)
+    const manifestDigest = parseDigest(input.manifestDigest)
     const pages = Object.freeze(input.pages.map(parseReplicaProjectFloorPageV2))
     const authority = liveFloorManifestAdmissions.get(admission)
     if (!authority || authority.digest !== manifestDigest) fail("invalid-proof", "A live exact ProjectIndex manifest admission is required")
@@ -261,7 +261,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
       if (pages.some((page) => page.core.floorSetId !== floorSetId)) fail("invalid-proof", "Project floor pages mix floor set ids")
       const serviceKeyId = this.signatures.serviceKeyId("checkpoint-stability")
       const registry = currentRegistry(state)
-      const core: ReplicaProjectFloorRootCoreV2 = Object.freeze({ format: "convax.replica-project-floor-root-core/2", projectId, projectEpoch: state.seed.projectEpoch, membershipEpoch: state.seed.membershipEpoch, floorSetId, targetMemberId, targetReplicaId, targetActorId: replica.actorId, targetReplicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, membershipSnapshotDigest: team.currentSnapshot.coreDigest, projectIndexLiveScopeManifestDigest: manifestDigest, registrySequence: registry.sequence, registryRootDigest: registry.digest, requiredScopeSetPolicy: "project-index-plus-certified-live-routes", unlistedScopePolicy: "registry-only-is-advisory-and-never-blocks-or-grants", pageDigests: Object.freeze(pages.map((page) => page.coreDigest)), entryCount: parseUint32V2(String(entries.length)), protocolDigest: state.seed.membershipSnapshotDigest === team.currentSnapshot.coreDigest ? team.currentSnapshot.core.protocolDigest : fail("stale-counter", "Seed membership projection is stale"), trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "checkpoint-stability", serviceKeyId })
+      const core: ReplicaProjectFloorRootCoreV2 = Object.freeze({ format: "convax.replica-project-floor-root-core/2", projectId, projectEpoch: state.seed.projectEpoch, membershipEpoch: state.seed.membershipEpoch, floorSetId, targetMemberId, targetReplicaId, targetActorId: replica.actorId, targetReplicaAuthorizationEpoch: replica.replicaAuthorizationEpoch, membershipSnapshotDigest: team.currentSnapshot.coreDigest, projectIndexLiveScopeManifestDigest: manifestDigest, registrySequence: registry.sequence, registryRootDigest: registry.digest, requiredScopeSetPolicy: "project-index-plus-certified-live-routes", unlistedScopePolicy: "registry-only-is-advisory-and-never-blocks-or-grants", pageDigests: Object.freeze(pages.map((page) => page.coreDigest)), entryCount: parseUint32(String(entries.length)), protocolDigest: state.seed.membershipSnapshotDigest === team.currentSnapshot.coreDigest ? team.currentSnapshot.core.protocolDigest : fail("stale-counter", "Seed membership projection is stale"), trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "checkpoint-stability", serviceKeyId })
       const coreDigest = replicaProjectFloorRootCoreDigestV2(core)
       const root = Object.freeze({ format: "convax.replica-project-floor-root/2" as const, core, coreDigest, serviceSignature: await this.signatures.signServiceDigest("checkpoint-stability", coreDigest) })
       writeMetadata(transaction, state, { ...metadata, projectFloors: Object.freeze([...metadata.projectFloors, Object.freeze({ pages, root })]) })
@@ -269,7 +269,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     })
   }
 
-  async registerScope(projectId: ProjectIdV2, input: unknown): Promise<{ readonly entry: CollaborationScopeEntryV2; readonly registrySnapshot: RegistrySnapshotV2 }> {
+  async registerScope(projectId: ProjectId, input: unknown): Promise<{ readonly entry: CollaborationScopeEntryV2; readonly registrySnapshot: RegistrySnapshotV2 }> {
     const claim = parseDocumentRegistrationClaimV2(input)
     return this.store.transact(projectId, async (transaction) => {
       const state = requireProject(transaction.read(), projectId)
@@ -296,7 +296,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     })
   }
 
-  async abandonScope(projectId: ProjectIdV2, input: unknown): Promise<{ readonly entry: CollaborationScopeEntryV2; readonly registrySnapshot: RegistrySnapshotV2 }> {
+  async abandonScope(projectId: ProjectId, input: unknown): Promise<{ readonly entry: CollaborationScopeEntryV2; readonly registrySnapshot: RegistrySnapshotV2 }> {
     const abandonment = parseDocumentRegistrationAbandonmentV2(input)
     return this.store.transact(projectId, async (transaction) => {
       const state = requireProject(transaction.read(), projectId)
@@ -321,7 +321,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     })
   }
 
-  async admitCutoffCommit(projectId: ProjectIdV2, input: { readonly pages: readonly unknown[]; readonly root: unknown; readonly authorizationMutation: unknown }, admission: ExactControlCommitAdmissionV2): Promise<AuthorizationMutationV2> {
+  async admitCutoffCommit(projectId: ProjectId, input: { readonly pages: readonly unknown[]; readonly root: unknown; readonly authorizationMutation: unknown }, admission: ExactControlCommitAdmissionV2): Promise<AuthorizationMutationV2> {
     const pages = Object.freeze(input.pages.map(parseRegistryCutoffCoveragePageV2))
     const root = parseRegistryCutoffCoverageRootV2(input.root)
     const authorizationMutation = parseAuthorizationMutationV2(input.authorizationMutation)
@@ -334,7 +334,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
       const existing = metadata.cutoffCommits.find((item) => item.authorizationMutation.coreDigest === authorizationMutation.coreDigest)
       if (existing) return existing.authorizationMutation
       if (root.core.projectId !== projectId || root.core.projectEpoch !== state.seed.projectEpoch || root.core.registryRootDigest !== currentRegistry(state).digest || root.core.registrySequence !== currentRegistry(state).sequence) fail("stale-counter", "Cutoff registry binding is stale")
-      if (root.core.beforeMembershipSnapshotDigest !== authorizationMutation.core.beforeMembershipSnapshotDigest || root.core.afterMembershipSnapshotDigest !== authorizationMutation.core.afterMembershipSnapshotDigest || root.coreDigest !== authorizationMutation.core.registryCutoffCoverageRootCoreDigest || encodeRestrictedJcsTextV2(root.core.target) !== encodeRestrictedJcsTextV2(authorizationMutation.core.target)) fail("invalid-proof", "Cutoff root and authorization mutation bindings differ")
+      if (root.core.beforeMembershipSnapshotDigest !== authorizationMutation.core.beforeMembershipSnapshotDigest || root.core.afterMembershipSnapshotDigest !== authorizationMutation.core.afterMembershipSnapshotDigest || root.coreDigest !== authorizationMutation.core.registryCutoffCoverageRootCoreDigest || encodeRestrictedJcsText(root.core.target) !== encodeRestrictedJcsText(authorizationMutation.core.target)) fail("invalid-proof", "Cutoff root and authorization mutation bindings differ")
       if (!same(root.core.pageDigests, pages.map((page) => page.coreDigest)) || pages.reduce((sum, page) => sum + page.core.leaves.length, 0) !== Number(root.core.leafCount)) fail("invalid-proof", "Cutoff pages do not exactly close the signed root")
       if (authorizationMutationCoreDigestV2(authorizationMutation.core) !== authorizationMutation.coreDigest) fail("invalid-proof", "Authorization mutation digest mismatch")
       writeMetadata(transaction, state, { ...metadata, cutoffCommits: Object.freeze([...metadata.cutoffCommits, Object.freeze({ pages, root, authorizationMutation })]) })
@@ -342,7 +342,7 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
     })
   }
 
-  async admitShardResetApproval(projectId: ProjectIdV2, input: unknown, admission: ExactControlCommitAdmissionV2): Promise<DocumentShardResetApprovalV2> {
+  async admitShardResetApproval(projectId: ProjectId, input: unknown, admission: ExactControlCommitAdmissionV2): Promise<DocumentShardResetApprovalV2> {
     const approval = parseDocumentShardResetApprovalV2(input)
     const authority = consumeExactAdmission(admission, "shard-reset", approval.coreDigest)
     void authority
@@ -368,14 +368,14 @@ export class CollaborationMetadataControlServiceV2 implements EditorFloorAuthori
   private async signRegistrySnapshot(state: CollaborationControlProjectStateV2, entries: readonly CollaborationScopeEntryV2[]): Promise<RegistrySnapshotV2> {
     const current = currentRegistry(state)
     const entrySet: RegistryEntrySetV2 = Object.freeze({ format: "convax.registry-entry-set/2", entries })
-    const core: RegistrySnapshotCoreV2 = Object.freeze({ format: "convax.registry-snapshot-core/2", projectId: state.seed.projectId, projectEpoch: state.seed.projectEpoch, registrySequence: incrementUint64V2(current.sequence), priorRegistryDigest: current.sequence === "0" ? null : current.digest, entriesDigest: registryEntrySetDigestV2(entrySet), entryCount: parseUint32V2(String(entries.length)), protocolDigest: requireTeam(state).currentSnapshot.core.protocolDigest, trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: this.signatures.serviceKeyId("registry-cutoff") })
+    const core: RegistrySnapshotCoreV2 = Object.freeze({ format: "convax.registry-snapshot-core/2", projectId: state.seed.projectId, projectEpoch: state.seed.projectEpoch, registrySequence: incrementUint64(current.sequence), priorRegistryDigest: current.sequence === "0" ? null : current.digest, entriesDigest: registryEntrySetDigestV2(entrySet), entryCount: parseUint32(String(entries.length)), protocolDigest: requireTeam(state).currentSnapshot.core.protocolDigest, trustBundleDigest: state.seed.trustBundleDigest, serviceKeyPurpose: "registry-cutoff", serviceKeyId: this.signatures.serviceKeyId("registry-cutoff") })
     const coreDigest = registrySnapshotCoreDigestV2(core)
     return Object.freeze({ format: "convax.registry-snapshot/2", core, coreDigest, serviceSignature: await this.signatures.signServiceDigest("registry-cutoff", coreDigest) })
   }
 
 }
 
-async function verifyFloorAck(ack: ReplicaCausalFloorAckV2, stableDigest: DigestV2, state: CollaborationControlProjectStateV2, signatures: MetadataControlSignaturePortV2, allowPending = false): Promise<void> {
+async function verifyFloorAck(ack: ReplicaCausalFloorAck, stableDigest: Digest, state: CollaborationControlProjectStateV2, signatures: MetadataControlSignaturePortV2, allowPending = false): Promise<void> {
   if (ack.core.stableSetCoreDigest !== stableDigest) fail("invalid-proof", "Floor ACK is bound to another stable set")
   const team = requireTeam(state)
   const replica = team.currentSnapshot.core.replicas.find((item) => item.replicaId === ack.core.replicaId && item.actorId === ack.core.actorId && item.state === "active" && (item.editState === "active-editor" || (allowPending && item.editState === "pending-editor")))
@@ -417,12 +417,12 @@ function writeMetadata(transaction: { write(next: CollaborationControlProjectSta
   transaction.write(Object.freeze({ ...state, seed, metadata: Object.freeze(metadata) }))
 }
 
-function currentRegistry(state: CollaborationControlProjectStateV2): Readonly<{ sequence: CollaborationControlProjectStateV2["seed"]["registrySequence"]; digest: DigestV2 }> {
+function currentRegistry(state: CollaborationControlProjectStateV2): Readonly<{ sequence: CollaborationControlProjectStateV2["seed"]["registrySequence"]; digest: Digest }> {
   const snapshot = metadataState(state).registrySnapshots.at(-1)
   return snapshot ? Object.freeze({ sequence: snapshot.core.registrySequence, digest: snapshot.coreDigest }) : Object.freeze({ sequence: state.seed.registrySequence, digest: state.seed.registryRootDigest })
 }
 
-function requireProject(state: CollaborationControlProjectStateV2 | null, projectId: ProjectIdV2): CollaborationControlProjectStateV2 {
+function requireProject(state: CollaborationControlProjectStateV2 | null, projectId: ProjectId): CollaborationControlProjectStateV2 {
   if (!state || state.seed.projectId !== projectId) fail("not-found", "Control Project is not provisioned")
   return state
 }
@@ -431,12 +431,12 @@ function requireTeam(state: CollaborationControlProjectStateV2) {
   return state.team ?? fail("not-active", "Team authority is not provisioned")
 }
 
-function requireScopeProject(scope: DocumentScopeV2, state: CollaborationControlProjectStateV2): void {
+function requireScopeProject(scope: DocumentScope, state: CollaborationControlProjectStateV2): void {
   if (scope.projectId !== state.seed.projectId || scope.projectEpoch !== state.seed.projectEpoch) fail("invalid-proof", "Document scope is outside the current Project epoch")
 }
 
-function scopeKey(scope: DocumentScopeV2): string {
-  return encodeRestrictedJcsTextV2(scope)
+function scopeKey(scope: DocumentScope): string {
+  return encodeRestrictedJcsText(scope)
 }
 
 function compareEntry(left: CollaborationScopeEntryV2, right: CollaborationScopeEntryV2): number {
@@ -453,7 +453,7 @@ function same(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
-function consumeExactAdmission(admission: ExactControlCommitAdmissionV2, kind: "cutoff" | "shard-reset", digest: DigestV2): Readonly<{ kind: "cutoff" | "shard-reset"; digest: DigestV2 }> {
+function consumeExactAdmission(admission: ExactControlCommitAdmissionV2, kind: "cutoff" | "shard-reset", digest: Digest): Readonly<{ kind: "cutoff" | "shard-reset"; digest: Digest }> {
   const authority = liveExactControlCommitAdmissions.get(admission)
   if (!authority || authority.kind !== kind || authority.digest !== digest) fail("invalid-proof", `A live exact ${kind} transaction admission is required`)
   liveExactControlCommitAdmissions.delete(admission)

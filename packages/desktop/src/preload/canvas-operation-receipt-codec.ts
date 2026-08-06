@@ -1,5 +1,5 @@
 import type { BoundedOperationReceiptV2, CanvasEntityRefV2 } from "@convax/canvas/collaboration"
-import type { Id128V2 } from "@convax/collaboration"
+import type { Id128 } from "@convax/collaboration"
 
 const digestPattern = /^[0-9a-f]{64}$/
 const id128Pattern = /^[A-Za-z0-9_-]{21}[AQgw]$/
@@ -98,9 +98,9 @@ export function assertEntityRefDtoV2(
   }
 }
 
-export function requireId128DtoV2(value: unknown, label: string): Id128V2 {
+export function requireId128DtoV2(value: unknown, label: string): Id128 {
   if (typeof value !== "string" || !id128Pattern.test(value)) throw new Error(`${label} is invalid`)
-  return value as Id128V2
+  return value as Id128
 }
 
 function exactDataRecord(value: unknown, keys: readonly string[], label: string): Record<string, unknown> {

@@ -1,13 +1,13 @@
 import {
-  compareDecodedBase64urlV2,
-  compareUtf8V2,
-  documentScopeDigestV2,
-  encodeRestrictedJcsV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseReplicaIdV2,
-  replicaIdToYjsClientIdV2,
-  parseDocumentScopeV2,
+  compareDecodedBase64url,
+  compareUtf8,
+  documentScopeDigest,
+  encodeRestrictedJcs,
+  parseActorId,
+  parseDigest,
+  parseReplicaId,
+  replicaIdToYjsClientId,
+  parseDocumentScope,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import type {
@@ -29,8 +29,8 @@ import type {
   CanvasSnapshotV2,
   ContainmentChoiceV2,
   CreationGroupRefV2,
-  DigestV2,
-  DocumentScopeV2,
+  Digest,
+  DocumentScope,
   GenerationBeginV2,
   GenerationDismissalV2,
   GenerationRecoveryFailureV2,
@@ -100,25 +100,25 @@ const IDENTITY_KEYS = [
 ] as const
 
 export function createCanvasYDocV2(
-  scopeInput: DocumentScopeV2,
-  ownerSchemaDigestInput: DigestV2,
-  protocolDigestInput: DigestV2,
-  projectIndexRouteDependencyFrameDigestInput: DigestV2,
-  checkpointAuthorReplicaIdInput: import("@convax/collaboration").ReplicaIdV2,
+  scopeInput: DocumentScope,
+  ownerSchemaDigestInput: Digest,
+  protocolDigestInput: Digest,
+  projectIndexRouteDependencyFrameDigestInput: Digest,
+  checkpointAuthorReplicaIdInput: import("@convax/collaboration").ReplicaId,
 ): Y.Doc {
-  const scope = parseDocumentScopeV2(scopeInput)
+  const scope = parseDocumentScope(scopeInput)
   if (scope.docKind !== "canvas")
     throw new CanvasSchemaErrorV2("scope-mismatch", "Canvas genesis requires a Canvas scope")
-  const ownerSchemaDigest = parseDigestV2(ownerSchemaDigestInput)
-  const protocolDigest = parseDigestV2(protocolDigestInput)
-  const projectIndexRouteDependencyFrameDigest = parseDigestV2(projectIndexRouteDependencyFrameDigestInput)
-  const checkpointAuthorReplicaId = parseReplicaIdV2(checkpointAuthorReplicaIdInput)
-  const scopeId = documentScopeDigestV2(scope)
+  const ownerSchemaDigest = parseDigest(ownerSchemaDigestInput)
+  const protocolDigest = parseDigest(protocolDigestInput)
+  const projectIndexRouteDependencyFrameDigest = parseDigest(projectIndexRouteDependencyFrameDigestInput)
+  const checkpointAuthorReplicaId = parseReplicaId(checkpointAuthorReplicaIdInput)
+  const scopeId = documentScopeDigest(scope)
   const canonicalizerDigest = canvasOwnerCanonicalizerDigestV2(ownerSchemaDigest)
   const core = {
     format: "convax.canvas-genesis-core/2",
     scopeId,
-    canvasId: scope.docId as import("@convax/collaboration").CanvasIdV2,
+    canvasId: scope.docId as import("@convax/collaboration").CanvasId,
     ownerSchemaDigest,
     protocolDigest,
     canonicalizerDigest,
@@ -133,7 +133,7 @@ export function createCanvasYDocV2(
   // Genesis structs are authored by the checkpoint replica's reserved Yjs client
   // id. A random process client id would make otherwise identical genesis bytes
   // unverifiable against the retained author credential chain.
-  document.clientID = replicaIdToYjsClientIdV2(checkpointAuthorReplicaId)
+  document.clientID = replicaIdToYjsClientId(checkpointAuthorReplicaId)
   document.transact(() => {
     const root = document.getMap(CANVAS_ROOT_NAME_V2)
     const identityMap = new Y.Map<unknown>()
@@ -172,7 +172,7 @@ export function getCanvasChildMapV2(document: Y.Doc, key: (typeof CANVAS_ROOT_KE
   return asMap(getCanvasRootV2(document).get(key), `${CANVAS_ROOT_NAME_V2}.${key}`)
 }
 
-export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScopeV2): CanvasSnapshotV2 {
+export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScope): CanvasSnapshotV2 {
   const sharedNames = [...document.share.keys()]
   if (sharedNames.length !== 1 || sharedNames[0] !== CANVAS_ROOT_NAME_V2) {
     throw new CanvasSchemaErrorV2("unknown-root", "Canvas Y.Doc must contain exactly the convax.canvas.v2 named root")
@@ -220,7 +220,7 @@ export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScopeV2): 
   })
 }
 
-export function extractCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScopeV2): CanvasCanonicalStateV2 {
+export function extractCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScope): CanvasCanonicalStateV2 {
   const snapshot = validateCanvasYDocV2(document, scope)
   return {
     format: "convax.canvas-canonical-state/2",
@@ -238,11 +238,11 @@ export function extractCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentS
   }
 }
 
-export function encodeCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScopeV2): Uint8Array {
-  return encodeRestrictedJcsV2(extractCanvasCanonicalStateV2(document, scope))
+export function encodeCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScope): Uint8Array {
+  return encodeRestrictedJcs(extractCanvasCanonicalStateV2(document, scope))
 }
 
-function readIdentity(map: Y.Map<unknown>, scope?: DocumentScopeV2): CanvasIdentityV2 {
+function readIdentity(map: Y.Map<unknown>, scope?: DocumentScope): CanvasIdentityV2 {
   assertMapKeys(map, IDENTITY_KEYS, "identity")
   const value = Object.fromEntries(IDENTITY_KEYS.map((key) => [key, map.get(key)]))
   assertCanvasIdentityV2(value, scope)
@@ -419,7 +419,7 @@ function validateCreationGroups(
   const groupByNode = new Map<string, string>()
   for (const [key, node] of nodes) if (node.creationGroup !== null) groupByNode.set(key, node.creationGroup.groupId)
   for (const [groupId, group] of groups) {
-    group.members.sort((left, right) => compareUtf8V2(canvasEntityKeyV2(left), canvasEntityKeyV2(right)))
+    group.members.sort((left, right) => compareUtf8(canvasEntityKeyV2(left), canvasEntityKeyV2(right)))
     const core = {
       format: "convax.canvas-creation-group-member-set/2",
       groupId,
@@ -530,9 +530,9 @@ function actorEntries<T>(
   validate: (value: unknown) => asserts value is T,
   tombstone = false,
 ): CanvasActorSlotEntriesV2<T> {
-  const entries: [import("@convax/collaboration").ActorIdV2, T][] = []
+  const entries: [import("@convax/collaboration").ActorId, T][] = []
   for (const [actor, value] of map.entries()) {
-    const actorId = parseActorIdV2(actor)
+    const actorId = parseActorId(actor)
     validate(value)
     const embeddedActor = tombstone
       ? (value as TombstoneFactV2).stamp.actorId
@@ -541,7 +541,7 @@ function actorEntries<T>(
       throw new CanvasSchemaErrorV2("actor-slot-mismatch", `Actor slot ${actor} disagrees with embedded stamp`)
     entries.push([actorId, value])
   }
-  entries.sort((left, right) => compareDecodedBase64urlV2(left[0], right[0]))
+  entries.sort((left, right) => compareDecodedBase64url(left[0], right[0]))
   return entries
 }
 
@@ -550,7 +550,7 @@ function mapEntries<K extends string, V, O = V>(
   convert?: (value: V) => O,
 ): CanvasCanonicalMapEntriesV2<K, O> {
   return [...map.entries()]
-    .sort((left, right) => compareUtf8V2(left[0], right[0]))
+    .sort((left, right) => compareUtf8(left[0], right[0]))
     .map(([key, value]) => [key, convert === undefined ? (value as unknown as O) : convert(value)] as const)
 }
 
@@ -583,7 +583,7 @@ function assertTags(value: unknown): asserts value is readonly string[] {
   for (const tag of value) {
     if (typeof tag !== "string" || tag.normalize("NFC") !== tag || new TextEncoder().encode(tag).length > 256)
       throw new CanvasSchemaErrorV2("invalid-tags", "Tag is invalid")
-    if (prior !== undefined && compareUtf8V2(prior, tag) >= 0)
+    if (prior !== undefined && compareUtf8(prior, tag) >= 0)
       throw new CanvasSchemaErrorV2("invalid-tags", "Tags must be UTF-8 sorted and duplicate-free")
     prior = tag
   }

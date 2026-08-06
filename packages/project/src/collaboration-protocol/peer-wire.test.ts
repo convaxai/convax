@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseSignatureV2,
-  parseUint32V2,
-  parseUint64V2,
+  encodeBase64url,
+  ordinarySha256,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseSignature,
+  parseUint32,
+  parseUint64,
 } from "@convax/collaboration"
 
 import {
@@ -23,9 +23,9 @@ import {
 } from "../collaboration-protocol"
 
 const encoder = new TextEncoder()
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const digest = (label: string) => ordinarySha256V2(encoder.encode(label))
-const signature = parseSignatureV2(encodeBase64urlV2(Uint8Array.from({ length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0)))
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const digest = (label: string) => ordinarySha256(encoder.encode(label))
+const signature = parseSignature(encodeBase64url(Uint8Array.from({ length: 64 }, (_, index) => index === 0 || index === 32 ? 2 : 0)))
 const connectionId = id(1)
 
 function header(raw: Uint8Array, overrides: Partial<PeerTransferChunkHeaderV2> = {}): PeerTransferChunkHeaderV2 {
@@ -33,10 +33,10 @@ function header(raw: Uint8Array, overrides: Partial<PeerTransferChunkHeaderV2> =
     format: "convax.peer-transfer-chunk/2",
     transferId: id(2),
     manifestDigest: digest("manifest"),
-    chunkIndex: parseUint32V2("0"),
-    byteOffset: parseUint64V2("0"),
-    byteLength: parseUint32V2(String(raw.byteLength)),
-    chunkSha256: ordinarySha256V2(raw),
+    chunkIndex: parseUint32("0"),
+    byteOffset: parseUint64("0"),
+    byteLength: parseUint32(String(raw.byteLength)),
+    chunkSha256: ordinarySha256(raw),
     ...overrides,
   }
 }
@@ -56,7 +56,7 @@ describe("R5 exact Peer wire codec", () => {
       channel: "control",
       senderCredentialDigest: digest("sender"),
       receiverCredentialDigest: digest("receiver"),
-      messageSequence: parseUint64V2("1"),
+      messageSequence: parseUint64("1"),
       bodyKind: "control.object-request",
       body,
       signCoreDigest: ({ coreDigest }) => {
@@ -69,8 +69,8 @@ describe("R5 exact Peer wire codec", () => {
     expect(wire[8]).toBe(1)
     expect(wire[9]).toBe(0)
     const decoded = peerControlCodecV2.decodeMessageWire(wire)
-    expect(decoded.core.messageSequence).toBe(parseUint64V2("1"))
-    expect(decoded.core.bodyLength).toBe(parseUint64V2(String(body.byteLength)))
+    expect(decoded.core.messageSequence).toBe(parseUint64("1"))
+    expect(decoded.core.bodyLength).toBe(parseUint64(String(body.byteLength)))
     expect(decoded.senderSessionSignature).toBe(signature)
     expect(decoded.body).toEqual(body)
     expect(peerControlCodecV2.decodeControlBody(decoded.body, decoded.core.bodyKind)).toEqual({
@@ -92,7 +92,7 @@ describe("R5 exact Peer wire codec", () => {
       channelOpenDigest: digest("channel-open"),
       senderCredentialDigest: digest("sender"),
       receiverCredentialDigest: digest("receiver"),
-      messageSequence: parseUint64V2("1"),
+      messageSequence: parseUint64("1"),
       signCoreDigest: () => signature,
     }
     await expect(peerControlCodecV2.createMessageWire({
@@ -124,18 +124,18 @@ describe("R5 exact Peer wire codec", () => {
       transferId: id(4),
       channel: "update",
       kind: "causal-frame",
-      scope: { projectId: parseProjectIdV2("project"), projectEpoch: id(5), docKind: "project-index", docId: "project-index", shardEpoch: id(6) },
+      scope: { projectId: parseProjectId("project"), projectEpoch: id(5), docKind: "project-index", docId: "project-index", shardEpoch: id(6) },
       subjectDigest: digest("frame"),
-      byteLength: parseUint64V2(String(bytes.byteLength)),
-      sha256: ordinarySha256V2(bytes),
-      chunkBytes: parseUint32V2("8"),
-      chunkCount: parseUint32V2(String(Math.ceil(bytes.byteLength / 8))),
+      byteLength: parseUint64(String(bytes.byteLength)),
+      sha256: ordinarySha256(bytes),
+      chunkBytes: parseUint32("8"),
+      chunkCount: parseUint32(String(Math.ceil(bytes.byteLength / 8))),
       compression: "none",
-      protocolDigest: parseDigestV2(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
+      protocolDigest: parseDigest(CONTROL_PROTOCOL_EXPECTED_IDENTITIES_V2.protocolDigest),
     })
     expect(manifest.coreDigest).toMatch(/^[0-9a-f]{64}$/)
 
-    expect(() => createPeerTransferManifestV2({ ...manifest.core, chunkCount: parseUint32V2("1") })).toThrow("exact ceiling")
+    expect(() => createPeerTransferManifestV2({ ...manifest.core, chunkCount: parseUint32("1") })).toThrow("exact ceiling")
     expect(() => createPeerTransferManifestV2({ ...manifest.core, channel: "blob" })).toThrow("channel/kind mapping")
 
     const first = bytes.subarray(0, 8)

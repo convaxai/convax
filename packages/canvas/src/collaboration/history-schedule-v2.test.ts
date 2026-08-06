@@ -7,9 +7,9 @@ import {
 import type { CanvasHistoryTemplateV2, PluginRequirementV2 } from "./types"
 import { context, digest } from "./test-fixtures.test"
 import { derivedNodeRefV2 } from "./validation"
-import { parseUint32V2 } from "@convax/collaboration"
+import { parseUint32 } from "@convax/collaboration"
 
-const U0 = parseUint32V2("0")
+const U0 = parseUint32("0")
 const EXTERNAL = derivedNodeRefV2(context(90, 90, 90), U0)
 const PLUGIN: PluginRequirementV2 = {
   pluginId: "plugin",
@@ -37,12 +37,12 @@ describe("Canvas semantic-history deterministic schedule", () => {
       scheduled.map((template) => (template.op === "creation-group.restore" ? template.groupHandle : template.op)),
     ).toEqual(["g/0", "g/1", "g/2"])
     expect(planCanvasHistoryDerivedOrdinalsV2(templates, bindings)).toEqual([
-      { ordinal: parseUint32V2("0"), kind: "creation-group", handle: "g/0" },
-      { ordinal: parseUint32V2("1"), kind: "node", handle: "n/0" },
-      { ordinal: parseUint32V2("2"), kind: "creation-group", handle: "g/1" },
-      { ordinal: parseUint32V2("3"), kind: "node", handle: "n/1" },
-      { ordinal: parseUint32V2("4"), kind: "creation-group", handle: "g/2" },
-      { ordinal: parseUint32V2("5"), kind: "node", handle: "n/2" },
+      { ordinal: parseUint32("0"), kind: "creation-group", handle: "g/0" },
+      { ordinal: parseUint32("1"), kind: "node", handle: "n/0" },
+      { ordinal: parseUint32("2"), kind: "creation-group", handle: "g/1" },
+      { ordinal: parseUint32("3"), kind: "node", handle: "n/1" },
+      { ordinal: parseUint32("4"), kind: "creation-group", handle: "g/2" },
+      { ordinal: parseUint32("5"), kind: "node", handle: "n/2" },
     ])
   })
 

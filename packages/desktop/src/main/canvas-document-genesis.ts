@@ -6,12 +6,12 @@ import {
   type CanvasGenesisProofCarrierVerifierV2,
 } from "@convax/canvas/collaboration"
 import {
-  assertDocumentOwnerRuntimeV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentScopeV2,
-  type VerifiedProtocolAuthorityV2,
+  assertDocumentOwnerRuntime,
+  parseDigest,
+  parseDocumentScope,
+  type DocumentOwnerRuntime,
+  type DocumentScope,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import type {
   ProjectDocumentGenesisVerifierPortV2 as DocumentGenesisVerifierPortV2,
@@ -25,13 +25,13 @@ export type PrepareCanvasGenesisAuthorResultV2 =
 /** Control/native composition edge. No Project bytes or route DTO enter Canvas. */
 export interface CanvasGenesisAuthorProviderPortV2 {
   preflight(input: {
-    readonly projectId: import("@convax/collaboration").ProjectIdV2
-    readonly projectEpoch: import("@convax/collaboration").Id128V2
+    readonly projectId: import("@convax/collaboration").ProjectId
+    readonly projectEpoch: import("@convax/collaboration").Id128
     readonly signal?: AbortSignal
   }): Promise<"ready" | "pending" | "rejected">
   prepareAuthor(input: {
-    readonly scope: DocumentScopeV2 & { readonly docKind: "canvas" }
-    readonly projectIndexRouteDependencyFrameDigest: import("@convax/collaboration").DigestV2
+    readonly scope: DocumentScope & { readonly docKind: "canvas" }
+    readonly projectIndexRouteDependencyFrameDigest: import("@convax/collaboration").Digest
     readonly signal?: AbortSignal
   }): Promise<PrepareCanvasGenesisAuthorResultV2>
 }
@@ -44,8 +44,8 @@ export interface CanvasDocumentGenesisAuthorityV2 {
 
 /** One selected Canvas runtime produces both G and the fact verifier that consumes G. */
 export function createCanvasDocumentGenesisAuthorityV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly runtime: DocumentOwnerRuntimeV2<"canvas">
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
   readonly historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPortV2
   readonly authorProvider: CanvasGenesisAuthorProviderPortV2
 }): CanvasDocumentGenesisAuthorityV2 {
@@ -78,12 +78,12 @@ export function createCanvasDocumentGenesisAuthorityV2(input: {
  * opaque Canvas genesis predecessor witness.
  */
 export function createCanvasDocumentGenesisVerifierPortV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly runtime: DocumentOwnerRuntimeV2<"canvas">
+  readonly authority: CurrentProtocolAuthority
+  readonly runtime: DocumentOwnerRuntime<"canvas">
   readonly verifier: CanvasGenesisProofCarrierVerifierV2
   readonly authorProvider: CanvasGenesisAuthorProviderPortV2
 }): DocumentGenesisVerifierPortV2<"canvas"> {
-  assertDocumentOwnerRuntimeV2(input.runtime, input.authority)
+  assertDocumentOwnerRuntime(input.runtime, input.authority)
   if (typeof input.verifier !== "function" || typeof input.authorProvider?.prepareAuthor !== "function") {
     throw new TypeError("Canvas document-genesis composition is invalid")
   }
@@ -92,9 +92,9 @@ export function createCanvasDocumentGenesisVerifierPortV2(input: {
       request: Parameters<DocumentGenesisVerifierPortV2<"canvas">["prepare"]>[0],
     ): Promise<PrepareDocumentGenesisResultV2<"canvas">> {
       assertNotAborted(request.signal)
-      const scope = parseDocumentScopeV2(request.scope) as DocumentScopeV2 & { readonly docKind: "canvas" }
+      const scope = parseDocumentScope(request.scope) as DocumentScope & { readonly docKind: "canvas" }
       if (scope.docKind !== "canvas") return Object.freeze({ status: "rejected" })
-      const predecessorFrameDigest = parseDigestV2(request.predecessor.frame.frameDigest)
+      const predecessorFrameDigest = parseDigest(request.predecessor.frame.frameDigest)
       const preparedAuthor = await input.authorProvider.prepareAuthor({
         scope,
         projectIndexRouteDependencyFrameDigest: predecessorFrameDigest,

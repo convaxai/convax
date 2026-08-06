@@ -23,14 +23,14 @@ import {
   requiredProjectIndexBlobDigestsV2,
 } from "@convax/project"
 import {
-  createWebCryptoEd25519VerifierV2,
-  parseDigestV2,
-  parseId128V2,
-  parseValidationArtifactSetV2,
+  createWebCryptoEd25519Verifier,
+  parseDigest,
+  parseId128,
+  parseValidationArtifactSet,
 } from "@convax/collaboration"
 import {
   createPinnedControlServiceVerifierV2,
-  createWebCryptoEd25519VerifierV2 as createProjectControlEd25519VerifierV2,
+  createWebCryptoEd25519Verifier as createProjectControlEd25519VerifierV2,
 } from "@convax/project/collaboration-protocol"
 import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
 import {
@@ -708,7 +708,7 @@ function startApplication() {
         trustedWebContents.has(event.sender.id) &&
         Boolean(event.senderFrame && isTrustedRendererUrl(event.senderFrame.url)),
     }
-    const createCollaborationIdV2 = () => parseId128V2(randomBytes(16).toString("base64url"))
+    const createCollaborationIdV2 = () => parseId128(randomBytes(16).toString("base64url"))
     const openCodeConfigDirectory = join(userDataDirectory, "opencode")
     const projectCreationDirectory = desktopProjectWorkspaceDirectory(app.getPath("documents"))
     const projectManager = new NodeProjectManager({
@@ -729,7 +729,7 @@ function startApplication() {
       join(userDataDirectory, "collaboration", "replica-vault"),
       safeStorage,
     )
-    const collaborationSignatureVerifier = createWebCryptoEd25519VerifierV2()
+    const collaborationSignatureVerifier = createWebCryptoEd25519Verifier()
     // This local durable store performs no control-plane or PeerJS startup; the
     // Team runtime stays behind the protocol gate below.
     const collaborationTeamStore = new NodeDurableTeamAuthorityStoreV1(
@@ -910,7 +910,7 @@ function startApplication() {
               },
             })
         const collaborationTrustBundleDigest =
-          collaborationControlConfig?.trustBundleDigest ?? parseDigestV2("0".repeat(64))
+          collaborationControlConfig?.trustBundleDigest ?? parseDigest("0".repeat(64))
         const collaborationControl = createDesktopCollaborationControlHttpClientV2({
           serviceBaseUrl: collaborationControlConfig?.serviceBaseUrl,
           verifier: collaborationControlVerifier,
@@ -927,7 +927,7 @@ function startApplication() {
         const collaborationMemberIdentities = new NodeProjectTeamMemberIdentityStoreV1(
           join(userDataDirectory, "collaboration", "member-identities"),
         )
-        const collaborationValidationArtifacts = parseValidationArtifactSetV2({
+        const collaborationValidationArtifacts = parseValidationArtifactSet({
           format: "convax.validation-artifact-set/2",
           artifacts: collaborationAuthority.protocolSchemaBundle.core.artifacts
             .map((artifact, index) => ({

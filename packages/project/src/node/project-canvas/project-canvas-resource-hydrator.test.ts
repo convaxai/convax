@@ -5,7 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { canvasProjectionResourceMetadataKeyV2 } from "@convax/canvas/collaboration"
 import { createCanvasDocument, createMediaNode, createTextNode } from "@convax/canvas/core"
-import { encodeBase64urlV2, ordinarySha256V2, parseId128V2, parseProjectIdV2 } from "@convax/collaboration"
+import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
 import { projectResourceReferenceKey } from "../../canvas/project-resources"
 import { projectResourceReferenceDigestV2, type ProjectResourceReferenceV2 } from "../../collaboration/project-index"
 import { NodeProjectManager } from "../project-manager"
@@ -538,9 +538,9 @@ describe("ProjectCanvasResourceHydrator", () => {
 })
 
 function currentProjectReference(projectIdValue: string, bytes: Uint8Array, mime: string): ProjectResourceReferenceV2 {
-  const projectId = parseProjectIdV2(projectIdValue)
-  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
-  const digest = ordinarySha256V2(bytes)
+  const projectId = parseProjectId(projectIdValue)
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(bytes)
   const fileId = `pf_${"a".repeat(64)}` as ProjectResourceReferenceV2["entryFileId"]
   return Object.freeze({
     format: "convax.project-resource-reference/2",
@@ -557,6 +557,6 @@ function currentProjectReference(projectIdValue: string, bytes: Uint8Array, mime
       byteLength: String(bytes.byteLength) as never,
       mime,
     },
-    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode(`version:${digest}`)),
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
 }

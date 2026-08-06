@@ -2,7 +2,7 @@ import type {
   CanvasApplicationCommandRequest,
   CanvasDocumentRef,
 } from "@convax/canvas/application"
-import { parseId128V2, parseProjectIdV2, type Id128V2, type ProjectIdV2 } from "@convax/collaboration"
+import { parseId128, parseProjectId, type Id128, type ProjectId } from "@convax/collaboration"
 import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
 import type {
   ProjectIndexCanvasApplicationPortV2,
@@ -18,7 +18,7 @@ import type {
 export type MainProjectProtocolSelectionV3 = "v10-r5" | "v11-r1-local-owner" | "v11-r1-team-replica"
 
 export interface MainSelectedProjectCollaborationPortsV3 {
-  readonly projectId: ProjectIdV2
+  readonly projectId: ProjectId
   readonly protocol: MainProjectProtocolSelectionV3
   readonly projectIndexes: ProjectIndexCanvasApplicationPortV2 &
     ProjectIndexCurrentBlobReferencePortV2 &
@@ -40,7 +40,7 @@ export type MainProjectCollaborationResolutionV3 =
 
 export interface MainProjectCollaborationPortResolverV3 {
   /** Selection must use only Project-owned persisted protocol state. */
-  resolve(projectId: ProjectIdV2): Promise<MainProjectCollaborationResolutionV3>
+  resolve(projectId: ProjectId): Promise<MainProjectCollaborationResolutionV3>
 }
 
 export class MainProjectCollaborationUnavailableErrorV3 extends Error {
@@ -75,12 +75,12 @@ interface BoundSessionV3 {
 export function createMainProjectCollaborationCompositionFacadeV3(
   resolver: MainProjectCollaborationPortResolverV3,
 ): MainProjectCollaborationCompositionFacadeV3 {
-  const runtimes = new Map<ProjectIdV2, Promise<MainSelectedProjectCollaborationPortsV3>>()
-  const ready = new Map<ProjectIdV2, MainSelectedProjectCollaborationPortsV3>()
-  const sessions = new Map<Id128V2, BoundSessionV3>()
+  const runtimes = new Map<ProjectId, Promise<MainSelectedProjectCollaborationPortsV3>>()
+  const ready = new Map<ProjectId, MainSelectedProjectCollaborationPortsV3>()
+  const sessions = new Map<Id128, BoundSessionV3>()
   const listeners = new Set<(event: CanvasSessionInvalidationDtoV2) => void>()
   const ownerSubscriptions = new Map<CanvasCollaborationSessionOwnerV2, () => void>()
-  const quiescing = new Set<ProjectIdV2>()
+  const quiescing = new Set<ProjectId>()
   let disposed = false
 
   const projectIndexes: MainSelectedProjectCollaborationPortsV3["projectIndexes"] = {
@@ -119,10 +119,10 @@ export function createMainProjectCollaborationCompositionFacadeV3(
 
   const canvasSessions: CanvasCollaborationSessionOwnerV2 = {
     async open(input) {
-      const runtime = await runtimeFor(parseProjectIdV2(input.ref.scopeId))
+      const runtime = await runtimeFor(parseProjectId(input.ref.scopeId))
       subscribeOwner(runtime.canvasSessions)
       const projection = await runtime.canvasSessions.open(input)
-      const sessionId = parseId128V2(projection.sessionId)
+      const sessionId = parseId128(projection.sessionId)
       if (sessions.has(sessionId)) {
         runtime.canvasSessions.close({ ref: input.ref, sessionId })
         throw new Error("Selected Canvas owner reused a live session identity")
@@ -132,7 +132,7 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     },
     close(input) {
       const bound = requireSession(input.ref, input.sessionId)
-      sessions.delete(parseId128V2(input.sessionId))
+      sessions.delete(parseId128(input.sessionId))
       bound.owner.close(input)
     },
     queryRenderer(ref, sessionId) {
@@ -149,26 +149,26 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     },
     flush(ref, sessionId) {
       return sessionId === undefined
-        ? runtimeFor(parseProjectIdV2(ref.scopeId)).then((runtime) => runtime.canvasSessions.flush(ref))
+        ? runtimeFor(parseProjectId(ref.scopeId)).then((runtime) => runtime.canvasSessions.flush(ref))
         : requireSession(ref, sessionId).owner.flush(ref, sessionId)
     },
     async query(ref, query) {
-      return (await runtimeFor(parseProjectIdV2(ref.scopeId))).canvasSessions.query(ref, query)
+      return (await runtimeFor(parseProjectId(ref.scopeId))).canvasSessions.query(ref, query)
     },
     async submit(request: CanvasApplicationCommandRequest) {
-      return (await runtimeFor(parseProjectIdV2(request.scopeId))).canvasSessions.submit(request)
+      return (await runtimeFor(parseProjectId(request.scopeId))).canvasSessions.submit(request)
     },
     async queryAuthoritative(ref) {
-      return (await runtimeFor(parseProjectIdV2(ref.scopeId))).canvasSessions.queryAuthoritative(ref)
+      return (await runtimeFor(parseProjectId(ref.scopeId))).canvasSessions.queryAuthoritative(ref)
     },
     async submitAuthoritative(input) {
-      return (await runtimeFor(parseProjectIdV2(input.ref.scopeId))).canvasSessions.submitAuthoritative(input)
+      return (await runtimeFor(parseProjectId(input.ref.scopeId))).canvasSessions.submitAuthoritative(input)
     },
     async quiesceProject(projectId) {
       await quiesceProject(projectId)
     },
     resumeProject(projectIdInput) {
-      const projectId = parseProjectIdV2(projectIdInput)
+      const projectId = parseProjectId(projectIdInput)
       const runtime = ready.get(projectId)
       if (!runtime || quiescing.has(projectId)) {
         throw new Error("Project runtime must be prepared before it can resume")
@@ -191,7 +191,7 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     projectIndexes,
     canvasSessions,
     async prepareProject(projectIdInput: string) {
-      const projectId = parseProjectIdV2(projectIdInput)
+      const projectId = parseProjectId(projectIdInput)
       const runtime = await runtimeFor(projectId)
       runtime.canvasSessions.resumeProject(projectId)
       return runtime.protocol
@@ -200,9 +200,9 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     dispose,
   })
 
-  async function runtimeFor(projectIdInput: ProjectIdV2): Promise<MainSelectedProjectCollaborationPortsV3> {
+  async function runtimeFor(projectIdInput: ProjectId): Promise<MainSelectedProjectCollaborationPortsV3> {
     requireLive()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     if (quiescing.has(projectId)) throw new Error("Project collaboration runtime is quiescing")
     let promised = runtimes.get(projectId)
     if (!promised) {
@@ -216,10 +216,10 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     return promised
   }
 
-  async function resolveRuntime(projectId: ProjectIdV2): Promise<MainSelectedProjectCollaborationPortsV3> {
+  async function resolveRuntime(projectId: ProjectId): Promise<MainSelectedProjectCollaborationPortsV3> {
     const resolved = await resolver.resolve(projectId)
     if (resolved.status === "unavailable") throw new MainProjectCollaborationUnavailableErrorV3(resolved.reason)
-    if (parseProjectIdV2(resolved.ports.projectId) !== projectId) {
+    if (parseProjectId(resolved.ports.projectId) !== projectId) {
       throw new Error("Resolved collaboration runtime crossed its Project binding")
     }
     return Object.freeze(resolved.ports)
@@ -227,7 +227,7 @@ export function createMainProjectCollaborationCompositionFacadeV3(
 
   async function quiesceProject(projectIdInput: string): Promise<void> {
     requireLive()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     if (quiescing.has(projectId)) throw new Error("Project collaboration runtime is already quiescing")
     quiescing.add(projectId)
     try {
@@ -246,10 +246,10 @@ export function createMainProjectCollaborationCompositionFacadeV3(
     }
   }
 
-  function requireSession(refInput: CanvasDocumentRef, sessionIdInput: Id128V2): BoundSessionV3 {
+  function requireSession(refInput: CanvasDocumentRef, sessionIdInput: Id128): BoundSessionV3 {
     requireLive()
     const ref = normalizeRef(refInput)
-    const sessionId = parseId128V2(sessionIdInput)
+    const sessionId = parseId128(sessionIdInput)
     const bound = sessions.get(sessionId)
     if (!bound || !sameRef(bound.ref, ref)) throw new Error("Canvas session is stale or belongs to another Project runtime")
     return bound
@@ -258,7 +258,7 @@ export function createMainProjectCollaborationCompositionFacadeV3(
   function subscribeOwner(owner: CanvasCollaborationSessionOwnerV2): void {
     if (ownerSubscriptions.has(owner)) return
     ownerSubscriptions.set(owner, owner.subscribe((event) => {
-      const bound = sessions.get(parseId128V2(event.sessionId))
+      const bound = sessions.get(parseId128(event.sessionId))
       if (!bound || bound.owner !== owner || !sameRef(bound.ref, event.ref)) return
       for (const listener of listeners) {
         try { listener(event) } catch { /* Projection listeners cannot affect durable state. */ }
@@ -287,7 +287,7 @@ export function createMainProjectCollaborationCompositionFacadeV3(
 }
 
 function normalizeRef(ref: CanvasDocumentRef): CanvasDocumentRef {
-  return Object.freeze({ scopeId: parseProjectIdV2(ref.scopeId), canvasId: String(ref.canvasId) })
+  return Object.freeze({ scopeId: parseProjectId(ref.scopeId), canvasId: String(ref.canvasId) })
 }
 
 function sameRef(left: CanvasDocumentRef, right: CanvasDocumentRef): boolean {

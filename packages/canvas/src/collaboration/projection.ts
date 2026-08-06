@@ -1,4 +1,4 @@
-import { comparePortableStampsV2, compareUtf8V2, encodeRestrictedJcsV2, ordinarySha256V2 } from "@convax/collaboration"
+import { comparePortableStamps, compareUtf8, encodeRestrictedJcs, ordinarySha256 } from "@convax/collaboration"
 import { canonicalize as canonicalizeUri } from "@convax/uri"
 import type { CanvasDocument, CanvasNode, CanvasNodeData } from "../types"
 import type {
@@ -12,7 +12,7 @@ import type {
   CanvasProjectionV2,
   CanvasSnapshotV2,
   ContainmentChoiceV2,
-  DigestV2,
+  Digest,
   GenerationBeginV2,
   NodeDataEnvelopeV2,
   OwnerGenerationTerminalV2,
@@ -212,7 +212,7 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
 
   const selectedContainments = selectContainments(snapshot, isNodeKeyLive)
   const nodesByKey = new Map<string, CanvasProjectedNodeV2>()
-  for (const [key, node] of [...snapshot.nodes.entries()].sort((a, b) => compareUtf8V2(a[0], b[0]))) {
+  for (const [key, node] of [...snapshot.nodes.entries()].sort((a, b) => compareUtf8(a[0], b[0]))) {
     if (!isNodeKeyLive(key)) continue
     const position = maxClaimV2(node.position.map((entry) => entry[1]))
     const size = maxClaimV2(node.size.map((entry) => entry[1]))
@@ -237,7 +237,7 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
   }
 
   const edgesByKey = new Map<string, CanvasProjectedEdgeV2>()
-  for (const [key, edge] of [...snapshot.edges.entries()].sort((a, b) => compareUtf8V2(a[0], b[0]))) {
+  for (const [key, edge] of [...snapshot.edges.entries()].sort((a, b) => compareUtf8(a[0], b[0]))) {
     if (!isEdgeKeyLive(key)) continue
     const data = maxClaimV2(edge.data.map((entry) => entry[1]))
     if (data === null) continue
@@ -288,8 +288,8 @@ function semanticCreationLiveness(snapshot: CanvasSnapshotV2): (createdBy: strin
       effectiveByRoot.set(entry[1].rootOperationId, entry)
       continue
     }
-    const stampOrder = comparePortableStampsV2(current[1].stamp, entry[1].stamp)
-    if (stampOrder < 0 || (stampOrder === 0 && compareUtf8V2(current[0], entry[0]) < 0))
+    const stampOrder = comparePortableStamps(current[1].stamp, entry[1].stamp)
+    if (stampOrder < 0 || (stampOrder === 0 && compareUtf8(current[0], entry[0]) < 0))
       effectiveByRoot.set(entry[1].rootOperationId, entry)
   }
 
@@ -322,7 +322,7 @@ export function effectiveNodeDataV2(
   node: CanvasNodeSnapshotV2,
 ): {
   readonly data: NodeDataEnvelopeV2
-  readonly stamp: import("@convax/collaboration").PortableStampV2
+  readonly stamp: import("@convax/collaboration").PortableStamp
   readonly lifecycle: CanvasProjectedNodeV2["generationLifecycle"]
 } {
   const claims: { claim: StampedClaimV2<NodeDataEnvelopeV2>; begin?: GenerationBeginV2 }[] = node.data.map((entry) => ({
@@ -345,7 +345,7 @@ export function effectiveNodeDataV2(
             : recovery !== undefined
               ? "recovery-failed"
               : "active"
-    if (selectedLifecycle === null || comparePortableStampsV2(selectedLifecycle.begin.beginStamp, begin.beginStamp) < 0)
+    if (selectedLifecycle === null || comparePortableStamps(selectedLifecycle.begin.beginStamp, begin.beginStamp) < 0)
       selectedLifecycle = { begin, lifecycle }
     if (dismissal === undefined && terminal?.phase === "succeeded") {
       claims.push({
@@ -355,27 +355,27 @@ export function effectiveNodeDataV2(
     }
   }
   const winner = claims.reduce((current, next) =>
-    comparePortableStampsV2(current.claim.stamp, next.claim.stamp) < 0 ? next : current,
+    comparePortableStamps(current.claim.stamp, next.claim.stamp) < 0 ? next : current,
   )
   return { data: winner.claim.value, stamp: winner.claim.stamp, lifecycle: selectedLifecycle?.lifecycle ?? "none" }
 }
 
-export function nodeIdentityDigestV2(node: CanvasCanonicalNodeRecordV2): DigestV2 {
+export function nodeIdentityDigestV2(node: CanvasCanonicalNodeRecordV2): Digest {
   return canvasDigestV2("convax.canvas-node-identity/2", node.identity)
 }
 
-export function edgeIdentityDigestV2(edge: CanvasEdgeSnapshotV2): DigestV2 {
+export function edgeIdentityDigestV2(edge: CanvasEdgeSnapshotV2): Digest {
   return canvasDigestV2("convax.canvas-edge-identity/2", edge.identity)
 }
 
-export function effectiveDataDigestV2(snapshot: CanvasSnapshotV2, node: CanvasNodeSnapshotV2): DigestV2 {
+export function effectiveDataDigestV2(snapshot: CanvasSnapshotV2, node: CanvasNodeSnapshotV2): Digest {
   return canvasDigestV2("convax.canvas-effective-data/2", {
     format: "convax.canvas-effective-data/2",
     data: effectiveNodeDataV2(snapshot, node).data,
   })
 }
 
-export function dataRegisterDigestV2(node: CanvasNodeSnapshotV2): DigestV2 {
+export function dataRegisterDigestV2(node: CanvasNodeSnapshotV2): Digest {
   return canvasDigestV2("convax.canvas-data-register/2", {
     format: "convax.canvas-data-register/2",
     node: node.identity.ref,
@@ -387,14 +387,14 @@ export function effectivePluginV2(node: CanvasNodeSnapshotV2): PluginStateEnvelo
   return maxClaimV2(node.plugin.map((entry) => entry[1]))?.value ?? null
 }
 
-export function effectivePluginDigestV2(node: CanvasNodeSnapshotV2): DigestV2 | null {
+export function effectivePluginDigestV2(node: CanvasNodeSnapshotV2): Digest | null {
   const plugin = effectivePluginV2(node)
   return plugin === null
     ? null
     : canvasDigestV2("convax.canvas-effective-plugin/2", { format: "convax.canvas-effective-plugin/2", plugin })
 }
 
-export function geometryDigestV2(node: CanvasNodeSnapshotV2): DigestV2 {
+export function geometryDigestV2(node: CanvasNodeSnapshotV2): Digest {
   const position = maxClaimV2(node.position.map((entry) => entry[1]))
   const size = maxClaimV2(node.size.map((entry) => entry[1]))
   if (position === null || size === null) throw new Error("Validated node has no effective geometry")
@@ -427,17 +427,17 @@ export function generationLifecycleCoreV2(
   }
 }
 
-export function generationLifecycleDigestV2(snapshot: CanvasSnapshotV2, generationId: string): DigestV2 {
+export function generationLifecycleDigestV2(snapshot: CanvasSnapshotV2, generationId: string): Digest {
   return canvasDigestV2("convax.canvas-generation-lifecycle/2", generationLifecycleCoreV2(snapshot, generationId))
 }
 
 export function projectedGenerationDigestV2(
   snapshot: CanvasSnapshotV2,
   node: CanvasEntityRefV2 & { readonly kind: "node" },
-): DigestV2 {
+): Digest {
   const lifecycles = [...snapshot.generationBegins.values()]
     .filter((begin) => canvasEntityKeyV2(begin.node) === canvasEntityKeyV2(node))
-    .sort((a, b) => compareUtf8V2(a.generationId, b.generationId))
+    .sort((a, b) => compareUtf8(a.generationId, b.generationId))
     .map((begin) => generationLifecycleCoreV2(snapshot, begin.generationId))
   return canvasDigestV2("convax.canvas-projected-generation/2", {
     format: "convax.canvas-projected-generation/2",
@@ -446,24 +446,24 @@ export function projectedGenerationDigestV2(
   })
 }
 
-export function obstacleProjectionDigestV2(snapshot: CanvasSnapshotV2): DigestV2 {
+export function obstacleProjectionDigestV2(snapshot: CanvasSnapshotV2): Digest {
   const index = buildCanvasProjectionIndexV2(snapshot)
   const obstacles = index.projection.nodes
     .filter((node) => node.parent === null)
     .map((node) => ({ node: node.ref, position: node.position, size: node.size }))
-    .sort((a, b) => compareUtf8V2(canvasEntityKeyV2(a.node), canvasEntityKeyV2(b.node)))
+    .sort((a, b) => compareUtf8(canvasEntityKeyV2(a.node), canvasEntityKeyV2(b.node)))
   return canvasDigestV2("convax.canvas-obstacle-projection/2", {
     format: "convax.canvas-obstacle-projection/2",
     obstacles,
   })
 }
 
-export function projectionDigestV2(snapshot: CanvasSnapshotV2): DigestV2 {
-  return ordinarySha256V2(canonicalProjectionBytesV2(snapshot))
+export function projectionDigestV2(snapshot: CanvasSnapshotV2): Digest {
+  return ordinarySha256(canonicalProjectionBytesV2(snapshot))
 }
 
 export function canonicalProjectionBytesV2(snapshot: CanvasSnapshotV2): Uint8Array {
-  return encodeRestrictedJcsV2(projectCanvasV2(snapshot))
+  return encodeRestrictedJcs(projectCanvasV2(snapshot))
 }
 
 function selectContainments(
@@ -481,7 +481,7 @@ function selectContainments(
   const selected = new Map<string, ContainmentChoiceV2 | null>()
   for (const [child, choices] of byChild) {
     const maximum = choices.reduce((winner, next) =>
-      comparePortableStampsV2(winner.stamp, next.stamp) < 0 ? next : winner,
+      comparePortableStamps(winner.stamp, next.stamp) < 0 ? next : winner,
     )
     if (maximum.parent === null) selected.set(child, maximum)
     else {
@@ -502,8 +502,8 @@ function selectContainments(
       const left = selected.get(loser)
       const right = selected.get(candidate)
       if (left === null || left === undefined || right === null || right === undefined) continue
-      const order = comparePortableStampsV2(left.stamp, right.stamp)
-      if (order < 0 || (order === 0 && compareUtf8V2(left.relationId, right.relationId) < 0)) loser = candidate
+      const order = comparePortableStamps(left.stamp, right.stamp)
+      if (order < 0 || (order === 0 && compareUtf8(left.relationId, right.relationId) < 0)) loser = candidate
     }
     selected.set(loser, null)
   }
@@ -512,7 +512,7 @@ function selectContainments(
 
 function findContainmentCycle(selected: ReadonlyMap<string, ContainmentChoiceV2 | null>): string[] | null {
   const done = new Set<string>()
-  for (const start of [...selected.keys()].sort(compareUtf8V2)) {
+  for (const start of [...selected.keys()].sort(compareUtf8)) {
     if (done.has(start)) continue
     const path: string[] = []
     const positions = new Map<string, number>()

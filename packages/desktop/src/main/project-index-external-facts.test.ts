@@ -1,17 +1,17 @@
 import { describe, expect, mock, test } from "bun:test"
 import {
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseId128V2,
-  parseProjectIdV2,
-  type DecodedCausalEditFrameV2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type OwnerExternalFactPortFactoryV2,
-  type OwnerExternalFactPortV2,
-  type StateVectorV2,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  parseActorId,
+  parseCanvasId,
+  parseId128,
+  parseProjectId,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentScope,
+  type OwnerExternalFactPortFactory,
+  type OwnerExternalFactPort,
+  type StateVector,
 } from "@convax/collaboration"
 import type { CanvasGenesisProofCarrierVerifierV2 } from "@convax/canvas/collaboration"
 
@@ -24,10 +24,10 @@ import {
 
 describe("ProjectIndex fail-closed production fact ports", () => {
   test("creates an attempt port for dependency-free query/history and keeps Canvas genesis pending", async () => {
-    const port = Object.freeze({ marker: "project-index-port" }) as unknown as OwnerExternalFactPortV2<"project-index">
+    const port = Object.freeze({ marker: "project-index-port" }) as unknown as OwnerExternalFactPort<"project-index">
     const factory = {
       createAttemptPort() { return { status: "created" as const, port } },
-    } as unknown as OwnerExternalFactPortFactoryV2<"project-index">
+    } as unknown as OwnerExternalFactPortFactory<"project-index">
     const adapters = createFailClosedProjectIndexFactPortsV2({ factory, scope: scope() })
     await expect(adapters.facts.resolve({ dependencies: { validationArtifacts: [], externalFacts: [] } }))
       .resolves.toEqual({ status: "resolved", port })
@@ -37,7 +37,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
   })
 
   test("keeps authority-bearing ProjectIndex mutation pending and rejects cross-scope incoming frames", async () => {
-    const factory = { createAttemptPort() { throw new Error("must not create") } } as unknown as OwnerExternalFactPortFactoryV2<"project-index">
+    const factory = { createAttemptPort() { throw new Error("must not create") } } as unknown as OwnerExternalFactPortFactory<"project-index">
     const adapters = createFailClosedProjectIndexFactPortsV2({ factory, scope: scope() })
     const requirement = {
       owner: "project-index" as const, kind: "blob-publication-currentness", factDigest: "a".repeat(64) as never,
@@ -60,14 +60,14 @@ describe("ProjectIndex fail-closed production fact ports", () => {
       versionRecordDigest: digest("version"),
       blob: { format: "convax.blob-ref/2", algorithm: "sha256", digest: digest("blob"), byteLength: "7", mime: "text/plain" },
     } as const
-    const exactJcs = encodeRestrictedJcsV2(request)
-    const factDigest = ordinarySha256V2(exactJcs)
+    const exactJcs = encodeRestrictedJcs(request)
+    const factDigest = ordinarySha256(exactJcs)
     const requirement = { owner: "project-index" as const, kind: request.kind, factDigest, request: { sha256: factDigest, exactJcs } }
     const factory = {
       createAttemptPort({ resolver }: { resolver: { resolveFact(requirement: unknown): unknown } }) {
         return { status: "created" as const, port: { resolveFact: (value: unknown) => resolver.resolveFact(value) } }
       },
-    } as unknown as OwnerExternalFactPortFactoryV2<"project-index">
+    } as unknown as OwnerExternalFactPortFactory<"project-index">
     const queryHave = mock(async () => [{ blobSha256: request.blob.digest, byteLength: request.blob.byteLength }])
     const ports = createLocalBlobProjectIndexFactPortsV2({ factory, scope: scope(), blobs: { queryHave } as never })
     const resolved = await ports.facts.resolve({ dependencies: { validationArtifacts: [], externalFacts: [requirement] } })
@@ -105,20 +105,6 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     })
   })
 
-  test("activates an exact V3 local-owner Canvas proof when the frozen V2 verifier rejects it", async () => {
-    const fixture = productionFixture({ localOwnerV3: true })
-    await fixture.ports.canvasGenesis.stageCanvasGenesis(fixture.stageRequest)
-
-    const resolved = await fixture.ports.facts.resolve({ dependencies: fixture.dependencies })
-
-    expect(resolved.status).toBe("resolved")
-    expect(fixture.localOwnerProofVerifierV3).toHaveBeenCalledTimes(1)
-    if (resolved.status !== "resolved") throw new Error("expected resolved V3 Canvas genesis fact")
-    expect(resolved.port.resolveFact(fixture.requirement)).toMatchObject({
-      status: "resolved",
-      value: { kind: "canvas-genesis-currentness", decision: "verified" },
-    })
-  })
 
   test("leaves a missing durable G pending and rejects F or scope substitution", async () => {
     const missing = productionFixture({ missingProof: true })
@@ -133,7 +119,7 @@ describe("ProjectIndex fail-closed production fact ports", () => {
     const crossed = productionFixture()
     await expect(crossed.ports.canvasGenesis.stageCanvasGenesis({
       ...crossed.stageRequest,
-      scope: { ...crossed.stageRequest.scope, projectId: parseProjectIdV2("other") },
+      scope: { ...crossed.stageRequest.scope, projectId: parseProjectId("other") },
     })).resolves.toBe("rejected")
     expect(crossed.prepareGenesis).not.toHaveBeenCalled()
   })
@@ -172,17 +158,16 @@ function scope() {
 
 function productionFixture(options: {
   readonly missingProof?: boolean
-  readonly proofFrameDigest?: DigestV2
+  readonly proofFrameDigest?: Digest
   readonly failFirstInitialization?: boolean
   readonly authorPending?: boolean
-  readonly localOwnerV3?: boolean
 } = {}) {
   const projectIndexScope = scope()
   const canvasScope = {
     projectId: projectIndexScope.projectId,
     projectEpoch: projectIndexScope.projectEpoch,
     docKind: "canvas" as const,
-    docId: parseCanvasIdV2(`cv_${"c".repeat(64)}`),
+    docId: parseCanvasId(`cv_${"c".repeat(64)}`),
     shardEpoch: id(9),
   }
   const stageFrameDigest = digest("stage-frame")
@@ -198,7 +183,7 @@ function productionFixture(options: {
       heads: Object.freeze([]),
     }),
     fullUpdate: new Uint8Array([1, 2, 3]),
-    stateVector: new Uint8Array([4, 5]) as StateVectorV2,
+    stateVector: new Uint8Array([4, 5]) as StateVector,
     canonicalStateDigest: digest("canonical"),
   })
   const checkpointBytes = new Uint8Array([6, 7])
@@ -226,7 +211,7 @@ function productionFixture(options: {
   })
   const persistence = {
     initializeShardWithGenesisProof,
-    async readGenesisProof(requestScope: DocumentScopeV2, requestDigest: DigestV2) {
+    async readGenesisProof(requestScope: DocumentScope, requestDigest: Digest) {
       if (
         options.missingProof || !installed ||
         !sameTestScope(requestScope, canvasScope) || requestDigest !== checkpointObjectDigest
@@ -238,10 +223,9 @@ function productionFixture(options: {
   }
   const proofVerifier = ((exactBytes: Readonly<Uint8Array>) => {
     expect(exactBytes).toEqual(carrierBytes)
-    if (options.localOwnerV3) return Object.freeze({ status: "rejected" as const })
     return Object.freeze({
       status: "validated" as const,
-      exactBytesSha256: ordinarySha256V2(exactBytes),
+      exactBytesSha256: ordinarySha256(exactBytes),
       canvasArtifactDigest: digest("canvas-artifact"),
       identity: Object.freeze({
         checkpointObjectDigest,
@@ -249,21 +233,11 @@ function productionFixture(options: {
         identity: Object.freeze({
           projectIndexRouteDependencyFrameDigest: options.proofFrameDigest ?? stageFrameDigest,
         }),
-        authorActorId: parseActorIdV2(Buffer.alloc(32, 3).toString("base64url")),
+        authorActorId: parseActorId(Buffer.alloc(32, 3).toString("base64url")),
         authorCredentialCoreDigest: digest("credential"),
       }),
     })
   }) as unknown as CanvasGenesisProofCarrierVerifierV2
-  const localOwnerProofVerifierV3 = mock(async (exactBytes: Uint8Array) => {
-    expect(exactBytes).toEqual(carrierBytes)
-    return Object.freeze({
-      status: "validated" as const,
-      proofDigest: digest("v3-proof"),
-      checkpointObjectDigest,
-      scope: canvasScope,
-      projectIndexRouteDependencyFrameDigest: options.proofFrameDigest ?? stageFrameDigest,
-    })
-  })
   const factory = attemptFactory()
   const ports = createProjectIndexCanvasGenesisFactPortsV2({
     factory,
@@ -271,13 +245,12 @@ function productionFixture(options: {
     persistence,
     genesisVerifier,
     proofVerifier,
-    ...(options.localOwnerV3 ? { localOwnerProofVerifierV3 } : {}),
     preflightAuthor: async () => options.authorPending ? "pending" : "ready",
   })
   const stageFrame = {
     frameDigest: stageFrameDigest,
     header: { core: { scope: projectIndexScope } },
-  } as unknown as DecodedCausalEditFrameV2
+  } as unknown as DecodedCausalEditFrame
   const stageRequest = Object.freeze({
     scope: canvasScope,
     predecessor: Object.freeze({ frame: stageFrame, acceptedFrontierDigest: stageFrontierDigest }),
@@ -294,8 +267,8 @@ function productionFixture(options: {
     genesisCheckpointObjectDigest: checkpointObjectDigest,
     stagedProjectIndexFrontierDigest: stageFrontierDigest,
   })
-  const exactJcs = encodeRestrictedJcsV2(request)
-  const sha256 = ordinarySha256V2(exactJcs)
+  const exactJcs = encodeRestrictedJcs(request)
+  const sha256 = ordinarySha256(exactJcs)
   const requirement = Object.freeze({
     owner: "project-index" as const,
     kind: "canvas-genesis-currentness",
@@ -316,33 +289,32 @@ function productionFixture(options: {
     dependencies,
     initializeShardWithGenesisProof,
     prepareGenesis,
-    localOwnerProofVerifierV3,
   }
 }
 
-function attemptFactory(): OwnerExternalFactPortFactoryV2<"project-index"> {
+function attemptFactory(): OwnerExternalFactPortFactory<"project-index"> {
   return {
-    createAttemptPort(request: Parameters<OwnerExternalFactPortFactoryV2<"project-index">["createAttemptPort"]>[0]) {
+    createAttemptPort(request: Parameters<OwnerExternalFactPortFactory<"project-index">["createAttemptPort"]>[0]) {
       const { declared, resolver } = request
       const port = Object.freeze({
         resolveArtifact: resolver.resolveArtifact.bind(resolver),
         resolveFact: resolver.resolveFact.bind(resolver),
         consumedDependencies: () => declared,
-      }) as unknown as OwnerExternalFactPortV2<"project-index">
+      }) as unknown as OwnerExternalFactPort<"project-index">
       return Object.freeze({ status: "created" as const, port })
     },
-  } as unknown as OwnerExternalFactPortFactoryV2<"project-index">
+  } as unknown as OwnerExternalFactPortFactory<"project-index">
 }
 
-function digest(value: string): DigestV2 {
-  return ordinarySha256V2(new TextEncoder().encode(value))
+function digest(value: string): Digest {
+  return ordinarySha256(new TextEncoder().encode(value))
 }
 
 function id(value: number) {
-  return parseId128V2(Buffer.alloc(16, value).toString("base64url"))
+  return parseId128(Buffer.alloc(16, value).toString("base64url"))
 }
 
-function sameTestScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
+function sameTestScope(left: DocumentScope, right: DocumentScope): boolean {
   return left.projectId === right.projectId && left.projectEpoch === right.projectEpoch &&
     left.docKind === right.docKind && left.docId === right.docId && left.shardEpoch === right.shardEpoch
 }

@@ -1,13 +1,13 @@
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseActorId,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
 } from "@convax/collaboration"
 import {
   blobDurableAckCoreFromReferenceV2,
@@ -18,26 +18,26 @@ import {
 import type { ProjectResourceReferenceV2 } from "./project-index"
 
 const bytes = new TextEncoder().encode("blob")
-const blob = ordinarySha256V2(bytes)
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const actor = (fill: number) => parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(fill)))
-const signature = parseSignatureV2(encodeBase64urlV2(new Uint8Array(64).fill(7)))
+const blob = ordinarySha256(bytes)
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
+const signature = parseSignature(encodeBase64url(new Uint8Array(64).fill(7)))
 const reference: ProjectResourceReferenceV2 = Object.freeze({
   format: "convax.project-resource-reference/2",
-  projectId: parseProjectIdV2("project-a"),
+  projectId: parseProjectId("project-a"),
   projectEpoch: id(1),
   entryFileId: `pf_${"a".repeat(64)}` as never,
   familyPrimaryFileId: `pf_${"a".repeat(64)}` as never,
   versionId: `pv_${"b".repeat(64)}`,
   canonicalUri: `convax-project://project-a/epochs/${id(1)}/entries/pf_${"a".repeat(64)}?blob=sha256%3A${blob}`,
   blob: { format: "convax.blob-ref/2" as const, algorithm: "sha256" as const, digest: blob, byteLength: String(bytes.byteLength) as never, mime: "application/octet-stream" },
-  versionRecordDigest: ordinarySha256V2(new TextEncoder().encode("version")),
+  versionRecordDigest: ordinarySha256(new TextEncoder().encode("version")),
 })
 const receiver = {
-  receiverMemberId: parseMemberIdV2(id(2)),
-  receiverReplicaId: parseReplicaIdV2("replica_00000002"),
+  receiverMemberId: parseMemberId(id(2)),
+  receiverReplicaId: parseReplicaId("replica_00000002"),
   receiverActorId: actor(2),
-  receiverAuthorizationDigest: ordinarySha256V2(new TextEncoder().encode("authorization")),
+  receiverAuthorizationDigest: ordinarySha256(new TextEncoder().encode("authorization")),
 }
 
 describe("Project blob holder and durable ACK semantics", () => {
@@ -60,7 +60,7 @@ describe("Project blob holder and durable ACK semantics", () => {
   })
 
   test("does not call an early blob ACK replicated without a same-replica frame ACK", () => {
-    const core = blobDurableAckCoreFromReferenceV2({ reference, ...receiver, protocolDigest: ordinarySha256V2(new TextEncoder().encode("protocol")) })
+    const core = blobDurableAckCoreFromReferenceV2({ reference, ...receiver, protocolDigest: ordinarySha256(new TextEncoder().encode("protocol")) })
     const ack = createBlobDurableAckV2(core, signature)
     expect(evaluateProjectBlobReplicationStatusV2({ references: [reference], frameAckReceivers: [], blobAcks: [ack], verifyCurrentAck: () => true })).toBe("local-structural-only")
     expect(evaluateProjectBlobReplicationStatusV2({
@@ -71,7 +71,7 @@ describe("Project blob holder and durable ACK semantics", () => {
     })).toBe("blob-replicated")
     expect(evaluateProjectBlobReplicationStatusV2({
       references: [reference],
-      frameAckReceivers: [{ receiverReplicaId: parseReplicaIdV2("replica_00000003"), receiverAuthorizationDigest: receiver.receiverAuthorizationDigest }],
+      frameAckReceivers: [{ receiverReplicaId: parseReplicaId("replica_00000003"), receiverAuthorizationDigest: receiver.receiverAuthorizationDigest }],
       blobAcks: [ack],
       verifyCurrentAck: () => true,
     })).toBe("structure-replicated-blobs-pending")

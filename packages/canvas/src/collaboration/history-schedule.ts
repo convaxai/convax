@@ -1,5 +1,5 @@
-import { compareUtf8V2, encodeRestrictedJcsV2, parseUint32V2 } from "@convax/collaboration"
-import type { CanvasHistoryBindingV2, CanvasHistoryTemplateV2, Uint32V2 } from "./types"
+import { compareUtf8, encodeRestrictedJcs, parseUint32 } from "@convax/collaboration"
+import type { CanvasHistoryBindingV2, CanvasHistoryTemplateV2, Uint32 } from "./types"
 import { CanvasSchemaErrorV2 } from "./validation"
 
 export const CANVAS_UNDOABLE_INTENT_KINDS_V2 = Object.freeze([
@@ -113,7 +113,7 @@ export function scheduleCanvasHistoryTemplatesV2(
   const groupSchedule: CanvasHistoryTemplateV2[] = []
   const remaining = new Set(groups.keys())
   while (remaining.size > 0) {
-    const ready = [...remaining].filter((handle) => inDegree.get(handle) === 0).sort(compareUtf8V2)
+    const ready = [...remaining].filter((handle) => inDegree.get(handle) === 0).sort(compareUtf8)
     const next = ready[0]
     if (next === undefined) invalid("creation-group source dependency cycle")
     remaining.delete(next)
@@ -124,7 +124,7 @@ export function scheduleCanvasHistoryTemplatesV2(
   const withoutGroups = templates.filter((template) => template.op !== "creation-group.restore")
   withoutGroups.sort((left, right) => {
     const rank = TEMPLATE_RANK[left.op] - TEMPLATE_RANK[right.op]
-    return rank || compareUtf8V2(templatePrimaryKey(left), templatePrimaryKey(right))
+    return rank || compareUtf8(templatePrimaryKey(left), templatePrimaryKey(right))
   })
   assertUniqueOuterKeys(withoutGroups)
   const beforeGroups = withoutGroups.filter((template) => TEMPLATE_RANK[template.op] < 11)
@@ -145,7 +145,7 @@ export function assertCanvasHistoryTemplateScheduleV2(
 }
 
 export interface CanvasHistoryOrdinalPlanEntryV2 {
-  readonly ordinal: Uint32V2
+  readonly ordinal: Uint32
   readonly kind: "node" | "edge" | "relation" | "creation-group"
   readonly handle: string
 }
@@ -181,7 +181,7 @@ export function planCanvasHistoryDerivedOrdinalsV2(
         break
     }
   }
-  return Object.freeze(plan.map((entry, index) => Object.freeze({ ...entry, ordinal: parseUint32V2(String(index)) })))
+  return Object.freeze(plan.map((entry, index) => Object.freeze({ ...entry, ordinal: parseUint32(String(index)) })))
 }
 
 function assertUniqueOuterKeys(templates: readonly CanvasHistoryTemplateV2[]): void {
@@ -225,7 +225,7 @@ function assertSortedMembers(values: readonly { readonly handle: string }[], lab
   let prior: string | undefined
   for (const value of values) {
     assertHandle(value.handle)
-    if (prior !== undefined && compareUtf8V2(prior, value.handle) >= 0)
+    if (prior !== undefined && compareUtf8(prior, value.handle) >= 0)
       invalid(`${label} must be handle-sorted and duplicate-free`)
     prior = value.handle
   }
@@ -233,17 +233,17 @@ function assertSortedMembers(values: readonly { readonly handle: string }[], lab
 
 function assertHandle(value: string): void {
   if (!/^[ne]\/(0|[1-9]\d*)$/u.test(value)) invalid(`invalid history handle ${value}`)
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function assertGroupHandle(value: string): void {
   if (!/^g\/(0|[1-9]\d*)$/u.test(value)) invalid(`invalid creation-group handle ${value}`)
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function byteEqual(left: unknown, right: unknown): boolean {
-  const a = encodeRestrictedJcsV2(left)
-  const b = encodeRestrictedJcsV2(right)
+  const a = encodeRestrictedJcs(left)
+  const b = encodeRestrictedJcs(right)
   return a.length === b.length && a.every((byte, index) => byte === b[index])
 }
 

@@ -5,7 +5,7 @@ import {
   CURRENT_PROTOCOL_DESCRIPTOR_FILE_NAME,
   installCurrentProtocolAuthority,
   parseCurrentProtocolDescriptor,
-  type VerifiedProtocolAuthorityV2,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 
 const maximumDescriptorBytes = 1024 * 1024
@@ -27,7 +27,7 @@ export interface LoadCurrentCollaborationProtocolOptions {
  */
 export async function loadCurrentCollaborationProtocol(
   options: LoadCurrentCollaborationProtocolOptions,
-): Promise<VerifiedProtocolAuthorityV2> {
+): Promise<CurrentProtocolAuthority> {
   assertExplicitProtocolRoot(options.explicitProtocolRoot)
   const bytes = await (options.source ?? nodeCurrentProtocolDescriptorSource)
     .loadDescriptorBytes(options.explicitProtocolRoot)

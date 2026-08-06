@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { parseProjectIdV2, type DigestV2, type ProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId, type Digest, type ProjectId } from "@convax/collaboration"
 import type {
   ProjectIndexFileMaterializationEntryV2,
   ProjectIndexFileMaterializationPlanV2,
@@ -27,7 +27,7 @@ interface MaterializedEntryV2 {
   readonly entryId: string
   readonly kind: "directory" | "file"
   readonly path: string
-  readonly blobDigest: DigestV2 | null
+  readonly blobDigest: Digest | null
 }
 
 /**
@@ -37,7 +37,7 @@ interface MaterializedEntryV2 {
  * protocol, but can never revive or overwrite a logical entry.
  */
 export class ProjectIndexFileMaterializerV2 {
-  readonly #projectId: ProjectIdV2
+  readonly #projectId: ProjectId
   readonly #projectRoot: string
   readonly #projection: ProjectIndexFileMaterializationProjectionPortV2
   readonly #blobs: ProjectIndexMaterializationBlobPortV2
@@ -45,7 +45,7 @@ export class ProjectIndexFileMaterializerV2 {
   #queue: Promise<void> = Promise.resolve()
 
   private constructor(input: {
-    projectId: ProjectIdV2
+    projectId: ProjectId
     projectRoot: string
     projection: ProjectIndexFileMaterializationProjectionPortV2
     blobs: ProjectIndexMaterializationBlobPortV2
@@ -57,12 +57,12 @@ export class ProjectIndexFileMaterializerV2 {
   }
 
   static async open(input: {
-    readonly projectId: ProjectIdV2
+    readonly projectId: ProjectId
     readonly projectRoot: string
     readonly projection: ProjectIndexFileMaterializationProjectionPortV2
     readonly blobs: ProjectIndexMaterializationBlobPortV2
   }): Promise<ProjectIndexFileMaterializerV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+    const projectId = parseProjectId(input.projectId)
     if (!path.isAbsolute(input.projectRoot)) throw new TypeError("Project materialization root must be absolute")
     const projectRoot = await fs.realpath(input.projectRoot)
     const stat = await fs.lstat(projectRoot)
@@ -252,7 +252,7 @@ function inside(root: string, target: string): boolean {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)
 }
 
-async function digestRegularFile(target: string): Promise<DigestV2 | null> {
+async function digestRegularFile(target: string): Promise<Digest | null> {
   let stat: Awaited<ReturnType<typeof fs.lstat>>
   try { stat = await fs.lstat(target) } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return null
@@ -270,7 +270,7 @@ async function digestRegularFile(target: string): Promise<DigestV2 | null> {
       hash.update(buffer.subarray(0, bytesRead))
       offset += bytesRead
     }
-    return hash.digest("hex") as DigestV2
+    return hash.digest("hex") as Digest
   } finally { await handle.close() }
 }
 
