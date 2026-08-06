@@ -127,6 +127,15 @@ export type NodeDataEnvelopeV2 =
       readonly title: string
       readonly resource: CanvasResourceRefV2
     }
+  /**
+   * Host-neutral generic Plugin surface. The concrete Plugin lives only in the
+   * node's validated `PluginStateEnvelopeV2`; Canvas never learns a Plugin id.
+   */
+  | {
+      readonly format: "convax.canvas-node-data/2"
+      readonly kind: "plugin-surface"
+      readonly title: string
+    }
 
 export interface CanvasEdgeDataV2 {
   readonly format: "convax.canvas-edge-data/2"
@@ -421,6 +430,20 @@ export interface PendingNodeCreateSpecV2 {
   readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
 }
 
+/**
+ * The one Canvas-owned specification for a generic Plugin surface node. It
+ * carries no source, edge, parent, creation group, caller-selected id, actor,
+ * or digest; position is Canvas-computed from the bound causal placement.
+ */
+export interface PluginSurfaceCreateSpecV2 {
+  readonly ordinal: Uint32
+  readonly nodeId: string
+  readonly incarnation: string
+  readonly size: CanvasSizeV2
+  readonly title: string
+  readonly plugin: PluginStateEnvelopeV2
+}
+
 export interface GeometryGuardV2 extends NodeLiveGuardV2 {
   readonly expectedGeometryDigest: Digest
 }
@@ -486,6 +509,7 @@ export type CanvasIntentKindV2 =
   | "canvas.generation.dismiss/2"
   | "canvas.generation.fail-recovery/2"
   | "canvas.plugin.creation-group.create/2"
+  | "canvas.plugin.surface.create"
   | "canvas.undo.semantic-inverse/2"
   | "canvas.redo.semantic-forward/2"
 
@@ -963,6 +987,16 @@ export type CanvasIntentContractMapV2 = {
       readonly nodes: readonly NodeCreateTemplateV2[]
       readonly edges: readonly EdgeCreateTemplateV2[]
     }
+  >
+  /**
+   * Creates exactly one independent top-level Plugin surface node. There is no
+   * source, edge, parent, or creation group; the single derived-node guard and
+   * the causal placement are the whole contract.
+   */
+  readonly "canvas.plugin.surface.create": CanvasTypedIntentV2<
+    "canvas.plugin.surface.create",
+    { readonly derivedNode: DerivedNodeAbsentGuardV2 },
+    { readonly placement: CausalPlacementV2; readonly node: PluginSurfaceCreateSpecV2 }
   >
   readonly "canvas.undo.semantic-inverse/2": CanvasTypedIntentV2<
     "canvas.undo.semantic-inverse/2",

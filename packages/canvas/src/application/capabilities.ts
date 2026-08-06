@@ -51,6 +51,12 @@ export const canvasCommandCapabilities = [
     layer: "business",
   },
   {
+    commandType: "plugin.surface.create",
+    defaultForAgent: false,
+    description: "Create one independent top-level Plugin surface node with Canvas-owned identity and placement.",
+    layer: "business",
+  },
+  {
     commandType: "nodes.distribute",
     defaultForAgent: false,
     description: "Evenly distribute a set of nodes.",

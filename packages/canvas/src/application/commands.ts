@@ -23,6 +23,11 @@ import {
   getCanvasNodePresentationSize,
   getCanvasNodeSize,
 } from "../document"
+import type { ValidationArtifactRef } from "@convax/collaboration"
+import {
+  canvasProjectionPluginIdentityMetadataKeyV2,
+  canvasProjectionPluginStateMetadataKeyV2,
+} from "../collaboration/projection"
 import { sameCanvasJson } from "../json-equality"
 import type {
   CanvasDocument,
@@ -194,10 +199,36 @@ export interface CanvasMaterializeConnectedNodeCommand {
 }
 
 /**
+ * The exact leased Plugin identity plus its already validated initial state.
+ * The Host derives every field from one ActiveSet lease; Canvas treats the
+ * Plugin id as routing data and never branches on its value.
+ */
+export interface CanvasPluginSurfaceBinding {
+  id: string
+  pluginStateSchemaDigest: string
+  snapshotDigest: string
+  state: unknown
+  validationArtifact: ValidationArtifactRef
+}
+
+/**
+ * Host-owned creation of one independent top-level Plugin surface node. The
+ * caller supplies no node id, position, source, edge, parent, or creation
+ * group; Canvas derives identity and placement and commits atomically.
+ */
+export interface CanvasCreatePluginSurfaceCommand {
+  type: "plugin.surface.create"
+  label: string
+  plugin: CanvasPluginSurfaceBinding
+  size: CanvasSize
+}
+
+/**
  * Product-level operations that preserve the same behavior across UI and Agent
  * callers. Business commands may compose several primitive mutations.
  */
 export type CanvasBusinessCommand =
+  | CanvasCreatePluginSurfaceCommand
   | CanvasAddResourcesCommand
   | CanvasCreatePendingGenerationResourceCommand
   | CanvasCreatePendingResourceCommand
@@ -518,6 +549,7 @@ export function applyCanvasApplicationCommand(
   if (command.type === "resources.pending.fail") return failPendingResource(document, command)
   if (command.type === "resources.relink") return relinkResource(document, command)
   if (command.type === "nodes.materialize-connected") return materializeConnectedNode(document, command)
+  if (command.type === "plugin.surface.create") return createPluginSurface(document, command)
 
   if (command.type === "elements.remove") {
     const affectedNodeIds = existingNodeIds(document, command.nodeIds ?? [])
@@ -776,6 +808,49 @@ function addResources(document: CanvasDocument, command: CanvasAddResourcesComma
     }
   }
   return result(document, next, [...new Set([...anchorNodeIds, ...nodeIds])], nodeIds)
+}
+
+function createPluginSurface(
+  document: CanvasDocument,
+  command: CanvasCreatePluginSurfaceCommand,
+): CanvasBusinessCommandResult {
+  requireNonEmptyBoundedString(command.label, "Plugin surface label", 4096)
+  requireNonEmptyBoundedString(command.plugin.id, "Plugin surface plugin id", 4096)
+  requireNonEmptyBoundedString(command.plugin.snapshotDigest, "Plugin surface snapshot digest", 256)
+  requireNonEmptyBoundedString(command.plugin.pluginStateSchemaDigest, "Plugin surface schema digest", 256)
+  if (command.plugin.validationArtifact.owner !== "plugin") {
+    throw new CanvasCommandValidationError("Plugin surface validation artifact must be Plugin-owned")
+  }
+  if (
+    !Number.isFinite(command.size.width) ||
+    !Number.isFinite(command.size.height) ||
+    command.size.width <= 0 ||
+    command.size.height <= 0
+  ) {
+    throw new CanvasCommandValidationError("Plugin surface size is invalid")
+  }
+  const node: CanvasNode = {
+    // Canvas owns the identity and the placement; the Host supplies neither.
+    id: createCanvasId("node"),
+    position: findOpenCanvasPoint(document, { x: 0, y: 0 }, command.size),
+    type: "file",
+    data: {
+      kind: `plugin.${command.plugin.id}`,
+      label: command.label,
+      metadata: {
+        [canvasProjectionPluginIdentityMetadataKeyV2]: {
+          id: command.plugin.id,
+          snapshotDigest: command.plugin.snapshotDigest,
+          pluginStateSchemaDigest: command.plugin.pluginStateSchemaDigest,
+        },
+        [canvasProjectionPluginStateMetadataKeyV2]: structuredClone(command.plugin.state),
+      },
+    },
+    height: command.size.height,
+    width: command.size.width,
+  }
+  const next = addCanvasNodes(document, [node]).document
+  return result(document, next, [node.id], [node.id])
 }
 
 function materializeConnectedNode(

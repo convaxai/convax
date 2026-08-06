@@ -100,6 +100,7 @@ const UNDOABLE = new Set<string>([
   "canvas.edges.connect/2",
   "canvas.metadata.update/2",
   "canvas.plugin.creation-group.create/2",
+  "canvas.plugin.surface.create",
 ])
 
 interface ProvisionalHistoryNodeV2 {
@@ -1035,6 +1036,33 @@ function planIntent(
         results.push(ref)
         invalidated.push(ref)
       }
+      return "valid"
+    }
+    case "canvas.plugin.surface.create": {
+      const node = intent.body.node
+      if (node.ordinal !== "0") return "invalid"
+      requirePlacement(base, intent.body.placement)
+      const ref = requireDerivedNode(base, context, intent.guard.derivedNode, node)
+      const position = placeCreatedNodes(base, intent.body.placement.anchor, [
+        { ordinal: node.ordinal, size: node.size },
+      ])[0]!
+      requireFact(facts.validatePluginArtifact(pluginRequirementV2(node.plugin)!))
+      requireFact(facts.validatePluginState(node.plugin))
+      planNodeCreate(
+        writes,
+        ref,
+        {
+          ...node,
+          role: "file",
+          position,
+          data: { format: "convax.canvas-node-data/2", kind: "plugin-surface", title: node.title },
+          plugin: node.plugin,
+        },
+        context,
+        null,
+      )
+      results.push(ref)
+      invalidated.push(ref)
       return "valid"
     }
     case "canvas.undo.semantic-inverse/2":

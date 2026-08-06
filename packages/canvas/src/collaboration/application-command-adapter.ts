@@ -11,7 +11,7 @@ import type {
 import type { OwnerIntentConstructionContext } from "@convax/collaboration"
 import { buildCanvasProjectionIndexV2, projectCanvasDocumentV2 } from "./projection"
 import type { CanvasAuthoritativeCommandV2 } from "./command-construction"
-import { assertResourceProofV2, canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
+import { assertPluginStateV2, assertResourceProofV2, canvasEntityKeyV2, sameCanonicalValueV2 } from "./validation"
 
 export const canvasResourceProofMetadataKeyV2 = "convaxCanvasResourceProofV2"
 
@@ -282,6 +282,29 @@ export function adaptCanvasApplicationCommandV2(input: {
             node: node.ref,
             title: command.item.name ?? node.data.title,
             proof,
+          }),
+        })
+      }
+      case "plugin.surface.create": {
+        // The Host must have derived a complete leased envelope. Canvas accepts
+        // no node id, position, or partial Plugin identity from the caller.
+        const plugin = Object.freeze({
+          format: "convax.canvas-plugin-state/2",
+          pluginId: command.plugin.id,
+          snapshotDigest: command.plugin.snapshotDigest,
+          pluginStateSchemaDigest: command.plugin.pluginStateSchemaDigest,
+          validationArtifact: Object.freeze({ ...command.plugin.validationArtifact }),
+          state: structuredClone(command.plugin.state),
+        })
+        assertPluginStateV2(plugin)
+        if (!finiteSize(command.size) || typeof command.label !== "string") return "rejected"
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "plugin-surface-create",
+            title: command.label,
+            size: Object.freeze({ ...command.size }),
+            plugin,
           }),
         })
       }

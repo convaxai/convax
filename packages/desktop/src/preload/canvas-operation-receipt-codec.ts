@@ -27,6 +27,7 @@ const canvasIntentKinds = new Set([
   "canvas.generation.dismiss/2",
   "canvas.generation.fail-recovery/2",
   "canvas.plugin.creation-group.create/2",
+  "canvas.plugin.surface.create",
   "canvas.undo.semantic-inverse/2",
   "canvas.redo.semantic-forward/2",
 ])

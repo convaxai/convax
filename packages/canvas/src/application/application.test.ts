@@ -177,6 +177,48 @@ describe("canvas application commands", () => {
     ).toThrow("requires a audio file node")
   })
 
+  test("creates a generic Plugin surface without a caller-selected id or position", () => {
+    const occupied = {
+      ...createTextNode({
+        id: "occupied",
+        metadata: {},
+        position: { x: 0, y: 0 },
+        resourceState: { status: "ready", text: "" },
+      }),
+      style: { height: 200, width: 300 },
+    }
+    const document = createCanvasDocument({ id: "plugin-surface", nodes: [occupied] })
+    const committed = executeCanvasBusinessCommand(document, {
+      actor: { id: "host", kind: "host" },
+      command: {
+        type: "plugin.surface.create",
+        label: "Storyboard",
+        size: { height: 320, width: 480 },
+        plugin: {
+          id: "acme.storyboard",
+          snapshotDigest: "a".repeat(64),
+          pluginStateSchemaDigest: "b".repeat(64),
+          validationArtifact: {
+            owner: "plugin",
+            format: "convax.plugin-validation-artifact/2",
+            artifactDigest: "b".repeat(64),
+          },
+          state: { board: "empty" },
+        },
+      },
+      commandId: "create-storyboard",
+    })
+
+    expect(committed.createdNodeIds).toHaveLength(1)
+    const created = committed.document.nodes.find((node) => node.id === committed.createdNodeIds[0])!
+    expect(created.type).toBe("file")
+    expect(created.parentId).toBeUndefined()
+    expect(created.data.kind).toBe("plugin.acme.storyboard")
+    expect(created.data.metadata).toMatchObject({ convaxPluginState: { board: "empty" } })
+    expect(created.position).not.toEqual(occupied.position)
+    expect(committed.document.edges).toEqual([])
+  })
+
   test("keeps searching for free placement after the old fixed candidate set is full", () => {
     const occupiedPoints = [
       [0, 0],

@@ -68,6 +68,7 @@ export const CANVAS_INTENT_KINDS_V2 = Object.freeze([
   "canvas.generation.dismiss/2",
   "canvas.generation.fail-recovery/2",
   "canvas.plugin.creation-group.create/2",
+  "canvas.plugin.surface.create",
   "canvas.undo.semantic-inverse/2",
   "canvas.redo.semantic-forward/2",
 ] as const satisfies readonly CanvasIntentKindV2[])
@@ -256,6 +257,13 @@ export function assertCanvasTypedIntentV2(value: unknown): asserts value is Canv
       assertArray(value.body.nodes, assertNodeTemplate)
       assertArray(value.body.edges, assertEdgeTemplate)
       return
+    case "canvas.plugin.surface.create":
+      assertExactKeys(value.guard, ["derivedNode"], "plugin surface guard")
+      assertDerivedNodeGuard(value.guard.derivedNode)
+      assertExactKeys(value.body, ["placement", "node"], "plugin surface body")
+      assertPlacement(value.body.placement)
+      assertPluginSurfaceNode(value.body.node)
+      return
     case "canvas.undo.semantic-inverse/2":
     case "canvas.redo.semantic-forward/2":
       assertHistoryGuard(value.guard, value.kind === "canvas.undo.semantic-inverse/2" ? "applied" : "undone")
@@ -404,6 +412,16 @@ function assertPendingNode(value: unknown): void {
   assertString(value.title)
   if (!new Set(["text", "image", "video", "audio", "file"]).has(value.expectedClass as string))
     invalid("expectedClass is invalid")
+}
+
+function assertPluginSurfaceNode(value: unknown): void {
+  assertExactKeys(value, ["ordinal", "nodeId", "incarnation", "size", "title", "plugin"], "PluginSurfaceCreateSpecV2")
+  parseUint32(value.ordinal)
+  assertDerivedIdV2(value.nodeId, "n_", "nodeId")
+  assertDerivedIdV2(value.incarnation, "ni_", "incarnation")
+  assertSizeV2(value.size)
+  assertString(value.title)
+  assertPluginStateV2(value.plugin)
 }
 
 function assertCreateSetGuard(value: unknown, resources: boolean): void {

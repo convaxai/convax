@@ -113,6 +113,17 @@ export type CanvasAuthoritativeCommandV2 =
       readonly owner: PluginRequirementV2
       readonly plugin: PluginStateEnvelopeV2
     }>
+  | Readonly<{
+      /**
+       * One independent top-level Plugin surface. The Host supplies only the
+       * leased envelope, the derived title, and the manifest size; Canvas owns
+       * the node identity and the deterministic placement.
+       */
+      readonly kind: "plugin-surface-create"
+      readonly title: string
+      readonly size: Readonly<{ width: number; height: number }>
+      readonly plugin: PluginStateEnvelopeV2
+    }>
   | CanvasPluginCreationGroupCommandV2
 
 export interface CanvasPluginCreationGroupCommandV2 {
@@ -137,6 +148,12 @@ export interface CanvasPluginCreationGroupCommandV2 {
     readonly label: string | null
   }>[]
 }
+
+/**
+ * A root Plugin surface has no source node to anchor against, so Canvas uses
+ * the document origin and lets causal placement slide past live obstacles.
+ */
+const CANVAS_PLUGIN_SURFACE_ANCHOR_V2 = Object.freeze({ x: 0, y: 0 })
 
 export interface CanvasClosedIntentConstructionV2 {
   readonly intent: CanvasTypedIntentUnionV2
@@ -236,6 +253,30 @@ function constructIntent(
             instructions: command.instructions,
           }),
           plugin: null,
+        }),
+      }),
+    })
+  }
+  if (command.kind === "plugin-surface-create") {
+    const ordinal = parseUint32("0")
+    const node = derivedNodeRefV2(context, ordinal)
+    return Object.freeze({
+      format: "convax.typed-intent/2",
+      kind: "canvas.plugin.surface.create",
+      guard: Object.freeze({ derivedNode: Object.freeze({ ordinal, node, expectedAbsent: true }) }),
+      body: Object.freeze({
+        placement: Object.freeze({
+          anchor: Object.freeze({ ...CANVAS_PLUGIN_SURFACE_ANCHOR_V2 }),
+          gap: 24 as const,
+          obstacleProjectionDigest: obstacleProjectionDigestV2(snapshot),
+        }),
+        node: Object.freeze({
+          ordinal,
+          nodeId: node.id,
+          incarnation: node.incarnation,
+          size: Object.freeze({ ...command.size }),
+          title: command.title,
+          plugin: command.plugin,
         }),
       }),
     })

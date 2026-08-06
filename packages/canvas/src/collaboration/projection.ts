@@ -123,6 +123,15 @@ function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
         label: node.data.title,
         ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
       }
+    case "plugin-surface":
+      // Without a live Plugin envelope the projected kind stays the bare
+      // `plugin-surface` discriminator, which no renderer claims, so the node
+      // degrades to the unknown-file fallback with its portable state intact.
+      return {
+        kind,
+        label: node.data.title,
+        ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
+      }
     case "placeholder": {
       const manualPending = node.data.owner === "manual-pending"
       const failed = manualPending

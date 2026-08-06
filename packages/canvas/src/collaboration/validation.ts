@@ -418,6 +418,9 @@ export function assertNodeDataV2(value: unknown, label = "NodeDataEnvelopeV2"): 
     assertExactKeys(value, ["format", "kind", "title", "resource"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertResourceRefV2(value.resource)
+  } else if (candidate.kind === "plugin-surface") {
+    assertExactKeys(value, ["format", "kind", "title"], label)
+    assertText(value.title, 0, 4096, `${label}.title`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "generation") {
     assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
@@ -722,6 +725,7 @@ const UNDOABLE_INTENT_KINDS = new Set([
   "canvas.edges.connect/2",
   "canvas.metadata.update/2",
   "canvas.plugin.creation-group.create/2",
+  "canvas.plugin.surface.create",
 ])
 
 export function assertHistoryTemplateV2(value: unknown): asserts value is CanvasHistoryTemplateV2 {

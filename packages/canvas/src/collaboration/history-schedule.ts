@@ -17,6 +17,7 @@ export const CANVAS_UNDOABLE_INTENT_KINDS_V2 = Object.freeze([
   "canvas.edges.connect/2",
   "canvas.metadata.update/2",
   "canvas.plugin.creation-group.create/2",
+  "canvas.plugin.surface.create",
 ] as const)
 
 const TEMPLATE_RANK: Readonly<Record<CanvasHistoryTemplateV2["op"], number>> = Object.freeze({

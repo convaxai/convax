@@ -8,8 +8,8 @@ import { encodeCanvasCanonicalStateV2 } from "./ydoc"
 import { context, newCanvas, U0, VALID_FACTS } from "./test-fixtures.test"
 
 describe("Canvas v2 closed typed-intent admission", () => {
-  test("closes all 22 discriminators and rejects document replacement/version/raw Yjs fields", () => {
-    expect(CANVAS_INTENT_KINDS_V2).toHaveLength(22)
+  test("closes all 23 discriminators and rejects document replacement/version/raw Yjs fields", () => {
+    expect(CANVAS_INTENT_KINDS_V2).toHaveLength(23)
     const intent = nodeCreateIntent()
     expect(() => assertCanvasTypedIntentV2(intent)).not.toThrow()
     expect(decodeCanvasTypedIntentV2(encodeRestrictedJcs(intent))).toEqual(intent)
