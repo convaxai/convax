@@ -22,7 +22,7 @@ export interface AppearancePreferences {
 }
 
 export const defaultAppearancePreferences: AppearancePreferences = Object.freeze({
-  accent: "violet",
+  accent: "lime",
   customAccent: defaultCustomAccentColor,
   highContrast: false,
   reducedMotion: false,
@@ -78,7 +78,7 @@ export function readAppearancePreferences(storage: AppearanceStorageReader): App
     const legacyValue = JSON.parse(legacyRaw) as unknown
     if (!isLegacyStoredAppearancePreferences(legacyValue)) return defaultAppearancePreferences
     return {
-      accent: "violet",
+      accent: "lime",
       customAccent: defaultCustomAccentColor,
       highContrast: legacyValue.highContrast,
       reducedMotion: legacyValue.reducedMotion,

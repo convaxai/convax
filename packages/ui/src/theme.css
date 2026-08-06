@@ -77,9 +77,9 @@
   --ui-text-secondary: #4d554f;
   --ui-text-tertiary: #68716b;
   --ui-text-disabled: #858c87;
-  --ui-brand: #6254c7;
+  --ui-brand: #5c7a00;
   --ui-on-brand: #ffffff;
-  --ui-selection: #5267ca;
+  --ui-selection: #4f6b00;
   --ui-on-selection: #ffffff;
   --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
   --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
@@ -87,7 +87,7 @@
   --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
   --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
   --ui-backdrop: rgb(16 18 17 / 44%);
-  --ui-focus-ring: #5267ca;
+  --ui-focus-ring: #5c7a00;
   --ui-status-danger: #b52f43;
   --ui-status-danger-surface: #f9e4e7;
   --ui-status-warning: #8b5a00;

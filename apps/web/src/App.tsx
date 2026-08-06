@@ -147,10 +147,10 @@ function ProductPreview() {
 
           <svg aria-hidden="true" className="canvas-connections" viewBox="0 0 700 470">
             <defs>
-              <linearGradient id="line-violet" x1="0" x2="1">
-                <stop offset="0" stopColor="#9d8bff" stopOpacity=".22" />
-                <stop offset=".5" stopColor="#9d8bff" stopOpacity=".9" />
-                <stop offset="1" stopColor="#9d8bff" stopOpacity=".28" />
+              <linearGradient id="line-lime" x1="0" x2="1">
+                <stop offset="0" stopColor="#c6f22d" stopOpacity=".22" />
+                <stop offset=".5" stopColor="#c6f22d" stopOpacity=".9" />
+                <stop offset="1" stopColor="#c6f22d" stopOpacity=".28" />
               </linearGradient>
             </defs>
             <path d="M238 117C310 117 280 230 356 230" />
@@ -183,7 +183,7 @@ function ProductPreview() {
 
           <article className="canvas-node canvas-node--direction">
             <span className="node-port node-port--in" />
-            <div className="node-kicker node-kicker--violet">
+            <div className="node-kicker node-kicker--lime">
               <WandSparkles size={11} />
               Direction
             </div>

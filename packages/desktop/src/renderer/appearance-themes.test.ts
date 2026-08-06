@@ -75,7 +75,7 @@ describe("appearance themes", () => {
     expect(Object.keys(appearanceAccents)).toEqual([...appearanceAccentIds])
     expect(appearanceAccentIds).toHaveLength(6)
     expect(resolveAppearanceAccentId("cyan")).toBe("cyan")
-    expect(resolveAppearanceAccentId("removed-accent")).toBe("violet")
+    expect(resolveAppearanceAccentId("removed-accent")).toBe("lime")
 
     for (const themeId of appearancePresetIds) {
       const theme = appAppearanceThemes[themeId]

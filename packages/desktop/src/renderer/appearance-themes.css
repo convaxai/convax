@@ -46,9 +46,9 @@
   --ui-text-secondary: #4d554f;
   --ui-text-tertiary: #68716b;
   --ui-text-disabled: #858c87;
-  --ui-brand: #6254c7;
+  --ui-brand: #5c7a00;
   --ui-on-brand: #ffffff;
-  --ui-selection: #5267ca;
+  --ui-selection: #4f6b00;
   --ui-on-selection: #ffffff;
   --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
   --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
@@ -56,7 +56,7 @@
   --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
   --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
   --ui-backdrop: rgb(16 18 17 / 44%);
-  --ui-focus-ring: #5267ca;
+  --ui-focus-ring: #5c7a00;
   --ui-status-danger: #b52f43;
   --ui-status-danger-surface: #f9e4e7;
   --ui-status-warning: #8b5a00;
@@ -85,9 +85,9 @@
   --ui-text-secondary: #c4c7cd;
   --ui-text-tertiary: #9499a2;
   --ui-text-disabled: #6f747d;
-  --ui-brand: #9992ff;
+  --ui-brand: #c6f22d;
   --ui-on-brand: #111217;
-  --ui-selection: #8e94ff;
+  --ui-selection: #b1de1f;
   --ui-on-selection: #111217;
   --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
   --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
@@ -95,7 +95,7 @@
   --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
   --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
   --ui-backdrop: rgb(0 0 0 / 62%);
-  --ui-focus-ring: #9aa7ff;
+  --ui-focus-ring: #d8ff6b;
   --ui-status-danger: #ff7885;
   --ui-status-danger-surface: #3b1c23;
   --ui-status-warning: #e9b24a;
@@ -123,9 +123,9 @@
   --ui-text-secondary: #d0d6e0;
   --ui-text-tertiary: #8f949d;
   --ui-text-disabled: #62666d;
-  --ui-brand: #929cff;
+  --ui-brand: #c6f22d;
   --ui-on-brand: #0b0c12;
-  --ui-selection: #7f8cff;
+  --ui-selection: #b1de1f;
   --ui-on-selection: #08090a;
   --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
   --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
@@ -133,7 +133,7 @@
   --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
   --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
   --ui-backdrop: rgb(0 0 0 / 62%);
-  --ui-focus-ring: #9aa7ff;
+  --ui-focus-ring: #d8ff6b;
   --ui-status-danger: #ff727d;
   --ui-status-danger-surface: #38181e;
   --ui-status-warning: #f0bf52;
@@ -161,9 +161,9 @@
   --ui-text-secondary: #454c5e;
   --ui-text-tertiary: #626b7e;
   --ui-text-disabled: #81899a;
-  --ui-brand: #5c4db3;
+  --ui-brand: #5c7a00;
   --ui-on-brand: #ffffff;
-  --ui-selection: #3d64b8;
+  --ui-selection: #4f6b00;
   --ui-on-selection: #ffffff;
   --ui-interactive-hover: color-mix(in oklab, var(--ui-brand) 8%, var(--ui-surface-raised));
   --ui-interactive-selected: color-mix(in oklab, var(--ui-brand) 14%, var(--ui-surface-raised));
@@ -171,7 +171,7 @@
   --ui-interactive-pressed: color-mix(in oklab, var(--ui-brand) 20%, var(--ui-surface-raised));
   --ui-drop-target: color-mix(in oklab, var(--ui-brand) 12%, var(--ui-surface-canvas));
   --ui-backdrop: rgb(16 18 17 / 44%);
-  --ui-focus-ring: #3d64b8;
+  --ui-focus-ring: #4f6b00;
   --ui-status-danger: #b52f43;
   --ui-status-danger-surface: #f9e3e8;
   --ui-status-warning: #895900;
@@ -190,22 +190,22 @@
 }
 
 /* Accent is independent from surface theme. Light and dark ramps preserve contrast. */
-:root[data-app-theme="paper"][data-app-accent="violet"],
-:root[data-app-theme="studio"][data-app-accent="violet"] {
-  --ui-brand: #6254c7;
+:root[data-app-theme="paper"][data-app-accent="lime"],
+:root[data-app-theme="studio"][data-app-accent="lime"] {
+  --ui-brand: #5c7a00;
   --ui-on-brand: #ffffff;
-  --ui-selection: #5267ca;
+  --ui-selection: #4f6b00;
   --ui-on-selection: #ffffff;
-  --ui-focus-ring: #6254c7;
+  --ui-focus-ring: #5c7a00;
 }
 
-:root[data-app-theme="graphite"][data-app-accent="violet"],
-:root[data-app-theme="midnight"][data-app-accent="violet"] {
-  --ui-brand: #9992ff;
+:root[data-app-theme="graphite"][data-app-accent="lime"],
+:root[data-app-theme="midnight"][data-app-accent="lime"] {
+  --ui-brand: #c6f22d;
   --ui-on-brand: #111217;
-  --ui-selection: #8e94ff;
+  --ui-selection: #b1de1f;
   --ui-on-selection: #111217;
-  --ui-focus-ring: #a6a0ff;
+  --ui-focus-ring: #d8ff6b;
 }
 
 :root[data-app-theme="paper"][data-app-accent="blue"],

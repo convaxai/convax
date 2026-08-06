@@ -14,8 +14,9 @@
   --ink: #181713;
   --ink-soft: #6f6c64;
   --line: rgba(24, 23, 19, 0.12);
-  --violet: #7557eb;
-  --violet-soft: #e7e0ff;
+  --lime-accent: #c6f22d;
+  --lime-accent-soft: #e7f2b8;
+  --lime-accent-deep: #5c7a00;
   --night: #151514;
   --night-raised: #1d1d1c;
   --page: min(1180px, calc(100vw - 48px));
@@ -52,7 +53,7 @@ button {
 
 ::selection {
   color: #fff;
-  background: var(--violet);
+  background: var(--lime-accent-deep);
 }
 
 .sr-only {
@@ -98,7 +99,7 @@ button {
 }
 
 .brand > span span {
-  color: var(--violet);
+  color: var(--lime-accent-deep);
 }
 
 .brand--inverted {
@@ -218,7 +219,7 @@ main {
   padding: 4px 7px;
   border-radius: 999px;
   color: #fff;
-  background: var(--violet);
+  background: var(--lime-accent-deep);
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.04em;
@@ -234,7 +235,7 @@ main {
 
 .eyebrow {
   margin: 0 0 20px;
-  color: var(--violet);
+  color: var(--lime-accent-deep);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.15em;
@@ -253,7 +254,7 @@ main {
 
 .hero h1 span {
   display: block;
-  color: var(--violet);
+  color: var(--lime-accent-deep);
 }
 
 .hero__description {
@@ -344,7 +345,7 @@ main {
   left: calc(50% - 500px);
   width: 290px;
   height: 290px;
-  background: radial-gradient(circle, rgba(117, 87, 235, 0.08), transparent 68%);
+  background: radial-gradient(circle, rgba(92, 122, 0, 0.1), transparent 68%);
 }
 
 .hero-glow--two {
@@ -393,7 +394,7 @@ main {
 }
 
 .value-grid article:hover > svg {
-  color: var(--violet);
+  color: var(--lime-accent-deep);
   transform: translateX(4px);
 }
 
@@ -680,7 +681,7 @@ main {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(circle at 43% 37%, rgba(117, 87, 235, 0.07), transparent 32%),
+    radial-gradient(circle at 43% 37%, rgba(198, 242, 45, 0.07), transparent 32%),
     radial-gradient(circle at 70% 75%, rgba(237, 162, 112, 0.05), transparent 27%);
   content: "";
   pointer-events: none;
@@ -743,7 +744,7 @@ main {
 }
 
 .canvas-connections .canvas-connection--active {
-  stroke: url("#line-violet");
+  stroke: url("#line-lime");
   stroke-dasharray: 5 5;
   animation: flow-line 4s linear infinite;
 }
@@ -810,8 +811,8 @@ main {
   font-size: 8px;
 }
 
-.node-kicker--violet {
-  color: #b7a9ff;
+.node-kicker--lime {
+  color: #c6f22d;
 }
 
 .node-port {
@@ -1225,8 +1226,8 @@ main {
 }
 
 .story-list-row--selected {
-  color: #413773 !important;
-  background: #ebe6fb;
+  color: #5c7a00 !important;
+  background: #eef2d8;
 }
 
 .story-drag-card {
@@ -1239,9 +1240,9 @@ main {
   align-items: center;
   width: 175px;
   padding: 12px;
-  border: 1px solid rgba(117, 87, 235, 0.26);
+  border: 1px solid rgba(92, 122, 0, 0.26);
   border-radius: 11px;
-  color: #413773;
+  color: #5c7a00;
   background: #f8f5ff;
   box-shadow: 0 20px 45px rgba(68, 54, 120, 0.16);
   transform: rotate(2deg);
@@ -1277,10 +1278,10 @@ main {
   justify-content: center;
   width: 190px;
   height: 80px;
-  border: 1px dashed rgba(117, 87, 235, 0.35);
+  border: 1px dashed rgba(92, 122, 0, 0.35);
   border-radius: 13px;
-  color: #7865bc;
-  background: rgba(238, 233, 255, 0.52);
+  color: #5c7a00;
+  background: rgba(238, 242, 216, 0.52);
   font-size: 10px;
 }
 
@@ -1296,7 +1297,7 @@ main {
 }
 
 .story-visual--canvas > svg .active {
-  stroke: #846be7;
+  stroke: #7ba60f;
   stroke-dasharray: 5 5;
   animation: flow-line 4s linear infinite;
 }
@@ -1355,8 +1356,8 @@ main {
   top: 143px;
   left: 43%;
   width: 130px;
-  border-color: rgba(117, 87, 235, 0.36);
-  color: #4c3f82;
+  border-color: rgba(92, 122, 0, 0.36);
+  color: #5c7a00;
 }
 
 .mini-node--result {
@@ -1465,7 +1466,7 @@ main {
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: #8e74f4;
+  background: #c6f22d;
   animation: pulse-dot 1.8s ease-in-out infinite;
 }
 
@@ -1488,13 +1489,13 @@ main {
 }
 
 .story-agent-composer > svg:last-child {
-  color: #aa98ef;
+  color: #c6f22d;
 }
 
 .story-visual--plugins {
   min-height: 470px;
   background:
-    radial-gradient(circle at 50% 50%, rgba(117, 87, 235, 0.11), transparent 35%),
+    radial-gradient(circle at 50% 50%, rgba(198, 242, 45, 0.12), transparent 35%),
     linear-gradient(rgba(30, 28, 24, 0.035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(30, 28, 24, 0.035) 1px, transparent 1px), #f1eee7;
   background-size:
@@ -1510,7 +1511,7 @@ main {
   left: 50%;
   width: 265px;
   height: 265px;
-  border: 1px dashed rgba(117, 87, 235, 0.25);
+  border: 1px dashed rgba(198, 242, 45, 0.28);
   border-radius: 50%;
   content: "";
   transform: translate(-50%, -50%);
@@ -1614,7 +1615,7 @@ main {
 }
 
 .marketplace-section .eyebrow {
-  color: #a58eff;
+  color: #c6f22d;
 }
 
 .marketplace-section .section-heading--split > p,
@@ -1674,13 +1675,17 @@ main {
   width: 210px;
   height: 210px;
   border-radius: 50%;
-  background: rgba(117, 87, 235, 0.13);
+  background: rgba(198, 242, 45, 0.13);
   content: "";
   filter: blur(3px);
 }
 
 .plugin-card--coral::before {
   background: rgba(220, 109, 76, 0.12);
+}
+
+.plugin-card--orange::before {
+  background: rgba(235, 131, 40, 0.13);
 }
 
 .plugin-card--blue::before {
@@ -1717,13 +1722,18 @@ main {
   width: 40px;
   height: 40px;
   border-radius: 11px;
-  color: #b5a4ff;
-  background: #342d4f;
+  color: #c6f22d;
+  background: #333d17;
 }
 
 .plugin-card--coral .plugin-icon {
   color: #f0a38d;
   background: #4c3029;
+}
+
+.plugin-card--orange .plugin-icon {
+  color: #f0a95f;
+  background: #48311c;
 }
 
 .plugin-card--blue .plugin-icon {
@@ -1924,7 +1934,7 @@ main {
   border-radius: 28px;
   color: #fff;
   background:
-    radial-gradient(circle at 50% -5%, rgba(150, 122, 255, 0.42), transparent 42%),
+    radial-gradient(circle at 50% -5%, rgba(198, 242, 45, 0.28), transparent 42%),
     linear-gradient(145deg, #201b31, #121212 70%);
   text-align: center;
 }
@@ -1970,7 +1980,7 @@ main {
 .final-cta .eyebrow {
   position: relative;
   z-index: 1;
-  color: #ae9bff;
+  color: #c6f22d;
 }
 
 .final-cta h2 {
@@ -2043,7 +2053,7 @@ main {
 }
 
 .site-footer__links a:hover {
-  color: var(--violet);
+  color: var(--lime-accent-deep);
 }
 
 .site-footer__bottom {
@@ -2176,7 +2186,7 @@ main {
   }
 
   .site-nav a:hover {
-    background: rgba(117, 87, 235, 0.07);
+    background: rgba(92, 122, 0, 0.08);
     transform: none;
   }
 
