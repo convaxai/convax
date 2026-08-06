@@ -6,9 +6,9 @@ import { rawDomainDigest } from "./digest"
 import { CollaborationCodecError, CollaborationKernelError } from "./errors"
 import { assertByteLength, assertUint8Array, cloneBytes, sameBytes } from "./binary"
 
-export const LOCAL_CANDIDATE_ORIGIN = Object.freeze({ format: "convax.local-candidate-origin/2" })
-export const ACCEPTED_FRAME_ORIGIN = Object.freeze({ format: "convax.accepted-frame-origin/2" })
-export const RECONSTRUCTION_ORIGIN = Object.freeze({ format: "convax.reconstruction-origin/2" })
+export const LOCAL_CANDIDATE_ORIGIN = Object.freeze({ format: "convax.local-candidate-origin" })
+export const ACCEPTED_FRAME_ORIGIN = Object.freeze({ format: "convax.accepted-frame-origin" })
+export const RECONSTRUCTION_ORIGIN = Object.freeze({ format: "convax.reconstruction-origin" })
 
 export interface YjsDocumentFactory {
   createDocument(): Y.Doc
@@ -31,12 +31,12 @@ export function parseStateVector(value: Uint8Array): StateVector {
 }
 
 export function stateVectorDigest(value: Uint8Array) {
-  return rawDomainDigest("convax.state-vector/2", parseStateVector(value))
+  return rawDomainDigest("convax.state-vector", parseStateVector(value))
 }
 
 export function yjsUpdateDigest(value: Uint8Array) {
   assertByteLength(value, 0, KERNEL_LIMITS.yjsUpdateBytes, "Yjs update-v1 delta")
-  return rawDomainDigest("convax.yjs-update/2", value)
+  return rawDomainDigest("convax.yjs-update", value)
 }
 
 export function encodeFullUpdate(document: Y.Doc, maximum = 32 * 1024 * 1024): Uint8Array {

@@ -113,9 +113,9 @@ function build(): void {
     artifacts: PROTOCOL_SCHEMA_ARTIFACTS,
     channelContractDigest: CURRENT_PROTOCOL_IDENTITIES.channelContractDigest,
     domainRegistry: PROTOCOL_DIGEST_DOMAIN_REGISTRY,
-    format: "convax.protocol-schema-bundle-core/2",
+    format: "convax.protocol-schema-bundle-core",
     limitsDigest: CURRENT_PROTOCOL_IDENTITIES.limitsDigest,
-    protocolMajor: "2",
+    protocolMajor: "current",
     typeNamespaces: PROTOCOL_TYPE_NAMESPACES,
     uriProtocolDigest: CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest,
     yjsWireCodec: YJS_WIRE_CODEC,
@@ -149,7 +149,7 @@ function build(): void {
   builtBundleValue = Object.freeze({
     core,
     coreDigest: protocolDigest,
-    format: "convax.protocol-schema-bundle/2",
+    format: "convax.protocol-schema-bundle",
     protocolDigest,
   })
   builtDescriptor = descriptor

@@ -9,11 +9,11 @@ export function ordinarySha256(bytes: Uint8Array): Digest {
   return bytesToHex(sha256Bytes(bytes))
 }
 
-export function structuredDigest(domain: `${string}/2`, value: unknown): Digest {
+export function structuredDigest(domain: string, value: unknown): Digest {
   return rawDomainDigest(domain, encodeRestrictedJcs(value))
 }
 
-export function rawDomainDigest(domain: `${string}/2`, bytes: Uint8Array): Digest {
+export function rawDomainDigest(domain: string, bytes: Uint8Array): Digest {
   const domainBytes = encoder.encode(domain)
   const preimage = new Uint8Array(domainBytes.byteLength + 1 + bytes.byteLength)
   preimage.set(domainBytes)
@@ -22,13 +22,13 @@ export function rawDomainDigest(domain: `${string}/2`, bytes: Uint8Array): Diges
   return ordinarySha256(preimage)
 }
 
-export function decodedDigestPurpose(domain: `${string}/2`, digest: Digest | string): Uint8Array {
+export function decodedDigestPurpose(domain: string, digest: Digest | string): Uint8Array {
   return hexToBytes(rawDomainDigest(domain, hexToBytes(parseDigest(digest))))
 }
 
 export function canonicalStateDigest(ownerSchemaDigest: Digest | string, exactCanonicalState: Uint8Array): Digest {
   if (!(exactCanonicalState instanceof Uint8Array)) throw new TypeError("Canonical state must be Uint8Array")
-  const domain = encoder.encode("convax.canonical-state/2")
+  const domain = encoder.encode("convax.canonical-state")
   const schema = hexToBytes(parseDigest(ownerSchemaDigest))
   const preimage = new Uint8Array(domain.byteLength + 1 + schema.byteLength + 1 + exactCanonicalState.byteLength)
   preimage.set(domain)

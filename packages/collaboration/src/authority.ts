@@ -48,7 +48,7 @@ export function assertCurrentProtocolAuthority(value: unknown): asserts value is
 
 function parseVerifiedBundle(value: unknown): ProtocolSchemaBundle {
   assertExactKeys(value, ["core", "coreDigest", "format", "protocolDigest"], "ProtocolSchemaBundle")
-  if (value.format !== "convax.protocol-schema-bundle/2") unavailable("ProtocolSchemaBundle format is invalid")
+  if (value.format !== "convax.protocol-schema-bundle") unavailable("ProtocolSchemaBundle format is invalid")
   const core = parseVerifiedBundleCore(value.core)
   const coreDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.protocolSchemaBundleCore, core)
   requireEqual(coreDigest, CURRENT_PROTOCOL_IDENTITIES.protocolDigest, "ProtocolSchemaBundle core digest")
@@ -78,7 +78,7 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
     ],
     "ProtocolSchemaBundleCore",
   )
-  if (value.format !== "convax.protocol-schema-bundle-core/2" || value.protocolMajor !== "2") {
+  if (value.format !== "convax.protocol-schema-bundle-core" || value.protocolMajor !== "current") {
     unavailable("ProtocolSchemaBundle core discriminators are invalid")
   }
   if (!sameBytes(encodeRestrictedJcs(value.artifacts), encodeRestrictedJcs(PROTOCOL_SCHEMA_ARTIFACTS))) {
@@ -89,7 +89,7 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
   }
   assertDenseArray(value.domainRegistry, "ProtocolSchemaBundle domainRegistry")
   const domainRegistry = value.domainRegistry.map((domain) => {
-    if (typeof domain !== "string" || !domain.endsWith("/2")) {
+    if (typeof domain !== "string" || !domain.startsWith("convax.") || domain.includes("/")) {
       unavailable("ProtocolSchemaBundle has an invalid digest domain")
     }
     return domain
@@ -103,7 +103,7 @@ function parseVerifiedBundleCore(value: unknown): ProtocolSchemaBundleCore {
   if (!isPlainDataObject(value.yjsWireCodec)) unavailable("ProtocolSchemaBundle Yjs codec is invalid")
   const yjsWireCodec = Object.freeze({
     applyCodec: requireLiteral(value.yjsWireCodec.applyCodec, "Y.applyUpdate", "Yjs apply codec"),
-    format: requireLiteral(value.yjsWireCodec.format, "convax.yjs-wire-codec/2", "Yjs codec format"),
+    format: requireLiteral(value.yjsWireCodec.format, "convax.yjs-wire-codec", "Yjs codec format"),
     package: requireLiteral(value.yjsWireCodec.package, "yjs", "Yjs package"),
     packageIntegrity: requireLiteral(
       value.yjsWireCodec.packageIntegrity,

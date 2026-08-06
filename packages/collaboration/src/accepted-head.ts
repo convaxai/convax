@@ -97,7 +97,7 @@ export function materializeAcceptedFrame(input: MaterializeAcceptedFrameInput): 
 export function causalHeadRefFromDecodedFrame(frame: DecodedCausalEditFrame): CausalHeadRef {
   const core = frame.header.core
   return Object.freeze({
-    format: "convax.causal-head-ref/2",
+    format: "convax.causal-head-ref",
     actorId: core.actorId,
     actorSequence: core.actorSequence,
     frameDigest: frame.frameDigest,
@@ -142,7 +142,7 @@ export function incomingFrameClosure(
 export function replaceReplicaActorHead(set: ReplicaActorHeadSet, head: CausalHeadRef): ReplicaActorHeadSet {
   const heads = set.heads.filter((item) => item.actorId !== head.actorId).concat(head)
   heads.sort((left, right) => compareDecodedBase64url(left.actorId, right.actorId))
-  return Object.freeze({ format: "convax.replica-actor-head-set/2", scope: set.scope, heads: Object.freeze(heads) })
+  return Object.freeze({ format: "convax.replica-actor-head-set", scope: set.scope, heads: Object.freeze(heads) })
 }
 
 function encodeRestrictedJcsText(value: unknown): string {

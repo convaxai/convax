@@ -14,10 +14,10 @@ import { loadVerifiedTestAuthority } from "./authority.test-support"
 
 const SCHEMA = parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest)
 const descriptor = Object.freeze({
-  format: "convax.owner-canonicalizer-descriptor/2" as const,
+  format: "convax.owner-canonicalizer-descriptor" as const,
   owner: "canvas" as const,
   ownerSchemaDigest: SCHEMA,
-  canonicalStateFormat: "convax.canvas-owner-runtime-test/2",
+  canonicalStateFormat: "convax.canvas-owner-runtime-test",
   canonicalStateCodec: "restricted-jcs-utf8" as const,
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,

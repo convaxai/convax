@@ -70,9 +70,9 @@ const DIGEST_A = ordinarySha256(encoder.encode("a"))
 const DIGEST_B = ordinarySha256(encoder.encode("b"))
 const DIGEST_C = ordinarySha256(encoder.encode("c"))
 const SCHEMA = parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest)
-const CANONICAL_STATE_FORMAT = "convax.canvas-canonical-state/2" as const
+const CANONICAL_STATE_FORMAT = "convax.canvas-canonical-state" as const
 const CANONICALIZER_DESCRIPTOR = Object.freeze({
-  format: "convax.owner-canonicalizer-descriptor/2" as const,
+  format: "convax.owner-canonicalizer-descriptor" as const,
   owner: "canvas" as const,
   ownerSchemaDigest: SCHEMA,
   canonicalStateFormat: CANONICAL_STATE_FORMAT,
@@ -96,12 +96,12 @@ async function fixtureFrame(): Promise<DecodedCausalEditFrame> {
   candidate.getMap("root").set("value", "golden")
   const baseStateVector = encodeStateVector(base)
   const yjsUpdate = encodeCandidateDelta(candidate, baseStateVector)
-  const typedIntentJcs = encodeRestrictedJcs({ format: "convax.typed-intent/2", kind: "set", value: "golden" })
-  const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
+  const typedIntentJcs = encodeRestrictedJcs({ format: "convax.typed-intent", kind: "set", value: "golden" })
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
   const artifacts = parseValidationArtifactSet(requiredValidationArtifacts())
   const artifactDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.validationArtifactSet, artifacts)
   const context = Object.freeze({
-    format: "convax.causal-context/2" as const,
+    format: "convax.causal-context" as const,
     scope: SCOPE,
     baseFrontier: frontier,
     baseFrontierDigest: causalFrontierDigest(frontier),
@@ -122,13 +122,13 @@ async function fixtureFrame(): Promise<DecodedCausalEditFrame> {
   const causalContextJcs = encodeRestrictedJcs(context)
   const intentDigest = typedIntentDigest(typedIntentJcs)
   const evidence = parseActualWriteEvidence({
-    format: "convax.actual-write-evidence/2", scope: SCOPE, owner: "canvas", ownerSchemaDigest: SCHEMA,
+    format: "convax.actual-write-evidence", scope: SCOPE, owner: "canvas", ownerSchemaDigest: SCHEMA,
     intentDigest, changedPaths: ["root/value"], writes: [{ entityKind: "root", entityId: "root", field: "value", valueDigest: ordinarySha256(encoder.encode("golden")) }],
   })
   const actualWriteEvidenceJcs = encodeRestrictedJcs(evidence)
   const canonical = validateCanonicalDelta({ createDocument: () => new Y.Doc() }, encodeFullUpdate(base), baseStateVector, yjsUpdate, REPLICA)
   const core: CausalEditCore = Object.freeze({
-    format: "convax.causal-edit-core/2", scope: SCOPE, actorId: ACTOR, actorSequence: parseUint64("1"),
+    format: "convax.causal-edit-core", scope: SCOPE, actorId: ACTOR, actorSequence: parseUint64("1"),
     predecessorFrameDigest: null, operationId: ZERO_16, lamport: parseUint64("1"), intentKind: "set", intentDigest,
     causalContextDigest: causalContextDigest(context), baseFrontierDigest: context.baseFrontierDigest,
     baseStateVectorDigest: context.baseStateVectorDigest, baseCanonicalStateDigest: context.baseCanonicalStateDigest,
@@ -173,13 +173,13 @@ describe("current protocol authority and codecs", () => {
 
   test("closes the one owner canonicalizer descriptor and its exact digest", () => {
     const emptySchemaDescriptor = { ...CANONICALIZER_DESCRIPTOR, ownerSchemaDigest: parseDigest("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") }
-    expect(new TextDecoder().decode(encodeRestrictedJcs(emptySchemaDescriptor))).toBe('{"canonicalStateCodec":"restricted-jcs-utf8","canonicalStateFormat":"convax.canvas-canonical-state/2","exactBytePolicy":"parse-reencode-byte-equal","format":"convax.owner-canonicalizer-descriptor/2","owner":"canvas","ownerSchemaDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","unknownStatePolicy":"reject"}')
-    expect(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor)).toBe(parseDigest("043f386edb26fd29d9eebffc5d5154dceb263df6451eb3b2228890ce455291cd"))
+    expect(new TextDecoder().decode(encodeRestrictedJcs(emptySchemaDescriptor))).toBe('{"canonicalStateCodec":"restricted-jcs-utf8","canonicalStateFormat":"convax.canvas-canonical-state","exactBytePolicy":"parse-reencode-byte-equal","format":"convax.owner-canonicalizer-descriptor","owner":"canvas","ownerSchemaDigest":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","unknownStatePolicy":"reject"}')
+    expect(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor)).toBe(parseDigest("5779d138e8cb93127fee8fbf7c0d7007486a5f3df36585451762a9c8696ebfaa"))
     expect(ownerCanonicalizerDescriptorDigest({ ...emptySchemaDescriptor })).toBe(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor))
     for (const changed of [
       { ...emptySchemaDescriptor, owner: "project-index" },
       { ...emptySchemaDescriptor, ownerSchemaDigest: DIGEST_A },
-      { ...emptySchemaDescriptor, canonicalStateFormat: "convax.project-index-canonical-state/2" },
+      { ...emptySchemaDescriptor, canonicalStateFormat: "convax.project-index-canonical-state" },
     ]) expect(ownerCanonicalizerDescriptorDigest(changed)).not.toBe(ownerCanonicalizerDescriptorDigest(emptySchemaDescriptor))
     for (const tampered of [
       { ...emptySchemaDescriptor, canonicalStateCodec: "other" },
@@ -193,8 +193,8 @@ describe("current protocol authority and codecs", () => {
     const retained = validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, ownerBytes)
     retained[0] ^= 1
     expect(validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, ownerBytes)).toEqual(ownerBytes)
-    expect(() => validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, encodeRestrictedJcs({ format: "convax.other-state/2" }))).toThrow()
-    expect(() => validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, encoder.encode('{"value":1, "format":"convax.canvas-canonical-state/2"}'))).toThrow()
+    expect(() => validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, encodeRestrictedJcs({ format: "convax.other-state" }))).toThrow()
+    expect(() => validateOwnerCanonicalStateBytes(CANONICALIZER_DESCRIPTOR, encoder.encode('{"value":1, "format":"convax.canvas-canonical-state"}'))).toThrow()
   })
 
   test("matches the frozen scalar, state-vector and Ed25519 negative corpus", async () => {
@@ -205,7 +205,7 @@ describe("current protocol authority and codecs", () => {
     expect(encodeBase64url(hex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"))).toBe("11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo")
     const emptyVector = encodeStateVector(new Y.Doc())
     expect(Array.from(emptyVector)).toEqual([0])
-    expect(stateVectorDigest(emptyVector)).toBe(parseDigest("87e7210e576ca5c626cdd6c1b710f2a2dc8ebe2ae09d6e4dc32d74e98115d7ca"))
+    expect(stateVectorDigest(emptyVector)).toBe(parseDigest("e292d997898cbe962397c003466f384c738ee0f4cffa4dcb22601c3547147563"))
     const verifier = createWebCryptoEd25519Verifier()
     await expect(verifyExactEd25519(verifier, parsePublicKey(encodeBase64url(hex(`01${"00".repeat(31)}`))), SIGNATURE, new Uint8Array(32))).rejects.toThrow("small-order")
     await expect(verifyExactEd25519(verifier, parsePublicKey(encodeBase64url(hex(`ed${"ff".repeat(30)}7f`))), SIGNATURE, new Uint8Array(32))).rejects.toThrow("noncanonical")
@@ -216,12 +216,14 @@ describe("current protocol authority and codecs", () => {
   })
 })
 
-describe("CVXCOLL2 binary closure", () => {
+describe("CVXCOLL binary closure", () => {
   test("has a stable binary golden and rejects header/payload tampering", async () => {
     const verified = await authority()
     const frame = await fixtureFrame()
-    expect(new TextDecoder().decode(frame.bytes.subarray(0, 8))).toBe("CVXCOLL2")
-    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("829f539ea33742c96eb89a5431541c0b7e84e8976e10d2c93065b8bb73b753e6"))
+    const magic = frame.bytes.subarray(0, 8)
+    expect(new TextDecoder().decode(magic.subarray(0, 7))).toBe("CVXCOLL")
+    expect(magic[7]).toBe(0)
+    expect(ordinarySha256(frame.bytes)).toBe(parseDigest("16860ff2784beb5d7f73386ddc7c4ddeea044401d5a77c0c5da3c60a414cc4eb"))
     for (const offset of [30, frame.bytes.length - 1]) {
       const tampered = Uint8Array.from(frame.bytes)
       tampered[offset] ^= 1
@@ -270,17 +272,17 @@ describe("CVXCOLL2 binary closure", () => {
 describe("v2 exact count caps", () => {
   test("accepts frontier/artifact/write exact maxima and rejects +1", () => {
     const heads = Array.from({ length: 257 }, (_, index) => ({
-      format: "convax.causal-head-ref/2", actorId: parseActorId(encodeBase64url(actorBytes(index))), actorSequence: "1",
+      format: "convax.causal-head-ref", actorId: parseActorId(encodeBase64url(actorBytes(index))), actorSequence: "1",
       frameDigest: ordinarySha256(actorBytes(index)), lamport: "1",
     }))
-    expect(parseCausalFrontier({ format: "convax.causal-frontier/2", heads: heads.slice(0, 256) }).heads).toHaveLength(256)
-    expect(() => parseCausalFrontier({ format: "convax.causal-frontier/2", heads })).toThrow()
+    expect(parseCausalFrontier({ format: "convax.causal-frontier", heads: heads.slice(0, 256) }).heads).toHaveLength(256)
+    expect(() => parseCausalFrontier({ format: "convax.causal-frontier", heads })).toThrow()
     const artifacts = Array.from({ length: 65 }, (_, index) => ({ owner: "kernel", format: `artifact-${index.toString().padStart(3, "0")}`, artifactDigest: ordinarySha256(actorBytes(index)) }))
-    expect(parseValidationArtifactSet({ format: "convax.validation-artifact-set/2", artifacts: artifacts.slice(0, 64) }).artifacts).toHaveLength(64)
-    expect(() => parseValidationArtifactSet({ format: "convax.validation-artifact-set/2", artifacts })).toThrow()
+    expect(parseValidationArtifactSet({ format: "convax.validation-artifact-set", artifacts: artifacts.slice(0, 64) }).artifacts).toHaveLength(64)
+    expect(() => parseValidationArtifactSet({ format: "convax.validation-artifact-set", artifacts })).toThrow()
     const paths = Array.from({ length: 2_049 }, (_, index) => `p${index.toString().padStart(4, "0")}`)
     const writes = paths.map((field, index) => ({ entityKind: "node", entityId: "id", field, valueDigest: ordinarySha256(actorBytes(index)) }))
-    const base = { format: "convax.actual-write-evidence/2", scope: SCOPE, owner: "canvas", ownerSchemaDigest: SCHEMA, intentDigest: DIGEST_A }
+    const base = { format: "convax.actual-write-evidence", scope: SCOPE, owner: "canvas", ownerSchemaDigest: SCHEMA, intentDigest: DIGEST_A }
     expect(parseActualWriteEvidence({ ...base, changedPaths: paths.slice(0, 2_048), writes: writes.slice(0, 2_048) }).writes).toHaveLength(2_048)
     expect(() => parseActualWriteEvidence({ ...base, changedPaths: paths, writes: writes.slice(0, 2_048) })).toThrow()
     expect(() => parseActualWriteEvidence({ ...base, changedPaths: paths.slice(0, 2_048), writes })).toThrow()
@@ -294,8 +296,8 @@ describe("v2 exact count caps", () => {
       { kind: "replica-edit-authorization" as const, digest: DIGEST_C },
     ]
     const context = {
-      format: "convax.causal-context/2", scope: SCOPE, baseFrontier: { format: "convax.causal-frontier/2", heads: [] },
-      baseFrontierDigest: causalFrontierDigest({ format: "convax.causal-frontier/2", heads: [] }), baseStateVectorDigest: DIGEST_A,
+      format: "convax.causal-context", scope: SCOPE, baseFrontier: { format: "convax.causal-frontier", heads: [] },
+      baseFrontierDigest: causalFrontierDigest({ format: "convax.causal-frontier", heads: [] }), baseStateVectorDigest: DIGEST_A,
       baseCanonicalStateDigest: DIGEST_B, signerAuthority: { memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ZERO_16, replicaAuthorizationEpoch: ZERO_16, membershipSnapshotDigest: DIGEST_A, replicaActorCredentialCoreDigest: DIGEST_B, replicaEditAuthorizationCoreDigest: DIGEST_C },
       validationArtifactSetDigest: DIGEST_C,
     }
@@ -311,8 +313,8 @@ function actorBytes(index: number): Uint8Array {
 }
 
 function sizedTypedIntent(size: number): Uint8Array {
-  const base = encodeRestrictedJcs({ format: "convax.typed-intent/2", kind: "x", padding: "" })
-  return encodeRestrictedJcs({ format: "convax.typed-intent/2", kind: "x", padding: "x".repeat(size - base.byteLength) })
+  const base = encodeRestrictedJcs({ format: "convax.typed-intent", kind: "x", padding: "" })
+  return encodeRestrictedJcs({ format: "convax.typed-intent", kind: "x", padding: "x".repeat(size - base.byteLength) })
 }
 
 function hex(value: string): Uint8Array {
@@ -325,7 +327,7 @@ function canonicalStateBytes(value: unknown): Uint8Array {
 
 function requiredValidationArtifacts() {
   return {
-    format: "convax.validation-artifact-set/2" as const,
+    format: "convax.validation-artifact-set" as const,
     artifacts: [
       { owner: "canvas" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[0].format, artifactDigest: PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest },
       { owner: "control-plane" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[2].format, artifactDigest: PROTOCOL_SCHEMA_ARTIFACTS[2].artifactDigest },

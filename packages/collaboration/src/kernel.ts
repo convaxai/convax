@@ -301,7 +301,7 @@ export class CollaborationKernel {
     const intent = requireDecodedIntent(this.options.owner.protocolPort.decodeIntent(cloneBytes(typedIntentJcs, "typed-intent JCS")))
     const intentDigest = this.codec.typedIntentDigest(typedIntentJcs)
     const context: CausalContext = this.codec.parseCausalContext({
-      format: "convax.causal-context/2",
+      format: "convax.causal-context",
       scope: this.options.scope,
       baseFrontier: this.head.frontier,
       baseFrontierDigest: this.head.frontierDigest,
@@ -349,7 +349,7 @@ export class CollaborationKernel {
         const postStateVector = canonical.postStateVector
         const postCanonicalStateDigest = ownerCanonicalDigest(this.options.owner.protocolPort, canonical.document)
         const core: CausalEditCore = Object.freeze({
-          format: "convax.causal-edit-core/2",
+          format: "convax.causal-edit-core",
           scope: this.options.scope,
           actorId: authority.actorId,
           actorSequence: authority.actorSequence,
@@ -621,7 +621,7 @@ export class CollaborationKernel {
     assertFrameRefMirror(journal.ref, ref, "Journal append")
     parseDigest(journal.journalRecordDigest)
     assertNotAborted(signal)
-    const frontierDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.causalFrontier, { format: "convax.causal-frontier/2", heads: [head] })
+    const frontierDigest = structuredDigest(KERNEL_DIGEST_DOMAINS.causalFrontier, { format: "convax.causal-frontier", heads: [head] })
     return this.commitReplicaHead(ref, journal, frontierDigest)
   }
 
@@ -699,7 +699,7 @@ export class CollaborationKernel {
     canonicalStateDigest: Digest,
     durableHeadDigest: Digest,
   ): void {
-    const frontier = parseCausalFrontier({ format: "convax.causal-frontier/2", heads: frontierHeads })
+    const frontier = parseCausalFrontier({ format: "convax.causal-frontier", heads: frontierHeads })
     const actorHeads = replaceReplicaActorHead(this.head.actorHeads, causalHeadRefFromDecodedFrame(frame))
     this.head = Object.freeze({
       scope: this.options.scope,

@@ -35,7 +35,7 @@ export function parseReplicaCheckpointCore(value: unknown): ReplicaCheckpointCor
     "fullUpdateDigest", "fullUpdateByteLength", "protocolDigest", "schemaDigest", "canonicalizerDigest",
     "validationArtifactSetDigest",
   ], "ReplicaCheckpointCore")
-  if (value.format !== "convax.replica-checkpoint-core/2") invalid("ReplicaCheckpointCore format is invalid")
+  if (value.format !== "convax.replica-checkpoint-core") invalid("ReplicaCheckpointCore format is invalid")
   return Object.freeze({
     format: value.format,
     scope: parseDocumentScope(value.scope),
@@ -61,7 +61,7 @@ export function parseReplicaCheckpointCore(value: unknown): ReplicaCheckpointCor
 
 export function parseReplicaCheckpoint(value: unknown): ReplicaCheckpoint {
   assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCheckpoint")
-  if (value.format !== "convax.replica-checkpoint/2") invalid("ReplicaCheckpoint format is invalid")
+  if (value.format !== "convax.replica-checkpoint") invalid("ReplicaCheckpoint format is invalid")
   const core = parseReplicaCheckpointCore(value.core)
   const coreDigest = parseDigest(value.coreDigest)
   if (coreDigest !== replicaCheckpointCoreDigest(core)) invalid("ReplicaCheckpoint core digest mismatches")
@@ -75,7 +75,7 @@ export function parseCheckpointContentCertificateCore(value: unknown): Checkpoin
     "schemaDigest", "canonicalizerDigest", "validationArtifactSetDigest", "trustBundleDigest", "contentStatus",
     "serviceKeyPurpose", "serviceKeyId",
   ], "CheckpointContentCertificateCore")
-  if (value.format !== "convax.checkpoint-content-certificate-core/2" || value.contentStatus !== "service-validated-causal-closure" || value.serviceKeyPurpose !== "content-attestation") {
+  if (value.format !== "convax.checkpoint-content-certificate-core" || value.contentStatus !== "service-validated-causal-closure" || value.serviceKeyPurpose !== "content-attestation") {
     invalid("CheckpointContentCertificateCore discriminators are invalid")
   }
   assertBoundedNfcString(value.serviceKeyId, 1, 256, "content certificate serviceKeyId")
@@ -102,7 +102,7 @@ export function parseCheckpointContentCertificateCore(value: unknown): Checkpoin
 
 export function parseCheckpointContentCertificate(value: unknown): CheckpointContentCertificate {
   assertExactKeys(value, ["format", "core", "coreDigest", "serviceSignature"], "CheckpointContentCertificate")
-  if (value.format !== "convax.checkpoint-content-certificate/2") invalid("CheckpointContentCertificate format is invalid")
+  if (value.format !== "convax.checkpoint-content-certificate") invalid("CheckpointContentCertificate format is invalid")
   const core = parseCheckpointContentCertificateCore(value.core)
   const coreDigest = parseDigest(value.coreDigest)
   if (coreDigest !== checkpointContentCertificateCoreDigest(core)) invalid("Checkpoint content certificate core digest mismatches")
@@ -114,7 +114,7 @@ export function parseStableCheckpointSetCore(value: unknown): StableCheckpointSe
     "format", "scope", "priorSetDigest", "contentCertificateDigests", "mergedFrontierDigest",
     "actorHeadBoundaryDigest", "membershipSnapshotDigest", "protocolDigest", "validationArtifactSetDigest",
   ], "StableCheckpointSetCore")
-  if (value.format !== "convax.stable-checkpoint-set-core/2") invalid("StableCheckpointSetCore format is invalid")
+  if (value.format !== "convax.stable-checkpoint-set-core") invalid("StableCheckpointSetCore format is invalid")
   return Object.freeze({
     format: value.format,
     scope: parseDocumentScope(value.scope),
@@ -133,7 +133,7 @@ export function parseReplicaCausalFloorAckCore(value: unknown): ReplicaCausalFlo
     "format", "stableSetCoreDigest", "replicaId", "actorId", "replicaActorCredentialDigest",
     "actorHeadAtAck", "durableCheckpoint", "validatedExactClosure", "installedMonotonicFloor",
   ], "ReplicaCausalFloorAckCore")
-  if (value.format !== "convax.replica-causal-floor-ack-core/2" || value.durableCheckpoint !== true || value.validatedExactClosure !== true || value.installedMonotonicFloor !== true) {
+  if (value.format !== "convax.replica-causal-floor-ack-core" || value.durableCheckpoint !== true || value.validatedExactClosure !== true || value.installedMonotonicFloor !== true) {
     invalid("ReplicaCausalFloorAckCore proof flags are invalid")
   }
   return Object.freeze({
@@ -151,7 +151,7 @@ export function parseReplicaCausalFloorAckCore(value: unknown): ReplicaCausalFlo
 
 export function parseReplicaCausalFloorAck(value: unknown): ReplicaCausalFloorAck {
   assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCausalFloorAck")
-  if (value.format !== "convax.replica-causal-floor-ack/2") invalid("ReplicaCausalFloorAck format is invalid")
+  if (value.format !== "convax.replica-causal-floor-ack") invalid("ReplicaCausalFloorAck format is invalid")
   const core = parseReplicaCausalFloorAckCore(value.core)
   const coreDigest = parseDigest(value.coreDigest)
   if (coreDigest !== replicaCausalFloorAckCoreDigest(core)) invalid("Replica floor ACK core digest mismatches")
@@ -162,7 +162,7 @@ export function parsePrunableCheckpointSetCertificateCore(value: unknown): Pruna
   assertExactKeys(value, [
     "format", "stableSetCore", "floorAckDigests", "contentStatus", "trustBundleDigest", "serviceKeyPurpose", "serviceKeyId",
   ], "PrunableCheckpointSetCertificateCore")
-  if (value.format !== "convax.prunable-checkpoint-set-certificate-core/2" || value.contentStatus !== "service-validated-and-all-editors-acknowledged" || value.serviceKeyPurpose !== "checkpoint-stability") {
+  if (value.format !== "convax.prunable-checkpoint-set-certificate-core" || value.contentStatus !== "service-validated-and-all-editors-acknowledged" || value.serviceKeyPurpose !== "checkpoint-stability") {
     invalid("PrunableCheckpointSetCertificateCore discriminators are invalid")
   }
   assertBoundedNfcString(value.serviceKeyId, 1, 256, "prunable certificate serviceKeyId")
@@ -179,7 +179,7 @@ export function parsePrunableCheckpointSetCertificateCore(value: unknown): Pruna
 
 export function parsePrunableCheckpointSetCertificate(value: unknown): PrunableCheckpointSetCertificate {
   assertExactKeys(value, ["format", "core", "coreDigest", "serviceSignature"], "PrunableCheckpointSetCertificate")
-  if (value.format !== "convax.prunable-checkpoint-set-certificate/2") invalid("PrunableCheckpointSetCertificate format is invalid")
+  if (value.format !== "convax.prunable-checkpoint-set-certificate") invalid("PrunableCheckpointSetCertificate format is invalid")
   const core = parsePrunableCheckpointSetCertificateCore(value.core)
   const coreDigest = parseDigest(value.coreDigest)
   if (coreDigest !== prunableCheckpointSetCertificateCoreDigest(core)) invalid("Prunable checkpoint certificate core digest mismatches")

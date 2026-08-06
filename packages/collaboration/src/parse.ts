@@ -72,7 +72,7 @@ export function parseDocumentScope(value: unknown): DocumentScope {
 
 export function parsePortableStamp(value: unknown): PortableStamp {
   assertExactKeys(value, ["format", "lamport", "actorId", "operationId", "writeOrdinal"], "PortableStamp")
-  if (value.format !== "convax.portable-stamp/2") failCodec("PortableStamp format is invalid")
+  if (value.format !== "convax.portable-stamp") failCodec("PortableStamp format is invalid")
   return Object.freeze({
     format: value.format,
     lamport: parseUint64(value.lamport),
@@ -84,7 +84,7 @@ export function parsePortableStamp(value: unknown): PortableStamp {
 
 export function parseCausalHeadRef(value: unknown): CausalHeadRef {
   assertExactKeys(value, ["format", "actorId", "actorSequence", "frameDigest", "lamport"], "CausalHeadRef")
-  if (value.format !== "convax.causal-head-ref/2") failCodec("CausalHeadRef format is invalid")
+  if (value.format !== "convax.causal-head-ref") failCodec("CausalHeadRef format is invalid")
   const actorSequence = parseUint64(value.actorSequence)
   if (actorSequence === "0") failCodec("Causal actor sequence starts at one")
   return Object.freeze({
@@ -98,7 +98,7 @@ export function parseCausalHeadRef(value: unknown): CausalHeadRef {
 
 export function parseCausalFrontier(value: unknown): CausalFrontier {
   assertExactKeys(value, ["format", "heads"], "CausalFrontier")
-  if (value.format !== "convax.causal-frontier/2") failCodec("CausalFrontier format is invalid")
+  if (value.format !== "convax.causal-frontier") failCodec("CausalFrontier format is invalid")
   assertDenseArray(value.heads, "CausalFrontier heads")
   if (value.heads.length > KERNEL_LIMITS.causalFrontierHeads) failCodec("Causal frontier exceeds 256 heads")
   const heads = value.heads.map(parseCausalHeadRef)
@@ -108,7 +108,7 @@ export function parseCausalFrontier(value: unknown): CausalFrontier {
 
 export function parseReplicaActorHeadSet(value: unknown): ReplicaActorHeadSet {
   assertExactKeys(value, ["format", "scope", "heads"], "ReplicaActorHeadSet")
-  if (value.format !== "convax.replica-actor-head-set/2") failCodec("ReplicaActorHeadSet format is invalid")
+  if (value.format !== "convax.replica-actor-head-set") failCodec("ReplicaActorHeadSet format is invalid")
   assertDenseArray(value.heads, "ReplicaActorHeadSet heads")
   if (value.heads.length > KERNEL_LIMITS.causalFrontierHeads) failCodec("Replica actor heads exceed 256")
   const heads = value.heads.map(parseCausalHeadRef)
@@ -121,7 +121,7 @@ export function parseCausalContext(value: unknown): CausalContext {
     "format", "scope", "baseFrontier", "baseFrontierDigest", "baseStateVectorDigest",
     "baseCanonicalStateDigest", "signerAuthority", "dependencies", "validationArtifactSetDigest",
   ], "CausalContext")
-  if (value.format !== "convax.causal-context/2") failCodec("CausalContext format is invalid")
+  if (value.format !== "convax.causal-context") failCodec("CausalContext format is invalid")
   assertDenseArray(value.dependencies, "CausalContext dependencies")
   if (value.dependencies.length > KERNEL_LIMITS.causalDependencyRefs) failCodec("Causal dependencies exceed 256 refs")
   const dependencies = value.dependencies.map(parseDependency)
@@ -145,7 +145,7 @@ export function parseCausalContext(value: unknown): CausalContext {
 
 export function parseActualWriteEvidence(value: unknown): ActualWriteEvidence {
   assertExactKeys(value, ["format", "scope", "owner", "ownerSchemaDigest", "intentDigest", "changedPaths", "writes"], "ActualWriteEvidence")
-  if (value.format !== "convax.actual-write-evidence/2") failCodec("ActualWriteEvidence format is invalid")
+  if (value.format !== "convax.actual-write-evidence") failCodec("ActualWriteEvidence format is invalid")
   if (value.owner !== "project-index" && value.owner !== "canvas") failCodec("ActualWriteEvidence owner is invalid")
   assertDenseArray(value.changedPaths, "ActualWriteEvidence changedPaths")
   assertDenseArray(value.writes, "ActualWriteEvidence writes")
@@ -172,7 +172,7 @@ export function parseActualWriteEvidence(value: unknown): ActualWriteEvidence {
 
 export function parseValidationArtifactSet(value: unknown): ValidationArtifactSet {
   assertExactKeys(value, ["format", "artifacts"], "ValidationArtifactSet")
-  if (value.format !== "convax.validation-artifact-set/2") failCodec("ValidationArtifactSet format is invalid")
+  if (value.format !== "convax.validation-artifact-set") failCodec("ValidationArtifactSet format is invalid")
   assertDenseArray(value.artifacts, "ValidationArtifactSet artifacts")
   if (value.artifacts.length > KERNEL_LIMITS.validationArtifactRefs) failCodec("Validation artifacts exceed 64 refs")
   const artifacts = value.artifacts.map(parseValidationArtifact)
@@ -182,7 +182,7 @@ export function parseValidationArtifactSet(value: unknown): ValidationArtifactSe
 
 export function parseCausalEditCore(value: unknown): CausalEditCore {
   assertExactKeys(value, CORE_KEYS, "CausalEditCore")
-  if (value.format !== "convax.causal-edit-core/2") failFrame("CausalEditCore format is invalid")
+  if (value.format !== "convax.causal-edit-core") failFrame("CausalEditCore format is invalid")
   const actorSequence = parseUint64(value.actorSequence)
   if (actorSequence === "0") failFrame("Causal edit actor sequence starts at one")
   if (value.predecessorFrameDigest !== null && typeof value.predecessorFrameDigest !== "string") failFrame("Causal predecessor is invalid")
@@ -225,7 +225,7 @@ export function parseCausalEditCore(value: unknown): CausalEditCore {
 
 export function parseCausalEditFrameHeader(value: unknown): CausalEditFrameHeader {
   assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "CausalEditFrameHeader")
-  if (value.format !== "convax.causal-edit-frame/2") failFrame("Causal edit frame header format is invalid")
+  if (value.format !== "convax.causal-edit-frame") failFrame("Causal edit frame header format is invalid")
   return Object.freeze({
     format: value.format,
     core: parseCausalEditCore(value.core),

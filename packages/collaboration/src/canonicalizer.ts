@@ -7,7 +7,7 @@ import { structuredDigest } from "./digest"
 import { failCodec } from "./errors"
 import { assertExactKeys, assertNfcScalarString, decodeRestrictedJcs, encodeRestrictedJcs, isPlainDataObject, utf8ByteLength } from "./jcs"
 
-const CANONICAL_STATE_FORMAT = /^convax\.[a-z0-9][a-z0-9.-]*\/2$/u
+const CANONICAL_STATE_FORMAT = /^convax\.[a-z0-9][a-z0-9.-]*$/u
 
 export function parseOwnerCanonicalizerDescriptor(value: unknown): OwnerCanonicalizerDescriptor {
   const normalized = decodeRestrictedJcs(encodeRestrictedJcs(value))
@@ -20,7 +20,7 @@ export function parseOwnerCanonicalizerDescriptor(value: unknown): OwnerCanonica
     "exactBytePolicy",
     "unknownStatePolicy",
   ], "OwnerCanonicalizerDescriptor")
-  if (normalized.format !== "convax.owner-canonicalizer-descriptor/2") failCodec("Owner canonicalizer descriptor format is invalid")
+  if (normalized.format !== "convax.owner-canonicalizer-descriptor") failCodec("Owner canonicalizer descriptor format is invalid")
   if (normalized.owner !== "canvas" && normalized.owner !== "project-index") failCodec("Owner canonicalizer descriptor owner is invalid")
   assertNfcScalarString(normalized.canonicalStateFormat, "Owner canonical state format")
   if (utf8ByteLength(normalized.canonicalStateFormat) < 1 || utf8ByteLength(normalized.canonicalStateFormat) > 128 || !CANONICAL_STATE_FORMAT.test(normalized.canonicalStateFormat)) {

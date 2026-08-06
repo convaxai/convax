@@ -44,7 +44,7 @@ describe("checkpoint and causal-floor primitives", () => {
   test("enforces the exact eight-parent and 32 MiB snapshot boundaries", () => {
     const parents = Array.from({ length: 9 }, (_, index) => digest(`parent-${index}`)).sort()
     const base = {
-      format: "convax.replica-checkpoint-core/2", scope, checkpointId: id(4), authorMemberId: parseMemberId(id(5)),
+      format: "convax.replica-checkpoint-core", scope, checkpointId: id(4), authorMemberId: parseMemberId(id(5)),
       authorReplicaId: replica, authorActorId: actor, authorAuthorizationDigest: digest("credential"),
       directParentCheckpointDigests: parents.slice(0, 8), baseFrontierDigest: digest("base-frontier"),
       computedFrontierDigest: digest("computed-frontier"), actorHeadBoundaryDigest: digest("actor-boundary"),
@@ -58,7 +58,7 @@ describe("checkpoint and causal-floor primitives", () => {
 
     const core = parseReplicaCheckpointCore(base)
     const checkpoint = {
-      format: "convax.replica-checkpoint/2" as const,
+      format: "convax.replica-checkpoint" as const,
       core,
       coreDigest: replicaCheckpointCoreDigest(core),
       replicaSignature: signature,
@@ -71,7 +71,7 @@ describe("checkpoint and causal-floor primitives", () => {
 
   test("requires both exact content certificates and exact active-editor floor ACK coverage", () => {
     const contentCore = {
-      format: "convax.checkpoint-content-certificate-core/2" as const, scope, checkpointDigest: digest("checkpoint"),
+      format: "convax.checkpoint-content-certificate-core" as const, scope, checkpointDigest: digest("checkpoint"),
       parentCertificateDigests: [], computedFrontierDigest: digest("frontier"), actorHeadBoundaryDigest: digest("boundary"),
       stateVectorDigest: digest("vector"), canonicalStateDigest: digest("state"), fullUpdateDigest: digest("update"),
       protocolDigest, schemaDigest: digest("schema"), canonicalizerDigest: digest("canonicalizer"), validationArtifactSetDigest: digest("artifacts"),
@@ -79,29 +79,29 @@ describe("checkpoint and causal-floor primitives", () => {
       serviceKeyPurpose: "content-attestation" as const, serviceKeyId: "content-key",
     }
     const content: CheckpointContentCertificate = {
-      format: "convax.checkpoint-content-certificate/2", core: contentCore,
+      format: "convax.checkpoint-content-certificate", core: contentCore,
       coreDigest: checkpointContentCertificateCoreDigest(contentCore), serviceSignature: signature,
     }
     const contentObjectDigest = digest("content-certificate-object")
     const stable: StableCheckpointSetCore = {
-      format: "convax.stable-checkpoint-set-core/2", scope, priorSetDigest: null, contentCertificateDigests: [contentObjectDigest],
+      format: "convax.stable-checkpoint-set-core", scope, priorSetDigest: null, contentCertificateDigests: [contentObjectDigest],
       mergedFrontierDigest: content.core.computedFrontierDigest, actorHeadBoundaryDigest: content.core.actorHeadBoundaryDigest,
       membershipSnapshotDigest: digest("membership"), protocolDigest, validationArtifactSetDigest: content.core.validationArtifactSetDigest,
     }
     const ackCore = parseReplicaCausalFloorAckCore({
-      format: "convax.replica-causal-floor-ack-core/2", stableSetCoreDigest: stableCheckpointSetCoreDigest(stable),
+      format: "convax.replica-causal-floor-ack-core", stableSetCoreDigest: stableCheckpointSetCoreDigest(stable),
       replicaId: replica, actorId: actor, replicaActorCredentialDigest: digest("credential"), actorHeadAtAck: null,
       durableCheckpoint: true, validatedExactClosure: true, installedMonotonicFloor: true,
     })
-    const ack: ReplicaCausalFloorAck = { format: "convax.replica-causal-floor-ack/2", core: ackCore, coreDigest: replicaCausalFloorAckCoreDigest(ackCore), replicaSignature: signature }
+    const ack: ReplicaCausalFloorAck = { format: "convax.replica-causal-floor-ack", core: ackCore, coreDigest: replicaCausalFloorAckCoreDigest(ackCore), replicaSignature: signature }
     const ackObjectDigest = digest("floor-ack-object")
     const certificateCore = {
-      format: "convax.prunable-checkpoint-set-certificate-core/2" as const, stableSetCore: stable, floorAckDigests: [ackObjectDigest],
+      format: "convax.prunable-checkpoint-set-certificate-core" as const, stableSetCore: stable, floorAckDigests: [ackObjectDigest],
       contentStatus: "service-validated-and-all-editors-acknowledged" as const, trustBundleDigest: digest("trust"),
       serviceKeyPurpose: "checkpoint-stability" as const, serviceKeyId: "stability-key",
     }
     const certificate: PrunableCheckpointSetCertificate = {
-      format: "convax.prunable-checkpoint-set-certificate/2", core: certificateCore,
+      format: "convax.prunable-checkpoint-set-certificate", core: certificateCore,
       coreDigest: prunableCheckpointSetCertificateCoreDigest(certificateCore), serviceSignature: signature,
     }
     const contentRef = { certificateDigest: contentObjectDigest, certificate: content }

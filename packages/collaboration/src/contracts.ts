@@ -16,18 +16,18 @@ import type {
 export interface ProtocolSchemaArtifact {
   readonly artifactDigest: Digest
   readonly format:
-    | "convax.canvas-protocol-schema/2"
-    | "convax.collaboration-kernel-protocol-schema/2"
-    | "convax.control-plane-protocol-schema/2"
-    | "convax.project-persistence-protocol-schema/2"
+    | "convax.canvas-protocol-schema"
+    | "convax.collaboration-kernel-protocol-schema"
+    | "convax.control-plane-protocol-schema"
+    | "convax.project-persistence-protocol-schema"
   readonly name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence"
 }
 
 export type ProtocolSchemaArtifactManifest = readonly [
-  ProtocolSchemaArtifact & { readonly name: "canvas-schema"; readonly format: "convax.canvas-protocol-schema/2" },
-  ProtocolSchemaArtifact & { readonly name: "collaboration-kernel"; readonly format: "convax.collaboration-kernel-protocol-schema/2" },
-  ProtocolSchemaArtifact & { readonly name: "control-plane"; readonly format: "convax.control-plane-protocol-schema/2" },
-  ProtocolSchemaArtifact & { readonly name: "project-persistence"; readonly format: "convax.project-persistence-protocol-schema/2" },
+  ProtocolSchemaArtifact & { readonly name: "canvas-schema"; readonly format: "convax.canvas-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "collaboration-kernel"; readonly format: "convax.collaboration-kernel-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "control-plane"; readonly format: "convax.control-plane-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "project-persistence"; readonly format: "convax.project-persistence-protocol-schema" },
 ]
 
 export interface ProtocolTypeNamespace {
@@ -45,7 +45,7 @@ export type ProtocolTypeNamespaceManifest = readonly [
 
 export interface YjsWireCodec {
   readonly applyCodec: "Y.applyUpdate"
-  readonly format: "convax.yjs-wire-codec/2"
+  readonly format: "convax.yjs-wire-codec"
   readonly package: "yjs"
   readonly packageIntegrity: "sha512-Eq+5BRfbeGyqGVrTJL3bEcr8gKkxPuyuoHmAwpk52fDb8kOVMrfVSTRPd6yiGgX5Fskb96qCRjzjbRjrL4YEnw=="
   readonly stateVectorCodec: "Y.encodeStateVector"
@@ -58,9 +58,9 @@ export interface ProtocolSchemaBundleCore {
   readonly artifacts: ProtocolSchemaArtifactManifest
   readonly channelContractDigest: Digest
   readonly domainRegistry: readonly string[]
-  readonly format: "convax.protocol-schema-bundle-core/2"
+  readonly format: "convax.protocol-schema-bundle-core"
   readonly limitsDigest: Digest
-  readonly protocolMajor: "2"
+  readonly protocolMajor: "current"
   readonly typeNamespaces: ProtocolTypeNamespaceManifest
   readonly uriProtocolDigest: Digest
   readonly yjsWireCodec: YjsWireCodec
@@ -69,7 +69,7 @@ export interface ProtocolSchemaBundleCore {
 export interface ProtocolSchemaBundle {
   readonly core: ProtocolSchemaBundleCore
   readonly coreDigest: Digest
-  readonly format: "convax.protocol-schema-bundle/2"
+  readonly format: "convax.protocol-schema-bundle"
   readonly protocolDigest: Digest
 }
 
@@ -84,7 +84,7 @@ export interface DocumentScope {
 export type DocumentScopeDigest = Digest
 
 export interface PortableStamp {
-  readonly format: "convax.portable-stamp/2"
+  readonly format: "convax.portable-stamp"
   readonly lamport: Uint64
   readonly actorId: ActorId
   readonly operationId: Id128
@@ -92,7 +92,7 @@ export interface PortableStamp {
 }
 
 export interface CausalHeadRef {
-  readonly format: "convax.causal-head-ref/2"
+  readonly format: "convax.causal-head-ref"
   readonly actorId: ActorId
   readonly actorSequence: Uint64
   readonly frameDigest: Digest
@@ -100,12 +100,12 @@ export interface CausalHeadRef {
 }
 
 export interface CausalFrontier {
-  readonly format: "convax.causal-frontier/2"
+  readonly format: "convax.causal-frontier"
   readonly heads: readonly CausalHeadRef[]
 }
 
 export interface ReplicaActorHeadSet {
-  readonly format: "convax.replica-actor-head-set/2"
+  readonly format: "convax.replica-actor-head-set"
   readonly scope: DocumentScope
   readonly heads: readonly CausalHeadRef[]
 }
@@ -140,7 +140,7 @@ export interface CausalSignerAuthority {
 }
 
 export interface CausalContext {
-  readonly format: "convax.causal-context/2"
+  readonly format: "convax.causal-context"
   readonly scope: DocumentScope
   readonly baseFrontier: CausalFrontier
   readonly baseFrontierDigest: Digest
@@ -156,7 +156,7 @@ export type DocumentOwnerKind = "project-index" | "canvas"
 export type OwnerCanonicalStateCodec = "restricted-jcs-utf8"
 
 export interface OwnerCanonicalizerDescriptor {
-  readonly format: "convax.owner-canonicalizer-descriptor/2"
+  readonly format: "convax.owner-canonicalizer-descriptor"
   readonly owner: DocumentOwnerKind
   readonly ownerSchemaDigest: Digest
   readonly canonicalStateFormat: string
@@ -173,7 +173,7 @@ export interface ActualWrite {
 }
 
 export interface ActualWriteEvidence {
-  readonly format: "convax.actual-write-evidence/2"
+  readonly format: "convax.actual-write-evidence"
   readonly scope: DocumentScope
   readonly owner: DocumentOwnerKind
   readonly ownerSchemaDigest: Digest
@@ -191,12 +191,12 @@ export interface ValidationArtifactRef {
 }
 
 export interface ValidationArtifactSet {
-  readonly format: "convax.validation-artifact-set/2"
+  readonly format: "convax.validation-artifact-set"
   readonly artifacts: readonly ValidationArtifactRef[]
 }
 
 export interface CausalEditCore {
-  readonly format: "convax.causal-edit-core/2"
+  readonly format: "convax.causal-edit-core"
   readonly scope: DocumentScope
   readonly actorId: ActorId
   readonly actorSequence: Uint64
@@ -228,7 +228,7 @@ export interface CausalEditCore {
 }
 
 export interface CausalEditFrameHeader {
-  readonly format: "convax.causal-edit-frame/2"
+  readonly format: "convax.causal-edit-frame"
   readonly core: CausalEditCore
   readonly coreDigest: Digest
   readonly replicaSignature: Signature
@@ -824,7 +824,7 @@ export interface RemoteTransferAttemptBindingFactory {
 }
 
 export interface ReplicaCheckpointCore {
-  readonly format: "convax.replica-checkpoint-core/2"
+  readonly format: "convax.replica-checkpoint-core"
   readonly scope: DocumentScope
   readonly checkpointId: Id128
   readonly authorMemberId: MemberId
@@ -846,14 +846,14 @@ export interface ReplicaCheckpointCore {
 }
 
 export interface ReplicaCheckpoint {
-  readonly format: "convax.replica-checkpoint/2"
+  readonly format: "convax.replica-checkpoint"
   readonly core: ReplicaCheckpointCore
   readonly coreDigest: Digest
   readonly replicaSignature: Signature
 }
 
 export interface CheckpointContentCertificateCore {
-  readonly format: "convax.checkpoint-content-certificate-core/2"
+  readonly format: "convax.checkpoint-content-certificate-core"
   readonly scope: DocumentScope
   readonly checkpointDigest: Digest
   readonly parentCertificateDigests: readonly Digest[]
@@ -873,14 +873,14 @@ export interface CheckpointContentCertificateCore {
 }
 
 export interface CheckpointContentCertificate {
-  readonly format: "convax.checkpoint-content-certificate/2"
+  readonly format: "convax.checkpoint-content-certificate"
   readonly core: CheckpointContentCertificateCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature
 }
 
 export interface StableCheckpointSetCore {
-  readonly format: "convax.stable-checkpoint-set-core/2"
+  readonly format: "convax.stable-checkpoint-set-core"
   readonly scope: DocumentScope
   readonly priorSetDigest: Digest | null
   readonly contentCertificateDigests: readonly Digest[]
@@ -892,7 +892,7 @@ export interface StableCheckpointSetCore {
 }
 
 export interface ReplicaCausalFloorAckCore {
-  readonly format: "convax.replica-causal-floor-ack-core/2"
+  readonly format: "convax.replica-causal-floor-ack-core"
   readonly stableSetCoreDigest: Digest
   readonly replicaId: ReplicaId
   readonly actorId: ActorId
@@ -904,14 +904,14 @@ export interface ReplicaCausalFloorAckCore {
 }
 
 export interface ReplicaCausalFloorAck {
-  readonly format: "convax.replica-causal-floor-ack/2"
+  readonly format: "convax.replica-causal-floor-ack"
   readonly core: ReplicaCausalFloorAckCore
   readonly coreDigest: Digest
   readonly replicaSignature: Signature
 }
 
 export interface PrunableCheckpointSetCertificateCore {
-  readonly format: "convax.prunable-checkpoint-set-certificate-core/2"
+  readonly format: "convax.prunable-checkpoint-set-certificate-core"
   readonly stableSetCore: StableCheckpointSetCore
   readonly floorAckDigests: readonly Digest[]
   readonly contentStatus: "service-validated-and-all-editors-acknowledged"
@@ -921,7 +921,7 @@ export interface PrunableCheckpointSetCertificateCore {
 }
 
 export interface PrunableCheckpointSetCertificate {
-  readonly format: "convax.prunable-checkpoint-set-certificate/2"
+  readonly format: "convax.prunable-checkpoint-set-certificate"
   readonly core: PrunableCheckpointSetCertificateCore
   readonly coreDigest: Digest
   readonly serviceSignature: Signature

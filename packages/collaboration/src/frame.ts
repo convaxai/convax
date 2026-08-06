@@ -33,7 +33,15 @@ import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from ".
 import { parseStateVector, stateVectorDigest, yjsUpdateDigest } from "./yjs-codec"
 import { causalFrontierDigest } from "./causal"
 
-const MAGIC = new TextEncoder().encode(CAUSAL_EDIT_MAGIC)
+const MAGIC = (() => {
+  const raw = new TextEncoder().encode(CAUSAL_EDIT_MAGIC)
+  if (raw.byteLength === 0 || raw.byteLength > 8) {
+    throw new TypeError("Causal edit magic must be 1..8 UTF-8 bytes")
+  }
+  const bytes = new Uint8Array(8)
+  bytes.set(raw)
+  return bytes
+})()
 
 export interface EncodeCausalEditFrameInput {
   readonly header: CausalEditFrameHeader
@@ -70,7 +78,7 @@ export async function signCausalEditCore(
   const parsedCore = parseCausalEditCore(core)
   const coreDigest = causalEditCoreDigest(parsedCore)
   const signature = parseSignature(await signer.sign(causalEditSignatureDigest(coreDigest)))
-  return Object.freeze({ format: "convax.causal-edit-frame/2", core: parsedCore, coreDigest, replicaSignature: signature })
+  return Object.freeze({ format: "convax.causal-edit-frame", core: parsedCore, coreDigest, replicaSignature: signature })
 }
 
 export function encodeCausalEditFrame(
@@ -109,7 +117,7 @@ export function decodeCausalEditFrame(
   if (value.byteLength < CAUSAL_EDIT_PREFIX_BYTES || value.byteLength > KERNEL_LIMITS.causalEnvelopeBytes) {
     failFrame("Causal edit envelope length is invalid")
   }
-  if (!sameBytes(value.subarray(0, 8), MAGIC)) failFrame("Causal edit envelope magic is not CVXCOLL2")
+  if (!sameBytes(value.subarray(0, 8), MAGIC)) failFrame("Causal edit envelope magic is not CVXCOLL")
   const view = new DataView(value.buffer, value.byteOffset, value.byteLength)
   if (view.getUint16(8, false) !== COLLABORATION_PROTOCOL_MAJOR) failFrame("Causal edit protocol major is not 2")
   if (view.getUint8(10) !== CAUSAL_EDIT_KIND_CODE) failFrame("Causal edit kind code is not 1")
@@ -240,13 +248,13 @@ function validateFrameClosure(
   }
 }
 
-function validateTypedIntentJcs(bytes: Uint8Array): { readonly format: "convax.typed-intent/2"; readonly kind: string } {
+function validateTypedIntentJcs(bytes: Uint8Array): { readonly format: "convax.typed-intent"; readonly kind: string } {
   const value = decodeRestrictedJcs(bytes)
-  if (!isPlainDataObject(value) || value.format !== "convax.typed-intent/2" || typeof value.kind !== "string") {
+  if (!isPlainDataObject(value) || value.format !== "convax.typed-intent" || typeof value.kind !== "string") {
     failFrame("Typed-intent section lacks the exact format and kind discriminators")
   }
   if (value.kind.length === 0 || new TextEncoder().encode(value.kind).byteLength > 128 || !/^[\x20-\x7e]+$/u.test(value.kind)) {
     failFrame("Typed-intent kind is not bounded NFC ASCII")
   }
-  return value as { readonly format: "convax.typed-intent/2"; readonly kind: string }
+  return value as { readonly format: "convax.typed-intent"; readonly kind: string }
 }

@@ -55,7 +55,7 @@ export interface CheckpointCarrierSection {
 }
 
 export interface CheckpointValidationCarrierIndex {
-  readonly format: "convax.checkpoint-validation-carrier-index/2"
+  readonly format: "convax.checkpoint-validation-carrier-index"
   readonly scope: DocumentScope
   readonly proposalCheckpointDigest: Digest
   readonly parentCheckpointDigests: readonly Digest[]
@@ -103,7 +103,7 @@ export function parseCheckpointValidationCarrierIndex(value: unknown): Checkpoin
     "totalSectionBytes",
     "protocolDigest",
   ], "CheckpointValidationCarrierIndex")
-  if (value.format !== "convax.checkpoint-validation-carrier-index/2") invalid("Checkpoint carrier index format is invalid")
+  if (value.format !== "convax.checkpoint-validation-carrier-index") invalid("Checkpoint carrier index format is invalid")
   const protocolDigest = parseDigest(value.protocolDigest)
   if (protocolDigest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest) invalid("Checkpoint carrier protocol digest is not the current protocol digest")
   const proposalCheckpointDigest = parseDigest(value.proposalCheckpointDigest)

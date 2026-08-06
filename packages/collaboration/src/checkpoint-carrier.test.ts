@@ -48,7 +48,7 @@ function fixture() {
     return section
   })
   const index = parseCheckpointValidationCarrierIndex({
-    format: "convax.checkpoint-validation-carrier-index/2",
+    format: "convax.checkpoint-validation-carrier-index",
     scope,
     proposalCheckpointDigest: digest("proposal-checkpoint"),
     parentCheckpointDigests: [],

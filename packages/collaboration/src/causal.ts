@@ -89,7 +89,7 @@ export function maxCausalFrontier(
   for (let index = 1; index < maximal.length; index += 1) {
     if (maximal[index - 1]!.actorId === maximal[index]!.actorId) invalid("Causal frontier contains an unresolved same-actor fork")
   }
-  return Object.freeze({ format: "convax.causal-frontier/2", heads: Object.freeze(maximal) })
+  return Object.freeze({ format: "convax.causal-frontier", heads: Object.freeze(maximal) })
 }
 
 export function assertFrontierLeq(left: CausalFrontier, right: CausalFrontier, closure: CausalClosurePort): boolean | "pending" {
