@@ -80,6 +80,15 @@ export class PluginStateSchemaAuthorityV1 {
   }
 
   /**
+   * Admit a schema already loaded from an exact ActiveSet lease without
+   * re-entering the Plugin runtime lock. Used by Host-owned creation paths that
+   * already hold the same snapshot.
+   */
+  resolveManifestSchema(value: unknown): ResolvedPluginStateSchemaV1 | null {
+    return this.#resolveManifestSchema(value)
+  }
+
+  /**
    * Admits bytes received from a trusted immutable-blob path. The digest is
    * recomputed from the normalized schema, so transport metadata alone never
    * establishes artifact authority.

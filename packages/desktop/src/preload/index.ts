@@ -16,6 +16,10 @@ import {
   pluginMaterializationIpcChannels,
   type PluginMaterializationRendererClient,
 } from "../plugin-materialization-contracts"
+import {
+  pluginSurfaceIpcChannels,
+  type PluginSurfaceRendererClient,
+} from "../plugin-surface-contracts"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
@@ -509,6 +513,10 @@ const pluginMaterializationClient = {
   materialize: (input) => ipcRenderer.invoke(pluginMaterializationIpcChannels.materialize, input),
 } satisfies PluginMaterializationRendererClient
 
+const pluginSurfaceClient = {
+  create: (input) => ipcRenderer.invoke(pluginSurfaceIpcChannels.create, input),
+} satisfies PluginSurfaceRendererClient
+
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
@@ -609,6 +617,7 @@ contextBridge.exposeInMainWorld("convax", {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
     pluginMaterialization: pluginMaterializationClient,
+    pluginSurfaces: pluginSurfaceClient,
     renderer: canvasRendererClient,
     sessions: canvasSessionClient,
     resources: canvasResourceClient,

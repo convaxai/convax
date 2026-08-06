@@ -13,6 +13,7 @@ import type { WebPluginClient } from "../plugin-contracts"
 import type { PluginServiceClient } from "../plugin-service-contracts"
 import type { PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import type { PluginMaterializationRendererClient } from "../plugin-materialization-contracts"
+import type { PluginSurfaceRendererClient } from "../plugin-surface-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import type { PetSettingsHostClient } from "./pet-settings-host"
 import type { WorkspaceSystemStatusClient } from "../workspace-system-status-contracts"
@@ -31,6 +32,7 @@ declare global {
         documents: CanvasRendererDocumentClient
         externalMediaDrag?: CanvasExternalMediaDragRendererClient
         pluginMaterialization: PluginMaterializationRendererClient
+        pluginSurfaces: PluginSurfaceRendererClient
         renderer: CanvasRendererClient
         resources: CanvasResourceClient
         sessions: CanvasRendererSessionTransportV2

@@ -154,6 +154,8 @@ import { PluginHostApiService } from "./plugin-host-api-service"
 import { PluginCapabilityBrokerMainService } from "./plugin-capability-broker-service"
 import { registerPluginMaterializationIpc } from "./plugin-materialization-ipc"
 import { PluginMaterializationService } from "./plugin-materialization-service"
+import { registerPluginSurfaceIpc } from "./plugin-surface-ipc"
+import { PluginSurfaceService } from "./plugin-surface-service"
 import { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
 import { PluginCanvasImageService } from "./plugin-canvas-image-service"
 import { PluginCanvasStateServiceV1 } from "./plugin-canvas-state-service"
@@ -849,6 +851,9 @@ function startApplication() {
         }
       },
     })
+    const pluginStateSchemaArtifactAuthority: {
+      current?: Pick<PluginStateSchemaAuthorityV1, "resolveArtifact">
+    } = {}
     collaborationCanvasComposition = createMainCanvasCollaborationCompositionV2({
       authority: collaborationAuthority,
       projects: collaborationProjects,
@@ -861,6 +866,15 @@ function startApplication() {
       createOperationId: createCollaborationIdV2,
       createSessionId: createCollaborationIdV2,
       createCursorToken: createCollaborationIdV2,
+      artifactAuthority: {
+        async resolve({ ref }) {
+          const authority = pluginStateSchemaArtifactAuthority.current
+          if (!authority) {
+            return Object.freeze({ status: "pending" as const, ref })
+          }
+          return authority.resolveArtifact(ref)
+        },
+      },
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
     collaborationCanvasRoutes = collaborationCanvasComposition.routes
@@ -1151,6 +1165,7 @@ function startApplication() {
     const pluginPrincipals = new InstalledPluginPrincipalResolver(pluginInstallations)
     const pluginStateSchemas = new PluginStateSchemaAuthorityV1(pluginInstallations)
     await pluginStateSchemas.primeActive()
+    pluginStateSchemaArtifactAuthority.current = pluginStateSchemas
     const pluginCanvasStates = new PluginCanvasStateServiceV1({
       canvas: {
         queryAuthoritative(ref) {
@@ -1175,6 +1190,11 @@ function startApplication() {
     const pluginMaterialization = new PluginMaterializationService({
       application: canvasApplication,
       plugins: pluginInstallations,
+    })
+    const pluginSurfaces = new PluginSurfaceService({
+      application: canvasApplication,
+      plugins: pluginInstallations,
+      schemas: pluginStateSchemas,
     })
     const pluginCanvasCapabilities = new PluginCanvasCapabilityService({
       application: canvasApplication,
@@ -2379,6 +2399,10 @@ function startApplication() {
       isTrustedSender: ipcSecurity.isTrustedSender,
       service: pluginMaterialization,
     })
+    const disposePluginSurfaceIpc = registerPluginSurfaceIpc({
+      isTrustedSender: ipcSecurity.isTrustedSender,
+      service: pluginSurfaces,
+    })
     const disposePluginManagementIpc = registerPluginManagementIpc(
       pluginInstallations,
       [],
@@ -2513,6 +2537,7 @@ function startApplication() {
         disposePluginServiceIpc,
         disposePluginCapabilityIpc,
         disposePluginMaterializationIpc,
+        disposePluginSurfaceIpc,
         disposePluginManagementIpc,
         disposeSkillManagementIpc,
         disposeAgentIpc,

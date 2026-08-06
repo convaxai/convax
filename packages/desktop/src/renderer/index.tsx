@@ -182,7 +182,6 @@ import {
   type WorkspaceUtilityDrawerState,
 } from "./workspace-utility-drawer-state"
 import { createWebPluginCanvasContribution } from "./web-plugin-canvas"
-import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 import "./appearance-themes.css"
 
@@ -1649,7 +1648,7 @@ function App() {
           if (!activeProjectId) throw new Error("Open a Project before using this Plugin on Canvas")
           const lease = await workspaceEntryCoordinator.acquire({ projectId: activeProjectId })
           if (!lease) throw new Error("The active Project changed before Canvas was ready")
-          const editor = await waitForMountedWorkspaceTarget({
+          await waitForMountedWorkspaceTarget({
             read: () => {
               const mounted = canvasEditorScopeRef.current
               return mounted?.projectId === lease.projectId && mounted.canvasId === lease.canvasId
@@ -1657,9 +1656,20 @@ function App() {
                 : null
             },
           })
-          if (!lease.validate("canvas")) throw new Error("The active Canvas changed before the Plugin was ready")
-          if (!editor.insertNode(webPluginCanvasRendererId(plugin.id))) {
-            throw new Error("The Plugin node could not be added to the active Canvas")
+          if (!lease.validate("canvas") || !lease.canvasId) {
+            throw new Error("The active Canvas changed before the Plugin was ready")
+          }
+          const result = await window.convax.canvas.pluginSurfaces.create({
+            canvasId: lease.canvasId,
+            pluginId: plugin.id,
+            projectId: lease.projectId,
+          })
+          // Durable create already succeeded; projection refresh must not undo it.
+          try {
+            await canvasEditorRef.current?.reloadAuthoritative()
+            canvasEditorRef.current?.selectNodes([result.createdNodeId])
+          } catch (error) {
+            console.warn("Plugin surface created, but Canvas projection refresh failed", error)
           }
         } catch (error) {
           reportWorkspaceEntryFailure(error)

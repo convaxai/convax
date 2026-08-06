@@ -18,7 +18,6 @@ import {
 import { webPluginAssetUrl } from "../plugin-asset-contract"
 import {
   matchesWebPluginCanvasNode,
-  createWebPluginCanvasNode,
   webPluginCanvasRendererId,
   webPluginIdentityMetadataKey,
   webPluginStateMetadataKey,
@@ -472,14 +471,12 @@ export function createWebPluginCanvasContribution(
   plugin: ActiveInstalledWebPluginCanvasSurface,
   options: WebPluginCanvasContributionOptions,
 ): CanvasFileRendererPlugin {
-  const renderer = plugin.contributes.canvas.renderer
   const Component = (props: WebPluginNodeProps) => <WebPluginCanvasNode {...props} options={options} plugin={plugin} />
   return {
     id: `desktop.${plugin.id}`,
     renderers: [
       {
         component: Component,
-        ...(renderer.create ? { create: (input) => createWebPluginCanvasNode(plugin, input) } : {}),
         id: webPluginCanvasRendererId(plugin.id),
         label: plugin.name,
         matches: (data) => matchesWebPluginCanvasNode(plugin, data),
