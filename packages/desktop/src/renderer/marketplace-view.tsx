@@ -1,5 +1,5 @@
 import { Button, Input, LoadingSpinner, cn } from "@convax/ui"
-import { Download, PackagePlus, RefreshCw, Store, Trash2 } from "lucide-react"
+import { Download, PackagePlus, Pause, Play, RefreshCw, Store, Trash2, Wrench } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
@@ -362,28 +362,86 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                       </p>
                     ) : null}
                   </div>
-                  <Button
-                    aria-busy={installing}
-                    aria-label={`${text.install} ${card.name}`}
-                    disabled={installing || card.installed !== undefined || pluginUnavailable}
-                    onClick={() =>
-                      void mutate(
-                        pendingKey,
-                        async () => {
-                          const choices = await client.beginInstall({ id: card.id, kind: card.kind })
-                          if (choices.length === 0) throw new Error("No installable source is available")
-                          setSourceChoiceRequest({ mode: "install", pendingKey })
-                          setSourceChoices(choices)
-                          setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
-                        },
-                        { action: "install", label: text.progressPrepareInstall },
-                      )
-                    }
-                    size="sm"
-                  >
-                    {installing ? <LoadingSpinner className="text-current" size="sm" /> : <Download />}
-                    {installing ? pendingOperation?.label : text.install}
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    {card.installed ? (
+                      <>
+                        {card.updateAvailable ? (
+                          <Button
+                            aria-busy={pendingOperation?.action === "update"}
+                            aria-label={`${text.update} ${card.name}`}
+                            disabled={Boolean(pendingOperation) || pluginUnavailable}
+                            onClick={() =>
+                              void mutate(
+                                pendingKey,
+                                async () => {
+                                  const choices = await client.beginUpdate({
+                                    id: card.id,
+                                    kind: card.kind,
+                                  })
+                                  if (choices.length === 0) throw new Error("No update source is available")
+                                  setSourceChoiceRequest({ mode: "update", pendingKey })
+                                  setSourceChoices(choices)
+                                  setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                                },
+                                { action: "update", label: text.progressPrepareUpdate },
+                              )
+                            }
+                            size="icon"
+                            variant="outline"
+                          >
+                            {pendingOperation?.action === "update" ? (
+                              <LoadingSpinner className="text-current" size="sm" />
+                            ) : (
+                              <RefreshCw />
+                            )}
+                          </Button>
+                        ) : null}
+                        <Button
+                          aria-busy={pendingOperation?.action === "uninstall"}
+                          aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${card.name}`}
+                          disabled={Boolean(pendingOperation) || pluginUnavailable}
+                          onClick={() =>
+                            void mutate(
+                              pendingKey,
+                              () => client.uninstall({ id: card.id, kind: card.kind }),
+                              { action: "uninstall", label: text.progressUninstall },
+                            )
+                          }
+                          size="icon"
+                          variant="outline"
+                        >
+                          {pendingOperation?.action === "uninstall" ? (
+                            <LoadingSpinner className="text-current" size="sm" />
+                          ) : (
+                            <Trash2 />
+                          )}
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        aria-busy={installing}
+                        aria-label={`${text.install} ${card.name}`}
+                        disabled={installing || pluginUnavailable}
+                        onClick={() =>
+                          void mutate(
+                            pendingKey,
+                            async () => {
+                              const choices = await client.beginInstall({ id: card.id, kind: card.kind })
+                              if (choices.length === 0) throw new Error("No installable source is available")
+                              setSourceChoiceRequest({ mode: "install", pendingKey })
+                              setSourceChoices(choices)
+                              setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                            },
+                            { action: "install", label: text.progressPrepareInstall },
+                          )
+                        }
+                        size="icon"
+                        variant="outline"
+                      >
+                        {installing ? <LoadingSpinner className="text-current" size="sm" /> : <Download />}
+                      </Button>
+                    )}
+                  </div>
                 </div>
                 {pendingOperation ? (
                   <p
@@ -458,13 +516,14 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                             { action: "update", label: text.progressPrepareUpdate },
                           )
                         }}
-                        size="sm"
+                        size="icon"
                         variant="outline"
                       >
                         {pendingOperation?.action === "update" ? (
                           <LoadingSpinner className="text-current" size="sm" />
-                        ) : null}
-                        {pendingOperation?.action === "update" ? pendingOperation.label : text.update}
+                        ) : (
+                          <RefreshCw />
+                        )}
                       </Button>
                     ) : null}
                     {!pluginUnavailable &&
@@ -475,6 +534,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                       capability.attention === "setup-required-before-enable") ? (
                       <Button
                         aria-busy={pendingOperation?.action === "setup"}
+                        aria-label={`${locale === "zh-CN" ? "完成设置" : "Complete setup"} ${capability.name}`}
                         disabled={Boolean(pendingOperation)}
                         onClick={() =>
                           void mutate(pendingKey, () => client.setup({ id: capability.id, kind: capability.kind }), {
@@ -482,21 +542,20 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                             label: text.progressSetup,
                           })
                         }
-                        size="sm"
+                        size="icon"
+                        variant="outline"
                       >
                         {pendingOperation?.action === "setup" ? (
                           <LoadingSpinner className="text-current" size="sm" />
-                        ) : null}
-                        {pendingOperation?.action === "setup"
-                          ? pendingOperation.label
-                          : locale === "zh-CN"
-                            ? "完成设置"
-                            : "Complete setup"}
+                        ) : (
+                          <Wrench />
+                        )}
                       </Button>
                     ) : null}
                     {capability.state === "disabled" ? (
                       <Button
                         aria-busy={pendingOperation?.action === "enable"}
+                        aria-label={`${locale === "zh-CN" ? "启用" : "Enable"} ${capability.name}`}
                         disabled={Boolean(pendingOperation) || pluginUnavailable}
                         onClick={() =>
                           void mutate(pendingKey, () => client.enable({ id: capability.id, kind: capability.kind }), {
@@ -504,21 +563,19 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                             label: text.progressEnable,
                           })
                         }
-                        size="sm"
+                        size="icon"
                         variant="outline"
                       >
                         {pendingOperation?.action === "enable" ? (
                           <LoadingSpinner className="text-current" size="sm" />
-                        ) : null}
-                        {pendingOperation?.action === "enable"
-                          ? pendingOperation.label
-                          : locale === "zh-CN"
-                            ? "启用"
-                            : "Enable"}
+                        ) : (
+                          <Play />
+                        )}
                       </Button>
                     ) : capability.runtimeScope ? (
                       <Button
                         aria-busy={pendingOperation?.action === "disable"}
+                        aria-label={`${locale === "zh-CN" ? "停用" : "Disable"} ${capability.name}`}
                         disabled={Boolean(pendingOperation) || pluginUnavailable}
                         onClick={() =>
                           void mutate(pendingKey, () => client.disable({ id: capability.id, kind: capability.kind }), {
@@ -526,17 +583,14 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                             label: text.progressDisable,
                           })
                         }
-                        size="sm"
+                        size="icon"
                         variant="outline"
                       >
                         {pendingOperation?.action === "disable" ? (
                           <LoadingSpinner className="text-current" size="sm" />
-                        ) : null}
-                        {pendingOperation?.action === "disable"
-                          ? pendingOperation.label
-                          : locale === "zh-CN"
-                            ? "停用"
-                            : "Disable"}
+                        ) : (
+                          <Pause />
+                        )}
                       </Button>
                     ) : null}
                     <Button
@@ -550,7 +604,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                         })
                       }
                       size="icon"
-                      variant="ghost"
+                      variant="outline"
                     >
                       {pendingOperation?.action === "uninstall" ? (
                         <LoadingSpinner className="text-current" size="sm" />

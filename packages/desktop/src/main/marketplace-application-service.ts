@@ -531,6 +531,14 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
                         }).state,
                   version: installed.version,
                 },
+                updateAvailable: catalog.some(
+                  (candidate) =>
+                    candidate.kind === installed.kind &&
+                    candidate.id === installed.id &&
+                    this.#isCurrentOrRecoverySource(installed, candidate) &&
+                    (candidate.version !== installed.version ||
+                      sha256Hex(canonicalJson(candidate.delivery)) !== installed.artifactDigest),
+                ),
               }
             : {}),
           kind: group.identity.kind,

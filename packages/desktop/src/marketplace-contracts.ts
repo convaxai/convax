@@ -24,6 +24,7 @@ export interface MarketplaceCatalogCard {
   name: string
   otherSourceCount: number
   runtimeScope?: "agent" | "agent-and-convax"
+  updateAvailable?: boolean
 }
 
 export interface MarketplaceCatalogSnapshot {
