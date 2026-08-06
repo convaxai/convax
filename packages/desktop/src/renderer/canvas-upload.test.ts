@@ -20,7 +20,7 @@ function host() {
 }
 
 describe("desktop Canvas resource transport", () => {
-  test("flushes renderer edits before submitting one operation-identified upload", async () => {
+  test("submits one operation-identified upload without an authoritative pre-query", async () => {
     const order: string[] = []
     const file = new File(["image"], "frame.png", { type: "image/png" })
     const add = mock(async (input: unknown) => {
@@ -47,14 +47,11 @@ describe("desktop Canvas resource transport", () => {
           return "opaque-file-token"
         },
         createSourceId: () => "source-a",
-        async flushAuthoritativeCanvas() {
-          order.push("flush")
-          return { id: "canvas-a" }
-        },
+        sessionId: "AQEBAQEBAQEBAQEBAQEBAQ" as never,
       },
     )
 
-    expect(order).toEqual(["flush", "token", "add"])
+    expect(order).toEqual(["token", "add"])
     expect(add).toHaveBeenCalledWith({
       anchor: { x: 20, y: 40 },
       canvasId: "canvas-a",
@@ -68,13 +65,15 @@ describe("desktop Canvas resource transport", () => {
         },
       ],
       projectId: "project-a",
+      sessionId: "AQEBAQEBAQEBAQEBAQEBAQ",
       sources: [],
     })
     expect(result).toMatchObject({ createdNodeIds: ["frame"] })
   })
 
-  test("does not mint file authority or invoke Main after cancellation during the flush", async () => {
+  test("does not mint file authority or invoke Main when already canceled", async () => {
     const controller = new AbortController()
+    controller.abort(new Error("cancelled"))
     const createLocalFileToken = mock(() => "must-not-run")
     const add = mock(async () => ({ createdNodeIds: [], warnings: [] }))
 
@@ -95,10 +94,7 @@ describe("desktop Canvas resource transport", () => {
           createCommandId: () => "renderer:add",
           createLocalFileToken,
           createSourceId: () => "source-a",
-          async flushAuthoritativeCanvas() {
-            controller.abort(new Error("cancelled"))
-            return { id: "canvas-a" }
-          },
+          sessionId: "AQEBAQEBAQEBAQEBAQEBAQ" as never,
         },
       )
     } catch (error) {

@@ -66,5 +66,8 @@ export function createAgentCanvasInstructions(input: {
       ? "Convax Canvas resources are read-only snapshots. Use Convax Canvas tools for changes, selection, and viewport actions; do not read or edit files under .convax directly."
       : "Use Convax Canvas tools—not private .convax files—when the request involves a canvas. Prefer business tools; use primitive tools only for precise low-level edits.",
   )
+  instructions.push(
+    "To replace an existing editable Canvas Markdown or text card, call convax_canvas_update_text with its nodeId. Never edit the card's backing Project file with shell or generic file tools; that bypasses ProjectIndex version publication and Canvas relinking.",
+  )
   return instructions
 }

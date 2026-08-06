@@ -331,6 +331,7 @@ function renderEditor(
   options: {
     initialDocument?: ReturnType<typeof createCanvasDocument>
     appearance?: CanvasAppearanceInput
+    executeCommand?: Parameters<typeof CanvasEditor>[0]["executeCommand"]
     onGenerateRequest?: Parameters<typeof CanvasEditor>[0]["onGenerateRequest"]
     readOnly?: boolean
     selectionDragSource?: Parameters<typeof CanvasEditor>[0]["selectionDragSource"]
@@ -340,6 +341,7 @@ function renderEditor(
   return renderToStaticMarkup(
     <CanvasEditor
       appearance={options.appearance}
+      executeCommand={options.executeCommand}
       onGenerateRequest={options.onGenerateRequest}
       readOnly={options.readOnly}
       selectionDragSource={options.selectionDragSource}
@@ -1015,6 +1017,27 @@ describe("CanvasEditor resource mutation", () => {
     expect(show).toHaveBeenCalledWith({ description: undefined, kind: "success", title: "1 item added" })
   })
 
+  test("uses an already-delivered session projection without issuing a reload query", async () => {
+    const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
+    const reload = mock(async () => undefined)
+    const selectNodes = mock(() => undefined)
+    await completeCanvasResourceMutation({
+      currentScope: () => scope,
+      operationScope: scope,
+      reload,
+      result: {
+        authoritativeProjectionDelivered: true,
+        createdNodeIds: ["note"],
+        warnings: [],
+      },
+      selectNodes,
+      show: () => undefined,
+      signal: new AbortController().signal,
+    })
+    expect(reload).not.toHaveBeenCalled()
+    expect(selectNodes).toHaveBeenCalledWith(["note"])
+  })
+
   test("prepares an authoritative batch before reload so its first paint can animate", async () => {
     const scope = { documentId: "canvas-main", generation: 0, scopeId: "project-a" }
     const calls: string[] = []
@@ -1361,9 +1384,8 @@ describe("CanvasEditor resource mutation", () => {
     expectViewportUnchanged()
   })
 
-  test("fits only as an explicit view effect after the user tidies the canvas", () => {
-    renderEditor(createCanvasServices(), {
-      initialDocument: createCanvasDocument({
+  test("fits only after the authoritative tidy command commits", async () => {
+    const initialDocument = createCanvasDocument({
         edges: [{ id: "edge", source: "first", target: "second" }],
         id: "canvas-layout",
         nodes: [
@@ -1375,11 +1397,15 @@ describe("CanvasEditor resource mutation", () => {
           }),
           createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
         ],
-      }),
+      })
+    renderEditor(createCanvasServices(), {
+      initialDocument,
+      executeCommand: async () => ({ document: initialDocument } as never),
     })
 
     expect(buttonActions.get("Tidy canvas")).toBeFunction()
     buttonActions.get("Tidy canvas")?.()
+    await Promise.resolve()
 
     expect(fitView).toHaveBeenCalledWith({
       duration: 300,

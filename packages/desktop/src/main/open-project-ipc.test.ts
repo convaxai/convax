@@ -17,6 +17,7 @@ import {
 import { createCanvasDocument } from "@convax/canvas/core"
 import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import {
+  encodeBase64url,
   parseActorId,
   parseDigest,
   parseId128,
@@ -56,6 +57,7 @@ const operationReceipt: BoundedOperationReceipt = {
   semanticRoot: true,
   historyMaterialDigest: parseDigest("f".repeat(64)),
 }
+const resourceSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
 let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""
 let selectedLocalFilePath = ""
@@ -279,6 +281,9 @@ describe("desktop Project lifecycle IPC smoke", () => {
         ...trusted,
         resolveActiveCanvas: async () =>
           activeProjectId ? { canvasId: "canvas-main", projectId: activeProjectId } : null,
+        sessions: {
+          deliverApplicationCommit: async () => Object.freeze({ status: "unavailable" as const }),
+        },
       }),
       registerAgentIpc(runtime, projects, { ...trusted, activity }),
     ]
@@ -346,6 +351,7 @@ describe("desktop Project lifecycle IPC smoke", () => {
       canvasId: "canvas-main",
       commandId: "renderer-resource-smoke",
       projectId,
+      sessionId: resourceSessionId,
       sources: [{ kind: "host-file", path: "Notes/renderer-note.md", sourceId: "renderer-note" }],
     })
     const rendererNodeId = rendererResource.createdNodeIds[0]
@@ -377,12 +383,13 @@ describe("desktop Project lifecycle IPC smoke", () => {
       commandId: "smoke-add-external",
       localFiles: [{ mediaType: "image/png", name: "outside.png", sourceId: "outside", sourceToken }],
       projectId,
+      sessionId: resourceSessionId,
       sources: [],
     })
     expect(resourceResult).toMatchObject({
       createdNodeIds: [expect.any(String)],
+      delivery: { status: "unavailable" },
       operationReceipt,
-      projection: { nodes: expect.any(Array) },
       warnings: [],
     })
     expect(JSON.stringify(resourceResult)).not.toContain(selectedLocalFilePath)

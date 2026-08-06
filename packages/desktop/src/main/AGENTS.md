@@ -26,7 +26,9 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Main's Canvas application service/repository is the sole authoritative document
   writer. Use revision/CAS commands and transactions; never ask Renderer to flush,
   lock, approve, or arbitrate a Main read or mutation.
-- Publish committed revision invalidations after domain success. Renderer reload,
+- Publish committed frame-digest invalidations after domain success. Session-local
+  responses return the complete projection and accepted frame digest so Renderer
+  can suppress the matching query while retaining a trailing remote refresh. Renderer reload,
   selection, reveal, or reconciliation is fallible projection work and cannot undo
   or misreport a durable mutation.
 - Bind every IPC, MessagePort, tool, and external-operation request to its trusted
@@ -36,6 +38,10 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Bound requests, queues, subscriptions, messages, staged bytes, retained receipts,
   diagnostics, and recovery state. Serialize mutations that share an identity or
   filesystem namespace.
+- Bind UI semantic roots only to the originating renderer lease. Agent, Plugin and
+  background commits invalidate mounted projections but never mutate renderer undo
+  stacks. Resource commit delivery verifies the operation receipt against the live
+  owner and returns `unavailable` for a stale lease without reversing the commit.
 - Keep native paths and private storage behind typed scoped capabilities. Renderer,
   Preload, Agent tools, sandboxed frames, and companions never receive paths merely
   because Main resolved them.
@@ -94,6 +100,10 @@ For any matching change, read the full routed reference before planning or editi
 - Agent tools are thin adapters. Host Project scope is authoritative; document tools
   may name only a Canvas in that Project's live catalog, while view tools remain
   bound to the mounted active Canvas.
+- Agent replacement of an existing editable Canvas text node must use the shared
+  Main text-resource writer: compare-and-replace the materialized Project file,
+  publish its ProjectIndex version, relink the same Canvas node, then optionally
+  reload the mounted view. Never report a direct shell write as a Canvas mutation.
 - Project-directory focus resolves its root from the authoritative Canvas node,
   delegates bounded descendant listing to the existing scoped Project Files port,
   and rechecks Project/Canvas/node scope after awaits. Never persist projected

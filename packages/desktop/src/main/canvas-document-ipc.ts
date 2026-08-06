@@ -6,10 +6,6 @@ import {
   type CanvasResourceSource,
 } from "@convax/canvas/application"
 import {
-  assertResourceRef,
-  canvasProjectionResourceMetadataKey,
-} from "@convax/canvas/collaboration"
-import {
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasEmptyImageNodeData,
   type CanvasNode,
@@ -21,12 +17,11 @@ import {
   projectResourceBindingsKey,
   requireProjectResourceReference,
 } from "@convax/project/canvas"
-import { projectIndexResourceReferenceDigest } from "@convax/project"
 import type { ProjectResourceReference } from "@convax/project/canvas"
 import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import type { ProjectCanvasResourceHydrator, ProjectCanvasResourcePreparation } from "@convax/project/node"
-import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
-import { ordinarySha256, parseProjectId } from "@convax/collaboration"
+import type { ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
+import { ordinarySha256, parseId128, type Id128 } from "@convax/collaboration"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import {
   canvasResourcePartialFailureKind,
@@ -43,6 +38,8 @@ import {
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
 import { canvasDocumentIpcChannels, type CanvasRendererCommandRequest } from "../canvas-document-contracts"
+import { CanvasTextResourceWriteConflictError, createCanvasTextResourceWriter } from "./canvas-text-resource-service"
+import type { CanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 
 const commandIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u
 
@@ -188,33 +185,19 @@ export function registerCanvasTextResourceIpc(
     resources: Pick<CanvasResourceBusinessService, "relinkPreparedResource">
   },
 ) {
+  const writer = createCanvasTextResourceWriter({
+    application,
+    currentResources: options.currentResources,
+    files,
+    preparation: options.preparation,
+    resources: options.resources,
+  })
   ipcMain.handle(canvasTextResourceIpcChannel, async (event, value: unknown) => {
     if (!options.isTrustedSender(event)) throw new Error("Canvas IPC request came from an untrusted renderer")
     try {
       const input = requireCanvasTextResourceMainRequest(value)
       const active = await options.resolveActiveCanvas(event)
       if (!active) throw new CanvasTextResourceRequestError("Canvas text resource request has no live Workbench scope")
-      const document = (await application.query({ canvasId: active.canvasId, scopeId: active.projectId })).projection
-      const matches = document.nodes.filter((node) => node.id === input.nodeId)
-      const node = matches.length === 1 ? matches[0] : undefined
-      const resource = node ? canonicalCanvasTextResource(node) : null
-      if (!node || !resource) {
-        throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
-      }
-
-      const currentResources = await options.currentResources.queryCurrentResources({ projectId: parseProjectId(active.projectId) })
-      const resourceEntry = currentResources.find(({ reference }) =>
-        reference.canonicalUri === resource.uri &&
-        reference.blob.digest === resource.contentDigest &&
-        reference.blob.mime === resource.mime &&
-        reference.blob.byteLength === resource.byteLength &&
-        projectIndexResourceReferenceDigest(reference) === resource.ownerProofDigest
-      )
-      const path = resourceEntry?.storageClass === "project-file" ? resourceEntry.materializedPath : null
-      if (!path || !isEditableProjectTextPath(path)) {
-        throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
-      }
-
       const current = await options.resolveActiveCanvas(event)
       if (!sameActiveCanvasScope(active, current)) {
         throw new CanvasTextResourceRequestError(
@@ -222,66 +205,34 @@ export function registerCanvasTextResourceIpc(
         )
       }
 
-      const contentRevision = ordinarySha256(new TextEncoder().encode(input.content))
-      try {
-        const saved = await files.compareAndReplaceTextFile({
-          content: input.content,
-          expectedRevision: input.contentRevision,
-          path,
-          projectId: active.projectId,
-        })
-        if (saved.contentRevision !== contentRevision) {
-          throw new CanvasTextResourceRequestError("Canvas text resource write returned an unexpected revision")
-        }
-      } catch (error) {
-        if (!(error instanceof ProjectTextFileConflictError) || error.actualRevision !== contentRevision) throw error
-      }
-
-      const prepared = await options.preparation.prepare({
-        canvasId: active.canvasId,
-        scopeId: active.projectId,
-        sources: [{ kind: "host-file", path, sourceId: "text-save" }],
-      })
-      if (prepared.items.length !== 1) {
-        throw new CanvasTextResourceRequestError("Canvas text resource preparation did not return one file")
-      }
-      const latest = await options.resolveActiveCanvas(event)
-      if (!sameActiveCanvasScope(active, latest)) {
-        throw new CanvasTextResourceRequestError(
-          "Canvas text resource request does not match the invoking window's live Workbench scope",
-        )
-      }
-      await options.resources.relinkPreparedResource({
+      const nextContentRevision = ordinarySha256(new TextEncoder().encode(input.content))
+      const result = await writer.save({
         actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
+        async beforeRelink() {
+          const latest = await options.resolveActiveCanvas(event)
+          if (!sameActiveCanvasScope(active, latest)) {
+            throw new CanvasTextResourceRequestError(
+              "Canvas text resource request does not match the invoking window's live Workbench scope",
+            )
+          }
+        },
         canvasId: active.canvasId,
-        commandId: `canvas-text-save:${ordinarySha256(new TextEncoder().encode(`${input.nodeId}\0${contentRevision}`))}`,
-        metadataKeysToRemove: [projectResourceBindingsKey],
+        commandId: `canvas-text-save:${ordinarySha256(new TextEncoder().encode(`${input.nodeId}\0${nextContentRevision}`))}`,
+        content: input.content,
+        expectedContentRevision: input.contentRevision,
         nodeId: input.nodeId,
         scopeId: active.projectId,
-      }, prepared)
-      return { contentRevision }
+      })
+      return { contentRevision: result.contentRevision }
     } catch (error) {
-      if (error instanceof ProjectTextFileConflictError) {
-        return { actualRevision: error.actualRevision, kind: canvasTextResourceConflictKind }
+      if (error instanceof CanvasTextResourceWriteConflictError) {
+        return { actualRevision: error.actualContentRevision, kind: canvasTextResourceConflictKind }
       }
       if (error instanceof CanvasTextResourceRequestError) throw error
-      throw new Error("Could not save the Canvas text resource")
+      throw new Error("Could not save the Canvas text resource", { cause: error })
     }
   })
   return () => ipcMain.removeHandler(canvasTextResourceIpcChannel)
-}
-
-function canonicalCanvasTextResource(node: CanvasNode) {
-  if (node.type !== "file" || node.data.kind !== "text") return null
-  const metadata = node.data.metadata
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
-  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
-  try {
-    assertResourceRef(value)
-  } catch {
-    return null
-  }
-  return value.mediaClass === "text" ? value : null
 }
 
 class CanvasTextResourceRequestError extends Error {}
@@ -304,11 +255,6 @@ function requireCanvasTextResourceMainRequest(value: unknown): CanvasTextResourc
   const nodeId = requireNonEmptyString(value.nodeId, "Canvas text node id")
   if (nodeId.length > 256) throw new CanvasTextResourceRequestError("Canvas text node id is too long")
   return { content, contentRevision, nodeId }
-}
-
-function isEditableProjectTextPath(value: string) {
-  const lower = value.toLowerCase()
-  return lower.endsWith(".md") || lower.endsWith(".txt")
 }
 
 function sameActiveCanvasScope(left: ActiveCanvasScope, right: ActiveCanvasScope | null) {
@@ -349,6 +295,7 @@ interface CanvasResourceMainRequest {
   parentId?: string
   pending?: { kind: "image" | "video"; label: string }
   projectId: string
+  sessionId: Id128
   relation?: {
     anchorNodeIds: readonly string[]
     direction?: "from-anchor" | "to-anchor"
@@ -365,6 +312,7 @@ export function registerCanvasResourceIpc(
     images?: Pick<ProjectCanvasResourceHydrator, "readImage">
     isTrustedSender(event: IpcMainInvokeEvent): boolean
     resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
+    sessions: Pick<CanvasCollaborationSessionOwner, "deliverApplicationCommit">
   },
 ) {
   const localFileTokens = new Map<string, { expiresAt: number; sourcePath: string }>()
@@ -461,10 +409,16 @@ export function registerCanvasResourceIpc(
         }
         throw error
       }
+      const delivery = await options.sessions.deliverApplicationCommit({
+        ref: { canvasId: active.canvasId, scopeId: active.projectId },
+        rendererActorId: `desktop:renderer:${event.sender.id}`,
+        sessionId: input.sessionId,
+        result,
+      })
       return {
         createdNodeIds: result.createdNodeIds,
+        delivery,
         operationReceipt: result.operationReceipt,
-        projection: result.document,
         warnings: result.warnings,
       }
     })()
@@ -521,9 +475,15 @@ export function registerCanvasResourceIpc(
           await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
           result = await relinkPreparedResource(request, prepared)
         }
+        const delivery = await options.sessions.deliverApplicationCommit({
+          ref: { canvasId: active.canvasId, scopeId: active.projectId },
+          rendererActorId: `desktop:renderer:${event.sender.id}`,
+          sessionId: input.sessionId,
+          result,
+        })
         return {
+          delivery,
           operationReceipt: result.operationReceipt,
-          projection: result.document,
           warnings: result.warnings,
         }
       } catch (error) {
@@ -567,9 +527,15 @@ export function registerCanvasResourceIpc(
         requireCompatibleRelinkPreparation(live.node, prepared)
         await recheckLiveRelinkScope(event, active, input.nodeId, live.reference, options)
         const result = await relinkPreparedResource(canvasRelinkBusinessRequest(active, input), prepared)
+        const delivery = await options.sessions.deliverApplicationCommit({
+          ref: { canvasId: active.canvasId, scopeId: active.projectId },
+          rendererActorId: `desktop:renderer:${event.sender.id}`,
+          sessionId: input.sessionId,
+          result,
+        })
         return {
+          delivery,
           operationReceipt: result.operationReceipt,
-          projection: result.document,
           warnings: result.warnings,
         }
       } catch (error) {
@@ -743,6 +709,8 @@ interface CanvasResourceRelinkGuard {
   canvasId: string
   commandId: string
   nodeId: string
+  projectId: string
+  sessionId: Id128
 }
 
 type CanvasResourceRelinkMainRequest = CanvasResourceRelinkGuard & {
@@ -759,11 +727,13 @@ function requireCanvasResourceRelinkGuard(value: unknown, allowedKeys: readonly 
   const canvasId = requireNonEmptyString(value.canvasId, "Canvas id")
   const commandId = requireNonEmptyString(value.commandId, "Canvas command id")
   const nodeId = requireNonEmptyString(value.nodeId, "Canvas node id")
-  return { canvasId, commandId, nodeId }
+  const projectId = requireNonEmptyString(value.projectId, "Project id")
+  const sessionId = parseId128(value.sessionId)
+  return { canvasId, commandId, nodeId, projectId, sessionId }
 }
 
 function requireCanvasResourceRelinkMainRequest(value: unknown): CanvasResourceRelinkMainRequest {
-  const guard = requireCanvasResourceRelinkGuard(value, ["canvasId", "commandId", "nodeId", "source"])
+  const guard = requireCanvasResourceRelinkGuard(value, ["canvasId", "commandId", "nodeId", "projectId", "sessionId", "source"])
   if (!isRecord(value) || !isRecord(value.source)) throw new Error("Canvas resource relink source must be an object")
   const source = value.source
   if (source.kind === "host-file" || source.kind === "host-directory") {
@@ -788,7 +758,7 @@ function requireCanvasResourceRelinkMainRequest(value: unknown): CanvasResourceR
 }
 
 function requireCanvasResourceEditableCopyRequest(value: unknown): CanvasResourceRelinkGuard {
-  return requireCanvasResourceRelinkGuard(value, ["canvasId", "commandId", "nodeId"])
+  return requireCanvasResourceRelinkGuard(value, ["canvasId", "commandId", "nodeId", "projectId", "sessionId"])
 }
 
 function requireCanvasResourceLocalFileRegistration(value: unknown) {
@@ -817,7 +787,7 @@ async function requireActiveRelinkScope(
   options: Parameters<typeof registerCanvasResourceIpc>[2],
 ): Promise<ActiveCanvasScope> {
   const active = await options.resolveActiveCanvas(event)
-  if (!active || active.canvasId !== input.canvasId) {
+  if (!active || active.canvasId !== input.canvasId || active.projectId !== input.projectId) {
     throw new Error("Canvas resource relink does not match the invoking window's live Workbench scope")
   }
   return active
@@ -941,6 +911,7 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
   const projectId = requireNonEmptyString(value.projectId, "Project id")
   const canvasId = requireNonEmptyString(value.canvasId, "Canvas id")
   const commandId = requireNonEmptyString(value.commandId, "Canvas command id")
+  const sessionId = parseId128(value.sessionId)
   if (!isRecord(value.anchor) || !Number.isFinite(value.anchor.x) || !Number.isFinite(value.anchor.y)) {
     throw new Error("Canvas resource anchor is invalid")
   }
@@ -982,6 +953,7 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
       ? {}
       : { parentId: requireNonEmptyString(value.parentId, "Canvas resource parent id") }),
     projectId,
+    sessionId,
     ...(pending === undefined ? {} : { pending }),
     relation: requireCanvasResourceRelation(value.relation),
     sources: value.sources as CanvasResourceSource[],

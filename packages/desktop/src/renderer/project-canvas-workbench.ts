@@ -2,7 +2,7 @@ import type { CanvasResourceMutationService } from "@convax/canvas"
 import type { ProjectCanvas, ProjectCanvasControllerSnapshot } from "@convax/project/canvas"
 import type { ProjectFilesControllerSnapshot } from "@convax/project-files"
 import type { WorkbenchCanvasInput, WorkbenchInput, WorkbenchSnapshot } from "@convax/workbench"
-import type { CanvasResourceClient } from "../desktop-protocol"
+import type { CanvasResourceClient, CanvasResourceRelinkInput } from "../desktop-protocol"
 
 export interface ProjectCanvasCatalogControllerPort {
   createCanvas(name?: string): Promise<ProjectCanvas | undefined>
@@ -46,10 +46,10 @@ export async function runProjectCanvasResourceRelink(input: {
   activeCanvasId: string | null | undefined
   activeProjectId: string | null | undefined
   createCommandId(): string
-  flush(): Promise<{ id: string } | undefined>
   projectFiles: { getSnapshot(): ProjectFilesControllerSnapshot }
   request: ProjectCanvasResourceRelinkRequest
   resources: Pick<CanvasResourceClient, "createLocalFileToken" | "relink">
+  sessionId: CanvasResourceRelinkInput["sessionId"]
 }) {
   if (input.request.signal.aborted) throw input.request.signal.reason
   if (!input.activeProjectId || !input.activeCanvasId) {
@@ -64,11 +64,6 @@ export async function runProjectCanvasResourceRelink(input: {
           projectFiles: input.projectFiles,
         })
 
-  const authoritativeDocument = await input.flush()
-  if (input.request.signal.aborted) throw input.request.signal.reason
-  if (!authoritativeDocument || authoritativeDocument.id !== input.activeCanvasId) {
-    throw new Error("Canvas resource relink could not resolve Main's authoritative document")
-  }
   const source =
     capturedSource.kind === "external-file"
       ? localFileRelinkSource(input.resources, capturedSource.file)
@@ -77,6 +72,8 @@ export async function runProjectCanvasResourceRelink(input: {
     canvasId: input.activeCanvasId,
     commandId: input.createCommandId(),
     nodeId: input.request.nodeId,
+    projectId: input.activeProjectId,
+    sessionId: input.sessionId,
     source,
   })
 }

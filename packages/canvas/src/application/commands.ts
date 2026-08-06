@@ -3,18 +3,23 @@ import {
   alignCanvasNodes,
   connectCanvasNodes,
   distributeCanvasNodes,
+  duplicateCanvasSelection,
   groupCanvasNodes,
   layoutCanvasNodes,
   moveCanvasNodes,
   reparentCanvasNodes,
   removeCanvasElements,
   setCanvasNodeGeometry,
+  updateCanvasNodeData,
   ungroupCanvasNode,
   type CanvasAlign,
   type CanvasDistribute,
   type CanvasLayout,
   type CanvasNodeGeometryUpdate,
 } from "../commands"
+import { setCanvasGroupFolded } from "../group-fold"
+import { setCanvasGroupAppearance, type CanvasGroupAppearance } from "../group-appearance"
+import { setCanvasNodeGenerationToolId } from "../generation-preference"
 import {
   createCanvasId,
   createFolderNode,
@@ -243,10 +248,16 @@ export type CanvasBusinessCommand =
 /** Low-level document mutations available to advanced callers. */
 export type CanvasPrimitiveCommand =
   | { type: "elements.remove"; edgeIds?: readonly string[]; nodeIds?: readonly string[] }
+  | {
+      type: "nodes.duplicate"
+      nodeIds: readonly string[]
+      offset?: CanvasPoint
+      edgeScope?: "connected" | "internal"
+    }
   | { type: "nodes.align"; direction: CanvasAlign; nodeIds: readonly string[] }
   | { type: "nodes.connect"; connection: Pick<CanvasEdge, "source" | "target"> & Partial<CanvasEdge> }
   | { type: "nodes.distribute"; axis: CanvasDistribute; nodeIds: readonly string[] }
-  | { type: "nodes.group"; label?: string; nodeIds: readonly string[] }
+  | { type: "nodes.group"; folded?: boolean; label?: string; nodeIds: readonly string[] }
   | { type: "nodes.layout"; gap?: number; layout?: CanvasLayout; nodeIds: readonly string[] }
   | { type: "nodes.move"; delta: CanvasPoint; nodeIds: readonly string[] }
   | {
@@ -254,8 +265,13 @@ export type CanvasPrimitiveCommand =
       nodeIds: readonly string[]
       parentId?: string
       preserveWorldPosition?: boolean
+      delta?: CanvasPoint
     }
   | { type: "nodes.setGeometry"; updates: readonly CanvasNodeGeometryUpdate[] }
+  | { type: "nodes.setFolded"; folded: boolean; nodeId: string }
+  | { type: "nodes.setGenerationToolId"; nodeId: string; toolId?: string }
+  | { type: "nodes.setGroupAppearance"; appearance: CanvasGroupAppearance; nodeId: string }
+  | { type: "nodes.setTitle"; nodeId: string; title: string }
   | { type: "nodes.ungroup"; nodeId: string }
 
 export type CanvasApplicationCommand = CanvasBusinessCommand | CanvasPrimitiveCommand
@@ -591,7 +607,8 @@ export function applyCanvasApplicationCommand(
         }
       }
     }
-    const reparented = reparentCanvasNodes(document, command.nodeIds, command.parentId, {
+    const moved = command.delta ? moveCanvasNodes(document, command.nodeIds, command.delta) : document
+    const reparented = reparentCanvasNodes(moved, command.nodeIds, command.parentId, {
       preserveWorldPosition: command.preserveWorldPosition,
     })
     return result(document, reparented.document, reparented.selectedNodeIds)
@@ -629,7 +646,31 @@ export function applyCanvasApplicationCommand(
     const grouped = groupCanvasNodes(document, command.nodeIds, command.label)
     const previousIds = new Set(document.nodes.map((node) => node.id))
     const createdNodeIds = grouped.document.nodes.filter((node) => !previousIds.has(node.id)).map((node) => node.id)
-    return result(document, grouped.document, grouped.selectedNodeIds, createdNodeIds)
+    const next = command.folded && createdNodeIds[0]
+      ? setCanvasGroupFolded(grouped.document, createdNodeIds[0], true)
+      : grouped.document
+    return result(document, next, grouped.selectedNodeIds, createdNodeIds)
+  }
+  if (command.type === "nodes.setFolded") {
+    requireNodeIds(document, [command.nodeId])
+    return result(document, setCanvasGroupFolded(document, command.nodeId, command.folded), [command.nodeId])
+  }
+  if (command.type === "nodes.setGenerationToolId") {
+    requireNodeIds(document, [command.nodeId])
+    return result(document, setCanvasNodeGenerationToolId(document, command.nodeId, command.toolId), [command.nodeId])
+  }
+  if (command.type === "nodes.setGroupAppearance") {
+    requireNodeIds(document, [command.nodeId])
+    return result(document, setCanvasGroupAppearance(document, command.nodeId, command.appearance), [command.nodeId])
+  }
+  if (command.type === "nodes.setTitle") {
+    const title = command.title.trim().slice(0, 200)
+    requireNonEmptyBoundedString(title, "Canvas node title", 200)
+    requireNodeIds(document, [command.nodeId])
+    const node = document.nodes.find((candidate) => candidate.id === command.nodeId)
+    if (!node || node.type !== "file") return result(document, document)
+    const next = updateCanvasNodeData(document, command.nodeId, (data) => ({ ...data, label: title }))
+    return result(document, next, [command.nodeId])
   }
   if (command.type === "nodes.ungroup") {
     requireNodeIds(document, [command.nodeId])
@@ -652,6 +693,11 @@ export function applyCanvasApplicationCommand(
   if (command.type === "nodes.align") {
     requireNodeIds(document, command.nodeIds)
     return result(document, alignCanvasNodes(document, command.nodeIds, command.direction), [...command.nodeIds])
+  }
+  if (command.type === "nodes.duplicate") {
+    requireNodeIds(document, command.nodeIds)
+    const duplicated = duplicateCanvasSelection(document, command.nodeIds, command.offset, { edgeScope: command.edgeScope })
+    return result(document, duplicated.document, duplicated.selectedNodeIds, [...duplicated.duplicatedNodeIdBySourceId.values()])
   }
   requireNodeIds(document, command.nodeIds)
   return result(document, distributeCanvasNodes(document, command.nodeIds, command.axis), [...command.nodeIds])

@@ -1,4 +1,3 @@
-import { updateCanvasNodeData } from "./commands"
 import type { CanvasDocument, CanvasNode } from "./types"
 
 export const canvasNodeGenerationPreferenceKey = "convaxGenerationPreference"
@@ -52,20 +51,25 @@ export function setCanvasNodeGenerationToolId(
   const node = document.nodes.find((candidate) => candidate.id === nodeId)
   if (!node || getCanvasNodeGenerationToolId(node) === toolId) return document
 
-  return updateCanvasNodeData(document, nodeId, (data) => {
-    const currentMetadata = isRecord(data.metadata) ? data.metadata : {}
-    const metadata = { ...currentMetadata }
-    if (toolId === undefined) delete metadata[canvasNodeGenerationPreferenceKey]
-    else {
-      metadata[canvasNodeGenerationPreferenceKey] = {
-        schema: canvasNodeGenerationPreferenceSchema,
-        toolId,
-      } satisfies StoredCanvasNodeGenerationPreference
-    }
-    if (Object.keys(metadata).length === 0) {
-      const { metadata: _metadata, ...withoutMetadata } = data
-      return withoutMetadata as CanvasNode["data"]
-    }
-    return { ...data, metadata }
-  })
+  return {
+    ...document,
+    nodes: document.nodes.map((candidate) => {
+      if (candidate.id !== nodeId) return candidate
+      const data = candidate.data
+      const currentMetadata = isRecord(data.metadata) ? data.metadata : {}
+      const metadata = { ...currentMetadata }
+      if (toolId === undefined) delete metadata[canvasNodeGenerationPreferenceKey]
+      else {
+        metadata[canvasNodeGenerationPreferenceKey] = {
+          schema: canvasNodeGenerationPreferenceSchema,
+          toolId,
+        } satisfies StoredCanvasNodeGenerationPreference
+      }
+      if (Object.keys(metadata).length === 0) {
+        const { metadata: _metadata, ...withoutMetadata } = data
+        return { ...candidate, data: withoutMetadata as CanvasNode["data"] }
+      }
+      return { ...candidate, data: { ...data, metadata } }
+    }),
+  }
 }

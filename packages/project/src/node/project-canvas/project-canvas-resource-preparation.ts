@@ -233,20 +233,35 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   ): Promise<{ item: CanvasUploadItem; retainedOnFailure?: { label: string } }> {
     throwIfAborted(signal)
     if (source.kind === "new-text") {
-      const published = await this.publisher.publishText({
-        content: source.text,
-        directory: "Notes",
-        extension: ".md",
-        name: source.name,
-        projectId,
-      })
+      const [publication, initialPlan] = await Promise.allSettled([
+        this.publisher.publishText({
+          content: source.text,
+          directory: "Notes",
+          extension: ".md",
+          name: source.name,
+          projectId,
+        }),
+        this.prepareProjectIndexParent(projectId, "Notes/pending.md"),
+      ])
+      if (publication.status === "rejected") throw publication.reason
+      const published = publication.value
+      if (initialPlan.status === "rejected") {
+        throw new CanvasResourcePartialFailureError(initialPlan.reason, [{ label: published.path }])
+      }
       const reference = requireProjectFileReference(published.path)
-      const proof = await this.publishTextProof({
-        content: source.text,
-        mime: "text/markdown",
-        path: reference.path,
-        projectId,
-      })
+      let proof: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> | undefined
+      try {
+        proof = await this.publishTextProof({
+          content: source.text,
+          ...(initialPlan.value === undefined ? {} : { initialPlan: initialPlan.value }),
+          mime: "text/markdown",
+          path: reference.path,
+          projectId,
+        })
+      } catch (error) {
+        if (error instanceof CanvasResourcePartialFailureError) throw error
+        throw new CanvasResourcePartialFailureError(error, [{ label: reference.path }])
+      }
       if (signal?.aborted) {
         throw new CanvasResourcePartialFailureError(
           signal.reason ?? new DOMException("Canvas resource preparation was canceled", "AbortError"),
@@ -355,6 +370,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
   private async publishTextProof(input: {
     readonly content: string
+    readonly initialPlan?: ProjectIndexFileMaterializationPlan
     readonly mime: string
     readonly path: string
     readonly projectId: string
@@ -363,6 +379,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     const projectId = parseProjectId(input.projectId)
     return this.publishProjectFileProof({
       exactBytes: new TextEncoder().encode(input.content),
+      ...(input.initialPlan === undefined ? {} : { initialPlan: input.initialPlan }),
       mediaClass: "text",
       mime: input.mime,
       path: input.path,
@@ -372,6 +389,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
 
   private async publishProjectFileProof(input: {
     readonly exactBytes?: Uint8Array
+    readonly initialPlan?: ProjectIndexFileMaterializationPlan
     readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
     readonly mime: string
     readonly path: string
@@ -393,7 +411,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (contents && contents.size !== bytes.byteLength) {
       throw new Error("Project file size changed during Canvas resource preparation")
     }
-    let plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    let plan = input.initialPlan ?? await this.indexFiles.queryFileMaterializationPlan({ projectId })
     const existing = plan.entries.find((entry) => entry.path === input.path)
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
@@ -418,6 +436,16 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       throw new Error("ProjectIndex did not publish the Canvas resource")
     }
     return canvasProofForProjectReference(result.reference, input.mediaClass)
+  }
+
+  private async prepareProjectIndexParent(
+    projectIdInput: string,
+    filePath: string,
+  ): Promise<ProjectIndexFileMaterializationPlan | undefined> {
+    if (!this.indexFiles) return undefined
+    const projectId = parseProjectId(projectIdInput)
+    const plan = await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    return this.ensureProjectIndexDirectories(projectId, filePath, plan)
   }
 
   private async publishManagedAssetProof(input: {

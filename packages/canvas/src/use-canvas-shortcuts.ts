@@ -72,6 +72,16 @@ export function isCanvasExternalDragChordKey(
   return key === "Meta" || key === "Control"
 }
 
+export function resolveCanvasHistoryShortcut(
+  event: Pick<globalThis.KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">,
+): "redo" | "undo" | null {
+  const key = event.key.toLowerCase()
+  const mod = event.metaKey || event.ctrlKey
+  if (mod && !event.altKey && key === "z") return event.shiftKey ? "redo" : "undo"
+  if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && key === "y") return "redo"
+  return null
+}
+
 export function createCanvasShortcutHandler(
   actions: CanvasShortcutActions,
   readOnly: boolean,
@@ -113,8 +123,8 @@ export function createCanvasShortcutHandler(
     if (!mod && !event.altKey && !event.shiftKey && key === "v") return run(actions.select)
     if (!mod && !event.altKey && !event.shiftKey && key === "h" && actions.hand) return run(actions.hand)
     if (readOnly) return
-    if (mod && !event.altKey && key === "z") return run(event.shiftKey ? actions.redo : actions.undo)
-    if (event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey && key === "y") return run(actions.redo)
+    const historyShortcut = resolveCanvasHistoryShortcut(event)
+    if (historyShortcut) return run(actions[historyShortcut])
     if (mod && !event.altKey && event.shiftKey && key === "g") return run(actions.ungroup)
     if (mod && !event.altKey && !event.shiftKey && key === "g") return run(actions.group)
     if (mod && !event.altKey && !event.shiftKey && key === "d") return run(actions.duplicate)

@@ -17,6 +17,9 @@ const openAgentPanelSelector =
 // CAS/recovery/UI paths. Its outer debugger deadline must not expire before
 // the final exact-state wait can report its own bounded failure.
 const evaluationTimeoutMs = timeoutMs * 4 + 30_000
+const latencyMode = process.env.CONVAX_DESKTOP_SMOKE_LATENCY === "1"
+const latencyIterations = 100
+const latencyLimitMs = 500
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
@@ -475,15 +478,234 @@ try {
       scopeId: projectId,
     })
     if (!initialDocument.projection) throw new Error("The default Canvas projection did not load")
+    if (${latencyMode}) {
+      const iterations = ${latencyIterations}
+      const limitMs = ${latencyLimitMs}
+      const ref = { canvasId: selectedCanvasId, scopeId: projectId }
+      const surface = document.querySelector(".convax-canvas")
+      if (!surface) throw new Error("Latency mode requires the mounted Canvas session UI")
+      const probeSession = await window.convax.canvas.sessions.open(ref)
+      const pendingProbeInvalidations = []
+      const unsubscribeProbe = window.convax.canvas.sessions.subscribe((event) => {
+        if (
+          event.sessionId === probeSession.sessionId
+          && event.ref.canvasId === ref.canvasId
+          && event.ref.scopeId === ref.scopeId
+        ) {
+          pendingProbeInvalidations.push({ event, observedAt: performance.now() })
+        }
+      })
+      const percentile = (values, quantile) => {
+        const sorted = [...values].sort((left, right) => left - right)
+        return sorted[Math.max(0, Math.ceil(sorted.length * quantile) - 1)] ?? 0
+      }
+      const documentState = async () => {
+        const projection = await window.convax.canvas.sessions.query({
+          ref,
+          sessionId: probeSession.sessionId,
+        })
+        return projection.document
+      }
+      const waitUntil = async (read, label, timeout = limitMs) => {
+        const deadline = performance.now() + timeout
+        while (performance.now() <= deadline) {
+          const value = await read()
+          if (value) return value
+          await new Promise((resolve) => requestAnimationFrame(resolve))
+        }
+        throw new Error("Latency mode exceeded 500ms waiting for " + label)
+      }
+      const samples = []
+      const run = async (operation, expected, invoke) => {
+        const before = await documentState()
+        const visualBefore = new Set([...surface.querySelectorAll("[data-id]")]
+          .map((element) => element.getAttribute("data-id"))
+          .filter(Boolean))
+        pendingProbeInvalidations.length = 0
+        let feedbackAt
+        const startedAt = performance.now()
+        const observer = new MutationObserver(() => {
+          if (feedbackAt === undefined && expected.rendererFeedback(before, document, visualBefore)) feedbackAt = performance.now()
+        })
+        observer.observe(surface, { attributes: true, childList: true, subtree: true })
+        invoke()
+        if (expected.rendererFeedback(before, document, visualBefore)) feedbackAt = performance.now()
+        let committed
+        try {
+          const observed = await waitUntil(
+            () => pendingProbeInvalidations.shift(),
+            operation + " Main commit",
+            Math.max(limitMs * 10, 5_000),
+          )
+          const commitAt = observed.observedAt
+          await waitUntil(() => expected.reconciled(before, document), operation + " authoritative reconcile")
+          const reconciledAt = performance.now()
+          committed = await documentState()
+          if (!expected.authoritative(before, committed)) {
+            throw new Error(operation + " frame invalidation did not expose the expected authoritative state")
+          }
+          if (feedbackAt === undefined || (feedbackAt >= commitAt && feedbackAt - startedAt > 50)) {
+            throw new Error(operation + " Renderer first-feedback unavailable before a non-immediate Main commit")
+          }
+          const sample = {
+            operation,
+            rendererFirstFeedbackMs: feedbackAt - startedAt,
+            mainCommitMs: commitAt - startedAt,
+            authoritativeReconcileMs: reconciledAt - commitAt,
+            totalMs: reconciledAt - startedAt,
+          }
+          samples.push(sample)
+          if (sample.totalMs > limitMs) {
+            console.error("[convax:desktop-latency-slow] " + JSON.stringify(sample))
+            throw new Error(operation + " exceeded 500ms: " + JSON.stringify(sample))
+          }
+          return { before, committed }
+        } catch (error) {
+          const elapsedMs = performance.now() - startedAt
+          if (elapsedMs > limitMs) {
+            console.error("[convax:desktop-latency-slow] " + JSON.stringify({
+              operation,
+              rendererFirstFeedbackMs: feedbackAt === undefined ? "unavailable" : feedbackAt - startedAt,
+              totalMs: elapsedMs,
+              error: String(error),
+            }))
+          }
+          throw error
+        } finally {
+          observer.disconnect()
+        }
+      }
+      const click = (element, label) => {
+        if (!(element instanceof HTMLElement)) throw new Error("Latency mode could not find " + label)
+        element.click()
+      }
+      const nodeElements = () => [...surface.querySelectorAll(".react-flow__node[data-id]")]
+        .filter((node) => !node.getAttribute("data-id")?.startsWith("ghost-"))
+      const ghostElements = () => surface.querySelectorAll(
+        '.react-flow__node[data-id^="ghost-"], .react-flow__edge[data-id^="ghost-"]',
+      ).length
+      const hasRenderedEntity = (id) => Boolean(id && surface.querySelector('[data-id="' + CSS.escape(id) + '"]'))
+      const hasNewRenderedEntity = (visualBefore, kind) => [...surface.querySelectorAll("[data-id]")].some((element) => {
+        const id = element.getAttribute("data-id")
+        return Boolean(id && !visualBefore.has(id) && element.classList.contains("react-flow__" + kind))
+      })
+      const addedEntityId = (before, after, key) => {
+        const existing = new Set(before[key].map((entity) => entity.id))
+        return after[key].find((entity) => !existing.has(entity.id))?.id
+      }
+      const invokeQuickCreate = () => {
+        click(surface.querySelector('button[aria-label="Add node"]'), "Add node")
+        click(surface.querySelector('button[aria-label="Add Text"]'), "Add Text")
+      }
+      const warmBefore = await documentState()
+      pendingProbeInvalidations.length = 0
+      invokeQuickCreate()
+      await waitUntil(
+        () => pendingProbeInvalidations.shift(),
+        "quick-create warm-up Main commit",
+        Math.max(limitMs * 10, 5_000),
+      )
+      await waitUntil(() => ghostElements() === 0, "quick-create warm-up reconciliation", 5_000)
+      const warmAfter = await documentState()
+      if (warmAfter.nodes.length !== warmBefore.nodes.length + 1) {
+        throw new Error("Latency warm-up did not commit exactly one text node")
+      }
+      for (let index = 0; index < iterations; index += 1) {
+        await run("quick-create", {
+          rendererFeedback: (_before, _document, visualBefore) => ghostElements() > 0 || hasNewRenderedEntity(visualBefore, "node"),
+          authoritative: (before, after) => after.nodes.length === before.nodes.length + 1,
+          reconciled: () => ghostElements() === 0,
+        }, invokeQuickCreate)
+      }
+      const selectLastNode = () => {
+        const node = nodeElements().at(-1)
+        click(node, "the last Canvas node")
+      }
+      for (let index = 0; index < iterations; index += 1) {
+        selectLastNode()
+        await run("duplicate", {
+          rendererFeedback: (_before, _document, visualBefore) => ghostElements() > 0 || hasNewRenderedEntity(visualBefore, "node"),
+          authoritative: (before, after) => after.nodes.length === before.nodes.length + 1,
+          reconciled: () => ghostElements() === 0,
+        }, () => click(surface.querySelector('button[aria-label="Duplicate"]'), "Duplicate"))
+      }
+      const connectOnce = (index) => {
+        const nodes = nodeElements()
+        const source = nodes[index]
+        const target = nodes[index + iterations]
+        const sourceHandle = source?.querySelector('[data-handle-id="source-right"]')
+        const targetHandle = target?.querySelector('[data-handle-id="target-left"]')
+        if (!(sourceHandle instanceof HTMLElement) || !(targetHandle instanceof HTMLElement)) {
+          throw new Error("Latency mode could not find public Canvas connection handles")
+        }
+        const sourceBounds = sourceHandle.getBoundingClientRect()
+        const targetBounds = targetHandle.getBoundingClientRect()
+        const pointer = (targetElement, type, bounds, buttons) => targetElement.dispatchEvent(new PointerEvent(type, {
+          bubbles: true,
+          buttons,
+          clientX: bounds.left + bounds.width / 2,
+          clientY: bounds.top + bounds.height / 2,
+          pointerId: 1,
+          pointerType: "mouse",
+        }))
+        pointer(sourceHandle, "pointerdown", sourceBounds, 1)
+        pointer(targetHandle, "pointermove", targetBounds, 1)
+        pointer(targetHandle, "pointerup", targetBounds, 0)
+      }
+      let historyEdgeId
+      for (let index = 0; index < iterations; index += 1) {
+        const connected = await run("connect", {
+          rendererFeedback: (_before, _document, visualBefore) => ghostElements() > 0 || hasNewRenderedEntity(visualBefore, "edge"),
+          authoritative: (before, after) => after.edges.length === before.edges.length + 1,
+          reconciled: () => ghostElements() === 0,
+        }, () => connectOnce(index))
+        historyEdgeId = addedEntityId(connected.before, connected.committed, "edges")
+      }
+      const invokeHistory = (key, shiftKey) => window.dispatchEvent(new KeyboardEvent("keydown", {
+        bubbles: true, cancelable: true, key, metaKey: true, shiftKey,
+      }))
+      for (let index = 0; index < iterations; index += 1) {
+        const targetEdgeId = historyEdgeId
+        if (!targetEdgeId) throw new Error("Latency mode lost the visual-history edge identity")
+        await run("undo", {
+          rendererFeedback: () => !hasRenderedEntity(targetEdgeId),
+          authoritative: (before, after) => after.edges.length === before.edges.length - 1
+            && !after.edges.some((edge) => edge.id === targetEdgeId),
+          reconciled: () => !hasRenderedEntity(targetEdgeId) && ghostElements() === 0,
+        }, () => invokeHistory("z", false))
+        const redone = await run("redo", {
+          rendererFeedback: (_before, _document, visualBefore) => ghostElements() > 0 || hasNewRenderedEntity(visualBefore, "edge"),
+          authoritative: (before, after) => after.edges.length === before.edges.length + 1,
+          reconciled: () => ghostElements() === 0,
+        }, () => invokeHistory("z", true))
+        historyEdgeId = addedEntityId(redone.before, redone.committed, "edges")
+      }
+      const summary = Object.fromEntries(["duplicate", "connect", "quick-create", "undo", "redo"].map((operation) => {
+        const rows = samples.filter((sample) => sample.operation === operation)
+        const metrics = Object.fromEntries(["rendererFirstFeedbackMs", "mainCommitMs", "authoritativeReconcileMs", "totalMs"].map(
+          (metric) => [metric, { p95: percentile(rows.map((row) => row[metric]), 0.95), p99: percentile(rows.map((row) => row[metric]), 0.99) }],
+        ))
+        return [operation, { count: rows.length, metrics }]
+      }))
+      console.log("[convax:desktop-latency-summary] " + JSON.stringify(summary))
+      unsubscribeProbe()
+      await window.convax.canvas.sessions.close({ ref, sessionId: probeSession.sessionId })
+      return { latencyMode: true, latencySummary: summary, projectId }
+    }
     const offlineBasic = JSON.parse(sessionStorage.getItem("convax.smoke.v11-offline-basic.v1") ?? "null")
     if (selectedCanvasId.startsWith("cv_")) {
       if (!offlineBasic) {
         if (initialDocument.projection.nodes.length !== 0) throw new Error("A new V11 Canvas was not empty")
+        const resourceSession = await window.convax.canvas.sessions.open({
+          canvasId: selectedCanvasId,
+          scopeId: projectId,
+        })
         const added = await window.convax.canvas.resources.add({
           anchor: { x: 40, y: 60 },
           canvasId: selectedCanvasId,
           commandId: "smoke-v11-offline-add",
           projectId,
+          sessionId: resourceSession.sessionId,
           sources: [
             { kind: "new-text", name: "offline-keep", sourceId: "offline-keep", text: "Keep after restart" },
             { kind: "new-text", name: "offline-delete", sourceId: "offline-delete", text: "Delete before restart" },
@@ -991,6 +1213,8 @@ try {
     documentId?: string
     localAuthorityRecovery?: boolean
     language?: string
+    latencyMode?: boolean
+    latencySummary?: unknown
     offlineMutation?: boolean
     projectId?: string
     recoveryTitle?: string
@@ -1002,7 +1226,12 @@ try {
       status?: string
     }
   }
-  if (summary.startupMode === "local-authority-unavailable") {
+  if (summary.latencyMode === true) {
+    if (!summary.projectId || !summary.latencySummary) {
+      throw new Error(`Unexpected latency result: ${JSON.stringify(summary)}`)
+    }
+    console.log(`Desktop mounted-session latency smoke passed (${summary.projectId})`)
+  } else if (summary.startupMode === "local-authority-unavailable") {
     if (
       !summary.projectId ||
       summary.canvasCount !== 0 ||

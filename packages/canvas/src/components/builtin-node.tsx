@@ -73,10 +73,7 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 import {
-  mentionCanvasResource,
   normalizeCanvasTextNodeTitle,
-  setCanvasTextNodeTitle,
-  updateCanvasNodeData,
 } from "../commands"
 import { isCanvasEmptyImageNodeData } from "../document"
 import { useCanvasOverlayPresence } from "./use-overlay-presence"
@@ -88,12 +85,11 @@ import {
 import { useCanvasEditor, useCanvasNodeEntryPresentation, useCanvasOverlayRoot } from "../editor-context"
 import { useCanvasMutationSurface } from "./canvas-mutation-surface"
 import { getCanvasTextFileFormat } from "../file-import"
-import { getCanvasNodeGenerationToolId, setCanvasNodeGenerationToolId } from "../generation-preference"
+import { getCanvasNodeGenerationToolId } from "../generation-preference"
 import {
   getCanvasGroupAppearance,
   getCanvasGroupEmoji,
   hasUnsupportedCanvasGroupAppearance,
-  setCanvasGroupAppearance,
   type CanvasGroupAppearance,
 } from "../group-appearance"
 import { isCanvasGroupFolded } from "../group-fold"
@@ -1644,12 +1640,10 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       onSelect: (candidate) => {
         const current = canvasEditorRef.current
         if (!isCanvasTextMentionCandidate(current.document, props.id, candidate.id)) return false
-        current.commit((document) =>
-          mentionCanvasResource(document, {
-            mentionedNodeId: candidate.id,
-            textNodeId: props.id,
-          }),
-        )
+        current.executeCommand({
+          type: "nodes.connect",
+          connection: { source: candidate.id, target: props.id },
+        })
         return true
       },
     })
@@ -1803,7 +1797,8 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     const next = normalizeCanvasTextNodeTitle(titleDraftRef.current)
     titleDraftRef.current = next
     setTitleDraft(next)
-    canvasEditorRef.current.commit((document) => setCanvasTextNodeTitle(document, props.id, next))
+    if (next === dataRef.current.label) return
+    canvasEditorRef.current.executeCommand({ type: "nodes.setTitle", nodeId: props.id, title: next })
   }, [props.id])
 
   const closeExpandedEditor = useCallback(() => {
@@ -2705,14 +2700,23 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
           onMediaLoad={
             supportsViewer
               ? (size) => {
-                  editor.commit((document) =>
-                    fitCanvasMediaNodeToIntrinsicSize(document, {
-                      ...size,
-                      nodeId: props.id,
-                      preserveFrame: cutoutPresentation !== "idle",
-                      sourceUrl: url ?? "",
-                    }),
-                  )
+                  const fitted = fitCanvasMediaNodeToIntrinsicSize(editor.document, {
+                    ...size,
+                    nodeId: props.id,
+                    preserveFrame: cutoutPresentation !== "idle",
+                    sourceUrl: url ?? "",
+                  })
+                  const next = fitted.nodes.find((node) => node.id === props.id)
+                  const current = editor.document.nodes.find((node) => node.id === props.id)
+                  if (!next || !current) return
+                  const width = typeof next.style?.width === "number" ? next.style.width : undefined
+                  const height = typeof next.style?.height === "number" ? next.style.height : undefined
+                  const sizeChanged = width !== current.style?.width || height !== current.style?.height
+                  if (!sizeChanged || width === undefined || height === undefined) return
+                  editor.executeCommand({
+                    type: "nodes.setGeometry",
+                    updates: [{ nodeId: props.id, position: next.position, size: { width, height } }],
+                  })
                 }
               : undefined
           }
@@ -2823,14 +2827,10 @@ function GroupNode(props: NodeProps<CanvasNode>) {
     titleChangedRef.current = false
     setTitle(resolved.title)
     if (!resolved.shouldCommit) return
-    editor.commit((document) =>
-      updateCanvasNodeData(document, props.id, (data) =>
-        data.kind === "group" ? { ...data, label: resolved.title } : data,
-      ),
-    )
+    editor.executeCommand({ type: "nodes.setTitle", nodeId: props.id, title: resolved.title })
   }
   const updateAppearance = (next: CanvasGroupAppearance) => {
-    editor.commit((document) => setCanvasGroupAppearance(document, props.id, next))
+    editor.executeCommand({ type: "nodes.setGroupAppearance", nodeId: props.id, appearance: next })
   }
   if (focused) {
     return <div aria-hidden="true" className="pointer-events-none size-full" data-canvas-group-focus-root />
@@ -3202,7 +3202,7 @@ function FileAssistantAccessory(
                     ...(replacesOwner
                       ? {
                           onOwnerToolIdChange: (toolId?: string) => {
-                            editor.commit((document) => setCanvasNodeGenerationToolId(document, props.id, toolId))
+                            editor.executeCommand({ type: "nodes.setGenerationToolId", nodeId: props.id, toolId })
                           },
                           ownerToolId: ownerNode ? getCanvasNodeGenerationToolId(ownerNode) : undefined,
                         }

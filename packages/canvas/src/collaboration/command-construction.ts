@@ -50,6 +50,7 @@ export type CanvasAuthoritativeCommand =
   | Readonly<{
       readonly kind: "resources-create"
       readonly anchor: Readonly<{ x: number; y: number }>
+      readonly relation?: CanvasCreatedResourceRelation | null
       readonly items: readonly Readonly<{
         readonly title: string
         readonly proof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>
@@ -59,6 +60,7 @@ export type CanvasAuthoritativeCommand =
   | Readonly<{
       readonly kind: "manual-resource-placeholders-create"
       readonly anchor: Readonly<{ x: number; y: number }>
+      readonly relation?: CanvasCreatedResourceRelation | null
       readonly items: readonly Readonly<{
         readonly title: string
         readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
@@ -86,9 +88,21 @@ export type CanvasAuthoritativeCommand =
       }>[]
     }>
   | Readonly<{
+      readonly kind: "nodes-duplicate"
+      readonly sources: readonly (CanvasEntityRef & { readonly kind: "node" })[]
+      readonly offset: Readonly<{ x: number; y: number }>
+      readonly edgeScope: "connected" | "internal"
+    }>
+  | Readonly<{
       readonly kind: "nodes-group"
       readonly children: readonly (CanvasEntityRef & { readonly kind: "node" })[]
       readonly title: string
+      readonly folded: boolean
+    }>
+  | Readonly<{
+      readonly kind: "node-data-set"
+      readonly node: CanvasEntityRef & { readonly kind: "node" }
+      readonly data: import("./types").NodeDataEnvelope
     }>
   | Readonly<{
       readonly kind: "nodes-ungroup"
@@ -98,12 +112,14 @@ export type CanvasAuthoritativeCommand =
       readonly kind: "structural-parent-set"
       readonly child: CanvasEntityRef & { readonly kind: "node" }
       readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
+      readonly position: Readonly<{ x: number; y: number }>
     }>
   | Readonly<{
       readonly kind: "resource-relink"
       readonly node: CanvasEntityRef & { readonly kind: "node" }
       readonly title: string
       readonly proof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>
+      readonly generationToolId?: string
     }>
   | Readonly<{
       /** Host-owned validated envelope; never accepted from a Plugin renderer. */
@@ -125,6 +141,11 @@ export type CanvasAuthoritativeCommand =
       readonly plugin: PluginStateEnvelope
     }>
   | CanvasPluginCreationGroupCommand
+
+export interface CanvasCreatedResourceRelation {
+  readonly anchors: readonly (CanvasEntityRef & { readonly kind: "node" })[]
+  readonly direction: "from-anchor" | "to-anchor"
+}
 
 export interface CanvasPluginCreationGroupCommand {
   readonly kind: "plugin-creation-group"
@@ -288,13 +309,22 @@ function constructIntent(
       const node = derivedNodeRef(context, ordinal)
       return Object.freeze({ ordinal, node, item })
     })
+    const edges = createdResourceEdges(context, nodes, command.relation)
+    requireBoundedCreateSet(nodes.length, edges.length)
     return Object.freeze({
       format: "convax.typed-intent",
       kind: "canvas.resources.add",
       guard: Object.freeze({
-        existingEndpoints: Object.freeze([]),
+        existingEndpoints: Object.freeze(
+          (command.relation?.anchors ?? []).map((anchor) => connectableGuard(snapshot, anchor)),
+        ),
         derivedNodes: Object.freeze(nodes.map(({ ordinal, node }) => Object.freeze({ ordinal, node, expectedAbsent: true }))),
-        derivedEdges: Object.freeze([]),
+        derivedEdges: Object.freeze(
+          edges.map((edge) => {
+            const ref = derivedEdgeRef(context, edge.ordinal)
+            return Object.freeze({ ordinal: edge.ordinal, edge: ref, expectedAbsent: true as const })
+          }),
+        ),
         resourceProofs: Object.freeze(nodes.map(({ ordinal, item }) => Object.freeze({
           createdNodeOrdinal: ordinal,
           proof: item.proof,
@@ -314,7 +344,7 @@ function constructIntent(
           title: item.title,
           resource: item.proof.resource,
         }))),
-        edges: Object.freeze([]),
+        edges: Object.freeze(edges),
       }),
     })
   }
@@ -325,13 +355,22 @@ function constructIntent(
       const node = derivedNodeRef(context, ordinal)
       return Object.freeze({ ordinal, node, item })
     })
+    const edges = createdResourceEdges(context, nodes, command.relation)
+    requireBoundedCreateSet(nodes.length, edges.length)
     return Object.freeze({
       format: "convax.typed-intent",
       kind: "canvas.resources.pending.create",
       guard: Object.freeze({
-        existingEndpoints: Object.freeze([]),
+        existingEndpoints: Object.freeze(
+          (command.relation?.anchors ?? []).map((anchor) => connectableGuard(snapshot, anchor)),
+        ),
         derivedNodes: Object.freeze(nodes.map(({ ordinal, node }) => Object.freeze({ ordinal, node, expectedAbsent: true }))),
-        derivedEdges: Object.freeze([]),
+        derivedEdges: Object.freeze(
+          edges.map((edge) => {
+            const ref = derivedEdgeRef(context, edge.ordinal)
+            return Object.freeze({ ordinal: edge.ordinal, edge: ref, expectedAbsent: true as const })
+          }),
+        ),
       }),
       body: Object.freeze({
         placement: Object.freeze({
@@ -347,7 +386,7 @@ function constructIntent(
           title: item.title,
           expectedClass: item.expectedClass,
         }))),
-        edges: Object.freeze([]),
+        edges: Object.freeze(edges),
       }),
     })
   }
@@ -376,9 +415,20 @@ function constructIntent(
   }
   if (command.kind === "elements-remove") return removeElementsIntent(snapshot, command)
   if (command.kind === "geometry-set") return geometryIntent(snapshot, command.updates)
+  if (command.kind === "nodes-duplicate") return duplicateNodesIntent(snapshot, context, command)
   if (command.kind === "nodes-group") return groupNodesIntent(snapshot, context, command)
+  if (command.kind === "node-data-set") {
+    const node = requireLiveNode(snapshot, command.node)
+    return Object.freeze({
+      format: "convax.typed-intent",
+      kind: "canvas.nodes.update-data",
+      guard: Object.freeze({ node: nodeDataGuard(snapshot, node), resourceProof: null }),
+      body: Object.freeze({ node: Object.freeze({ ...command.node }), data: structuredClone(command.data) }),
+    })
+  }
   if (command.kind === "nodes-ungroup") return ungroupNodesIntent(snapshot, context, command.group)
   if (command.kind === "structural-parent-set") {
+    const child = requireLiveNode(snapshot, command.child)
     if (command.parent !== null) {
       const parent = requireLiveNode(snapshot, command.parent)
       if (buildCanvasProjectionIndex(snapshot).nodesByKey.get(canvasEntityKey(parent.identity.ref))?.data.kind !== "group") {
@@ -389,12 +439,16 @@ function constructIntent(
       format: "convax.typed-intent",
       kind: "canvas.nodes.set-structural-parent",
       guard: Object.freeze({
-        child: containmentGuard(snapshot, context, command.child),
+        child: Object.freeze({
+          ...containmentGuard(snapshot, context, command.child),
+          expectedGeometryDigest: geometryDigest(child),
+        }),
         parent: command.parent === null ? null : nodeLiveGuard(snapshot, command.parent),
       }),
       body: Object.freeze({
         child: Object.freeze({ ...command.child }),
         parent: command.parent === null ? null : Object.freeze({ ...command.parent }),
+        position: Object.freeze({ ...command.position }),
         relationId: derivedRelationId(context, 0),
       }),
     })
@@ -415,6 +469,7 @@ function constructIntent(
           kind: "resource",
           title: command.title,
           resource: structuredClone(command.proof.resource),
+          ...(command.generationToolId === undefined ? {} : { generationToolId: command.generationToolId }),
         }),
       }),
     })
@@ -449,6 +504,141 @@ function constructIntent(
     })
   }
   return pluginCreationGroupIntent(snapshot, context, command)
+}
+
+function duplicateNodesIntent(
+  snapshot: CanvasSnapshot,
+  context: OwnerIntentConstructionContext,
+  command: Extract<CanvasAuthoritativeCommand, { readonly kind: "nodes-duplicate" }>,
+): CanvasTypedIntentUnion {
+  const index = buildCanvasProjectionIndex(snapshot)
+  const sourceKeys = new Set(command.sources.map(canvasEntityKey))
+  if (sourceKeys.size !== command.sources.length || command.sources.length < 1 || command.sources.length > 85) {
+    throw new RangeError("Canvas duplicate source set is invalid")
+  }
+  const sourceNodes = command.sources.map((ref) => {
+    const node = snapshot.nodes.get(canvasEntityKey(ref))
+    if (!node || !index.isNodeLive(ref)) throw new TypeError("Canvas duplicate source is stale")
+    return node
+  })
+  const ordinalBySource = new Map(sourceNodes.map((node, index) => [node.key, parseUint32(String(index))] as const))
+  const nodes = sourceNodes.map((source, position): NodeCreateTemplate => {
+    const ordinal = parseUint32(String(position))
+    const ref = derivedNodeRef(context, ordinal)
+    const projected = index.projection.nodes.find((candidate) => sameCanonicalValue(candidate.ref, source.identity.ref))!
+    return Object.freeze({
+      ordinal,
+      nodeId: ref.id,
+      incarnation: ref.incarnation,
+      role: projected.role,
+      position: Object.freeze({ x: projected.position.x + command.offset.x, y: projected.position.y + command.offset.y }),
+      size: Object.freeze({ ...projected.size }),
+      data: structuredClone(projected.data),
+      plugin: structuredClone(projected.plugin),
+    })
+  })
+  const projectedEdges = index.projection.edges.filter((edge) => {
+    const sourceIncluded = sourceKeys.has(canvasEntityKey(edge.source))
+    const targetIncluded = sourceKeys.has(canvasEntityKey(edge.target))
+    return command.edgeScope === "internal" ? sourceIncluded && targetIncluded : sourceIncluded || targetIncluded
+  })
+  if (projectedEdges.length > 168 || 6 * nodes.length + 3 * projectedEdges.length + 2 > 512) {
+    throw new RangeError("Canvas duplicate set exceeds intent bounds")
+  }
+  const externalRefs = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
+  const endpoint = (ref: CanvasEntityRef & { readonly kind: "node" }) => {
+    const ordinal = ordinalBySource.get(canvasEntityKey(ref))
+    if (ordinal !== undefined) return Object.freeze({ createdNodeOrdinal: ordinal })
+    externalRefs.set(canvasEntityKey(ref), ref)
+    return Object.freeze({ ...ref })
+  }
+  const edges = projectedEdges.map((edge, index): EdgeCreateTemplate => {
+    const ordinal = parseUint32(String(nodes.length + index))
+    const ref = derivedEdgeRef(context, ordinal)
+    return Object.freeze({
+      ordinal,
+      edgeId: ref.id,
+      incarnation: ref.incarnation,
+      source: endpoint(edge.source),
+      target: endpoint(edge.target),
+      data: structuredClone(edge.data),
+    })
+  })
+  const existingParents = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
+  const containments = sourceNodes.flatMap((source, position) => {
+    const projected = index.projection.nodes.find((candidate) => sameCanonicalValue(candidate.ref, source.identity.ref))!
+    if (projected.parent === null) return []
+    const parentOrdinal = ordinalBySource.get(canvasEntityKey(projected.parent))
+    const parent = parentOrdinal === undefined
+      ? (existingParents.set(canvasEntityKey(projected.parent), projected.parent), Object.freeze({ ...projected.parent }))
+      : Object.freeze({ createdNodeOrdinal: parentOrdinal })
+    return [Object.freeze({
+      childCreatedNodeOrdinal: parseUint32(String(position)),
+      parent,
+      relationId: derivedRelationId(context, nodes.length + edges.length + position),
+    })]
+  })
+  if (6 * nodes.length + 3 * edges.length + containments.length + 2 > 512) {
+    throw new RangeError("Canvas duplicate set exceeds intent bounds")
+  }
+  return Object.freeze({
+    format: "convax.typed-intent",
+    kind: "canvas.nodes.duplicate",
+    guard: Object.freeze({
+      sources: Object.freeze(sourceNodes.map((node) => nodeDataGuard(snapshot, node))),
+      existingEndpoints: Object.freeze([...externalRefs.values()].map((ref) => connectableGuard(snapshot, ref))),
+      existingParents: Object.freeze([...existingParents.values()].map((ref) => nodeLiveGuard(snapshot, ref))),
+      derivedNodes: Object.freeze(nodes.map((node) => Object.freeze({
+        ordinal: node.ordinal,
+        node: derivedNodeRef(context, node.ordinal),
+        expectedAbsent: true as const,
+      }))),
+      derivedEdges: Object.freeze(edges.map((edge) => Object.freeze({
+        ordinal: edge.ordinal,
+        edge: derivedEdgeRef(context, edge.ordinal),
+        expectedAbsent: true as const,
+      }))),
+    }),
+    body: Object.freeze({
+      offset: Object.freeze({ ...command.offset }),
+      nodes: Object.freeze(nodes),
+      edges: Object.freeze(edges),
+      containments: Object.freeze(containments),
+    }),
+  })
+}
+
+function createdResourceEdges(
+  context: OwnerIntentConstructionContext,
+  nodes: readonly { readonly ordinal: import("./types").Uint32 }[],
+  relation: CanvasCreatedResourceRelation | null | undefined,
+): readonly EdgeCreateTemplate[] {
+  if (relation == null) return Object.freeze([])
+  const edges: EdgeCreateTemplate[] = []
+  for (const anchor of relation.anchors) {
+    for (const node of nodes) {
+      const ordinal = parseUint32(String(nodes.length + edges.length))
+      const ref = derivedEdgeRef(context, ordinal)
+      const created = Object.freeze({ createdNodeOrdinal: node.ordinal })
+      edges.push(
+        Object.freeze({
+          ordinal,
+          edgeId: ref.id,
+          incarnation: ref.incarnation,
+          source: relation.direction === "from-anchor" ? Object.freeze({ ...anchor }) : created,
+          target: relation.direction === "from-anchor" ? created : Object.freeze({ ...anchor }),
+          data: Object.freeze({ format: "convax.canvas-edge-data", kind: "business", label: null }),
+        }),
+      )
+    }
+  }
+  return Object.freeze(edges)
+}
+
+function requireBoundedCreateSet(nodeCount: number, edgeCount: number): void {
+  if (edgeCount > 168 || 6 * nodeCount + 3 * edgeCount + 2 > 512) {
+    throw new RangeError("Connected resource creation exceeds Canvas bounds")
+  }
 }
 
 function removeElementsIntent(
@@ -582,7 +772,12 @@ function groupNodesIntent(
         role: "file" as const,
         position: groupPosition,
         size: groupSize,
-        data: Object.freeze({ format: "convax.canvas-node-data" as const, kind: "group" as const, title: command.title }),
+        data: Object.freeze({
+          format: "convax.canvas-node-data" as const,
+          kind: "group" as const,
+          title: command.title,
+          ...(command.folded ? { folded: true as const } : {}),
+        }),
         plugin: null,
       }),
       children: Object.freeze(childRefs),

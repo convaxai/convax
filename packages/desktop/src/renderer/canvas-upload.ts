@@ -1,8 +1,7 @@
 import type { CanvasResourceMutationRequest } from "@convax/canvas"
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import type { CanvasDocument } from "@convax/canvas/core"
 import { parseProjectEntryDrag, PROJECT_ENTRY_DRAG_TYPE } from "@convax/project-files/drag"
-import type { CanvasResourceClient } from "../desktop-protocol"
+import type { CanvasResourceAddInput, CanvasResourceClient } from "../desktop-protocol"
 
 export interface CanvasUploadSources {
   localFiles: Array<{ file: File; mediaType?: string; name: string; sourceId: string }>
@@ -32,7 +31,7 @@ export interface CanvasUploadMutationHost
   extends Pick<CanvasResourceClient, "add" | "createLocalFileToken"> {
   createCommandId(): string
   createSourceId(): string
-  flushAuthoritativeCanvas(): Promise<Pick<CanvasDocument, "id"> | undefined>
+  sessionId: CanvasResourceAddInput["sessionId"]
 }
 
 export function resolveCanvasUploadItems(request: CanvasUploadRequest, host: CanvasUploadHost): CanvasUploadSources {
@@ -60,11 +59,6 @@ export async function addCanvasUploadResources(
   host: CanvasUploadMutationHost,
 ) {
   throwIfAborted(request.signal)
-  const authoritativeDocument = await host.flushAuthoritativeCanvas()
-  throwIfAborted(request.signal)
-  if (!authoritativeDocument || authoritativeDocument.id !== request.canvasId) {
-    throw new Error("Canvas upload could not resolve Main's authoritative document")
-  }
   const transport = resolveCanvasUploadItems(
     {
       files: request.files ?? [],
@@ -87,6 +81,7 @@ export async function addCanvasUploadResources(
     ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
     ...(request.pending === undefined ? {} : { pending: request.pending }),
     projectId: request.projectId,
+    sessionId: host.sessionId,
     ...(request.relation === undefined ? {} : { relation: request.relation }),
     sources: [...request.sources, ...transport.sources],
   })

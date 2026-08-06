@@ -335,6 +335,7 @@ test("box-selects connected nodes without feeding controlled selection back into
       id: "box-selection",
       nodes: [first, second],
     })
+    let observedDocument = initialDocument
     const session = new RealReactFlowCanvasSession(initialDocument)
     const nodeRegistry = createCanvasNodeRegistry([
       {
@@ -358,6 +359,7 @@ test("box-selects connected nodes without feeding controlled selection back into
           <CanvasEditor
             fileRendererRegistry={createCanvasFileRendererRegistry()}
             nodeRegistry={nodeRegistry}
+            onDocumentChange={(next) => { observedDocument = next }}
             onlyRenderVisibleElements={false}
             services={createCanvasServices()}
             session={session}
@@ -477,7 +479,9 @@ test("box-selects connected nodes without feeding controlled selection back into
 
     await act(async () => {
       session.publish(structuredClone(initialDocument), { first: "replacement-first-incarnation" })
+      await Promise.resolve()
     })
+    expect(observedDocument).not.toBe(initialDocument)
     expect(observedSelection).toEqual({ edgeIds: ["connected"], nodeIds: ["second"] })
 
     await act(async () => {

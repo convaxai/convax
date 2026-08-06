@@ -1,6 +1,10 @@
 import { getCanvasNodePresentationSize } from "./document"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
+export * from "./optimistic-overlay"
+export * from "./optimistic-overlay-plans"
+export * from "./visual-history"
+
 export const CANVAS_VIEW_MIN_ZOOM = 0.15
 export const CANVAS_VIEW_MAX_ZOOM = 2.5
 

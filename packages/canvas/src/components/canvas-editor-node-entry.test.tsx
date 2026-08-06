@@ -13,6 +13,7 @@ import type { Connection, NodeProps } from "@xyflow/react"
 import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
 import type { CanvasDocument, CanvasNode } from "../types"
+import type { CanvasResourceMutationRequest } from "../services"
 import type { CanvasEditorHandle } from "./canvas-editor"
 
 let renderedNodes: CanvasNode[] = []
@@ -24,6 +25,7 @@ let connectStart:
 let connectEnd:
   | ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void)
   | undefined
+let nodesChange: ((changes: readonly { id: string; selected: boolean; type: "select" }[]) => void) | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
 function Passthrough(props: { children?: ReactNode }) {
@@ -161,12 +163,14 @@ void mock.module("@xyflow/react", () => ({
     onConnect?: (connection: Connection) => void
     onConnectEnd?: (event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void
     onConnectStart?: (event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void
+    onNodesChange?: (changes: readonly { id: string; selected: boolean; type: "select" }[]) => void
     onPaneContextMenu?: (event: { clientX: number; clientY: number }) => void
   }) => {
     renderedNodes = props.nodes ?? []
     connect = props.onConnect
     connectStart = props.onConnectStart
     connectEnd = props.onConnectEnd
+    nodesChange = props.onNodesChange
     return (
       <div
         className="react-flow__pane"
@@ -260,6 +264,7 @@ const [
 
 let nextNodeId = 0
 const createdNodes = new Map<string, CanvasNode>()
+const resourceMutations: CanvasResourceMutationRequest[] = []
 
 class NodeEntryCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
@@ -424,6 +429,7 @@ function createNodeEntryServices(session: NodeEntryCanvasSession) {
   return createCanvasServices({
     mutation: {
       async add(input) {
+        resourceMutations.push(input)
         const id = `created-${++nextNodeId}`
         const node = createMediaNode({
           id,
@@ -571,6 +577,107 @@ test("publishes hydrated resource state into the rendered transient document", a
       status: "ready",
       url: "convax-asset://project/relinked-image",
     })
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("projects a dropped local file before the host mutation settles and reconciles it after authority arrives", async () => {
+  const restoreWindow = installTestWindow()
+  const editorRef = createRef<CanvasEditorHandle | null>()
+  let root: Root | undefined
+  renderNodes = true
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "optimistic-upload" }))
+  let resolveMutation: ((value: { createdNodeIds: readonly string[]; warnings: readonly string[] }) => void) | undefined
+  let rejectMutation: ((reason?: unknown) => void) | undefined
+  const mutation = mock(
+    async (_input: CanvasResourceMutationRequest) =>
+      new Promise<{ createdNodeIds: readonly string[]; warnings: readonly string[] }>((resolve, reject) => {
+        resolveMutation = resolve
+        rejectMutation = reject
+      }),
+  )
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          nodeRegistry={createTestRegistry()}
+          ref={editorRef}
+          services={createCanvasServices({ mutation: { add: mutation } })}
+          session={session}
+          viewScopeId="optimistic-upload"
+        />,
+      )
+    })
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")!
+    const file = new File(["image"], "instant.png", { type: "image/png" })
+    const drop = (selectedFile: File) => {
+      const event = new Event("drop", { bubbles: true })
+      Object.defineProperty(event, "clientX", { value: 120 })
+      Object.defineProperty(event, "clientY", { value: 160 })
+      Object.defineProperty(event, "dataTransfer", {
+        value: { files: [selectedFile], getData: () => "", types: ["Files"] },
+      })
+      canvas.dispatchEvent(event)
+    }
+
+    await act(async () => {
+      drop(file)
+      await Promise.resolve()
+    })
+
+    expect(mutation).toHaveBeenCalledTimes(1)
+    expect(renderedNodes).toHaveLength(1)
+    expect(renderedNodes[0]).toMatchObject({ data: { kind: "image", name: "instant.png", status: "pending" } })
+    expect(renderedNodes[0]).toMatchObject({
+      connectable: false,
+      deletable: false,
+      draggable: false,
+      focusable: false,
+      selectable: false,
+    })
+    expect(renderedNodes[0]?.id.startsWith("ghost-resource:")).toBeTrue()
+    expect(session.getProjection().nodes).toEqual([])
+
+    const authoritative = createMediaNode({
+      id: "authoritative-image",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "authoritative-image",
+        kind: "image",
+        metadata: {},
+        name: "instant.png",
+        state: { status: "ready" },
+      },
+    })
+    await act(async () => {
+      session.publish({ ...session.getProjection(), nodes: [authoritative] })
+      resolveMutation?.({ createdNodeIds: [authoritative.id], warnings: [] })
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-image"])
+
+    const failedFile = new File(["video"], "failed.mp4", { type: "video/mp4" })
+    await act(async () => {
+      drop(failedFile)
+      await Promise.resolve()
+    })
+    expect(renderedNodes).toHaveLength(2)
+    expect(renderedNodes[1]).toMatchObject({ data: { kind: "video", name: "failed.mp4", status: "pending" } })
+
+    await act(async () => {
+      rejectMutation?.(new Error("import failed"))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.map((node) => node.id)).toEqual(["authoritative-image"])
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
@@ -906,12 +1013,13 @@ test("places a top-toolbar-created node in a visible gap and focuses it before e
   }
 })
 
-test("does not offer non-atomic Agent creation after dragging a connection to empty canvas", async () => {
+test("offers atomic text, image, and video creation but not non-atomic Agent creation after dragging a connection", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
   let root: Root | undefined
   renderNodes = true
   nextNodeId = 0
+  resourceMutations.length = 0
   const session = new NodeEntryCanvasSession(createNodeEntryDocument())
   const nodeRegistry = createTestRegistry()
   setViewport.mockClear()
@@ -947,9 +1055,30 @@ test("does not offer non-atomic Agent creation after dragging a connection to em
     const textOption = [...(pendingMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Text"),
     )
+    const imageOption = [...(pendingMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Image"),
+    )
+    const videoOption = [...(pendingMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Video"),
+    )
     expect(pendingMenu).toBeDefined()
     expect(agentOption).toBeUndefined()
     expect(textOption).toBeDefined()
+    expect(imageOption).toBeDefined()
+    expect(videoOption).toBeDefined()
+
+    await act(async () => {
+      imageOption?.click()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(resourceMutations).toHaveLength(1)
+    expect(resourceMutations[0]).toMatchObject({
+      files: [],
+      pending: { kind: "image", label: "Image" },
+      relation: { anchorNodeIds: ["hydrated"], direction: "from-anchor", mode: "connect" },
+      sources: [],
+    })
   } finally {
     setViewport.mockReset()
     setViewport.mockImplementation(async () => undefined)
@@ -1054,6 +1183,90 @@ test("submits direct and card-target connections through the existing applicatio
   }
 })
 
+test("hides a deleted node immediately and restores it when the authoritative command fails", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  renderNodes = true
+  const node = createMediaNode({
+    id: "optimistic-delete",
+    position: { x: 20, y: 40 },
+    resource: { id: "optimistic-delete", kind: "image", metadata: {}, state: { status: "ready" } },
+  })
+  const session = new NodeEntryCanvasSession(createCanvasDocument({ id: "optimistic-delete-canvas", nodes: [node] }))
+  let resolveCommand: (() => void) | undefined
+  let rejectCommand: ((error: Error) => void) | undefined
+  const executeCommand = mock(
+    () => new Promise<void>((resolve, reject) => {
+      resolveCommand = resolve
+      rejectCommand = reject
+    }),
+  )
+  const notify = mock(() => undefined)
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <CanvasEditor
+          executeCommand={executeCommand}
+          nodeRegistry={createTestRegistry()}
+          services={createCanvasServices({ notify: { show: notify } })}
+          session={session}
+        />,
+      )
+      await Promise.resolve()
+    })
+
+    await act(async () => {
+      nodesChange?.([{ id: node.id, selected: true, type: "select" }])
+      await Promise.resolve()
+    })
+    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Delete"),
+    )
+    expect(deleteButton).toBeDefined()
+    await act(async () => {
+      deleteButton?.click()
+      await Promise.resolve()
+    })
+    expect(executeCommand).toHaveBeenCalledWith({ type: "elements.remove", nodeIds: [node.id], edgeIds: [] })
+    expect(renderedNodes).toEqual([])
+
+    await act(async () => {
+      rejectCommand?.(new Error("delete rejected"))
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(renderedNodes.map((candidate) => candidate.id)).toEqual([node.id])
+    expect(notify).toHaveBeenCalledWith({
+      kind: "error",
+      title: "Could not delete Canvas elements",
+      description: "delete rejected",
+    })
+
+    await act(async () => {
+      nodesChange?.([{ id: node.id, selected: true, type: "select" }])
+      await Promise.resolve()
+    })
+    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.includes("Delete"),
+    )
+    await act(async () => {
+      retryDeleteButton?.click()
+      await Promise.resolve()
+      session.publish(createCanvasDocument({ id: "optimistic-delete-canvas" }))
+      resolveCommand?.()
+      await Promise.resolve()
+    })
+    expect(renderedNodes).toEqual([])
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
 test("does not offer non-atomic Agent creation from click-to-connect", async () => {
   const restoreWindow = installTestWindow()
   const editorRef = createRef<CanvasEditorHandle | null>()
@@ -1082,9 +1295,17 @@ test("does not offer non-atomic Agent creation from click-to-connect", async () 
     const textOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Text"),
     )
+    const imageOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Image"),
+    )
+    const videoOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
+      (button) => button.textContent?.includes("Video"),
+    )
     expect(connectionMenu).toBeDefined()
     expect(agentOption).toBeUndefined()
     expect(textOption).toBeDefined()
+    expect(imageOption).toBeDefined()
+    expect(videoOption).toBeDefined()
     expect(setViewport.mock.calls.some((call) => call[1]?.duration === 400)).toBeFalse()
   } finally {
     if (root) await act(async () => root?.unmount())

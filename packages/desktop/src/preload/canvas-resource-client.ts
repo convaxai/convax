@@ -9,6 +9,7 @@ import {
   canvasResourceSaveEditableCopyIpcChannel,
   canvasTextResourceIpcChannel,
   type CanvasResourceAddResult,
+  type CanvasResourceAddInput,
   type CanvasResourceClient,
   type CanvasTextResourceClient,
 } from "../desktop-protocol"
@@ -16,7 +17,8 @@ import {
   isCanvasResourcePartialFailureResponse,
   isCanvasTextResourceConflictResponse,
 } from "../canvas-resource-private-contract"
-import { assertOperationReceiptDto } from "./canvas-operation-receipt-codec"
+import { assertOperationReceiptDto, requireDigestDto, requireId128Dto } from "./canvas-operation-receipt-codec"
+import { requireCanvasSessionProjection } from "./canvas-session-client"
 
 interface CanvasResourcePreloadClientOptions {
   getPathForFile(file: File): string
@@ -85,6 +87,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
 
   return {
     async add(input) {
+      const sessionId = requireId128Dto(input.sessionId, "Canvas session id")
       const localFiles = Array.isArray(input.localFiles) ? input.localFiles : []
       const sources = Array.isArray(input.sources) ? input.sources : []
       if (localFiles.length === 0 && sources.length === 0 && input.pending === undefined) {
@@ -137,6 +140,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
           ...(input.parentId === undefined ? {} : { parentId: input.parentId }),
           ...(input.pending === undefined ? {} : { pending: input.pending }),
           projectId: input.projectId,
+          sessionId,
           ...(input.relation === undefined ? {} : { relation: input.relation }),
           sources,
         })
@@ -150,7 +154,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
           )}`,
         )
       }
-      return requireCanvasResourceAddResult(result)
+      return requireCanvasResourceAddResult(result, input)
     },
     createLocalFileToken(file) {
       const filePath = options.getPathForFile(file)
@@ -205,8 +209,10 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
         canvasId: input.canvasId,
         commandId: input.commandId,
         nodeId: input.nodeId,
+        projectId: input.projectId,
+        sessionId: input.sessionId,
         source,
-      })
+      }, input)
     },
     async readConnectedImage(input) {
       let result: unknown
@@ -222,7 +228,9 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
         canvasId: input.canvasId,
         commandId: input.commandId,
         nodeId: input.nodeId,
-      })
+        projectId: input.projectId,
+        sessionId: input.sessionId,
+      }, input)
     },
   }
 }
@@ -277,6 +285,7 @@ async function invokeCanvasResourceRelink(
   options: CanvasResourcePreloadClientOptions,
   channel: string,
   input: unknown,
+  expected: Pick<CanvasResourceAddInput, "canvasId" | "projectId" | "sessionId">,
 ) {
   let result: unknown
   try {
@@ -289,15 +298,18 @@ async function invokeCanvasResourceRelink(
       `Could not relink the Canvas resource; these Notes files were retained: ${result.retainedLabels.join(", ")}`,
     )
   }
-  if (!isRecord(result) || !isStringArray(result.warnings)) {
+  if (
+    !isRecord(result) ||
+    Object.keys(result).length !== 3 ||
+    !["delivery", "operationReceipt", "warnings"].every((key) => key in result) ||
+    !isStringArray(result.warnings)
+  ) {
     throw new Error("Canvas relink response is invalid")
   }
-  const projection = parseCanvasDocument(result.projection)
-  if (!projection) throw new Error("Canvas relink projection is invalid")
   assertOperationReceiptDto(result.operationReceipt)
   return {
+    delivery: requireCanvasResourceProjectionDelivery(result.delivery, expected),
     operationReceipt: structuredClone(result.operationReceipt),
-    projection,
     warnings: result.warnings,
   }
 }
@@ -312,9 +324,18 @@ function addUniqueSourceId(sourceIds: Set<string>, value: unknown) {
   sourceIds.add(value)
 }
 
-function requireCanvasResourceAddResult(value: unknown): CanvasResourceAddResult {
+function requireCanvasResourceAddResult(
+  value: unknown,
+  expected: Pick<CanvasResourceAddInput, "canvasId" | "projectId" | "sessionId">,
+): CanvasResourceAddResult {
   if (!isRecord(value) || !Array.isArray(value.createdNodeIds) || !Array.isArray(value.warnings)) {
     throw new Error("Canvas resource response is invalid")
+  }
+  if (
+    Object.keys(value).length !== 4 ||
+    !["createdNodeIds", "delivery", "operationReceipt", "warnings"].every((key) => key in value)
+  ) {
+    throw new Error("Canvas resource response has an invalid field set")
   }
   if (
     value.createdNodeIds.some((id) => typeof id !== "string") ||
@@ -322,15 +343,39 @@ function requireCanvasResourceAddResult(value: unknown): CanvasResourceAddResult
   ) {
     throw new Error("Canvas resource response is invalid")
   }
-  const projection = parseCanvasDocument(value.projection)
-  if (!projection) throw new Error("Canvas resource response projection is invalid")
   assertOperationReceiptDto(value.operationReceipt)
+  const delivery = requireCanvasResourceProjectionDelivery(value.delivery, expected)
   return {
     createdNodeIds: value.createdNodeIds,
+    delivery,
     operationReceipt: structuredClone(value.operationReceipt),
-    projection,
     warnings: value.warnings,
   }
+}
+
+function requireCanvasResourceProjectionDelivery(
+  value: unknown,
+  expected: Pick<CanvasResourceAddInput, "canvasId" | "projectId" | "sessionId">,
+) {
+  if (!isRecord(value) || (value.status !== "accepted" && value.status !== "unavailable")) {
+    throw new Error("Canvas resource projection delivery is invalid")
+  }
+  if (value.status === "unavailable") {
+    if (Object.keys(value).length !== 1) throw new Error("Canvas resource projection delivery is invalid")
+    return Object.freeze({ status: "unavailable" as const })
+  }
+  if (Object.keys(value).length !== 3 || typeof value.projection !== "object" || !value.projection) {
+    throw new Error("Canvas resource projection delivery is invalid")
+  }
+  return Object.freeze({
+    status: "accepted" as const,
+    acceptedFrameDigest: requireDigestDto(value.acceptedFrameDigest, "Canvas accepted frame digest"),
+    projection: requireCanvasSessionProjection(
+      value.projection,
+      { canvasId: expected.canvasId, scopeId: expected.projectId },
+      expected.sessionId,
+    ),
+  })
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

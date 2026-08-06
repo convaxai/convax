@@ -40,8 +40,14 @@ Desktop contracts; Preload must not simplify or widen its semantics.
 
 An incompatible bridge change updates Main, Preload, Renderer,
 `desktopProtocolVersion`, and compatibility tests together. Keep authoritative load
-and revision-bound Canvas commands; never add whole-document save or
+and closed typed Canvas commands; never add whole-document save or
 renderer-supplied native authority.
+
+Canvas session mutation DTOs carry a strict accepted frame digest and complete
+session projection; invalidations carry their frame digest. Resource mutation
+requests carry the current session id and responses use a strict
+`accepted | unavailable` projection-delivery union. Preload does not synthesize a
+projection or downgrade malformed markers into a refresh.
 
 ## Validation
 

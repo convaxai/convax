@@ -4,6 +4,7 @@ import { parseCanvasDocument } from "@convax/canvas/core"
 import {
   canvasSessionIpcChannels,
   type CanvasRendererSessionMutationResult,
+  type CanvasRendererApplicationMutationResult,
   type CanvasRendererSessionScope,
   type CanvasRendererSessionTransport,
   type CanvasSessionInvalidationDto,
@@ -12,6 +13,7 @@ import {
 import {
   assertEntityRefDto,
   assertOperationReceiptDto,
+  requireDigestDto,
   requireId128Dto,
 } from "./canvas-operation-receipt-codec"
 
@@ -27,10 +29,16 @@ export function createCanvasSessionPreloadClient(
 ): CanvasRendererSessionTransport {
   const client: CanvasRendererSessionTransport = {
     async open(ref) {
-      return requireProjection(await options.invoke(canvasSessionIpcChannels.open, ref), ref)
+      return requireCanvasSessionProjection(await options.invoke(canvasSessionIpcChannels.open, ref), ref)
     },
     async query(scope) {
-      return requireProjection(await options.invoke(canvasSessionIpcChannels.query, scope), scope.ref, scope.sessionId)
+      return requireCanvasSessionProjection(await options.invoke(canvasSessionIpcChannels.query, scope), scope.ref, scope.sessionId)
+    },
+    async executeApplication(input) {
+      return requireApplicationMutation(
+        await options.invoke(canvasSessionIpcChannels.executeApplication, input),
+        input,
+      )
     },
     async submit(input) {
       return requireMutation(await options.invoke(canvasSessionIpcChannels.submit, input), input)
@@ -63,15 +71,60 @@ function requireMutation(
   value: unknown,
   scope: CanvasRendererSessionScope,
 ): CanvasRendererSessionMutationResult {
-  const record = exactRecord(value, ["operationReceipt", "projection"], "Canvas session mutation result")
+  const valueRecord = value as Record<string, unknown> | null
+  const hasHistory = Boolean(valueRecord && Object.prototype.hasOwnProperty.call(valueRecord, "historyTransition"))
+  const record = exactRecord(
+    value,
+    hasHistory
+      ? ["acceptedFrameDigest", "historyTransition", "operationReceipt", "projection"]
+      : ["acceptedFrameDigest", "operationReceipt", "projection"],
+    "Canvas session mutation result",
+  )
   assertOperationReceiptDto(record.operationReceipt)
+  let historyTransition: CanvasRendererSessionMutationResult["historyTransition"]
+  if (hasHistory) {
+    const transition = exactRecord(record.historyTransition, ["direction", "rootOperationId"], "Canvas history transition")
+    if (transition.direction !== "undo" && transition.direction !== "redo") {
+      throw new Error("Canvas history transition direction is invalid")
+    }
+    historyTransition = Object.freeze({
+      direction: transition.direction,
+      rootOperationId: requireId128Dto(transition.rootOperationId, "Canvas history root operation id"),
+    })
+  }
   return Object.freeze({
     operationReceipt: structuredClone(record.operationReceipt),
-    projection: requireProjection(record.projection, scope.ref, scope.sessionId),
+    projection: requireCanvasSessionProjection(record.projection, scope.ref, scope.sessionId),
+    acceptedFrameDigest: requireDigestDto(record.acceptedFrameDigest, "Canvas accepted frame digest"),
+    ...(historyTransition ? { historyTransition } : {}),
   })
 }
 
-function requireProjection(
+function requireApplicationMutation(
+  value: unknown,
+  scope: CanvasRendererSessionScope,
+): CanvasRendererApplicationMutationResult {
+  const record = exactRecord(value, [
+    "acceptedFrameDigest", "affectedNodeIds", "changed", "createdNodeIds",
+    "operationReceipt", "projection", "warnings",
+  ], "Canvas application mutation result")
+  assertOperationReceiptDto(record.operationReceipt)
+  if (record.changed !== true) throw new Error("Canvas application mutation changed marker is invalid")
+  const affectedNodeIds = requireStringArray(record.affectedNodeIds, "Canvas affected node ids", 4_096)
+  const createdNodeIds = requireStringArray(record.createdNodeIds, "Canvas created node ids", 4_096)
+  const warnings = requireStringArray(record.warnings, "Canvas application warnings", 64)
+  return Object.freeze({
+    acceptedFrameDigest: requireDigestDto(record.acceptedFrameDigest, "Canvas accepted frame digest"),
+    affectedNodeIds,
+    changed: true,
+    createdNodeIds,
+    operationReceipt: structuredClone(record.operationReceipt),
+    projection: requireCanvasSessionProjection(record.projection, scope.ref, scope.sessionId),
+    warnings,
+  })
+}
+
+export function requireCanvasSessionProjection(
   value: unknown,
   expectedRef: CanvasDocumentRef,
   expectedSessionId?: CanvasSessionProjectionDto["sessionId"],
@@ -133,7 +186,7 @@ function requireProjection(
 }
 
 function requireInvalidation(value: unknown): CanvasSessionInvalidationDto {
-  const record = exactRecord(value, ["format", "ref", "sessionId"], "Canvas session invalidation")
+  const record = exactRecord(value, ["format", "frameDigest", "ref", "sessionId"], "Canvas session invalidation")
   if (record.format !== "convax.canvas-session-invalidation") {
     throw new Error("Canvas session invalidation has an invalid field set")
   }
@@ -141,7 +194,19 @@ function requireInvalidation(value: unknown): CanvasSessionInvalidationDto {
     format: "convax.canvas-session-invalidation",
     ref: requireRef(record.ref),
     sessionId: requireId128Dto(record.sessionId, "Canvas session id"),
+    frameDigest: requireDigestDto(record.frameDigest, "Canvas invalidation frame digest"),
   })
+}
+
+function requireStringArray(value: unknown, label: string, maximum: number): string[] {
+  if (!Array.isArray(value) || value.length > maximum) throw new Error(`${label} is invalid`)
+  const result = value.map((item) => {
+    if (typeof item !== "string" || item.length < 1 || item.includes("\0") || new TextEncoder().encode(item).byteLength > 1_024) {
+      throw new Error(`${label} is invalid`)
+    }
+    return item
+  })
+  return result
 }
 
 function requireRef(value: unknown): CanvasDocumentRef {

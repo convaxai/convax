@@ -22,7 +22,7 @@ import { createCanvasCollaborationSessionOwner } from "./canvas-collaboration-se
 const ref = { scopeId: "project-a", canvasId: "canvas-a" }
 
 describe("CanvasCollaborationSessionOwner Project quiescence", () => {
-  test("records Plugin semantic roots in the mounted Main undo chain and clears them on unmount", async () => {
+  test("keeps Plugin semantic roots out of every mounted renderer undo chain", async () => {
     const session = semanticRootSession()
     const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
@@ -39,10 +39,32 @@ describe("CanvasCollaborationSessionOwner Project quiescence", () => {
       commandId: "creation-group-one",
       command: {} as never,
     })
-    expect((await owner.queryRenderer(ref, opened.sessionId)).canUndo).toBeTrue()
+    expect((await owner.queryRenderer(ref, opened.sessionId)).canUndo).toBeFalse()
 
     owner.close({ ref, sessionId: opened.sessionId })
     expect((await owner.open({ ref, actor })).canUndo).toBeFalse()
+    owner.dispose()
+  })
+
+  test("records a renderer semantic root only in its originating lease", async () => {
+    const session = semanticRootSession()
+    let sessionFill = 10
+    const owner = createCanvasCollaborationSessionOwner({
+      ...inertOptions(),
+      createSessionId: () => parseId128(encodeBase64url(new Uint8Array(16).fill(sessionFill++))),
+      openDocumentSession: async () => session.value,
+    })
+    const actor = { kind: "renderer", id: "renderer-one" }
+    const first = await owner.open({ ref, actor })
+    const second = await owner.open({ ref, actor: { kind: "renderer", id: "renderer-two" } })
+    await owner.submitRenderer({
+      ref,
+      sessionId: first.sessionId,
+      commandId: "move-one",
+      command: {} as never,
+    })
+    expect((await owner.queryRenderer(ref, first.sessionId)).canUndo).toBeTrue()
+    expect((await owner.queryRenderer(ref, second.sessionId)).canUndo).toBeFalse()
     owner.dispose()
   })
 
@@ -158,7 +180,10 @@ function semanticRootSession() {
         historyMaterialDigest: parseDigest("6".repeat(64)),
       })
       snapshot = Object.freeze({ ...snapshot, operations: new Map([[`operation/${operationId}`, receipt]]) })
-      return { status: "saved-locally", frame: { header: { core: { operationId } } } } as never
+      return {
+        status: "saved-locally",
+        frame: { frameDigest: parseDigest("7".repeat(64)), header: { core: { operationId } } },
+      } as never
     },
     flush: async () => undefined,
     subscribe: () => () => undefined,

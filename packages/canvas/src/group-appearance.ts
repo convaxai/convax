@@ -1,4 +1,3 @@
-import { updateCanvasNodeData } from "./commands"
 import type { CanvasDocument, CanvasNode } from "./types"
 
 export const canvasGroupAppearanceKey = "convaxGroupAppearance"
@@ -207,25 +206,29 @@ export function setCanvasGroupAppearance(
   const current = getCanvasGroupAppearance(node)
   if (current.color === appearance.color && current.emoji === appearance.emoji) return document
 
-  return updateCanvasNodeData(document, nodeId, (data) => {
-    if (data.kind !== "group") return data
-    const currentMetadata = isRecord(data.metadata) ? data.metadata : {}
-    const metadata = { ...currentMetadata }
-    if (
-      appearance.color === defaultCanvasGroupAppearance.color &&
-      appearance.emoji === defaultCanvasGroupAppearance.emoji
-    ) {
-      delete metadata[canvasGroupAppearanceKey]
-    } else {
-      metadata[canvasGroupAppearanceKey] = {
-        ...appearance,
-        schema: canvasGroupAppearanceSchema,
-      } satisfies StoredCanvasGroupAppearance
-    }
-    if (Object.keys(metadata).length === 0) {
-      const { metadata: _metadata, ...withoutMetadata } = data
-      return withoutMetadata as CanvasNode["data"]
-    }
-    return { ...data, metadata }
-  })
+  return {
+    ...document,
+    nodes: document.nodes.map((candidate) => {
+      if (candidate.id !== nodeId || candidate.data.kind !== "group") return candidate
+      const data = candidate.data
+      const currentMetadata = isRecord(data.metadata) ? data.metadata : {}
+      const metadata = { ...currentMetadata }
+      if (
+        appearance.color === defaultCanvasGroupAppearance.color &&
+        appearance.emoji === defaultCanvasGroupAppearance.emoji
+      ) {
+        delete metadata[canvasGroupAppearanceKey]
+      } else {
+        metadata[canvasGroupAppearanceKey] = {
+          ...appearance,
+          schema: canvasGroupAppearanceSchema,
+        } satisfies StoredCanvasGroupAppearance
+      }
+      if (Object.keys(metadata).length === 0) {
+        const { metadata: _metadata, ...withoutMetadata } = data
+        return { ...candidate, data: withoutMetadata as CanvasNode["data"] }
+      }
+      return { ...candidate, data: { ...data, metadata } }
+    }),
+  }
 }

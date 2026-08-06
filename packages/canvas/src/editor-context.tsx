@@ -6,6 +6,7 @@ import type { CanvasSelectionAction } from "./selection-actions"
 import type { CanvasSelectionDragPreparationStatus, CanvasSelectionDragSource } from "./selection-drag-source"
 import type { CanvasDocument, CanvasPoint, CanvasResourceRuntimeState, CanvasSelection } from "./types"
 import type { CanvasPendingDraft } from "./services"
+import type { CanvasApplicationCommand } from "./application/commands"
 
 export interface CanvasConnectionNodeType {
   label: string
@@ -43,6 +44,8 @@ export interface CanvasEditorController {
   cancelGesture: () => void
   endGesture: () => void
   commit: (update: (document: CanvasDocument) => CanvasDocument) => void
+  /** Submits one closed Canvas-owned application command through the authoritative Host bridge. */
+  executeCommand: (command: CanvasApplicationCommand) => void
   duplicateNode: (nodeId: string) => void
   executeSelectionAction: (action: CanvasSelectionAction) => void
   finishNodeEntry: (nodeId: string) => void

@@ -420,6 +420,36 @@ interface LoadedPendingFrame {
   readonly exactFrameBytes: Uint8Array
 }
 
+interface VerifiedMaterializedHeadCache {
+  readonly durableHeadDigest: Digest
+  readonly localHeadGeneration: string
+  readonly journalBaseDigest: Digest
+  readonly journalTailDigest: Digest
+  readonly installedCheckpointSetDigest: Digest
+  readonly acceptedHead: NodeAcceptedReplicaHead
+  readonly reachableFrameDigests: ReadonlySet<Digest>
+}
+
+interface PendingHeadTransition {
+  readonly expectedHeadDigest: Digest
+  readonly priorJournalTailDigest: Digest
+  readonly journalRecordDigest: Digest
+  readonly frameDigest: Digest
+  readonly resultingFrontierDigest: Digest
+  readonly acceptedHead: NodeAcceptedReplicaHead
+  readonly reachableFrameDigests: ReadonlySet<Digest>
+}
+
+interface IndexedOperationFrame {
+  readonly ref: FrameObjectRef
+  readonly layout: DocumentLayout
+}
+
+interface OutboxUsageCache {
+  readonly frameBytes: Map<Digest, number>
+  totalBytes: number
+}
+
 const rootWriterLeases = new Set<string>()
 
 /**
@@ -429,6 +459,11 @@ const rootWriterLeases = new Set<string>()
  */
 export class NodeCollaborationPersistence implements CollaborationPersistencePort, PendingInboxPort {
   private readonly queues = new Map<string, Promise<void>>()
+  private readonly materializedHeadCaches = new Map<string, VerifiedMaterializedHeadCache>()
+  private readonly pendingHeadTransitions = new Map<string, PendingHeadTransition>()
+  private readonly outboxUsageCaches = new Map<string, OutboxUsageCache>()
+  private operationRecoveryIndex: Map<string, Map<Digest, IndexedOperationFrame>> | null = null
+  private operationRecoveryIndexWarmup: Promise<void> | null = null
   private disposed = false
 
   private constructor(
@@ -463,7 +498,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       )
     }
     rootWriterLeases.add(real)
-    return new NodeCollaborationPersistence(
+    const store = new NodeCollaborationPersistence(
       real,
       input.localActorId,
       input.materializer,
@@ -474,6 +509,13 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       input.hooks ?? {},
       true,
     )
+    try {
+      await store.ensureOperationRecoveryIndex()
+      return store
+    } catch (error) {
+      store.dispose()
+      throw error
+    }
   }
 
   static async openReadOnly(input: Parameters<typeof NodeCollaborationPersistence.open>[0]): Promise<NodeCollaborationPersistence> {
@@ -496,6 +538,11 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.materializedHeadCaches.clear()
+    this.pendingHeadTransitions.clear()
+    this.outboxUsageCaches.clear()
+    this.operationRecoveryIndex = null
+    this.operationRecoveryIndexWarmup = null
     if (this.ownsRootWriterLease) rootWriterLeases.delete(this.collaborationDirectory)
   }
 
@@ -600,7 +647,10 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         }
         await replaceDurableRecord(layout.durableHead, head)
         await fsyncProjectDirectory(layout.directory)
-        return freezeHead(input.acceptedBase, localRecordDigest(head))
+        const headDigest = localRecordDigest(head)
+        const accepted = freezeHead(input.acceptedBase, headDigest)
+        this.storeMaterializedHeadCache(layout, head, headDigest, accepted, new Set())
+        return freezeHead(accepted, headDigest)
       } catch (error) {
         throw classifyNativeFailure(error)
       }
@@ -728,13 +778,39 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     ) {
       throw new NodeCollaborationPersistenceError("store-corrupt", "Canvas genesis retry bytes do not match the durable shard")
     }
-    return freezeHead(input.acceptedBase, durable.digest)
+    const accepted = freezeHead(input.acceptedBase, durable.digest)
+    this.storeMaterializedHeadCache(layout, durable.record, durable.digest, accepted, new Set())
+    return freezeHead(accepted, durable.digest)
   }
 
   async loadReplicaHead(scope: DocumentScope): Promise<unknown> {
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => this.loadAcceptedHeadInternal(layout, scope, true))
+  }
+
+  /** Process-local, identity-free counters for optional slow-command diagnostics. */
+  async sampleLatencyDiagnostics(scope: DocumentScope): Promise<Readonly<{
+    historyCount: number
+    outboxCount: number
+    cacheHit: boolean
+  }>> {
+    this.requireLive()
+    const layout = this.layout(scope)
+    return this.serial(layout.directory, async () => {
+      await this.assertReadableDocument(layout)
+      const durable = await this.readDurableHead(layout, scope)
+      const cache = this.materializedHeadCaches.get(layout.directory)
+      const cacheHit = Boolean(cache && this.materializedHeadCacheMatches(cache, durable.record, durable.digest))
+      const base = await readJournalBase(layout.journalBases, durable.record.journalBaseDigest, scope)
+      const history = BigInt(durable.record.localHeadGeneration) - BigInt(base.record.baseLocalRecordSequence)
+      const usage = await this.loadOutboxUsage(layout)
+      return Object.freeze({
+        historyCount: Number(history > BigInt(Number.MAX_SAFE_INTEGER) ? BigInt(Number.MAX_SAFE_INTEGER) : history),
+        outboxCount: usage.frameBytes.size,
+        cacheHit,
+      })
+    })
   }
 
   /** Exact installed checkpoint base; no accepted suffix frame is applied. */
@@ -852,6 +928,14 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         }
         await replaceDurableRecord(layout.durableHead, head, this.hooks)
         const resultingHeadDigest = localRecordDigest(head)
+        const previousCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
+        this.storeMaterializedHeadCache(
+          layout,
+          head,
+          resultingHeadDigest,
+          currentAcceptedHead,
+          previousCache.reachableFrameDigests,
+        )
         const exposed = await this.materializeInstalledCheckpointBase(layout, input.scope, installedSet)
         assertSameAcceptedState(exposed, currentAcceptedHead, this.materializer)
         return {
@@ -989,6 +1073,13 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         await writeDurableNewOrVerify(journalPath, encodeRecord(journalRecord))
         await replaceDurableRecord(layout.activePrunePlan, activePrunePlan(input.scope, planDigest, "prepared"))
         await replaceDurableRecord(layout.durableHead, candidateHead, this.hooks)
+        this.storeMaterializedHeadCache(
+          layout,
+          candidateHead,
+          candidateHeadDigest,
+          installedBase,
+          new Set(),
+        )
         await replaceDurableRecord(layout.activePrunePlan, activePrunePlan(input.scope, planDigest, "head-published"))
         const secondScan = normalizePruneRootScan(await rootScanner.scanComplete({
           scope: input.scope,
@@ -1106,6 +1197,8 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       await ensureTrustedDirectory(operationDirectory, this.collaborationDirectory)
       const operationRef: LocalOperationObjectRef = { format: "convax.local-operation-object-ref", ref }
       await putImmutableRecord(operationDirectory, "operation-ref", ref.frameDigest, operationRef)
+      await this.ensureOperationRecoveryIndex()
+      this.addOperationRecoveryIndexEntry({ ref, layout })
       // The operation sidecar is part of the immutable-object durability barrier:
       // recovery must be able to rediscover opaque frame paths by actor/operation.
       await this.hooks.afterFrameFileFsync?.()
@@ -1132,8 +1225,10 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         requiredBlobDigests,
       }
       const target = path.join(layout.outboxFrames, `${deriveObjectNativeKey("outbox-ref", ref.frameDigest)}.ref`)
-      if (!(await fileExists(target))) await this.assertOutboxCapacity(layout, frame.byteLength)
+      const exists = await fileExists(target)
+      if (!exists) await this.assertOutboxCapacity(layout, frame.byteLength)
       await writeDurableNewOrVerify(target, encodeRecord(record))
+      if (!exists) this.recordOutboxPut(layout, ref.frameDigest, frame.byteLength)
       await this.hooks.afterOutboxFileFsync?.()
     })
   }
@@ -1172,6 +1267,16 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       await writeDurableNewFile(target, encodeRecord(record))
       await fsyncProjectDirectory(layout.journalSegments)
       await this.hooks.afterJournalFileFsync?.()
+      const previousCache = this.requireMaterializedHeadCache(layout, head.record, head.digest)
+      this.pendingHeadTransitions.set(layout.directory, {
+        expectedHeadDigest: head.digest,
+        priorJournalTailDigest: head.record.journalTailDigest,
+        journalRecordDigest,
+        frameDigest: ref.frameDigest,
+        resultingFrontierDigest: next.frontierDigest,
+        acceptedHead: freezeHead(next, head.digest),
+        reachableFrameDigests: new Set([...previousCache.reachableFrameDigests, ref.frameDigest]),
+      })
       return Object.freeze({ ref, journalRecordDigest })
     })
   }
@@ -1199,8 +1304,10 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
             current.record.journalTailDigest === input.journal.journalRecordDigest &&
             current.record.acceptedFrontierDigest === input.resultingFrontierDigest
           ) {
+            this.pendingHeadTransitions.delete(layout.directory)
             return committedEvidence(input, current.digest)
           }
+          this.pendingHeadTransitions.delete(layout.directory)
           return await this.quarantineStaleHead(layout, input, current.digest)
         }
         const sequence = incrementUint64(current.record.localHeadGeneration)
@@ -1212,11 +1319,28 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         assertJournalRef(journal.record, input.ref)
         if (journal.record.priorJournalRecordDigest !== current.record.journalTailDigest) corrupt("Journal predecessor differs from the sole durable head")
         if (journal.record.resultingFrontierDigest !== input.resultingFrontierDigest) corrupt("Journal frontier differs from the Kernel result")
-        await this.readFrame(layout, input.ref)
-        await this.readOutbox(layout, input.ref)
-        const previous = await this.reconstructHead(layout, input.ref.scope, current.record, current.digest)
         const frame = await this.readFrame(layout, input.ref)
-        const next = await this.materializer.applyAcceptedFrame({ previous, ref: input.ref, exactBytes: frame })
+        await this.readOutbox(layout, input.ref)
+        const pending = this.pendingHeadTransitions.get(layout.directory)
+        let next: NodeAcceptedReplicaHead
+        let reachableFrameDigests: ReadonlySet<Digest>
+        if (
+          pending &&
+          pending.expectedHeadDigest === current.digest &&
+          pending.priorJournalTailDigest === current.record.journalTailDigest &&
+          pending.journalRecordDigest === journal.digest &&
+          pending.frameDigest === input.ref.frameDigest &&
+          pending.resultingFrontierDigest === input.resultingFrontierDigest
+        ) {
+          next = freezeHead(pending.acceptedHead, current.digest)
+          reachableFrameDigests = pending.reachableFrameDigests
+        } else {
+          this.pendingHeadTransitions.delete(layout.directory)
+          const previous = await this.reconstructHead(layout, input.ref.scope, current.record, current.digest)
+          const previousCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
+          next = await this.materializer.applyAcceptedFrame({ previous, ref: input.ref, exactBytes: frame })
+          reachableFrameDigests = new Set([...previousCache.reachableFrameDigests, input.ref.frameDigest])
+        }
         validateAcceptedBase(next, input.ref.scope)
         if (next.frontierDigest !== input.resultingFrontierDigest) corrupt("Materialized frontier differs from journal and Kernel")
         const head: LocalDurableHead = {
@@ -1231,9 +1355,13 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
         }
         await replaceDurableRecord(layout.durableHead, head, this.hooks)
+        const headDigest = localRecordDigest(head)
+        this.storeMaterializedHeadCache(layout, head, headDigest, next, reachableFrameDigests)
+        this.pendingHeadTransitions.delete(layout.directory)
         this.materializer.observeAcceptedFrame?.(input.ref, frame)
-        return committedEvidence(input, localRecordDigest(head))
+        return committedEvidence(input, headDigest)
       } catch (error) {
+        this.pendingHeadTransitions.delete(layout.directory)
         if (error instanceof NodeCollaborationPersistenceError && error.code === "store-corrupt") {
           return { status: "rejected", code: "store-corrupt" }
         }
@@ -1247,40 +1375,40 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     const layout = this.layout(ref.scope)
     return this.serial(layout.directory, async () => {
       const head = await this.readDurableHead(layout, ref.scope)
-      const records = await this.readReachableJournals(layout, ref.scope, head.record)
-      return records.some((entry) => isFrameJournal(entry.record) && entry.record.objectDigests.includes(ref.frameDigest))
+      await this.reconstructHead(layout, ref.scope, head.record, head.digest)
+      return this.requireMaterializedHeadCache(layout, head.record, head.digest).reachableFrameDigests.has(ref.frameDigest)
     })
   }
 
   async lookupOperation(actorId: ActorId, operationId: Id128): Promise<OperationLookup> {
     this.requireLive()
-    const matches: Array<{ ref: FrameObjectRef; bytes: Uint8Array; layout: DocumentLayout }> = []
-    const documents = path.join(this.collaborationDirectory, "documents")
-    for (const documentName of await readDirectoryNames(documents)) {
-      const layout = this.layoutFromDirectory(path.join(documents, documentName))
-      const operationDirectory = path.join(layout.operationRefs, operationIndexKey(actorId, operationId))
-      for (const name of await readDirectoryNames(operationDirectory)) {
-        if (!name.endsWith(".bin")) continue
-        const parsed = decodeRecord(await fs.readFile(path.join(operationDirectory, name)))
-        const operationRef = parseOperationRef(parsed)
-        if (operationRef.ref.actorId !== actorId || operationRef.ref.operationId !== operationId) corrupt("Operation index key/value mismatch")
-        matches.push({ ref: operationRef.ref, bytes: await this.readFrame(layout, operationRef.ref), layout })
-      }
-    }
-    const unique = new Map(matches.map((entry) => [entry.ref.frameDigest, entry]))
-    if (unique.size === 0) return { status: "absent" }
+    await this.ensureOperationRecoveryIndex()
+    const unique = this.operationRecoveryIndex?.get(operationRecoveryKey(actorId, operationId))
+    if (!unique || unique.size === 0) return { status: "absent" }
     if (unique.size > 1) return { status: "equivocation", frameDigests: [...unique.keys()].sort() }
     const entry = [...unique.values()][0]
     if (!entry) corrupt("Operation index lost its only frame")
-    const reachable = await this.isReachableFromAcceptedHead(entry.ref)
-    if (reachable) return { status: "accepted", ref: entry.ref, bytes: entry.bytes }
-    const hasOutbox = await fileExists(this.outboxPath(entry.layout, entry.ref))
-    const hasJournal = await this.findJournalForFrame(entry.layout, entry.ref.frameDigest)
-    return {
-      status: hasOutbox && hasJournal ? "same-frame-recovery" : "object-only-recovery",
-      ref: entry.ref,
-      bytes: entry.bytes,
-    }
+    return this.serial(entry.layout.directory, async () => {
+      const bytes = await this.readFrame(entry.layout, entry.ref)
+      const durable = await this.readDurableHead(entry.layout, entry.ref.scope)
+      await this.reconstructHead(entry.layout, entry.ref.scope, durable.record, durable.digest)
+      const reachable = this.requireMaterializedHeadCache(entry.layout, durable.record, durable.digest)
+        .reachableFrameDigests.has(entry.ref.frameDigest)
+      if (reachable) return { status: "accepted", ref: entry.ref, bytes }
+      const hasOutbox = await fileExists(this.outboxPath(entry.layout, entry.ref))
+      const nextSequence = incrementUint64(durable.record.localHeadGeneration)
+      const nextPath = path.join(entry.layout.journalSegments, deriveJournalSegmentNativeKey(nextSequence))
+      let hasJournal = false
+      if (await fileExists(nextPath)) {
+        const journal = await readJournalRecord(nextPath, entry.ref.scope)
+        hasJournal = isFrameJournal(journal.record) && journal.record.objectDigests[0] === entry.ref.frameDigest
+      }
+      return {
+        status: hasOutbox && hasJournal ? "same-frame-recovery" : "object-only-recovery",
+        ref: entry.ref,
+        bytes,
+      }
+    })
   }
 
   async scanDurableReferences(frameDigest: Digest): Promise<{ readonly complete: boolean; readonly reachable: boolean }> {
@@ -1358,14 +1486,14 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       const names = [...await readDirectoryNames(layout.outboxFrames)].sort()
       if (names.length > MAX_OUTBOX_FRAMES) corrupt("Local frame outbox exceeds 4,096 refs")
       const durable = await this.readDurableHead(layout, scope)
-      const journals = await this.readReachableJournals(layout, scope, durable.record)
-      const reachableFrameDigests = new Set(journals
-        .filter((entry) => isFrameJournal(entry.record))
-        .flatMap((entry) => entry.record.objectDigests))
       await this.reconstructHead(layout, scope, durable.record, durable.digest)
-      const entries: NodeDurableReplicationOutboxEntry[] = []
-      let totalBytes = 0
-      for (const name of names) {
+      const reachableFrameDigests = this.requireMaterializedHeadCache(layout, durable.record, durable.digest)
+        .reachableFrameDigests
+      const usage = await this.loadOutboxUsage(layout)
+      if (usage.frameBytes.size !== names.length || usage.totalBytes > MAX_OUTBOX_BYTES) {
+        corrupt("Local frame outbox usage cache disagrees with durable refs")
+      }
+      const entries = await mapWithConcurrency(names, 8, async (name): Promise<NodeDurableReplicationOutboxEntry> => {
         const record = parseOutbox(decodeRecord(await fs.readFile(path.join(layout.outboxFrames, name))))
         assertSameScope(record.scope, scope)
         const ref: FrameObjectRef = Object.freeze({
@@ -1382,14 +1510,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           recoverRequired("Replication outbox references a frame outside the sole durable head")
         }
         const exactFrameBytes = await this.readFrame(layout, ref)
-        totalBytes += exactFrameBytes.byteLength
-        if (totalBytes > MAX_OUTBOX_BYTES) corrupt("Local frame outbox exceeds 512 MiB")
-        entries.push(Object.freeze({
+        if (usage.frameBytes.get(ref.frameDigest) !== exactFrameBytes.byteLength) {
+          corrupt("Local frame outbox usage changed after validation")
+        }
+        return Object.freeze({
           ref,
           exactFrameBytes,
           requiredBlobDigests: Object.freeze([...record.requiredBlobDigests]),
-        }))
-      }
+        })
+      })
       return Object.freeze(entries)
     })
   }
@@ -1451,6 +1580,12 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       }
       await replaceDurableRecord(layout.durableHead, head, this.hooks)
       current = { record: head, digest: localRecordDigest(head) }
+      const cached = this.materializedHeadCaches.get(layout.directory)
+      if (cached && this.materializedHeadCacheMatches(cached, { ...head, journalTailDigest: journalRecord.priorJournalRecordDigest! }, head.priorHeadDigest!)) {
+        this.storeMaterializedHeadCache(layout, head, current.digest, cached.acceptedHead, cached.reachableFrameDigests)
+      } else {
+        this.invalidateMaterializedState(layout)
+      }
       journals = await this.readReachableJournals(layout, normalized.scope, current.record)
       if (!journals.some((entry) => entry.digest === journalDigest)) corrupt("ACK journal is absent after head commit")
       await this.retireFrameOutbox(layout, normalized.frameDigest)
@@ -1555,6 +1690,16 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
     }
     await replaceDurableRecord(layout.durableHead, head)
+    const headDigest = localRecordDigest(head)
+    const priorCache = this.requireMaterializedHeadCache(layout, current.record, current.digest)
+    this.storeMaterializedHeadCache(
+      layout,
+      head,
+      headDigest,
+      next,
+      new Set([...priorCache.reachableFrameDigests, ref.frameDigest]),
+    )
+    this.pendingHeadTransitions.delete(layout.directory)
     this.materializer.observeAcceptedFrame?.(ref, frame)
   }
 
@@ -1564,6 +1709,11 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     head: LocalDurableHead,
     headDigest: Digest,
   ): Promise<NodeAcceptedReplicaHead> {
+    const cached = this.materializedHeadCaches.get(layout.directory)
+    if (cached && this.materializedHeadCacheMatches(cached, head, headDigest)) {
+      return freezeHead(cached.acceptedHead, headDigest)
+    }
+    if (cached) this.invalidateMaterializedState(layout)
     await this.readInstalledCheckpointSet(layout, head.installedCheckpointSetDigest, scope)
     const base = await readJournalBase(layout.journalBases, head.journalBaseDigest, scope)
     let current: NodeAcceptedReplicaHead = freezeHead(
@@ -1579,6 +1729,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       base.digest,
     )
     const records = await this.readReachableJournals(layout, scope, head)
+    const reachableFrameDigests = new Set<Digest>()
     for (const journal of records) {
       if (!isFrameJournal(journal.record)) {
         if (journal.record.resultingFrontierDigest !== current.frontierDigest) corrupt("Metadata journal changes the accepted frontier")
@@ -1593,12 +1744,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       const ref = await this.refForJournal(layout, journal.record)
       const frame = await this.readFrame(layout, ref)
       current = freezeHead(await this.materializer.applyAcceptedFrame({ previous: current, ref, exactBytes: frame }), journal.digest)
+      reachableFrameDigests.add(ref.frameDigest)
       if (current.frontierDigest !== journal.record.resultingFrontierDigest) corrupt("Reopened frame produces a different frontier")
       this.materializer.observeAcceptedFrame?.(ref, frame)
     }
     if (current.frontierDigest !== head.acceptedFrontierDigest) corrupt("Reopened frontier differs from durable head")
     if (this.materializer.actorHeadsDigest(current.actorHeads) !== head.acceptedActorHeadsDigest) corrupt("Reopened actor heads differ from durable head")
-    return freezeHead(current, headDigest)
+    const accepted = freezeHead(current, headDigest)
+    this.storeMaterializedHeadCache(layout, head, headDigest, accepted, reachableFrameDigests)
+    return freezeHead(accepted, headDigest)
   }
 
   private async readReachableJournals(
@@ -1702,6 +1856,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         journalTailDigest: baseDigest,
       }
       await replaceDurableRecord(layout.durableHead, head)
+      this.invalidateMaterializedState(layout)
       return
     } else corrupt("Unsupported metadata journal transition")
     const head: LocalDurableHead = {
@@ -1712,6 +1867,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       installedCheckpointSetDigest,
     }
     await replaceDurableRecord(layout.durableHead, head)
+    this.invalidateMaterializedState(layout)
     if (ack) await this.retireFrameOutbox(layout, ack.frameDigest)
   }
 
@@ -1753,6 +1909,141 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1) corrupt("Installed checkpoint certificate shape is invalid")
     }
     return record
+  }
+
+  private materializedHeadCacheMatches(
+    cache: VerifiedMaterializedHeadCache,
+    head: LocalDurableHead,
+    headDigest: Digest,
+  ): boolean {
+    return cache.durableHeadDigest === headDigest &&
+      cache.localHeadGeneration === head.localHeadGeneration &&
+      cache.journalBaseDigest === head.journalBaseDigest &&
+      cache.journalTailDigest === head.journalTailDigest &&
+      cache.installedCheckpointSetDigest === head.installedCheckpointSetDigest &&
+      cache.acceptedHead.frontierDigest === head.acceptedFrontierDigest &&
+      this.materializer.actorHeadsDigest(cache.acceptedHead.actorHeads) === head.acceptedActorHeadsDigest
+  }
+
+  private storeMaterializedHeadCache(
+    layout: DocumentLayout,
+    head: LocalDurableHead,
+    headDigest: Digest,
+    acceptedHead: NodeAcceptedReplicaHead,
+    reachableFrameDigests: ReadonlySet<Digest>,
+  ): void {
+    const defensiveHead = freezeHead(acceptedHead, headDigest)
+    if (
+      defensiveHead.frontierDigest !== head.acceptedFrontierDigest ||
+      this.materializer.actorHeadsDigest(defensiveHead.actorHeads) !== head.acceptedActorHeadsDigest
+    ) {
+      corrupt("Materialized cache differs from the exact durable head")
+    }
+    this.materializedHeadCaches.set(layout.directory, {
+      durableHeadDigest: headDigest,
+      localHeadGeneration: head.localHeadGeneration,
+      journalBaseDigest: head.journalBaseDigest,
+      journalTailDigest: head.journalTailDigest,
+      installedCheckpointSetDigest: head.installedCheckpointSetDigest,
+      acceptedHead: defensiveHead,
+      reachableFrameDigests: new Set(reachableFrameDigests),
+    })
+  }
+
+  private requireMaterializedHeadCache(
+    layout: DocumentLayout,
+    head: LocalDurableHead,
+    headDigest: Digest,
+  ): VerifiedMaterializedHeadCache {
+    const cache = this.materializedHeadCaches.get(layout.directory)
+    if (!cache || !this.materializedHeadCacheMatches(cache, head, headDigest)) {
+      corrupt("Verified materialized head cache is unavailable")
+    }
+    return cache
+  }
+
+  private invalidateMaterializedState(layout: DocumentLayout): void {
+    this.materializedHeadCaches.delete(layout.directory)
+    this.pendingHeadTransitions.delete(layout.directory)
+  }
+
+  private async ensureOperationRecoveryIndex(): Promise<void> {
+    if (this.operationRecoveryIndex) return
+    if (!this.operationRecoveryIndexWarmup) {
+      this.operationRecoveryIndexWarmup = this.buildOperationRecoveryIndex()
+    }
+    try {
+      await this.operationRecoveryIndexWarmup
+    } finally {
+      this.operationRecoveryIndexWarmup = null
+    }
+  }
+
+  private async buildOperationRecoveryIndex(): Promise<void> {
+    const index = new Map<string, Map<Digest, IndexedOperationFrame>>()
+    const documents = path.join(this.collaborationDirectory, "documents")
+    for (const documentName of await readDirectoryNames(documents)) {
+      const layout = this.layoutFromDirectory(path.join(documents, documentName))
+      for (const operationDirectoryName of await readDirectoryNames(layout.operationRefs)) {
+        const operationDirectory = path.join(layout.operationRefs, operationDirectoryName)
+        for (const name of await readDirectoryNames(operationDirectory)) {
+          if (!name.endsWith(".bin")) continue
+          const record = parseOperationRef(decodeRecord(await fs.readFile(path.join(operationDirectory, name))))
+          validateFrameRef(record.ref)
+          if (deriveDocumentNativeKey(record.ref.scope) !== documentName) {
+            corrupt("Operation sidecar scope differs from its document shard")
+          }
+          if (operationIndexKey(record.ref.actorId, record.ref.operationId) !== operationDirectoryName) {
+            corrupt("Operation sidecar directory differs from its actor and operation")
+          }
+          const expectedName = `${deriveObjectNativeKey("operation-ref", record.ref.frameDigest)}.bin`
+          if (name !== expectedName) corrupt("Operation sidecar filename differs from its frame")
+          addOperationRecoveryIndexEntry(index, { ref: record.ref, layout })
+        }
+      }
+    }
+    this.operationRecoveryIndex = index
+  }
+
+  private addOperationRecoveryIndexEntry(entry: IndexedOperationFrame): void {
+    const index = this.operationRecoveryIndex
+    if (!index) corrupt("Operation recovery index is not warm")
+    addOperationRecoveryIndexEntry(index, entry)
+  }
+
+  private async loadOutboxUsage(layout: DocumentLayout): Promise<OutboxUsageCache> {
+    const cached = this.outboxUsageCaches.get(layout.directory)
+    if (cached) return cached
+    const frameBytes = new Map<Digest, number>()
+    let totalBytes = 0
+    const names = await readDirectoryNames(layout.outboxFrames)
+    if (names.length > MAX_OUTBOX_FRAMES) corrupt("Local frame outbox exceeds 4,096 refs")
+    for (const name of names) {
+      const record = parseOutbox(decodeRecord(await fs.readFile(path.join(layout.outboxFrames, name))))
+      const expectedName = `${deriveObjectNativeKey("outbox-ref", record.frameDigest)}.ref`
+      if (name !== expectedName) corrupt("Outbox filename and frame digest differ")
+      const framePath = path.join(layout.frames, `${deriveObjectNativeKey("frame", record.frameDigest)}.bin`)
+      const stat = await fs.lstat(framePath).catch((error) => {
+        throw new NodeCollaborationPersistenceError("store-corrupt", "Outbox frame object is missing", { cause: error })
+      })
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.size < 1 || stat.size > MAX_FRAME_BYTES) {
+        corrupt("Outbox frame object shape is invalid")
+      }
+      if (frameBytes.has(record.frameDigest)) corrupt("Outbox contains a duplicate frame digest")
+      frameBytes.set(record.frameDigest, stat.size)
+      totalBytes += stat.size
+      if (totalBytes > MAX_OUTBOX_BYTES) corrupt("Local frame outbox exceeds 512 MiB")
+    }
+    const usage = { frameBytes, totalBytes }
+    this.outboxUsageCaches.set(layout.directory, usage)
+    return usage
+  }
+
+  private recordOutboxPut(layout: DocumentLayout, frameDigest: Digest, byteLength: number): void {
+    const usage = this.outboxUsageCaches.get(layout.directory)
+    if (!usage || usage.frameBytes.has(frameDigest)) return
+    usage.frameBytes.set(frameDigest, byteLength)
+    usage.totalBytes += byteLength
   }
 
   private async materializeInstalledCheckpointBase(
@@ -1818,10 +2109,16 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
 
   private async retireFrameOutbox(layout: DocumentLayout, frameDigest: Digest): Promise<void> {
     const target = path.join(layout.outboxFrames, `${deriveObjectNativeKey("outbox-ref", frameDigest)}.ref`)
+    const usage = this.outboxUsageCaches.get(layout.directory)
+    const retiredBytes = usage?.frameBytes.get(frameDigest)
     await fs.unlink(target).catch((error) => {
       if (!isNodeError(error) || error.code !== "ENOENT") throw error
     })
     await fsyncProjectDirectory(layout.outboxFrames)
+    if (usage && retiredBytes !== undefined) {
+      usage.frameBytes.delete(frameDigest)
+      usage.totalBytes -= retiredBytes
+    }
   }
 
   private async findJournalForFrame(layout: DocumentLayout, frameDigest: Digest): Promise<boolean> {
@@ -1883,6 +2180,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       quarantineCommitRecordDigest: quarantineDigest,
     }
     await replaceDurableRecord(layout.dispositionHead, disposition)
+    this.invalidateMaterializedState(layout)
     return { quarantineDigest, dispositionDigest: localRecordDigest(disposition) }
   }
 
@@ -1908,18 +2206,12 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
   }
 
   private async assertOutboxCapacity(layout: DocumentLayout, incomingBytes: number): Promise<void> {
-    const refs = await readDirectoryNames(layout.outboxFrames)
-    if (refs.length >= MAX_OUTBOX_FRAMES) {
+    const usage = await this.loadOutboxUsage(layout)
+    if (usage.frameBytes.size >= MAX_OUTBOX_FRAMES) {
       throw new NodeCollaborationPersistenceError("outbox-backpressure", "Local frame outbox reached 4,096 refs")
     }
-    let total = incomingBytes
-    for (const name of refs) {
-      const record = parseOutbox(decodeRecord(await fs.readFile(path.join(layout.outboxFrames, name))))
-      const framePath = path.join(layout.frames, `${deriveObjectNativeKey("frame", record.frameDigest)}.bin`)
-      total += (await fs.stat(framePath)).size
-      if (total > MAX_OUTBOX_BYTES) {
-        throw new NodeCollaborationPersistenceError("outbox-backpressure", "Local frame outbox reached 512 MiB")
-      }
+    if (usage.totalBytes + incomingBytes > MAX_OUTBOX_BYTES) {
+      throw new NodeCollaborationPersistenceError("outbox-backpressure", "Local frame outbox reached 512 MiB")
     }
   }
 
@@ -2049,6 +2341,45 @@ function committedEvidence(
       resultingFrontierDigest: input.resultingFrontierDigest,
     },
   }
+}
+
+function operationRecoveryKey(actorId: ActorId, operationId: Id128): string {
+  return `${actorId}\0${operationId}`
+}
+
+function addOperationRecoveryIndexEntry(
+  index: Map<string, Map<Digest, IndexedOperationFrame>>,
+  entry: IndexedOperationFrame,
+): void {
+  const key = operationRecoveryKey(entry.ref.actorId, entry.ref.operationId)
+  let byDigest = index.get(key)
+  if (!byDigest) {
+    byDigest = new Map()
+    index.set(key, byDigest)
+  }
+  const existing = byDigest.get(entry.ref.frameDigest)
+  if (existing && restrictedJcs(existing.ref) !== restrictedJcs(entry.ref)) {
+    corrupt("Operation recovery frame digest aliases another frame ref")
+  }
+  byDigest.set(entry.ref.frameDigest, entry)
+}
+
+async function mapWithConcurrency<T, R>(
+  values: readonly T[],
+  concurrency: number,
+  operation: (value: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = []
+  let cursor = 0
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (cursor < values.length) {
+      const index = cursor
+      cursor += 1
+      results[index] = await operation(values[index]!, index)
+    }
+  })
+  await Promise.all(workers)
+  return results
 }
 
 function freezeHead(

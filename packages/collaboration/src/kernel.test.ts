@@ -30,6 +30,7 @@ import { canonicalStateDigest, ordinarySha256 } from "./digest"
 import { decodeCausalEditFrame } from "./frame"
 import { decodeRestrictedJcs, encodeRestrictedJcs } from "./jcs"
 import { CollaborationKernel, type LocalIntentRequest } from "./kernel"
+import type { CollaborationLatencyDiagnostic, CollaborationLatencyDiagnosticsPort } from "./latency-diagnostics"
 import { createSelectedDocumentOwnerArtifactFactory } from "./owner-runtime"
 import type {
   AcceptedHeadView,
@@ -248,6 +249,7 @@ async function openKernel(
   override?: Partial<CollaborationKernelPorts>,
   projection?: string[],
   ownerRuntime?: DocumentOwnerRuntime<"canvas">,
+  diagnostics?: CollaborationLatencyDiagnosticsPort,
 ) {
   const base = ports(persistence)
   const selectedAuthority = await authority()
@@ -262,6 +264,7 @@ async function openKernel(
       ...override,
     }, signatureVerifier: { verify: async () => true },
     projection: projection ? { publish: ({ frameDigest }) => projection.push(frameDigest) } : undefined,
+    diagnostics,
   })
   factPortFactories.set(kernel, createFacts)
   return kernel
@@ -372,6 +375,39 @@ describe("replicaDoc/candidateDoc durability", () => {
     expect(kernel.getProjectionSnapshot().canonicalStateDigest).toBe(canonicalStateDigestFor({ value: "one" }))
     expect(projected).toEqual([result.frame.frameDigest])
     kernel.dispose()
+  })
+
+  test("reports a closed identity-free latency breakdown without affecting commit success", async () => {
+    const persistence = new MemoryPersistence()
+    const diagnostics: CollaborationLatencyDiagnostic[] = []
+    const kernel = await openKernel(persistence, undefined, undefined, undefined, {
+      sample: () => ({ historyCount: 32, outboxCount: 4, cacheHit: true }),
+      record: (diagnostic) => {
+        diagnostics.push(diagnostic)
+      },
+    })
+    await commit(kernel, "diagnosed")
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(diagnostics).toHaveLength(1)
+    expect(diagnostics[0]).toMatchObject({
+      format: "convax.collaboration-latency-diagnostic",
+      outcome: "succeeded",
+      sample: { historyCount: 32, outboxCount: 4, cacheHit: true },
+    })
+    expect(Object.keys(diagnostics[0]!.stages).sort()).toEqual([
+      "candidate-clone", "canonicalize", "head", "head-check", "journal", "object",
+      "operation-lookup", "outbox", "post-head-check", "prepare/facts", "projection",
+      "queue", "reducer", "replica-apply", "sign",
+    ].sort())
+    expect(diagnostics[0]!.stages.object).toBeGreaterThanOrEqual(0)
+    kernel.dispose()
+
+    const isolated = await openKernel(new MemoryPersistence(), undefined, undefined, undefined, {
+      record: () => { throw new Error("diagnostics unavailable") },
+    })
+    await expect(commit(isolated, "still-saved")).resolves.toMatchObject({ status: "saved-locally" })
+    isolated.dispose()
   })
 
   test("response-loss retry returns the original final frame without recomputation", async () => {

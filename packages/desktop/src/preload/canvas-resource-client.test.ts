@@ -3,6 +3,7 @@ import { canvasResourcePartialFailureKind } from "../canvas-resource-private-con
 import { CanvasTextResourceConflictError } from "@convax/canvas/application/errors"
 import {
   canvasResourceHydrateStaleIpcChannel,
+  canvasResourceIpcChannel,
   canvasResourceReadConnectedImageIpcChannel,
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
@@ -17,10 +18,13 @@ function request(overrides: Record<string, unknown> = {}) {
     commandId: "add-resources",
     localFiles: [],
     projectId: "project-one",
+    sessionId: parseId128(encodeBase64url(new Uint8Array(16).fill(3))),
     sources: [{ kind: "host-file" as const, path: "media/hero.png", sourceId: "hero" }],
     ...overrides,
   }
 }
+
+const resourceSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
 
 const operationReceipt = {
   format: "convax.canvas-operation-receipt" as const,
@@ -35,17 +39,51 @@ const operationReceipt = {
 }
 
 function resourceResult(createdNodeIds: readonly string[] = ["created"]) {
+  void createdNodeIds
+  return {
+    delivery: {
+      status: "accepted" as const,
+      acceptedFrameDigest: parseDigest("d".repeat(64)),
+      projection: {
+        format: "convax.canvas-session-projection" as const,
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: resourceSessionId,
+        document: createCanvasDocument({ id: "canvas-main" }),
+        nodeEntities: [],
+        canUndo: true,
+        canRedo: false,
+      },
+    },
+    operationReceipt,
+    warnings: [],
+  }
+}
+
+function resourceAddResult(createdNodeIds: readonly string[] = ["created"]) {
   return {
     createdNodeIds,
+    delivery: {
+      status: "accepted" as const,
+      acceptedFrameDigest: parseDigest("d".repeat(64)),
+      projection: {
+        format: "convax.canvas-session-projection" as const,
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId: resourceSessionId,
+        document: createCanvasDocument({ id: "canvas-main" }),
+        nodeEntities: [],
+        canUndo: true,
+        canRedo: false,
+      },
+    },
     operationReceipt,
-    projection: createCanvasDocument({ id: "canvas-main" }),
     warnings: [],
   }
 }
 
 function setup(
   invoke = mock(
-    async (_channel?: string, _input?: unknown): Promise<unknown> => resourceResult(),
+    async (channel?: string, _input?: unknown): Promise<unknown> =>
+      channel === canvasResourceIpcChannel ? resourceAddResult() : resourceResult(),
   ),
 ) {
   let nextToken = 0
@@ -59,7 +97,7 @@ function setup(
 }
 
 describe("preload Canvas resource client", () => {
-  test("relinks from one portable Project source without accepting Project ids, references, native paths, or bodies", async () => {
+  test("relinks from one portable Project source through its mounted session without references, native paths, or bodies", async () => {
     const { client, invoke } = setup()
 
     await expect(
@@ -67,17 +105,20 @@ describe("preload Canvas resource client", () => {
         canvasId: "canvas-main",
         commandId: "relink-project-file",
         nodeId: "image-node",
+        projectId: "project-one",
+        sessionId: resourceSessionId,
         source: { kind: "host-file", path: "media/replacement.png" },
       }),
-    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
+    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-relink", {
       canvasId: "canvas-main",
       commandId: "relink-project-file",
       nodeId: "image-node",
+      projectId: "project-one",
+      sessionId: resourceSessionId,
       source: { kind: "host-file", path: "media/replacement.png" },
     })
-    expect(JSON.stringify(invoke.mock.calls)).not.toContain("projectId")
     expect(JSON.stringify(invoke.mock.calls)).not.toContain("reference")
     expect(JSON.stringify(invoke.mock.calls)).not.toContain("body")
     expect(JSON.stringify(invoke.mock.calls)).not.toContain("/native/")
@@ -97,10 +138,12 @@ describe("preload Canvas resource client", () => {
       canvasId: "canvas-main",
       commandId: "relink-local-file",
       nodeId: "image-node",
+      projectId: "project-one",
+      sessionId: resourceSessionId,
       source: { kind: "local-file" as const, mediaType: file.type, name: file.name, sourceToken },
     }
 
-    await expect(client.relink(input)).resolves.toMatchObject({ projection: { id: "canvas-main" } })
+    await expect(client.relink(input)).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
     expect(invoke.mock.calls[0]).toEqual([
       "canvas:resource-local-file-register",
       { sourcePath: "/native/replacement.png", sourceToken },
@@ -111,6 +154,8 @@ describe("preload Canvas resource client", () => {
         canvasId: "canvas-main",
         commandId: "relink-local-file",
         nodeId: "image-node",
+        projectId: "project-one",
+        sessionId: resourceSessionId,
         source: { kind: "local-file", mediaType: "image/png", name: "replacement.png", sourceToken },
       },
     ])
@@ -118,7 +163,7 @@ describe("preload Canvas resource client", () => {
     await expect(client.relink({ ...input, commandId: "reuse-local-file" })).rejects.toThrow("authorization")
   })
 
-  test("requests an editable managed-text copy without sending text, a reference, path, or Project id", async () => {
+  test("requests an editable managed-text copy through its mounted session without sending text, a reference, or path", async () => {
     const { client, invoke } = setup()
 
     await expect(
@@ -126,16 +171,19 @@ describe("preload Canvas resource client", () => {
         canvasId: "canvas-main",
         commandId: "save-editable-copy",
         nodeId: "managed-text",
+        projectId: "project-one",
+        sessionId: resourceSessionId,
       }),
-    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
+    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-save-editable-copy", {
       canvasId: "canvas-main",
       commandId: "save-editable-copy",
       nodeId: "managed-text",
+      projectId: "project-one",
+      sessionId: resourceSessionId,
     })
     const serialized = JSON.stringify(invoke.mock.calls)
-    expect(serialized).not.toContain("projectId")
     expect(serialized).not.toContain("reference")
     expect(serialized).not.toContain("content")
     expect(serialized).not.toContain("path")
@@ -252,6 +300,7 @@ describe("preload Canvas resource client", () => {
       ],
       parentId: "focused-group",
       projectId: "project-one",
+      sessionId: resourceSessionId,
       sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
     })
     expect(JSON.stringify(result)).not.toContain("/native/outside.png")
@@ -299,7 +348,7 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
+    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
   })
 
   test("an invalid token does not consume valid peers, while an IPC failure consumes the whole valid batch", async () => {
@@ -378,7 +427,7 @@ describe("preload Canvas resource client", () => {
           sources: [],
         }),
       ),
-    ).resolves.toMatchObject({ projection: { id: "canvas-main" } })
+    ).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
   })
 
   test("does not mint a token for an in-memory File without a native path", () => {

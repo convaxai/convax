@@ -10,7 +10,7 @@ import type {
 } from "./types"
 import type { OwnerIntentConstructionContext } from "@convax/collaboration"
 import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
-import type { CanvasAuthoritativeCommand } from "./command-construction"
+import type { CanvasAuthoritativeCommand, CanvasCreatedResourceRelation } from "./command-construction"
 import { assertPluginState, assertResourceProof, canvasEntityKey, sameCanonicalValue } from "./validation"
 
 export const canvasResourceProofMetadataKey = "convaxCanvasResourceProof"
@@ -130,19 +130,62 @@ export function adaptCanvasApplicationCommand(input: {
           }),
         })
       }
+      case "nodes.duplicate": {
+        if (command.nodeIds.length < 1 || command.nodeIds.length > 85) return "rejected"
+        const requested = new Set(command.nodeIds)
+        if (requested.size !== command.nodeIds.length) return "rejected"
+        const included = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
+        for (const id of command.nodeIds) {
+          const source = nodeById.get(id)
+          if (!source) return "rejected"
+          included.set(canvasEntityKey(source.ref), source.ref)
+        }
+        let changed = true
+        while (changed) {
+          changed = false
+          for (const node of index.projection.nodes) {
+            if (node.parent === null || !included.has(canvasEntityKey(node.parent)) || included.has(canvasEntityKey(node.ref))) continue
+            included.set(canvasEntityKey(node.ref), node.ref)
+            changed = true
+          }
+        }
+        const sources = [...included.values()]
+        if (sources.length > 85) return "rejected"
+        const offset = command.offset ?? { x: 32, y: 32 }
+        if (!finitePoint(offset) || (offset.x === 0 && offset.y === 0)) return "rejected"
+        if (command.edgeScope !== undefined && command.edgeScope !== "connected" && command.edgeScope !== "internal") {
+          return "rejected"
+        }
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "nodes-duplicate",
+            sources: Object.freeze(sources),
+            offset: Object.freeze({ ...offset }),
+            edgeScope: command.edgeScope ?? "connected",
+          }),
+        })
+      }
       case "nodes.reparent": {
         if (command.nodeIds.length !== 1) return "rejected"
+        if (command.delta !== undefined && !finitePoint(command.delta)) return "rejected"
         const child = nodeById.get(command.nodeIds[0]!)
         if (!child) return "rejected"
         const parent = command.parentId === undefined ? null : nodeById.get(command.parentId)
         if (command.parentId !== undefined && (!parent || parent.data.kind !== "group")) return "rejected"
         if (parent && sameCanonicalValue(child.ref, parent.ref)) return "rejected"
+        const childWorld = projectedWorldPosition(child, nodeById)
+        const parentWorld = parent ? projectedWorldPosition(parent, nodeById) : { x: 0, y: 0 }
         return Object.freeze({
           caller,
           command: Object.freeze({
             kind: "structural-parent-set",
             child: child.ref,
             parent: parent?.ref ?? null,
+            position: Object.freeze({
+              x: childWorld.x + (command.delta?.x ?? 0) - parentWorld.x,
+              y: childWorld.y + (command.delta?.y ?? 0) - parentWorld.y,
+            }),
           }),
         })
       }
@@ -178,7 +221,78 @@ export function adaptCanvasApplicationCommand(input: {
         })
         return Object.freeze({
           caller,
-          command: Object.freeze({ kind: "nodes-group", children: Object.freeze(children), title: command.label ?? "Group" }),
+          command: Object.freeze({
+            kind: "nodes-group",
+            children: Object.freeze(children),
+            title: command.label ?? "Group",
+            folded: command.folded === true,
+          }),
+        })
+      }
+      case "nodes.setFolded": {
+        const node = nodeById.get(command.nodeId)
+        if (!node || node.data.kind !== "group") return "rejected"
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "node-data-set",
+            node: node.ref,
+            data: Object.freeze({
+              format: "convax.canvas-node-data",
+              kind: "group",
+              title: node.data.title,
+              ...(command.folded ? { folded: true as const } : {}),
+              ...(node.data.appearance === undefined ? {} : { appearance: { ...node.data.appearance } }),
+            }),
+          }),
+        })
+      }
+      case "nodes.setGenerationToolId": {
+        const node = nodeById.get(command.nodeId)
+        if (!node || (node.data.kind !== "resource" && node.data.kind !== "placeholder")) return "rejected"
+        if (command.toolId !== undefined && (
+          command.toolId.length === 0 || command.toolId.length > 512 || command.toolId !== command.toolId.trim() ||
+          /[\u0000-\u001f\u007f]/.test(command.toolId)
+        )) return "rejected"
+        const { generationToolId: _generationToolId, ...data } = node.data
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "node-data-set",
+            node: node.ref,
+            data: Object.freeze({ ...data, ...(command.toolId === undefined ? {} : { generationToolId: command.toolId }) }),
+          }),
+        })
+      }
+      case "nodes.setGroupAppearance": {
+        const node = nodeById.get(command.nodeId)
+        if (!node || node.data.kind !== "group") return "rejected"
+        const { appearance: _appearance, ...data } = node.data
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "node-data-set",
+            node: node.ref,
+            data: Object.freeze({
+              ...data,
+              ...(command.appearance.color === "default" && command.appearance.emoji === "folder"
+                ? {}
+                : { appearance: Object.freeze({ ...command.appearance }) }),
+            }),
+          }),
+        })
+      }
+      case "nodes.setTitle": {
+        const node = nodeById.get(command.nodeId)
+        const title = command.title.trim().slice(0, 200)
+        if (!node || title.length === 0 || node.data.title === title) return "rejected"
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "node-data-set",
+            node: node.ref,
+            data: Object.freeze({ ...node.data, title }),
+          }),
         })
       }
       case "nodes.ungroup": {
@@ -211,9 +325,11 @@ export function adaptCanvasApplicationCommand(input: {
         }))
       }
       case "resources.add": {
-        if (command.items.length < 1 || command.items.length > 85 || command.placement.parentId !== undefined || command.relation?.mode === "connect") {
+        if (command.items.length < 1 || command.items.length > 85 || command.placement.parentId !== undefined) {
           return "rejected"
         }
+        const relation = adaptCreatedResourceRelation(command.relation, nodeById)
+        if (relation === "rejected" || !boundedCreatedResourceSet(command.items.length, relation)) return "rejected"
         const items = command.items.map(({ item }) => {
           const metadata = item.metadata
           if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
@@ -234,11 +350,14 @@ export function adaptCanvasApplicationCommand(input: {
             kind: "resources-create",
             anchor: Object.freeze({ ...command.placement.anchor }),
             items: Object.freeze(items),
+            relation,
           }),
         })
       }
       case "resources.pending.create": {
-        if (command.placement.parentId !== undefined || command.relation?.mode === "connect") return "rejected"
+        if (command.placement.parentId !== undefined) return "rejected"
+        const relation = adaptCreatedResourceRelation(command.relation, nodeById)
+        if (relation === "rejected" || !boundedCreatedResourceSet(1, relation)) return "rejected"
         return Object.freeze({
           caller,
           command: Object.freeze({
@@ -249,6 +368,7 @@ export function adaptCanvasApplicationCommand(input: {
               expectedClass: command.kind,
               size: Object.freeze({ width: 240, height: 180 }),
             })]),
+            relation,
           }),
         })
       }
@@ -275,6 +395,10 @@ export function adaptCanvasApplicationCommand(input: {
         ) {
           return "rejected"
         }
+        const generationToolId =
+          node.data.kind === "resource" || node.data.kind === "placeholder"
+            ? node.data.generationToolId
+            : undefined
         return Object.freeze({
           caller,
           command: Object.freeze({
@@ -282,6 +406,7 @@ export function adaptCanvasApplicationCommand(input: {
             node: node.ref,
             title: command.item.name ?? node.data.title,
             proof,
+            ...(generationToolId === undefined ? {} : { generationToolId }),
           }),
         })
       }
@@ -324,6 +449,37 @@ export function adaptCanvasApplicationCommand(input: {
   } catch {
     return "rejected"
   }
+}
+
+function adaptCreatedResourceRelation(
+  relation: Extract<CanvasApplicationCommand, { type: "resources.add" }>["relation"],
+  nodeById: ReadonlyMap<string, { readonly ref: CanvasEntityRef & { readonly kind: "node" } }>,
+): CanvasCreatedResourceRelation | null | "rejected" {
+  if (relation === undefined || relation.mode === "none") return null
+  if (
+    relation.mode !== "connect" ||
+    (relation.direction !== undefined && relation.direction !== "from-anchor" && relation.direction !== "to-anchor") ||
+    relation.anchorNodeIds.length < 1
+  ) {
+    return "rejected"
+  }
+  const seen = new Set<string>()
+  const anchors = relation.anchorNodeIds.map((nodeId) => {
+    if (seen.has(nodeId)) throw new TypeError("Connected resource anchor is duplicated")
+    seen.add(nodeId)
+    const node = nodeById.get(nodeId)
+    if (!node) throw new TypeError("Connected resource anchor is not live")
+    return Object.freeze({ ...node.ref })
+  })
+  return Object.freeze({
+    anchors: Object.freeze(anchors),
+    direction: relation.direction ?? "from-anchor",
+  })
+}
+
+function boundedCreatedResourceSet(nodeCount: number, relation: CanvasCreatedResourceRelation | null): boolean {
+  const edgeCount = nodeCount * (relation?.anchors.length ?? 0)
+  return edgeCount <= 168 && 6 * nodeCount + 3 * edgeCount + 2 <= 512
 }
 
 function geometryAdaptation(
@@ -375,6 +531,27 @@ function finitePoint(value: { readonly x: number; readonly y: number }): boolean
 
 function finiteSize(value: { readonly width: number; readonly height: number }): boolean {
   return Number.isFinite(value.width) && value.width > 0 && Number.isFinite(value.height) && value.height > 0
+}
+
+function projectedWorldPosition(
+  node: { readonly ref: CanvasEntityRef & { readonly kind: "node" }; readonly position: { readonly x: number; readonly y: number }; readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null },
+  nodes: ReadonlyMap<string, { readonly ref: CanvasEntityRef & { readonly kind: "node" }; readonly position: { readonly x: number; readonly y: number }; readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null }>,
+): { x: number; y: number } {
+  let x = node.position.x
+  let y = node.position.y
+  let parent = node.parent
+  const visited = new Set<string>([canvasEntityKey(node.ref)])
+  while (parent !== null) {
+    const key = canvasEntityKey(parent)
+    if (visited.has(key)) throw new TypeError("Canvas structural parent cycle")
+    visited.add(key)
+    const value = nodes.get(parent.id)
+    if (!value) throw new TypeError("Canvas structural parent is stale")
+    x += value.position.x
+    y += value.position.y
+    parent = value.parent
+  }
+  return { x, y }
 }
 
 function hasOnlyKeys(value: object, keys: readonly string[]): boolean {

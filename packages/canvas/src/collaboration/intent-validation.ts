@@ -54,6 +54,7 @@ export const CANVAS_INTENT_KINDS = Object.freeze([
   "canvas.resources.pending-generation.create",
   "canvas.elements.remove",
   "canvas.nodes.set-geometry",
+  "canvas.nodes.duplicate",
   "canvas.nodes.update-data",
   "canvas.nodes.set-plugin-state",
   "canvas.nodes.set-structural-parent",
@@ -142,6 +143,24 @@ export function assertCanvasTypedIntent(value: unknown): asserts value is Canvas
         if (item.size !== null) assertSize(item.size)
       })
       return
+    case "canvas.nodes.duplicate":
+      assertExactKeys(value.guard, ["sources", "existingEndpoints", "existingParents", "derivedNodes", "derivedEdges"], "duplicate guard")
+      assertArray(value.guard.sources, assertNodeDataGuard)
+      assertArray(value.guard.existingEndpoints, assertConnectableGuard)
+      assertArray(value.guard.existingParents, assertNodeLiveGuard)
+      assertArray(value.guard.derivedNodes, assertDerivedNodeGuard)
+      assertArray(value.guard.derivedEdges, assertDerivedEdgeGuard)
+      assertExactKeys(value.body, ["offset", "nodes", "edges", "containments"], "duplicate body")
+      assertPoint(value.body.offset)
+      assertArray(value.body.nodes, assertNodeTemplate)
+      assertArray(value.body.edges, assertEdgeTemplate)
+      assertArray(value.body.containments, (item) => {
+        assertExactKeys(item, ["childCreatedNodeOrdinal", "parent", "relationId"], "duplicate containment")
+        parseUint32(item.childCreatedNodeOrdinal)
+        assertEndpoint(item.parent)
+        assertDerivedId(item.relationId, "r_", "relationId")
+      })
+      return
     case "canvas.nodes.update-data":
       assertExactKeys(value.guard, ["node", "resourceProof"], "update-data guard")
       assertNodeDataGuard(value.guard.node)
@@ -159,11 +178,24 @@ export function assertCanvasTypedIntent(value: unknown): asserts value is Canvas
       return
     case "canvas.nodes.set-structural-parent":
       assertExactKeys(value.guard, ["child", "parent"], "parent guard")
-      assertContainmentGuard(value.guard.child)
+      const hasStructuralGeometry = typeof value.guard.child === "object" && value.guard.child !== null && "expectedGeometryDigest" in value.guard.child
+      assertExactKeys(value.guard.child, !hasStructuralGeometry
+        ? ["node", "expectedLive", "expectedIdentityDigest", "expectedOwnSlotDigest"]
+        : ["node", "expectedLive", "expectedIdentityDigest", "expectedOwnSlotDigest", "expectedGeometryDigest"], "structural child guard")
+      assertEntityRef(value.guard.child.node, "node")
+      if (value.guard.child.expectedLive !== true) invalid("structural child must be live")
+      parseDigest(value.guard.child.expectedIdentityDigest)
+      if (value.guard.child.expectedOwnSlotDigest !== null) parseDigest(value.guard.child.expectedOwnSlotDigest)
+      if (value.guard.child.expectedGeometryDigest !== undefined) parseDigest(value.guard.child.expectedGeometryDigest)
       if (value.guard.parent !== null) assertNodeLiveGuard(value.guard.parent)
-      assertExactKeys(value.body, ["child", "parent", "relationId"], "parent body")
+      const hasStructuralPosition = typeof value.body === "object" && value.body !== null && "position" in value.body
+      assertExactKeys(value.body, !hasStructuralPosition
+        ? ["child", "parent", "relationId"]
+        : ["child", "parent", "position", "relationId"], "parent body")
       assertEntityRef(value.body.child, "node")
       if (value.body.parent !== null) assertEntityRef(value.body.parent, "node")
+      if (value.body.position !== undefined) assertPoint(value.body.position)
+      if ((value.body.position === undefined) !== (value.guard.child.expectedGeometryDigest === undefined)) invalid("structural geometry guard/body mismatch")
       assertDerivedId(value.body.relationId, "r_", "relation id")
       return
     case "canvas.nodes.group":

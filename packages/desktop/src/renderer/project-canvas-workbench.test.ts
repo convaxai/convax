@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from "bun:test"
-import { createCanvasDocument } from "@convax/canvas"
 import type { ProjectCanvas, ProjectCanvasControllerSnapshot } from "@convax/project/canvas"
 import type { ProjectFilesControllerSnapshot } from "@convax/project-files"
+import { encodeBase64url, parseId128 } from "@convax/collaboration"
 import { WorkbenchController } from "@convax/workbench"
 import type { CanvasResourceRelinkResult } from "../desktop-protocol"
 import {
@@ -16,10 +16,12 @@ function canvas(id: string): ProjectCanvas {
   return { createdAt: 1, id, name: id, updatedAt: 1 }
 }
 
-function relinkResult(canvasId = "canvas-one"): CanvasResourceRelinkResult {
+const resourceSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
+
+function relinkResult(): CanvasResourceRelinkResult {
   return {
+    delivery: { status: "unavailable" },
     operationReceipt: {} as CanvasResourceRelinkResult["operationReceipt"],
-    projection: createCanvasDocument({ id: canvasId }),
     warnings: [],
   }
 }
@@ -57,7 +59,7 @@ function catalogHarness(initial = [canvas("canvas-one"), canvas("canvas-two")]) 
 }
 
 describe("Project Canvas Workbench coordination", () => {
-  test("captures the selected Project resource before flushing Main and returns its relink projection", async () => {
+  test("captures the selected Project resource and submits it without a pre-commit refresh", async () => {
     let snapshot: ProjectFilesControllerSnapshot = {
       error: null,
       expandedPaths: [],
@@ -75,57 +77,49 @@ describe("Project Canvas Workbench coordination", () => {
       projectId: "project-one",
       selectedPaths: ["first.png"],
     }
-    let releaseFlush!: () => void
-    let markFlushStarted!: () => void
-    const flushStarted = new Promise<void>((resolve) => {
-      markFlushStarted = resolve
-    })
-    const flushBarrier = new Promise<void>((resolve) => {
-      releaseFlush = resolve
-    })
-    const flush = mock(async () => {
-      markFlushStarted()
-      await flushBarrier
-      return createCanvasDocument({ id: "canvas-one" })
-    })
+    let releaseRelink!: () => void
+    const relinkBarrier = new Promise<void>((resolve) => { releaseRelink = resolve })
     const result = relinkResult()
-    const relink = mock(async () => result)
+    const relink = mock(async () => {
+      await relinkBarrier
+      return result
+    })
 
     const operation = runProjectCanvasResourceRelink({
       activeCanvasId: "canvas-one",
       activeProjectId: "project-one",
       createCommandId: () => "renderer:relink",
-      flush,
       projectFiles: { getSnapshot: () => snapshot },
       request: {
         nodeId: "missing-image",
         signal: new AbortController().signal,
       },
       resources: { createLocalFileToken: mock(), relink: relink as never },
+      sessionId: resourceSessionId,
     })
-    await flushStarted
     snapshot = { ...snapshot, selectedPaths: ["later.png"] }
-    releaseFlush()
+    releaseRelink()
     await expect(operation).resolves.toBe(result)
 
     expect(relink).toHaveBeenCalledWith({
       canvasId: "canvas-one",
       commandId: "renderer:relink",
       nodeId: "missing-image",
+      projectId: "project-one",
+      sessionId: resourceSessionId,
       source: { kind: "host-file", path: "first.png" },
     })
   })
 
-  test("rejects relink when flush cannot resolve the active authoritative Canvas", async () => {
+  test("rejects relink before consuming a local-file token when no Canvas is mounted", async () => {
     const createLocalFileToken = mock(() => "local-file-token")
     const relink = mock(async () => relinkResult())
 
     await expect(
       runProjectCanvasResourceRelink({
-        activeCanvasId: "canvas-one",
+        activeCanvasId: null,
         activeProjectId: "project-one",
         createCommandId: () => "renderer:relink",
-        flush: async () => createCanvasDocument({ id: "canvas-two" }),
         projectFiles: {
           getSnapshot: () => ({
             error: null,
@@ -142,14 +136,14 @@ describe("Project Canvas Workbench coordination", () => {
           signal: new AbortController().signal,
         },
         resources: { createLocalFileToken, relink },
+        sessionId: resourceSessionId,
       }),
-    ).rejects.toThrow("Canvas resource relink could not resolve Main's authoritative document")
+    ).rejects.toThrow("Open a Project Canvas")
     expect(createLocalFileToken).not.toHaveBeenCalled()
     expect(relink).not.toHaveBeenCalled()
   })
 
-  test("rejects an invalid Project selection before flushing or invoking relink IPC", async () => {
-    const flush = mock(async () => undefined)
+  test("rejects an invalid Project selection before invoking relink IPC", async () => {
     const relink = mock(async () => relinkResult())
 
     await expect(
@@ -157,7 +151,6 @@ describe("Project Canvas Workbench coordination", () => {
         activeCanvasId: "canvas-one",
         activeProjectId: "project-one",
         createCommandId: () => "renderer:relink",
-        flush,
         projectFiles: {
           getSnapshot: () => ({
             error: null,
@@ -173,9 +166,9 @@ describe("Project Canvas Workbench coordination", () => {
           signal: new AbortController().signal,
         },
         resources: { createLocalFileToken: mock(), relink: relink as never },
+        sessionId: resourceSessionId,
       }),
     ).rejects.toThrow("Select exactly one Project file or directory")
-    expect(flush).not.toHaveBeenCalled()
     expect(relink).not.toHaveBeenCalled()
   })
 

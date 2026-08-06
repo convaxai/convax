@@ -33,6 +33,9 @@ import type {
   CanvasTypedIntentUnion,
   Id128,
 } from "./types"
+import type { CanvasApplicationCommand } from "../application/commands"
+import type { CanvasApplicationCommandResult } from "../application/service"
+import type { CanvasOptimisticOverlaySnapshot } from "../optimistic-overlay"
 import { canvasOwnerCanonicalizerDescriptor } from "./validation"
 import { encodeCanvasCanonicalState, validateCanvasYDoc } from "./ydoc"
 
@@ -252,12 +255,24 @@ export type CanvasRendererCommand = Readonly<{
 export interface CanvasRendererCollaborationClient extends CanvasRendererProjectionStore {
   readonly authority: "project-collaboration-application"
   readonly undoModel: "project-yjs-semantic-history"
+  readonly visualOverlay?: Readonly<{
+    getSnapshot(): CanvasOptimisticOverlaySnapshot
+    subscribe(listener: () => void): () => void
+  }>
   canRedo(): boolean
   canUndo(): boolean
+  drain(signal?: AbortSignal): Promise<void>
+  executeApplication(command: CanvasApplicationCommand, signal?: AbortSignal): Promise<CanvasApplicationCommandResult>
   flush(signal?: AbortSignal): Promise<void>
-  redo(signal?: AbortSignal): Promise<void>
+  redo(signal?: AbortSignal): Promise<CanvasRendererHistoryTransitionResult | null>
+  refresh(signal?: AbortSignal): Promise<void>
   submit(command: CanvasRendererCommand, signal?: AbortSignal): Promise<void>
-  undo(signal?: AbortSignal): Promise<void>
+  undo(signal?: AbortSignal): Promise<CanvasRendererHistoryTransitionResult | null>
+}
+
+export interface CanvasRendererHistoryTransitionResult {
+  readonly direction: "undo" | "redo"
+  readonly rootOperationId: Id128
 }
 
 export function createReadonlyCanvasProjectionBootstrap(

@@ -9,6 +9,7 @@ export const CANVAS_UNDOABLE_INTENT_KINDS = Object.freeze([
   "canvas.resources.pending-generation.create",
   "canvas.elements.remove",
   "canvas.nodes.set-geometry",
+  "canvas.nodes.duplicate",
   "canvas.nodes.update-data",
   "canvas.nodes.set-plugin-state",
   "canvas.nodes.set-structural-parent",

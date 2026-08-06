@@ -92,6 +92,7 @@ const UNDOABLE = new Set<string>([
   "canvas.resources.pending-generation.create",
   "canvas.elements.remove",
   "canvas.nodes.set-geometry",
+  "canvas.nodes.duplicate",
   "canvas.nodes.update-data",
   "canvas.nodes.set-plugin-state",
   "canvas.nodes.set-structural-parent",
@@ -607,6 +608,85 @@ function planIntent(
       }
       return "valid"
     }
+    case "canvas.nodes.duplicate": {
+      if (
+        intent.body.nodes.length < 1 ||
+        intent.body.nodes.length > 85 ||
+        intent.body.edges.length > 168 ||
+        intent.body.containments.length > intent.body.nodes.length ||
+        (intent.body.offset.x === 0 && intent.body.offset.y === 0) ||
+        !Number.isFinite(intent.body.offset.x) ||
+        !Number.isFinite(intent.body.offset.y) ||
+        6 * intent.body.nodes.length + 3 * intent.body.edges.length + intent.body.containments.length + 2 > 512
+      ) return "invalid"
+      if (intent.guard.sources.length !== intent.body.nodes.length) return "invalid"
+      const nodeRefs = new Map<string, CanvasEntityRef & { kind: "node" }>()
+      for (let position = 0; position < intent.body.nodes.length; position += 1) {
+        const template = intent.body.nodes[position]!
+        const sourceGuard = intent.guard.sources[position]!
+        const source = requireNodeData(base, index, sourceGuard)
+        const sourceData = effectiveNodeData(base, source).data
+        const sourcePlugin = effectivePlugin(source)
+        if (
+          template.ordinal !== String(position) ||
+          template.role !== source.identity.role ||
+          !sameCanonicalValue(template.data, sourceData) ||
+          !sameCanonicalValue(template.plugin, sourcePlugin) ||
+          template.position.x !== effectivePosition(source).x + intent.body.offset.x ||
+          template.position.y !== effectivePosition(source).y + intent.body.offset.y ||
+          !sameCanonicalValue(template.size, effectiveSize(source))
+        ) return "invalid"
+        if (template.plugin !== null) requireFact(facts.validatePluginState(template.plugin))
+        const guard = intent.guard.derivedNodes.find((candidate) => candidate.ordinal === template.ordinal)
+        if (!guard) return "invalid"
+        const ref = requireDerivedNode(base, context, guard, template)
+        nodeRefs.set(template.ordinal, ref)
+        planNodeCreate(writes, ref, template, context, null)
+        results.push(ref)
+        invalidated.push(ref)
+      }
+      for (const edge of intent.body.edges) {
+        const guard = intent.guard.derivedEdges.find((candidate) => candidate.ordinal === edge.ordinal)
+        if (!guard) return "invalid"
+        const ref = requireDerivedEdge(base, context, guard, edge)
+        const source = resolveEndpoint(edge.source, nodeRefs, base, index)
+        const target = resolveEndpoint(edge.target, nodeRefs, base, index)
+        for (const endpoint of [edge.source, edge.target]) {
+          if ("createdNodeOrdinal" in endpoint) continue
+          const endpointGuard = intent.guard.existingEndpoints.find((candidate) =>
+            canvasEntityKey(candidate.node) === canvasEntityKey(endpoint),
+          )
+          if (!endpointGuard) return "invalid"
+          requireNode(base, index, endpointGuard)
+        }
+        planEdgeCreate(writes, ref, source, target, edge.data, context, null)
+        results.push(ref)
+        invalidated.push(ref)
+      }
+      for (const containment of intent.body.containments) {
+        const child = nodeRefs.get(containment.childCreatedNodeOrdinal)
+        if (!child) return "invalid"
+        let parent: CanvasEntityRef & { kind: "node" }
+        if ("createdNodeOrdinal" in containment.parent) {
+          const parentOrdinal = containment.parent.createdNodeOrdinal
+          const createdParent = nodeRefs.get(parentOrdinal)
+          if (!createdParent) return "invalid"
+          const parentTemplate = intent.body.nodes.find((candidate) => candidate.ordinal === parentOrdinal)
+          if (parentTemplate?.data.kind !== "group") return "invalid"
+          parent = createdParent
+        } else {
+          const parentGuard = intent.guard.existingParents.find((candidate) =>
+            canvasEntityKey(candidate.node) === canvasEntityKey(containment.parent as CanvasEntityRef),
+          )
+          if (!parentGuard) return "invalid"
+          const parentNode = requireNode(base, index, parentGuard)
+          if (effectiveNodeData(base, parentNode).data.kind !== "group") return "invalid"
+          parent = parentNode.identity.ref
+        }
+        planContainment(writes, child, parent, containment.relationId, context)
+      }
+      return "valid"
+    }
     case "canvas.nodes.update-data": {
       const node = requireNodeData(base, index, intent.guard.node)
       if (canvasEntityKey(intent.body.node) !== node.key) return "invalid"
@@ -649,7 +729,8 @@ function planIntent(
       const child = requireNode(base, index, intent.guard.child)
       if (
         canvasEntityKey(child.identity.ref) !== canvasEntityKey(intent.body.child) ||
-        ownContainmentSlotDigest(base, child.identity.ref, context.actorId) !== intent.guard.child.expectedOwnSlotDigest
+        ownContainmentSlotDigest(base, child.identity.ref, context.actorId) !== intent.guard.child.expectedOwnSlotDigest ||
+        (intent.guard.child.expectedGeometryDigest !== undefined && geometryDigest(child) !== intent.guard.child.expectedGeometryDigest)
       )
         return "invalid"
       if (intent.body.parent !== null) {
@@ -663,6 +744,7 @@ function planIntent(
       }
       const expectedRelation = deriveCanvasId("relation", context, "0" as Uint32)
       if (intent.body.relationId !== expectedRelation) return "invalid"
+      if (intent.body.position !== undefined) planClaim(writes, "node", intent.body.child, "position", intent.body.position, context)
       planContainment(writes, intent.body.child, intent.body.parent, intent.body.relationId, context)
       results.push(intent.body.child)
       invalidated.push(intent.body.child)
@@ -2278,11 +2360,25 @@ function captureHistoryRoot(
     }
   else if (intent.kind === "canvas.nodes.set-structural-parent") {
     const handle = handles.get(canvasEntityKey(intent.body.child))!
+    if (intent.body.position !== undefined)
+      inverseTemplate.push({
+        op: "node.geometry",
+        handle,
+        position: effectivePosition(base.nodes.get(canvasEntityKey(intent.body.child))!),
+        size: effectiveSize(base.nodes.get(canvasEntityKey(intent.body.child))!),
+      })
     inverseTemplate.push({
       op: "containment.set",
       child: { mode: "handle", handle },
       parent: historyTarget(effectiveParent(base, intent.body.child), handles),
     })
+    if (intent.body.position !== undefined)
+      forwardTemplate.push({
+        op: "node.geometry",
+        handle,
+        position: effectivePosition(post.nodes.get(canvasEntityKey(intent.body.child))!),
+        size: effectiveSize(post.nodes.get(canvasEntityKey(intent.body.child))!),
+      })
     forwardTemplate.push({
       op: "containment.set",
       child: { mode: "handle", handle },
@@ -2369,6 +2465,28 @@ function captureHistoryRoot(
         snapshot: historyEdgeSnapshot(post, ref, handles),
       })),
     })
+  } else if (intent.kind === "canvas.nodes.duplicate") {
+    for (const ref of edgeRefs) {
+      inverseTemplate.push({ op: "edge.tombstone", handle: handles.get(canvasEntityKey(ref))! })
+      forwardTemplate.push({
+        op: "edge.create",
+        handle: handles.get(canvasEntityKey(ref))!,
+        snapshot: historyEdgeSnapshot(post, ref, handles),
+      })
+    }
+    for (const ref of nodeRefs) {
+      const handle = handles.get(canvasEntityKey(ref))!
+      inverseTemplate.push({ op: "node.tombstone", handle })
+      forwardTemplate.unshift({ op: "node.create", handle, snapshot: historyNodeSnapshot(post, ref) })
+      const parent = effectiveParent(post, ref)
+      if (parent !== null) {
+        forwardTemplate.push({
+          op: "containment.set",
+          child: { mode: "handle", handle },
+          parent: historyTarget(parent, handles),
+        })
+      }
+    }
   } else if (intent.kind === "canvas.elements.remove") {
     const removedNodeKeys = new Set(intent.body.nodes.map(canvasEntityKey))
     const grouped = new Map<

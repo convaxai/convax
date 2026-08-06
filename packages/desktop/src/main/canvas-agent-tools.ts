@@ -22,6 +22,7 @@ import {
   type ProjectCanvasCatalogProjection,
 } from "@convax/project/canvas"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
+import type { CanvasTextResourceWriter } from "./canvas-text-resource-service"
 
 type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addResources">
@@ -309,6 +310,22 @@ const tools = [
     },
   },
   {
+    name: "canvas_update_text",
+    description:
+      "Replace one existing editable Canvas Markdown or text node through the ProjectIndex and Canvas transaction path. Use this instead of editing its backing Project file directly.",
+    inputSchema: {
+      additionalProperties: false,
+      properties: {
+        canvasId: canvasFields.canvasId,
+        commandId: { minLength: 1, type: "string" },
+        content: { type: "string" },
+        nodeId: nonEmptyStringSchema,
+      },
+      required: ["canvasId", "commandId", "content", "nodeId"],
+      type: "object",
+    },
+  },
+  {
     name: "canvas_apply_primitive",
     description:
       "Advanced low-level Canvas mutations: remove, move, connect, group, ungroup, layout, align, or distribute. Prefer business tools when one matches the task.",
@@ -352,6 +369,7 @@ export function createCanvasAgentToolProvider(input: {
   canvases: ProjectCanvasPort
   renderer: CanvasRendererBridge
   resources: CanvasResourcePort
+  textResources: CanvasTextResourceWriter
 }): AgentToolProvider {
   return {
     async callTool(scope, name, value, context) {
@@ -361,6 +379,8 @@ export function createCanvasAgentToolProvider(input: {
       if (name === "canvas_query_nodes") return queryNodes(input.application, input.canvases, scope, value, signal)
       if (name === "canvas_add_resources")
         return addResources(input.canvases, input.resources, input.renderer, scope, value, signal)
+      if (name === "canvas_update_text")
+        return updateText(input.canvases, input.textResources, input.renderer, scope, value, signal)
       if (name === "canvas_auto_layout")
         return autoLayout(input.application, input.canvases, input.renderer, scope, value, signal)
       if (name === "canvas_apply_primitive")
@@ -370,6 +390,30 @@ export function createCanvasAgentToolProvider(input: {
     },
     listTools: () => tools,
   }
+}
+
+async function updateText(
+  canvases: ProjectCanvasPort,
+  textResources: CanvasTextResourceWriter,
+  renderer: CanvasRendererBridge,
+  scope: AgentToolScope,
+  input: Record<string, unknown>,
+  signal?: AbortSignal,
+) {
+  const canvasId = requiredString(input.canvasId, "canvasId")
+  await assertCanvasExists(canvases, scope, canvasId, signal)
+  throwIfAborted(signal)
+  const result = await textResources.save({
+    actor: actor(scope),
+    canvasId,
+    commandId: requiredString(input.commandId, "commandId"),
+    content: text(input.content, "content"),
+    nodeId: requiredString(input.nodeId, "nodeId"),
+    ...(signal ? { signal } : {}),
+    scopeId: scope.scopeId,
+  })
+  const sync = await documentMutationSync(renderer, ref(scope, canvasId))
+  return { ...result, sync }
 }
 
 async function listCanvases(

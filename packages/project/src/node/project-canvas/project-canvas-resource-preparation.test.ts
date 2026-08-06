@@ -311,6 +311,102 @@ describe("project canvas resource preparation", () => {
     expect(result.retainedOnFailure).toEqual([{ label: "Notes/Brief-a1.md" }])
   })
 
+  test("overlaps new-text publication with Notes owner preparation and reuses the verified plan", async () => {
+    const content = "# Brief"
+    const bytes = new TextEncoder().encode(content)
+    const reference = projectIndexReference(bytes, "text/markdown")
+    let planQueries = 0
+    let planQueryStarted = false
+    let publicationObservedPlanQuery = false
+    const directories: string[] = []
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        planQueries += 1
+        planQueryStarted = true
+        return { projectId: parseProjectId("project_one"), entries: [] }
+      },
+      async createDirectory(input: { path: string }) {
+        directories.push(input.path)
+        return {
+          status: "committed" as const,
+          entryId: `pd_${"c".repeat(64)}` as never,
+          versionId: null,
+          reference: null,
+        }
+      },
+      async publishFile(input: { exactBytes: Readonly<Uint8Array>; path: string }) {
+        expect(input.path).toBe("Notes/Brief-a1.md")
+        expect([...input.exactBytes]).toEqual([...bytes])
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async admitManagedBlob() { throw new Error("not used") },
+      async relocateEntry() { throw new Error("not used") },
+      async tombstoneEntry() { throw new Error("not used") },
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      {
+        async publishText() {
+          await Promise.resolve()
+          publicationObservedPlanQuery = planQueryStarted
+          return { contentRevision: ordinarySha256(bytes), path: "Notes/Brief-a1.md" }
+        },
+      },
+      unusedAssets(),
+      undefined,
+      indexFiles,
+    )
+
+    const result = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "new-text", sourceId: "new", text: content }],
+    })
+
+    expect(publicationObservedPlanQuery).toBeTrue()
+    expect(planQueries).toBe(1)
+    expect(directories).toEqual(["Notes"])
+    expect(result.items[0]?.metadata).toMatchObject({
+      convaxCanvasResourceProof: { mode: "current-owner-state" },
+    })
+  })
+
+  test("reports a published Notes file when concurrent owner preparation fails", async () => {
+    const ownerFailure = new Error("ProjectIndex Notes preparation failed")
+    const preparation = new ProjectCanvasResourcePreparation(
+      host(),
+      {
+        async publishText() {
+          return { contentRevision: "revision-a", path: "Notes/retained-a1.md" }
+        },
+      },
+      unusedAssets(),
+      undefined,
+      {
+        async queryFileMaterializationPlan() {
+          return { projectId: parseProjectId("project_one"), entries: [] }
+        },
+        async createDirectory() { throw ownerFailure },
+        async publishFile() { throw new Error("not used") },
+      } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort,
+    )
+
+    const error = await preparation.prepare({
+      ...requestRef,
+      sources: [{ kind: "new-text", sourceId: "new", text: "" }],
+    }).catch((reason: unknown) => reason)
+
+    expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
+    expect((error as CanvasResourcePartialFailureError).cause).toBe(ownerFailure)
+    expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([
+      { label: "Notes/retained-a1.md" },
+    ])
+  })
+
   test("reports only successfully published new text when later preparation fails", async () => {
     const laterFailure = new Error("native file lookup failed")
     const preparation = new ProjectCanvasResourcePreparation(

@@ -33,6 +33,8 @@ type InvokeHandler = (event: TestEvent, input: unknown) => unknown
 const handlers = new Map<string, InvokeHandler>()
 const event = { sender: { id: 7 } }
 const document = createCanvasDocument({ id: "canvas-main" })
+const sessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
+const acceptedFrameDigest = parseDigest("a".repeat(64))
 const receipt: BoundedOperationReceipt = {
   format: "convax.canvas-operation-receipt",
   actorId: parseActorId("A".repeat(43)),
@@ -43,6 +45,22 @@ const receipt: BoundedOperationReceipt = {
   resultEntities: [],
   semanticRoot: true,
   historyMaterialDigest: parseDigest("f".repeat(64)),
+}
+
+const resourceSessions = {
+  deliverApplicationCommit: mock(async () => Object.freeze({
+    status: "accepted" as const,
+    acceptedFrameDigest,
+    projection: Object.freeze({
+      format: "convax.canvas-session-projection" as const,
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId,
+      document,
+      nodeEntities: [],
+      canUndo: true,
+      canRedo: false,
+    }),
+  })),
 }
 
 beforeEach(() => {
@@ -155,6 +173,7 @@ describe("Canvas resource IPC", () => {
         application: { query: mock() },
         isTrustedSender: () => true,
         resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: resourceSessions,
       },
     )
     const input = {
@@ -163,13 +182,14 @@ describe("Canvas resource IPC", () => {
       commandId: "renderer-add",
       externalFiles: [],
       projectId: "project-one",
+      sessionId,
       sources: [{ kind: "new-text", sourceId: "note", text: "hello" }],
     }
 
     await expect(handlers.get(canvasResourceIpcChannel)!(event, input)).resolves.toEqual({
       createdNodeIds: ["created"],
+      delivery: await resourceSessions.deliverApplicationCommit(),
       operationReceipt: receipt,
-      projection: document,
       warnings: ["normalized"],
     })
     expect(addResources).toHaveBeenCalledWith({
@@ -192,6 +212,7 @@ describe("Canvas resource IPC", () => {
         application: { query: mock() },
         isTrustedSender: () => true,
         resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: resourceSessions,
       },
     )
 
@@ -201,6 +222,7 @@ describe("Canvas resource IPC", () => {
       commandId: "invalid-relation",
       externalFiles: [],
       projectId: "project-one",
+      sessionId,
       relation: { anchorNodeIds: ["same", "same"], mode: "connect" },
       sources: [],
     })).rejects.toThrow("must be unique")
@@ -216,11 +238,12 @@ describe("Canvas resource IPC", () => {
         application: { query: mock() },
         isTrustedSender: () => true,
         resolveActiveCanvas: async () => ({ canvasId: "other", projectId: "project-one" }),
+        sessions: resourceSessions,
       },
     )
     await expect(handlers.get(canvasResourceIpcChannel)!(event, {
       anchor: { x: 0, y: 0 }, canvasId: "canvas-main", commandId: "stale",
-      externalFiles: [], projectId: "project-one", sources: [],
+      externalFiles: [], projectId: "project-one", sessionId, sources: [],
     })).rejects.toThrow("live Workbench scope")
     expect(addResources).not.toHaveBeenCalled()
   })
@@ -397,6 +420,7 @@ function commandResult(): CanvasApplicationCommandResult {
     createdNodeIds: ["created"],
     document,
     operationReceipt: receipt,
+    acceptedFrameDigest,
     warnings: ["normalized"],
   }
 }

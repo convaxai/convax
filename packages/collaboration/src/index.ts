@@ -235,6 +235,13 @@ export type {
   PreparedLocalIntent,
   ReplicaProjectionSnapshot,
 } from "./kernel"
+export { collaborationLatencyStages } from "./latency-diagnostics"
+export type {
+  CollaborationLatencyDiagnostic,
+  CollaborationLatencyDiagnosticsPort,
+  CollaborationLatencySample,
+  CollaborationLatencyStage,
+} from "./latency-diagnostics"
 
 export {
   causalHeadRefFromDecodedFrame,
