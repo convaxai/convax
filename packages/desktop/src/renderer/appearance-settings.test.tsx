@@ -22,7 +22,7 @@ describe("AppearanceSettings", () => {
     expect(markup).toContain('data-appearance-theme-select=""')
     expect(markup).toContain('data-appearance-accent-select=""')
     expect(markup).toContain("Midnight")
-    expect(markup).toContain("Purple")
+    expect(markup).toContain("Lime")
     expect(markup).not.toContain('role="radiogroup"')
     expect(markup).toContain('role="switch"')
     expect(markup.match(/data-slot="settings-row"/g)).toHaveLength(4)

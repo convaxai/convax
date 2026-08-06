@@ -47,9 +47,9 @@ const zhAccentLabels = {
   custom: "自定义",
   cyan: "青色",
   green: "绿色",
+  lime: "酸橙绿",
   orange: "橙色",
   rose: "玫红",
-  violet: "紫色",
 } as const satisfies Record<AppearanceAccentSelectionId, string>
 
 function copy(locale: AppearanceSettingsProps["locale"]) {

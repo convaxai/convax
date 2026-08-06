@@ -66,7 +66,7 @@ export const plugins = [
     name: "Convax Account",
     type: "Service",
     description: "Connect OpenRouter chat and live image generation through your Convax account.",
-    tone: "violet",
+    tone: "orange",
   },
   {
     name: "ChatCut",

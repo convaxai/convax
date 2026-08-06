@@ -5,7 +5,7 @@ export const appearancePresetIds = ["paper", "graphite", "midnight", "studio"] a
 export type AppearancePresetId = (typeof appearancePresetIds)[number]
 export const defaultAppearancePresetId: AppearancePresetId = "graphite"
 export type AppearanceColorScheme = "light" | "dark"
-export const appearanceAccentIds = ["violet", "blue", "cyan", "green", "orange", "rose"] as const
+export const appearanceAccentIds = ["lime", "blue", "cyan", "green", "orange", "rose"] as const
 export type AppearanceAccentId = (typeof appearanceAccentIds)[number]
 export const customAppearanceAccentId = "custom" as const
 export type AppearanceAccentSelectionId = AppearanceAccentId | typeof customAppearanceAccentId
@@ -63,22 +63,22 @@ function interactionRoleTokens(scheme: AppearanceColorScheme): InteractionRoleTo
 }
 
 export const appearanceAccents = {
-  violet: {
-    id: "violet",
-    label: "Purple",
+  lime: {
+    id: "lime",
+    label: "Lime",
     light: {
-      brand: "#6254c7",
-      focusRing: "#6254c7",
+      brand: "#5c7a00",
+      focusRing: "#5c7a00",
       onBrand: "#ffffff",
       onSelection: "#ffffff",
-      selection: "#5267ca",
+      selection: "#4f6b00",
     },
     dark: {
-      brand: "#9992ff",
-      focusRing: "#a6a0ff",
+      brand: "#c6f22d",
+      focusRing: "#d8ff6b",
       onBrand: "#111217",
       onSelection: "#111217",
-      selection: "#8e94ff",
+      selection: "#b1de1f",
     },
   },
   blue: {
@@ -188,12 +188,12 @@ export const appAppearanceThemes = {
       "text-secondary": "#4d554f",
       "text-tertiary": "#68716b",
       "text-disabled": "#858c87",
-      brand: "#6254c7",
+      brand: "#5c7a00",
       "on-brand": "#ffffff",
-      selection: "#5267ca",
+      selection: "#4f6b00",
       "on-selection": "#ffffff",
       ...interactionRoleTokens("light"),
-      "focus-ring": "#5267ca",
+      "focus-ring": "#5c7a00",
       "status-danger": "#b52f43",
       "status-danger-surface": "#f9e4e7",
       "status-warning": "#8b5a00",
@@ -222,12 +222,12 @@ export const appAppearanceThemes = {
       "text-secondary": "#c4c7cd",
       "text-tertiary": "#9499a2",
       "text-disabled": "#6f747d",
-      brand: "#9992ff",
+      brand: "#c6f22d",
       "on-brand": "#111217",
-      selection: "#8e94ff",
+      selection: "#b1de1f",
       "on-selection": "#111217",
       ...interactionRoleTokens("dark"),
-      "focus-ring": "#9aa7ff",
+      "focus-ring": "#d8ff6b",
       "status-danger": "#ff7885",
       "status-danger-surface": "#3b1c23",
       "status-warning": "#e9b24a",
@@ -256,12 +256,12 @@ export const appAppearanceThemes = {
       "text-secondary": "#d0d6e0",
       "text-tertiary": "#8f949d",
       "text-disabled": "#62666d",
-      brand: "#929cff",
+      brand: "#c6f22d",
       "on-brand": "#0b0c12",
-      selection: "#7f8cff",
+      selection: "#b1de1f",
       "on-selection": "#08090a",
       ...interactionRoleTokens("dark"),
-      "focus-ring": "#9aa7ff",
+      "focus-ring": "#d8ff6b",
       "status-danger": "#ff727d",
       "status-danger-surface": "#38181e",
       "status-warning": "#f0bf52",
@@ -290,12 +290,12 @@ export const appAppearanceThemes = {
       "text-secondary": "#454c5e",
       "text-tertiary": "#626b7e",
       "text-disabled": "#81899a",
-      brand: "#5c4db3",
+      brand: "#5c7a00",
       "on-brand": "#ffffff",
-      selection: "#3d64b8",
+      selection: "#4f6b00",
       "on-selection": "#ffffff",
       ...interactionRoleTokens("light"),
-      "focus-ring": "#3d64b8",
+      "focus-ring": "#4f6b00",
       "status-danger": "#b52f43",
       "status-danger-surface": "#f9e3e8",
       "status-warning": "#895900",
@@ -341,12 +341,12 @@ export const canvasAppearanceThemes = {
 
 export const canvasAppearancePalettes = {
   paper: {
-    accent: "#6254c7",
+    accent: "#5c7a00",
     accentForeground: "#ffffff",
     background: "#f7f6f2",
     colorScheme: "light",
     edge: "#a9ada8",
-    edgeActive: "#5267ca",
+    edgeActive: "#4f6b00",
     gridColor: "#000000",
     nodeBackground: "#fffefa",
     nodeBorder: "#cbc8c1",
@@ -355,12 +355,12 @@ export const canvasAppearancePalettes = {
     textMuted: "#68716b",
   },
   graphite: {
-    accent: "#9992ff",
+    accent: "#c6f22d",
     accentForeground: "#08090a",
     background: "#151619",
     colorScheme: "dark",
     edge: "#50535d",
-    edgeActive: "#8e94ff",
+    edgeActive: "#b1de1f",
     gridColor: "#ffffff",
     nodeBackground: "#24252a",
     nodeBorder: "#50535d",
@@ -369,12 +369,12 @@ export const canvasAppearancePalettes = {
     textMuted: "#9499a2",
   },
   midnight: {
-    accent: "#929cff",
+    accent: "#c6f22d",
     accentForeground: "#08090a",
     background: "#08090a",
     colorScheme: "dark",
     edge: "#4a4b53",
-    edgeActive: "#7f8cff",
+    edgeActive: "#b1de1f",
     gridColor: "#ffffff",
     nodeBackground: "#1c1c1f",
     nodeBorder: "#34343a",
@@ -383,12 +383,12 @@ export const canvasAppearancePalettes = {
     textMuted: "#8f949d",
   },
   studio: {
-    accent: "#5c4db3",
+    accent: "#5c7a00",
     accentForeground: "#ffffff",
     background: "#edf0f6",
     colorScheme: "light",
     edge: "#9ea7b7",
-    edgeActive: "#3d64b8",
+    edgeActive: "#4f6b00",
     gridColor: "#000000",
     nodeBackground: "#ffffff",
     nodeBorder: "#c1c8d5",
@@ -415,7 +415,7 @@ export function isAppearanceAccentId(value: unknown): value is AppearanceAccentI
 }
 
 export function resolveAppearanceAccentId(value: unknown): AppearanceAccentId {
-  return isAppearanceAccentId(value) ? value : "violet"
+  return isAppearanceAccentId(value) ? value : "lime"
 }
 
 export function isAppearanceAccentSelectionId(value: unknown): value is AppearanceAccentSelectionId {

@@ -61,7 +61,7 @@ describe("appearance preferences", () => {
     expect(storage.values.get(previousAppearancePreferencesStorageKey)).toBe(storedV2)
   })
 
-  test("migrates legacy theme preferences to the Purple accent without losing accessibility choices", () => {
+  test("migrates legacy theme preferences to the Lime accent without losing accessibility choices", () => {
     const storage = memoryStorage({
       [legacyAppearancePreferencesStorageKey]: JSON.stringify({
         highContrast: true,
@@ -72,7 +72,7 @@ describe("appearance preferences", () => {
     })
 
     expect(readAppearancePreferences(storage)).toEqual({
-      accent: "violet",
+      accent: "lime",
       customAccent: "#d98f60",
       highContrast: true,
       reducedMotion: true,
@@ -80,7 +80,7 @@ describe("appearance preferences", () => {
     })
   })
 
-  test("returns Graphite and Purple defaults for missing, malformed, unknown, old, or partial records", () => {
+  test("returns Graphite and Lime defaults for missing, malformed, unknown, old, or partial records", () => {
     const invalidValues = [
       null,
       "{",
