@@ -466,7 +466,7 @@ export interface SemanticHistoryGuardV2 {
 }
 
 export type CanvasIntentKindV2 =
-  | "canvas.nodes.create/2"
+  | "canvas.agent.create"
   | "canvas.resources.add/2"
   | "canvas.resources.pending.create/2"
   | "canvas.resources.pending-generation.create/2"
@@ -784,8 +784,8 @@ export interface CanvasIntentApplyResultV2 {
 }
 
 export type CanvasIntentContractMapV2 = {
-  readonly "canvas.nodes.create/2": CanvasTypedIntentV2<
-    "canvas.nodes.create/2",
+  readonly "canvas.agent.create": CanvasTypedIntentV2<
+    "canvas.agent.create",
     DerivedNodeAbsentGuardV2,
     { readonly node: NodeCreateTemplateV2 }
   >

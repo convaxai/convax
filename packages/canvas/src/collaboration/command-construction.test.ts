@@ -57,7 +57,7 @@ describe("Canvas v2 authoritative command construction", () => {
         },
       }),
     )
-    expect(created.intent.kind).toBe("canvas.nodes.create/2")
+    expect(created.intent.kind).toBe("canvas.agent.create")
     applyOk(document, createContext, created.intent)
 
     const connectContext = context(2, 5, 5)

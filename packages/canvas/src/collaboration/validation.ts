@@ -708,7 +708,7 @@ export function assertSemanticHistoryValueV2(value: unknown): asserts value is C
 }
 
 const UNDOABLE_INTENT_KINDS = new Set([
-  "canvas.nodes.create/2",
+  "canvas.agent.create",
   "canvas.resources.add/2",
   "canvas.resources.pending.create/2",
   "canvas.resources.pending-generation.create/2",

@@ -3,7 +3,7 @@ import type { CanvasHistoryBindingV2, CanvasHistoryTemplateV2, Uint32 } from "./
 import { CanvasSchemaErrorV2 } from "./validation"
 
 export const CANVAS_UNDOABLE_INTENT_KINDS_V2 = Object.freeze([
-  "canvas.nodes.create/2",
+  "canvas.agent.create",
   "canvas.resources.add/2",
   "canvas.resources.pending.create/2",
   "canvas.resources.pending-generation.create/2",

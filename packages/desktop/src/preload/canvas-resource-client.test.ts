@@ -26,7 +26,7 @@ const operationReceipt = {
   format: "convax.canvas-operation-receipt/2" as const,
   actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(1))),
   operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(2))),
-  intentKind: "canvas.nodes.create/2" as const,
+  intentKind: "canvas.agent.create" as const,
   intentDigest: parseDigest("a".repeat(64)),
   baseFrontierDigest: parseDigest("b".repeat(64)),
   resultEntities: [],

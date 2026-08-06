@@ -9,7 +9,7 @@ import type {
   OwnerIntentValidationContext,
   SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
-import { ownerCanonicalizerDescriptorDigest, parseDigest } from "@convax/collaboration"
+import { currentProtocolDescriptor, ownerCanonicalizerDescriptorDigest, parseDigest } from "@convax/collaboration"
 import type * as Y from "yjs"
 import type { CanvasNodeGeometryUpdate } from "../commands"
 import { parseCanvasDocument } from "../document"
@@ -42,9 +42,25 @@ interface CanvasOwnerResultValueV2 {
   readonly scope: OwnerIntentValidationContext["scope"]
 }
 
-export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: Digest = parseDigest(
-  "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36",
-)
+const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_NAME = "canvas-schema"
+const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_FORMAT = "convax.canvas-protocol-schema/2"
+
+/**
+ * The Canvas owner schema digest is the current protocol descriptor's
+ * domain-separated Canvas artifact. Canvas never anchors a second literal; a
+ * missing or renamed artifact fails closed before any decode or commit.
+ */
+export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: Digest = canvasProtocolSchemaArtifactDigest()
+
+function canvasProtocolSchemaArtifactDigest(): Digest {
+  const artifact = currentProtocolDescriptor().artifacts.find(
+    (candidate) => candidate.name === CANVAS_PROTOCOL_SCHEMA_ARTIFACT_NAME,
+  )
+  if (artifact === undefined || artifact.format !== CANVAS_PROTOCOL_SCHEMA_ARTIFACT_FORMAT) {
+    throw new TypeError("The current protocol descriptor does not name the Canvas owner schema artifact")
+  }
+  return parseDigest(artifact.digest)
+}
 
 export const selectedCanvasDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinition<"canvas"> =
   Object.freeze({

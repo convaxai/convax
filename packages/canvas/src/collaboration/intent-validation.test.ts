@@ -49,12 +49,12 @@ describe("Canvas v2 closed typed-intent admission", () => {
   })
 })
 
-function nodeCreateIntent(): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.nodes.create/2" }> {
+function nodeCreateIntent(): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.agent.create" }> {
   const operationContext = context(1, 1, 1)
   const node = derivedNodeRefV2(operationContext, U0)
   return {
     format: "convax.typed-intent/2",
-    kind: "canvas.nodes.create/2",
+    kind: "canvas.agent.create",
     guard: { ordinal: U0, node, expectedAbsent: true },
     body: {
       node: {

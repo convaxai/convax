@@ -94,7 +94,7 @@ function nodeCreate(): CanvasCallerIntentV2 {
   const node = derivedNodeRefV2(operationContext, U0)
   return {
     format: "convax.typed-intent/2",
-    kind: "canvas.nodes.create/2",
+    kind: "canvas.agent.create",
     guard: { ordinal: U0, node, expectedAbsent: true },
     body: {
       node: {

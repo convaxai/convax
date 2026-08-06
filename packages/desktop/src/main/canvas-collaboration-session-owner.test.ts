@@ -150,7 +150,7 @@ function semanticRootSession() {
         format: "convax.canvas-operation-receipt/2",
         actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(5))),
         operationId,
-        intentKind: "canvas.nodes.create/2",
+        intentKind: "canvas.agent.create",
         intentDigest: parseDigest("4".repeat(64)),
         baseFrontierDigest: parseDigest("5".repeat(64)),
         resultEntities: Object.freeze([]),

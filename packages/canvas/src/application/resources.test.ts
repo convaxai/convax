@@ -12,7 +12,7 @@ const receipt: BoundedOperationReceiptV2 = {
   operationId: parseId128("A".repeat(22)),
   intentDigest: parseDigest("d".repeat(64)),
   baseFrontierDigest: parseDigest("e".repeat(64)),
-  intentKind: "canvas.nodes.create/2",
+  intentKind: "canvas.agent.create",
   resultEntities: [],
   semanticRoot: true,
   historyMaterialDigest: parseDigest("f".repeat(64)),

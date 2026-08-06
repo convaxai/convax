@@ -926,11 +926,11 @@ function semanticRedoIntent(
 function nodeCreate(
   operationContext: ReturnType<typeof context>,
   title: string,
-): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.nodes.create/2" }> {
+): Extract<CanvasTypedIntentUnionV2, { kind: "canvas.agent.create" }> {
   const node = derivedNodeRefV2(operationContext, U0)
   return {
     format: "convax.typed-intent/2",
-    kind: "canvas.nodes.create/2",
+    kind: "canvas.agent.create",
     guard: { ordinal: U0, node, expectedAbsent: true },
     body: {
       node: {

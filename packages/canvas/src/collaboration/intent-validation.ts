@@ -48,7 +48,7 @@ import {
 } from "./validation"
 
 export const CANVAS_INTENT_KINDS_V2 = Object.freeze([
-  "canvas.nodes.create/2",
+  "canvas.agent.create",
   "canvas.resources.add/2",
   "canvas.resources.pending.create/2",
   "canvas.resources.pending-generation.create/2",
@@ -87,12 +87,12 @@ export function decodeCanvasTypedIntentV2(bytes: Uint8Array): CanvasTypedIntentU
 export function assertCanvasTypedIntentV2(value: unknown): asserts value is CanvasTypedIntentUnionV2 {
   assertExactKeys(value, ["format", "kind", "guard", "body"], "CanvasTypedIntentV2")
   if (value.format !== "convax.typed-intent/2" || typeof value.kind !== "string" || !INTENT_KIND_SET.has(value.kind)) {
-    throw new CanvasSchemaErrorV2("unknown-intent", "Canvas typed-intent discriminator is not in the closed /2 union")
+    throw new CanvasSchemaErrorV2("unknown-intent", "Canvas typed-intent discriminator is not in the closed union")
   }
   switch (value.kind as CanvasIntentKindV2) {
-    case "canvas.nodes.create/2":
+    case "canvas.agent.create":
       assertDerivedNodeGuard(value.guard)
-      assertExactKeys(value.body, ["node"], "nodes.create body")
+      assertExactKeys(value.body, ["node"], "agent.create body")
       assertNodeTemplate(value.body.node)
       return
     case "canvas.resources.add/2":

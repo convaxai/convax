@@ -25,7 +25,7 @@ describe("Canvas required blob dependency extraction", () => {
     }
     const intent: CanvasTypedIntentUnionV2 = {
       format: "convax.typed-intent/2",
-      kind: "canvas.nodes.create/2",
+      kind: "canvas.agent.create",
       guard: { ordinal: U0, node, expectedAbsent: true },
       body: { node: {
         ordinal: U0, nodeId: node.id, incarnation: node.incarnation, role: "file",
@@ -49,7 +49,7 @@ describe("Canvas required blob dependency extraction", () => {
     const node = derivedNodeRefV2(operation, U0)
     const intent: CanvasTypedIntentUnionV2 = {
       format: "convax.typed-intent/2",
-      kind: "canvas.nodes.create/2",
+      kind: "canvas.agent.create",
       guard: { ordinal: U0, node, expectedAbsent: true },
       body: { node: {
         ordinal: U0, nodeId: node.id, incarnation: node.incarnation, role: "agent",

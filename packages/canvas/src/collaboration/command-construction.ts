@@ -219,7 +219,7 @@ function constructIntent(
     const node = derivedNodeRefV2(context, ordinal)
     return Object.freeze({
       format: "convax.typed-intent/2",
-      kind: "canvas.nodes.create/2",
+      kind: "canvas.agent.create",
       guard: Object.freeze({ ordinal, node, expectedAbsent: true }),
       body: Object.freeze({
         node: Object.freeze({

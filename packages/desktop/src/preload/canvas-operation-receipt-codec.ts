@@ -7,7 +7,7 @@ const actorIdPattern = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/
 const entitySuffixPattern = actorIdPattern
 
 const canvasIntentKinds = new Set([
-  "canvas.nodes.create/2",
+  "canvas.agent.create",
   "canvas.resources.add/2",
   "canvas.resources.pending.create/2",
   "canvas.resources.pending-generation.create/2",

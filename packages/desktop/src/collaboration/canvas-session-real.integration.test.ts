@@ -444,9 +444,9 @@ async function commitOneNode(
     operationId,
     prepare: ({ context }) => {
       const node = derivedNodeRefV2(context, u0)
-      const intent: Extract<CanvasTypedIntentUnionV2, { kind: "canvas.nodes.create/2" }> = {
+      const intent: Extract<CanvasTypedIntentUnionV2, { kind: "canvas.agent.create" }> = {
         format: "convax.typed-intent/2",
-        kind: "canvas.nodes.create/2",
+        kind: "canvas.agent.create",
         guard: { ordinal: u0, node, expectedAbsent: true },
         body: {
           node: {

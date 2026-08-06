@@ -86,7 +86,7 @@ interface PlannedWrite {
 }
 
 const UNDOABLE = new Set<string>([
-  "canvas.nodes.create/2",
+  "canvas.agent.create",
   "canvas.resources.add/2",
   "canvas.resources.pending.create/2",
   "canvas.resources.pending-generation.create/2",
@@ -376,7 +376,7 @@ function planIntent(
   invalidatedMeta: ("title" | "description" | "tags")[],
 ): "valid" | "pending" | "invalid" {
   switch (intent.kind) {
-    case "canvas.nodes.create/2": {
+    case "canvas.agent.create": {
       if (intent.body.node.ordinal !== "0") return "invalid"
       const ref = requireDerivedNode(base, context, intent.guard, intent.body.node)
       if (
