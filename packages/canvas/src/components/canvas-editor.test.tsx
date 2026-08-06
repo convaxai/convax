@@ -1,7 +1,7 @@
 import { afterAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import { isValidElement, type ReactElement, type ReactNode } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
+import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
 import type { CanvasDocument, CanvasEdge, CanvasNode } from "../types"
 import type { CanvasAppearanceInput } from "../appearance"
 
@@ -259,7 +259,7 @@ const { getCanvasNodeInsertionItems } = await import("./insertion-items")
 const { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } = await import("../builtin-registry")
 const { createCanvasServices } = await import("../services")
 
-class StaticCanvasSession implements CanvasRendererCollaborationClientV2 {
+class StaticCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
   readonly undoModel = "project-yjs-semantic-history" as const
 
@@ -287,7 +287,7 @@ class StaticCanvasSession implements CanvasRendererCollaborationClientV2 {
       : undefined
   }
 
-  async submit(_command: CanvasRendererCommandV2) {}
+  async submit(_command: CanvasRendererCommand) {}
 
   subscribe() {
     return () => undefined

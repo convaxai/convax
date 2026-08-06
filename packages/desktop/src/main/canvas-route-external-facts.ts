@@ -1,58 +1,56 @@
 import {
-  encodeRestrictedJcsV2,
-  parseDocumentScopeV2,
-  type DocumentScopeV2,
-  type DecodedCausalEditFrameV2,
-  type DecodedCausalEditFrameV3,
-  type IncomingOwnerFactResolverPortV2,
-  type IncomingOwnerFactResolverPortV3,
-  type OwnerExternalFactPortFactoryV2,
-  type OwnerExternalFactRequirementV2,
-  type OwnerIntentDependenciesV2,
-  type OwnerValidationArtifactResolveResultV2,
-  type ValidationArtifactRefV2,
+  encodeRestrictedJcs,
+  parseDocumentScope,
+  type DocumentScope,
+  type DecodedCausalEditFrame,
+  type IncomingOwnerFactResolverPort,
+  type OwnerExternalFactPortFactory,
+  type OwnerExternalFactRequirement,
+  type OwnerIntentDependencies,
+  type OwnerValidationArtifactResolveResult,
+  type ValidationArtifactRef,
 } from "@convax/collaboration"
 import {
-  decodeCanvasExternalFactRequestV2,
-  type CanvasExternalFactRequestV2,
+  decodeCanvasExternalFactRequest,
+  type CanvasExternalFactRequest,
 } from "@convax/canvas/collaboration"
 import { parseProjectUri } from "@convax/uri"
 
-import type { CanvasFactResolutionV2 } from "./canvas-collaboration-session-owner"
+import type { CanvasFactResolution } from "./canvas-collaboration-session-owner"
 
-type CanvasScopeV2 = DocumentScopeV2 & { readonly docKind: "canvas" }
+type CanvasScope = DocumentScope & { readonly docKind: "canvas" }
 
-export interface CanvasRouteArtifactAuthorityV2 {
+export interface CanvasRouteArtifactAuthority {
   resolve(input: {
-    readonly scope: CanvasScopeV2
-    readonly ref: ValidationArtifactRefV2
+    readonly scope: CanvasScope
+    readonly ref: ValidationArtifactRef
     readonly signal?: AbortSignal
-  }): Promise<OwnerValidationArtifactResolveResultV2>
+  }): Promise<OwnerValidationArtifactResolveResult>
 }
 
-export interface CanvasRouteExternalFactAuthorityV2 {
+export interface CanvasRouteExternalFactAuthority {
   verify(input: {
-    readonly scope: CanvasScopeV2
-    readonly request: CanvasExternalFactRequestV2
-    readonly requirement: OwnerExternalFactRequirementV2<"canvas">
+    readonly scope: CanvasScope
+    readonly request: CanvasExternalFactRequest
+    readonly requirement: OwnerExternalFactRequirement<"canvas">
     readonly signal?: AbortSignal
   }): Promise<"verified" | "pending" | "rejected">
 }
 
 /** Async route edge that creates the attempt-scoped branded owner port only after every fact closes. */
-export function createRouteScopedCanvasFactResolverV2(input: {
-  readonly factory: OwnerExternalFactPortFactoryV2<"canvas">
-  readonly artifacts?: CanvasRouteArtifactAuthorityV2
-  readonly facts?: CanvasRouteExternalFactAuthorityV2
+export function createRouteScopedCanvasFactResolver(input: {
+  readonly factory: OwnerExternalFactPortFactory<"canvas">
+  readonly artifacts?: CanvasRouteArtifactAuthority
+  readonly facts?: CanvasRouteExternalFactAuthority
 }) {
   return async function resolve(inputAttempt: {
-    readonly scope: CanvasScopeV2
-    readonly dependencies: OwnerIntentDependenciesV2<"canvas">
+    readonly scope: CanvasScope
+    readonly dependencies: OwnerIntentDependencies<"canvas">
     readonly signal?: AbortSignal
-  }): Promise<CanvasFactResolutionV2> {
+  }): Promise<CanvasFactResolution> {
     const scope = requireCanvasScope(inputAttempt.scope)
     inputAttempt.signal?.throwIfAborted()
-    const artifacts = new Map<string, Extract<OwnerValidationArtifactResolveResultV2, { status: "resolved" }>>()
+    const artifacts = new Map<string, Extract<OwnerValidationArtifactResolveResult, { status: "resolved" }>>()
     for (const ref of inputAttempt.dependencies.validationArtifacts) {
       if (!input.artifacts) return Object.freeze({ status: "pending" })
       const resolved = await input.artifacts.resolve({ scope, ref, signal: inputAttempt.signal })
@@ -63,7 +61,7 @@ export function createRouteScopedCanvasFactResolverV2(input: {
 
     const facts = new Map<string, unknown>()
     for (const requirement of inputAttempt.dependencies.externalFacts) {
-      const request = decodeCanvasExternalFactRequestV2(new Uint8Array(requirement.request.exactJcs))
+      const request = decodeCanvasExternalFactRequest(new Uint8Array(requirement.request.exactJcs))
       if (request === "rejected" || !requestBelongsToScope(request, scope)) {
         return Object.freeze({ status: "rejected" })
       }
@@ -72,7 +70,7 @@ export function createRouteScopedCanvasFactResolverV2(input: {
       inputAttempt.signal?.throwIfAborted()
       if (decision !== "verified") return Object.freeze({ status: decision })
       facts.set(factKey(requirement), Object.freeze({
-        format: "convax.canvas-external-fact-result/2",
+        format: "convax.canvas-external-fact-result",
         kind: requirement.kind,
         requestSha256: requirement.request.sha256,
         factDigest: requirement.factDigest,
@@ -84,10 +82,10 @@ export function createRouteScopedCanvasFactResolverV2(input: {
       declared: inputAttempt.dependencies,
       resolver: Object.freeze({
         owner: "canvas" as const,
-        resolveArtifact(ref: ValidationArtifactRefV2) {
+        resolveArtifact(ref: ValidationArtifactRef) {
           return artifacts.get(artifactKey(ref)) ?? Object.freeze({ status: "rejected" as const, code: "artifact-not-declared" as const })
         },
-        resolveFact(requirement: OwnerExternalFactRequirementV2<"canvas">) {
+        resolveFact(requirement: OwnerExternalFactRequirement<"canvas">) {
           const value = facts.get(factKey(requirement))
           return value === undefined
             ? Object.freeze({ status: "rejected" as const, code: "fact-not-declared" as const })
@@ -102,18 +100,18 @@ export function createRouteScopedCanvasFactResolverV2(input: {
 }
 
 /** Incoming frames use the same exact route-scoped authority and never trust their peer/session identity. */
-export function createRouteScopedCanvasIncomingFactResolverV2(input: {
-  readonly scope: CanvasScopeV2
-  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolverV2>
-}): IncomingOwnerFactResolverPortV2 {
+export function createRouteScopedCanvasIncomingFactResolver(input: {
+  readonly scope: CanvasScope
+  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolver>
+}): IncomingOwnerFactResolverPort {
   const scope = requireCanvasScope(input.scope)
   return Object.freeze({
     async resolve(attempt: {
-      readonly frame: DecodedCausalEditFrameV2
-      readonly declaredDependencies: OwnerIntentDependenciesV2<"canvas">
+      readonly frame: DecodedCausalEditFrame
+      readonly declaredDependencies: OwnerIntentDependencies<"canvas">
       readonly signal?: AbortSignal
     }) {
-      const frameScope = parseDocumentScopeV2(attempt.frame.header.core.scope)
+      const frameScope = parseDocumentScope(attempt.frame.header.core.scope)
       if (!sameScope(frameScope, scope)) return Object.freeze({ status: "rejected" as const })
       const result = await input.resolve({ scope, dependencies: attempt.declaredDependencies, signal: attempt.signal })
       return result.status === "resolved"
@@ -123,37 +121,16 @@ export function createRouteScopedCanvasIncomingFactResolverV2(input: {
   })
 }
 
-/** V3 counterpart keeps the decoded successor frame in its native protocol domain. */
-export function createRouteScopedCanvasIncomingFactResolverV3(input: {
-  readonly scope: CanvasScopeV2
-  readonly resolve: ReturnType<typeof createRouteScopedCanvasFactResolverV2>
-}): IncomingOwnerFactResolverPortV3 {
-  const scope = requireCanvasScope(input.scope)
-  return Object.freeze({
-    async resolve(attempt: {
-      readonly frame: DecodedCausalEditFrameV3
-      readonly declaredDependencies: OwnerIntentDependenciesV2<"canvas">
-      readonly signal?: AbortSignal
-    }) {
-      const frameScope = parseDocumentScopeV2(attempt.frame.header.core.scope)
-      if (!sameScope(frameScope, scope)) return Object.freeze({ status: "rejected" as const })
-      const result = await input.resolve({ scope, dependencies: attempt.declaredDependencies, signal: attempt.signal })
-      return result.status === "resolved"
-        ? Object.freeze({ status: "resolved" as const, port: result.port })
-        : Object.freeze({ status: result.status })
-    },
-  })
-}
 
-function requireCanvasScope(value: DocumentScopeV2): CanvasScopeV2 {
-  const scope = parseDocumentScopeV2(value)
+function requireCanvasScope(value: DocumentScope): CanvasScope {
+  const scope = parseDocumentScope(value)
   if (scope.docKind !== "canvas") throw new TypeError("Canvas external facts require a Canvas scope")
-  return scope as CanvasScopeV2
+  return scope as CanvasScope
 }
 
-function requestBelongsToScope(request: CanvasExternalFactRequestV2, scope: CanvasScopeV2): boolean {
+function requestBelongsToScope(request: CanvasExternalFactRequest, scope: CanvasScope): boolean {
   if (request.kind === "generation-begin") {
-    const requestScope = parseDocumentScopeV2(request.scope)
+    const requestScope = parseDocumentScope(request.scope)
     return sameScope(requestScope, scope)
   }
   if (request.kind === "generation-recovery") return true
@@ -167,16 +144,16 @@ function requestBelongsToScope(request: CanvasExternalFactRequestV2, scope: Canv
   }
 }
 
-function sameScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
+function sameScope(left: DocumentScope, right: DocumentScope): boolean {
   return left.projectId === right.projectId && left.projectEpoch === right.projectEpoch &&
     left.docKind === right.docKind && left.docId === right.docId && left.shardEpoch === right.shardEpoch
 }
 
-function artifactKey(ref: ValidationArtifactRefV2): string {
-  return bytesKey(encodeRestrictedJcsV2(ref))
+function artifactKey(ref: ValidationArtifactRef): string {
+  return bytesKey(encodeRestrictedJcs(ref))
 }
 
-function factKey(requirement: OwnerExternalFactRequirementV2<"canvas">): string {
+function factKey(requirement: OwnerExternalFactRequirement<"canvas">): string {
   return `${requirement.owner}\0${requirement.kind}\0${requirement.factDigest}\0${requirement.request.sha256}`
 }
 

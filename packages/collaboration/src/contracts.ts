@@ -1,41 +1,41 @@
 import type * as Y from "yjs"
 import type {
-  ActorIdV2,
-  CanvasIdV2,
-  DigestV2,
-  Id128V2,
-  MemberIdV2,
-  ProjectIdV2,
-  ReplicaIdV2,
-  SignatureV2,
-  StateVectorV2,
-  Uint32V2,
-  Uint64V2,
+  ActorId,
+  CanvasId,
+  Digest,
+  Id128,
+  MemberId,
+  ProjectId,
+  ReplicaId,
+  Signature,
+  StateVector,
+  Uint32,
+  Uint64,
 } from "./codecs"
 
-export interface ProtocolSchemaArtifactV2 {
-  readonly artifactDigest: DigestV2
+export interface ProtocolSchemaArtifact {
+  readonly artifactDigest: Digest
   readonly format:
-    | "convax.canvas-protocol-schema/2"
-    | "convax.collaboration-kernel-protocol-schema/2"
-    | "convax.control-plane-protocol-schema/2"
-    | "convax.project-persistence-protocol-schema/2"
+    | "convax.canvas-protocol-schema"
+    | "convax.collaboration-kernel-protocol-schema"
+    | "convax.control-plane-protocol-schema"
+    | "convax.project-persistence-protocol-schema"
   readonly name: "canvas-schema" | "collaboration-kernel" | "control-plane" | "project-persistence"
 }
 
-export type ProtocolSchemaArtifactManifestV2 = readonly [
-  ProtocolSchemaArtifactV2 & { readonly name: "canvas-schema"; readonly format: "convax.canvas-protocol-schema/2" },
-  ProtocolSchemaArtifactV2 & { readonly name: "collaboration-kernel"; readonly format: "convax.collaboration-kernel-protocol-schema/2" },
-  ProtocolSchemaArtifactV2 & { readonly name: "control-plane"; readonly format: "convax.control-plane-protocol-schema/2" },
-  ProtocolSchemaArtifactV2 & { readonly name: "project-persistence"; readonly format: "convax.project-persistence-protocol-schema/2" },
+export type ProtocolSchemaArtifactManifest = readonly [
+  ProtocolSchemaArtifact & { readonly name: "canvas-schema"; readonly format: "convax.canvas-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "collaboration-kernel"; readonly format: "convax.collaboration-kernel-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "control-plane"; readonly format: "convax.control-plane-protocol-schema" },
+  ProtocolSchemaArtifact & { readonly name: "project-persistence"; readonly format: "convax.project-persistence-protocol-schema" },
 ]
 
-export interface ProtocolTypeNamespaceV2 {
+export interface ProtocolTypeNamespace {
   readonly imports: readonly ("canvas-schema" | "collaboration-kernel" | "control-plane" | "global-uri" | "project-persistence")[]
   readonly namespace: "canvas-schema" | "collaboration-kernel" | "control-plane" | "global-uri" | "project-persistence"
 }
 
-export type ProtocolTypeNamespaceManifestV2 = readonly [
+export type ProtocolTypeNamespaceManifest = readonly [
   { readonly namespace: "canvas-schema"; readonly imports: readonly ["collaboration-kernel", "control-plane", "global-uri"] },
   { readonly namespace: "collaboration-kernel"; readonly imports: readonly ["global-uri"] },
   { readonly namespace: "control-plane"; readonly imports: readonly ["collaboration-kernel", "global-uri", "project-persistence"] },
@@ -43,9 +43,9 @@ export type ProtocolTypeNamespaceManifestV2 = readonly [
   { readonly namespace: "project-persistence"; readonly imports: readonly ["canvas-schema", "collaboration-kernel", "control-plane", "global-uri"] },
 ]
 
-export interface YjsWireCodecV2 {
+export interface YjsWireCodec {
   readonly applyCodec: "Y.applyUpdate"
-  readonly format: "convax.yjs-wire-codec/2"
+  readonly format: "convax.yjs-wire-codec"
   readonly package: "yjs"
   readonly packageIntegrity: "sha512-Eq+5BRfbeGyqGVrTJL3bEcr8gKkxPuyuoHmAwpk52fDb8kOVMrfVSTRPd6yiGgX5Fskb96qCRjzjbRjrL4YEnw=="
   readonly stateVectorCodec: "Y.encodeStateVector"
@@ -54,63 +54,63 @@ export interface YjsWireCodecV2 {
   readonly version: "13.6.31"
 }
 
-export interface ProtocolSchemaBundleCoreV2 {
-  readonly artifacts: ProtocolSchemaArtifactManifestV2
-  readonly channelContractDigest: DigestV2
+export interface ProtocolSchemaBundleCore {
+  readonly artifacts: ProtocolSchemaArtifactManifest
+  readonly channelContractDigest: Digest
   readonly domainRegistry: readonly string[]
-  readonly format: "convax.protocol-schema-bundle-core/2"
-  readonly limitsDigest: DigestV2
-  readonly protocolMajor: "2"
-  readonly typeNamespaces: ProtocolTypeNamespaceManifestV2
-  readonly uriProtocolDigest: DigestV2
-  readonly yjsWireCodec: YjsWireCodecV2
+  readonly format: "convax.protocol-schema-bundle-core"
+  readonly limitsDigest: Digest
+  readonly protocolMajor: "current"
+  readonly typeNamespaces: ProtocolTypeNamespaceManifest
+  readonly uriProtocolDigest: Digest
+  readonly yjsWireCodec: YjsWireCodec
 }
 
-export interface ProtocolSchemaBundleV2 {
-  readonly core: ProtocolSchemaBundleCoreV2
-  readonly coreDigest: DigestV2
-  readonly format: "convax.protocol-schema-bundle/2"
-  readonly protocolDigest: DigestV2
+export interface ProtocolSchemaBundle {
+  readonly core: ProtocolSchemaBundleCore
+  readonly coreDigest: Digest
+  readonly format: "convax.protocol-schema-bundle"
+  readonly protocolDigest: Digest
 }
 
-export interface DocumentScopeV2 {
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
+export interface DocumentScope {
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
   readonly docKind: "project-index" | "canvas"
-  readonly docId: "project-index" | CanvasIdV2
-  readonly shardEpoch: Id128V2
+  readonly docId: "project-index" | CanvasId
+  readonly shardEpoch: Id128
 }
 
-export type DocumentScopeDigestV2 = DigestV2
+export type DocumentScopeDigest = Digest
 
-export interface PortableStampV2 {
-  readonly format: "convax.portable-stamp/2"
-  readonly lamport: Uint64V2
-  readonly actorId: ActorIdV2
-  readonly operationId: Id128V2
-  readonly writeOrdinal: Uint32V2
+export interface PortableStamp {
+  readonly format: "convax.portable-stamp"
+  readonly lamport: Uint64
+  readonly actorId: ActorId
+  readonly operationId: Id128
+  readonly writeOrdinal: Uint32
 }
 
-export interface CausalHeadRefV2 {
-  readonly format: "convax.causal-head-ref/2"
-  readonly actorId: ActorIdV2
-  readonly actorSequence: Uint64V2
-  readonly frameDigest: DigestV2
-  readonly lamport: Uint64V2
+export interface CausalHeadRef {
+  readonly format: "convax.causal-head-ref"
+  readonly actorId: ActorId
+  readonly actorSequence: Uint64
+  readonly frameDigest: Digest
+  readonly lamport: Uint64
 }
 
-export interface CausalFrontierV2 {
-  readonly format: "convax.causal-frontier/2"
-  readonly heads: readonly CausalHeadRefV2[]
+export interface CausalFrontier {
+  readonly format: "convax.causal-frontier"
+  readonly heads: readonly CausalHeadRef[]
 }
 
-export interface ReplicaActorHeadSetV2 {
-  readonly format: "convax.replica-actor-head-set/2"
-  readonly scope: DocumentScopeV2
-  readonly heads: readonly CausalHeadRefV2[]
+export interface ReplicaActorHeadSet {
+  readonly format: "convax.replica-actor-head-set"
+  readonly scope: DocumentScope
+  readonly heads: readonly CausalHeadRef[]
 }
 
-export type CausalDependencyKindV2 =
+export type CausalDependencyKind =
   | "membership-snapshot"
   | "replica-actor-credential"
   | "replica-edit-authorization"
@@ -123,497 +123,497 @@ export type CausalDependencyKindV2 =
   | "generation-external-fact"
   | "reset-authorization"
 
-export interface CausalDependencyRefV2 {
-  readonly kind: CausalDependencyKindV2
-  readonly digest: DigestV2
+export interface CausalDependencyRef {
+  readonly kind: CausalDependencyKind
+  readonly digest: Digest
 }
 
-export interface CausalSignerAuthorityV2 {
-  readonly memberId: MemberIdV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly memberAuthorizationEpoch: Id128V2
-  readonly replicaAuthorizationEpoch: Id128V2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly replicaActorCredentialCoreDigest: DigestV2
-  readonly replicaEditAuthorizationCoreDigest: DigestV2
+export interface CausalSignerAuthority {
+  readonly memberId: MemberId
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly memberAuthorizationEpoch: Id128
+  readonly replicaAuthorizationEpoch: Id128
+  readonly membershipSnapshotDigest: Digest
+  readonly replicaActorCredentialCoreDigest: Digest
+  readonly replicaEditAuthorizationCoreDigest: Digest
 }
 
-export interface CausalContextV2 {
-  readonly format: "convax.causal-context/2"
-  readonly scope: DocumentScopeV2
-  readonly baseFrontier: CausalFrontierV2
-  readonly baseFrontierDigest: DigestV2
-  readonly baseStateVectorDigest: DigestV2
-  readonly baseCanonicalStateDigest: DigestV2
-  readonly signerAuthority: CausalSignerAuthorityV2
-  readonly dependencies: readonly CausalDependencyRefV2[]
-  readonly validationArtifactSetDigest: DigestV2
+export interface CausalContext {
+  readonly format: "convax.causal-context"
+  readonly scope: DocumentScope
+  readonly baseFrontier: CausalFrontier
+  readonly baseFrontierDigest: Digest
+  readonly baseStateVectorDigest: Digest
+  readonly baseCanonicalStateDigest: Digest
+  readonly signerAuthority: CausalSignerAuthority
+  readonly dependencies: readonly CausalDependencyRef[]
+  readonly validationArtifactSetDigest: Digest
 }
 
-export type DocumentOwnerKindV2 = "project-index" | "canvas"
+export type DocumentOwnerKind = "project-index" | "canvas"
 
-export type OwnerCanonicalStateCodecV2 = "restricted-jcs-utf8"
+export type OwnerCanonicalStateCodec = "restricted-jcs-utf8"
 
-export interface OwnerCanonicalizerDescriptorV2 {
-  readonly format: "convax.owner-canonicalizer-descriptor/2"
-  readonly owner: DocumentOwnerKindV2
-  readonly ownerSchemaDigest: DigestV2
+export interface OwnerCanonicalizerDescriptor {
+  readonly format: "convax.owner-canonicalizer-descriptor"
+  readonly owner: DocumentOwnerKind
+  readonly ownerSchemaDigest: Digest
   readonly canonicalStateFormat: string
-  readonly canonicalStateCodec: OwnerCanonicalStateCodecV2
+  readonly canonicalStateCodec: OwnerCanonicalStateCodec
   readonly exactBytePolicy: "parse-reencode-byte-equal"
   readonly unknownStatePolicy: "reject"
 }
 
-export interface ActualWriteV2 {
+export interface ActualWrite {
   readonly entityKind: string
   readonly entityId: string
   readonly field: string
-  readonly valueDigest: DigestV2
+  readonly valueDigest: Digest
 }
 
-export interface ActualWriteEvidenceV2 {
-  readonly format: "convax.actual-write-evidence/2"
-  readonly scope: DocumentScopeV2
-  readonly owner: DocumentOwnerKindV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly intentDigest: DigestV2
+export interface ActualWriteEvidence {
+  readonly format: "convax.actual-write-evidence"
+  readonly scope: DocumentScope
+  readonly owner: DocumentOwnerKind
+  readonly ownerSchemaDigest: Digest
+  readonly intentDigest: Digest
   readonly changedPaths: readonly string[]
-  readonly writes: readonly ActualWriteV2[]
+  readonly writes: readonly ActualWrite[]
 }
 
-export type ValidationArtifactOwnerV2 = "kernel" | "project-index" | "canvas" | "control-plane" | "plugin"
+export type ValidationArtifactOwner = "kernel" | "project-index" | "canvas" | "control-plane" | "plugin"
 
-export interface ValidationArtifactRefV2 {
-  readonly owner: ValidationArtifactOwnerV2
+export interface ValidationArtifactRef {
+  readonly owner: ValidationArtifactOwner
   readonly format: string
-  readonly artifactDigest: DigestV2
+  readonly artifactDigest: Digest
 }
 
-export interface ValidationArtifactSetV2 {
-  readonly format: "convax.validation-artifact-set/2"
-  readonly artifacts: readonly ValidationArtifactRefV2[]
+export interface ValidationArtifactSet {
+  readonly format: "convax.validation-artifact-set"
+  readonly artifacts: readonly ValidationArtifactRef[]
 }
 
-export interface CausalEditCoreV2 {
-  readonly format: "convax.causal-edit-core/2"
-  readonly scope: DocumentScopeV2
-  readonly actorId: ActorIdV2
-  readonly actorSequence: Uint64V2
-  readonly predecessorFrameDigest: DigestV2 | null
-  readonly operationId: Id128V2
-  readonly lamport: Uint64V2
+export interface CausalEditCore {
+  readonly format: "convax.causal-edit-core"
+  readonly scope: DocumentScope
+  readonly actorId: ActorId
+  readonly actorSequence: Uint64
+  readonly predecessorFrameDigest: Digest | null
+  readonly operationId: Id128
+  readonly lamport: Uint64
   readonly intentKind: string
-  readonly intentDigest: DigestV2
-  readonly causalContextDigest: DigestV2
-  readonly baseFrontierDigest: DigestV2
-  readonly baseStateVectorDigest: DigestV2
-  readonly baseCanonicalStateDigest: DigestV2
-  readonly yjsUpdateDigest: DigestV2
-  readonly postStateVectorDigest: DigestV2
-  readonly postCanonicalStateDigest: DigestV2
-  readonly actualWriteEvidenceDigest: DigestV2
-  readonly typedIntentJcsByteLength: Uint64V2
-  readonly causalContextJcsByteLength: Uint64V2
-  readonly baseStateVectorByteLength: Uint64V2
-  readonly yjsUpdateByteLength: Uint64V2
-  readonly actualWriteEvidenceJcsByteLength: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly replicaActorCredentialCoreDigest: DigestV2
-  readonly replicaEditAuthorizationCoreDigest: DigestV2
+  readonly intentDigest: Digest
+  readonly causalContextDigest: Digest
+  readonly baseFrontierDigest: Digest
+  readonly baseStateVectorDigest: Digest
+  readonly baseCanonicalStateDigest: Digest
+  readonly yjsUpdateDigest: Digest
+  readonly postStateVectorDigest: Digest
+  readonly postCanonicalStateDigest: Digest
+  readonly actualWriteEvidenceDigest: Digest
+  readonly typedIntentJcsByteLength: Uint64
+  readonly causalContextJcsByteLength: Uint64
+  readonly baseStateVectorByteLength: Uint64
+  readonly yjsUpdateByteLength: Uint64
+  readonly actualWriteEvidenceJcsByteLength: Uint64
+  readonly protocolDigest: Digest
+  readonly ownerSchemaDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly validationArtifactSetDigest: Digest
+  readonly membershipSnapshotDigest: Digest
+  readonly replicaActorCredentialCoreDigest: Digest
+  readonly replicaEditAuthorizationCoreDigest: Digest
 }
 
-export interface CausalEditFrameHeaderV2 {
-  readonly format: "convax.causal-edit-frame/2"
-  readonly core: CausalEditCoreV2
-  readonly coreDigest: DigestV2
-  readonly replicaSignature: SignatureV2
+export interface CausalEditFrameHeader {
+  readonly format: "convax.causal-edit-frame"
+  readonly core: CausalEditCore
+  readonly coreDigest: Digest
+  readonly replicaSignature: Signature
 }
 
-export interface CausalEditFrameSectionsV2 {
+export interface CausalEditFrameSections {
   readonly typedIntentJcs: Uint8Array
   readonly causalContextJcs: Uint8Array
-  readonly baseStateVector: StateVectorV2
+  readonly baseStateVector: StateVector
   readonly yjsUpdate: Uint8Array
   readonly actualWriteEvidenceJcs: Uint8Array
 }
 
-export interface DecodedCausalEditFrameV2 {
+export interface DecodedCausalEditFrame {
   readonly bytes: Uint8Array
-  readonly frameDigest: DigestV2
-  readonly header: CausalEditFrameHeaderV2
+  readonly frameDigest: Digest
+  readonly header: CausalEditFrameHeader
   readonly headerJcs: Uint8Array
   readonly payload: Uint8Array
-  readonly context: CausalContextV2
-  readonly evidence: ActualWriteEvidenceV2
-  readonly sections: CausalEditFrameSectionsV2
+  readonly context: CausalContext
+  readonly evidence: ActualWriteEvidence
+  readonly sections: CausalEditFrameSections
 }
 
-declare const ownerValidatedStateBrandV2: unique symbol
-declare const ownerApplyResultBrandV2: unique symbol
-declare const ownerProcessValueFactoryBrandV2: unique symbol
-declare const ownerExternalFactPortBrandV2: unique symbol
-declare const ownerExternalFactPortFactoryBrandV2: unique symbol
-declare const ownerHistoryMaterializationPortBrandV2: unique symbol
-declare const ownerIntentClosurePortBrandV2: unique symbol
-declare const documentOwnerProtocolPortBrandV2: unique symbol
-declare const documentOwnerRuntimeBrandV2: unique symbol
-declare const selectedDocumentOwnerArtifactFactoryBrandV2: unique symbol
+declare const ownerValidatedStateBrand: unique symbol
+declare const ownerApplyResultBrand: unique symbol
+declare const ownerProcessValueFactoryBrand: unique symbol
+declare const ownerExternalFactPortBrand: unique symbol
+declare const ownerExternalFactPortFactoryBrand: unique symbol
+declare const ownerHistoryMaterializationPortBrand: unique symbol
+declare const ownerIntentClosurePortBrand: unique symbol
+declare const documentOwnerProtocolPortBrand: unique symbol
+declare const documentOwnerRuntimeBrand: unique symbol
+declare const selectedDocumentOwnerArtifactFactoryBrand: unique symbol
 
-export interface OwnerIntentConstructionContextV2 {
-  readonly scope: DocumentScopeV2
-  readonly actorId: ActorIdV2
-  readonly actorSequence: Uint64V2
-  readonly operationId: Id128V2
-  readonly lamport: Uint64V2
-  readonly baseFrontierDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
+export interface OwnerIntentConstructionContext {
+  readonly scope: DocumentScope
+  readonly actorId: ActorId
+  readonly actorSequence: Uint64
+  readonly operationId: Id128
+  readonly lamport: Uint64
+  readonly baseFrontierDigest: Digest
+  readonly protocolDigest: Digest
+  readonly ownerSchemaDigest: Digest
+  readonly validationArtifactSetDigest: Digest
 }
 
-export interface OwnerIntentDependencyContextV2 extends OwnerIntentConstructionContextV2 {
-  readonly intentDigest: DigestV2
+export interface OwnerIntentDependencyContext extends OwnerIntentConstructionContext {
+  readonly intentDigest: Digest
 }
 
-export type OwnerIntentValidationContextV2 = OwnerIntentDependencyContextV2
+export type OwnerIntentValidationContext = OwnerIntentDependencyContext
 
-export interface OwnerValidatedStateV2<K extends DocumentOwnerKindV2 = DocumentOwnerKindV2> {
+export interface OwnerValidatedState<K extends DocumentOwnerKind = DocumentOwnerKind> {
   readonly owner: K
   readonly value: unknown
-  readonly [ownerValidatedStateBrandV2]: true
+  readonly [ownerValidatedStateBrand]: true
 }
 
-export interface OwnerApplyResultV2<K extends DocumentOwnerKindV2 = DocumentOwnerKindV2> {
+export interface OwnerApplyResult<K extends DocumentOwnerKind = DocumentOwnerKind> {
   readonly owner: K
   readonly value: unknown
-  readonly [ownerApplyResultBrandV2]: true
+  readonly [ownerApplyResultBrand]: true
 }
 
-export interface OwnerProcessValueFactoryV2<K extends DocumentOwnerKindV2> {
-  wrapValidatedState(value: unknown): OwnerValidatedStateV2<K>
-  wrapApplyResult(value: unknown): OwnerApplyResultV2<K>
-  readonly [ownerProcessValueFactoryBrandV2]: true
+export interface OwnerProcessValueFactory<K extends DocumentOwnerKind> {
+  wrapValidatedState(value: unknown): OwnerValidatedState<K>
+  wrapApplyResult(value: unknown): OwnerApplyResult<K>
+  readonly [ownerProcessValueFactoryBrand]: true
 }
 
-export interface OwnerExternalFactRequirementV2<K extends DocumentOwnerKindV2> {
+export interface OwnerExternalFactRequirement<K extends DocumentOwnerKind> {
   readonly owner: K
   readonly kind: string
-  readonly factDigest: DigestV2
+  readonly factDigest: Digest
   readonly request: Readonly<{
-    readonly sha256: DigestV2
+    readonly sha256: Digest
     readonly exactJcs: Readonly<Uint8Array>
   }>
 }
 
-export interface OwnerIntentDependenciesV2<K extends DocumentOwnerKindV2> {
-  readonly validationArtifacts: readonly ValidationArtifactRefV2[]
-  readonly externalFacts: readonly OwnerExternalFactRequirementV2<K>[]
+export interface OwnerIntentDependencies<K extends DocumentOwnerKind> {
+  readonly validationArtifacts: readonly ValidationArtifactRef[]
+  readonly externalFacts: readonly OwnerExternalFactRequirement<K>[]
 }
 
-export type OwnerValidationArtifactResolveResultV2 =
-  | Readonly<{ status: "resolved"; ref: ValidationArtifactRefV2; exactBytes: Readonly<Uint8Array> }>
-  | Readonly<{ status: "pending"; ref: ValidationArtifactRefV2 }>
+export type OwnerValidationArtifactResolveResult =
+  | Readonly<{ status: "resolved"; ref: ValidationArtifactRef; exactBytes: Readonly<Uint8Array> }>
+  | Readonly<{ status: "pending"; ref: ValidationArtifactRef }>
   | Readonly<{ status: "rejected"; code: "artifact-not-declared" | "artifact-invalid" }>
 
-export type OwnerExternalFactResolveResultV2<K extends DocumentOwnerKindV2> =
-  | Readonly<{ status: "resolved"; requirement: OwnerExternalFactRequirementV2<K>; value: unknown }>
-  | Readonly<{ status: "pending"; requirement: OwnerExternalFactRequirementV2<K> }>
+export type OwnerExternalFactResolveResult<K extends DocumentOwnerKind> =
+  | Readonly<{ status: "resolved"; requirement: OwnerExternalFactRequirement<K>; value: unknown }>
+  | Readonly<{ status: "pending"; requirement: OwnerExternalFactRequirement<K> }>
   | Readonly<{ status: "rejected"; code: "fact-not-declared" | "fact-invalid" }>
 
-export interface OwnerExternalFactResolverDefinitionV2<K extends DocumentOwnerKindV2> {
+export interface OwnerExternalFactResolverDefinition<K extends DocumentOwnerKind> {
   readonly owner: K
-  resolveArtifact(ref: ValidationArtifactRefV2): OwnerValidationArtifactResolveResultV2
-  resolveFact(requirement: OwnerExternalFactRequirementV2<K>): OwnerExternalFactResolveResultV2<K>
+  resolveArtifact(ref: ValidationArtifactRef): OwnerValidationArtifactResolveResult
+  resolveFact(requirement: OwnerExternalFactRequirement<K>): OwnerExternalFactResolveResult<K>
 }
 
-export interface OwnerExternalFactPortV2<K extends DocumentOwnerKindV2 = DocumentOwnerKindV2> {
-  resolveArtifact(ref: ValidationArtifactRefV2): OwnerValidationArtifactResolveResultV2
-  resolveFact(requirement: OwnerExternalFactRequirementV2<K>): OwnerExternalFactResolveResultV2<K>
-  consumedDependencies(): OwnerIntentDependenciesV2<K>
-  readonly [ownerExternalFactPortBrandV2]: true
+export interface OwnerExternalFactPort<K extends DocumentOwnerKind = DocumentOwnerKind> {
+  resolveArtifact(ref: ValidationArtifactRef): OwnerValidationArtifactResolveResult
+  resolveFact(requirement: OwnerExternalFactRequirement<K>): OwnerExternalFactResolveResult<K>
+  consumedDependencies(): OwnerIntentDependencies<K>
+  readonly [ownerExternalFactPortBrand]: true
 }
 
-export type CreateOwnerExternalFactAttemptPortResultV2<K extends DocumentOwnerKindV2> =
-  | Readonly<{ status: "created"; port: OwnerExternalFactPortV2<K> }>
+export type CreateOwnerExternalFactAttemptPortResult<K extends DocumentOwnerKind> =
+  | Readonly<{ status: "created"; port: OwnerExternalFactPort<K> }>
   | Readonly<{
       status: "rejected"
       code: "wrong-owner" | "dependency-cap-exceeded" | "dependency-order-invalid" | "dependency-duplicate" | "dependency-invalid"
     }>
 
-export interface OwnerExternalFactPortFactoryV2<K extends DocumentOwnerKindV2> {
+export interface OwnerExternalFactPortFactory<K extends DocumentOwnerKind> {
   createAttemptPort(input: {
-    readonly declared: OwnerIntentDependenciesV2<K>
-    readonly resolver: OwnerExternalFactResolverDefinitionV2<K>
-  }): CreateOwnerExternalFactAttemptPortResultV2<K>
-  readonly [ownerExternalFactPortFactoryBrandV2]: true
+    readonly declared: OwnerIntentDependencies<K>
+    readonly resolver: OwnerExternalFactResolverDefinition<K>
+  }): CreateOwnerExternalFactAttemptPortResult<K>
+  readonly [ownerExternalFactPortFactoryBrand]: true
 }
 
-export type InspectedOwnerIntentV2 =
+export type InspectedOwnerIntent =
   | Readonly<{ kind: "ordinary" }>
-  | Readonly<{ kind: "history"; direction: "undo" | "redo"; rootOperationId: Id128V2 }>
+  | Readonly<{ kind: "history"; direction: "undo" | "redo"; rootOperationId: Id128 }>
 
-export interface OwnerHistoryMaterializationDefinitionV2<K extends DocumentOwnerKindV2> {
+export interface OwnerHistoryMaterializationDefinition<K extends DocumentOwnerKind> {
   discoverDependencies(input: {
     readonly direction: "undo" | "redo"
-    readonly rootOperationId: Id128V2
-    readonly base: OwnerValidatedStateV2<K>
-    readonly context: OwnerIntentConstructionContextV2
-  }): OwnerIntentDependenciesV2<K> | "pending" | "rejected"
+    readonly rootOperationId: Id128
+    readonly base: OwnerValidatedState<K>
+    readonly context: OwnerIntentConstructionContext
+  }): OwnerIntentDependencies<K> | "pending" | "rejected"
   materialize(input: {
     readonly direction: "undo" | "redo"
-    readonly rootOperationId: Id128V2
-    readonly base: OwnerValidatedStateV2<K>
-    readonly context: OwnerIntentConstructionContextV2
-    readonly externalFacts: OwnerExternalFactPortV2<K>
+    readonly rootOperationId: Id128
+    readonly base: OwnerValidatedState<K>
+    readonly context: OwnerIntentConstructionContext
+    readonly externalFacts: OwnerExternalFactPort<K>
   }): unknown | "pending" | "rejected"
 }
 
-export interface OwnerHistoryMaterializationPortV2<K extends DocumentOwnerKindV2>
-  extends OwnerHistoryMaterializationDefinitionV2<K> {
-  readonly [ownerHistoryMaterializationPortBrandV2]: true
+export interface OwnerHistoryMaterializationPort<K extends DocumentOwnerKind>
+  extends OwnerHistoryMaterializationDefinition<K> {
+  readonly [ownerHistoryMaterializationPortBrand]: true
 }
 
-export interface OwnerIntentClosureDefinitionV2<K extends DocumentOwnerKindV2> {
-  inspectIntent(intent: unknown): InspectedOwnerIntentV2 | "rejected"
+export interface OwnerIntentClosureDefinition<K extends DocumentOwnerKind> {
+  inspectIntent(intent: unknown): InspectedOwnerIntent | "rejected"
   discoverDependencies(input: {
-    readonly context: OwnerIntentDependencyContextV2
+    readonly context: OwnerIntentDependencyContext
     readonly intent: unknown
-  }): OwnerIntentDependenciesV2<K> | "pending" | "rejected"
-  readonly history: OwnerHistoryMaterializationDefinitionV2<K> | null
+  }): OwnerIntentDependencies<K> | "pending" | "rejected"
+  readonly history: OwnerHistoryMaterializationDefinition<K> | null
 }
 
-export interface OwnerIntentClosurePortV2<K extends DocumentOwnerKindV2> {
-  readonly protocolPort: DocumentOwnerProtocolPortV2<K>
-  inspectIntent(intent: unknown): InspectedOwnerIntentV2 | "rejected"
+export interface OwnerIntentClosurePort<K extends DocumentOwnerKind> {
+  readonly protocolPort: DocumentOwnerProtocolPort<K>
+  inspectIntent(intent: unknown): InspectedOwnerIntent | "rejected"
   discoverDependencies(input: {
-    readonly context: OwnerIntentDependencyContextV2
+    readonly context: OwnerIntentDependencyContext
     readonly intent: unknown
-  }): OwnerIntentDependenciesV2<K> | "pending" | "rejected"
-  readonly history: OwnerHistoryMaterializationPortV2<K> | null
-  readonly [ownerIntentClosurePortBrandV2]: true
+  }): OwnerIntentDependencies<K> | "pending" | "rejected"
+  readonly history: OwnerHistoryMaterializationPort<K> | null
+  readonly [ownerIntentClosurePortBrand]: true
 }
 
-export interface DocumentOwnerProtocolDefinitionV2<K extends DocumentOwnerKindV2> {
+export interface DocumentOwnerProtocolDefinition<K extends DocumentOwnerKind> {
   readonly owner: K
-  readonly schemaDigest: DigestV2
-  readonly canonicalizerDescriptor: OwnerCanonicalizerDescriptorV2
-  readonly canonicalizerDigest: DigestV2
+  readonly schemaDigest: Digest
+  readonly canonicalizerDescriptor: OwnerCanonicalizerDescriptor
+  readonly canonicalizerDigest: Digest
   decodeIntent(exactJcs: Uint8Array): unknown | "rejected"
-  validateBase(document: Y.Doc): OwnerValidatedStateV2<K> | "pending" | "rejected"
+  validateBase(document: Y.Doc): OwnerValidatedState<K> | "pending" | "rejected"
   applyIntent(
     candidate: Y.Doc,
-    context: OwnerIntentValidationContextV2,
+    context: OwnerIntentValidationContext,
     intent: unknown,
-    externalFacts: OwnerExternalFactPortV2<K>,
-  ): OwnerApplyResultV2<K> | "pending" | "rejected"
+    externalFacts: OwnerExternalFactPort<K>,
+  ): OwnerApplyResult<K> | "pending" | "rejected"
   validatePost(
-    base: OwnerValidatedStateV2<K>,
+    base: OwnerValidatedState<K>,
     candidate: Y.Doc,
-    result: OwnerApplyResultV2<K>,
-  ): OwnerValidatedStateV2<K> | "pending" | "rejected"
+    result: OwnerApplyResult<K>,
+  ): OwnerValidatedState<K> | "pending" | "rejected"
   canonicalStateBytes(document: Y.Doc): Uint8Array | "rejected"
-  deriveActualWriteEvidence(result: OwnerApplyResultV2<K>): ActualWriteEvidenceV2
+  deriveActualWriteEvidence(result: OwnerApplyResult<K>): ActualWriteEvidence
 }
 
-export interface DocumentOwnerProtocolPortV2<K extends DocumentOwnerKindV2 = DocumentOwnerKindV2>
-  extends DocumentOwnerProtocolDefinitionV2<K> {
-  readonly [documentOwnerProtocolPortBrandV2]: true
+export interface DocumentOwnerProtocolPort<K extends DocumentOwnerKind = DocumentOwnerKind>
+  extends DocumentOwnerProtocolDefinition<K> {
+  readonly [documentOwnerProtocolPortBrand]: true
 }
 
-export interface SelectedDocumentOwnerArtifactDefinitionV2<K extends DocumentOwnerKindV2> {
+export interface SelectedDocumentOwnerArtifactDefinition<K extends DocumentOwnerKind> {
   readonly owner: K
-  createDefinitions(processValues: OwnerProcessValueFactoryV2<K>): Readonly<{
-    protocol: DocumentOwnerProtocolDefinitionV2<K>
-    closure: OwnerIntentClosureDefinitionV2<K>
+  createDefinitions(processValues: OwnerProcessValueFactory<K>): Readonly<{
+    protocol: DocumentOwnerProtocolDefinition<K>
+    closure: OwnerIntentClosureDefinition<K>
   }>
 }
 
-export interface DocumentOwnerRuntimeV2<K extends DocumentOwnerKindV2 = DocumentOwnerKindV2> {
-  readonly artifactDigest: DigestV2
-  readonly protocolPort: DocumentOwnerProtocolPortV2<K>
-  readonly closurePort: OwnerIntentClosurePortV2<K>
-  readonly externalFactPortFactory: OwnerExternalFactPortFactoryV2<K>
-  readonly [documentOwnerRuntimeBrandV2]: true
+export interface DocumentOwnerRuntime<K extends DocumentOwnerKind = DocumentOwnerKind> {
+  readonly artifactDigest: Digest
+  readonly protocolPort: DocumentOwnerProtocolPort<K>
+  readonly closurePort: OwnerIntentClosurePort<K>
+  readonly externalFactPortFactory: OwnerExternalFactPortFactory<K>
+  readonly [documentOwnerRuntimeBrand]: true
 }
 
-export interface SelectedDocumentOwnerArtifactFactoryV2<K extends DocumentOwnerKindV2> {
-  createRuntime(definition: SelectedDocumentOwnerArtifactDefinitionV2<K>):
-    | DocumentOwnerRuntimeV2<K>
+export interface SelectedDocumentOwnerArtifactFactory<K extends DocumentOwnerKind> {
+  createRuntime(definition: SelectedDocumentOwnerArtifactDefinition<K>):
+    | DocumentOwnerRuntime<K>
     | Readonly<{
         status: "rejected"
         code: "owner-definition-mismatch" | "owner-artifact-mismatch" | "owner-runtime-invalid"
       }>
-  readonly [selectedDocumentOwnerArtifactFactoryBrandV2]: true
+  readonly [selectedDocumentOwnerArtifactFactoryBrand]: true
 }
 
-export interface FrameObjectRefV2 {
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly actorId: ActorIdV2
-  readonly actorSequence: Uint64V2
-  readonly operationId: Id128V2
+export interface FrameObjectRef {
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly actorId: ActorId
+  readonly actorSequence: Uint64
+  readonly operationId: Id128
 }
 
-export type OrdinarySha256V2 = DigestV2
+export type OrdinarySha256 = Digest
 
-declare const remoteIngressReservationReceiptBrandV2: unique symbol
-declare const completedRemoteUpdateIngressBrandV2: unique symbol
-declare const remoteIngressByteCursorBrandV2: unique symbol
-declare const fullyValidatedRemoteIngressStagingBrandV2: unique symbol
-declare const remoteImmutableIngressObjectReceiptBrandV2: unique symbol
-declare const remoteTransferAttemptBindingBrandV2: unique symbol
-declare const remoteTransferAttemptBindingFactoryBrandV2: unique symbol
-declare const remoteIngressEvidenceAdmissionReceiptBrandV2: unique symbol
+declare const remoteIngressReservationReceiptBrand: unique symbol
+declare const completedRemoteUpdateIngressBrand: unique symbol
+declare const remoteIngressByteCursorBrand: unique symbol
+declare const fullyValidatedRemoteIngressStagingBrand: unique symbol
+declare const remoteImmutableIngressObjectReceiptBrand: unique symbol
+declare const remoteTransferAttemptBindingBrand: unique symbol
+declare const remoteTransferAttemptBindingFactoryBrand: unique symbol
+declare const remoteIngressEvidenceAdmissionReceiptBrand: unique symbol
 
-export interface StableRemoteTransferKeyV2 {
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly sourceMemberId: MemberIdV2
-  readonly transferId: Id128V2
+export interface StableRemoteTransferKey {
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly sourceMemberId: MemberId
+  readonly transferId: Id128
 }
 
-export type RemoteIngressKindV2 = string
-export type RemoteIngressAckAuthorityV2 = string
+export type RemoteIngressKind = string
+export type RemoteIngressAckAuthority = string
 
-export interface RemoteIngressEvidenceMissingObjectV2 {
-  readonly objectDigest: DigestV2
-  readonly byteLength: Uint64V2
+export interface RemoteIngressEvidenceMissingObject {
+  readonly objectDigest: Digest
+  readonly byteLength: Uint64
 }
 
-export interface BeginRemoteIngressEvidenceAdmissionCommandV2 {
+export interface BeginRemoteIngressEvidenceAdmissionCommand {
   readonly transition: "reserve"
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly sourceMemberId: MemberIdV2
-  readonly authenticatedSourceMemberId: MemberIdV2
-  readonly expectedPriorEpochHeadRecordDigest: DigestV2
-  readonly expectedPriorStableKeyStateRecordDigest: DigestV2 | null
-  readonly expectedPriorMemberQuotaRecordDigest: DigestV2 | null
+  readonly stableKey: StableRemoteTransferKey
+  readonly sourceMemberId: MemberId
+  readonly authenticatedSourceMemberId: MemberId
+  readonly expectedPriorEpochHeadRecordDigest: Digest
+  readonly expectedPriorStableKeyStateRecordDigest: Digest | null
+  readonly expectedPriorMemberQuotaRecordDigest: Digest | null
   readonly exactManifestCoreJcs: Readonly<Uint8Array>
   readonly prospectiveClosureRecordExactJcs: Readonly<Uint8Array>
-  readonly admissionStartMissingObjects: readonly RemoteIngressEvidenceMissingObjectV2[]
+  readonly admissionStartMissingObjects: readonly RemoteIngressEvidenceMissingObject[]
 }
 
-export interface SettleRemoteIngressEvidenceAdmissionCommandV2 {
+export interface SettleRemoteIngressEvidenceAdmissionCommand {
   readonly transition: "settle"
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly sourceMemberId: MemberIdV2
-  readonly authenticatedSourceMemberId: MemberIdV2
-  readonly manifestCoreDigest: DigestV2
-  readonly prospectiveClosureRecordDigest: DigestV2
-  readonly signedOfferEvidenceClosureObjectDigest: DigestV2
-  readonly expectedPriorEpochHeadRecordDigest: DigestV2
-  readonly expectedPriorStableKeyStateRecordDigest: DigestV2
-  readonly expectedPriorMemberQuotaRecordDigest: DigestV2
+  readonly stableKey: StableRemoteTransferKey
+  readonly sourceMemberId: MemberId
+  readonly authenticatedSourceMemberId: MemberId
+  readonly manifestCoreDigest: Digest
+  readonly prospectiveClosureRecordDigest: Digest
+  readonly signedOfferEvidenceClosureObjectDigest: Digest
+  readonly expectedPriorEpochHeadRecordDigest: Digest
+  readonly expectedPriorStableKeyStateRecordDigest: Digest
+  readonly expectedPriorMemberQuotaRecordDigest: Digest
 }
 
-export interface AbandonRemoteIngressEvidenceAdmissionCommandV2 {
+export interface AbandonRemoteIngressEvidenceAdmissionCommand {
   readonly transition: "abandon-release"
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly sourceMemberId: MemberIdV2
-  readonly authenticatedSourceMemberId: MemberIdV2
-  readonly manifestCoreDigest: DigestV2
-  readonly prospectiveClosureRecordDigest: DigestV2
-  readonly expectedPriorEpochHeadRecordDigest: DigestV2
-  readonly expectedPriorStableKeyStateRecordDigest: DigestV2
-  readonly expectedPriorMemberQuotaRecordDigest: DigestV2
+  readonly stableKey: StableRemoteTransferKey
+  readonly sourceMemberId: MemberId
+  readonly authenticatedSourceMemberId: MemberId
+  readonly manifestCoreDigest: Digest
+  readonly prospectiveClosureRecordDigest: Digest
+  readonly expectedPriorEpochHeadRecordDigest: Digest
+  readonly expectedPriorStableKeyStateRecordDigest: Digest
+  readonly expectedPriorMemberQuotaRecordDigest: Digest
   readonly abandonmentReason: "authorization-closed" | "caller-cancelled" | "evidence-capacity-exceeded"
 }
 
-export interface TransferRemoteIngressEvidenceAdmissionChargeCommandV2 {
+export interface TransferRemoteIngressEvidenceAdmissionChargeCommand {
   readonly transition: "transfer-release"
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly sourceMemberId: MemberIdV2
-  readonly authenticatedSourceMemberId: MemberIdV2
-  readonly manifestCoreDigest: DigestV2
-  readonly prospectiveClosureRecordDigest: DigestV2
-  readonly signedOfferEvidenceClosureObjectDigest: DigestV2
-  readonly chargeTransferBindingRecordDigest: DigestV2
-  readonly expectedPriorEpochHeadRecordDigest: DigestV2
-  readonly expectedPriorStableKeyStateRecordDigest: DigestV2
-  readonly expectedPriorMemberQuotaRecordDigest: DigestV2
+  readonly stableKey: StableRemoteTransferKey
+  readonly sourceMemberId: MemberId
+  readonly authenticatedSourceMemberId: MemberId
+  readonly manifestCoreDigest: Digest
+  readonly prospectiveClosureRecordDigest: Digest
+  readonly signedOfferEvidenceClosureObjectDigest: Digest
+  readonly chargeTransferBindingRecordDigest: Digest
+  readonly expectedPriorEpochHeadRecordDigest: Digest
+  readonly expectedPriorStableKeyStateRecordDigest: Digest
+  readonly expectedPriorMemberQuotaRecordDigest: Digest
 }
 
-export type AdvanceRemoteIngressEvidenceAdmissionCommandV2 =
-  | SettleRemoteIngressEvidenceAdmissionCommandV2
-  | AbandonRemoteIngressEvidenceAdmissionCommandV2
-  | TransferRemoteIngressEvidenceAdmissionChargeCommandV2
+export type AdvanceRemoteIngressEvidenceAdmissionCommand =
+  | SettleRemoteIngressEvidenceAdmissionCommand
+  | AbandonRemoteIngressEvidenceAdmissionCommand
+  | TransferRemoteIngressEvidenceAdmissionChargeCommand
 
-export type RemoteIngressEvidenceAdmissionTransitionV2 =
+export type RemoteIngressEvidenceAdmissionTransition =
   | "reserve"
   | "settle"
   | "abandon-release"
   | "transfer-release"
 
-export interface RemoteIngressEvidenceAdmissionTransitionPortEvidenceV2 {
-  readonly transition: RemoteIngressEvidenceAdmissionTransitionV2
+export interface RemoteIngressEvidenceAdmissionTransitionPortEvidence {
+  readonly transition: RemoteIngressEvidenceAdmissionTransition
   readonly idempotent: boolean
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly sourceMemberId: MemberIdV2
-  readonly manifestCoreDigest: DigestV2
-  readonly prospectiveClosureRecordDigest: DigestV2
-  readonly transitionRecordDigest: DigestV2
-  readonly epochHeadRecordDigest: DigestV2
-  readonly stableKeyStateRecordDigest: DigestV2
-  readonly memberQuotaRecordDigest: DigestV2
-  readonly stableKeyMonotonicAttemptCount: Uint32V2
-  readonly memberMonotonicAttemptCount: Uint32V2
-  readonly projectMonotonicAttemptCount: Uint32V2
-  readonly stableKeyChargedClosureCount: Uint32V2
-  readonly memberChargedClosureCount: Uint32V2
-  readonly projectChargedClosureCount: Uint32V2
-  readonly memberAccountedAdmissionByteLength: Uint64V2
-  readonly projectAccountedAdmissionByteLength: Uint64V2
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly stableKey: StableRemoteTransferKey
+  readonly sourceMemberId: MemberId
+  readonly manifestCoreDigest: Digest
+  readonly prospectiveClosureRecordDigest: Digest
+  readonly transitionRecordDigest: Digest
+  readonly epochHeadRecordDigest: Digest
+  readonly stableKeyStateRecordDigest: Digest
+  readonly memberQuotaRecordDigest: Digest
+  readonly stableKeyMonotonicAttemptCount: Uint32
+  readonly memberMonotonicAttemptCount: Uint32
+  readonly projectMonotonicAttemptCount: Uint32
+  readonly stableKeyChargedClosureCount: Uint32
+  readonly memberChargedClosureCount: Uint32
+  readonly projectChargedClosureCount: Uint32
+  readonly memberAccountedAdmissionByteLength: Uint64
+  readonly projectAccountedAdmissionByteLength: Uint64
 }
 
-export interface RemoteIngressEvidenceAdmissionReceiptV2 {
-  readonly transition: RemoteIngressEvidenceAdmissionTransitionV2
-  readonly epochHeadRecordDigest: DigestV2
-  readonly stableKeyStateRecordDigest: DigestV2
-  readonly memberQuotaRecordDigest: DigestV2
-  readonly [remoteIngressEvidenceAdmissionReceiptBrandV2]: true
+export interface RemoteIngressEvidenceAdmissionReceipt {
+  readonly transition: RemoteIngressEvidenceAdmissionTransition
+  readonly epochHeadRecordDigest: Digest
+  readonly stableKeyStateRecordDigest: Digest
+  readonly memberQuotaRecordDigest: Digest
+  readonly [remoteIngressEvidenceAdmissionReceiptBrand]: true
 }
 
-export type RemoteIngressEvidenceAdmissionPortResultV2 =
-  | Readonly<{ status: "committed"; evidence: RemoteIngressEvidenceAdmissionTransitionPortEvidenceV2 }>
+export type RemoteIngressEvidenceAdmissionPortResult =
+  | Readonly<{ status: "committed"; evidence: RemoteIngressEvidenceAdmissionTransitionPortEvidence }>
   | Readonly<{
       status: "rejected"
       code: "head-stale" | "identity-mismatch" | "quota-exceeded" | "transition-invalid" |
         "durability-failed" | "store-corrupt"
     }>
 
-export interface RemoteIngressEvidenceAdmissionPersistencePortV2 {
-  begin(command: BeginRemoteIngressEvidenceAdmissionCommandV2): Promise<RemoteIngressEvidenceAdmissionPortResultV2>
-  advance(command: AdvanceRemoteIngressEvidenceAdmissionCommandV2): Promise<RemoteIngressEvidenceAdmissionPortResultV2>
+export interface RemoteIngressEvidenceAdmissionPersistencePort {
+  begin(command: BeginRemoteIngressEvidenceAdmissionCommand): Promise<RemoteIngressEvidenceAdmissionPortResult>
+  advance(command: AdvanceRemoteIngressEvidenceAdmissionCommand): Promise<RemoteIngressEvidenceAdmissionPortResult>
   loadCurrentEpochHeadDigest(input: {
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-  }): Promise<DigestV2>
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+  }): Promise<Digest>
 }
 
-export type UpdateIngressChunkBytesV2 = "4096" | "8192" | "16384" | "32768" | "65536" | "131072" | "262144"
+export type UpdateIngressChunkBytes = "4096" | "8192" | "16384" | "32768" | "65536" | "131072" | "262144"
 
-export interface RemoteIngressQuotaReservationPortEvidenceV2 {
-  readonly limitsDigest: DigestV2
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
-  readonly kind: RemoteIngressKindV2
-  readonly sourceMemberId: MemberIdV2
+export interface RemoteIngressQuotaReservationPortEvidence {
+  readonly limitsDigest: Digest
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
+  readonly kind: RemoteIngressKind
+  readonly sourceMemberId: MemberId
   readonly chargedClosureCount: "1"
-  readonly accountedAdmissionByteLength: Uint64V2
-  readonly resultingProjectChargedClosureCount: Uint32V2
-  readonly resultingProjectAccountedAdmissionByteLength: Uint64V2
-  readonly resultingSourceMemberChargedClosureCount: Uint32V2
-  readonly resultingSourceMemberAccountedAdmissionByteLength: Uint64V2
-  readonly admissionEpochHeadRecordDigest: DigestV2
-  readonly admissionTransitionRecordDigest: DigestV2
-  readonly memberQuotaRecordDigest: DigestV2
+  readonly accountedAdmissionByteLength: Uint64
+  readonly resultingProjectChargedClosureCount: Uint32
+  readonly resultingProjectAccountedAdmissionByteLength: Uint64
+  readonly resultingSourceMemberChargedClosureCount: Uint32
+  readonly resultingSourceMemberAccountedAdmissionByteLength: Uint64
+  readonly admissionEpochHeadRecordDigest: Digest
+  readonly admissionTransitionRecordDigest: Digest
+  readonly memberQuotaRecordDigest: Digest
 }
 
 /**
@@ -621,308 +621,308 @@ export interface RemoteIngressQuotaReservationPortEvidenceV2 {
  * transfer. The Kernel compares every mirror before minting an install receipt;
  * this structural carrier is deliberately unbranded and grants no authority.
  */
-export interface RemoteIngressQuotaTransferPortEvidenceV2<K extends RemoteIngressKindV2> {
-  readonly limitsDigest: DigestV2
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
+export interface RemoteIngressQuotaTransferPortEvidence<K extends RemoteIngressKind> {
+  readonly limitsDigest: Digest
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
   readonly kind: K
-  readonly sourceMemberId: MemberIdV2
+  readonly sourceMemberId: MemberId
   readonly chargedClosureCount: "1"
-  readonly accountedAdmissionByteLength: Uint64V2
-  readonly resultingProjectChargedClosureCount: Uint32V2
-  readonly resultingProjectAccountedAdmissionByteLength: Uint64V2
-  readonly resultingSourceMemberChargedClosureCount: Uint32V2
-  readonly resultingSourceMemberAccountedAdmissionByteLength: Uint64V2
-  readonly priorAdmissionEpochHeadRecordDigest: DigestV2
-  readonly resultingAdmissionEpochHeadRecordDigest: DigestV2
-  readonly chargeTransferBindingRecordDigest: DigestV2
+  readonly accountedAdmissionByteLength: Uint64
+  readonly resultingProjectChargedClosureCount: Uint32
+  readonly resultingProjectAccountedAdmissionByteLength: Uint64
+  readonly resultingSourceMemberChargedClosureCount: Uint32
+  readonly resultingSourceMemberAccountedAdmissionByteLength: Uint64
+  readonly priorAdmissionEpochHeadRecordDigest: Digest
+  readonly resultingAdmissionEpochHeadRecordDigest: Digest
+  readonly chargeTransferBindingRecordDigest: Digest
   readonly replacementKind: "owner-install"
-  readonly replacementRootRecordDigest: DigestV2
-  readonly replacementRootHeadRecordDigest: DigestV2
+  readonly replacementRootRecordDigest: Digest
+  readonly replacementRootHeadRecordDigest: Digest
 }
 
-export interface RemoteIngressReservationPortEvidenceV2 {
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
-  readonly signedOfferEvidenceClosureRecordDigest: DigestV2
-  readonly reservationRecordDigest: DigestV2
-  readonly currentChunkSetHeadRecordDigest: DigestV2
-  readonly kind: RemoteIngressKindV2
-  readonly scope: DocumentScopeV2 | null
-  readonly subjectDigest: DigestV2
-  readonly ordinarySha256: OrdinarySha256V2
-  readonly declaredByteLength: Uint64V2
-  readonly chunkBytes: UpdateIngressChunkBytesV2
-  readonly chunkCount: Uint32V2
-  readonly quota: RemoteIngressQuotaReservationPortEvidenceV2
+export interface RemoteIngressReservationPortEvidence {
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
+  readonly signedOfferEvidenceClosureRecordDigest: Digest
+  readonly reservationRecordDigest: Digest
+  readonly currentChunkSetHeadRecordDigest: Digest
+  readonly kind: RemoteIngressKind
+  readonly scope: DocumentScope | null
+  readonly subjectDigest: Digest
+  readonly ordinarySha256: OrdinarySha256
+  readonly declaredByteLength: Uint64
+  readonly chunkBytes: UpdateIngressChunkBytes
+  readonly chunkCount: Uint32
+  readonly quota: RemoteIngressQuotaReservationPortEvidence
 }
 
-export interface RemoteIngressReservationReceiptV2 extends RemoteIngressReservationPortEvidenceV2 {
-  readonly [remoteIngressReservationReceiptBrandV2]: true
+export interface RemoteIngressReservationReceipt extends RemoteIngressReservationPortEvidence {
+  readonly [remoteIngressReservationReceiptBrand]: true
 }
 
-export interface ReserveRemoteIngressRequestV2 {
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
-  readonly signedOfferEvidenceClosureRecordDigest: DigestV2
-  readonly kind: RemoteIngressKindV2
-  readonly scope: DocumentScopeV2 | null
-  readonly subjectDigest: DigestV2
-  readonly ordinarySha256: OrdinarySha256V2
-  readonly declaredByteLength: Uint64V2
-  readonly accountedAdmissionByteLength: Uint64V2
-  readonly chunkBytes: UpdateIngressChunkBytesV2
-  readonly chunkCount: Uint32V2
+export interface ReserveRemoteIngressRequest {
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
+  readonly signedOfferEvidenceClosureRecordDigest: Digest
+  readonly kind: RemoteIngressKind
+  readonly scope: DocumentScope | null
+  readonly subjectDigest: Digest
+  readonly ordinarySha256: OrdinarySha256
+  readonly declaredByteLength: Uint64
+  readonly accountedAdmissionByteLength: Uint64
+  readonly chunkBytes: UpdateIngressChunkBytes
+  readonly chunkCount: Uint32
 }
 
-export interface RemoteIngressCompletedStagingEvidenceV2 {
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
-  readonly signedOfferEvidenceClosureRecordDigest: DigestV2
-  readonly reservationRecordDigest: DigestV2
-  readonly finalChunkSetHeadRecordDigest: DigestV2
-  readonly durableChunkSetDigest: DigestV2
-  readonly kind: RemoteIngressKindV2
-  readonly scope: DocumentScopeV2 | null
-  readonly subjectDigest: DigestV2
-  readonly ordinarySha256: OrdinarySha256V2
-  readonly exactByteLength: Uint64V2
-  readonly chunkBytes: UpdateIngressChunkBytesV2
-  readonly chunkCount: Uint32V2
-  readonly quota: RemoteIngressQuotaReservationPortEvidenceV2
+export interface RemoteIngressCompletedStagingEvidence {
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
+  readonly signedOfferEvidenceClosureRecordDigest: Digest
+  readonly reservationRecordDigest: Digest
+  readonly finalChunkSetHeadRecordDigest: Digest
+  readonly durableChunkSetDigest: Digest
+  readonly kind: RemoteIngressKind
+  readonly scope: DocumentScope | null
+  readonly subjectDigest: Digest
+  readonly ordinarySha256: OrdinarySha256
+  readonly exactByteLength: Uint64
+  readonly chunkBytes: UpdateIngressChunkBytes
+  readonly chunkCount: Uint32
+  readonly quota: RemoteIngressQuotaReservationPortEvidence
 }
 
-export interface CompletedRemoteUpdateIngressV2<K extends RemoteIngressKindV2 = RemoteIngressKindV2> {
-  readonly evidence: RemoteIngressCompletedStagingEvidenceV2 & { readonly kind: K }
-  openSequentialCursor(): Promise<RemoteIngressByteCursorV2>
-  readonly [completedRemoteUpdateIngressBrandV2]: true
+export interface CompletedRemoteUpdateIngress<K extends RemoteIngressKind = RemoteIngressKind> {
+  readonly evidence: RemoteIngressCompletedStagingEvidence & { readonly kind: K }
+  openSequentialCursor(): Promise<RemoteIngressByteCursor>
+  readonly [completedRemoteUpdateIngressBrand]: true
 }
 
-export type ReserveRemoteIngressPortResultV2 =
-  | Readonly<{ status: "reserved"; evidence: RemoteIngressReservationPortEvidenceV2 }>
+export type ReserveRemoteIngressPortResult =
+  | Readonly<{ status: "reserved"; evidence: RemoteIngressReservationPortEvidence }>
   | Readonly<{
       status: "rejected"
       code: "manifest-mismatch" | "authorization-closed" | "capacity-exceeded" | "durability-failed" | "store-corrupt"
     }>
 
-export type CompleteRemoteIngressStagingPortResultV2 =
-  | Readonly<{ status: "complete"; evidence: RemoteIngressCompletedStagingEvidenceV2 }>
+export type CompleteRemoteIngressStagingPortResult =
+  | Readonly<{ status: "complete"; evidence: RemoteIngressCompletedStagingEvidence }>
   | Readonly<{
       status: "rejected"
       code: "stale-receipt" | "transfer-incomplete" | "length-mismatch" | "hash-mismatch" | "durability-failed" | "store-corrupt"
     }>
 
-export interface RemoteIngressStagingPersistencePortV2 {
-  reserveRemoteIngress(request: ReserveRemoteIngressRequestV2): Promise<ReserveRemoteIngressPortResultV2>
-  completeRemoteIngressStaging(reservation: RemoteIngressReservationReceiptV2): Promise<CompleteRemoteIngressStagingPortResultV2>
+export interface RemoteIngressStagingPersistencePort {
+  reserveRemoteIngress(request: ReserveRemoteIngressRequest): Promise<ReserveRemoteIngressPortResult>
+  completeRemoteIngressStaging(reservation: RemoteIngressReservationReceipt): Promise<CompleteRemoteIngressStagingPortResult>
   openRemoteIngressSequentialCursor(
-    evidence: RemoteIngressCompletedStagingEvidenceV2,
-  ): Promise<OpenRemoteIngressSequentialCursorPortResultV2>
+    evidence: RemoteIngressCompletedStagingEvidence,
+  ): Promise<OpenRemoteIngressSequentialCursorPortResult>
 }
 
-export type RemoteIngressByteCursorReadV2 =
+export type RemoteIngressByteCursorRead =
   | Readonly<{
       status: "chunk"
-      chunkIndex: Uint32V2
-      byteOffset: Uint64V2
-      exactByteLength: Uint32V2
-      exactChunkSha256: OrdinarySha256V2
+      chunkIndex: Uint32
+      byteOffset: Uint64
+      exactByteLength: Uint32
+      exactChunkSha256: OrdinarySha256
       exactChunkBytes: Readonly<Uint8Array>
     }>
-  | Readonly<{ status: "complete"; exactByteLength: Uint64V2; ordinarySha256: OrdinarySha256V2 }>
+  | Readonly<{ status: "complete"; exactByteLength: Uint64; ordinarySha256: OrdinarySha256 }>
 
-export interface RemoteIngressSequentialCursorPortHandleV2 {
-  nextPersistedChunk(): Promise<RemoteIngressByteCursorReadV2>
+export interface RemoteIngressSequentialCursorPortHandle {
+  nextPersistedChunk(): Promise<RemoteIngressByteCursorRead>
   closePersistedCursor(): void
 }
 
-export type OpenRemoteIngressSequentialCursorPortResultV2 =
-  | Readonly<{ status: "opened"; handle: RemoteIngressSequentialCursorPortHandleV2 }>
+export type OpenRemoteIngressSequentialCursorPortResult =
+  | Readonly<{ status: "opened"; handle: RemoteIngressSequentialCursorPortHandle }>
   | Readonly<{
       status: "rejected"
       code: "staging-not-complete" | "staging-head-stale" | "cursor-already-open" | "store-corrupt"
     }>
 
-export interface RemoteIngressByteCursorV2 {
-  next(): Promise<RemoteIngressByteCursorReadV2>
+export interface RemoteIngressByteCursor {
+  next(): Promise<RemoteIngressByteCursorRead>
   close(): void
-  readonly [remoteIngressByteCursorBrandV2]: true
+  readonly [remoteIngressByteCursorBrand]: true
 }
 
-export interface RemoteIngressOwnerValidationEvidenceV2<K extends RemoteIngressKindV2> {
+export interface RemoteIngressOwnerValidationEvidence<K extends RemoteIngressKind> {
   readonly kind: K
-  readonly scope: DocumentScopeV2 | null
-  readonly subjectDigest: DigestV2
-  readonly ordinarySha256: OrdinarySha256V2
-  readonly exactByteLength: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly ownerArtifactDigest: DigestV2
+  readonly scope: DocumentScope | null
+  readonly subjectDigest: Digest
+  readonly ordinarySha256: OrdinarySha256
+  readonly exactByteLength: Uint64
+  readonly protocolDigest: Digest
+  readonly ownerArtifactDigest: Digest
 }
 
-export interface FullyValidatedRemoteIngressStagingV2<K extends RemoteIngressKindV2> {
-  readonly completed: CompletedRemoteUpdateIngressV2<K>
-  readonly ownerArtifactDigest: DigestV2
-  readonly [fullyValidatedRemoteIngressStagingBrandV2]: true
+export interface FullyValidatedRemoteIngressStaging<K extends RemoteIngressKind> {
+  readonly completed: CompletedRemoteUpdateIngress<K>
+  readonly ownerArtifactDigest: Digest
+  readonly [fullyValidatedRemoteIngressStagingBrand]: true
 }
 
-export interface RemoteImmutableIngressObjectPortEvidenceV2<K extends RemoteIngressKindV2> {
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly exactManifestDigest: DigestV2
-  readonly signedOfferEvidenceClosureRecordDigest: DigestV2
-  readonly reservationRecordDigest: DigestV2
-  readonly finalChunkSetHeadRecordDigest: DigestV2
-  readonly durableChunkSetDigest: DigestV2
+export interface RemoteImmutableIngressObjectPortEvidence<K extends RemoteIngressKind> {
+  readonly stableKey: StableRemoteTransferKey
+  readonly exactManifestDigest: Digest
+  readonly signedOfferEvidenceClosureRecordDigest: Digest
+  readonly reservationRecordDigest: Digest
+  readonly finalChunkSetHeadRecordDigest: Digest
+  readonly durableChunkSetDigest: Digest
   readonly kind: K
-  readonly scope: DocumentScopeV2 | null
-  readonly subjectDigest: DigestV2
-  readonly ordinarySha256: OrdinarySha256V2
-  readonly exactByteLength: Uint64V2
-  readonly immutableObjectDigest: DigestV2
-  readonly quota: RemoteIngressQuotaReservationPortEvidenceV2
+  readonly scope: DocumentScope | null
+  readonly subjectDigest: Digest
+  readonly ordinarySha256: OrdinarySha256
+  readonly exactByteLength: Uint64
+  readonly immutableObjectDigest: Digest
+  readonly quota: RemoteIngressQuotaReservationPortEvidence
 }
 
-export interface RemoteImmutableIngressObjectReceiptV2<K extends RemoteIngressKindV2>
-  extends RemoteImmutableIngressObjectPortEvidenceV2<K> {
-  readonly [remoteImmutableIngressObjectReceiptBrandV2]: true
+export interface RemoteImmutableIngressObjectReceipt<K extends RemoteIngressKind>
+  extends RemoteImmutableIngressObjectPortEvidence<K> {
+  readonly [remoteImmutableIngressObjectReceiptBrand]: true
 }
 
-export type PutImmutableCompletedRemoteIngressPortResultV2<K extends RemoteIngressKindV2> =
-  | Readonly<{ status: "durable"; evidence: RemoteImmutableIngressObjectPortEvidenceV2<K> }>
+export type PutImmutableCompletedRemoteIngressPortResult<K extends RemoteIngressKind> =
+  | Readonly<{ status: "durable"; evidence: RemoteImmutableIngressObjectPortEvidence<K> }>
   | Readonly<{
       status: "rejected"
       code: "stale-completed-staging" | "mirror-mismatch" | "durability-failed" | "store-corrupt"
     }>
 
-export interface RemoteIngressImmutableObjectPersistencePortV2 {
-  putImmutableCompletedRemoteIngress<K extends RemoteIngressKindV2>(
-    validated: FullyValidatedRemoteIngressStagingV2<K>,
-  ): Promise<PutImmutableCompletedRemoteIngressPortResultV2<K>>
+export interface RemoteIngressImmutableObjectPersistencePort {
+  putImmutableCompletedRemoteIngress<K extends RemoteIngressKind>(
+    validated: FullyValidatedRemoteIngressStaging<K>,
+  ): Promise<PutImmutableCompletedRemoteIngressPortResult<K>>
 }
 
-export interface RemoteTransferAttemptBindingV2<K extends RemoteIngressKindV2> {
+export interface RemoteTransferAttemptBinding<K extends RemoteIngressKind> {
   readonly kind: K
-  readonly stableKey: StableRemoteTransferKeyV2
-  readonly projectId: ProjectIdV2
-  readonly projectEpoch: Id128V2
-  readonly sourceMemberId: MemberIdV2
-  readonly exactManifestDigest: DigestV2
-  readonly subjectDigest: DigestV2
-  readonly [remoteTransferAttemptBindingBrandV2]: true
+  readonly stableKey: StableRemoteTransferKey
+  readonly projectId: ProjectId
+  readonly projectEpoch: Id128
+  readonly sourceMemberId: MemberId
+  readonly exactManifestDigest: Digest
+  readonly subjectDigest: Digest
+  readonly [remoteTransferAttemptBindingBrand]: true
 }
 
-export interface RemoteTransferAttemptBindingFactoryV2 {
-  bind<K extends RemoteIngressKindV2>(input: {
+export interface RemoteTransferAttemptBindingFactory {
+  bind<K extends RemoteIngressKind>(input: {
     readonly kind: K
-    readonly stableKey: StableRemoteTransferKeyV2
-    readonly projectId: ProjectIdV2
-    readonly projectEpoch: Id128V2
-    readonly sourceMemberId: MemberIdV2
-    readonly exactManifestDigest: DigestV2
-    readonly subjectDigest: DigestV2
-  }): RemoteTransferAttemptBindingV2<K>
-  readonly [remoteTransferAttemptBindingFactoryBrandV2]: true
+    readonly stableKey: StableRemoteTransferKey
+    readonly projectId: ProjectId
+    readonly projectEpoch: Id128
+    readonly sourceMemberId: MemberId
+    readonly exactManifestDigest: Digest
+    readonly subjectDigest: Digest
+  }): RemoteTransferAttemptBinding<K>
+  readonly [remoteTransferAttemptBindingFactoryBrand]: true
 }
 
-export interface ReplicaCheckpointCoreV2 {
-  readonly format: "convax.replica-checkpoint-core/2"
-  readonly scope: DocumentScopeV2
-  readonly checkpointId: Id128V2
-  readonly authorMemberId: MemberIdV2
-  readonly authorReplicaId: ReplicaIdV2
-  readonly authorActorId: ActorIdV2
-  readonly authorAuthorizationDigest: DigestV2
-  readonly directParentCheckpointDigests: readonly DigestV2[]
-  readonly baseFrontierDigest: DigestV2
-  readonly computedFrontierDigest: DigestV2
-  readonly actorHeadBoundaryDigest: DigestV2
-  readonly stateVectorDigest: DigestV2
-  readonly canonicalStateDigest: DigestV2
-  readonly fullUpdateDigest: DigestV2
-  readonly fullUpdateByteLength: Uint64V2
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
+export interface ReplicaCheckpointCore {
+  readonly format: "convax.replica-checkpoint-core"
+  readonly scope: DocumentScope
+  readonly checkpointId: Id128
+  readonly authorMemberId: MemberId
+  readonly authorReplicaId: ReplicaId
+  readonly authorActorId: ActorId
+  readonly authorAuthorizationDigest: Digest
+  readonly directParentCheckpointDigests: readonly Digest[]
+  readonly baseFrontierDigest: Digest
+  readonly computedFrontierDigest: Digest
+  readonly actorHeadBoundaryDigest: Digest
+  readonly stateVectorDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly fullUpdateDigest: Digest
+  readonly fullUpdateByteLength: Uint64
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly validationArtifactSetDigest: Digest
 }
 
-export interface ReplicaCheckpointV2 {
-  readonly format: "convax.replica-checkpoint/2"
-  readonly core: ReplicaCheckpointCoreV2
-  readonly coreDigest: DigestV2
-  readonly replicaSignature: SignatureV2
+export interface ReplicaCheckpoint {
+  readonly format: "convax.replica-checkpoint"
+  readonly core: ReplicaCheckpointCore
+  readonly coreDigest: Digest
+  readonly replicaSignature: Signature
 }
 
-export interface CheckpointContentCertificateCoreV2 {
-  readonly format: "convax.checkpoint-content-certificate-core/2"
-  readonly scope: DocumentScopeV2
-  readonly checkpointDigest: DigestV2
-  readonly parentCertificateDigests: readonly DigestV2[]
-  readonly computedFrontierDigest: DigestV2
-  readonly actorHeadBoundaryDigest: DigestV2
-  readonly stateVectorDigest: DigestV2
-  readonly canonicalStateDigest: DigestV2
-  readonly fullUpdateDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly schemaDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
-  readonly trustBundleDigest: DigestV2
+export interface CheckpointContentCertificateCore {
+  readonly format: "convax.checkpoint-content-certificate-core"
+  readonly scope: DocumentScope
+  readonly checkpointDigest: Digest
+  readonly parentCertificateDigests: readonly Digest[]
+  readonly computedFrontierDigest: Digest
+  readonly actorHeadBoundaryDigest: Digest
+  readonly stateVectorDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly fullUpdateDigest: Digest
+  readonly protocolDigest: Digest
+  readonly schemaDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly validationArtifactSetDigest: Digest
+  readonly trustBundleDigest: Digest
   readonly contentStatus: "service-validated-causal-closure"
   readonly serviceKeyPurpose: "content-attestation"
   readonly serviceKeyId: string
 }
 
-export interface CheckpointContentCertificateV2 {
-  readonly format: "convax.checkpoint-content-certificate/2"
-  readonly core: CheckpointContentCertificateCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+export interface CheckpointContentCertificate {
+  readonly format: "convax.checkpoint-content-certificate"
+  readonly core: CheckpointContentCertificateCore
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }
 
-export interface StableCheckpointSetCoreV2 {
-  readonly format: "convax.stable-checkpoint-set-core/2"
-  readonly scope: DocumentScopeV2
-  readonly priorSetDigest: DigestV2 | null
-  readonly contentCertificateDigests: readonly DigestV2[]
-  readonly mergedFrontierDigest: DigestV2
-  readonly actorHeadBoundaryDigest: DigestV2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly validationArtifactSetDigest: DigestV2
+export interface StableCheckpointSetCore {
+  readonly format: "convax.stable-checkpoint-set-core"
+  readonly scope: DocumentScope
+  readonly priorSetDigest: Digest | null
+  readonly contentCertificateDigests: readonly Digest[]
+  readonly mergedFrontierDigest: Digest
+  readonly actorHeadBoundaryDigest: Digest
+  readonly membershipSnapshotDigest: Digest
+  readonly protocolDigest: Digest
+  readonly validationArtifactSetDigest: Digest
 }
 
-export interface ReplicaCausalFloorAckCoreV2 {
-  readonly format: "convax.replica-causal-floor-ack-core/2"
-  readonly stableSetCoreDigest: DigestV2
-  readonly replicaId: ReplicaIdV2
-  readonly actorId: ActorIdV2
-  readonly replicaActorCredentialDigest: DigestV2
-  readonly actorHeadAtAck: CausalHeadRefV2 | null
+export interface ReplicaCausalFloorAckCore {
+  readonly format: "convax.replica-causal-floor-ack-core"
+  readonly stableSetCoreDigest: Digest
+  readonly replicaId: ReplicaId
+  readonly actorId: ActorId
+  readonly replicaActorCredentialDigest: Digest
+  readonly actorHeadAtAck: CausalHeadRef | null
   readonly durableCheckpoint: true
   readonly validatedExactClosure: true
   readonly installedMonotonicFloor: true
 }
 
-export interface ReplicaCausalFloorAckV2 {
-  readonly format: "convax.replica-causal-floor-ack/2"
-  readonly core: ReplicaCausalFloorAckCoreV2
-  readonly coreDigest: DigestV2
-  readonly replicaSignature: SignatureV2
+export interface ReplicaCausalFloorAck {
+  readonly format: "convax.replica-causal-floor-ack"
+  readonly core: ReplicaCausalFloorAckCore
+  readonly coreDigest: Digest
+  readonly replicaSignature: Signature
 }
 
-export interface PrunableCheckpointSetCertificateCoreV2 {
-  readonly format: "convax.prunable-checkpoint-set-certificate-core/2"
-  readonly stableSetCore: StableCheckpointSetCoreV2
-  readonly floorAckDigests: readonly DigestV2[]
+export interface PrunableCheckpointSetCertificateCore {
+  readonly format: "convax.prunable-checkpoint-set-certificate-core"
+  readonly stableSetCore: StableCheckpointSetCore
+  readonly floorAckDigests: readonly Digest[]
   readonly contentStatus: "service-validated-and-all-editors-acknowledged"
-  readonly trustBundleDigest: DigestV2
+  readonly trustBundleDigest: Digest
   readonly serviceKeyPurpose: "checkpoint-stability"
   readonly serviceKeyId: string
 }
 
-export interface PrunableCheckpointSetCertificateV2 {
-  readonly format: "convax.prunable-checkpoint-set-certificate/2"
-  readonly core: PrunableCheckpointSetCertificateCoreV2
-  readonly coreDigest: DigestV2
-  readonly serviceSignature: SignatureV2
+export interface PrunableCheckpointSetCertificate {
+  readonly format: "convax.prunable-checkpoint-set-certificate"
+  readonly core: PrunableCheckpointSetCertificateCore
+  readonly coreDigest: Digest
+  readonly serviceSignature: Signature
 }

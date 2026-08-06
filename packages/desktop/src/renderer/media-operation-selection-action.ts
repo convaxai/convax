@@ -8,8 +8,8 @@ import {
   type CanvasSelectionActionContext,
 } from "@convax/canvas"
 import {
-  assertResourceRefV2,
-  canvasProjectionResourceMetadataKeyV2,
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
 } from "@convax/canvas/collaboration"
 import { getProjectResourceReference } from "@convax/project/canvas"
 import { parseProjectUri } from "@convax/uri"
@@ -382,11 +382,11 @@ function projectMediaReferenceIdentity(node: CanvasNode, output: CanvasGeneratio
     metadata &&
     typeof metadata === "object" &&
     !Array.isArray(metadata) &&
-    Object.hasOwn(metadata, canvasProjectionResourceMetadataKeyV2)
+    Object.hasOwn(metadata, canvasProjectionResourceMetadataKey)
   ) {
-    const resource = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+    const resource = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
     try {
-      assertResourceRefV2(resource)
+      assertResourceRef(resource)
       parseProjectUri(resource.uri)
     } catch {
       return undefined

@@ -99,10 +99,25 @@ contract and its routed references.
 - React Flow projection, measurements, selection, viewport, and gesture previews
   remain transient Canvas-owned view state. Desktop supplies shell and adapters,
   not a competing document store.
-- Collaboration composition must load the active V11/R1 release and its complete
-  pinned historical V10/R5 dependency before dual-version dispatch. Missing or
-  mismatched identity-chain members fail closed. Older drafts, receipts, code, or
-  portable JSON bytes are evidence only and never runtime fallback.
+- Collaboration composition loads only the packaged current protocol descriptor and
+  composes exactly one kernel, one codec, and one document session type. There is no
+  authority selector, release pair, dual-version dispatch, promotion bridge, or
+  successor runtime, and new/open/recover/share use the same composition. A descriptor
+  that is missing or does not match the build fails closed; archived authority
+  releases, drafts, receipts, code, or portable JSON bytes are evidence only and never
+  runtime fallback. Desktop build and packaging never stage or read
+  `docs/superpowers/specs/authorities/**`.
+- Unsupported collaboration bytes return one `unsupported-project-data` result. Never
+  infer a protocol from a directory, filename, or durable record shape, and never
+  reset, re-sign, or reinterpret those bytes without the explicit user-confirmed reset
+  that retains a recoverable backup.
+- Plugin surface creation crosses processes as one narrow trusted method carrying only
+  Project, Canvas, and Plugin ids. Main resolves one exact current ActiveSet lease,
+  derives renderer/size/schema/validation-artifact/snapshot and initial state from that
+  leased manifest, rechecks the lease immediately before the durable commit, and calls
+  the Canvas business command. Renderer and Preload never send or build a version,
+  digest, node id, position, complete Canvas node, or initial state, and no renderer
+  node factory or generic node-insert path substitutes for that command.
 - Product Agent tools and direct UI/Plugin/native calls are thin adapters over the
   same typed Project, Canvas, Workbench, and generation capabilities.
 - Card conversations infer only direct incoming file nodes. Image/video replacement

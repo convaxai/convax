@@ -67,8 +67,8 @@ describe("ProjectController", () => {
       lastOpenedAt: 9,
       name: "Legacy",
       recovery: {
-        legacyPaths: [".convax/canvases/catalog.json"],
-        status: "unsupported-portable-project-version",
+        unsupportedPaths: [".convax/canvases/catalog.json"],
+        status: "unsupported-project-data",
       },
       rootPath: "/legacy",
     }
@@ -130,8 +130,8 @@ describe("ProjectController", () => {
       lastOpenedAt: 9,
       name: id,
       recovery: {
-        legacyPaths: [`.convax/canvases/${id}.json`],
-        status: "unsupported-portable-project-version",
+        unsupportedPaths: [`.convax/canvases/${id}.json`],
+        status: "unsupported-project-data",
       },
       rootPath: `/${id}`,
     })
@@ -345,7 +345,7 @@ describe("ProjectController", () => {
       id: "legacy",
       lastOpenedAt: 0,
       name: "Legacy",
-      recovery: { legacyPaths: [".convax/canvases/catalog.json"], status: "unsupported-portable-project-version" },
+      recovery: { unsupportedPaths: [".convax/canvases/catalog.json"], status: "unsupported-project-data" },
       rootPath: "/legacy",
     }
     const openProject = mock(async (): Promise<ProjectSelectionResult> => ({

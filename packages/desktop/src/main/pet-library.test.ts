@@ -31,7 +31,7 @@ describe("parseInstalledPetLibrary", () => {
   })
 
   test.each([
-    ["wrong schema", { ...library(), schema: "convax.pet-library/2" }],
+    ["wrong schema", { ...library(), schema: "convax.pet-library" }],
     ["unknown root field", { ...library(), source: "legacy" }],
     ["empty library", library([])],
     ["too many pets", library(Array.from({ length: 65 }, (_, index) => pet(`pet-${index}`)))],

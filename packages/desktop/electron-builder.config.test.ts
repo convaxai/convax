@@ -67,9 +67,9 @@ describe("Desktop package contents", () => {
     expect(config.files).toEqual(["out/**/*", "resources/**/*", "package.json", "!node_modules/**/*"])
     expect(config.npmRebuild).toBe(false)
     expect(config.extraResources).toContainEqual({
-      from: ".packaging/collaboration-authority",
-      to: "collaboration-authority",
-      filter: ["**/*"],
+      from: ".packaging/collaboration-protocol",
+      to: "collaboration-protocol",
+      filter: ["current.json"],
     })
     expect(config.extraResources).toContainEqual({
       from: ".packaging/marketplace-product",

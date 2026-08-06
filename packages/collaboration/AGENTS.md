@@ -4,23 +4,26 @@
 It has no knowledge of a Project, Canvas, Plugin, PeerJS peer, identity provider,
 Electron, filesystem, React, or a concrete document schema.
 
+This package implements exactly one current collaboration protocol. There is no
+second decoder, kernel, reducer, codec strategy, authority selector, release pair,
+dual-version dispatcher, promotion bridge, or successor runtime, and none may be
+added back.
+
 ## Owns
 
-- Historical V2 and selected V3 ids/scopes/stamps, restricted JCS, exact Yjs 13.6.31
-  update-v1 codecs, bounded envelopes, causal frames/frontiers, exact-base
-  validation, protocol-authority selection/dispatch, the binary `CVXCAR02`
-  historical checkpoint-carrier structural codec, and checkpoint/causal-floor
-  primitives.
+- One current protocol descriptor and its exact `protocolDigest`, generated
+  deterministically from the owner schemas and recomputed during build/CI.
+- One set of ids/scopes/stamps, one restricted JCS canonicalization, the exact
+  Yjs 13.6.31 update-v1 codec, bounded envelopes, causal frames/frontiers,
+  exact-base validation, the binary `CVXCAR02` checkpoint-carrier structural codec,
+  and checkpoint/causal-floor primitives.
 - One Main-owned `replicaDoc` per shard plus one isolated `candidateDoc` per command.
   Owner packages inject their exact closed schema, reducer, canonicalizer, evidence,
   and external-fact ports.
 - The final long-lived-replica-signed causal frame and its object/outbox/journal/head
   ordering contract. Replication outboxes and ACKs are metadata, never another doc.
 - Transaction-origin separation, typed persistence/journal ports without an I/O
-  implementation, and the transient `SessionUndoCoordinatorV2`.
-- The exact V11/R1 four-owner artifact manifest and
-  `ProtocolSchemaBundleV3.coreDigest`/`protocolDigest`, plus the complete historical
-  V10/R5 authority pinned by that release.
+  implementation, and one transient session undo coordinator.
 
 ## Does not own
 
@@ -30,7 +33,9 @@ Electron, filesystem, React, or a concrete document schema.
   applied to an isolated candidate and admitted only as the exact signed frame.
 - Cross-process writer coordination, durable-head semantics, fsync, or retry policy.
 - Centralized edit sequencing, Merkle edit-log ordering, global shard authority,
-  or the legacy multi-document promotion model.
+  or a multi-document promotion model.
+- Compatibility with retired experimental protocols. This package never ships a
+  fallback decoder for bytes it did not produce.
 
 ## Invariants
 
@@ -50,21 +55,20 @@ Electron, filesystem, React, or a concrete document schema.
   coordinator. Remote/bootstrap/recovery frames never enter or reorder its stacks.
   Owners materialize a new semantic inverse/forward intent; raw Y.UndoManager bytes
   never enter candidate, replica, journal, or wire.
-- Missing or mismatched files in the sealed V11/R1 release or its pinned V10/R5
-  dependency fail closed before dispatch, decode, or sign as
-  `protocol-schema-bundle-unavailable`.
-- The verified V11 selector activates V3 only for R1's narrow promotion of a
-  verified pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project
-  with one deterministic default Canvas. Shared, non-pristine, incomplete, or
-  ambiguous V10 Projects continue through the pinned historical V2 authority.
-  Direct-new V3, additional V3 Canvas creation, and V3 sharing are unavailable.
-- Never pass V3 evidence into the V2 kernel, dispatch either protocol without the
-  verified V11 release and historical pin, or infer activation from public exports,
-  directory presence, durable records, source constants, or passing tests.
-- The non-active V3 sharing-handoff codec binds one exact Project epoch, owner
-  predecessor, ProjectIndex head, sorted live-Canvas head closure, initial Team
-  artifact digests, and successor protocol. Its receipt requires owner and trusted
-  service signatures over one core digest; handoff-id retries are byte-idempotent
-  and any alternate bytes are equivocation.
+- Dispatch, decode, and signing require the current descriptor to match the built
+  digest exactly. A missing or drifted descriptor fails closed before any of them.
+- Frame magic, wire format, or `protocolDigest` mismatch resolves to one
+  `unsupported-project-data` result. Never try another decoder, guess a layout,
+  reinterpret unknown bytes, or re-sign, renumber, or rewrite them.
+- Wire identity is unversioned and carries no parallel `/2` or `/3` discriminator.
+  Version-suffixed identifiers that still exist here are legacy names of this one
+  implementation; renaming them is mechanical cleanup and never admits a second
+  protocol.
+- Never select behavior from directory presence, a durable record shape, public
+  exports, source constants, a pointer file, an archived authority release, or
+  passing tests. `docs/superpowers/specs/authorities/**` is non-runtime archive and
+  review material and must not be read, staged, or imported by this package.
+- Schema changes change the descriptor digest. They never add a second codec, a
+  migration decoder, or a compatibility branch.
 
 Run `bun typecheck && bun test`.

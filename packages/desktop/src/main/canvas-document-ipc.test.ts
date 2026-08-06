@@ -4,23 +4,20 @@ import type {
   CanvasApplicationQueryResult,
 } from "@convax/canvas/application"
 import {
-  canvasProjectionResourceMetadataKeyV2,
-  type BoundedOperationReceiptV2,
+  canvasProjectionResourceMetadataKey,
+  type BoundedOperationReceipt,
 } from "@convax/canvas/collaboration"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
 } from "@convax/collaboration"
-import { parseProjectResourceReferenceV2 } from "@convax/project"
-import {
-  projectIndexResourceReferenceDigestV2,
-  projectResourceReferenceKey,
-} from "@convax/project/canvas"
+import { parseProjectIndexResourceReference, projectIndexResourceReferenceDigest } from "@convax/project"
+import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { ProjectTextFileConflictError } from "@convax/project-files"
 
 import { canvasTextResourceConflictKind } from "../canvas-resource-private-contract"
@@ -36,16 +33,16 @@ type InvokeHandler = (event: TestEvent, input: unknown) => unknown
 const handlers = new Map<string, InvokeHandler>()
 const event = { sender: { id: 7 } }
 const document = createCanvasDocument({ id: "canvas-main" })
-const receipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
-  actorId: parseActorIdV2("A".repeat(43)),
-  operationId: parseId128V2("A".repeat(22)),
-  intentDigest: parseDigestV2("d".repeat(64)),
-  baseFrontierDigest: parseDigestV2("e".repeat(64)),
-  intentKind: "canvas.elements.remove/2",
+const receipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
+  actorId: parseActorId("A".repeat(43)),
+  operationId: parseId128("A".repeat(22)),
+  intentDigest: parseDigest("d".repeat(64)),
+  baseFrontierDigest: parseDigest("e".repeat(64)),
+  intentKind: "canvas.elements.remove",
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+  historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 
 beforeEach(() => {
@@ -237,13 +234,13 @@ describe("Canvas text resource IPC", () => {
       nodes: [createTextNode({
         id: "text-node",
         position: { x: 0, y: 0 },
-        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
+        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
         name: "a.md",
         resourceState: { status: "ready" },
       })],
     })
     const nextContent = "after"
-    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const compareAndReplaceTextFile = mock(async () => ({ contentRevision: nextRevision }))
     const prepared = {
       items: [{
@@ -304,7 +301,7 @@ describe("Canvas text resource IPC", () => {
       id: "canvas-main",
       nodes: [createTextNode({
         id: "text-node", position: { x: 0, y: 0 }, name: "a.md", resourceState: { status: "ready" },
-        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
+        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
       })],
     })
     const prepare = mock()
@@ -340,12 +337,12 @@ describe("Canvas text resource IPC", () => {
   test("finishes ProjectIndex and Canvas publication when retry observes the exact already-written bytes", async () => {
     const fixture = canonicalTextResource("before")
     const nextContent = "after"
-    const nextRevision = ordinarySha256V2(new TextEncoder().encode(nextContent))
+    const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const textDocument = createCanvasDocument({
       id: "canvas-main",
       nodes: [createTextNode({
         id: "text-node",
-        metadata: { [canvasProjectionResourceMetadataKeyV2]: fixture.resource },
+        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
         name: "a.md",
         position: { x: 0, y: 0 },
         resourceState: { status: "ready" },
@@ -405,12 +402,12 @@ function commandResult(): CanvasApplicationCommandResult {
 }
 
 function canonicalTextResource(content: string) {
-  const projectId = parseProjectIdV2("project_0123456789abcdef0123456789abcdef")
-  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
-  const digest = ordinarySha256V2(new TextEncoder().encode(content))
+  const projectId = parseProjectId("project_0123456789abcdef0123456789abcdef")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(new TextEncoder().encode(content))
   const fileId = `pf_${"a".repeat(64)}`
-  const reference = parseProjectResourceReferenceV2({
-    format: "convax.project-resource-reference/2",
+  const reference = parseProjectIndexResourceReference({
+    format: "convax.project-resource-reference",
     projectId,
     projectEpoch,
     entryFileId: fileId,
@@ -418,25 +415,25 @@ function canonicalTextResource(content: string) {
     versionId: `pv_${"b".repeat(64)}`,
     canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
     blob: {
-      format: "convax.blob-ref/2",
+      format: "convax.blob-ref",
       algorithm: "sha256",
       digest,
       byteLength: String(new TextEncoder().encode(content).byteLength) as never,
       mime: "text/markdown",
     },
-    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode(`version:${digest}`)),
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
   })
   return {
     projectId,
     reference,
     resource: {
-      format: "convax.canvas-resource-ref/2" as const,
+      format: "convax.canvas-resource-ref" as const,
       uri: reference.canonicalUri,
       mediaClass: "text" as const,
       mime: reference.blob.mime,
       byteLength: reference.blob.byteLength,
       contentDigest: reference.blob.digest,
-      ownerProofDigest: projectIndexResourceReferenceDigestV2(reference),
+      ownerProofDigest: projectIndexResourceReferenceDigest(reference),
     },
   }
 }

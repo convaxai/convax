@@ -1,14 +1,14 @@
 import { describe, expect, test } from "bun:test"
-import { parseDigestV2, parseProjectIdV2 } from "@convax/collaboration"
+import { parseDigest, parseProjectId } from "@convax/collaboration"
 import {
   CollaborationRendezvousServiceV2,
   createCollaborationApiV2Handler,
   createSessionDirectoryAuthorizationFactoryV2,
 } from "../src"
 
-const projectId = parseProjectIdV2("project-a")
-const credentialDigest = parseDigestV2("1".repeat(64))
-const directory = Object.freeze({ format: "convax.active-peer-directory/2", marker: "signed-directory" })
+const projectId = parseProjectId("project-a")
+const credentialDigest = parseDigest("1".repeat(64))
+const directory = Object.freeze({ format: "convax.active-peer-directory", marker: "signed-directory" })
 
 function handler(options?: { readonly authorize?: boolean }) {
   const rendezvous = {
@@ -25,7 +25,7 @@ function handler(options?: { readonly authorize?: boolean }) {
       })
       return factory.authorize({
         projectId: input.projectId,
-        credentialDigest: parseDigestV2(input.credentialDigest),
+        credentialDigest: parseDigest(input.credentialDigest),
         evidence: input.request,
       })
     },

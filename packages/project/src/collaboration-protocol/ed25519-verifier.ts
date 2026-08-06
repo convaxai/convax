@@ -1,4 +1,4 @@
-export type Ed25519VerificationFailureV2 =
+export type Ed25519VerificationFailure =
   | "invalid-public-key-length"
   | "invalid-signature-length"
   | "invalid-digest-length"
@@ -10,18 +10,18 @@ export type Ed25519VerificationFailureV2 =
   | "signature-mismatch"
   | "backend-unavailable"
 
-export type Ed25519VerificationResultV2 =
+export type Ed25519VerificationResult =
   | { readonly ok: true }
-  | { readonly ok: false; readonly code: Ed25519VerificationFailureV2 }
+  | { readonly ok: false; readonly code: Ed25519VerificationFailure }
 
-export interface Ed25519VerifyDigestInputV2 {
+export interface Ed25519VerifyDigestInput {
   readonly publicKeyBytes: Uint8Array
   readonly signatureBytes: Uint8Array
   readonly purposeDigestBytes: Uint8Array
 }
 
-export interface Ed25519VerifierV2 {
-  verifyDigest(input: Ed25519VerifyDigestInputV2): Promise<Ed25519VerificationResultV2>
+export interface Ed25519Verifier {
+  verifyDigest(input: Ed25519VerifyDigestInput): Promise<Ed25519VerificationResult>
 }
 
 const fieldPrime = (1n << 255n) - 19n
@@ -63,7 +63,7 @@ function copyForWebCrypto(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   return copy
 }
 
-function pointFailure(bytes: Uint8Array, subject: "public-key" | "signature-r"): Ed25519VerificationFailureV2 | null {
+function pointFailure(bytes: Uint8Array, subject: "public-key" | "signature-r"): Ed25519VerificationFailure | null {
   const y = bytes.slice()
   y[31] = y[31]! & 0x7f
   if (littleEndianInteger(y) >= fieldPrime) {
@@ -75,11 +75,11 @@ function pointFailure(bytes: Uint8Array, subject: "public-key" | "signature-r"):
   return null
 }
 
-export function createWebCryptoEd25519VerifierV2(
+export function createWebCryptoEd25519Verifier(
   subtle: SubtleCrypto | null | undefined = globalThis.crypto?.subtle,
-): Ed25519VerifierV2 {
-  const verifier: Ed25519VerifierV2 = {
-    async verifyDigest(input: Ed25519VerifyDigestInputV2): Promise<Ed25519VerificationResultV2> {
+): Ed25519Verifier {
+  const verifier: Ed25519Verifier = {
+    async verifyDigest(input: Ed25519VerifyDigestInput): Promise<Ed25519VerificationResult> {
       if (!(input.publicKeyBytes instanceof Uint8Array) || input.publicKeyBytes.byteLength !== 32) {
         return { ok: false, code: "invalid-public-key-length" }
       }

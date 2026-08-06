@@ -16,13 +16,17 @@ import {
   pluginMaterializationIpcChannels,
   type PluginMaterializationRendererClient,
 } from "../plugin-materialization-contracts"
+import {
+  pluginSurfaceIpcChannels,
+  type PluginSurfaceRendererClient,
+} from "../plugin-surface-contracts"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
 import type { PetDisplayedSession, PetNavigationRequest, PetNavigationTarget } from "../pet-contracts"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
-import { createCanvasSessionPreloadClientV2 } from "./canvas-session-client"
-import { createProjectTeamCollaborationPreloadClientV2 } from "./project-team-collaboration-client"
+import { createCanvasSessionPreloadClient } from "./canvas-session-client"
+import { createProjectTeamCollaborationPreloadClient } from "./project-team-collaboration-client"
 import {
   canvasRendererChannels,
   type CanvasRendererClient,
@@ -362,11 +366,11 @@ const projectCanvasClient = {
 const projectsClient = {
   ...projectClient,
   canvases: projectCanvasClient,
-  collaboration: createProjectTeamCollaborationPreloadClientV2(ipcRenderer),
+  collaboration: createProjectTeamCollaborationPreloadClient(ipcRenderer),
   recovery: projectRecoveryClient,
 } satisfies ProjectLifecycleClient & {
   canvases: ProjectCanvasClient
-  collaboration: import("../project-team-collaboration-contracts").ProjectTeamCollaborationClientV2
+  collaboration: import("../project-team-collaboration-contracts").ProjectTeamCollaborationClient
   recovery: ProjectCollaborationRecoveryClient
 }
 
@@ -404,7 +408,7 @@ const canvasDocumentClient = {
   load: (input) => ipcRenderer.invoke(canvasDocumentIpcChannels.load, input),
 } satisfies CanvasRendererDocumentClient
 
-const canvasSessionClient = createCanvasSessionPreloadClientV2({
+const canvasSessionClient = createCanvasSessionPreloadClient({
   invoke: (channel, input) => ipcRenderer.invoke(channel, input),
   on: (channel, listener) => ipcRenderer.on(channel, listener),
   removeListener: (channel, listener) => ipcRenderer.removeListener(channel, listener),
@@ -509,6 +513,10 @@ const pluginMaterializationClient = {
   materialize: (input) => ipcRenderer.invoke(pluginMaterializationIpcChannels.materialize, input),
 } satisfies PluginMaterializationRendererClient
 
+const pluginSurfaceClient = {
+  create: (input) => ipcRenderer.invoke(pluginSurfaceIpcChannels.create, input),
+} satisfies PluginSurfaceRendererClient
+
 const pluginServiceClient = {
   authorize: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.authorize, input),
   cancelAuthorization: (input) => ipcRenderer.invoke(pluginServiceIpcChannels.cancelAuthorization, input),
@@ -609,6 +617,7 @@ contextBridge.exposeInMainWorld("convax", {
     documents: canvasDocumentClient,
     externalMediaDrag: canvasExternalMediaDragClient,
     pluginMaterialization: pluginMaterializationClient,
+    pluginSurfaces: pluginSurfaceClient,
     renderer: canvasRendererClient,
     sessions: canvasSessionClient,
     resources: canvasResourceClient,

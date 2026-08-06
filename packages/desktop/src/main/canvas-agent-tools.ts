@@ -19,14 +19,14 @@ import {
 } from "@convax/canvas/view"
 import {
   requireProjectResourceReference,
-  type ProjectCanvasCatalogProjectionV2,
+  type ProjectCanvasCatalogProjection,
 } from "@convax/project/canvas"
 import type { CanvasRendererBridge } from "./canvas-renderer-bridge"
 
 type CanvasApplicationPort = Pick<CanvasApplicationService, "execute" | "query">
 type CanvasResourcePort = Pick<CanvasResourceBusinessService, "addResources">
 interface ProjectCanvasPort {
-  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+  getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjection>
 }
 
 function commandSchema(type: string, properties: Record<string, unknown>, required: readonly string[] = []) {

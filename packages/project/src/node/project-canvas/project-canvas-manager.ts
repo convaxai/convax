@@ -1,18 +1,18 @@
-import { parseCanvasIdV2, parseProjectIdV2 } from "@convax/collaboration"
+import { parseCanvasId, parseProjectId } from "@convax/collaboration"
 import {
-  parseProjectCanvasCatalogProjectionV2,
-  validateProjectCanvasTitleV2,
-  type ProjectCanvasCatalogProjectionV2,
-  type ProjectCanvasRouteCommandResultV2,
-  type ProjectCanvasRouteCommandV2,
-  type ProjectIndexCanvasApplicationPortV2,
+  parseProjectCanvasCatalogProjection,
+  validateProjectCanvasTitle,
+  type ProjectCanvasCatalogProjection,
+  type ProjectCanvasRouteCommandResult,
+  type ProjectCanvasRouteCommand,
+  type ProjectIndexCanvasApplicationPort,
 } from "../../canvas/application"
 
 export type {
-  ProjectCanvasCatalogProjectionV2,
-  ProjectCanvasRouteCommandResultV2,
-  ProjectCanvasRouteCommandV2,
-  ProjectIndexCanvasApplicationPortV2,
+  ProjectCanvasCatalogProjection,
+  ProjectCanvasRouteCommandResult,
+  ProjectCanvasRouteCommand,
+  ProjectIndexCanvasApplicationPort,
 } from "../../canvas/application"
 
 /**
@@ -22,7 +22,7 @@ export type {
  * raw update and owns no catalog persistence.
  */
 export class ProjectCanvasRouteCommandRejectedErrorV2 extends Error {
-  constructor(readonly code: Extract<ProjectCanvasRouteCommandResultV2, { status: "rejected" }>["code"]) {
+  constructor(readonly code: Extract<ProjectCanvasRouteCommandResult, { status: "rejected" }>["code"]) {
     super(`Project Canvas route command was rejected: ${code}`)
     this.name = "ProjectCanvasRouteCommandRejectedErrorV2"
   }
@@ -30,20 +30,20 @@ export class ProjectCanvasRouteCommandRejectedErrorV2 extends Error {
 
 /** Thin query/command facade; never a catalog cache or native-storage adapter. */
 export class NodeProjectCanvasManager {
-  constructor(private readonly application: ProjectIndexCanvasApplicationPortV2) {}
+  constructor(private readonly application: ProjectIndexCanvasApplicationPort) {}
 
-  async getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjectionV2> {
-    const projectId = parseProjectIdV2(input.projectId)
-    return parseProjectCanvasCatalogProjectionV2(await this.application.queryCatalog({ projectId }), projectId)
+  async getCanvasCatalog(input: { readonly projectId: string }): Promise<ProjectCanvasCatalogProjection> {
+    const projectId = parseProjectId(input.projectId)
+    return parseProjectCanvasCatalogProjection(await this.application.queryCatalog({ projectId }), projectId)
   }
 
   createCanvas(input: { readonly projectId: string; readonly name?: string; readonly signal?: AbortSignal }) {
     return this.submit(
       input.projectId,
       {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.create/2",
-        title: validateProjectCanvasTitleV2(input.name ?? "Canvas"),
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.create",
+        title: validateProjectCanvasTitle(input.name ?? "Canvas"),
       },
       input.signal,
     )
@@ -58,10 +58,10 @@ export class NodeProjectCanvasManager {
     return this.submit(
       input.projectId,
       {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.rename/2",
-        canvasId: parseCanvasIdV2(input.canvasId),
-        title: validateProjectCanvasTitleV2(input.name),
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.rename",
+        canvasId: parseCanvasId(input.canvasId),
+        title: validateProjectCanvasTitle(input.name),
       },
       input.signal,
     )
@@ -71,23 +71,23 @@ export class NodeProjectCanvasManager {
     return this.submit(
       input.projectId,
       {
-        format: "convax.project-canvas-route-command/2",
-        kind: "project.canvas.route.tombstone/2",
-        canvasId: parseCanvasIdV2(input.canvasId),
+        format: "convax.project-canvas-route-command",
+        kind: "project.canvas.route.tombstone",
+        canvasId: parseCanvasId(input.canvasId),
       },
       input.signal,
     )
   }
 
-  private async submit(projectIdInput: string, command: ProjectCanvasRouteCommandV2, signal?: AbortSignal) {
+  private async submit(projectIdInput: string, command: ProjectCanvasRouteCommand, signal?: AbortSignal) {
     signal?.throwIfAborted()
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     const result = await this.application.submitRouteCommand({ projectId, command, signal })
     signal?.throwIfAborted()
     if (result.status === "rejected") throw new ProjectCanvasRouteCommandRejectedErrorV2(result.code)
     return Object.freeze({
-      canvasId: parseCanvasIdV2(result.canvasId),
-      catalog: parseProjectCanvasCatalogProjectionV2(result.catalog, projectId),
+      canvasId: parseCanvasId(result.canvasId),
+      catalog: parseProjectCanvasCatalogProjection(result.catalog, projectId),
     })
   }
 }

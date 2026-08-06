@@ -9,7 +9,7 @@ import type {
   ProjectFileContents,
   ProjectFileInfo,
   ProjectMutationResult,
-  ProjectRecoveryStatusV1,
+  ProjectRecoveryStatus,
   ProjectTextFileContents,
   ProjectTextPreviewContents,
 } from "../contracts"
@@ -73,7 +73,7 @@ import {
   readStableProjectUtf8File,
   sameProjectFileSnapshot,
 } from "./stable-project-file"
-import { inspectPortableProjectCutover, PortableProjectResetError } from "./collaboration/portable-cutover"
+import { resolvePortableProjectData, PortableProjectResetError } from "./collaboration/portable-cutover"
 
 export interface NodeProjectManagerOptions {
   caseInsensitivePaths?: boolean
@@ -1098,9 +1098,9 @@ export class NodeProjectManager
 }
 
 async function assertPortableProjectOpenable(projectRoot: string) {
-  const cutover = await inspectPortableProjectCutover(projectRoot)
-  if (cutover.status === "unsupported-portable-project-version") throw cutover.error
-  if (cutover.status === "recovery-required") {
+  const resolution = await resolvePortableProjectData(projectRoot)
+  if (resolution.status === "unsupported-project-data") throw resolution.error
+  if (resolution.status === "recovery-required") {
     throw new PortableProjectResetError(
       "RECOVERY_REQUIRED",
       "Project has an incomplete collaboration reset and cannot be opened",
@@ -1110,16 +1110,16 @@ async function assertPortableProjectOpenable(projectRoot: string) {
 
 async function projectRecoveryProjection(
   projectRoot: string,
-): Promise<Readonly<{ recovery: ProjectRecoveryStatusV1 }> | Record<string, never>> {
-  const cutover = await inspectPortableProjectCutover(projectRoot)
-  if (cutover.status === "current") return Object.freeze({})
-  if (cutover.status === "recovery-required") {
+): Promise<Readonly<{ recovery: ProjectRecoveryStatus }> | Record<string, never>> {
+  const resolution = await resolvePortableProjectData(projectRoot)
+  if (resolution.status === "current") return Object.freeze({})
+  if (resolution.status === "recovery-required") {
     return Object.freeze({ recovery: Object.freeze({ status: "recovery-required" as const }) })
   }
   return Object.freeze({
     recovery: Object.freeze({
-      legacyPaths: Object.freeze([...cutover.error.legacyPaths]),
-      status: "unsupported-portable-project-version" as const,
+      unsupportedPaths: Object.freeze([...resolution.error.unsupportedPaths]),
+      status: "unsupported-project-data" as const,
     }),
   })
 }

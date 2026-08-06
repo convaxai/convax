@@ -1,17 +1,17 @@
 import { describe, expect, mock, test } from "bun:test"
-import type { CanvasIdV2, DigestV2, Id128V2, ProjectIdV2 } from "@convax/collaboration"
+import type { CanvasId, Digest, Id128, ProjectId } from "@convax/collaboration"
 import {
   NodeProjectCanvasManager,
   ProjectCanvasRouteCommandRejectedErrorV2,
-  type ProjectCanvasCatalogProjectionV2,
-  type ProjectIndexCanvasApplicationPortV2,
+  type ProjectCanvasCatalogProjection,
+  type ProjectIndexCanvasApplicationPort,
 } from "./project-canvas-manager"
 
-const projectId = "project-a" as ProjectIdV2
-const liveId = `cv_${"a".repeat(64)}` as CanvasIdV2
-const deletedId = `cv_${"b".repeat(64)}` as CanvasIdV2
-const digest = "c".repeat(64) as DigestV2
-const epoch = Buffer.alloc(16, 1).toString("base64url") as Id128V2
+const projectId = "project-a" as ProjectId
+const liveId = `cv_${"a".repeat(64)}` as CanvasId
+const deletedId = `cv_${"b".repeat(64)}` as CanvasId
+const digest = "c".repeat(64) as Digest
+const epoch = Buffer.alloc(16, 1).toString("base64url") as Id128
 
 describe("NodeProjectCanvasManager", () => {
   test("retains tombstones in the authoritative catalog while exposing only live routes", async () => {
@@ -20,7 +20,7 @@ describe("NodeProjectCanvasManager", () => {
     const manager = new NodeProjectCanvasManager({
       queryCatalog,
       submitRouteCommand: mock(),
-    } as ProjectIndexCanvasApplicationPortV2)
+    } as ProjectIndexCanvasApplicationPort)
 
     const result = await manager.getCanvasCatalog({ projectId })
 
@@ -35,7 +35,7 @@ describe("NodeProjectCanvasManager", () => {
   test("surfaces tombstone rejection without inventing a local catalog mutation", async () => {
     const queryCatalog = mock(async () => projection())
     let submittedKind = ""
-    const submitRouteCommand: ProjectIndexCanvasApplicationPortV2["submitRouteCommand"] = mock(async (input) => {
+    const submitRouteCommand: ProjectIndexCanvasApplicationPort["submitRouteCommand"] = mock(async (input) => {
       submittedKind = input.command.kind
       return { status: "rejected", code: "route-tombstoned" } as const
     })
@@ -45,7 +45,7 @@ describe("NodeProjectCanvasManager", () => {
       ProjectCanvasRouteCommandRejectedErrorV2,
     )
     expect(queryCatalog).not.toHaveBeenCalled()
-    expect(submittedKind).toBe("project.canvas.route.rename/2")
+    expect(submittedKind).toBe("project.canvas.route.rename")
   })
 
   test("rejects a projection that duplicates a route", async () => {
@@ -58,7 +58,7 @@ describe("NodeProjectCanvasManager", () => {
   })
 })
 
-function projection(): ProjectCanvasCatalogProjectionV2 {
+function projection(): ProjectCanvasCatalogProjection {
   const live = {
     canvasId: liveId,
     state: "live" as const,
@@ -76,7 +76,7 @@ function projection(): ProjectCanvasCatalogProjectionV2 {
     routeProjectionDigest: digest,
   }
   return {
-    format: "convax.project-canvas-catalog-projection/2",
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",
     projectId,
     projectEpoch: epoch,

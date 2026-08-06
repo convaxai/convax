@@ -4,7 +4,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { ProjectTextFileConflictError } from "@convax/project-files"
-import { UnsupportedPortableProjectVersion } from "./collaboration/portable-cutover"
+import { UnsupportedProjectDataError } from "./collaboration/portable-cutover"
 import { NodeProjectManager } from "./project-manager"
 import { copyPath } from "./project-manager-helpers"
 import { ProjectPrivateStorageConflictError } from "./project-private-storage"
@@ -66,8 +66,8 @@ describe("NodeProjectManager registry", () => {
     expect(candidate).toMatchObject({
       id: "project_legacy",
       recovery: {
-        legacyPaths: [".convax/canvases/canvas-main/document.json", ".convax/canvases/catalog.json"],
-        status: "unsupported-portable-project-version",
+        unsupportedPaths: [".convax/canvases/canvas-main/document.json", ".convax/canvases/catalog.json"],
+        status: "unsupported-project-data",
       },
     })
 
@@ -75,7 +75,7 @@ describe("NodeProjectManager registry", () => {
     expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")
     expect(await fs.readFile(path.join(legacyRoot, "keep.md"), "utf8")).toBe("ordinary")
     expect((await manager.listProjects()).find((project) => project.id === "project_legacy")?.recovery?.status)
-      .toBe("unsupported-portable-project-version")
+      .toBe("unsupported-project-data")
   })
 
   test("rejects an unsupported registered Project when it is opened again", async () => {
@@ -87,7 +87,7 @@ describe("NodeProjectManager registry", () => {
     await fs.writeFile(path.join(projectRoot, "keep.md"), "ordinary")
     const registryBefore = await fs.readFile(path.join(temporaryRoot, "state", "projects.json"))
 
-    await expect(manager.touchProject(projectId)).rejects.toBeInstanceOf(UnsupportedPortableProjectVersion)
+    await expect(manager.touchProject(projectId)).rejects.toBeInstanceOf(UnsupportedProjectDataError)
 
     expect(await fs.readFile(legacyCatalog, "utf8")).toBe("legacy-catalog")
     expect(await fs.readFile(legacyDocument, "utf8")).toBe("legacy-document")

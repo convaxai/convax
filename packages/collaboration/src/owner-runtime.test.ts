@@ -1,33 +1,33 @@
 import { describe, expect, test } from "bun:test"
 import * as Y from "yjs"
-import { ownerCanonicalizerDescriptorDigestV2 } from "./canonicalizer"
-import { parseDigestV2 } from "./codecs"
-import { PROTOCOL_SCHEMA_ARTIFACTS_V2 } from "./constants"
-import type { OwnerProcessValueFactoryV2, SelectedDocumentOwnerArtifactDefinitionV2 } from "./contracts"
-import { encodeRestrictedJcsV2 } from "./jcs"
+import { ownerCanonicalizerDescriptorDigest } from "./canonicalizer"
+import { parseDigest } from "./codecs"
+import { PROTOCOL_SCHEMA_ARTIFACTS } from "./constants"
+import type { OwnerProcessValueFactory, SelectedDocumentOwnerArtifactDefinition } from "./contracts"
+import { encodeRestrictedJcs } from "./jcs"
 import {
-  assertDocumentOwnerRuntimeV2,
-  assertOwnerExternalFactPortV2,
-  createSelectedDocumentOwnerArtifactFactoryV2,
+  assertDocumentOwnerRuntime,
+  assertOwnerExternalFactPort,
+  createSelectedDocumentOwnerArtifactFactory,
 } from "./owner-runtime"
-import { loadVerifiedTestAuthorityV2 } from "./authority.test-support"
+import { loadVerifiedTestAuthority } from "./authority.test-support"
 
-const SCHEMA = parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[0].artifactDigest)
+const SCHEMA = parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest)
 const descriptor = Object.freeze({
-  format: "convax.owner-canonicalizer-descriptor/2" as const,
+  format: "convax.owner-canonicalizer-descriptor" as const,
   owner: "canvas" as const,
   ownerSchemaDigest: SCHEMA,
-  canonicalStateFormat: "convax.canvas-owner-runtime-test/2",
+  canonicalStateFormat: "convax.canvas-owner-runtime-test",
   canonicalStateCodec: "restricted-jcs-utf8" as const,
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,
 })
-const canonicalizerDigest = ownerCanonicalizerDescriptorDigestV2(descriptor)
+const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(descriptor)
 
 function definition(
-  capture?: (values: OwnerProcessValueFactoryV2<"canvas">) => void,
-  borrowedValues?: OwnerProcessValueFactoryV2<"canvas">,
-): SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> {
+  capture?: (values: OwnerProcessValueFactory<"canvas">) => void,
+  borrowedValues?: OwnerProcessValueFactory<"canvas">,
+): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
   return {
     owner: "canvas",
     createDefinitions(values) {
@@ -43,7 +43,7 @@ function definition(
           validateBase: () => process.wrapValidatedState(null),
           applyIntent: () => process.wrapApplyResult(null),
           validatePost: () => process.wrapValidatedState(null),
-          canonicalStateBytes: () => encodeRestrictedJcsV2({ format: descriptor.canonicalStateFormat }),
+          canonicalStateBytes: () => encodeRestrictedJcs({ format: descriptor.canonicalStateFormat }),
           deriveActualWriteEvidence: () => {
             throw new Error("not used")
           },
@@ -58,23 +58,23 @@ function definition(
   }
 }
 
-describe("R5 selected document-owner runtime", () => {
+describe("Current document-owner runtime", () => {
   test("mints one live identity closure and rejects structural runtime copies", async () => {
-    const authority = await loadVerifiedTestAuthorityV2()
-    const runtime = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas").createRuntime(definition())
+    const authority = await loadVerifiedTestAuthority()
+    const runtime = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(definition())
     if ("status" in runtime) throw new Error(runtime.code)
     expect(runtime.artifactDigest).toBe(SCHEMA)
     expect(runtime.closurePort.protocolPort).toBe(runtime.protocolPort)
-    expect(() => assertDocumentOwnerRuntimeV2(runtime, authority)).not.toThrow()
-    expect(() => assertDocumentOwnerRuntimeV2({ ...runtime }, authority)).toThrow("live selected")
+    expect(() => assertDocumentOwnerRuntime(runtime, authority)).not.toThrow()
+    expect(() => assertDocumentOwnerRuntime({ ...runtime }, authority)).toThrow("live selected")
   })
 
   test("rejects process values borrowed from a different selected factory", async () => {
-    const authority = await loadVerifiedTestAuthorityV2()
-    let firstValues: OwnerProcessValueFactoryV2<"canvas"> | undefined
-    const first = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas").createRuntime(definition((value) => { firstValues = value }))
+    const authority = await loadVerifiedTestAuthority()
+    let firstValues: OwnerProcessValueFactory<"canvas"> | undefined
+    const first = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(definition((value) => { firstValues = value }))
     if ("status" in first || !firstValues) throw new Error("first runtime unavailable")
-    const second = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas").createRuntime(definition(undefined, firstValues))
+    const second = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(definition(undefined, firstValues))
     if ("status" in second) throw new Error(second.code)
     const document = new Y.Doc()
     try {
@@ -85,8 +85,8 @@ describe("R5 selected document-owner runtime", () => {
   })
 
   test("creates attempt-scoped fact ports and rejects wrong-owner and structural ports", async () => {
-    const authority = await loadVerifiedTestAuthorityV2()
-    const runtime = createSelectedDocumentOwnerArtifactFactoryV2(authority, "canvas").createRuntime(definition())
+    const authority = await loadVerifiedTestAuthority()
+    const runtime = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(definition())
     if ("status" in runtime) throw new Error(runtime.code)
     const wrongOwner = runtime.externalFactPortFactory.createAttemptPort({
       declared: { validationArtifacts: [], externalFacts: [] },
@@ -106,7 +106,7 @@ describe("R5 selected document-owner runtime", () => {
       },
     })
     if (created.status === "rejected") throw new Error(created.code)
-    expect(() => assertOwnerExternalFactPortV2(created.port, runtime)).not.toThrow()
-    expect(() => assertOwnerExternalFactPortV2({ ...created.port }, runtime)).toThrow("live owner external-fact")
+    expect(() => assertOwnerExternalFactPort(created.port, runtime)).not.toThrow()
+    expect(() => assertOwnerExternalFactPort({ ...created.port }, runtime)).toThrow("live owner external-fact")
   })
 })

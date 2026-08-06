@@ -12,7 +12,7 @@ import {
   useRef,
 } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
+import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
 import type { CanvasEditorController } from "../editor-context"
 import type { CanvasInspectorProjection, CanvasSelectionProjection } from "../inspector"
 import type { CanvasFolderBrowseListing } from "../services"
@@ -229,12 +229,12 @@ afterAll(() => {
   mock.restore()
 })
 
-class TestCanvasSession implements CanvasRendererCollaborationClientV2 {
+class TestCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
-  readonly commands: CanvasRendererCommandV2[] = []
+  readonly commands: CanvasRendererCommand[] = []
   readonly undoModel = "project-yjs-semantic-history" as const
   flushRequest: (signal?: AbortSignal) => Promise<void> = async () => undefined
-  submitRequest: (command: CanvasRendererCommandV2) => Promise<void> = async () => undefined
+  submitRequest: (command: CanvasRendererCommand) => Promise<void> = async () => undefined
   private readonly listeners = new Set<() => void>()
   private readonly nodeIncarnations = new Map<string, string>()
 
@@ -279,7 +279,7 @@ class TestCanvasSession implements CanvasRendererCollaborationClientV2 {
       : undefined
   }
 
-  async submit(command: CanvasRendererCommandV2) {
+  async submit(command: CanvasRendererCommand) {
     this.commands.push(command)
     await this.submitRequest(command)
   }
@@ -481,8 +481,8 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
             },
           ],
         },
-        format: "convax.canvas-renderer-command/2",
-        kind: "canvas.nodes.set-geometry/2",
+        format: "convax.canvas-renderer-command",
+        kind: "canvas.nodes.set-geometry",
       },
     ])
     expect(session.commands[0]).not.toHaveProperty("expectedRevision")
@@ -772,7 +772,7 @@ test("isolates a failed node geometry submission from another node still awaitin
       resolveVideoSubmission = resolve
     })
     session.submitRequest = (command) => {
-      if (command.kind !== "canvas.nodes.set-geometry/2") return Promise.resolve()
+      if (command.kind !== "canvas.nodes.set-geometry") return Promise.resolve()
       return command.body.updates[0]?.node.id === image.id ? imageSubmission : videoSubmission
     }
     await act(async () => {
@@ -1216,8 +1216,8 @@ test("keeps measured and resize preview state in React Flow and submits one clos
             },
           ],
         },
-        format: "convax.canvas-renderer-command/2",
-        kind: "canvas.nodes.set-geometry/2",
+        format: "convax.canvas-renderer-command",
+        kind: "canvas.nodes.set-geometry",
       },
     ])
   } finally {

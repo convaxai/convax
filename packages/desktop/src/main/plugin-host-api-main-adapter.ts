@@ -9,7 +9,7 @@ import {
   type CanvasNode,
   type CanvasNodeData,
 } from "@convax/canvas/core"
-import { getProjectResourceReference, type ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import { getProjectResourceReference, type ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 import type { ProjectRecord } from "@convax/project/contracts"
 import type { PluginApiGenerationReference } from "@convax/plugin-api"
 
@@ -55,7 +55,7 @@ export interface PluginHostApiMainAdapterOptions {
   agent: Pick<AgentRuntime, "abort" | "createSession" | "prompt">
   application: Pick<CanvasApplicationService, "execute" | "query">
   canvases: {
-    getCanvasCatalog(input: { projectId: string }): Promise<ProjectCanvasCatalogProjectionV2>
+    getCanvasCatalog(input: { projectId: string }): Promise<ProjectCanvasCatalogProjection>
   }
   generation: Pick<GenerationCanvasService, "generate" | "listTools">
   images: Pick<PluginCanvasImageService, "createForHostApi">
@@ -316,7 +316,10 @@ export class PluginHostApiMainAdapter implements PluginHostNodeContextPort, Plug
       state: input.state,
     })
     return {
-      operationReceipt: result.operationReceipt,
+      operationReceipt: {
+        ...result.operationReceipt,
+        format: "convax.canvas-operation-receipt/2" as const,
+      },
       projection: rendererSafeNode(result.node),
       updated: true as const,
     }

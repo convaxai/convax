@@ -1,121 +1,121 @@
 import {
-  assertExactKeysV2,
-  parseDigestV2,
-  parseId128V2,
-  parsePeerIdV2,
-  parseProjectIdV2,
-  parseSignatureV2,
-  structuredDigestV2,
-  type DigestV2,
+  assertExactKeys,
+  parseDigest,
+  parseId128,
+  parsePeerId,
+  parseProjectId,
+  parseSignature,
+  structuredDigest,
+  type Digest,
 } from "@convax/collaboration"
 
-import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2 } from "./kernel-integration"
+import { PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION } from "./kernel-integration"
 import type {
-  PeerChannelOpenCoreV2,
-  PeerChannelOpenV2,
-  PeerChannelV2,
-  PeerHandshakeCoreV2,
-  PeerHandshakeV2,
+  PeerChannelOpenCore,
+  PeerChannelOpen,
+  PeerChannel,
+  PeerHandshakeCore,
+  PeerHandshake,
 } from "./peer-session-contracts"
 
-export function peerHandshakeCoreDigestV2(core: PeerHandshakeCoreV2): DigestV2 {
-  return structuredDigestV2("convax.peer-handshake-core/2", parsePeerHandshakeCoreV2(core))
+export function peerHandshakeCoreDigest(core: PeerHandshakeCore): Digest {
+  return structuredDigest("convax.peer-handshake-core", parsePeerHandshakeCore(core))
 }
 
-export function peerChannelOpenCoreDigestV2(core: PeerChannelOpenCoreV2): DigestV2 {
-  return structuredDigestV2("convax.peer-channel-open-core/2", parsePeerChannelOpenCoreV2(core))
+export function peerChannelOpenCoreDigest(core: PeerChannelOpenCore): Digest {
+  return structuredDigest("convax.peer-channel-open-core", parsePeerChannelOpenCore(core))
 }
 
-export function parsePeerHandshakeCoreV2(value: unknown): PeerHandshakeCoreV2 {
-  assertExactKeysV2(value, [
+export function parsePeerHandshakeCore(value: unknown): PeerHandshakeCore {
+  assertExactKeys(value, [
     "format", "connectionId", "projectId", "projectEpoch", "membershipEpoch", "freshnessTicketDigest",
     "initiatorCredentialDigest", "responderCredentialDigest", "initiatorPeerId", "responderPeerId",
     "initiatorNonce", "responderNonce", "channelContractDigest", "protocolDigest",
-  ], "PeerHandshakeCoreV2")
-  if (value.format !== "convax.peer-handshake-core/2") invalid("Peer handshake core format is invalid")
-  const initiatorPeerId = parsePeerIdV2(value.initiatorPeerId)
-  const responderPeerId = parsePeerIdV2(value.responderPeerId)
+  ], "PeerHandshakeCore")
+  if (value.format !== "convax.peer-handshake-core") invalid("Peer handshake core format is invalid")
+  const initiatorPeerId = parsePeerId(value.initiatorPeerId)
+  const responderPeerId = parsePeerId(value.responderPeerId)
   if (initiatorPeerId === responderPeerId) invalid("Peer handshake endpoints must differ")
   return Object.freeze({
     format: value.format,
-    connectionId: parseId128V2(value.connectionId),
-    projectId: parseProjectIdV2(value.projectId),
-    projectEpoch: parseId128V2(value.projectEpoch),
-    membershipEpoch: parseId128V2(value.membershipEpoch),
-    freshnessTicketDigest: parseDigestV2(value.freshnessTicketDigest),
-    initiatorCredentialDigest: parseDigestV2(value.initiatorCredentialDigest),
-    responderCredentialDigest: parseDigestV2(value.responderCredentialDigest),
+    connectionId: parseId128(value.connectionId),
+    projectId: parseProjectId(value.projectId),
+    projectEpoch: parseId128(value.projectEpoch),
+    membershipEpoch: parseId128(value.membershipEpoch),
+    freshnessTicketDigest: parseDigest(value.freshnessTicketDigest),
+    initiatorCredentialDigest: parseDigest(value.initiatorCredentialDigest),
+    responderCredentialDigest: parseDigest(value.responderCredentialDigest),
     initiatorPeerId,
     responderPeerId,
-    initiatorNonce: parseId128V2(value.initiatorNonce),
-    responderNonce: parseId128V2(value.responderNonce),
-    channelContractDigest: parseDigestV2(value.channelContractDigest),
+    initiatorNonce: parseId128(value.initiatorNonce),
+    responderNonce: parseId128(value.responderNonce),
+    channelContractDigest: parseDigest(value.channelContractDigest),
     protocolDigest: protocolDigest(value.protocolDigest),
   })
 }
 
-export function parsePeerHandshakeV2(value: unknown): PeerHandshakeV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "initiatorSessionSignature", "responderSessionSignature"], "PeerHandshakeV2")
-  if (value.format !== "convax.peer-handshake/2") invalid("Peer handshake format is invalid")
-  const core = parsePeerHandshakeCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== peerHandshakeCoreDigestV2(core)) invalid("Peer handshake core digest mismatches")
+export function parsePeerHandshake(value: unknown): PeerHandshake {
+  assertExactKeys(value, ["format", "core", "coreDigest", "initiatorSessionSignature", "responderSessionSignature"], "PeerHandshake")
+  if (value.format !== "convax.peer-handshake") invalid("Peer handshake format is invalid")
+  const core = parsePeerHandshakeCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== peerHandshakeCoreDigest(core)) invalid("Peer handshake core digest mismatches")
   return Object.freeze({
     format: value.format,
     core,
     coreDigest,
-    initiatorSessionSignature: parseSignatureV2(value.initiatorSessionSignature),
-    responderSessionSignature: parseSignatureV2(value.responderSessionSignature),
+    initiatorSessionSignature: parseSignature(value.initiatorSessionSignature),
+    responderSessionSignature: parseSignature(value.responderSessionSignature),
   })
 }
 
-export function parsePeerChannelOpenCoreV2(value: unknown): PeerChannelOpenCoreV2 {
-  assertExactKeysV2(value, [
+export function parsePeerChannelOpenCore(value: unknown): PeerChannelOpenCore {
+  assertExactKeys(value, [
     "format", "connectionId", "handshakeDigest", "channel", "channelOpenId", "initiatorCredentialDigest",
     "responderCredentialDigest", "initiatorChannelNonce", "responderChannelNonce", "channelContractDigest", "protocolDigest",
-  ], "PeerChannelOpenCoreV2")
-  if (value.format !== "convax.peer-channel-open-core/2") invalid("Peer channel-open core format is invalid")
+  ], "PeerChannelOpenCore")
+  if (value.format !== "convax.peer-channel-open-core") invalid("Peer channel-open core format is invalid")
   return Object.freeze({
     format: value.format,
-    connectionId: parseId128V2(value.connectionId),
-    handshakeDigest: parseDigestV2(value.handshakeDigest),
-    channel: parsePeerChannelV2(value.channel),
-    channelOpenId: parseId128V2(value.channelOpenId),
-    initiatorCredentialDigest: parseDigestV2(value.initiatorCredentialDigest),
-    responderCredentialDigest: parseDigestV2(value.responderCredentialDigest),
-    initiatorChannelNonce: parseId128V2(value.initiatorChannelNonce),
-    responderChannelNonce: parseId128V2(value.responderChannelNonce),
-    channelContractDigest: parseDigestV2(value.channelContractDigest),
+    connectionId: parseId128(value.connectionId),
+    handshakeDigest: parseDigest(value.handshakeDigest),
+    channel: parsePeerChannel(value.channel),
+    channelOpenId: parseId128(value.channelOpenId),
+    initiatorCredentialDigest: parseDigest(value.initiatorCredentialDigest),
+    responderCredentialDigest: parseDigest(value.responderCredentialDigest),
+    initiatorChannelNonce: parseId128(value.initiatorChannelNonce),
+    responderChannelNonce: parseId128(value.responderChannelNonce),
+    channelContractDigest: parseDigest(value.channelContractDigest),
     protocolDigest: protocolDigest(value.protocolDigest),
   })
 }
 
-export function parsePeerChannelOpenV2(value: unknown): PeerChannelOpenV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "initiatorSessionSignature", "responderSessionSignature"], "PeerChannelOpenV2")
-  if (value.format !== "convax.peer-channel-open/2") invalid("Peer channel-open format is invalid")
-  const core = parsePeerChannelOpenCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== peerChannelOpenCoreDigestV2(core)) invalid("Peer channel-open core digest mismatches")
+export function parsePeerChannelOpen(value: unknown): PeerChannelOpen {
+  assertExactKeys(value, ["format", "core", "coreDigest", "initiatorSessionSignature", "responderSessionSignature"], "PeerChannelOpen")
+  if (value.format !== "convax.peer-channel-open") invalid("Peer channel-open format is invalid")
+  const core = parsePeerChannelOpenCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== peerChannelOpenCoreDigest(core)) invalid("Peer channel-open core digest mismatches")
   return Object.freeze({
     format: value.format,
     core,
     coreDigest,
-    initiatorSessionSignature: parseSignatureV2(value.initiatorSessionSignature),
-    responderSessionSignature: parseSignatureV2(value.responderSessionSignature),
+    initiatorSessionSignature: parseSignature(value.initiatorSessionSignature),
+    responderSessionSignature: parseSignature(value.responderSessionSignature),
   })
 }
 
-export function parsePeerChannelV2(value: unknown): PeerChannelV2 {
+export function parsePeerChannel(value: unknown): PeerChannel {
   if (value !== "control" && value !== "update" && value !== "blob" && value !== "awareness") {
     invalid("Peer channel is invalid")
   }
   return value
 }
 
-function protocolDigest(value: unknown): DigestV2 {
-  const digest = parseDigestV2(value)
-  if (digest !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION_V2.requiredProtocolDigest) {
-    invalid("Peer session protocol digest is not the selected R5 digest")
+function protocolDigest(value: unknown): Digest {
+  const digest = parseDigest(value)
+  if (digest !== PROJECT_CONTROL_PROTOCOL_KERNEL_INTEGRATION.requiredProtocolDigest) {
+    invalid("Peer session protocol digest is not the current protocol digest")
   }
   return digest
 }

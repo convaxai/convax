@@ -199,13 +199,13 @@ import { applyReactFlowEdgeSelectionChanges, applyReactFlowNodeSelectionChanges 
 import { snapCanvasNodePositionChanges } from "./canvas-node-snapping"
 import { createCanvasFileNode, type CanvasFileRendererRegistry } from "../file-renderer-registry"
 import {
-  assertResourceRefV2,
-  canvasProjectionResourceMetadataKeyV2,
-  canvasGeometryCommandV2,
-  createReadonlyCanvasProjectionBootstrapV2,
-  type CanvasEntityRefV2,
-  type CanvasRendererCollaborationClientV2,
-  type CanvasRendererProjectionStoreV2,
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
+  canvasGeometryCommand,
+  createReadonlyCanvasProjectionBootstrap,
+  type CanvasEntityRef,
+  type CanvasRendererCollaborationClient,
+  type CanvasRendererProjectionStore,
 } from "../collaboration"
 import type { CanvasNodeRegistry } from "../node-registry"
 import { CanvasReloadQueue } from "../reload-queue"
@@ -401,26 +401,26 @@ interface CanvasPendingGeometryValue<Value> {
  * submission failure may clear only the values published by its token.
  */
 interface CanvasPendingNodeGeometry {
-  entity: CanvasEntityRefV2
+  entity: CanvasEntityRef
   position?: CanvasPendingGeometryValue<CanvasPoint>
   size?: CanvasPendingGeometryValue<CanvasSize>
 }
 
 interface CanvasTransientMeasurement {
   canonicalSize: CanvasSize
-  entity?: CanvasEntityRefV2
+  entity?: CanvasEntityRef
   rendererId: string
   size: CanvasSize
 }
 
 interface CanvasTransientResourceState {
-  entity?: CanvasEntityRefV2
+  entity?: CanvasEntityRef
   rendererId: string
   resourceIdentity?: string
   state: CanvasResourceRuntimeState
 }
 
-function sameCanvasEntity(left: CanvasEntityRefV2 | undefined, right: CanvasEntityRefV2 | undefined) {
+function sameCanvasEntity(left: CanvasEntityRef | undefined, right: CanvasEntityRef | undefined) {
   return left?.id === right?.id && left?.incarnation === right?.incarnation
 }
 
@@ -436,9 +436,9 @@ function canvasFileRendererIdentity(node: CanvasNode, registry: CanvasFileRender
 function canvasCanonicalResourceIdentity(node: CanvasNode): string | undefined {
   const metadata = node.data.metadata
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined
-  const candidate = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+  const candidate = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
   try {
-    assertResourceRefV2(candidate)
+    assertResourceRef(candidate)
   } catch {
     return undefined
   }
@@ -456,7 +456,7 @@ function canvasCanonicalResourceIdentity(node: CanvasNode): string | undefined {
 function sameCanvasTransientResourceOwner(
   transient: CanvasTransientResourceState,
   node: CanvasNode,
-  entity: CanvasEntityRefV2 | undefined,
+  entity: CanvasEntityRef | undefined,
 ) {
   const resourceIdentity = canvasCanonicalResourceIdentity(node)
   return transient.resourceIdentity !== undefined
@@ -465,10 +465,10 @@ function sameCanvasTransientResourceOwner(
 }
 
 function submitCanvasTransientGeometry(
-  session: CanvasRendererCollaborationClientV2,
+  session: CanvasRendererCollaborationClient,
   start: CanvasDocument,
   geometry: ReadonlyMap<string, CanvasTransientGeometry>,
-  entities: ReadonlyMap<string, CanvasEntityRefV2>,
+  entities: ReadonlyMap<string, CanvasEntityRef>,
 ): Promise<boolean> {
   const updates: CanvasNodeGeometryUpdate[] = []
   for (const node of start.nodes) {
@@ -489,7 +489,7 @@ function submitCanvasTransientGeometry(
     })
   }
   if (updates.length === 0) return Promise.resolve(false)
-  return session.submit(canvasGeometryCommandV2(updates, (nodeId) => entities.get(nodeId))).then(() => true)
+  return session.submit(canvasGeometryCommand(updates, (nodeId) => entities.get(nodeId))).then(() => true)
 }
 
 interface PendingConnection {
@@ -599,7 +599,7 @@ export interface CanvasEditorProps {
   /** Immutable, read-only, no-persistence preview used only when `session` is absent. */
   initialDocument?: CanvasDocument
   /** Required for editing. Host-owned Yjs projection, typed-intent, undo, and flush boundary. */
-  session?: CanvasRendererCollaborationClientV2
+  session?: CanvasRendererCollaborationClient
   /** Host-owned application-command bridge used by non-geometry Canvas UI mutations. */
   executeCommand?: (command: CanvasApplicationCommand) => Promise<void>
   fileRendererRegistry?: CanvasFileRendererRegistry
@@ -1106,8 +1106,8 @@ function CanvasEditorContent(
   },
 ) {
   const appearance = useMemo(() => resolveCanvasAppearance(props.appearance), [props.appearance])
-  const [bootstrapProjection] = useState<CanvasRendererProjectionStoreV2 | undefined>(() =>
-    props.initialDocument ? createReadonlyCanvasProjectionBootstrapV2(props.initialDocument) : undefined,
+  const [bootstrapProjection] = useState<CanvasRendererProjectionStore | undefined>(() =>
+    props.initialDocument ? createReadonlyCanvasProjectionBootstrap(props.initialDocument) : undefined,
   )
   const collaborationSession = props.session
   const projectionStore = collaborationSession ?? bootstrapProjection
@@ -1130,7 +1130,7 @@ function CanvasEditorContent(
   )
   const [gestureStart, setGestureStart] = useState<CanvasDocument | undefined>()
   const gestureStartRef = useRef<CanvasDocument | undefined>(undefined)
-  const gestureEntitiesRef = useRef(new Map<string, CanvasEntityRefV2>())
+  const gestureEntitiesRef = useRef(new Map<string, CanvasEntityRef>())
   const gestureGeometryRef = useRef(new Map<string, CanvasTransientGeometry>())
   const [gestureGeometry, setGestureGeometry] = useState(() => new Map<string, CanvasTransientGeometry>())
   const pendingGeometryRef = useRef(new Map<string, CanvasPendingNodeGeometry>())
@@ -1241,7 +1241,7 @@ function CanvasEditorContent(
   const boxSelectionActiveRef = useRef(false)
   const boxSelectionBaselineRef = useRef<CanvasSelection | null>(null)
   const selectionRef = useRef(selection)
-  const selectedNodeEntitiesRef = useRef(new Map<string, CanvasEntityRefV2>())
+  const selectedNodeEntitiesRef = useRef(new Map<string, CanvasEntityRef>())
   const selectionDragAutoSelectedNodeRef = useRef<string | null>(null)
   const selectionDragCandidateNodeRef = useRef<string | null>(null)
   const selectionDragModeActiveRef = useRef(false)
@@ -1819,7 +1819,7 @@ function CanvasEditorContent(
     ],
     [fileRendererRegistryVersion, props.fileRendererRegistry, props.nodeRegistry, registryVersion],
   )
-  // R5 can atomically create connected resource nodes, but it has no generic
+  // current can atomically create connected resource nodes, but it has no generic
   // create-agent-plus-edge intent. Keep unsupported compound writes out of the UI
   // instead of splitting one user action into two independently durable frames.
   const quickConnectionNodeTypes = useMemo(

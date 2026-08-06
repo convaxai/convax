@@ -1,20 +1,20 @@
 import { describe, expect, mock, test } from "bun:test"
 import {
-  ordinarySha256V2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  type DecodedCausalEditFrameV2,
-  type DocumentScopeV2,
-  type StateVectorV2,
+  ordinarySha256,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  type DecodedCausalEditFrame,
+  type DocumentScope,
+  type StateVector,
 } from "@convax/collaboration"
 import {
-  stageDurableProjectDocumentGenesisV2,
-  type ProjectDocumentGenesisStorePortV2,
+  stageDurableProjectDocumentGenesis,
+  type ProjectDocumentGenesisStorePort,
 } from "./document-genesis-store"
 
-const projectId = parseProjectIdV2(`project_${"a".repeat(64)}`)
+const projectId = parseProjectId(`project_${"a".repeat(64)}`)
 const projectEpoch = id(1)
 const projectIndexScope = Object.freeze({
   projectId,
@@ -27,7 +27,7 @@ const canvasScope = Object.freeze({
   projectId,
   projectEpoch,
   docKind: "canvas" as const,
-  docId: parseCanvasIdV2(`cv_${"b".repeat(64)}`),
+  docId: parseCanvasId(`cv_${"b".repeat(64)}`),
   shardEpoch: id(3),
 })
 
@@ -36,12 +36,12 @@ describe("Project durable document genesis barrier", () => {
     const candidate = createCandidate()
     const prepare = mock(async () => ({ status: "verified" as const, candidate }))
     const initialize = mock(async (input: Parameters<
-      ProjectDocumentGenesisStorePortV2["initializeShardWithGenesisProof"]
+      ProjectDocumentGenesisStorePort["initializeShardWithGenesisProof"]
     >[0]) => Object.freeze({
       ...input.acceptedBase,
       headDigest: digest("head"),
     }))
-    const result = await stageDurableProjectDocumentGenesisV2({
+    const result = await stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(),
       verifier: { prepare },
@@ -53,10 +53,10 @@ describe("Project durable document genesis barrier", () => {
       predecessorFrameDigest: digest("frame"),
       stagedProjectIndexFrontierDigest: digest("stage-frontier"),
       checkpointObjectDigest: digest("checkpoint"),
-      checkpointExactBytesSha256: ordinarySha256V2(candidate.checkpointExactBytes),
-      proofCarrierExactBytesSha256: ordinarySha256V2(candidate.proofCarrierExactBytes),
-      fullUpdateDigest: ordinarySha256V2(candidate.acceptedBase.fullUpdate),
-      stateVectorDigest: ordinarySha256V2(candidate.acceptedBase.stateVector),
+      checkpointExactBytesSha256: ordinarySha256(candidate.checkpointExactBytes),
+      proofCarrierExactBytesSha256: ordinarySha256(candidate.proofCarrierExactBytes),
+      fullUpdateDigest: ordinarySha256(candidate.acceptedBase.fullUpdate),
+      stateVectorDigest: ordinarySha256(candidate.acceptedBase.stateVector),
       canonicalStateDigest: digest("canonical"),
       durableHeadDigest: digest("head"),
     })
@@ -65,7 +65,7 @@ describe("Project durable document genesis barrier", () => {
 
   test("keeps pending authoring fail-closed without touching persistence", async () => {
     const initialize = mock(async () => { throw new Error("must not write") })
-    await expect(stageDurableProjectDocumentGenesisV2({
+    await expect(stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(),
       verifier: { async prepare() { return { status: "pending" } } },
@@ -76,8 +76,8 @@ describe("Project durable document genesis barrier", () => {
 
   test("rejects a cross-Project predecessor before invoking the owner verifier", async () => {
     const prepare = mock(async () => ({ status: "verified" as const, candidate: createCandidate() }))
-    const crossedScope = { ...projectIndexScope, projectId: parseProjectIdV2(`project_${"c".repeat(64)}`) }
-    await expect(stageDurableProjectDocumentGenesisV2({
+    const crossedScope = { ...projectIndexScope, projectId: parseProjectId(`project_${"c".repeat(64)}`) }
+    await expect(stageDurableProjectDocumentGenesis({
       scope: canvasScope,
       predecessor: predecessor(crossedScope),
       verifier: { prepare },
@@ -87,12 +87,12 @@ describe("Project durable document genesis barrier", () => {
   })
 })
 
-function predecessor(scope: DocumentScopeV2 = projectIndexScope) {
+function predecessor(scope: DocumentScope = projectIndexScope) {
   return Object.freeze({
     frame: {
       frameDigest: digest("frame"),
       header: { core: { scope } },
-    } as unknown as DecodedCausalEditFrameV2,
+    } as unknown as DecodedCausalEditFrame,
     acceptedFrontierDigest: digest("stage-frontier"),
   })
 }
@@ -100,15 +100,15 @@ function predecessor(scope: DocumentScopeV2 = projectIndexScope) {
 function createCandidate() {
   const acceptedBase = Object.freeze({
     scope: canvasScope,
-    frontier: Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) }),
+    frontier: Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) }),
     frontierDigest: digest("frontier"),
     actorHeads: Object.freeze({
-      format: "convax.replica-actor-head-set/2" as const,
+      format: "convax.replica-actor-head-set" as const,
       scope: canvasScope,
       heads: Object.freeze([]),
     }),
     fullUpdate: new Uint8Array([1, 2, 3]),
-    stateVector: new Uint8Array([4, 5]) as StateVectorV2,
+    stateVector: new Uint8Array([4, 5]) as StateVector,
     canonicalStateDigest: digest("canonical"),
   })
   return Object.freeze({
@@ -121,9 +121,9 @@ function createCandidate() {
 }
 
 function id(byte: number) {
-  return parseId128V2(Buffer.alloc(16, byte).toString("base64url"))
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
 }
 
 function digest(seed: string) {
-  return parseDigestV2(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
+  return parseDigest(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
 }

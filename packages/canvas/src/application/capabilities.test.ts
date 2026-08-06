@@ -10,6 +10,7 @@ describe("canvas command capability catalog", () => {
       "nodes.align",
       "nodes.connect",
       "nodes.materialize-connected",
+      "plugin.surface.create",
       "nodes.distribute",
       "nodes.group",
       "nodes.layout",

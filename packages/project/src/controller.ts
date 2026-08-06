@@ -314,7 +314,7 @@ function selectStartupRecoveryProjectId(projects: readonly ProjectRecord[]) {
     .filter(
       (project) =>
         !project.missing &&
-        project.recovery?.status === "unsupported-portable-project-version",
+        project.recovery?.status === "unsupported-project-data",
     )
     .sort((left, right) => right.lastOpenedAt - left.lastOpenedAt || left.id.localeCompare(right.id))[0]?.id ?? null
 }

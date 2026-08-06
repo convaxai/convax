@@ -1,34 +1,34 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "@convax/canvas"
-import type { CanvasRendererCommandV2 } from "@convax/canvas/collaboration"
-import { encodeBase64urlV2, parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
+import type { CanvasRendererCommand } from "@convax/canvas/collaboration"
+import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
 import type {
-  CanvasRendererSessionTransportV2,
-  CanvasSessionInvalidationDtoV2,
-  CanvasSessionProjectionDtoV2,
+  CanvasRendererSessionTransport,
+  CanvasSessionInvalidationDto,
+  CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
-import { openDesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import { openDesktopCanvasRendererSession } from "./canvas-collaboration-client"
 
 const ref = { canvasId: "canvas-one", scopeId: "project-one" }
-const id = (fill: number) => parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(fill)))
-const actor = (fill: number) => parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(fill)))
+const id = (fill: number) => parseId128(encodeBase64url(new Uint8Array(16).fill(fill)))
+const actor = (fill: number) => parseActorId(encodeBase64url(new Uint8Array(32).fill(fill)))
 const sessionId = id(1)
 const entity = { kind: "node" as const, id: "node-one", incarnation: id(2) }
 const receipt = {
-  format: "convax.canvas-operation-receipt/2" as const,
+  format: "convax.canvas-operation-receipt" as const,
   actorId: actor(3),
   operationId: id(4),
-  intentKind: "canvas.nodes.set-geometry/2" as const,
-  intentDigest: parseDigestV2("a".repeat(64)),
-  baseFrontierDigest: parseDigestV2("b".repeat(64)),
+  intentKind: "canvas.nodes.set-geometry" as const,
+  intentDigest: parseDigest("a".repeat(64)),
+  baseFrontierDigest: parseDigest("b".repeat(64)),
   resultEntities: [entity],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("c".repeat(64)),
+  historyMaterialDigest: parseDigest("c".repeat(64)),
 }
 
-function projection(x: number, overrides: Partial<CanvasSessionProjectionDtoV2> = {}): CanvasSessionProjectionDtoV2 {
+function projection(x: number, overrides: Partial<CanvasSessionProjectionDto> = {}): CanvasSessionProjectionDto {
   return {
-    format: "convax.canvas-session-projection/2",
+    format: "convax.canvas-session-projection",
     ref,
     sessionId,
     document: createCanvasDocument({
@@ -42,20 +42,20 @@ function projection(x: number, overrides: Partial<CanvasSessionProjectionDtoV2> 
   }
 }
 
-function command(x: number): CanvasRendererCommandV2 {
+function command(x: number): CanvasRendererCommand {
   return {
-    format: "convax.canvas-renderer-command/2",
-    kind: "canvas.nodes.set-geometry/2",
+    format: "convax.canvas-renderer-command",
+    kind: "canvas.nodes.set-geometry",
     body: { updates: [{ node: entity, position: { x, y: 0 } }] },
   }
 }
 
 function transport(initial = projection(0)) {
   let current = initial
-  const listeners = new Set<(event: CanvasSessionInvalidationDtoV2) => void>()
-  const value: CanvasRendererSessionTransportV2 & {
-    emit(event: CanvasSessionInvalidationDtoV2): void
-    setProjection(next: CanvasSessionProjectionDtoV2): void
+  const listeners = new Set<(event: CanvasSessionInvalidationDto) => void>()
+  const value: CanvasRendererSessionTransport & {
+    emit(event: CanvasSessionInvalidationDto): void
+    setProjection(next: CanvasSessionProjectionDto): void
   } = {
     open: mock(async () => current),
     query: mock(async () => current),
@@ -89,7 +89,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
       releaseFirst = resolve
     })
     let calls = 0
-    const submit = mock(async ({ command: submitted }: Parameters<CanvasRendererSessionTransportV2["submit"]>[0]) => {
+    const submit = mock(async ({ command: submitted }: Parameters<CanvasRendererSessionTransport["submit"]>[0]) => {
       calls += 1
       if (calls === 1) await firstBarrier
       const next = projection(submitted.body.updates[0]!.position.x)
@@ -98,7 +98,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     })
     bridge.submit = submit
     let nextCommand = 0
-    const client = await openDesktopCanvasRendererSessionV2({
+    const client = await openDesktopCanvasRendererSession({
       createCommandId: () => `gesture-${++nextCommand}`,
       ref,
       transport: bridge,
@@ -120,13 +120,13 @@ describe("Desktop Canvas renderer collaboration client", () => {
 
   test("coalesces matching invalidation into a query and ignores another session", async () => {
     const bridge = transport()
-    const client = await openDesktopCanvasRendererSessionV2({ ref, transport: bridge })
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
     const listener = mock(() => undefined)
     client.subscribe(listener)
     bridge.setProjection(projection(4))
-    bridge.emit({ format: "convax.canvas-session-invalidation/2", ref, sessionId })
+    bridge.emit({ format: "convax.canvas-session-invalidation", ref, sessionId })
     bridge.emit({
-      format: "convax.canvas-session-invalidation/2",
+      format: "convax.canvas-session-invalidation",
       ref,
       sessionId: id(9),
     })
@@ -142,7 +142,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
 
   test("rejects an incomplete node/entity projection before it reaches React Flow", async () => {
     const bridge = transport(projection(0, { nodeEntities: [] }))
-    await expect(openDesktopCanvasRendererSessionV2({ ref, transport: bridge })).rejects.toThrow("incomplete")
+    await expect(openDesktopCanvasRendererSession({ ref, transport: bridge })).rejects.toThrow("incomplete")
     expect(bridge.close).toHaveBeenCalledWith({ ref, sessionId })
   })
 
@@ -155,7 +155,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     })
 
     await expect(
-      openDesktopCanvasRendererSessionV2({ ref, signal: controller.signal, transport: bridge }),
+      openDesktopCanvasRendererSession({ ref, signal: controller.signal, transport: bridge }),
     ).rejects.toThrow("scope changed")
     expect(bridge.close).toHaveBeenCalledWith({ ref, sessionId })
   })

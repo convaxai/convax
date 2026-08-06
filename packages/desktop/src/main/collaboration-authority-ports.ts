@@ -1,38 +1,38 @@
 import {
-  causalFrontierDigestV2,
-  incrementUint64V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  parseId128V2,
-  parsePublicKeyV2,
-  parseUint64V2,
-  parseValidationArtifactSetV2,
-  type ActorIdV2,
-  type CausalDependencyRefV2,
-  type CausalSignerAuthorityV2,
-  type DecodedCausalEditFrameV2,
-  type DigestV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type IncomingAuthorityVerificationPortV2,
-  type LocalAuthorityPortV2,
-  type PublicKeyV2,
-  type ReplicaSignerPortV2,
-  type ValidationArtifactSetV2,
+  causalFrontierDigest,
+  incrementUint64,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
+  parseId128,
+  parsePublicKey,
+  parseUint64,
+  parseValidationArtifactSet,
+  type ActorId,
+  type CausalDependencyRef,
+  type CausalSignerAuthority,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentScope,
+  type Id128,
+  type IncomingAuthorityVerificationPort,
+  type LocalAuthorityPort,
+  type PublicKey,
+  type ReplicaSignerPort,
+  type ValidationArtifactSet,
 } from "@convax/collaboration"
 
-export interface CurrentLocalReplicaAuthorityEvidenceV2 {
+export interface CurrentLocalReplicaAuthorityEvidence {
   /** Exact request binding produced after current control-plane verification. */
-  readonly scope: DocumentScopeV2
-  readonly operationId: Id128V2
-  readonly baseFrontierDigest: DigestV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly signerAuthority: CausalSignerAuthorityV2
-  readonly dependencies: readonly CausalDependencyRefV2[]
-  readonly validationArtifacts: ValidationArtifactSetV2
+  readonly scope: DocumentScope
+  readonly operationId: Id128
+  readonly baseFrontierDigest: Digest
+  readonly ownerSchemaDigest: Digest
+  readonly signerAuthority: CausalSignerAuthority
+  readonly dependencies: readonly CausalDependencyRef[]
+  readonly validationArtifacts: ValidationArtifactSet
   /** OS-vault-backed long-lived replica signer; never a PeerJS session key. */
-  readonly signer: ReplicaSignerPortV2
+  readonly signer: ReplicaSignerPort
 }
 
 /**
@@ -40,24 +40,24 @@ export interface CurrentLocalReplicaAuthorityEvidenceV2 {
  * reservation receipt, actor credential, active-editor authorization, cutoff and
  * installed floor before returning evidence. Peer id/session order is not input.
  */
-export interface CurrentLocalReplicaAuthoritySourceV2 {
+export interface CurrentLocalReplicaAuthoritySource {
   resolveCurrent(input: {
-    readonly scope: DocumentScopeV2
-    readonly actorId: ActorIdV2
-    readonly operationId: Id128V2
-    readonly baseFrontierDigest: DigestV2
-    readonly ownerSchemaDigest: DigestV2
-  }): Promise<CurrentLocalReplicaAuthorityEvidenceV2 | "pending" | "rejected">
+    readonly scope: DocumentScope
+    readonly actorId: ActorId
+    readonly operationId: Id128
+    readonly baseFrontierDigest: Digest
+    readonly ownerSchemaDigest: Digest
+  }): Promise<CurrentLocalReplicaAuthorityEvidence | "pending" | "rejected">
 }
 
-export interface VerifiedIncomingReplicaAuthorityEvidenceV2 {
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
-  readonly actorId: ActorIdV2
-  readonly membershipSnapshotDigest: DigestV2
-  readonly replicaActorCredentialCoreDigest: DigestV2
-  readonly replicaEditAuthorizationCoreDigest: DigestV2
-  readonly replicaPublicKey: PublicKeyV2
+export interface VerifiedIncomingReplicaAuthorityEvidence {
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
+  readonly actorId: ActorId
+  readonly membershipSnapshotDigest: Digest
+  readonly replicaActorCredentialCoreDigest: Digest
+  readonly replicaEditAuthorizationCoreDigest: Digest
+  readonly replicaPublicKey: PublicKey
 }
 
 /**
@@ -65,27 +65,27 @@ export interface VerifiedIncomingReplicaAuthorityEvidenceV2 {
  * Implementations resolve exact digest-addressed dependencies and cutoff state;
  * PeerJS connection identity alone can never produce this evidence.
  */
-export interface IncomingReplicaAuthoritySourceV2 {
+export interface IncomingReplicaAuthoritySource {
   verify(input: {
-    readonly frame: DecodedCausalEditFrameV2
-  }): Promise<VerifiedIncomingReplicaAuthorityEvidenceV2 | "pending" | "rejected">
+    readonly frame: DecodedCausalEditFrame
+  }): Promise<VerifiedIncomingReplicaAuthorityEvidence | "pending" | "rejected">
 }
 
-export function createCurrentLocalReplicaAuthorityPortV2(input: {
-  readonly actorId: ActorIdV2
-  readonly source: CurrentLocalReplicaAuthoritySourceV2
-}): LocalAuthorityPortV2 {
-  const actorId = parseActorIdV2(input.actorId)
+export function createCurrentLocalReplicaAuthorityPort(input: {
+  readonly actorId: ActorId
+  readonly source: CurrentLocalReplicaAuthoritySource
+}): LocalAuthorityPort {
+  const actorId = parseActorId(input.actorId)
   if (!input.source || typeof input.source.resolveCurrent !== "function") {
     throw new TypeError("Current local replica authority source is required")
   }
-  const port: LocalAuthorityPortV2 = {
+  const port: LocalAuthorityPort = {
     actorId,
     async prepareFinalFrameAuthority(request) {
-      const scope = parseDocumentScopeV2(request.scope)
-      const operationId = parseId128V2(request.operationId)
-      const baseFrontierDigest = causalFrontierDigestV2(request.baseFrontier)
-      const ownerSchemaDigest = parseDigestV2(request.ownerSchemaDigest)
+      const scope = parseDocumentScope(request.scope)
+      const operationId = parseId128(request.operationId)
+      const baseFrontierDigest = causalFrontierDigest(request.baseFrontier)
+      const ownerSchemaDigest = parseDigest(request.ownerSchemaDigest)
       const prior = request.previousActorHead
       if (prior !== null && prior.actorId !== actorId) {
         throw new Error("Local actor predecessor belongs to another actor")
@@ -100,10 +100,10 @@ export function createCurrentLocalReplicaAuthorityPortV2(input: {
       if (resolved === "pending" || resolved === "rejected") return resolved
       assertSameScope(resolved.scope, scope)
       if (
-        parseId128V2(resolved.operationId) !== operationId ||
-        parseDigestV2(resolved.baseFrontierDigest) !== baseFrontierDigest ||
-        parseDigestV2(resolved.ownerSchemaDigest) !== ownerSchemaDigest ||
-        parseActorIdV2(resolved.signerAuthority.actorId) !== actorId
+        parseId128(resolved.operationId) !== operationId ||
+        parseDigest(resolved.baseFrontierDigest) !== baseFrontierDigest ||
+        parseDigest(resolved.ownerSchemaDigest) !== ownerSchemaDigest ||
+        parseActorId(resolved.signerAuthority.actorId) !== actorId
       ) {
         throw new Error("Current local replica authority evidence is bound to another request")
       }
@@ -112,11 +112,11 @@ export function createCurrentLocalReplicaAuthorityPortV2(input: {
       }
       return Object.freeze({
         actorId,
-        actorSequence: prior === null ? parseUint64V2("1") : incrementUint64V2(prior.actorSequence),
-        predecessorFrameDigest: prior === null ? null : parseDigestV2(prior.frameDigest),
+        actorSequence: prior === null ? parseUint64("1") : incrementUint64(prior.actorSequence),
+        predecessorFrameDigest: prior === null ? null : parseDigest(prior.frameDigest),
         signerAuthority: resolved.signerAuthority,
         dependencies: Object.freeze([...resolved.dependencies]),
-        validationArtifacts: parseValidationArtifactSetV2(resolved.validationArtifacts),
+        validationArtifacts: parseValidationArtifactSet(resolved.validationArtifacts),
         signer: resolved.signer,
       })
     },
@@ -124,36 +124,36 @@ export function createCurrentLocalReplicaAuthorityPortV2(input: {
   return Object.freeze(port)
 }
 
-export function createIncomingReplicaAuthorityVerificationPortV2(
-  source: IncomingReplicaAuthoritySourceV2,
-): IncomingAuthorityVerificationPortV2 {
+export function createIncomingReplicaAuthorityVerificationPort(
+  source: IncomingReplicaAuthoritySource,
+): IncomingAuthorityVerificationPort {
   if (!source || typeof source.verify !== "function") {
     throw new TypeError("Incoming replica authority source is required")
   }
-  const port: IncomingAuthorityVerificationPortV2 = {
+  const port: IncomingAuthorityVerificationPort = {
     async verifyFrameAuthority(frame) {
       const verified = await source.verify({ frame })
       if (verified === "pending" || verified === "rejected") return verified
       const core = frame.header.core
       assertSameScope(verified.scope, core.scope)
       if (
-        parseDigestV2(verified.frameDigest) !== frame.frameDigest ||
-        parseActorIdV2(verified.actorId) !== core.actorId ||
-        parseDigestV2(verified.membershipSnapshotDigest) !== core.membershipSnapshotDigest ||
-        parseDigestV2(verified.replicaActorCredentialCoreDigest) !== core.replicaActorCredentialCoreDigest ||
-        parseDigestV2(verified.replicaEditAuthorizationCoreDigest) !== core.replicaEditAuthorizationCoreDigest
+        parseDigest(verified.frameDigest) !== frame.frameDigest ||
+        parseActorId(verified.actorId) !== core.actorId ||
+        parseDigest(verified.membershipSnapshotDigest) !== core.membershipSnapshotDigest ||
+        parseDigest(verified.replicaActorCredentialCoreDigest) !== core.replicaActorCredentialCoreDigest ||
+        parseDigest(verified.replicaEditAuthorizationCoreDigest) !== core.replicaEditAuthorizationCoreDigest
       ) {
         throw new Error("Incoming replica authority evidence is bound to another frame")
       }
-      return Object.freeze({ replicaPublicKey: parsePublicKeyV2(verified.replicaPublicKey) })
+      return Object.freeze({ replicaPublicKey: parsePublicKey(verified.replicaPublicKey) })
     },
   }
   return Object.freeze(port)
 }
 
-function assertSameScope(leftValue: DocumentScopeV2, rightValue: DocumentScopeV2): void {
-  const left = parseDocumentScopeV2(leftValue)
-  const right = parseDocumentScopeV2(rightValue)
+function assertSameScope(leftValue: DocumentScope, rightValue: DocumentScope): void {
+  const left = parseDocumentScope(leftValue)
+  const right = parseDocumentScope(rightValue)
   if (
     left.projectId !== right.projectId ||
     left.projectEpoch !== right.projectEpoch ||

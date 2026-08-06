@@ -1,25 +1,26 @@
-import { compareUtf8V2, encodeRestrictedJcsV2, parseUint32V2 } from "@convax/collaboration"
-import type { CanvasHistoryBindingV2, CanvasHistoryTemplateV2, Uint32V2 } from "./types"
-import { CanvasSchemaErrorV2 } from "./validation"
+import { compareUtf8, encodeRestrictedJcs, parseUint32 } from "@convax/collaboration"
+import type { CanvasHistoryBinding, CanvasHistoryTemplate, Uint32 } from "./types"
+import { CanvasSchemaError } from "./validation"
 
-export const CANVAS_UNDOABLE_INTENT_KINDS_V2 = Object.freeze([
-  "canvas.nodes.create/2",
-  "canvas.resources.add/2",
-  "canvas.resources.pending.create/2",
-  "canvas.resources.pending-generation.create/2",
-  "canvas.elements.remove/2",
-  "canvas.nodes.set-geometry/2",
-  "canvas.nodes.update-data/2",
-  "canvas.nodes.set-plugin-state/2",
-  "canvas.nodes.set-structural-parent/2",
-  "canvas.nodes.group/2",
-  "canvas.nodes.ungroup/2",
-  "canvas.edges.connect/2",
-  "canvas.metadata.update/2",
-  "canvas.plugin.creation-group.create/2",
+export const CANVAS_UNDOABLE_INTENT_KINDS = Object.freeze([
+  "canvas.agent.create",
+  "canvas.resources.add",
+  "canvas.resources.pending.create",
+  "canvas.resources.pending-generation.create",
+  "canvas.elements.remove",
+  "canvas.nodes.set-geometry",
+  "canvas.nodes.update-data",
+  "canvas.nodes.set-plugin-state",
+  "canvas.nodes.set-structural-parent",
+  "canvas.nodes.group",
+  "canvas.nodes.ungroup",
+  "canvas.edges.connect",
+  "canvas.metadata.update",
+  "canvas.plugin.creation-group.create",
+  "canvas.plugin.surface.create",
 ] as const)
 
-const TEMPLATE_RANK: Readonly<Record<CanvasHistoryTemplateV2["op"], number>> = Object.freeze({
+const TEMPLATE_RANK: Readonly<Record<CanvasHistoryTemplate["op"], number>> = Object.freeze({
   "node.create": 10,
   "creation-group.restore": 11,
   "pending-generation.restore": 12,
@@ -37,11 +38,11 @@ const TEMPLATE_RANK: Readonly<Record<CanvasHistoryTemplateV2["op"], number>> = O
  * Canonical rank-plus-Kahn schedule for one stored history direction.
  * This function allocates no ids and mutates no bindings or Y.Doc.
  */
-export function scheduleCanvasHistoryTemplatesV2(
-  templates: readonly CanvasHistoryTemplateV2[],
-  initialBindings: readonly CanvasHistoryBindingV2[],
-): readonly CanvasHistoryTemplateV2[] {
-  const bindings = new Map<string, CanvasHistoryBindingV2["ref"]>()
+export function scheduleCanvasHistoryTemplates(
+  templates: readonly CanvasHistoryTemplate[],
+  initialBindings: readonly CanvasHistoryBinding[],
+): readonly CanvasHistoryTemplate[] {
+  const bindings = new Map<string, CanvasHistoryBinding["ref"]>()
   for (const binding of initialBindings) {
     assertHandle(binding.handle)
     if (bindings.has(binding.handle)) invalid("duplicate history binding")
@@ -50,7 +51,7 @@ export function scheduleCanvasHistoryTemplatesV2(
 
   const producerByNode = new Map<string, string>()
   const producerByEdge = new Map<string, string>()
-  const groups = new Map<string, Extract<CanvasHistoryTemplateV2, { op: "creation-group.restore" }>>()
+  const groups = new Map<string, Extract<CanvasHistoryTemplate, { op: "creation-group.restore" }>>()
   const addProducer = <T extends string>(map: Map<string, T>, handle: string, producer: T): void => {
     assertHandle(handle)
     if (map.has(handle)) invalid(`duplicate producer for ${handle}`)
@@ -85,10 +86,10 @@ export function scheduleCanvasHistoryTemplatesV2(
     }
   }
 
-  const successors = new Map<string, Set<string>>()
+  const dependents = new Map<string, Set<string>>()
   const inDegree = new Map<string, number>()
   for (const handle of groups.keys()) {
-    successors.set(handle, new Set())
+    dependents.set(handle, new Set())
     inDegree.set(handle, 0)
   }
   for (const [groupHandle, template] of groups) {
@@ -102,7 +103,7 @@ export function scheduleCanvasHistoryTemplatesV2(
       invalid(`creation-group source ${sourceHandle} has a missing or late producer`)
     if (producer === "ordinary") continue
     if (producer === groupHandle) invalid(`creation-group ${groupHandle} has a self dependency`)
-    const targets = successors.get(producer)
+    const targets = dependents.get(producer)
     if (targets === undefined) invalid(`creation-group source producer ${producer} is absent`)
     if (!targets.has(groupHandle)) {
       targets.add(groupHandle)
@@ -110,21 +111,21 @@ export function scheduleCanvasHistoryTemplatesV2(
     }
   }
 
-  const groupSchedule: CanvasHistoryTemplateV2[] = []
+  const groupSchedule: CanvasHistoryTemplate[] = []
   const remaining = new Set(groups.keys())
   while (remaining.size > 0) {
-    const ready = [...remaining].filter((handle) => inDegree.get(handle) === 0).sort(compareUtf8V2)
+    const ready = [...remaining].filter((handle) => inDegree.get(handle) === 0).sort(compareUtf8)
     const next = ready[0]
     if (next === undefined) invalid("creation-group source dependency cycle")
     remaining.delete(next)
     groupSchedule.push(groups.get(next)!)
-    for (const target of successors.get(next)!) inDegree.set(target, inDegree.get(target)! - 1)
+    for (const target of dependents.get(next)!) inDegree.set(target, inDegree.get(target)! - 1)
   }
 
   const withoutGroups = templates.filter((template) => template.op !== "creation-group.restore")
   withoutGroups.sort((left, right) => {
     const rank = TEMPLATE_RANK[left.op] - TEMPLATE_RANK[right.op]
-    return rank || compareUtf8V2(templatePrimaryKey(left), templatePrimaryKey(right))
+    return rank || compareUtf8(templatePrimaryKey(left), templatePrimaryKey(right))
   })
   assertUniqueOuterKeys(withoutGroups)
   const beforeGroups = withoutGroups.filter((template) => TEMPLATE_RANK[template.op] < 11)
@@ -132,11 +133,11 @@ export function scheduleCanvasHistoryTemplatesV2(
   return Object.freeze([...beforeGroups, ...groupSchedule, ...afterGroups])
 }
 
-export function assertCanvasHistoryTemplateScheduleV2(
-  templates: readonly CanvasHistoryTemplateV2[],
-  initialBindings: readonly CanvasHistoryBindingV2[],
+export function assertCanvasHistoryTemplateSchedule(
+  templates: readonly CanvasHistoryTemplate[],
+  initialBindings: readonly CanvasHistoryBinding[],
 ): void {
-  const scheduled = scheduleCanvasHistoryTemplatesV2(templates, initialBindings)
+  const scheduled = scheduleCanvasHistoryTemplates(templates, initialBindings)
   if (scheduled.length !== templates.length) invalid("history schedule cardinality changed")
   for (let index = 0; index < templates.length; index += 1) {
     if (!byteEqual(templates[index], scheduled[index]))
@@ -144,19 +145,19 @@ export function assertCanvasHistoryTemplateScheduleV2(
   }
 }
 
-export interface CanvasHistoryOrdinalPlanEntryV2 {
-  readonly ordinal: Uint32V2
+export interface CanvasHistoryOrdinalPlanEntry {
+  readonly ordinal: Uint32
   readonly kind: "node" | "edge" | "relation" | "creation-group"
   readonly handle: string
 }
 
 /** Allocates the frozen contiguous ordinal plan only after scheduling succeeds. */
-export function planCanvasHistoryDerivedOrdinalsV2(
-  templates: readonly CanvasHistoryTemplateV2[],
-  initialBindings: readonly CanvasHistoryBindingV2[],
-): readonly CanvasHistoryOrdinalPlanEntryV2[] {
-  const scheduled = scheduleCanvasHistoryTemplatesV2(templates, initialBindings)
-  const plan: Omit<CanvasHistoryOrdinalPlanEntryV2, "ordinal">[] = []
+export function planCanvasHistoryDerivedOrdinals(
+  templates: readonly CanvasHistoryTemplate[],
+  initialBindings: readonly CanvasHistoryBinding[],
+): readonly CanvasHistoryOrdinalPlanEntry[] {
+  const scheduled = scheduleCanvasHistoryTemplates(templates, initialBindings)
+  const plan: Omit<CanvasHistoryOrdinalPlanEntry, "ordinal">[] = []
   for (const template of scheduled) {
     switch (template.op) {
       case "node.create":
@@ -181,10 +182,10 @@ export function planCanvasHistoryDerivedOrdinalsV2(
         break
     }
   }
-  return Object.freeze(plan.map((entry, index) => Object.freeze({ ...entry, ordinal: parseUint32V2(String(index)) })))
+  return Object.freeze(plan.map((entry, index) => Object.freeze({ ...entry, ordinal: parseUint32(String(index)) })))
 }
 
-function assertUniqueOuterKeys(templates: readonly CanvasHistoryTemplateV2[]): void {
+function assertUniqueOuterKeys(templates: readonly CanvasHistoryTemplate[]): void {
   let prior: string | undefined
   for (const template of templates) {
     const key = `${TEMPLATE_RANK[template.op]}/${templatePrimaryKey(template)}`
@@ -193,7 +194,7 @@ function assertUniqueOuterKeys(templates: readonly CanvasHistoryTemplateV2[]): v
   }
 }
 
-function templatePrimaryKey(template: CanvasHistoryTemplateV2): string {
+function templatePrimaryKey(template: CanvasHistoryTemplate): string {
   switch (template.op) {
     case "node.create":
     case "node.tombstone":
@@ -215,7 +216,7 @@ function templatePrimaryKey(template: CanvasHistoryTemplateV2): string {
   return invalid("unknown history template operation")
 }
 
-function containmentTargetKey(target: Extract<CanvasHistoryTemplateV2, { op: "containment.set" }>["child"]): string {
+function containmentTargetKey(target: Extract<CanvasHistoryTemplate, { op: "containment.set" }>["child"]): string {
   return target.mode === "handle"
     ? `0/${target.handle}`
     : `1/${target.ref.kind}/${target.ref.id}/${target.ref.incarnation}`
@@ -225,7 +226,7 @@ function assertSortedMembers(values: readonly { readonly handle: string }[], lab
   let prior: string | undefined
   for (const value of values) {
     assertHandle(value.handle)
-    if (prior !== undefined && compareUtf8V2(prior, value.handle) >= 0)
+    if (prior !== undefined && compareUtf8(prior, value.handle) >= 0)
       invalid(`${label} must be handle-sorted and duplicate-free`)
     prior = value.handle
   }
@@ -233,20 +234,20 @@ function assertSortedMembers(values: readonly { readonly handle: string }[], lab
 
 function assertHandle(value: string): void {
   if (!/^[ne]\/(0|[1-9]\d*)$/u.test(value)) invalid(`invalid history handle ${value}`)
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function assertGroupHandle(value: string): void {
   if (!/^g\/(0|[1-9]\d*)$/u.test(value)) invalid(`invalid creation-group handle ${value}`)
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function byteEqual(left: unknown, right: unknown): boolean {
-  const a = encodeRestrictedJcsV2(left)
-  const b = encodeRestrictedJcsV2(right)
+  const a = encodeRestrictedJcs(left)
+  const b = encodeRestrictedJcs(right)
   return a.length === b.length && a.every((byte, index) => byte === b[index])
 }
 
 function invalid(message: string): never {
-  throw new CanvasSchemaErrorV2("invalid-history-schedule", message)
+  throw new CanvasSchemaError("invalid-history-schedule", message)
 }

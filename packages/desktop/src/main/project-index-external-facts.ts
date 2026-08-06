@@ -1,49 +1,45 @@
 import type {
-  DecodedCausalEditFrameV2,
-  DocumentScopeV2,
-  IncomingOwnerFactResolverPortV2,
-  IncomingOwnerFactResolverPortV3,
-  OwnerExternalFactPortFactoryV2,
-  OwnerExternalFactRequirementV2,
-  OwnerIntentDependenciesV2,
+  DecodedCausalEditFrame,
+  DocumentScope,
+  IncomingOwnerFactResolverPort,
+  OwnerExternalFactPortFactory,
+  OwnerExternalFactRequirement,
+  OwnerIntentDependencies,
 } from "@convax/collaboration"
 import {
-  ordinarySha256V2,
-  parseDocumentScopeV2,
+  ordinarySha256,
+  parseDocumentScope,
 } from "@convax/collaboration"
-import type {
-  CanvasGenesisProofCarrierVerifierV2,
-  LocalOwnerCanvasGenesisProofVerificationV3,
-} from "@convax/canvas/collaboration"
+import type { CanvasGenesisProofCarrierVerifier } from "@convax/canvas/collaboration"
 import {
-  decodeProjectIndexBlobPublicationCurrentnessRequestV2,
-  decodeProjectIndexCanvasGenesisCurrentnessRequestV2,
-  type ProjectIndexCanvasGenesisCurrentnessRequestV2,
+  decodeProjectIndexBlobPublicationCurrentnessRequest,
+  decodeProjectIndexCanvasGenesisCurrentnessRequest,
+  type ProjectIndexCanvasGenesisCurrentnessRequest,
 } from "@convax/project"
 import type {
-  ProjectCanvasGenesisStagingPortV2,
-  ProjectIndexFactResolutionPortV2,
+  ProjectCanvasGenesisStagingPort,
+  ProjectIndexFactResolutionPort,
 } from "@convax/project/canvas"
 import {
-  stageDurableProjectDocumentGenesisV2,
-  type NodeCollaborationPersistenceV2,
-  type ProjectBlobReplicationStoreV2,
-  type ProjectDocumentGenesisVerifierPortV2,
+  stageDurableProjectDocumentGenesis,
+  type NodeCollaborationPersistence,
+  type ProjectBlobReplicationStore,
+  type ProjectDocumentGenesisVerifierPort,
 } from "@convax/project/node"
 
 /**
  * First production closure: read/query and dependency-free ProjectIndex frames work;
  * mutation requiring blob, Canvas-genesis or reset authority remains pending.
  */
-export function createFailClosedProjectIndexFactPortsV2(input: {
-  readonly factory: OwnerExternalFactPortFactoryV2<"project-index">
-  readonly scope: DocumentScopeV2 & { readonly docKind: "project-index" }
+export function createFailClosedProjectIndexFactPorts(input: {
+  readonly factory: OwnerExternalFactPortFactory<"project-index">
+  readonly scope: DocumentScope & { readonly docKind: "project-index" }
 }): Readonly<{
-  facts: ProjectIndexFactResolutionPortV2
-  incomingFacts: IncomingOwnerFactResolverPortV2
-  canvasGenesis: ProjectCanvasGenesisStagingPortV2
+  facts: ProjectIndexFactResolutionPort
+  incomingFacts: IncomingOwnerFactResolverPort
+  canvasGenesis: ProjectCanvasGenesisStagingPort
 }> {
-  const resolve = async (dependencies: OwnerIntentDependenciesV2<"project-index">) => {
+  const resolve = async (dependencies: OwnerIntentDependencies<"project-index">) => {
     if (dependencies.validationArtifacts.length !== 0 || dependencies.externalFacts.length !== 0) {
       return Object.freeze({ status: "pending" as const })
     }
@@ -59,19 +55,19 @@ export function createFailClosedProjectIndexFactPortsV2(input: {
       ? Object.freeze({ status: "resolved" as const, port: created.port })
       : Object.freeze({ status: "rejected" as const })
   }
-  const facts: ProjectIndexFactResolutionPortV2 = Object.freeze({
-    resolve: (attempt: Parameters<ProjectIndexFactResolutionPortV2["resolve"]>[0]) => resolve(attempt.dependencies),
+  const facts: ProjectIndexFactResolutionPort = Object.freeze({
+    resolve: (attempt: Parameters<ProjectIndexFactResolutionPort["resolve"]>[0]) => resolve(attempt.dependencies),
   })
-  const incomingFacts: IncomingOwnerFactResolverPortV2 = Object.freeze({
+  const incomingFacts: IncomingOwnerFactResolverPort = Object.freeze({
     async resolve({ frame, declaredDependencies }: {
-      readonly frame: DecodedCausalEditFrameV2
-      readonly declaredDependencies: OwnerIntentDependenciesV2<"project-index">
+      readonly frame: DecodedCausalEditFrame
+      readonly declaredDependencies: OwnerIntentDependencies<"project-index">
     }) {
       if (!sameScope(frame.header.core.scope, input.scope)) return Object.freeze({ status: "rejected" as const })
       return resolve(declaredDependencies)
     },
   })
-  const canvasGenesis: ProjectCanvasGenesisStagingPortV2 = Object.freeze({
+  const canvasGenesis: ProjectCanvasGenesisStagingPort = Object.freeze({
     async preflightCanvasGenesis() { return "pending" as const },
     async stageCanvasGenesis() { return "pending" as const },
   })
@@ -79,27 +75,26 @@ export function createFailClosedProjectIndexFactPortsV2(input: {
 }
 
 /** Local blob durability is a Project-owned external fact; paths and filesystem mtimes never satisfy it. */
-export function createLocalBlobProjectIndexFactPortsV2(input: {
-  readonly factory: OwnerExternalFactPortFactoryV2<"project-index">
-  readonly scope: DocumentScopeV2 & { readonly docKind: "project-index" }
-  readonly blobs: Pick<ProjectBlobReplicationStoreV2, "queryHave">
+export function createLocalBlobProjectIndexFactPorts(input: {
+  readonly factory: OwnerExternalFactPortFactory<"project-index">
+  readonly scope: DocumentScope & { readonly docKind: "project-index" }
+  readonly blobs: Pick<ProjectBlobReplicationStore, "queryHave">
 }): Readonly<{
-  facts: ProjectIndexFactResolutionPortV2
-  incomingFacts: IncomingOwnerFactResolverPortV2
-  incomingFactsV3: IncomingOwnerFactResolverPortV3
-  canvasGenesis: ProjectCanvasGenesisStagingPortV2
+  facts: ProjectIndexFactResolutionPort
+  incomingFacts: IncomingOwnerFactResolverPort
+  canvasGenesis: ProjectCanvasGenesisStagingPort
 }> {
   const scope = requireProjectIndexScope(input.scope)
-  const resolve = async (dependencies: OwnerIntentDependenciesV2<"project-index">) => {
+  const resolve = async (dependencies: OwnerIntentDependencies<"project-index">) => {
     if (dependencies.validationArtifacts.length !== 0) return Object.freeze({ status: "pending" as const })
     const facts = new Map<string, unknown>()
     for (const requirement of dependencies.externalFacts) {
       if (requirement.kind !== "blob-publication-currentness") return Object.freeze({ status: "pending" as const })
-      const request = decodeProjectIndexBlobPublicationCurrentnessRequestV2(requirement.request.exactJcs)
+      const request = decodeProjectIndexBlobPublicationCurrentnessRequest(requirement.request.exactJcs)
       if (
         request === "rejected" ||
         !sameScope(request.projectIndexScope, scope) ||
-        ordinarySha256V2(new Uint8Array(requirement.request.exactJcs)) !== requirement.request.sha256 ||
+        ordinarySha256(new Uint8Array(requirement.request.exactJcs)) !== requirement.request.sha256 ||
         requirement.factDigest !== requirement.request.sha256
       ) return Object.freeze({ status: "rejected" as const })
       const have = await input.blobs.queryHave([{ blobSha256: request.blob.digest, byteLength: request.blob.byteLength }])
@@ -107,7 +102,7 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
         return Object.freeze({ status: "pending" as const })
       }
       facts.set(requirement.factDigest, Object.freeze({
-        format: "convax.project-index-external-fact-result/2",
+        format: "convax.project-index-external-fact-result",
         kind: requirement.kind,
         requestSha256: requirement.request.sha256,
         factDigest: requirement.factDigest,
@@ -119,7 +114,7 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
       resolver: Object.freeze({
         owner: "project-index" as const,
         resolveArtifact: () => Object.freeze({ status: "rejected" as const, code: "artifact-not-declared" as const }),
-        resolveFact(requirement: OwnerExternalFactRequirementV2<"project-index">) {
+        resolveFact(requirement: OwnerExternalFactRequirement<"project-index">) {
           const value = facts.get(requirement.factDigest)
           return value === undefined
             ? Object.freeze({ status: "rejected" as const, code: "fact-not-declared" as const })
@@ -132,17 +127,11 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
       : Object.freeze({ status: "rejected" as const })
   }
   return Object.freeze({
-    facts: Object.freeze({ resolve: (request: Parameters<ProjectIndexFactResolutionPortV2["resolve"]>[0]) => resolve(request.dependencies) }),
+    facts: Object.freeze({ resolve: (request: Parameters<ProjectIndexFactResolutionPort["resolve"]>[0]) => resolve(request.dependencies) }),
     incomingFacts: Object.freeze({
-      async resolve(request: Parameters<IncomingOwnerFactResolverPortV2["resolve"]>[0]) {
+      async resolve(request: Parameters<IncomingOwnerFactResolverPort["resolve"]>[0]) {
         if (!sameScope(request.frame.header.core.scope, scope)) return Object.freeze({ status: "rejected" as const })
-        return resolve(request.declaredDependencies as OwnerIntentDependenciesV2<"project-index">)
-      },
-    }),
-    incomingFactsV3: Object.freeze({
-      async resolve(request: Parameters<IncomingOwnerFactResolverPortV3["resolve"]>[0]) {
-        if (!sameScope(request.frame.header.core.scope, scope)) return Object.freeze({ status: "rejected" as const })
-        return resolve(request.declaredDependencies as OwnerIntentDependenciesV2<"project-index">)
+        return resolve(request.declaredDependencies as OwnerIntentDependencies<"project-index">)
       },
     }),
     canvasGenesis: Object.freeze({
@@ -157,30 +146,29 @@ export function createLocalBlobProjectIndexFactPortsV2(input: {
  * CVXCGP02 build/validation stays behind the Canvas verifier, while Project owns
  * the request codec and native Project persistence owns the sole durable bytes.
  */
-export function createProjectIndexCanvasGenesisFactPortsV2(input: {
-  readonly factory: OwnerExternalFactPortFactoryV2<"project-index">
-  readonly scope: DocumentScopeV2 & { readonly docKind: "project-index" }
+export function createProjectIndexCanvasGenesisFactPorts(input: {
+  readonly factory: OwnerExternalFactPortFactory<"project-index">
+  readonly scope: DocumentScope & { readonly docKind: "project-index" }
   readonly persistence: Pick<
-    NodeCollaborationPersistenceV2,
+    NodeCollaborationPersistence,
     "initializeShardWithGenesisProof" | "readGenesisProof"
   >
-  readonly genesisVerifier: ProjectDocumentGenesisVerifierPortV2<"canvas">
-  readonly proofVerifier: CanvasGenesisProofCarrierVerifierV2
-  readonly localOwnerProofVerifierV3?: (carrier: Uint8Array) => Promise<LocalOwnerCanvasGenesisProofVerificationV3>
+  readonly genesisVerifier: ProjectDocumentGenesisVerifierPort<"canvas">
+  readonly proofVerifier: CanvasGenesisProofCarrierVerifier
   readonly preflightAuthor: (input: {
-    readonly projectId: DocumentScopeV2["projectId"]
-    readonly projectEpoch: DocumentScopeV2["projectEpoch"]
+    readonly projectId: DocumentScope["projectId"]
+    readonly projectEpoch: DocumentScope["projectEpoch"]
     readonly signal?: AbortSignal
   }) => Promise<"ready" | "pending" | "rejected">
 }): Readonly<{
-  facts: ProjectIndexFactResolutionPortV2
-  incomingFacts: IncomingOwnerFactResolverPortV2
-  canvasGenesis: ProjectCanvasGenesisStagingPortV2
+  facts: ProjectIndexFactResolutionPort
+  incomingFacts: IncomingOwnerFactResolverPort
+  canvasGenesis: ProjectCanvasGenesisStagingPort
 }> {
   const projectIndexScope = requireProjectIndexScope(input.scope)
 
   const resolve = async (
-    dependencies: OwnerIntentDependenciesV2<"project-index">,
+    dependencies: OwnerIntentDependencies<"project-index">,
     signal?: AbortSignal,
   ) => {
     signal?.throwIfAborted()
@@ -203,24 +191,15 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
         })
       }
       signal?.throwIfAborted()
-      const verifiedV2 = input.proofVerifier(carrier)
-      const verifiedV3 = verifiedV2.status === "rejected" && input.localOwnerProofVerifierV3
-        ? await input.localOwnerProofVerifierV3(carrier)
-        : undefined
-      if (verifiedV2.status === "pending") return Object.freeze({ status: "pending" as const })
-      const identity = verifiedV2.status === "validated"
+      const verified = input.proofVerifier(carrier)
+      if (verified.status === "pending") return Object.freeze({ status: "pending" as const })
+      const identity = verified.status === "validated"
         ? Object.freeze({
-            checkpointObjectDigest: verifiedV2.identity.checkpointObjectDigest,
-            scope: verifiedV2.identity.scope,
-            routeDependencyFrameDigest: verifiedV2.identity.identity.projectIndexRouteDependencyFrameDigest,
+            checkpointObjectDigest: verified.identity.checkpointObjectDigest,
+            scope: verified.identity.scope,
+            routeDependencyFrameDigest: verified.identity.identity.projectIndexRouteDependencyFrameDigest,
           })
-        : verifiedV3?.status === "validated"
-          ? Object.freeze({
-              checkpointObjectDigest: verifiedV3.checkpointObjectDigest,
-              scope: verifiedV3.scope,
-              routeDependencyFrameDigest: verifiedV3.projectIndexRouteDependencyFrameDigest,
-            })
-          : undefined
+        : undefined
       if (!identity ||
         identity.checkpointObjectDigest !== request.genesisCheckpointObjectDigest ||
         !sameScope(identity.scope, request.canvasScope) ||
@@ -229,7 +208,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
         return Object.freeze({ status: "rejected" as const })
       }
       facts.set(requirement.factDigest, Object.freeze({
-        format: "convax.project-index-external-fact-result/2",
+        format: "convax.project-index-external-fact-result",
         kind: requirement.kind,
         requestSha256: requirement.request.sha256,
         factDigest: requirement.factDigest,
@@ -244,7 +223,7 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
           status: "rejected" as const,
           code: "artifact-not-declared" as const,
         }),
-        resolveFact(requirement: OwnerExternalFactRequirementV2<"project-index">) {
+        resolveFact(requirement: OwnerExternalFactRequirement<"project-index">) {
           const value = facts.get(requirement.factDigest)
           return value === undefined
             ? Object.freeze({ status: "rejected" as const, code: "fact-not-declared" as const })
@@ -257,12 +236,12 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
       : Object.freeze({ status: "rejected" as const })
   }
 
-  const facts: ProjectIndexFactResolutionPortV2 = Object.freeze({
-    resolve: (request: Parameters<ProjectIndexFactResolutionPortV2["resolve"]>[0]) =>
+  const facts: ProjectIndexFactResolutionPort = Object.freeze({
+    resolve: (request: Parameters<ProjectIndexFactResolutionPort["resolve"]>[0]) =>
       resolve(request.dependencies, request.signal),
   })
-  const incomingFacts: IncomingOwnerFactResolverPortV2 = Object.freeze({
-    async resolve(request: Parameters<IncomingOwnerFactResolverPortV2["resolve"]>[0]) {
+  const incomingFacts: IncomingOwnerFactResolverPort = Object.freeze({
+    async resolve(request: Parameters<IncomingOwnerFactResolverPort["resolve"]>[0]) {
       const { frame, declaredDependencies, signal } = request
       if (!sameScope(frame.header.core.scope, projectIndexScope)) {
         return Object.freeze({ status: "rejected" as const })
@@ -270,11 +249,11 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
       if (declaredDependencies.externalFacts.some((requirement) => requirement.owner !== "project-index")) {
         return Object.freeze({ status: "rejected" as const })
       }
-      return resolve(declaredDependencies as OwnerIntentDependenciesV2<"project-index">, signal)
+      return resolve(declaredDependencies as OwnerIntentDependencies<"project-index">, signal)
     },
   })
-  const canvasGenesis: ProjectCanvasGenesisStagingPortV2 = Object.freeze({
-    async preflightCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPortV2["preflightCanvasGenesis"]>[0]) {
+  const canvasGenesis: ProjectCanvasGenesisStagingPort = Object.freeze({
+    async preflightCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPort["preflightCanvasGenesis"]>[0]) {
       if (!sameScope(request.projectIndexScope, projectIndexScope)) return "rejected"
       return input.preflightAuthor({
         projectId: projectIndexScope.projectId,
@@ -282,9 +261,9 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
         signal: request.signal,
       })
     },
-    async stageCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPortV2["stageCanvasGenesis"]>[0]) {
+    async stageCanvasGenesis(request: Parameters<ProjectCanvasGenesisStagingPort["stageCanvasGenesis"]>[0]) {
       if (!sameProjectEpoch(request.scope, projectIndexScope)) return "rejected"
-      const staged = await stageDurableProjectDocumentGenesisV2({
+      const staged = await stageDurableProjectDocumentGenesis({
         scope: request.scope,
         predecessor: request.predecessor,
         verifier: input.genesisVerifier,
@@ -303,32 +282,32 @@ export function createProjectIndexCanvasGenesisFactPortsV2(input: {
 }
 
 function decodeGenesisRequirement(
-  requirement: OwnerExternalFactRequirementV2<"project-index">,
-  scope: DocumentScopeV2 & { readonly docKind: "project-index" },
-): ProjectIndexCanvasGenesisCurrentnessRequestV2 | "rejected" {
+  requirement: OwnerExternalFactRequirement<"project-index">,
+  scope: DocumentScope & { readonly docKind: "project-index" },
+): ProjectIndexCanvasGenesisCurrentnessRequest | "rejected" {
   if (
     requirement.owner !== "project-index" ||
     requirement.kind !== "canvas-genesis-currentness" ||
-    ordinarySha256V2(new Uint8Array(requirement.request.exactJcs)) !== requirement.request.sha256 ||
+    ordinarySha256(new Uint8Array(requirement.request.exactJcs)) !== requirement.request.sha256 ||
     requirement.factDigest !== requirement.request.sha256
   ) return "rejected"
-  const request = decodeProjectIndexCanvasGenesisCurrentnessRequestV2(requirement.request.exactJcs)
+  const request = decodeProjectIndexCanvasGenesisCurrentnessRequest(requirement.request.exactJcs)
   if (request === "rejected" || !sameScope(request.projectIndexScope, scope)) return "rejected"
   return request
 }
 
 function requireProjectIndexScope(
-  value: DocumentScopeV2,
-): DocumentScopeV2 & { readonly docKind: "project-index"; readonly docId: "project-index" } {
-  const scope = parseDocumentScopeV2(value)
+  value: DocumentScope,
+): DocumentScope & { readonly docKind: "project-index"; readonly docId: "project-index" } {
+  const scope = parseDocumentScope(value)
   if (scope.docKind !== "project-index" || scope.docId !== "project-index") {
     throw new TypeError("ProjectIndex genesis facts require a ProjectIndex scope")
   }
-  return scope as DocumentScopeV2 & { readonly docKind: "project-index"; readonly docId: "project-index" }
+  return scope as DocumentScope & { readonly docKind: "project-index"; readonly docId: "project-index" }
 }
 
-function sameProjectEpoch(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
-  const parsed = parseDocumentScopeV2(left)
+function sameProjectEpoch(left: DocumentScope, right: DocumentScope): boolean {
+  const parsed = parseDocumentScope(left)
   return parsed.docKind === "canvas" && parsed.projectId === right.projectId &&
     parsed.projectEpoch === right.projectEpoch
 }
@@ -338,7 +317,7 @@ function isMissingGenesis(error: unknown): boolean {
     error.code === "document-not-found"
 }
 
-function sameScope(left: DocumentScopeV2, right: DocumentScopeV2): boolean {
+function sameScope(left: DocumentScope, right: DocumentScope): boolean {
   return left.projectId === right.projectId && left.projectEpoch === right.projectEpoch &&
     left.docKind === right.docKind && left.docId === right.docId && left.shardEpoch === right.shardEpoch
 }

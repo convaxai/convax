@@ -1,39 +1,39 @@
 import {
-  assertBoundedNfcStringV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint32V2,
-  parseUint64V2,
-  uint64ToBigIntV2,
+  assertBoundedNfcString,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
+  parseUint32,
+  parseUint64,
+  uint64ToBigInt,
 } from "./codecs"
 import type {
-  ActualWriteEvidenceV2,
-  ActualWriteV2,
-  CausalContextV2,
-  CausalDependencyKindV2,
-  CausalDependencyRefV2,
-  CausalEditCoreV2,
-  CausalEditFrameHeaderV2,
-  CausalFrontierV2,
-  CausalHeadRefV2,
-  CausalSignerAuthorityV2,
-  DocumentScopeV2,
-  PortableStampV2,
-  ReplicaActorHeadSetV2,
-  ValidationArtifactRefV2,
-  ValidationArtifactSetV2,
+  ActualWriteEvidence,
+  ActualWrite,
+  CausalContext,
+  CausalDependencyKind,
+  CausalDependencyRef,
+  CausalEditCore,
+  CausalEditFrameHeader,
+  CausalFrontier,
+  CausalHeadRef,
+  CausalSignerAuthority,
+  DocumentScope,
+  PortableStamp,
+  ReplicaActorHeadSet,
+  ValidationArtifactRef,
+  ValidationArtifactSet,
 } from "./contracts"
 import { failCodec, failFrame } from "./errors"
-import { assertDenseArrayV2, assertExactKeysV2, compareUtf8V2 } from "./jcs"
-import { KERNEL_LIMITS_V2, PINNED_AUTHORITY_IDENTITIES_V2 } from "./constants"
+import { assertDenseArray, assertExactKeys, compareUtf8 } from "./jcs"
+import { KERNEL_LIMITS, CURRENT_PROTOCOL_IDENTITIES } from "./constants"
 
-const DEPENDENCY_KINDS = new Set<CausalDependencyKindV2>([
+const DEPENDENCY_KINDS = new Set<CausalDependencyKind>([
   "membership-snapshot",
   "replica-actor-credential",
   "replica-edit-authorization",
@@ -57,73 +57,73 @@ const CORE_KEYS = [
   "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
 ] as const
 
-export function parseDocumentScopeV2(value: unknown): DocumentScopeV2 {
-  assertExactKeysV2(value, ["projectId", "projectEpoch", "docKind", "docId", "shardEpoch"], "DocumentScopeV2")
-  const projectId = parseProjectIdV2(value.projectId)
-  const projectEpoch = parseId128V2(value.projectEpoch)
-  const shardEpoch = parseId128V2(value.shardEpoch)
+export function parseDocumentScope(value: unknown): DocumentScope {
+  assertExactKeys(value, ["projectId", "projectEpoch", "docKind", "docId", "shardEpoch"], "DocumentScope")
+  const projectId = parseProjectId(value.projectId)
+  const projectEpoch = parseId128(value.projectEpoch)
+  const shardEpoch = parseId128(value.shardEpoch)
   if (value.docKind === "project-index") {
     if (value.docId !== "project-index") failCodec("ProjectIndex scope requires docId project-index")
     return Object.freeze({ projectId, projectEpoch, docKind: "project-index", docId: "project-index", shardEpoch })
   }
-  if (value.docKind !== "canvas") failCodec("DocumentScopeV2 docKind is invalid")
-  return Object.freeze({ projectId, projectEpoch, docKind: "canvas", docId: parseCanvasIdV2(value.docId), shardEpoch })
+  if (value.docKind !== "canvas") failCodec("DocumentScope docKind is invalid")
+  return Object.freeze({ projectId, projectEpoch, docKind: "canvas", docId: parseCanvasId(value.docId), shardEpoch })
 }
 
-export function parsePortableStampV2(value: unknown): PortableStampV2 {
-  assertExactKeysV2(value, ["format", "lamport", "actorId", "operationId", "writeOrdinal"], "PortableStampV2")
-  if (value.format !== "convax.portable-stamp/2") failCodec("PortableStampV2 format is invalid")
+export function parsePortableStamp(value: unknown): PortableStamp {
+  assertExactKeys(value, ["format", "lamport", "actorId", "operationId", "writeOrdinal"], "PortableStamp")
+  if (value.format !== "convax.portable-stamp") failCodec("PortableStamp format is invalid")
   return Object.freeze({
     format: value.format,
-    lamport: parseUint64V2(value.lamport),
-    actorId: parseActorIdV2(value.actorId),
-    operationId: parseId128V2(value.operationId),
-    writeOrdinal: parseUint32V2(value.writeOrdinal),
+    lamport: parseUint64(value.lamport),
+    actorId: parseActorId(value.actorId),
+    operationId: parseId128(value.operationId),
+    writeOrdinal: parseUint32(value.writeOrdinal),
   })
 }
 
-export function parseCausalHeadRefV2(value: unknown): CausalHeadRefV2 {
-  assertExactKeysV2(value, ["format", "actorId", "actorSequence", "frameDigest", "lamport"], "CausalHeadRefV2")
-  if (value.format !== "convax.causal-head-ref/2") failCodec("CausalHeadRefV2 format is invalid")
-  const actorSequence = parseUint64V2(value.actorSequence)
+export function parseCausalHeadRef(value: unknown): CausalHeadRef {
+  assertExactKeys(value, ["format", "actorId", "actorSequence", "frameDigest", "lamport"], "CausalHeadRef")
+  if (value.format !== "convax.causal-head-ref") failCodec("CausalHeadRef format is invalid")
+  const actorSequence = parseUint64(value.actorSequence)
   if (actorSequence === "0") failCodec("Causal actor sequence starts at one")
   return Object.freeze({
     format: value.format,
-    actorId: parseActorIdV2(value.actorId),
+    actorId: parseActorId(value.actorId),
     actorSequence,
-    frameDigest: parseDigestV2(value.frameDigest),
-    lamport: parseUint64V2(value.lamport),
+    frameDigest: parseDigest(value.frameDigest),
+    lamport: parseUint64(value.lamport),
   })
 }
 
-export function parseCausalFrontierV2(value: unknown): CausalFrontierV2 {
-  assertExactKeysV2(value, ["format", "heads"], "CausalFrontierV2")
-  if (value.format !== "convax.causal-frontier/2") failCodec("CausalFrontierV2 format is invalid")
-  assertDenseArrayV2(value.heads, "CausalFrontierV2 heads")
-  if (value.heads.length > KERNEL_LIMITS_V2.causalFrontierHeads) failCodec("Causal frontier exceeds 256 heads")
-  const heads = value.heads.map(parseCausalHeadRefV2)
+export function parseCausalFrontier(value: unknown): CausalFrontier {
+  assertExactKeys(value, ["format", "heads"], "CausalFrontier")
+  if (value.format !== "convax.causal-frontier") failCodec("CausalFrontier format is invalid")
+  assertDenseArray(value.heads, "CausalFrontier heads")
+  if (value.heads.length > KERNEL_LIMITS.causalFrontierHeads) failCodec("Causal frontier exceeds 256 heads")
+  const heads = value.heads.map(parseCausalHeadRef)
   assertStrictlySorted(heads, (left, right) => compareDecoded(left.actorId, right.actorId), "Causal frontier heads")
   return Object.freeze({ format: value.format, heads: Object.freeze(heads) })
 }
 
-export function parseReplicaActorHeadSetV2(value: unknown): ReplicaActorHeadSetV2 {
-  assertExactKeysV2(value, ["format", "scope", "heads"], "ReplicaActorHeadSetV2")
-  if (value.format !== "convax.replica-actor-head-set/2") failCodec("ReplicaActorHeadSetV2 format is invalid")
-  assertDenseArrayV2(value.heads, "ReplicaActorHeadSetV2 heads")
-  if (value.heads.length > KERNEL_LIMITS_V2.causalFrontierHeads) failCodec("Replica actor heads exceed 256")
-  const heads = value.heads.map(parseCausalHeadRefV2)
-  assertStrictlySorted(heads, (left, right) => compareDecoded(left.actorId, right.actorId), "ReplicaActorHeadSetV2 heads")
-  return Object.freeze({ format: value.format, scope: parseDocumentScopeV2(value.scope), heads: Object.freeze(heads) })
+export function parseReplicaActorHeadSet(value: unknown): ReplicaActorHeadSet {
+  assertExactKeys(value, ["format", "scope", "heads"], "ReplicaActorHeadSet")
+  if (value.format !== "convax.replica-actor-head-set") failCodec("ReplicaActorHeadSet format is invalid")
+  assertDenseArray(value.heads, "ReplicaActorHeadSet heads")
+  if (value.heads.length > KERNEL_LIMITS.causalFrontierHeads) failCodec("Replica actor heads exceed 256")
+  const heads = value.heads.map(parseCausalHeadRef)
+  assertStrictlySorted(heads, (left, right) => compareDecoded(left.actorId, right.actorId), "ReplicaActorHeadSet heads")
+  return Object.freeze({ format: value.format, scope: parseDocumentScope(value.scope), heads: Object.freeze(heads) })
 }
 
-export function parseCausalContextV2(value: unknown): CausalContextV2 {
-  assertExactKeysV2(value, [
+export function parseCausalContext(value: unknown): CausalContext {
+  assertExactKeys(value, [
     "format", "scope", "baseFrontier", "baseFrontierDigest", "baseStateVectorDigest",
     "baseCanonicalStateDigest", "signerAuthority", "dependencies", "validationArtifactSetDigest",
-  ], "CausalContextV2")
-  if (value.format !== "convax.causal-context/2") failCodec("CausalContextV2 format is invalid")
-  assertDenseArrayV2(value.dependencies, "CausalContextV2 dependencies")
-  if (value.dependencies.length > KERNEL_LIMITS_V2.causalDependencyRefs) failCodec("Causal dependencies exceed 256 refs")
+  ], "CausalContext")
+  if (value.format !== "convax.causal-context") failCodec("CausalContext format is invalid")
+  assertDenseArray(value.dependencies, "CausalContext dependencies")
+  if (value.dependencies.length > KERNEL_LIMITS.causalDependencyRefs) failCodec("Causal dependencies exceed 256 refs")
   const dependencies = value.dependencies.map(parseDependency)
   assertStrictlySorted(dependencies, compareDependency, "Causal dependencies")
   const signerAuthority = parseSignerAuthority(value.signerAuthority)
@@ -132,115 +132,115 @@ export function parseCausalContextV2(value: unknown): CausalContextV2 {
   requireDependency(dependencies, "replica-edit-authorization", signerAuthority.replicaEditAuthorizationCoreDigest)
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    baseFrontier: parseCausalFrontierV2(value.baseFrontier),
-    baseFrontierDigest: parseDigestV2(value.baseFrontierDigest),
-    baseStateVectorDigest: parseDigestV2(value.baseStateVectorDigest),
-    baseCanonicalStateDigest: parseDigestV2(value.baseCanonicalStateDigest),
+    scope: parseDocumentScope(value.scope),
+    baseFrontier: parseCausalFrontier(value.baseFrontier),
+    baseFrontierDigest: parseDigest(value.baseFrontierDigest),
+    baseStateVectorDigest: parseDigest(value.baseStateVectorDigest),
+    baseCanonicalStateDigest: parseDigest(value.baseCanonicalStateDigest),
     signerAuthority,
     dependencies: Object.freeze(dependencies),
-    validationArtifactSetDigest: parseDigestV2(value.validationArtifactSetDigest),
+    validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
   })
 }
 
-export function parseActualWriteEvidenceV2(value: unknown): ActualWriteEvidenceV2 {
-  assertExactKeysV2(value, ["format", "scope", "owner", "ownerSchemaDigest", "intentDigest", "changedPaths", "writes"], "ActualWriteEvidenceV2")
-  if (value.format !== "convax.actual-write-evidence/2") failCodec("ActualWriteEvidenceV2 format is invalid")
-  if (value.owner !== "project-index" && value.owner !== "canvas") failCodec("ActualWriteEvidenceV2 owner is invalid")
-  assertDenseArrayV2(value.changedPaths, "ActualWriteEvidenceV2 changedPaths")
-  assertDenseArrayV2(value.writes, "ActualWriteEvidenceV2 writes")
-  if (value.changedPaths.length > KERNEL_LIMITS_V2.changedPaths || value.writes.length > KERNEL_LIMITS_V2.writes) {
-    failCodec("ActualWriteEvidenceV2 exceeds the kernel outer count limits")
+export function parseActualWriteEvidence(value: unknown): ActualWriteEvidence {
+  assertExactKeys(value, ["format", "scope", "owner", "ownerSchemaDigest", "intentDigest", "changedPaths", "writes"], "ActualWriteEvidence")
+  if (value.format !== "convax.actual-write-evidence") failCodec("ActualWriteEvidence format is invalid")
+  if (value.owner !== "project-index" && value.owner !== "canvas") failCodec("ActualWriteEvidence owner is invalid")
+  assertDenseArray(value.changedPaths, "ActualWriteEvidence changedPaths")
+  assertDenseArray(value.writes, "ActualWriteEvidence writes")
+  if (value.changedPaths.length > KERNEL_LIMITS.changedPaths || value.writes.length > KERNEL_LIMITS.writes) {
+    failCodec("ActualWriteEvidence exceeds the kernel outer count limits")
   }
   const changedPaths = value.changedPaths.map((path, index) => {
-    assertBoundedNfcStringV2(path, 1, KERNEL_LIMITS_V2.oneChangedPathUtf8Bytes, `changedPaths[${index}]`)
+    assertBoundedNfcString(path, 1, KERNEL_LIMITS.oneChangedPathUtf8Bytes, `changedPaths[${index}]`)
     return path
   })
-  assertStrictlySorted(changedPaths, compareUtf8V2, "ActualWriteEvidenceV2 changedPaths")
+  assertStrictlySorted(changedPaths, compareUtf8, "ActualWriteEvidence changedPaths")
   const writes = value.writes.map(parseActualWrite)
-  assertStrictlySorted(writes, compareActualWrite, "ActualWriteEvidenceV2 writes")
+  assertStrictlySorted(writes, compareActualWrite, "ActualWriteEvidence writes")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
+    scope: parseDocumentScope(value.scope),
     owner: value.owner,
-    ownerSchemaDigest: parseDigestV2(value.ownerSchemaDigest),
-    intentDigest: parseDigestV2(value.intentDigest),
+    ownerSchemaDigest: parseDigest(value.ownerSchemaDigest),
+    intentDigest: parseDigest(value.intentDigest),
     changedPaths: Object.freeze(changedPaths),
     writes: Object.freeze(writes),
   })
 }
 
-export function parseValidationArtifactSetV2(value: unknown): ValidationArtifactSetV2 {
-  assertExactKeysV2(value, ["format", "artifacts"], "ValidationArtifactSetV2")
-  if (value.format !== "convax.validation-artifact-set/2") failCodec("ValidationArtifactSetV2 format is invalid")
-  assertDenseArrayV2(value.artifacts, "ValidationArtifactSetV2 artifacts")
-  if (value.artifacts.length > KERNEL_LIMITS_V2.validationArtifactRefs) failCodec("Validation artifacts exceed 64 refs")
+export function parseValidationArtifactSet(value: unknown): ValidationArtifactSet {
+  assertExactKeys(value, ["format", "artifacts"], "ValidationArtifactSet")
+  if (value.format !== "convax.validation-artifact-set") failCodec("ValidationArtifactSet format is invalid")
+  assertDenseArray(value.artifacts, "ValidationArtifactSet artifacts")
+  if (value.artifacts.length > KERNEL_LIMITS.validationArtifactRefs) failCodec("Validation artifacts exceed 64 refs")
   const artifacts = value.artifacts.map(parseValidationArtifact)
-  assertStrictlySorted(artifacts, compareValidationArtifact, "ValidationArtifactSetV2 artifacts")
+  assertStrictlySorted(artifacts, compareValidationArtifact, "ValidationArtifactSet artifacts")
   return Object.freeze({ format: value.format, artifacts: Object.freeze(artifacts) })
 }
 
-export function parseCausalEditCoreV2(value: unknown): CausalEditCoreV2 {
-  assertExactKeysV2(value, CORE_KEYS, "CausalEditCoreV2")
-  if (value.format !== "convax.causal-edit-core/2") failFrame("CausalEditCoreV2 format is invalid")
-  const actorSequence = parseUint64V2(value.actorSequence)
+export function parseCausalEditCore(value: unknown): CausalEditCore {
+  assertExactKeys(value, CORE_KEYS, "CausalEditCore")
+  if (value.format !== "convax.causal-edit-core") failFrame("CausalEditCore format is invalid")
+  const actorSequence = parseUint64(value.actorSequence)
   if (actorSequence === "0") failFrame("Causal edit actor sequence starts at one")
   if (value.predecessorFrameDigest !== null && typeof value.predecessorFrameDigest !== "string") failFrame("Causal predecessor is invalid")
-  assertBoundedNfcStringV2(value.intentKind, 1, 128, "Causal intentKind")
+  assertBoundedNfcString(value.intentKind, 1, 128, "Causal intentKind")
   if (!/^[\x20-\x7e]+$/u.test(value.intentKind)) failFrame("Causal intentKind must be ASCII")
-  const protocolDigest = parseDigestV2(value.protocolDigest)
-  if (protocolDigest !== PINNED_AUTHORITY_IDENTITIES_V2.protocolDigest) failFrame("Causal edit protocol digest is not the frozen v2 digest")
+  const protocolDigest = parseDigest(value.protocolDigest)
+  if (protocolDigest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest) failFrame("Causal edit protocol digest is not the current protocol digest")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    actorId: parseActorIdV2(value.actorId),
+    scope: parseDocumentScope(value.scope),
+    actorId: parseActorId(value.actorId),
     actorSequence,
-    predecessorFrameDigest: value.predecessorFrameDigest === null ? null : parseDigestV2(value.predecessorFrameDigest),
-    operationId: parseId128V2(value.operationId),
-    lamport: parseUint64V2(value.lamport),
+    predecessorFrameDigest: value.predecessorFrameDigest === null ? null : parseDigest(value.predecessorFrameDigest),
+    operationId: parseId128(value.operationId),
+    lamport: parseUint64(value.lamport),
     intentKind: value.intentKind,
-    intentDigest: parseDigestV2(value.intentDigest),
-    causalContextDigest: parseDigestV2(value.causalContextDigest),
-    baseFrontierDigest: parseDigestV2(value.baseFrontierDigest),
-    baseStateVectorDigest: parseDigestV2(value.baseStateVectorDigest),
-    baseCanonicalStateDigest: parseDigestV2(value.baseCanonicalStateDigest),
-    yjsUpdateDigest: parseDigestV2(value.yjsUpdateDigest),
-    postStateVectorDigest: parseDigestV2(value.postStateVectorDigest),
-    postCanonicalStateDigest: parseDigestV2(value.postCanonicalStateDigest),
-    actualWriteEvidenceDigest: parseDigestV2(value.actualWriteEvidenceDigest),
-    typedIntentJcsByteLength: parseUint64V2(value.typedIntentJcsByteLength),
-    causalContextJcsByteLength: parseUint64V2(value.causalContextJcsByteLength),
-    baseStateVectorByteLength: parseUint64V2(value.baseStateVectorByteLength),
-    yjsUpdateByteLength: parseUint64V2(value.yjsUpdateByteLength),
-    actualWriteEvidenceJcsByteLength: parseUint64V2(value.actualWriteEvidenceJcsByteLength),
+    intentDigest: parseDigest(value.intentDigest),
+    causalContextDigest: parseDigest(value.causalContextDigest),
+    baseFrontierDigest: parseDigest(value.baseFrontierDigest),
+    baseStateVectorDigest: parseDigest(value.baseStateVectorDigest),
+    baseCanonicalStateDigest: parseDigest(value.baseCanonicalStateDigest),
+    yjsUpdateDigest: parseDigest(value.yjsUpdateDigest),
+    postStateVectorDigest: parseDigest(value.postStateVectorDigest),
+    postCanonicalStateDigest: parseDigest(value.postCanonicalStateDigest),
+    actualWriteEvidenceDigest: parseDigest(value.actualWriteEvidenceDigest),
+    typedIntentJcsByteLength: parseUint64(value.typedIntentJcsByteLength),
+    causalContextJcsByteLength: parseUint64(value.causalContextJcsByteLength),
+    baseStateVectorByteLength: parseUint64(value.baseStateVectorByteLength),
+    yjsUpdateByteLength: parseUint64(value.yjsUpdateByteLength),
+    actualWriteEvidenceJcsByteLength: parseUint64(value.actualWriteEvidenceJcsByteLength),
     protocolDigest,
-    ownerSchemaDigest: parseDigestV2(value.ownerSchemaDigest),
-    canonicalizerDigest: parseDigestV2(value.canonicalizerDigest),
-    validationArtifactSetDigest: parseDigestV2(value.validationArtifactSetDigest),
-    membershipSnapshotDigest: parseDigestV2(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigestV2(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigestV2(value.replicaEditAuthorizationCoreDigest),
+    ownerSchemaDigest: parseDigest(value.ownerSchemaDigest),
+    canonicalizerDigest: parseDigest(value.canonicalizerDigest),
+    validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
+    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
+    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
+    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
   })
 }
 
-export function parseCausalEditFrameHeaderV2(value: unknown): CausalEditFrameHeaderV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "replicaSignature"], "CausalEditFrameHeaderV2")
-  if (value.format !== "convax.causal-edit-frame/2") failFrame("Causal edit frame header format is invalid")
+export function parseCausalEditFrameHeader(value: unknown): CausalEditFrameHeader {
+  assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "CausalEditFrameHeader")
+  if (value.format !== "convax.causal-edit-frame") failFrame("Causal edit frame header format is invalid")
   return Object.freeze({
     format: value.format,
-    core: parseCausalEditCoreV2(value.core),
-    coreDigest: parseDigestV2(value.coreDigest),
-    replicaSignature: parseSignatureV2(value.replicaSignature),
+    core: parseCausalEditCore(value.core),
+    coreDigest: parseDigest(value.coreDigest),
+    replicaSignature: parseSignature(value.replicaSignature),
   })
 }
 
-export function assertSameScopeV2(left: DocumentScopeV2, right: DocumentScopeV2, label = "document scope"): void {
+export function assertSameScope(left: DocumentScope, right: DocumentScope, label = "document scope"): void {
   if (left.projectId !== right.projectId || left.projectEpoch !== right.projectEpoch || left.docKind !== right.docKind || left.docId !== right.docId || left.shardEpoch !== right.shardEpoch) {
     failFrame(`${label} fields are not byte-identical`)
   }
 }
 
-export function assertCoreSectionLengthsV2(core: CausalEditCoreV2, lengths: readonly number[]): void {
+export function assertCoreSectionLengths(core: CausalEditCore, lengths: readonly number[]): void {
   const fields = [
     core.typedIntentJcsByteLength,
     core.causalContextJcsByteLength,
@@ -249,62 +249,62 @@ export function assertCoreSectionLengthsV2(core: CausalEditCoreV2, lengths: read
     core.actualWriteEvidenceJcsByteLength,
   ]
   for (let index = 0; index < fields.length; index += 1) {
-    if (uint64ToBigIntV2(fields[index]!) !== BigInt(lengths[index]!)) failFrame("Causal section length differs from its signed core field")
+    if (uint64ToBigInt(fields[index]!) !== BigInt(lengths[index]!)) failFrame("Causal section length differs from its signed core field")
   }
 }
 
-function parseSignerAuthority(value: unknown): CausalSignerAuthorityV2 {
-  assertExactKeysV2(value, [
+function parseSignerAuthority(value: unknown): CausalSignerAuthority {
+  assertExactKeys(value, [
     "memberId", "replicaId", "actorId", "memberAuthorizationEpoch", "replicaAuthorizationEpoch",
     "membershipSnapshotDigest", "replicaActorCredentialCoreDigest", "replicaEditAuthorizationCoreDigest",
-  ], "CausalSignerAuthorityV2")
+  ], "CausalSignerAuthority")
   return Object.freeze({
-    memberId: parseMemberIdV2(value.memberId),
-    replicaId: parseReplicaIdV2(value.replicaId),
-    actorId: parseActorIdV2(value.actorId),
-    memberAuthorizationEpoch: parseId128V2(value.memberAuthorizationEpoch),
-    replicaAuthorizationEpoch: parseId128V2(value.replicaAuthorizationEpoch),
-    membershipSnapshotDigest: parseDigestV2(value.membershipSnapshotDigest),
-    replicaActorCredentialCoreDigest: parseDigestV2(value.replicaActorCredentialCoreDigest),
-    replicaEditAuthorizationCoreDigest: parseDigestV2(value.replicaEditAuthorizationCoreDigest),
+    memberId: parseMemberId(value.memberId),
+    replicaId: parseReplicaId(value.replicaId),
+    actorId: parseActorId(value.actorId),
+    memberAuthorizationEpoch: parseId128(value.memberAuthorizationEpoch),
+    replicaAuthorizationEpoch: parseId128(value.replicaAuthorizationEpoch),
+    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
+    replicaActorCredentialCoreDigest: parseDigest(value.replicaActorCredentialCoreDigest),
+    replicaEditAuthorizationCoreDigest: parseDigest(value.replicaEditAuthorizationCoreDigest),
   })
 }
 
-function parseDependency(value: unknown): CausalDependencyRefV2 {
-  assertExactKeysV2(value, ["kind", "digest"], "CausalDependencyRefV2")
-  if (typeof value.kind !== "string" || !DEPENDENCY_KINDS.has(value.kind as CausalDependencyKindV2)) failCodec("Causal dependency kind is invalid")
-  return Object.freeze({ kind: value.kind as CausalDependencyKindV2, digest: parseDigestV2(value.digest) })
+function parseDependency(value: unknown): CausalDependencyRef {
+  assertExactKeys(value, ["kind", "digest"], "CausalDependencyRef")
+  if (typeof value.kind !== "string" || !DEPENDENCY_KINDS.has(value.kind as CausalDependencyKind)) failCodec("Causal dependency kind is invalid")
+  return Object.freeze({ kind: value.kind as CausalDependencyKind, digest: parseDigest(value.digest) })
 }
 
-function parseActualWrite(value: unknown): ActualWriteV2 {
-  assertExactKeysV2(value, ["entityKind", "entityId", "field", "valueDigest"], "ActualWriteV2")
-  assertBoundedNfcStringV2(value.entityKind, 1, 64, "ActualWriteV2 entityKind")
-  if (!/^[\x21-\x7e]+$/u.test(value.entityKind)) failCodec("ActualWriteV2 entityKind must be an ASCII token")
-  assertBoundedNfcStringV2(value.entityId, 1, 256, "ActualWriteV2 entityId")
-  assertBoundedNfcStringV2(value.field, 1, 256, "ActualWriteV2 field")
-  return Object.freeze({ entityKind: value.entityKind, entityId: value.entityId, field: value.field, valueDigest: parseDigestV2(value.valueDigest) })
+function parseActualWrite(value: unknown): ActualWrite {
+  assertExactKeys(value, ["entityKind", "entityId", "field", "valueDigest"], "ActualWrite")
+  assertBoundedNfcString(value.entityKind, 1, 64, "ActualWrite entityKind")
+  if (!/^[\x21-\x7e]+$/u.test(value.entityKind)) failCodec("ActualWrite entityKind must be an ASCII token")
+  assertBoundedNfcString(value.entityId, 1, 256, "ActualWrite entityId")
+  assertBoundedNfcString(value.field, 1, 256, "ActualWrite field")
+  return Object.freeze({ entityKind: value.entityKind, entityId: value.entityId, field: value.field, valueDigest: parseDigest(value.valueDigest) })
 }
 
-function parseValidationArtifact(value: unknown): ValidationArtifactRefV2 {
-  assertExactKeysV2(value, ["owner", "format", "artifactDigest"], "ValidationArtifactRefV2")
+function parseValidationArtifact(value: unknown): ValidationArtifactRef {
+  assertExactKeys(value, ["owner", "format", "artifactDigest"], "ValidationArtifactRef")
   if (typeof value.owner !== "string" || !ARTIFACT_OWNERS.has(value.owner)) failCodec("Validation artifact owner is invalid")
-  assertBoundedNfcStringV2(value.format, 1, 256, "Validation artifact format")
-  return Object.freeze({ owner: value.owner as ValidationArtifactRefV2["owner"], format: value.format, artifactDigest: parseDigestV2(value.artifactDigest) })
+  assertBoundedNfcString(value.format, 1, 256, "Validation artifact format")
+  return Object.freeze({ owner: value.owner as ValidationArtifactRef["owner"], format: value.format, artifactDigest: parseDigest(value.artifactDigest) })
 }
 
-function compareDependency(left: CausalDependencyRefV2, right: CausalDependencyRefV2): number {
-  return compareUtf8V2(left.kind, right.kind) || compareDecoded(left.digest, right.digest)
+function compareDependency(left: CausalDependencyRef, right: CausalDependencyRef): number {
+  return compareUtf8(left.kind, right.kind) || compareDecoded(left.digest, right.digest)
 }
 
-function compareActualWrite(left: ActualWriteV2, right: ActualWriteV2): number {
-  return compareUtf8V2(left.entityKind, right.entityKind) || compareUtf8V2(left.entityId, right.entityId) || compareUtf8V2(left.field, right.field) || compareDecoded(left.valueDigest, right.valueDigest)
+function compareActualWrite(left: ActualWrite, right: ActualWrite): number {
+  return compareUtf8(left.entityKind, right.entityKind) || compareUtf8(left.entityId, right.entityId) || compareUtf8(left.field, right.field) || compareDecoded(left.valueDigest, right.valueDigest)
 }
 
-function compareValidationArtifact(left: ValidationArtifactRefV2, right: ValidationArtifactRefV2): number {
-  return compareUtf8V2(left.owner, right.owner) || compareUtf8V2(left.format, right.format) || compareDecoded(left.artifactDigest, right.artifactDigest)
+function compareValidationArtifact(left: ValidationArtifactRef, right: ValidationArtifactRef): number {
+  return compareUtf8(left.owner, right.owner) || compareUtf8(left.format, right.format) || compareDecoded(left.artifactDigest, right.artifactDigest)
 }
 
-function requireDependency(dependencies: readonly CausalDependencyRefV2[], kind: CausalDependencyKindV2, digest: string): void {
+function requireDependency(dependencies: readonly CausalDependencyRef[], kind: CausalDependencyKind, digest: string): void {
   if (!dependencies.some((dependency) => dependency.kind === kind && dependency.digest === digest)) failCodec(`Causal context lacks mandatory ${kind} dependency`)
 }
 

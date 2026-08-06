@@ -1,29 +1,29 @@
-import { assertVerifiedProtocolAuthorityV2, type VerifiedProtocolAuthorityV2 } from "./authority"
-import { cloneBytesV2 } from "./binary"
-import { assertDocumentOwnerBindingV2 } from "./canonicalizer"
-import { parseDigestV2 } from "./codecs"
+import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from "./authority"
+import { cloneBytes } from "./binary"
+import { assertDocumentOwnerBinding } from "./canonicalizer"
+import { parseDigest } from "./codecs"
 import type {
-  CreateOwnerExternalFactAttemptPortResultV2,
-  DocumentOwnerKindV2,
-  DocumentOwnerProtocolDefinitionV2,
-  DocumentOwnerProtocolPortV2,
-  DocumentOwnerRuntimeV2,
-  OwnerApplyResultV2,
-  OwnerExternalFactPortFactoryV2,
-  OwnerExternalFactPortV2,
-  OwnerExternalFactRequirementV2,
-  OwnerHistoryMaterializationPortV2,
-  OwnerIntentClosureDefinitionV2,
-  OwnerIntentClosurePortV2,
-  OwnerIntentDependenciesV2,
-  OwnerProcessValueFactoryV2,
-  OwnerValidatedStateV2,
-  SelectedDocumentOwnerArtifactDefinitionV2,
-  SelectedDocumentOwnerArtifactFactoryV2,
-  ValidationArtifactRefV2,
+  CreateOwnerExternalFactAttemptPortResult,
+  DocumentOwnerKind,
+  DocumentOwnerProtocolDefinition,
+  DocumentOwnerProtocolPort,
+  DocumentOwnerRuntime,
+  OwnerApplyResult,
+  OwnerExternalFactPortFactory,
+  OwnerExternalFactPort,
+  OwnerExternalFactRequirement,
+  OwnerHistoryMaterializationPort,
+  OwnerIntentClosureDefinition,
+  OwnerIntentClosurePort,
+  OwnerIntentDependencies,
+  OwnerProcessValueFactory,
+  OwnerValidatedState,
+  SelectedDocumentOwnerArtifactDefinition,
+  SelectedDocumentOwnerArtifactFactory,
+  ValidationArtifactRef,
 } from "./contracts"
-import { ordinarySha256V2 } from "./digest"
-import { CollaborationKernelErrorV2 } from "./errors"
+import { ordinarySha256 } from "./digest"
+import { CollaborationKernelError } from "./errors"
 
 const OWNER_FACT_ARTIFACT_LIMIT = 64
 const OWNER_FACT_LIMIT = 64
@@ -31,57 +31,57 @@ const OWNER_FACT_REQUEST_LIMIT = 64 * 1024
 const OWNER_FACT_REQUEST_TOTAL_LIMIT = 1024 * 1024
 const OWNER_FACT_KIND = /^[a-z][a-z0-9.-]{0,127}$/u
 
-interface OwnerRuntimeRecordV2 {
-  readonly owner: DocumentOwnerKindV2
-  readonly authority: VerifiedProtocolAuthorityV2
+interface OwnerRuntimeRecord {
+  readonly owner: DocumentOwnerKind
+  readonly authority: CurrentProtocolAuthority
   readonly protocolPort: object
   readonly closurePort: object
   readonly externalFactPortFactory: object
 }
 
-interface ProcessValueRecordV2 {
-  readonly owner: DocumentOwnerKindV2
+interface ProcessValueRecord {
+  readonly owner: DocumentOwnerKind
   readonly factoryIdentity: object
   readonly kind: "state" | "result"
 }
 
 const liveFactories = new WeakSet<object>()
-const liveRuntimes = new WeakMap<object, OwnerRuntimeRecordV2>()
-const liveProtocolPorts = new WeakMap<object, OwnerRuntimeRecordV2>()
-const liveClosurePorts = new WeakMap<object, OwnerRuntimeRecordV2>()
-const liveExternalFactFactories = new WeakMap<object, OwnerRuntimeRecordV2>()
-const liveExternalFactPorts = new WeakMap<object, OwnerRuntimeRecordV2>()
-const liveProcessValues = new WeakMap<object, ProcessValueRecordV2>()
+const liveRuntimes = new WeakMap<object, OwnerRuntimeRecord>()
+const liveProtocolPorts = new WeakMap<object, OwnerRuntimeRecord>()
+const liveClosurePorts = new WeakMap<object, OwnerRuntimeRecord>()
+const liveExternalFactFactories = new WeakMap<object, OwnerRuntimeRecord>()
+const liveExternalFactPorts = new WeakMap<object, OwnerRuntimeRecord>()
+const liveProcessValues = new WeakMap<object, ProcessValueRecord>()
 
-export function createSelectedDocumentOwnerArtifactFactoryV2<K extends DocumentOwnerKindV2>(
-  authority: VerifiedProtocolAuthorityV2,
+export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwnerKind>(
+  authority: CurrentProtocolAuthority,
   owner: K,
-): SelectedDocumentOwnerArtifactFactoryV2<K> {
-  assertVerifiedProtocolAuthorityV2(authority)
+): SelectedDocumentOwnerArtifactFactory<K> {
+  assertCurrentProtocolAuthority(authority)
   const artifactDigest = selectedArtifactDigest(authority, owner)
   const factoryIdentity = Object.freeze({})
 
   const processValues = Object.freeze({
-    wrapValidatedState(value: unknown): OwnerValidatedStateV2<K> {
-      const wrapped = Object.freeze({ owner, value }) as OwnerValidatedStateV2<K>
+    wrapValidatedState(value: unknown): OwnerValidatedState<K> {
+      const wrapped = Object.freeze({ owner, value }) as OwnerValidatedState<K>
       liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "state" })
       return wrapped
     },
-    wrapApplyResult(value: unknown): OwnerApplyResultV2<K> {
-      const wrapped = Object.freeze({ owner, value }) as OwnerApplyResultV2<K>
+    wrapApplyResult(value: unknown): OwnerApplyResult<K> {
+      const wrapped = Object.freeze({ owner, value }) as OwnerApplyResult<K>
       liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "result" })
       return wrapped
     },
-  }) as OwnerProcessValueFactoryV2<K>
+  }) as OwnerProcessValueFactory<K>
 
   const factory = Object.freeze({
-    createRuntime(definition: SelectedDocumentOwnerArtifactDefinitionV2<K>) {
+    createRuntime(definition: SelectedDocumentOwnerArtifactDefinition<K>) {
       if (!isObject(definition) || definition.owner !== owner || typeof definition.createDefinitions !== "function") {
         return rejectedRuntime("owner-definition-mismatch")
       }
       let definitions: Readonly<{
-        protocol: DocumentOwnerProtocolDefinitionV2<K>
-        closure: OwnerIntentClosureDefinitionV2<K>
+        protocol: DocumentOwnerProtocolDefinition<K>
+        closure: OwnerIntentClosureDefinition<K>
       }>
       try {
         definitions = definition.createDefinitions(processValues)
@@ -95,7 +95,7 @@ export function createSelectedDocumentOwnerArtifactFactoryV2<K extends DocumentO
       if (definitions.protocol.schemaDigest !== artifactDigest) return rejectedRuntime("owner-artifact-mismatch")
       try {
         const protocolPort = createProtocolPort(definitions.protocol, owner, factoryIdentity)
-        assertDocumentOwnerBindingV2(protocolPort)
+        assertDocumentOwnerBinding(protocolPort)
         const runtimeRecordShell = {
           owner,
           authority,
@@ -105,8 +105,8 @@ export function createSelectedDocumentOwnerArtifactFactoryV2<K extends DocumentO
         }
         const externalFactPortFactory = createExternalFactPortFactory(owner, factoryIdentity, runtimeRecordShell)
         const closurePort = createClosurePort(definitions.closure, protocolPort, owner, factoryIdentity, runtimeRecordShell)
-        const record: OwnerRuntimeRecordV2 = Object.freeze({ owner, authority, protocolPort, closurePort, externalFactPortFactory })
-        const runtime = Object.freeze({ artifactDigest, protocolPort, closurePort, externalFactPortFactory }) as DocumentOwnerRuntimeV2<K>
+        const record: OwnerRuntimeRecord = Object.freeze({ owner, authority, protocolPort, closurePort, externalFactPortFactory })
+        const runtime = Object.freeze({ artifactDigest, protocolPort, closurePort, externalFactPortFactory }) as DocumentOwnerRuntime<K>
         liveRuntimes.set(runtime, record)
         liveProtocolPorts.set(protocolPort, record)
         liveClosurePorts.set(closurePort, record)
@@ -116,19 +116,19 @@ export function createSelectedDocumentOwnerArtifactFactoryV2<K extends DocumentO
         return rejectedRuntime("owner-runtime-invalid")
       }
     },
-  }) as SelectedDocumentOwnerArtifactFactoryV2<K>
+  }) as SelectedDocumentOwnerArtifactFactory<K>
   liveFactories.add(factory)
   return factory
 }
 
-export function assertDocumentOwnerRuntimeV2(
+export function assertDocumentOwnerRuntime(
   runtime: unknown,
-  authority?: VerifiedProtocolAuthorityV2,
-): asserts runtime is DocumentOwnerRuntimeV2 {
+  authority?: CurrentProtocolAuthority,
+): asserts runtime is DocumentOwnerRuntime {
   const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
-  const selected = runtime as DocumentOwnerRuntimeV2
+  const selected = runtime as DocumentOwnerRuntime
   if (authority !== undefined) {
-    assertVerifiedProtocolAuthorityV2(authority)
+    assertCurrentProtocolAuthority(authority)
     if (record.authority !== authority) invalid("Document-owner runtime belongs to a different protocol authority")
   }
   if (
@@ -140,11 +140,11 @@ export function assertDocumentOwnerRuntimeV2(
   ) invalid("Document-owner runtime closure is invalid")
 }
 
-export function assertOwnerExternalFactPortV2(
+export function assertOwnerExternalFactPort(
   port: unknown,
-  runtime: DocumentOwnerRuntimeV2,
-): asserts port is OwnerExternalFactPortV2 {
-  assertDocumentOwnerRuntimeV2(runtime)
+  runtime: DocumentOwnerRuntime,
+): asserts port is OwnerExternalFactPort {
+  assertDocumentOwnerRuntime(runtime)
   const portRecord = objectRecord(port, liveExternalFactPorts, "A live owner external-fact attempt port is required")
   const runtimeRecord = liveRuntimes.get(runtime)!
   if (
@@ -154,11 +154,11 @@ export function assertOwnerExternalFactPortV2(
   ) invalid("Owner external-fact port belongs to a different runtime")
 }
 
-function createProtocolPort<K extends DocumentOwnerKindV2>(
-  definition: DocumentOwnerProtocolDefinitionV2<K>,
+function createProtocolPort<K extends DocumentOwnerKind>(
+  definition: DocumentOwnerProtocolDefinition<K>,
   owner: K,
   factoryIdentity: object,
-): DocumentOwnerProtocolPortV2<K> {
+): DocumentOwnerProtocolPort<K> {
   requireFunction(definition.decodeIntent)
   requireFunction(definition.validateBase)
   requireFunction(definition.applyIntent)
@@ -167,31 +167,31 @@ function createProtocolPort<K extends DocumentOwnerKindV2>(
   requireFunction(definition.deriveActualWriteEvidence)
   const port = Object.freeze({
     owner,
-    schemaDigest: parseDigestV2(definition.schemaDigest),
+    schemaDigest: parseDigest(definition.schemaDigest),
     canonicalizerDescriptor: definition.canonicalizerDescriptor,
-    canonicalizerDigest: parseDigestV2(definition.canonicalizerDigest),
+    canonicalizerDigest: parseDigest(definition.canonicalizerDigest),
     decodeIntent(exactJcs: Uint8Array) {
-      return definition.decodeIntent(cloneBytesV2(exactJcs, "owner intent"))
+      return definition.decodeIntent(cloneBytes(exactJcs, "owner intent"))
     },
-    validateBase(document: Parameters<DocumentOwnerProtocolDefinitionV2<K>["validateBase"]>[0]) {
+    validateBase(document: Parameters<DocumentOwnerProtocolDefinition<K>["validateBase"]>[0]) {
       const result = definition.validateBase(document)
       if (typeof result !== "string") requireProcessValue(result, owner, factoryIdentity, "state")
       return result
     },
     applyIntent(
-      candidate: Parameters<DocumentOwnerProtocolDefinitionV2<K>["applyIntent"]>[0],
-      context: Parameters<DocumentOwnerProtocolDefinitionV2<K>["applyIntent"]>[1],
+      candidate: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[0],
+      context: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[1],
       intent: unknown,
-      externalFacts: OwnerExternalFactPortV2<K>,
+      externalFacts: OwnerExternalFactPort<K>,
     ) {
       const result = definition.applyIntent(candidate, context, intent, externalFacts)
       if (typeof result !== "string") requireProcessValue(result, owner, factoryIdentity, "result")
       return result
     },
     validatePost(
-      base: OwnerValidatedStateV2<K>,
-      candidate: Parameters<DocumentOwnerProtocolDefinitionV2<K>["validatePost"]>[1],
-      result: OwnerApplyResultV2<K>,
+      base: OwnerValidatedState<K>,
+      candidate: Parameters<DocumentOwnerProtocolDefinition<K>["validatePost"]>[1],
+      result: OwnerApplyResult<K>,
     ) {
       requireProcessValue(base, owner, factoryIdentity, "state")
       requireProcessValue(result, owner, factoryIdentity, "result")
@@ -199,69 +199,69 @@ function createProtocolPort<K extends DocumentOwnerKindV2>(
       if (typeof value !== "string") requireProcessValue(value, owner, factoryIdentity, "state")
       return value
     },
-    canonicalStateBytes(document: Parameters<DocumentOwnerProtocolDefinitionV2<K>["canonicalStateBytes"]>[0]) {
+    canonicalStateBytes(document: Parameters<DocumentOwnerProtocolDefinition<K>["canonicalStateBytes"]>[0]) {
       const result = definition.canonicalStateBytes(document)
-      return typeof result === "string" ? result : cloneBytesV2(result, "owner canonical-state bytes")
+      return typeof result === "string" ? result : cloneBytes(result, "owner canonical-state bytes")
     },
-    deriveActualWriteEvidence(result: OwnerApplyResultV2<K>) {
+    deriveActualWriteEvidence(result: OwnerApplyResult<K>) {
       requireProcessValue(result, owner, factoryIdentity, "result")
       return definition.deriveActualWriteEvidence(result)
     },
-  }) as DocumentOwnerProtocolPortV2<K>
+  }) as DocumentOwnerProtocolPort<K>
   return port
 }
 
-function createClosurePort<K extends DocumentOwnerKindV2>(
-  definition: OwnerIntentClosureDefinitionV2<K>,
-  protocolPort: DocumentOwnerProtocolPortV2<K>,
+function createClosurePort<K extends DocumentOwnerKind>(
+  definition: OwnerIntentClosureDefinition<K>,
+  protocolPort: DocumentOwnerProtocolPort<K>,
   owner: K,
   factoryIdentity: object,
-  recordShell: OwnerRuntimeRecordV2,
-): OwnerIntentClosurePortV2<K> {
+  recordShell: OwnerRuntimeRecord,
+): OwnerIntentClosurePort<K> {
   requireFunction(definition.inspectIntent)
   requireFunction(definition.discoverDependencies)
-  let history: OwnerHistoryMaterializationPortV2<K> | null = null
+  let history: OwnerHistoryMaterializationPort<K> | null = null
   if (definition.history !== null) {
     if (!isObject(definition.history)) invalid("Owner history definition is invalid")
     requireFunction(definition.history.discoverDependencies)
     requireFunction(definition.history.materialize)
     const historyDefinition = definition.history
     history = Object.freeze({
-      discoverDependencies(input: Parameters<OwnerHistoryMaterializationPortV2<K>["discoverDependencies"]>[0]) {
+      discoverDependencies(input: Parameters<OwnerHistoryMaterializationPort<K>["discoverDependencies"]>[0]) {
         requireProcessValue(input.base, owner, factoryIdentity, "state")
         return historyDefinition.discoverDependencies(input)
       },
-      materialize(input: Parameters<OwnerHistoryMaterializationPortV2<K>["materialize"]>[0]) {
+      materialize(input: Parameters<OwnerHistoryMaterializationPort<K>["materialize"]>[0]) {
         requireProcessValue(input.base, owner, factoryIdentity, "state")
         requireLiveFactPort(input.externalFacts, recordShell)
         return historyDefinition.materialize(input)
       },
-    }) as OwnerHistoryMaterializationPortV2<K>
+    }) as OwnerHistoryMaterializationPort<K>
   }
   return Object.freeze({
     protocolPort,
     inspectIntent: definition.inspectIntent.bind(definition),
     discoverDependencies: definition.discoverDependencies.bind(definition),
     history,
-  }) as OwnerIntentClosurePortV2<K>
+  }) as OwnerIntentClosurePort<K>
 }
 
-function createExternalFactPortFactory<K extends DocumentOwnerKindV2>(
+function createExternalFactPortFactory<K extends DocumentOwnerKind>(
   owner: K,
   _factoryIdentity: object,
-  recordShell: OwnerRuntimeRecordV2,
-): OwnerExternalFactPortFactoryV2<K> {
+  recordShell: OwnerRuntimeRecord,
+): OwnerExternalFactPortFactory<K> {
   return Object.freeze({
-    createAttemptPort(input: Parameters<OwnerExternalFactPortFactoryV2<K>["createAttemptPort"]>[0]): CreateOwnerExternalFactAttemptPortResultV2<K> {
+    createAttemptPort(input: Parameters<OwnerExternalFactPortFactory<K>["createAttemptPort"]>[0]): CreateOwnerExternalFactAttemptPortResult<K> {
       if (input.resolver.owner !== owner) return Object.freeze({ status: "rejected", code: "wrong-owner" })
       const normalized = normalizeDependencies(input.declared, owner)
       if (typeof normalized === "string") return Object.freeze({ status: "rejected", code: normalized })
-      const consumedArtifacts = new Map<string, ValidationArtifactRefV2>()
-      const consumedFacts = new Map<string, OwnerExternalFactRequirementV2<K>>()
+      const consumedArtifacts = new Map<string, ValidationArtifactRef>()
+      const consumedFacts = new Map<string, OwnerExternalFactRequirement<K>>()
       const declaredArtifacts = new Map(normalized.validationArtifacts.map((ref) => [artifactKey(ref), ref]))
       const declaredFacts = new Map(normalized.externalFacts.map((requirement) => [factKey(requirement), requirement]))
       const port = Object.freeze({
-        resolveArtifact(ref: ValidationArtifactRefV2) {
+        resolveArtifact(ref: ValidationArtifactRef) {
           const key = artifactKey(ref)
           const declared = declaredArtifacts.get(key)
           if (!declared) return Object.freeze({ status: "rejected", code: "artifact-not-declared" as const })
@@ -269,14 +269,14 @@ function createExternalFactPortFactory<K extends DocumentOwnerKindV2>(
           if (result.status === "resolved") {
             if (artifactKey(result.ref) !== key) return Object.freeze({ status: "rejected", code: "artifact-invalid" as const })
             consumedArtifacts.set(key, declared)
-            return Object.freeze({ ...result, ref: declared, exactBytes: cloneBytesV2(result.exactBytes, "validation artifact") })
+            return Object.freeze({ ...result, ref: declared, exactBytes: cloneBytes(result.exactBytes, "validation artifact") })
           }
           if (result.status === "pending" && artifactKey(result.ref) !== key) {
             return Object.freeze({ status: "rejected", code: "artifact-invalid" as const })
           }
           return result
         },
-        resolveFact(requirement: OwnerExternalFactRequirementV2<K>) {
+        resolveFact(requirement: OwnerExternalFactRequirement<K>) {
           const key = factKey(requirement)
           const declared = declaredFacts.get(key)
           if (!declared) return Object.freeze({ status: "rejected", code: "fact-not-declared" as const })
@@ -291,23 +291,23 @@ function createExternalFactPortFactory<K extends DocumentOwnerKindV2>(
           }
           return result
         },
-        consumedDependencies(): OwnerIntentDependenciesV2<K> {
+        consumedDependencies(): OwnerIntentDependencies<K> {
           return Object.freeze({
             validationArtifacts: Object.freeze(normalized.validationArtifacts.filter((ref) => consumedArtifacts.has(artifactKey(ref)))),
             externalFacts: Object.freeze(normalized.externalFacts.filter((requirement) => consumedFacts.has(factKey(requirement)))),
           })
         },
-      }) as OwnerExternalFactPortV2<K>
+      }) as OwnerExternalFactPort<K>
       liveExternalFactPorts.set(port, recordShell)
       return Object.freeze({ status: "created", port })
     },
-  }) as OwnerExternalFactPortFactoryV2<K>
+  }) as OwnerExternalFactPortFactory<K>
 }
 
-function normalizeDependencies<K extends DocumentOwnerKindV2>(
-  value: OwnerIntentDependenciesV2<K>,
+function normalizeDependencies<K extends DocumentOwnerKind>(
+  value: OwnerIntentDependencies<K>,
   owner: K,
-): OwnerIntentDependenciesV2<K> | Exclude<CreateOwnerExternalFactAttemptPortResultV2<K>, { status: "created" }>["code"] {
+): OwnerIntentDependencies<K> | Exclude<CreateOwnerExternalFactAttemptPortResult<K>, { status: "created" }>["code"] {
   if (!isObject(value) || !Array.isArray(value.validationArtifacts) || !Array.isArray(value.externalFacts)) return "dependency-invalid"
   if (value.validationArtifacts.length > OWNER_FACT_ARTIFACT_LIMIT || value.externalFacts.length > OWNER_FACT_LIMIT) return "dependency-cap-exceeded"
   let requestBytes = 0
@@ -315,8 +315,8 @@ function normalizeDependencies<K extends DocumentOwnerKindV2>(
     for (const ref of value.validationArtifacts) artifactKey(ref)
     for (const requirement of value.externalFacts) {
       if (requirement.owner !== owner || !OWNER_FACT_KIND.test(requirement.kind)) return "dependency-invalid"
-      const bytes = cloneBytesV2(requirement.request.exactJcs, "external-fact request")
-      if (bytes.byteLength > OWNER_FACT_REQUEST_LIMIT || ordinarySha256V2(bytes) !== requirement.request.sha256) return "dependency-invalid"
+      const bytes = cloneBytes(requirement.request.exactJcs, "external-fact request")
+      if (bytes.byteLength > OWNER_FACT_REQUEST_LIMIT || ordinarySha256(bytes) !== requirement.request.sha256) return "dependency-invalid"
       requestBytes += bytes.byteLength
     }
   } catch {
@@ -331,34 +331,34 @@ function normalizeDependencies<K extends DocumentOwnerKindV2>(
     validationArtifacts: Object.freeze(value.validationArtifacts.map((ref) => Object.freeze({ ...ref }))),
     externalFacts: Object.freeze(value.externalFacts.map((requirement) => Object.freeze({
       ...requirement,
-      request: Object.freeze({ ...requirement.request, exactJcs: cloneBytesV2(requirement.request.exactJcs, "external-fact request") }),
+      request: Object.freeze({ ...requirement.request, exactJcs: cloneBytes(requirement.request.exactJcs, "external-fact request") }),
     }))),
   })
 }
 
-function artifactKey(value: ValidationArtifactRefV2): string {
+function artifactKey(value: ValidationArtifactRef): string {
   return `${value.owner}\u0000${value.format}\u0000${value.artifactDigest}`
 }
 
-function factKey<K extends DocumentOwnerKindV2>(value: OwnerExternalFactRequirementV2<K>): string {
+function factKey<K extends DocumentOwnerKind>(value: OwnerExternalFactRequirement<K>): string {
   return `${value.owner}\u0000${value.kind}\u0000${value.request.sha256}\u0000${value.factDigest}`
 }
 
-function selectedArtifactDigest(authority: VerifiedProtocolAuthorityV2, owner: DocumentOwnerKindV2) {
+function selectedArtifactDigest(authority: CurrentProtocolAuthority, owner: DocumentOwnerKind) {
   const name = owner === "canvas" ? "canvas-schema" : "project-persistence"
   const artifact = authority.protocolSchemaBundle.core.artifacts.find((candidate) => candidate.name === name)
   if (!artifact) invalid("Selected owner artifact is unavailable")
   return artifact.artifactDigest
 }
 
-function requireProcessValue(value: object, owner: DocumentOwnerKindV2, factoryIdentity: object, kind: ProcessValueRecordV2["kind"]): void {
+function requireProcessValue(value: object, owner: DocumentOwnerKind, factoryIdentity: object, kind: ProcessValueRecord["kind"]): void {
   const record = liveProcessValues.get(value)
   if (!record || record.owner !== owner || record.factoryIdentity !== factoryIdentity || record.kind !== kind) {
     invalid("Owner process value is structural, stale or belongs to another runtime")
   }
 }
 
-function requireLiveFactPort(value: object, recordShell: OwnerRuntimeRecordV2): void {
+function requireLiveFactPort(value: object, recordShell: OwnerRuntimeRecord): void {
   const record = liveExternalFactPorts.get(value)
   if (record !== recordShell && record?.protocolPort !== recordShell.protocolPort) invalid("Owner external-fact port belongs to another runtime")
 }
@@ -391,5 +391,5 @@ function isObject(value: unknown): value is Record<PropertyKey, unknown> {
 }
 
 function invalid(message: string): never {
-  throw new CollaborationKernelErrorV2("invalid-owner-result", message)
+  throw new CollaborationKernelError("invalid-owner-result", message)
 }

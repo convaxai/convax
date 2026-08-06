@@ -6,9 +6,9 @@ import type {
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
 import type { CanvasViewSnapshot } from "@convax/canvas/view"
-import { parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
-import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import { parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
+import type { ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 
@@ -16,16 +16,16 @@ const projectId = "project-a"
 const canvasId = "canvas-main"
 const inactiveCanvasId = "canvas-inactive"
 const document = createCanvasDocument({ id: canvasId })
-const receipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
-  actorId: parseActorIdV2("A".repeat(43)),
-  operationId: parseId128V2("A".repeat(22)),
-  intentDigest: parseDigestV2("d".repeat(64)),
-  baseFrontierDigest: parseDigestV2("e".repeat(64)),
-  intentKind: "canvas.nodes.set-geometry/2",
+const receipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
+  actorId: parseActorId("A".repeat(43)),
+  operationId: parseId128("A".repeat(22)),
+  intentDigest: parseDigest("d".repeat(64)),
+  baseFrontierDigest: parseDigest("e".repeat(64)),
+  intentKind: "canvas.nodes.set-geometry",
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+  historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 
 describe("Canvas Agent tools", () => {
@@ -168,13 +168,13 @@ function commandResult(id: string): CanvasApplicationCommandResult {
   }
 }
 
-function catalog(): ProjectCanvasCatalogProjectionV2 {
+function catalog(): ProjectCanvasCatalogProjection {
   const routes = [
     route(canvasId, "Main", "1"),
     route(inactiveCanvasId, "Inactive", "2"),
   ]
   return {
-    format: "convax.project-canvas-catalog-projection/2",
+    format: "convax.project-canvas-catalog-projection",
     creationAvailability: "available",
     projectId: projectId as never,
     projectEpoch: id128(8),
@@ -189,13 +189,13 @@ function route(id: string, title: string, digit: string) {
     state: "live" as const,
     title,
     shardEpoch: id128(Number(digit)),
-    activationDigest: parseDigestV2(digit.repeat(64)),
-    routeProjectionDigest: parseDigestV2(digit.repeat(64)),
+    activationDigest: parseDigest(digit.repeat(64)),
+    routeProjectionDigest: parseDigest(digit.repeat(64)),
   }
 }
 
 function id128(byte: number) {
-  return parseId128V2(Buffer.alloc(16, byte).toString("base64url"))
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
 }
 
 function viewSnapshot(): CanvasViewSnapshot {

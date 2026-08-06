@@ -1,34 +1,36 @@
 import { createHash, randomBytes } from "node:crypto"
 import fs from "node:fs/promises"
 import path from "node:path"
-import { fsyncProjectDirectoryV2 } from "./directory-durability"
+import { CURRENT_PROTOCOL_IDENTITIES } from "@convax/collaboration"
+import { fsyncProjectDirectory } from "./directory-durability"
+import { decodeProjectNativeStoreManifest } from "./project-index-genesis-store"
 
-export type ProjectResetConfirmationTokenV1 = `reset-host-${string}` & { readonly __projectResetToken: unique symbol }
+export type ProjectResetConfirmationToken = `reset-host-${string}` & { readonly __projectResetToken: unique symbol }
 
-export interface ProjectResetDeletePreviewEntryV1 {
+export interface ProjectResetDeletePreviewEntry {
   byteLength?: number
   contentDigest?: string
   kind: "directory" | "file"
   path: string
 }
 
-export interface PortableProjectResetPlanV1 {
+export interface PortableProjectResetPlan {
   format: "convax.host-portable-project-reset-plan/1"
   originalTreeDigest: string
   privateDeletionSetDigest: string
   unsupportedInventoryDigest: string
-  preview: readonly ProjectResetDeletePreviewEntryV1[]
+  preview: readonly ProjectResetDeletePreviewEntry[]
   projectId: string
   projectRoot: string
-  token: ProjectResetConfirmationTokenV1
+  token: ProjectResetConfirmationToken
 }
 
-export class UnsupportedPortableProjectVersion extends Error {
-  readonly code = "unsupported-portable-version"
+export class UnsupportedProjectDataError extends Error {
+  readonly code = "unsupported-project-data"
 
-  constructor(readonly legacyPaths: readonly string[]) {
-    super("Portable Project uses the unsupported catalog/document JSON layout")
-    this.name = "UnsupportedPortableProjectVersion"
+  constructor(readonly unsupportedPaths: readonly string[]) {
+    super("Portable Project collaboration data is not the current protocol")
+    this.name = "UnsupportedProjectDataError"
   }
 }
 
@@ -49,12 +51,17 @@ export class PortableProjectResetError extends Error {
   }
 }
 
-export type PortableProjectCutoverInspectionV1 =
+/**
+ * The only three outcomes of resolving a portable Project's collaboration data.
+ * There is no legacy, follow-on, or elevated state, and nothing here selects a
+ * decoder: anything that is not the current protocol is unsupported data.
+ */
+export type PortableProjectDataResolution =
   | { status: "current" }
-  | { error: UnsupportedPortableProjectVersion; status: "unsupported-portable-project-version" }
+  | { error: UnsupportedProjectDataError; status: "unsupported-project-data" }
   | { artifacts: readonly string[]; status: "recovery-required" }
 
-export interface PortableProjectResetVerifierV1 {
+export interface PortableProjectResetVerifier {
   /**
    * The injected control/Project protocol owner verifies and durably stages the
    * exact frozen confirmation, approval and rollover objects. This native helper
@@ -94,45 +101,56 @@ export interface PortableProjectResetVerifierV1 {
   }): Promise<boolean>
 }
 
-export interface ExecutePortableProjectResetV1 {
+export interface ExecutePortableProjectReset {
   authorizationEvidence: unknown
   authorizationKind: "local-project-owner" | "team-epoch-rollover"
-  confirmationToken: ProjectResetConfirmationTokenV1
-  exclusiveLease: ProjectClosedExclusiveMutationLeaseV1
+  confirmationToken: ProjectResetConfirmationToken
+  exclusiveLease: ProjectClosedExclusiveMutationLease
   faultHooks?: {
     afterOriginalRenamed?(): Promise<void>
     beforePublish?(): Promise<void>
   }
   nextProjectEpoch: string
   signal?: AbortSignal
+  finalizePublishedReset?(input: {
+    archivedConvaxDirectory: string
+    executionFingerprint: string
+    nextProjectEpoch: string
+    originalTreeDigest: string
+    privateDeletionSetDigest: string
+    projectId: string
+    publishedConvaxDirectory: string
+    unsupportedInventoryDigest: string
+  }): Promise<void>
   stageGenesis(input: {
     nextProjectEpoch: string
     projectId: string
     stagedConvaxDirectory: string
     signal?: AbortSignal
   }): Promise<void>
-  verifier: PortableProjectResetVerifierV1
+  verifier: PortableProjectResetVerifier
 }
 
-export interface ProjectClosedExclusiveMutationLeaseV1 {
+export interface ProjectClosedExclusiveMutationLease {
   readonly format: "convax.host-project-closed-exclusive-mutation-lease/1"
   readonly projectId: string
   readonly projectRoot: string
 }
 
-export type PortableProjectResetResultV1 =
+export type PortableProjectResetResult =
   | { reason: "team-service-unavailable" | "cancelled"; stagedConvaxDirectory: string; status: "staged" }
   | { projectId: string; status: "published" }
 
 const recoveryPrefix = ".convax-reset-recovery-"
 const stagePrefix = ".convax-reset-stage-"
 const backupPrefix = ".convax-reset-backup-"
+const archivePrefix = ".convax-archive-"
 const resetDomain = Buffer.from("convax.host-portable-project-reset/1\0", "utf8")
 const resetIntentDomain = Buffer.from("convax.host-portable-project-reset-execution/1\0", "utf8")
 const recoveryMagic = Buffer.from("CVXRST01", "ascii")
 const activeExclusiveLeases = new WeakSet()
 
-interface TreeEntry extends ProjectResetDeletePreviewEntryV1 {}
+interface TreeEntry extends ProjectResetDeletePreviewEntry {}
 
 interface TreeSnapshot {
   digest: string
@@ -141,31 +159,31 @@ interface TreeSnapshot {
   projectManifest: Buffer
 }
 
-export async function inspectPortableProjectCutover(projectRoot: string): Promise<PortableProjectCutoverInspectionV1> {
+export async function resolvePortableProjectData(projectRoot: string): Promise<PortableProjectDataResolution> {
   const root = await requireAbsoluteProjectRoot(projectRoot)
   await assertPlainDirectoryIfPresent(path.join(root, ".convax"), "Project .convax")
   const artifacts = (await fs.readdir(root))
     .filter((name) => name.startsWith(recoveryPrefix) || name.startsWith(stagePrefix) || name.startsWith(backupPrefix))
     .sort()
   if (artifacts.length > 0) return { artifacts, status: "recovery-required" }
-  const legacyPaths = await detectLegacyPaths(root)
-  if (legacyPaths.length > 0) {
+  const unsupportedPaths = await detectUnsupportedPaths(root)
+  if (unsupportedPaths.length > 0) {
     return {
-      error: new UnsupportedPortableProjectVersion(legacyPaths),
-      status: "unsupported-portable-project-version",
+      error: new UnsupportedProjectDataError(unsupportedPaths),
+      status: "unsupported-project-data",
     }
   }
   return { status: "current" }
 }
 
-export async function planPortableProjectReset(projectRoot: string): Promise<PortableProjectResetPlanV1> {
+export async function planPortableProjectReset(projectRoot: string): Promise<PortableProjectResetPlan> {
   const root = await requireAbsoluteProjectRoot(projectRoot)
-  const inspection = await inspectPortableProjectCutover(root)
-  if (inspection.status === "recovery-required") {
+  const resolution = await resolvePortableProjectData(root)
+  if (resolution.status === "recovery-required") {
     throw new PortableProjectResetError("RECOVERY_REQUIRED", "A prior Project reset is incomplete")
   }
-  if (inspection.status !== "unsupported-portable-project-version") {
-    throw new PortableProjectResetError("INVALID_PROJECT", "Project does not require the legacy cutover reset")
+  if (resolution.status !== "unsupported-project-data") {
+    throw new PortableProjectResetError("INVALID_PROJECT", "Project collaboration data is already current")
   }
   const tree = await snapshotConvaxTree(root)
   const preview = tree.entries
@@ -190,9 +208,9 @@ export async function planPortableProjectReset(projectRoot: string): Promise<Por
 }
 
 export async function executePortableProjectReset(
-  plan: PortableProjectResetPlanV1,
-  input: ExecutePortableProjectResetV1,
-): Promise<PortableProjectResetResultV1> {
+  plan: PortableProjectResetPlan,
+  input: ExecutePortableProjectReset,
+): Promise<PortableProjectResetResult> {
   validatePlan(plan)
   if ((await requireAbsoluteProjectRoot(plan.projectRoot)) !== plan.projectRoot) {
     throw new PortableProjectResetError("INVALID_PROJECT", "Project reset plan root is not canonical")
@@ -226,8 +244,9 @@ export async function executePortableProjectReset(
   const convaxDirectory = path.join(plan.projectRoot, ".convax")
   const stagedConvaxDirectory = path.join(plan.projectRoot, `${stagePrefix}${tokenSuffix}`)
   const backupDirectory = path.join(plan.projectRoot, `${backupPrefix}${tokenSuffix}`)
+  const archiveDirectory = path.join(plan.projectRoot, `${archivePrefix}${tokenSuffix}`)
   const recoveryPath = path.join(plan.projectRoot, `${recoveryPrefix}${tokenSuffix}.bin`)
-  if ((await exists(recoveryPath)) || (await exists(backupDirectory))) {
+  if ((await exists(recoveryPath)) || (await exists(backupDirectory)) || (await exists(archiveDirectory))) {
     throw new PortableProjectResetError("RECOVERY_REQUIRED", "Project reset has ambiguous durable state")
   }
 
@@ -324,6 +343,7 @@ export async function executePortableProjectReset(
   }
 
   const recoveryEnvelope = encodeRecoveryEnvelope({
+    archiveDirectory: path.basename(archiveDirectory),
     backupDirectory: path.basename(backupDirectory),
     originalTreeDigest: plan.originalTreeDigest,
     projectId: plan.projectId,
@@ -332,15 +352,15 @@ export async function executePortableProjectReset(
     token: plan.token,
   })
   await writeDurableNewFile(recoveryPath, recoveryEnvelope)
-  await fsyncProjectDirectoryV2(plan.projectRoot)
+  await fsyncProjectDirectory(plan.projectRoot)
   try {
     await assertPlainDirectory(convaxDirectory, "Project .convax", "RECOVERY_REQUIRED")
     await assertPlainDirectory(stagedConvaxDirectory, "Reset staging directory", "RECOVERY_REQUIRED")
     await fs.rename(convaxDirectory, backupDirectory)
-    await fsyncProjectDirectoryV2(plan.projectRoot)
+    await fsyncProjectDirectory(plan.projectRoot)
     await input.faultHooks?.afterOriginalRenamed?.()
     await fs.rename(stagedConvaxDirectory, convaxDirectory)
-    await fsyncProjectDirectoryV2(plan.projectRoot)
+    await fsyncProjectDirectory(plan.projectRoot)
     if ((await snapshotDirectoryDigest(convaxDirectory)) !== stagedTreeDigest) {
       throw new Error("Published Project tree differs from the verified staged tree")
     }
@@ -361,10 +381,23 @@ export async function executePortableProjectReset(
     if ((await snapshotDirectoryDigest(backupDirectory)) !== plan.originalTreeDigest) {
       throw new Error("Retired Project tree differs from the confirmed deletion set")
     }
-    await fs.rm(backupDirectory, { recursive: true })
-    await fsyncProjectDirectoryV2(plan.projectRoot)
+    await fs.rename(backupDirectory, archiveDirectory)
+    await fsyncProjectDirectory(plan.projectRoot)
+    if ((await snapshotDirectoryDigest(archiveDirectory)) !== plan.originalTreeDigest) {
+      throw new Error("Archived Project tree differs from the confirmed private tree")
+    }
+    await input.finalizePublishedReset?.({
+      archivedConvaxDirectory: archiveDirectory,
+      executionFingerprint,
+      nextProjectEpoch: input.nextProjectEpoch,
+      originalTreeDigest: plan.originalTreeDigest,
+      privateDeletionSetDigest: plan.privateDeletionSetDigest,
+      projectId: plan.projectId,
+      publishedConvaxDirectory: convaxDirectory,
+      unsupportedInventoryDigest: plan.unsupportedInventoryDigest,
+    })
     await fs.rm(recoveryPath)
-    await fsyncProjectDirectoryV2(plan.projectRoot)
+    await fsyncProjectDirectory(plan.projectRoot)
     return { projectId: plan.projectId, status: "published" }
   } catch (error) {
     throw new PortableProjectResetError(
@@ -377,7 +410,7 @@ export async function executePortableProjectReset(
 
 export function derivePortableProjectResetExecutionFingerprint(input: {
   authorizationKind: "local-project-owner" | "team-epoch-rollover"
-  confirmationToken: ProjectResetConfirmationTokenV1
+  confirmationToken: ProjectResetConfirmationToken
   nextProjectEpoch: string
   originalTreeDigest: string
   privateDeletionSetDigest: string
@@ -408,7 +441,7 @@ export function allocateLocalProjectEpoch() {
 /** @internal The Project lifecycle owner must call this only inside its serialized close gate. */
 export async function runWithProjectClosedExclusiveMutationLease<T>(
   input: { projectId: string; projectRoot: string },
-  operation: (lease: ProjectClosedExclusiveMutationLeaseV1) => Promise<T>,
+  operation: (lease: ProjectClosedExclusiveMutationLease) => Promise<T>,
 ): Promise<T> {
   const lease = Object.freeze({
     format: "convax.host-project-closed-exclusive-mutation-lease/1" as const,
@@ -423,25 +456,37 @@ export async function runWithProjectClosedExclusiveMutationLease<T>(
   }
 }
 
-async function detectLegacyPaths(projectRoot: string) {
-  const legacy: string[] = []
+async function detectUnsupportedPaths(projectRoot: string) {
+  const unsupported: string[] = []
+  const retiredProtocol = path.join(projectRoot, ".convax", "protocol-v3")
+  const retiredProtocolStat = await lstatOrNull(retiredProtocol)
+  if (retiredProtocolStat?.isSymbolicLink()) {
+    throw new PortableProjectResetError("INVALID_PROJECT", "Retired protocol metadata cannot be a symbolic link")
+  }
+  if (retiredProtocolStat && !retiredProtocolStat.isDirectory()) {
+    throw new PortableProjectResetError("INVALID_PROJECT", "Retired protocol metadata must be a directory")
+  }
+  if (retiredProtocolStat?.isDirectory()) unsupported.push(".convax/protocol-v3")
   const catalog = path.join(projectRoot, ".convax", "canvases", "catalog.json")
-  if (await exists(catalog)) legacy.push(".convax/canvases/catalog.json")
+  if (await exists(catalog)) unsupported.push(".convax/canvases/catalog.json")
   const canvases = path.join(projectRoot, ".convax", "canvases")
   const canvasesStat = await lstatOrNull(canvases)
   if (canvasesStat?.isSymbolicLink()) {
-    throw new PortableProjectResetError("INVALID_PROJECT", "Legacy Canvas metadata cannot be a symbolic link")
+    throw new PortableProjectResetError("INVALID_PROJECT", "Unsupported Canvas metadata cannot be a symbolic link")
   }
   if (canvasesStat?.isDirectory()) {
     for (const dirent of (await fs.readdir(canvases, { withFileTypes: true })).sort((left, right) =>
       compareUtf8(left.name, right.name),
     )) {
       if (dirent.isSymbolicLink()) {
-        throw new PortableProjectResetError("INVALID_PROJECT", "Legacy Canvas metadata cannot contain symbolic links")
+        throw new PortableProjectResetError(
+          "INVALID_PROJECT",
+          "Unsupported Canvas metadata cannot contain symbolic links",
+        )
       }
       if (!dirent.isDirectory()) continue
       const document = path.join(canvases, dirent.name, "document.json")
-      if (await exists(document)) legacy.push(`.convax/canvases/${dirent.name}/document.json`)
+      if (await exists(document)) unsupported.push(`.convax/canvases/${dirent.name}/document.json`)
     }
   }
   const collaboration = path.join(projectRoot, ".convax", "collaboration")
@@ -454,10 +499,23 @@ async function detectLegacyPaths(projectRoot: string) {
   }
   if (collaborationStat?.isDirectory()) {
     const manifest = path.join(collaboration, "manifest-v2.bin")
-    if (!(await exists(manifest))) legacy.push(".convax/collaboration")
-    else await readStablePlainFile(manifest, "INVALID_PROJECT")
+    if (!(await exists(manifest))) unsupported.push(".convax/collaboration")
+    else {
+      const manifestBytes = await readStablePlainFile(manifest, "INVALID_PROJECT")
+      try {
+        const decoded = decodeProjectNativeStoreManifest(manifestBytes)
+        if (
+          decoded.protocolDigest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest ||
+          decoded.uriProtocolDigest !== CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest
+        ) {
+          unsupported.push(".convax/collaboration/manifest-v2.bin")
+        }
+      } catch {
+        unsupported.push(".convax/collaboration/manifest-v2.bin")
+      }
+    }
   }
-  return legacy.sort(compareUtf8)
+  return unsupported.sort(compareUtf8)
 }
 
 async function snapshotConvaxTree(projectRoot: string): Promise<TreeSnapshot> {
@@ -561,7 +619,7 @@ function compareUtf8(left: string, right: string) {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"))
 }
 
-function toPreviewEntry(entry: TreeEntry): ProjectResetDeletePreviewEntryV1 {
+function toPreviewEntry(entry: TreeEntry): ProjectResetDeletePreviewEntry {
   if (entry.kind === "directory") return { kind: "directory", path: entry.path }
   return {
     byteLength: entry.byteLength,
@@ -596,7 +654,7 @@ async function assertStagedProjectIdentity(stagedConvaxDirectory: string, projec
   }
 }
 
-function validatePlan(plan: PortableProjectResetPlanV1) {
+function validatePlan(plan: PortableProjectResetPlan) {
   if (
     !isExactRecord(plan, [
       "format",
@@ -619,7 +677,7 @@ function validatePlan(plan: PortableProjectResetPlanV1) {
   }
 }
 
-function assertActiveExclusiveLease(lease: ProjectClosedExclusiveMutationLeaseV1, plan: PortableProjectResetPlanV1) {
+function assertActiveExclusiveLease(lease: ProjectClosedExclusiveMutationLease, plan: PortableProjectResetPlan) {
   if (
     !activeExclusiveLeases.has(lease) ||
     lease.format !== "convax.host-project-closed-exclusive-mutation-lease/1" ||
@@ -637,10 +695,10 @@ function deriveResetToken(
   projectRoot: string,
   projectId: string,
   treeDigest: string,
-  preview: readonly ProjectResetDeletePreviewEntryV1[],
-): ProjectResetConfirmationTokenV1 {
+  preview: readonly ProjectResetDeletePreviewEntry[],
+): ProjectResetConfirmationToken {
   const bytes = Buffer.from(JSON.stringify({ preview, projectId, projectRoot, treeDigest }), "utf8")
-  return `reset-host-${createHash("sha256").update(resetDomain).update(bytes).digest("hex")}` as ProjectResetConfirmationTokenV1
+  return `reset-host-${createHash("sha256").update(resetDomain).update(bytes).digest("hex")}` as ProjectResetConfirmationToken
 }
 
 function encodeRecoveryEnvelope(value: Record<string, string>) {
@@ -669,7 +727,7 @@ async function fsyncTree(directory: string): Promise<void> {
       }
     }
   }
-  await fsyncProjectDirectoryV2(directory)
+  await fsyncProjectDirectory(directory)
 }
 
 async function writeDurableNewFile(target: string, bytes: Uint8Array) {

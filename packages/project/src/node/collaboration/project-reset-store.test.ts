@@ -3,17 +3,17 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseSignatureV2,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseSignature,
 } from "@convax/collaboration"
 import {
-  projectResetConfirmationCoreDigestV2,
-  type ProjectResetConfirmationCoreV2,
+  projectResetConfirmationCoreDigest,
+  type ProjectResetConfirmationCore,
 } from "../../collaboration-protocol/project-reset"
-import { readProjectResetRecordsV2, writeProjectResetRecordsV2, type ProjectResetRecordsV2 } from "./project-reset-store"
+import { readProjectResetRecords, writeProjectResetRecords, type ProjectResetRecords } from "./project-reset-store"
 
 const roots: string[] = []
 
@@ -26,29 +26,29 @@ describe.skipIf(process.platform === "win32")("Project reset record store real-f
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "convax-reset-records-"))
     roots.push(directory)
     const staged = records("reset-staged")
-    await writeProjectResetRecordsV2(directory, staged)
+    await writeProjectResetRecords(directory, staged)
     expect(await fs.readdir(directory)).toEqual(["project-reset-records-v2.jcs"])
 
     const authorized = records("reset-authorized")
     await fs.writeFile(
       path.join(directory, "project-reset-records-v2.jcs.next"),
-      encodeRestrictedJcsV2(authorized),
+      encodeRestrictedJcs(authorized),
     )
-    await writeProjectResetRecordsV2(directory, authorized)
-    expect((await readProjectResetRecordsV2(directory)).manifest.state).toBe("reset-authorized")
+    await writeProjectResetRecords(directory, authorized)
+    expect((await readProjectResetRecords(directory)).manifest.state).toBe("reset-authorized")
     expect(await fs.readdir(directory)).toEqual(["project-reset-records-v2.jcs"])
   })
 })
 
-function records(state: ProjectResetRecordsV2["manifest"]["state"]): ProjectResetRecordsV2 {
-  const id = parseId128V2("AQEBAQEBAQEBAQEBAQEBAQ")
-  const digest = parseDigestV2("11".repeat(32))
-  const bindingDigest = parseDigestV2("22".repeat(32))
-  const core: ProjectResetConfirmationCoreV2 = Object.freeze({
-    format: "convax.project-reset-confirmation-core/2",
+function records(state: ProjectResetRecords["manifest"]["state"]): ProjectResetRecords {
+  const id = parseId128("AQEBAQEBAQEBAQEBAQEBAQ")
+  const digest = parseDigest("11".repeat(32))
+  const bindingDigest = parseDigest("22".repeat(32))
+  const core: ProjectResetConfirmationCore = Object.freeze({
+    format: "convax.project-reset-confirmation-core",
     resetId: id,
     confirmationId: id,
-    projectId: parseProjectIdV2("project_reset_store"),
+    projectId: parseProjectId("project_reset_store"),
     oldProjectEpoch: null,
     reason: "unsupported-portable-version",
     observedOldPrivateTreeDigest: digest,
@@ -67,17 +67,17 @@ function records(state: ProjectResetRecordsV2["manifest"]["state"]): ProjectRese
     }),
     protocolDigest: digest,
   })
-  const coreDigest = projectResetConfirmationCoreDigestV2(core)
+  const coreDigest = projectResetConfirmationCoreDigest(core)
   return Object.freeze({
-    format: "convax.project-reset-records/2",
+    format: "convax.project-reset-records",
     confirmation: Object.freeze({
-      format: "convax.project-reset-confirmation/2",
+      format: "convax.project-reset-confirmation",
       core,
       coreDigest,
-      confirmationSignature: parseSignatureV2(Buffer.alloc(64, 3).toString("base64url")),
+      confirmationSignature: parseSignature(Buffer.alloc(64, 3).toString("base64url")),
     }),
     manifest: Object.freeze({
-      format: "convax.project-reset-manifest/2",
+      format: "convax.project-reset-manifest",
       resetId: id,
       projectId: core.projectId,
       oldProjectEpoch: null,

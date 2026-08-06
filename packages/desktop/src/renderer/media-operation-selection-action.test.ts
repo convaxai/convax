@@ -7,7 +7,7 @@ import {
   createTextNode,
   type CanvasNode,
 } from "@convax/canvas"
-import { canvasProjectionResourceMetadataKeyV2 } from "@convax/canvas/collaboration"
+import { canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboration"
 import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
@@ -85,8 +85,8 @@ const canonicalImage = createMediaNode({
     id: "canonical-image-resource",
     kind: "image",
     metadata: {
-      [canvasProjectionResourceMetadataKeyV2]: {
-        format: "convax.canvas-resource-ref/2",
+      [canvasProjectionResourceMetadataKey]: {
+        format: "convax.canvas-resource-ref",
         uri:
           `convax-project://project_0123456789abcdef0123456789abcdef/epochs/` +
           `AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"1".repeat(64)}` +
@@ -371,12 +371,12 @@ describe("manifest-driven media operation visibility", () => {
         ...canonicalImage.data,
         metadata: {
           [projectResourceReferenceKey]: legacyReference,
-          [canvasProjectionResourceMetadataKeyV2]: { format: "convax.canvas-resource-ref/2" },
+          [canvasProjectionResourceMetadataKey]: { format: "convax.canvas-resource-ref" },
         },
       },
     }
     const canonicalResource = (canonicalImage.data.metadata as Record<string, unknown>)[
-      canvasProjectionResourceMetadataKeyV2
+      canvasProjectionResourceMetadataKey
     ] as Record<string, unknown>
     const mismatched = {
       ...canonicalImage,
@@ -384,7 +384,7 @@ describe("manifest-driven media operation visibility", () => {
       data: {
         ...canonicalImage.data,
         metadata: {
-          [canvasProjectionResourceMetadataKeyV2]: { ...canonicalResource, mediaClass: "video" },
+          [canvasProjectionResourceMetadataKey]: { ...canonicalResource, mediaClass: "video" },
         },
       },
     }
@@ -394,7 +394,7 @@ describe("manifest-driven media operation visibility", () => {
       data: {
         ...canonicalImage.data,
         metadata: {
-          [canvasProjectionResourceMetadataKeyV2]: {
+          [canvasProjectionResourceMetadataKey]: {
             ...canonicalResource,
             uri: "convax-asset://project/canonical.png",
           },

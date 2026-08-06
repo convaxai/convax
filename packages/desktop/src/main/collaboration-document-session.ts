@@ -1,105 +1,68 @@
 import {
-  parseId128V2,
-  CollaborationKernelV2,
-  CollaborationKernelV3,
-  type CollaborationKernelOptionsV2,
-  type CollaborationKernelPortsV2,
-  type CollaborationKernelPortsV3,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentOwnerKindV2,
-  type DocumentScopeV2,
-  type Id128V2,
-  type LocalCommitResultV2,
-  type LocalCommitResultV3,
-  type OwnerIntentConstructionContextV2,
-  type OwnerValidatedStateV2,
-  type PreparedLocalIntentV2,
-  type VerifiedProtocolAuthorityV2,
-  type VerifiedProtocolAuthorityV3,
+  parseId128,
+  CollaborationKernel,
+  type CollaborationKernelOptions,
+  type CollaborationKernelPorts,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type DocumentOwnerKind,
+  type DocumentScope,
+  type Id128,
+  type LocalCommitResult,
+  type OwnerIntentConstructionContext,
+  type OwnerValidatedState,
+  type PreparedLocalIntent,
+  type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 
-export interface CollaborationDocumentInvalidationV2 {
-  readonly scope: DocumentScopeV2
-  readonly frameDigest: DigestV2
+export interface CollaborationDocumentInvalidation {
+  readonly scope: DocumentScope
+  readonly frameDigest: Digest
 }
 
-export interface MainCollaborationDocumentSessionV2<K extends DocumentOwnerKindV2> {
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  query<T>(project: (state: OwnerValidatedStateV2<K>) => T): Promise<T>
+export interface MainCollaborationDocumentSession<K extends DocumentOwnerKind> {
+  readonly scope: DocumentScope & { readonly docKind: K }
+  query<T>(project: (state: OwnerValidatedState<K>) => T): Promise<T>
   submit(input: {
-    readonly operationId?: Id128V2
+    readonly operationId?: Id128
     readonly prepare: (input: {
-      readonly base: OwnerValidatedStateV2<K>
-      readonly context: OwnerIntentConstructionContextV2
+      readonly base: OwnerValidatedState<K>
+      readonly context: OwnerIntentConstructionContext
       readonly signal?: AbortSignal
-    }) => Promise<PreparedLocalIntentV2> | PreparedLocalIntentV2
-    readonly historyTransition?: Readonly<{ direction: "undo" | "redo"; cursorToken: Id128V2 }>
+    }) => Promise<PreparedLocalIntent> | PreparedLocalIntent
+    readonly historyTransition?: Readonly<{ direction: "undo" | "redo"; cursorToken: Id128 }>
     readonly signal?: AbortSignal
-  }): Promise<LocalCommitResultV2>
+  }): Promise<LocalCommitResult>
   flush(): Promise<void>
-  subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void): () => void
+  subscribe(listener: (event: CollaborationDocumentInvalidation) => void): () => void
   dispose(): void
 }
 
-/**
- * The document owner/application surface is intentionally unchanged in V3. Only
- * the causal frame, signer union and durable protocol selection differ. Keeping a
- * distinct session type prevents a V3 frame from being passed to V2 replication.
- */
-export interface MainCollaborationDocumentSessionV3<K extends DocumentOwnerKindV2> {
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  query<T>(project: (state: OwnerValidatedStateV2<K>) => T): Promise<T>
-  submit(input: {
-    readonly operationId?: Id128V2
-    readonly prepare: (input: {
-      readonly base: OwnerValidatedStateV2<K>
-      readonly context: OwnerIntentConstructionContextV2
-      readonly signal?: AbortSignal
-    }) => Promise<PreparedLocalIntentV2> | PreparedLocalIntentV2
-    readonly historyTransition?: Readonly<{ direction: "undo" | "redo"; cursorToken: Id128V2 }>
-    readonly signal?: AbortSignal
-  }): Promise<LocalCommitResultV3>
-  flush(): Promise<void>
-  subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void): () => void
-  dispose(): void
-}
-
-export interface CreateMainCollaborationDocumentSessionOptionsV2<K extends DocumentOwnerKindV2> {
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  readonly createOperationId: () => Id128V2
+export interface CreateMainCollaborationDocumentSessionOptions<K extends DocumentOwnerKind> {
+  readonly scope: DocumentScope & { readonly docKind: K }
+  readonly createOperationId: () => Id128
   readonly openKernel: (projection: {
-    publish(input: CollaborationDocumentInvalidationV2): void
-  }) => Promise<CollaborationKernelV2>
+    publish(input: CollaborationDocumentInvalidation): void
+  }) => Promise<CollaborationKernel>
 }
 
-export interface CreateKernelBackedMainCollaborationDocumentSessionOptionsV2<K extends DocumentOwnerKindV2> {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  readonly owner: DocumentOwnerRuntimeV2<K>
-  readonly ports: CollaborationKernelPortsV2
-  readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
-  readonly createOperationId: () => Id128V2
-}
-
-export interface CreateKernelBackedMainCollaborationDocumentSessionOptionsV3<K extends DocumentOwnerKindV2> {
-  readonly authority: VerifiedProtocolAuthorityV3
-  readonly historicalAuthority: VerifiedProtocolAuthorityV2
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  readonly owner: DocumentOwnerRuntimeV2<K>
-  readonly ports: CollaborationKernelPortsV3
-  readonly signatureVerifier: CollaborationKernelOptionsV2["signatureVerifier"]
-  readonly createOperationId: () => Id128V2
+export interface CreateKernelBackedMainCollaborationDocumentSessionOptions<K extends DocumentOwnerKind> {
+  readonly authority: CurrentProtocolAuthority
+  readonly scope: DocumentScope & { readonly docKind: K }
+  readonly owner: DocumentOwnerRuntime<K>
+  readonly ports: CollaborationKernelPorts
+  readonly signatureVerifier: CollaborationKernelOptions["signatureVerifier"]
+  readonly createOperationId: () => Id128
 }
 
 /** Production composition path shared by Canvas and ProjectIndex owners. */
-export function createKernelBackedMainCollaborationDocumentSessionV2<K extends DocumentOwnerKindV2>(
-  options: CreateKernelBackedMainCollaborationDocumentSessionOptionsV2<K>,
-): Promise<MainCollaborationDocumentSessionV2<K>> {
-  return createMainCollaborationDocumentSessionV2({
+export function createKernelBackedMainCollaborationDocumentSession<K extends DocumentOwnerKind>(
+  options: CreateKernelBackedMainCollaborationDocumentSessionOptions<K>,
+): Promise<MainCollaborationDocumentSession<K>> {
+  return createMainCollaborationDocumentSession({
     scope: options.scope,
     createOperationId: options.createOperationId,
-    openKernel: (projection) => CollaborationKernelV2.open({
+    openKernel: (projection) => CollaborationKernel.open({
       authority: options.authority,
       scope: options.scope,
       owner: options.owner,
@@ -108,86 +71,6 @@ export function createKernelBackedMainCollaborationDocumentSessionV2<K extends D
       projection,
     }),
   })
-}
-
-/** Verified-V11-only composition. Candidate authority objects cannot satisfy this API. */
-export function createKernelBackedMainCollaborationDocumentSessionV3<K extends DocumentOwnerKindV2>(
-  options: CreateKernelBackedMainCollaborationDocumentSessionOptionsV3<K>,
-): Promise<MainCollaborationDocumentSessionV3<K>> {
-  return createMainCollaborationDocumentSessionV3({
-    scope: options.scope,
-    createOperationId: options.createOperationId,
-    openKernel: (projection) => CollaborationKernelV3.open({
-      authority: options.authority,
-      historicalAuthority: options.historicalAuthority,
-      scope: options.scope,
-      owner: options.owner,
-      ports: options.ports,
-      signatureVerifier: options.signatureVerifier,
-      projection,
-    }),
-  })
-}
-
-export interface CreateMainCollaborationDocumentSessionOptionsV3<K extends DocumentOwnerKindV2> {
-  readonly scope: DocumentScopeV2 & { readonly docKind: K }
-  readonly createOperationId: () => Id128V2
-  readonly openKernel: (projection: {
-    publish(input: CollaborationDocumentInvalidationV2): void
-  }) => Promise<CollaborationKernelV3>
-}
-
-export async function createMainCollaborationDocumentSessionV3<K extends DocumentOwnerKindV2>(
-  options: CreateMainCollaborationDocumentSessionOptionsV3<K>,
-): Promise<MainCollaborationDocumentSessionV3<K>> {
-  const listeners = new Set<(event: CollaborationDocumentInvalidationV2) => void>()
-  const kernel = await options.openKernel({
-    publish(input) {
-      const event = Object.freeze({ scope: input.scope, frameDigest: input.frameDigest })
-      for (const listener of listeners) {
-        try { listener(event) } catch { /* Durable state is unaffected by an observer. */ }
-      }
-    },
-  })
-  let disposed = false
-  const session: MainCollaborationDocumentSessionV3<K> = Object.freeze({
-    scope: options.scope,
-    query<T>(project: (state: OwnerValidatedStateV2<K>) => T): Promise<T> {
-      requireLive()
-      return kernel.queryOwnerState((state) => project(state as OwnerValidatedStateV2<K>))
-    },
-    submit(input: Parameters<MainCollaborationDocumentSessionV3<K>["submit"]>[0]): Promise<LocalCommitResultV3> {
-      requireLive()
-      return kernel.commitLocalIntent({
-        operationId: parseId128V2(input.operationId ?? options.createOperationId()),
-        signal: input.signal,
-        historyTransition: input.historyTransition,
-        prepare: ({ base, context, signal }) => input.prepare({
-          base: base as OwnerValidatedStateV2<K>,
-          context,
-          signal,
-        }),
-      })
-    },
-    flush(): Promise<void> { requireLive(); return kernel.flush() },
-    subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void) {
-      requireLive()
-      if (typeof listener !== "function") throw new TypeError("Collaboration invalidation listener is required")
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    dispose() {
-      if (disposed) return
-      disposed = true
-      listeners.clear()
-      kernel.dispose()
-    },
-  })
-  return session
-
-  function requireLive(): void {
-    if (disposed) throw new Error("Collaboration document session is disposed")
-  }
 }
 
 /**
@@ -195,11 +78,11 @@ export async function createMainCollaborationDocumentSessionV3<K extends Documen
  * ProjectIndex provide only their reducer/projection closures; this layer owns
  * operation allocation, queue ordering, flush and invalidation fanout.
  */
-export async function createMainCollaborationDocumentSessionV2<K extends DocumentOwnerKindV2>(
-  options: CreateMainCollaborationDocumentSessionOptionsV2<K>,
-): Promise<MainCollaborationDocumentSessionV2<K>> {
-  const listeners = new Set<(event: CollaborationDocumentInvalidationV2) => void>()
-  let session: MainCollaborationDocumentSessionV2<K> | undefined
+export async function createMainCollaborationDocumentSession<K extends DocumentOwnerKind>(
+  options: CreateMainCollaborationDocumentSessionOptions<K>,
+): Promise<MainCollaborationDocumentSession<K>> {
+  const listeners = new Set<(event: CollaborationDocumentInvalidation) => void>()
+  let session: MainCollaborationDocumentSession<K> | undefined
   const kernel = await options.openKernel({
     publish(input) {
       const event = Object.freeze({ scope: input.scope, frameDigest: input.frameDigest })
@@ -211,19 +94,19 @@ export async function createMainCollaborationDocumentSessionV2<K extends Documen
   let disposed = false
   session = Object.freeze({
     scope: options.scope,
-    query<T>(project: (state: OwnerValidatedStateV2<K>) => T): Promise<T> {
+    query<T>(project: (state: OwnerValidatedState<K>) => T): Promise<T> {
       requireLive()
-      return kernel.queryOwnerState((state) => project(state as OwnerValidatedStateV2<K>))
+      return kernel.queryOwnerState((state) => project(state as OwnerValidatedState<K>))
     },
-    submit(input: Parameters<MainCollaborationDocumentSessionV2<K>["submit"]>[0]): Promise<LocalCommitResultV2> {
+    submit(input: Parameters<MainCollaborationDocumentSession<K>["submit"]>[0]): Promise<LocalCommitResult> {
       requireLive()
-      const operationId = parseId128V2(input.operationId ?? options.createOperationId())
+      const operationId = parseId128(input.operationId ?? options.createOperationId())
       return kernel.commitLocalIntent({
         operationId,
         signal: input.signal,
         historyTransition: input.historyTransition,
         prepare: ({ base, context, signal }) => input.prepare({
-          base: base as OwnerValidatedStateV2<K>,
+          base: base as OwnerValidatedState<K>,
           context,
           signal,
         }),
@@ -233,7 +116,7 @@ export async function createMainCollaborationDocumentSessionV2<K extends Documen
       requireLive()
       return kernel.flush()
     },
-    subscribe(listener: (event: CollaborationDocumentInvalidationV2) => void): () => void {
+    subscribe(listener: (event: CollaborationDocumentInvalidation) => void): () => void {
       requireLive()
       if (typeof listener !== "function") throw new TypeError("Collaboration invalidation listener is required")
       listeners.add(listener)

@@ -44,7 +44,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { createRoot } from "react-dom/client"
 import { I18nextProvider } from "react-i18next"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
-import { parseProjectTeamInvitationV2 } from "../project-team-collaboration-contracts"
+import { parseProjectTeamInvitation } from "../project-team-collaboration-contracts"
 import {
   hasWebPluginCanvasSurface,
   type ActiveInstalledWebPluginSummary,
@@ -90,7 +90,7 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
-import { openDesktopCanvasRendererSessionV2, type DesktopCanvasRendererSessionV2 } from "./canvas-collaboration-client"
+import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import {
   mountCanvasSessionWithBackgroundReconcile,
   type CanvasSessionReconcileDiagnostic,
@@ -182,7 +182,6 @@ import {
   type WorkspaceUtilityDrawerState,
 } from "./workspace-utility-drawer-state"
 import { createWebPluginCanvasContribution } from "./web-plugin-canvas"
-import { webPluginCanvasRendererId } from "../plugin-canvas-node"
 import "./styles.css"
 import "./appearance-themes.css"
 
@@ -388,7 +387,7 @@ function App() {
     ? projectSnapshot.projects.find(
         (project) =>
           project.id === projectSnapshot.pendingRecoveryProjectId &&
-          project.recovery?.status === "unsupported-portable-project-version",
+          project.recovery?.status === "unsupported-project-data",
       )
     : undefined
   const projectCanvasSnapshot = useSyncExternalStore(
@@ -667,7 +666,7 @@ function App() {
   const canvasSessionScopeKey = `${activeProjectId ?? "no-project"}:${activeCanvasId ?? "no-canvas"}`
   const [mountedCanvasSession, setMountedCanvasSession] = useState<{
     key: string
-    session: DesktopCanvasRendererSessionV2
+    session: DesktopCanvasRendererSession
   } | null>(null)
   const [canvasSessionFailure, setCanvasSessionFailure] = useState<{ key: string; message: string } | null>(null)
   useEffect(() => {
@@ -686,7 +685,7 @@ function App() {
       },
       onMounted: (session) => setMountedCanvasSession({ key, session }),
       openSession: (signal) =>
-        openDesktopCanvasRendererSessionV2({
+        openDesktopCanvasRendererSession({
           ref,
           signal,
           transport: window.convax.canvas.sessions,
@@ -1649,7 +1648,7 @@ function App() {
           if (!activeProjectId) throw new Error("Open a Project before using this Plugin on Canvas")
           const lease = await workspaceEntryCoordinator.acquire({ projectId: activeProjectId })
           if (!lease) throw new Error("The active Project changed before Canvas was ready")
-          const editor = await waitForMountedWorkspaceTarget({
+          await waitForMountedWorkspaceTarget({
             read: () => {
               const mounted = canvasEditorScopeRef.current
               return mounted?.projectId === lease.projectId && mounted.canvasId === lease.canvasId
@@ -1657,9 +1656,20 @@ function App() {
                 : null
             },
           })
-          if (!lease.validate("canvas")) throw new Error("The active Canvas changed before the Plugin was ready")
-          if (!editor.insertNode(webPluginCanvasRendererId(plugin.id))) {
-            throw new Error("The Plugin node could not be added to the active Canvas")
+          if (!lease.validate("canvas") || !lease.canvasId) {
+            throw new Error("The active Canvas changed before the Plugin was ready")
+          }
+          const result = await window.convax.canvas.pluginSurfaces.create({
+            canvasId: lease.canvasId,
+            pluginId: plugin.id,
+            projectId: lease.projectId,
+          })
+          // Durable create already succeeded; projection refresh must not undo it.
+          try {
+            await canvasEditorRef.current?.reloadAuthoritative()
+            canvasEditorRef.current?.selectNodes([result.createdNodeId])
+          } catch (error) {
+            console.warn("Plugin surface created, but Canvas projection refresh failed", error)
           }
         } catch (error) {
           reportWorkspaceEntryFailure(error)
@@ -2430,7 +2440,7 @@ function App() {
                     }}
                     onJoinTeam={async ({ invitation, projectId }) => {
                       await window.convax.projects.collaboration.joinTeam({
-                        invitation: parseProjectTeamInvitationV2(JSON.parse(invitation)),
+                        invitation: parseProjectTeamInvitation(JSON.parse(invitation)),
                         projectId,
                       })
                     }}

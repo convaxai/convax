@@ -1,3 +1,9 @@
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
+
+/** Plugin API Catalog still documents the versioned receipt format constant. */
+export type PluginApiOperationReceipt = Omit<BoundedOperationReceipt, "format"> & {
+  readonly format: "convax.canvas-operation-receipt/2"
+}
 import type { CanvasNodeData, CanvasPoint } from "@convax/canvas/core"
 import type { PluginApiCall, PluginApiGenerationReference, PluginApiId } from "@convax/plugin-api"
 
@@ -199,7 +205,7 @@ export interface PluginHostNodeOperationsPort {
     signal?: AbortSignal
     state: Record<string, unknown>
   }): Promise<{
-    operationReceipt: import("@convax/plugin-api").PluginApiResult<"canvas.node.state.replace">["operationReceipt"]
+    operationReceipt: PluginApiOperationReceipt
     projection: PluginHostContextNode
     updated: true
   }>

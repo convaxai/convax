@@ -7,7 +7,7 @@ import {
   canvasTextResourceIpcChannel,
 } from "../desktop-protocol"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
-import { encodeBase64urlV2, parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
+import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
 import { createCanvasResourcePreloadClient, createCanvasTextResourcePreloadClient } from "./canvas-resource-client"
 
 function request(overrides: Record<string, unknown> = {}) {
@@ -23,15 +23,15 @@ function request(overrides: Record<string, unknown> = {}) {
 }
 
 const operationReceipt = {
-  format: "convax.canvas-operation-receipt/2" as const,
-  actorId: parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(1))),
-  operationId: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(2))),
-  intentKind: "canvas.nodes.create/2" as const,
-  intentDigest: parseDigestV2("a".repeat(64)),
-  baseFrontierDigest: parseDigestV2("b".repeat(64)),
+  format: "convax.canvas-operation-receipt" as const,
+  actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(1))),
+  operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(2))),
+  intentKind: "canvas.agent.create" as const,
+  intentDigest: parseDigest("a".repeat(64)),
+  baseFrontierDigest: parseDigest("b".repeat(64)),
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("c".repeat(64)),
+  historyMaterialDigest: parseDigest("c".repeat(64)),
 }
 
 function resourceResult(createdNodeIds: readonly string[] = ["created"]) {

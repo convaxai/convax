@@ -15,11 +15,11 @@ import {
   type CanvasApplicationCommandRequest,
 } from "@convax/canvas/application"
 import { createCanvasDocument } from "@convax/canvas/core"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import {
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
+  parseActorId,
+  parseDigest,
+  parseId128,
 } from "@convax/collaboration"
 import type { CanvasRendererDocumentClient } from "../canvas-document-contracts"
 import type { ProjectLifecycleClient } from "@convax/project"
@@ -45,16 +45,16 @@ const handlers = new Map<string, InvokeHandler>()
 const rendererListeners = new Map<string, Set<(...args: unknown[]) => void>>()
 const rendererSends: Array<{ channel: string; input: unknown }> = []
 const trustedEvent = { sender: { id: 1 }, senderFrame: { url: "file:///convax/index.html" } }
-const operationReceipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
-  actorId: parseActorIdV2("A".repeat(43)),
-  operationId: parseId128V2("A".repeat(22)),
-  intentDigest: parseDigestV2("d".repeat(64)),
-  baseFrontierDigest: parseDigestV2("e".repeat(64)),
-  intentKind: "canvas.nodes.set-geometry/2",
+const operationReceipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
+  actorId: parseActorId("A".repeat(43)),
+  operationId: parseId128("A".repeat(22)),
+  intentDigest: parseDigest("d".repeat(64)),
+  baseFrontierDigest: parseDigest("e".repeat(64)),
+  intentKind: "canvas.nodes.set-geometry",
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+  historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 let exposedBridge: DesktopBridge | undefined
 let selectedProjectPath = ""

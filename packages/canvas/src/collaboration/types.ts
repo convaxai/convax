@@ -1,111 +1,111 @@
 import type {
-  ActorIdV2,
-  CanvasIdV2,
-  DigestV2,
-  DocumentScopeDigestV2,
-  DocumentScopeV2,
-  Id128V2,
-  OwnerCanonicalizerDescriptorV2,
-  PortableStampV2,
-  Uint32V2,
-  Uint64V2,
-  ValidationArtifactRefV2,
+  ActorId,
+  CanvasId,
+  Digest,
+  DocumentScopeDigest,
+  DocumentScope,
+  Id128,
+  OwnerCanonicalizerDescriptor,
+  PortableStamp,
+  Uint32,
+  Uint64,
+  ValidationArtifactRef,
 } from "@convax/collaboration"
 
 export type {
-  ActorIdV2,
-  CanvasIdV2,
-  DigestV2,
-  DocumentScopeDigestV2,
-  DocumentScopeV2,
-  Id128V2,
-  OwnerCanonicalizerDescriptorV2,
-  PortableStampV2,
-  Uint32V2,
-  Uint64V2,
-  ValidationArtifactRefV2,
+  ActorId,
+  CanvasId,
+  Digest,
+  DocumentScopeDigest,
+  DocumentScope,
+  Id128,
+  OwnerCanonicalizerDescriptor,
+  PortableStamp,
+  Uint32,
+  Uint64,
+  ValidationArtifactRef,
 }
 
-export type CanvasScopeIdV2 = DocumentScopeDigestV2
-export type CanvasOperationIdV2 = Id128V2
+export type CanvasScopeId = DocumentScopeDigest
+export type CanvasOperationId = Id128
 
-export interface CanvasEntityRefV2 {
+export interface CanvasEntityRef {
   readonly kind: "node" | "edge"
   readonly id: string
   readonly incarnation: string
 }
 
-export interface StampedClaimV2<T> {
-  readonly format: "convax.canvas-stamped-claim/2"
-  readonly stamp: PortableStampV2
+export interface StampedClaim<T> {
+  readonly format: "convax.canvas-stamped-claim"
+  readonly stamp: PortableStamp
   readonly value: T
 }
 
-export interface CanvasPointV2 {
+export interface CanvasPoint {
   readonly x: number
   readonly y: number
 }
 
-export interface CanvasSizeV2 {
+export interface CanvasSize {
   readonly width: number
   readonly height: number
 }
 
-export interface CanvasResourceRefV2 {
-  readonly format: "convax.canvas-resource-ref/2"
+export interface CanvasResourceRef {
+  readonly format: "convax.canvas-resource-ref"
   readonly uri: string
   readonly mediaClass: "text" | "image" | "video" | "audio" | "file"
   readonly mime: string
-  readonly byteLength: Uint64V2
-  readonly contentDigest: DigestV2
-  readonly ownerProofDigest: DigestV2
+  readonly byteLength: Uint64
+  readonly contentDigest: Digest
+  readonly ownerProofDigest: Digest
 }
 
-export type CanvasResourceProofRefV2 =
+export type CanvasResourceProofRef =
   | {
-      readonly format: "convax.canvas-resource-proof-ref/2"
+      readonly format: "convax.canvas-resource-proof-ref"
       readonly mode: "current-owner-state"
-      readonly resource: CanvasResourceRefV2
-      readonly ownerProofDigest: DigestV2
+      readonly resource: CanvasResourceRef
+      readonly ownerProofDigest: Digest
       readonly requireCurrentLiveVersion: true
     }
   | {
-      readonly format: "convax.canvas-resource-proof-ref/2"
+      readonly format: "convax.canvas-resource-proof-ref"
       readonly mode: "retained-canvas-history"
       readonly sourceState: "history-root-pre" | "history-root-post" | "current-applied-post" | "last-history-post"
-      readonly sourceOperationId: CanvasOperationIdV2
-      readonly sourceNode: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly sourceDataDigest: DigestV2
-      readonly resource: CanvasResourceRefV2
+      readonly sourceOperationId: CanvasOperationId
+      readonly sourceNode: CanvasEntityRef & { readonly kind: "node" }
+      readonly sourceDataDigest: Digest
+      readonly resource: CanvasResourceRef
       readonly requireExactRetainedMaterial: true
     }
 
-export interface PluginRequirementV2 {
+export interface PluginRequirement {
   readonly pluginId: string
-  readonly snapshotDigest: DigestV2
-  readonly pluginStateSchemaDigest: DigestV2
-  readonly validationArtifact: ValidationArtifactRefV2
+  readonly snapshotDigest: Digest
+  readonly pluginStateSchemaDigest: Digest
+  readonly validationArtifact: ValidationArtifactRef
 }
 
-export interface PluginStateEnvelopeV2 extends PluginRequirementV2 {
-  readonly format: "convax.canvas-plugin-state/2"
+export interface PluginStateEnvelope extends PluginRequirement {
+  readonly format: "convax.canvas-plugin-state"
   readonly state: unknown
 }
 
-export type NodeDataEnvelopeV2 =
+export type NodeDataEnvelope =
   | {
-      readonly format: "convax.canvas-node-data/2"
+      readonly format: "convax.canvas-node-data"
       readonly kind: "agent"
       readonly title: string
       readonly instructions: string | null
     }
   | {
-      readonly format: "convax.canvas-node-data/2"
+      readonly format: "convax.canvas-node-data"
       readonly kind: "group"
       readonly title: string
     }
   | {
-      readonly format: "convax.canvas-node-data/2"
+      readonly format: "convax.canvas-node-data"
       readonly kind: "placeholder"
       readonly owner: "manual-pending"
       readonly title: string
@@ -115,75 +115,84 @@ export type NodeDataEnvelopeV2 =
         | { readonly phase: "failed"; readonly failureCode: string; readonly publicMessage: string | null }
     }
   | {
-      readonly format: "convax.canvas-node-data/2"
+      readonly format: "convax.canvas-node-data"
       readonly kind: "placeholder"
       readonly owner: "generation"
       readonly title: string
       readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
     }
   | {
-      readonly format: "convax.canvas-node-data/2"
+      readonly format: "convax.canvas-node-data"
       readonly kind: "resource"
       readonly title: string
-      readonly resource: CanvasResourceRefV2
+      readonly resource: CanvasResourceRef
+    }
+  /**
+   * Host-neutral generic Plugin surface. The concrete Plugin lives only in the
+   * node's validated `PluginStateEnvelope`; Canvas never learns a Plugin id.
+   */
+  | {
+      readonly format: "convax.canvas-node-data"
+      readonly kind: "plugin-surface"
+      readonly title: string
     }
 
-export interface CanvasEdgeDataV2 {
-  readonly format: "convax.canvas-edge-data/2"
+export interface CanvasEdgeData {
+  readonly format: "convax.canvas-edge-data"
   readonly kind: "business"
   readonly label: string | null
 }
 
-export interface CanvasNodeIdentityV2 {
-  readonly format: "convax.canvas-node-identity/2"
-  readonly ref: CanvasEntityRefV2 & { readonly kind: "node" }
+export interface CanvasNodeIdentity {
+  readonly format: "convax.canvas-node-identity"
+  readonly ref: CanvasEntityRef & { readonly kind: "node" }
   readonly role: "file" | "agent"
-  readonly createdBy: CanvasOperationIdV2
+  readonly createdBy: CanvasOperationId
 }
 
-export interface CanvasEdgeIdentityV2 {
-  readonly format: "convax.canvas-edge-identity/2"
-  readonly ref: CanvasEntityRefV2 & { readonly kind: "edge" }
-  readonly source: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly target: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly createdBy: CanvasOperationIdV2
+export interface CanvasEdgeIdentity {
+  readonly format: "convax.canvas-edge-identity"
+  readonly ref: CanvasEntityRef & { readonly kind: "edge" }
+  readonly source: CanvasEntityRef & { readonly kind: "node" }
+  readonly target: CanvasEntityRef & { readonly kind: "node" }
+  readonly createdBy: CanvasOperationId
 }
 
-export interface TombstoneFactV2 {
-  readonly format: "convax.canvas-tombstone/2"
-  readonly entity: CanvasEntityRefV2
-  readonly stamp: PortableStampV2
+export interface TombstoneFact {
+  readonly format: "convax.canvas-tombstone"
+  readonly entity: CanvasEntityRef
+  readonly stamp: PortableStamp
 }
 
-export interface ContainmentChoiceV2 {
-  readonly format: "convax.canvas-containment-choice/2"
+export interface ContainmentChoice {
+  readonly format: "convax.canvas-containment-choice"
   readonly relationId: string
-  readonly child: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly parent: (CanvasEntityRefV2 & { readonly kind: "node" }) | null
-  readonly stamp: PortableStampV2
+  readonly child: CanvasEntityRef & { readonly kind: "node" }
+  readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
+  readonly stamp: PortableStamp
 }
 
-export interface CreationGroupRefV2 {
-  readonly format: "convax.canvas-creation-group-ref/2"
+export interface CreationGroupRef {
+  readonly format: "convax.canvas-creation-group-ref"
   readonly groupId: string
-  readonly source: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly sourceDataDigest: DigestV2
-  readonly plugin: PluginRequirementV2
-  readonly memberSetDigest: DigestV2
+  readonly source: CanvasEntityRef & { readonly kind: "node" }
+  readonly sourceDataDigest: Digest
+  readonly plugin: PluginRequirement
+  readonly memberSetDigest: Digest
 }
 
 export interface GenerationBeginV2 {
   readonly format: "convax.canvas-generation-begin/2"
   readonly generationId: string
-  readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly beginActorId: ActorIdV2
-  readonly beginAuthorizationEpochDigest: DigestV2
-  readonly beginStamp: PortableStampV2
-  readonly outputClaimStamp: PortableStampV2
-  readonly toolRefDigest: DigestV2
+  readonly node: CanvasEntityRef & { readonly kind: "node" }
+  readonly beginActorId: ActorId
+  readonly beginAuthorizationEpochDigest: Digest
+  readonly beginStamp: PortableStamp
+  readonly outputClaimStamp: PortableStamp
+  readonly toolRefDigest: Digest
   readonly prompt: string
-  readonly targetEffectiveDataDigest: DigestV2
-  readonly targetPluginDigest: DigestV2 | null
+  readonly targetEffectiveDataDigest: Digest
+  readonly targetPluginDigest: Digest | null
 }
 
 export type OwnerGenerationTerminalV2 =
@@ -191,19 +200,19 @@ export type OwnerGenerationTerminalV2 =
       readonly format: "convax.canvas-generation-terminal/2"
       readonly phase: "succeeded"
       readonly generationId: string
-      readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly beginDigest: DigestV2
-      readonly beginActorId: ActorIdV2
-      readonly outputData: NodeDataEnvelopeV2 & { readonly kind: "resource" }
-      readonly outputProofDigest: DigestV2
+      readonly node: CanvasEntityRef & { readonly kind: "node" }
+      readonly beginDigest: Digest
+      readonly beginActorId: ActorId
+      readonly outputData: NodeDataEnvelope & { readonly kind: "resource" }
+      readonly outputProofDigest: Digest
     }
   | {
       readonly format: "convax.canvas-generation-terminal/2"
       readonly phase: "failed"
       readonly generationId: string
-      readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly beginDigest: DigestV2
-      readonly beginActorId: ActorIdV2
+      readonly node: CanvasEntityRef & { readonly kind: "node" }
+      readonly beginDigest: Digest
+      readonly beginActorId: ActorId
       readonly failureCode: string
       readonly publicMessage: string | null
     }
@@ -211,398 +220,413 @@ export type OwnerGenerationTerminalV2 =
 export interface GenerationDismissalV2 {
   readonly format: "convax.canvas-generation-dismissal/2"
   readonly generationId: string
-  readonly beginDigest: DigestV2
+  readonly beginDigest: Digest
   readonly marker: "dismissed"
 }
 
 export interface GenerationRecoveryFailureV2 {
   readonly format: "convax.canvas-generation-recovery-failure/2"
   readonly generationId: string
-  readonly beginDigest: DigestV2
-  readonly proofDigest: DigestV2
+  readonly beginDigest: Digest
+  readonly proofDigest: Digest
   readonly failureCode: "generation-owner-unavailable"
 }
 
-export interface CanvasIdentityV2 {
-  readonly format: "convax.canvas.v2"
-  readonly scopeId: CanvasScopeIdV2
-  readonly canvasId: CanvasIdV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly projectIndexRouteDependencyFrameDigest: DigestV2
-  readonly genesisDigest: DigestV2
+export interface CanvasIdentity {
+  readonly format: "convax.canvas"
+  readonly scopeId: CanvasScopeId
+  readonly canvasId: CanvasId
+  readonly ownerSchemaDigest: Digest
+  readonly protocolDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly projectIndexRouteDependencyFrameDigest: Digest
+  readonly genesisDigest: Digest
 }
 
-export interface CanvasGenesisCoreV2 {
-  readonly format: "convax.canvas-genesis-core/2"
-  readonly scopeId: CanvasScopeIdV2
-  readonly canvasId: CanvasIdV2
-  readonly ownerSchemaDigest: DigestV2
-  readonly protocolDigest: DigestV2
-  readonly canonicalizerDigest: DigestV2
-  readonly projectIndexRouteDependencyFrameDigest: DigestV2
+export interface CanvasGenesisCore {
+  readonly format: "convax.canvas-genesis-core"
+  readonly scopeId: CanvasScopeId
+  readonly canvasId: CanvasId
+  readonly ownerSchemaDigest: Digest
+  readonly protocolDigest: Digest
+  readonly canonicalizerDigest: Digest
+  readonly projectIndexRouteDependencyFrameDigest: Digest
 }
 
-export type CanvasExternalFactKindV2 =
+export type CanvasExternalFactKind =
   | "current-resources"
   | "retained-resources"
   | "generation-begin"
   | "generation-recovery"
 
-export type CanvasExternalFactRequestV2 =
+export type CanvasExternalFactRequest =
   | {
-      readonly format: "convax.canvas-external-fact-request/2"
+      readonly format: "convax.canvas-external-fact-request"
       readonly kind: "current-resources"
-      readonly proofs: readonly Extract<CanvasResourceProofRefV2, { readonly mode: "current-owner-state" }>[]
+      readonly proofs: readonly Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>[]
     }
   | {
-      readonly format: "convax.canvas-external-fact-request/2"
+      readonly format: "convax.canvas-external-fact-request"
       readonly kind: "retained-resources"
-      readonly proofs: readonly Extract<CanvasResourceProofRefV2, { readonly mode: "retained-canvas-history" }>[]
+      readonly proofs: readonly Extract<CanvasResourceProofRef, { readonly mode: "retained-canvas-history" }>[]
     }
   | {
-      readonly format: "convax.canvas-external-fact-request/2"
+      readonly format: "convax.canvas-external-fact-request"
       readonly kind: "generation-begin"
-      readonly scope: DocumentScopeV2
-      readonly beginDigest: DigestV2
-      readonly beginActorId: ActorIdV2
-      readonly beginAuthorizationEpochDigest: DigestV2
-      readonly toolRefDigest: DigestV2
-      readonly protocolDigest: DigestV2
+      readonly scope: DocumentScope
+      readonly beginDigest: Digest
+      readonly beginActorId: ActorId
+      readonly beginAuthorizationEpochDigest: Digest
+      readonly toolRefDigest: Digest
+      readonly protocolDigest: Digest
     }
   | {
-      readonly format: "convax.canvas-external-fact-request/2"
+      readonly format: "convax.canvas-external-fact-request"
       readonly kind: "generation-recovery"
-      readonly proofDigest: DigestV2
+      readonly proofDigest: Digest
     }
 
-export interface CanvasExternalFactResultV2 {
-  readonly format: "convax.canvas-external-fact-result/2"
-  readonly kind: CanvasExternalFactKindV2
-  readonly requestSha256: DigestV2
-  readonly factDigest: DigestV2
+export interface CanvasExternalFactResult {
+  readonly format: "convax.canvas-external-fact-result"
+  readonly kind: CanvasExternalFactKind
+  readonly requestSha256: Digest
+  readonly factDigest: Digest
   readonly decision: "verified"
 }
 
-export type CanvasCanonicalMapEntriesV2<K extends string, V> = readonly (readonly [K, V])[]
-export type CanvasActorSlotEntriesV2<V> = readonly (readonly [ActorIdV2, V])[]
+export type CanvasCanonicalMapEntries<K extends string, V> = readonly (readonly [K, V])[]
+export type CanvasActorSlotEntries<V> = readonly (readonly [ActorId, V])[]
 
-export interface CanvasCanonicalMetaV2 {
-  readonly title: CanvasActorSlotEntriesV2<StampedClaimV2<string | null>>
-  readonly description: CanvasActorSlotEntriesV2<StampedClaimV2<string | null>>
-  readonly tags: CanvasActorSlotEntriesV2<StampedClaimV2<readonly string[]>>
+export interface CanvasCanonicalMeta {
+  readonly title: CanvasActorSlotEntries<StampedClaim<string | null>>
+  readonly description: CanvasActorSlotEntries<StampedClaim<string | null>>
+  readonly tags: CanvasActorSlotEntries<StampedClaim<readonly string[]>>
 }
 
-export interface CanvasCanonicalNodeRecordV2 {
-  readonly identity: CanvasNodeIdentityV2
-  readonly position: CanvasActorSlotEntriesV2<StampedClaimV2<CanvasPointV2>>
-  readonly size: CanvasActorSlotEntriesV2<StampedClaimV2<CanvasSizeV2>>
-  readonly data: CanvasActorSlotEntriesV2<StampedClaimV2<NodeDataEnvelopeV2>>
-  readonly plugin: CanvasActorSlotEntriesV2<StampedClaimV2<PluginStateEnvelopeV2 | null>>
-  readonly tombstones: CanvasActorSlotEntriesV2<TombstoneFactV2>
-  readonly creationGroup: CreationGroupRefV2 | null
+export interface CanvasCanonicalNodeRecord {
+  readonly identity: CanvasNodeIdentity
+  readonly position: CanvasActorSlotEntries<StampedClaim<CanvasPoint>>
+  readonly size: CanvasActorSlotEntries<StampedClaim<CanvasSize>>
+  readonly data: CanvasActorSlotEntries<StampedClaim<NodeDataEnvelope>>
+  readonly plugin: CanvasActorSlotEntries<StampedClaim<PluginStateEnvelope | null>>
+  readonly tombstones: CanvasActorSlotEntries<TombstoneFact>
+  readonly creationGroup: CreationGroupRef | null
 }
 
-export interface CanvasCanonicalEdgeRecordV2 {
-  readonly identity: CanvasEdgeIdentityV2
-  readonly data: CanvasActorSlotEntriesV2<StampedClaimV2<CanvasEdgeDataV2>>
-  readonly tombstones: CanvasActorSlotEntriesV2<TombstoneFactV2>
-  readonly creationGroup: CreationGroupRefV2 | null
+export interface CanvasCanonicalEdgeRecord {
+  readonly identity: CanvasEdgeIdentity
+  readonly data: CanvasActorSlotEntries<StampedClaim<CanvasEdgeData>>
+  readonly tombstones: CanvasActorSlotEntries<TombstoneFact>
+  readonly creationGroup: CreationGroupRef | null
 }
 
-export type CanvasCanonicalSemanticHistoryValueV2 = SemanticHistoryRootV2 | SemanticHistoryTransitionV2
+export type CanvasCanonicalSemanticHistoryValue = SemanticHistoryRoot | SemanticHistoryTransition
 
-export interface CanvasCanonicalStateV2 {
-  readonly format: "convax.canvas-canonical-state/2"
-  readonly identity: CanvasIdentityV2
-  readonly meta: CanvasCanonicalMetaV2
-  readonly nodes: CanvasCanonicalMapEntriesV2<string, CanvasCanonicalNodeRecordV2>
-  readonly edges: CanvasCanonicalMapEntriesV2<string, CanvasCanonicalEdgeRecordV2>
-  readonly containments: CanvasCanonicalMapEntriesV2<string, ContainmentChoiceV2>
-  readonly generationBegins: CanvasCanonicalMapEntriesV2<string, GenerationBeginV2>
-  readonly generationTerminals: CanvasCanonicalMapEntriesV2<string, OwnerGenerationTerminalV2>
-  readonly generationDismissals: CanvasCanonicalMapEntriesV2<string, GenerationDismissalV2>
-  readonly generationRecoveryFailures: CanvasCanonicalMapEntriesV2<string, GenerationRecoveryFailureV2>
-  readonly semanticHistory: CanvasCanonicalMapEntriesV2<string, CanvasCanonicalSemanticHistoryValueV2>
-  readonly operations: CanvasCanonicalMapEntriesV2<string, BoundedOperationReceiptV2>
+export interface CanvasCanonicalState {
+  readonly format: "convax.canvas-canonical-state"
+  readonly identity: CanvasIdentity
+  readonly meta: CanvasCanonicalMeta
+  readonly nodes: CanvasCanonicalMapEntries<string, CanvasCanonicalNodeRecord>
+  readonly edges: CanvasCanonicalMapEntries<string, CanvasCanonicalEdgeRecord>
+  readonly containments: CanvasCanonicalMapEntries<string, ContainmentChoice>
+  readonly generationBegins: CanvasCanonicalMapEntries<string, GenerationBeginV2>
+  readonly generationTerminals: CanvasCanonicalMapEntries<string, OwnerGenerationTerminalV2>
+  readonly generationDismissals: CanvasCanonicalMapEntries<string, GenerationDismissalV2>
+  readonly generationRecoveryFailures: CanvasCanonicalMapEntries<string, GenerationRecoveryFailureV2>
+  readonly semanticHistory: CanvasCanonicalMapEntries<string, CanvasCanonicalSemanticHistoryValue>
+  readonly operations: CanvasCanonicalMapEntries<string, BoundedOperationReceipt>
 }
 
-export interface NodeLiveGuardV2 {
-  readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
+export interface NodeLiveGuard {
+  readonly node: CanvasEntityRef & { readonly kind: "node" }
   readonly expectedLive: true
-  readonly expectedIdentityDigest: DigestV2
+  readonly expectedIdentityDigest: Digest
 }
 
-export interface EdgeLiveGuardV2 {
-  readonly edge: CanvasEntityRefV2 & { readonly kind: "edge" }
+export interface EdgeLiveGuard {
+  readonly edge: CanvasEntityRef & { readonly kind: "edge" }
   readonly expectedLive: true
-  readonly expectedIdentityDigest: DigestV2
+  readonly expectedIdentityDigest: Digest
 }
 
-export interface NodeDataGuardV2 extends NodeLiveGuardV2 {
-  readonly expectedEffectiveDataDigest: DigestV2
-  readonly expectedDataRegisterDigest: DigestV2
+export interface NodeDataGuard extends NodeLiveGuard {
+  readonly expectedEffectiveDataDigest: Digest
+  readonly expectedDataRegisterDigest: Digest
 }
 
-export interface PluginGuardV2 extends NodeLiveGuardV2 {
-  readonly expectedPluginDigest: DigestV2 | null
-  readonly requirement: PluginRequirementV2 | null
+export interface PluginGuard extends NodeLiveGuard {
+  readonly expectedPluginDigest: Digest | null
+  readonly requirement: PluginRequirement | null
 }
 
-export interface GenerationGuardV2 extends NodeLiveGuardV2 {
+export interface GenerationGuardV2 extends NodeLiveGuard {
   readonly generationId: string
-  readonly beginDigest: DigestV2
-  readonly expectedLifecycleDigest: DigestV2
+  readonly beginDigest: Digest
+  readonly expectedLifecycleDigest: Digest
 }
 
-export interface DerivedNodeAbsentGuardV2 {
-  readonly ordinal: Uint32V2
-  readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
+export interface DerivedNodeAbsentGuard {
+  readonly ordinal: Uint32
+  readonly node: CanvasEntityRef & { readonly kind: "node" }
   readonly expectedAbsent: true
 }
 
-export interface DerivedEdgeAbsentGuardV2 {
-  readonly ordinal: Uint32V2
-  readonly edge: CanvasEntityRefV2 & { readonly kind: "edge" }
+export interface DerivedEdgeAbsentGuard {
+  readonly ordinal: Uint32
+  readonly edge: CanvasEntityRef & { readonly kind: "edge" }
   readonly expectedAbsent: true
 }
 
-export interface ConnectableNodeGuardV2 extends NodeLiveGuardV2 {
+export interface ConnectableNodeGuard extends NodeLiveGuard {
   readonly expectedConnectable: true
 }
 
-export interface CreatedResourceProofBindingV2 {
-  readonly createdNodeOrdinal: Uint32V2
-  readonly proof: Extract<CanvasResourceProofRefV2, { readonly mode: "current-owner-state" }>
+export interface CreatedResourceProofBinding {
+  readonly createdNodeOrdinal: Uint32
+  readonly proof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>
 }
 
-export interface CausalPlacementV2 {
-  readonly anchor: CanvasPointV2
+export interface CausalPlacement {
+  readonly anchor: CanvasPoint
   readonly gap: 24
-  readonly obstacleProjectionDigest: DigestV2
+  readonly obstacleProjectionDigest: Digest
 }
 
-export interface NodeCreateTemplateV2 {
-  readonly ordinal: Uint32V2
+export interface NodeCreateTemplate {
+  readonly ordinal: Uint32
   readonly nodeId: string
   readonly incarnation: string
   readonly role: "file" | "agent"
-  readonly position: CanvasPointV2
-  readonly size: CanvasSizeV2
-  readonly data: NodeDataEnvelopeV2
-  readonly plugin: PluginStateEnvelopeV2 | null
+  readonly position: CanvasPoint
+  readonly size: CanvasSize
+  readonly data: NodeDataEnvelope
+  readonly plugin: PluginStateEnvelope | null
 }
 
-export interface EdgeCreateTemplateV2 {
-  readonly ordinal: Uint32V2
+export interface EdgeCreateTemplate {
+  readonly ordinal: Uint32
   readonly edgeId: string
   readonly incarnation: string
-  readonly source: CanvasEntityRefV2 | { readonly createdNodeOrdinal: Uint32V2 }
-  readonly target: CanvasEntityRefV2 | { readonly createdNodeOrdinal: Uint32V2 }
-  readonly data: CanvasEdgeDataV2
+  readonly source: CanvasEntityRef | { readonly createdNodeOrdinal: Uint32 }
+  readonly target: CanvasEntityRef | { readonly createdNodeOrdinal: Uint32 }
+  readonly data: CanvasEdgeData
 }
 
-export interface ResourceNodeCreateSpecV2 {
-  readonly ordinal: Uint32V2
+export interface ResourceNodeCreateSpec {
+  readonly ordinal: Uint32
   readonly nodeId: string
   readonly incarnation: string
-  readonly size: CanvasSizeV2
+  readonly size: CanvasSize
   readonly title: string
-  readonly resource: CanvasResourceRefV2
+  readonly resource: CanvasResourceRef
 }
 
-export interface PendingNodeCreateSpecV2 {
-  readonly ordinal: Uint32V2
+export interface PendingNodeCreateSpec {
+  readonly ordinal: Uint32
   readonly nodeId: string
   readonly incarnation: string
-  readonly size: CanvasSizeV2
+  readonly size: CanvasSize
   readonly title: string
   readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
 }
 
-export interface GeometryGuardV2 extends NodeLiveGuardV2 {
-  readonly expectedGeometryDigest: DigestV2
+/**
+ * The one Canvas-owned specification for a generic Plugin surface node. It
+ * carries no source, edge, parent, creation group, caller-selected id, actor,
+ * or digest; position is Canvas-computed from the bound causal placement.
+ */
+export interface PluginSurfaceCreateSpec {
+  readonly ordinal: Uint32
+  readonly nodeId: string
+  readonly incarnation: string
+  readonly size: CanvasSize
+  readonly title: string
+  readonly plugin: PluginStateEnvelope
 }
 
-export interface GeometryUpdateV2 {
-  readonly node: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly position: CanvasPointV2
-  readonly size: CanvasSizeV2 | null
+export interface GeometryGuard extends NodeLiveGuard {
+  readonly expectedGeometryDigest: Digest
 }
 
-export interface ContainmentGuardV2 extends NodeLiveGuardV2 {
-  readonly expectedOwnSlotDigest: DigestV2 | null
+export interface GeometryUpdate {
+  readonly node: CanvasEntityRef & { readonly kind: "node" }
+  readonly position: CanvasPoint
+  readonly size: CanvasSize | null
 }
 
-export interface MetadataFieldGuardV2 {
+export interface ContainmentGuard extends NodeLiveGuard {
+  readonly expectedOwnSlotDigest: Digest | null
+}
+
+export interface MetadataFieldGuard {
   readonly field: "title" | "description" | "tags"
-  readonly expectedEffectiveDigest: DigestV2
-  readonly expectedOwnSlotDigest: DigestV2 | null
+  readonly expectedEffectiveDigest: Digest
+  readonly expectedOwnSlotDigest: Digest | null
 }
 
-export interface MetadataFieldUpdateV2 {
+export interface MetadataFieldUpdate {
   readonly field: "title" | "description" | "tags"
   readonly value: string | readonly string[] | null
 }
 
-export interface GenerationBeginGuardV2 extends NodeDataGuardV2 {
-  readonly expectedPluginDigest: DigestV2 | null
-  readonly expectedProjectedGenerationDigest: DigestV2
+export interface GenerationBeginGuardV2 extends NodeDataGuard {
+  readonly expectedPluginDigest: Digest | null
+  readonly expectedProjectedGenerationDigest: Digest
 }
 
 export interface GenerationObservedGuardV2 extends GenerationGuardV2 {
-  readonly expectedTerminalDigest: DigestV2 | null
-  readonly expectedDismissalDigest: DigestV2 | null
-  readonly expectedRecoveryFailureDigest: DigestV2 | null
+  readonly expectedTerminalDigest: Digest | null
+  readonly expectedDismissalDigest: Digest | null
+  readonly expectedRecoveryFailureDigest: Digest | null
 }
 
-export interface SemanticHistoryGuardV2 {
-  readonly rootOperationId: CanvasOperationIdV2
-  readonly expectedRootReceiptDigest: DigestV2
-  readonly expectedHistoryRootDigest: DigestV2
-  readonly expectedHistoryStateDigest: DigestV2
+export interface SemanticHistoryGuard {
+  readonly rootOperationId: CanvasOperationId
+  readonly expectedRootReceiptDigest: Digest
+  readonly expectedHistoryRootDigest: Digest
+  readonly expectedHistoryStateDigest: Digest
   readonly expectedMode: "applied" | "undone"
 }
 
-export type CanvasIntentKindV2 =
-  | "canvas.nodes.create/2"
-  | "canvas.resources.add/2"
-  | "canvas.resources.pending.create/2"
-  | "canvas.resources.pending-generation.create/2"
-  | "canvas.elements.remove/2"
-  | "canvas.nodes.set-geometry/2"
-  | "canvas.nodes.update-data/2"
-  | "canvas.nodes.set-plugin-state/2"
-  | "canvas.nodes.set-structural-parent/2"
-  | "canvas.nodes.group/2"
-  | "canvas.nodes.ungroup/2"
-  | "canvas.edges.connect/2"
-  | "canvas.metadata.update/2"
-  | "canvas.generation.begin/2"
-  | "canvas.generation.complete/2"
-  | "canvas.generation.fail/2"
-  | "canvas.generations.fail-owned/2"
-  | "canvas.generation.dismiss/2"
-  | "canvas.generation.fail-recovery/2"
-  | "canvas.plugin.creation-group.create/2"
-  | "canvas.undo.semantic-inverse/2"
-  | "canvas.redo.semantic-forward/2"
+export type CanvasIntentKind =
+  | "canvas.agent.create"
+  | "canvas.resources.add"
+  | "canvas.resources.pending.create"
+  | "canvas.resources.pending-generation.create"
+  | "canvas.elements.remove"
+  | "canvas.nodes.set-geometry"
+  | "canvas.nodes.update-data"
+  | "canvas.nodes.set-plugin-state"
+  | "canvas.nodes.set-structural-parent"
+  | "canvas.nodes.group"
+  | "canvas.nodes.ungroup"
+  | "canvas.edges.connect"
+  | "canvas.metadata.update"
+  | "canvas.generation.begin"
+  | "canvas.generation.complete"
+  | "canvas.generation.fail"
+  | "canvas.generations.fail-owned"
+  | "canvas.generation.dismiss"
+  | "canvas.generation.fail-recovery"
+  | "canvas.plugin.creation-group.create"
+  | "canvas.plugin.surface.create"
+  | "canvas.undo.semantic-inverse"
+  | "canvas.redo.semantic-forward"
 
-export type CanvasUndoableIntentKindV2 = Exclude<
-  CanvasIntentKindV2,
-  | "canvas.generation.begin/2"
-  | "canvas.generation.complete/2"
-  | "canvas.generation.fail/2"
-  | "canvas.generations.fail-owned/2"
-  | "canvas.generation.dismiss/2"
-  | "canvas.generation.fail-recovery/2"
-  | "canvas.undo.semantic-inverse/2"
-  | "canvas.redo.semantic-forward/2"
+export type CanvasUndoableIntentKind = Exclude<
+  CanvasIntentKind,
+  | "canvas.generation.begin"
+  | "canvas.generation.complete"
+  | "canvas.generation.fail"
+  | "canvas.generations.fail-owned"
+  | "canvas.generation.dismiss"
+  | "canvas.generation.fail-recovery"
+  | "canvas.undo.semantic-inverse"
+  | "canvas.redo.semantic-forward"
 >
 
-export interface CanvasTypedIntentV2<K extends CanvasIntentKindV2, G, B> {
-  readonly format: "convax.typed-intent/2"
+export interface CanvasTypedIntent<K extends CanvasIntentKind, G, B> {
+  readonly format: "convax.typed-intent"
   readonly kind: K
   readonly guard: G
   readonly body: B
 }
 
-export interface CanvasHistoryBindingV2 {
-  readonly handle: CanvasHistoryHandleV2
-  readonly ref: CanvasEntityRefV2 | null
+export interface CanvasHistoryBinding {
+  readonly handle: CanvasHistoryHandle
+  readonly ref: CanvasEntityRef | null
 }
 
-export type CanvasHistoryNodeHandleV2 = string
-export type CanvasHistoryEdgeHandleV2 = string
-export type CanvasHistoryCreationGroupHandleV2 = string
-export type CanvasHistoryHandleV2 = CanvasHistoryNodeHandleV2 | CanvasHistoryEdgeHandleV2
+export type CanvasHistoryNodeHandle = string
+export type CanvasHistoryEdgeHandle = string
+export type CanvasHistoryCreationGroupHandle = string
+export type CanvasHistoryHandle = CanvasHistoryNodeHandle | CanvasHistoryEdgeHandle
 
-export type CanvasHistoryNodeTargetV2 =
-  | { readonly mode: "handle"; readonly handle: CanvasHistoryNodeHandleV2 }
-  | { readonly mode: "external"; readonly ref: CanvasEntityRefV2 & { readonly kind: "node" } }
+export type CanvasHistoryNodeTarget =
+  | { readonly mode: "handle"; readonly handle: CanvasHistoryNodeHandle }
+  | { readonly mode: "external"; readonly ref: CanvasEntityRef & { readonly kind: "node" } }
 
-export interface CanvasHistoryNodeSnapshotV2 {
+export interface CanvasHistoryNodeSnapshot {
   readonly role: "file" | "agent"
-  readonly position: CanvasPointV2
-  readonly size: CanvasSizeV2
-  readonly data: NodeDataEnvelopeV2
-  readonly plugin: PluginStateEnvelopeV2 | null
-  readonly resource: CanvasResourceRefV2 | null
+  readonly position: CanvasPoint
+  readonly size: CanvasSize
+  readonly data: NodeDataEnvelope
+  readonly plugin: PluginStateEnvelope | null
+  readonly resource: CanvasResourceRef | null
 }
 
-export interface CanvasHistoryEdgeSnapshotV2 {
-  readonly source: CanvasHistoryNodeTargetV2
-  readonly target: CanvasHistoryNodeTargetV2
-  readonly data: CanvasEdgeDataV2
+export interface CanvasHistoryEdgeSnapshot {
+  readonly source: CanvasHistoryNodeTarget
+  readonly target: CanvasHistoryNodeTarget
+  readonly data: CanvasEdgeData
 }
 
-export type CanvasHistoryEntityFootprintV2 =
+export type CanvasHistoryEntityFootprint =
   | {
       readonly kind: "node"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly ref: (CanvasEntityRefV2 & { readonly kind: "node" }) | null
-      readonly snapshot: CanvasHistoryNodeSnapshotV2 | null
-      readonly effectiveParent: CanvasHistoryNodeTargetV2 | null
-      readonly incidentLiveEdges: readonly CanvasHistoryEdgeHandleV2[]
+      readonly handle: CanvasHistoryNodeHandle
+      readonly ref: (CanvasEntityRef & { readonly kind: "node" }) | null
+      readonly snapshot: CanvasHistoryNodeSnapshot | null
+      readonly effectiveParent: CanvasHistoryNodeTarget | null
+      readonly incidentLiveEdges: readonly CanvasHistoryEdgeHandle[]
     }
   | {
       readonly kind: "edge"
-      readonly handle: CanvasHistoryEdgeHandleV2
-      readonly ref: (CanvasEntityRefV2 & { readonly kind: "edge" }) | null
-      readonly snapshot: CanvasHistoryEdgeSnapshotV2 | null
+      readonly handle: CanvasHistoryEdgeHandle
+      readonly ref: (CanvasEntityRef & { readonly kind: "edge" }) | null
+      readonly snapshot: CanvasHistoryEdgeSnapshot | null
     }
 
-export interface CanvasHistoryFootprintCoreV2 {
-  readonly format: "convax.canvas-history-footprint/2"
-  readonly rootOperationId: CanvasOperationIdV2
+export interface CanvasHistoryFootprintCore {
+  readonly format: "convax.canvas-history-footprint"
+  readonly rootOperationId: CanvasOperationId
   readonly mode: "applied" | "undone"
-  readonly entities: readonly CanvasHistoryEntityFootprintV2[]
+  readonly entities: readonly CanvasHistoryEntityFootprint[]
   readonly metadata: readonly {
-    readonly format: "convax.canvas-metadata-effective/2"
+    readonly format: "convax.canvas-metadata-effective"
     readonly field: "title" | "description" | "tags"
     readonly value: string | readonly string[] | null
   }[]
   readonly containments: readonly {
-    readonly child: CanvasHistoryNodeTargetV2
-    readonly parent: CanvasHistoryNodeTargetV2 | null
+    readonly child: CanvasHistoryNodeTarget
+    readonly parent: CanvasHistoryNodeTarget | null
   }[]
 }
 
-export type CanvasHistoryTemplateV2 =
+export type CanvasHistoryTemplate =
   | {
       readonly op: "node.create"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly snapshot: CanvasHistoryNodeSnapshotV2
+      readonly handle: CanvasHistoryNodeHandle
+      readonly snapshot: CanvasHistoryNodeSnapshot
     }
-  | { readonly op: "node.tombstone"; readonly handle: CanvasHistoryNodeHandleV2 }
+  | { readonly op: "node.tombstone"; readonly handle: CanvasHistoryNodeHandle }
   | {
       readonly op: "node.geometry"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly position: CanvasPointV2
-      readonly size: CanvasSizeV2
+      readonly handle: CanvasHistoryNodeHandle
+      readonly position: CanvasPoint
+      readonly size: CanvasSize
     }
   | {
       readonly op: "node.data"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly data: NodeDataEnvelopeV2
-      readonly resource: CanvasResourceRefV2 | null
+      readonly handle: CanvasHistoryNodeHandle
+      readonly data: NodeDataEnvelope
+      readonly resource: CanvasResourceRef | null
     }
   | {
       readonly op: "node.plugin"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly plugin: PluginStateEnvelopeV2 | null
+      readonly handle: CanvasHistoryNodeHandle
+      readonly plugin: PluginStateEnvelope | null
     }
   | {
       readonly op: "edge.create"
-      readonly handle: CanvasHistoryEdgeHandleV2
-      readonly snapshot: CanvasHistoryEdgeSnapshotV2
+      readonly handle: CanvasHistoryEdgeHandle
+      readonly snapshot: CanvasHistoryEdgeSnapshot
     }
-  | { readonly op: "edge.tombstone"; readonly handle: CanvasHistoryEdgeHandleV2 }
+  | { readonly op: "edge.tombstone"; readonly handle: CanvasHistoryEdgeHandle }
   | {
       readonly op: "containment.set"
-      readonly child: CanvasHistoryNodeTargetV2
-      readonly parent: CanvasHistoryNodeTargetV2 | null
+      readonly child: CanvasHistoryNodeTarget
+      readonly parent: CanvasHistoryNodeTarget | null
     }
   | {
       readonly op: "metadata.set"
@@ -611,320 +635,320 @@ export type CanvasHistoryTemplateV2 =
     }
   | {
       readonly op: "creation-group.restore"
-      readonly groupHandle: CanvasHistoryCreationGroupHandleV2
-      readonly source: CanvasHistoryNodeTargetV2
-      readonly sourceDataDigest: DigestV2
-      readonly plugin: PluginRequirementV2
+      readonly groupHandle: CanvasHistoryCreationGroupHandle
+      readonly source: CanvasHistoryNodeTarget
+      readonly sourceDataDigest: Digest
+      readonly plugin: PluginRequirement
       readonly nodes: readonly {
-        readonly handle: CanvasHistoryNodeHandleV2
-        readonly snapshot: CanvasHistoryNodeSnapshotV2
+        readonly handle: CanvasHistoryNodeHandle
+        readonly snapshot: CanvasHistoryNodeSnapshot
       }[]
       readonly edges: readonly {
-        readonly handle: CanvasHistoryEdgeHandleV2
-        readonly snapshot: CanvasHistoryEdgeSnapshotV2
+        readonly handle: CanvasHistoryEdgeHandle
+        readonly snapshot: CanvasHistoryEdgeSnapshot
       }[]
     }
   | {
       readonly op: "pending-generation.restore"
-      readonly node: CanvasHistoryNodeHandleV2
+      readonly node: CanvasHistoryNodeHandle
       readonly edges: readonly {
-        readonly handle: CanvasHistoryEdgeHandleV2
-        readonly snapshot: CanvasHistoryEdgeSnapshotV2
+        readonly handle: CanvasHistoryEdgeHandle
+        readonly snapshot: CanvasHistoryEdgeSnapshot
       }[]
       readonly generationId: string
       readonly fallbackTitle: string
       readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
-      readonly position: CanvasPointV2
-      readonly size: CanvasSizeV2
+      readonly position: CanvasPoint
+      readonly size: CanvasSize
     }
 
 export interface CanvasHistoryGenerationGuardV2 {
-  readonly rootOperationId: CanvasOperationIdV2
-  readonly nodeHandle: CanvasHistoryNodeHandleV2
+  readonly rootOperationId: CanvasOperationId
+  readonly nodeHandle: CanvasHistoryNodeHandle
   readonly generationId: string
-  readonly retainedBeginDigest: DigestV2
-  readonly expectedLifecycleDigest: DigestV2
-  readonly expectedTerminalDigest: DigestV2 | null
-  readonly expectedDismissalDigest: DigestV2 | null
-  readonly expectedRecoveryFailureDigest: DigestV2 | null
+  readonly retainedBeginDigest: Digest
+  readonly expectedLifecycleDigest: Digest
+  readonly expectedTerminalDigest: Digest | null
+  readonly expectedDismissalDigest: Digest | null
+  readonly expectedRecoveryFailureDigest: Digest | null
 }
 
-export type CanvasMaterializedHistoryGuardV2 =
+export type CanvasMaterializedHistoryGuard =
   | { readonly op: "node.create"; readonly guard: null }
-  | { readonly op: "node.tombstone"; readonly guard: NodeLiveGuardV2 }
-  | { readonly op: "node.geometry"; readonly guard: GeometryGuardV2 }
-  | { readonly op: "node.data"; readonly guard: NodeDataGuardV2 }
-  | { readonly op: "node.plugin"; readonly guard: PluginGuardV2 }
+  | { readonly op: "node.tombstone"; readonly guard: NodeLiveGuard }
+  | { readonly op: "node.geometry"; readonly guard: GeometryGuard }
+  | { readonly op: "node.data"; readonly guard: NodeDataGuard }
+  | { readonly op: "node.plugin"; readonly guard: PluginGuard }
   | {
       readonly op: "edge.create"
       readonly guard: {
-        readonly edge: DerivedEdgeAbsentGuardV2
-        readonly source: ConnectableNodeGuardV2
-        readonly target: ConnectableNodeGuardV2
+        readonly edge: DerivedEdgeAbsentGuard
+        readonly source: ConnectableNodeGuard
+        readonly target: ConnectableNodeGuard
       }
     }
-  | { readonly op: "edge.tombstone"; readonly guard: EdgeLiveGuardV2 }
+  | { readonly op: "edge.tombstone"; readonly guard: EdgeLiveGuard }
   | {
       readonly op: "containment.set"
-      readonly guard: { readonly child: ContainmentGuardV2; readonly parent: NodeLiveGuardV2 | null }
+      readonly guard: { readonly child: ContainmentGuard; readonly parent: NodeLiveGuard | null }
     }
-  | { readonly op: "metadata.set"; readonly guard: MetadataFieldGuardV2 }
+  | { readonly op: "metadata.set"; readonly guard: MetadataFieldGuard }
   | {
       readonly op: "creation-group.restore"
       readonly guard: {
-        readonly source: NodeDataGuardV2
-        readonly pluginRequirement: PluginRequirementV2
-        readonly derivedNodes: readonly DerivedNodeAbsentGuardV2[]
-        readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
+        readonly source: NodeDataGuard
+        readonly pluginRequirement: PluginRequirement
+        readonly derivedNodes: readonly DerivedNodeAbsentGuard[]
+        readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
       }
     }
   | {
       readonly op: "pending-generation.restore"
       readonly guard: {
         readonly lifecycle: CanvasHistoryGenerationGuardV2
-        readonly derivedNode: DerivedNodeAbsentGuardV2
-        readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
+        readonly derivedNode: DerivedNodeAbsentGuard
+        readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
       }
     }
 
-export type CanvasHistoryDerivedObjectV2 =
+export type CanvasHistoryDerivedObject =
   | {
       readonly kind: "node"
-      readonly handle: CanvasHistoryNodeHandleV2
-      readonly ordinal: Uint32V2
-      readonly ref: CanvasEntityRefV2 & { readonly kind: "node" }
+      readonly handle: CanvasHistoryNodeHandle
+      readonly ordinal: Uint32
+      readonly ref: CanvasEntityRef & { readonly kind: "node" }
     }
   | {
       readonly kind: "edge"
-      readonly handle: CanvasHistoryEdgeHandleV2
-      readonly ordinal: Uint32V2
-      readonly ref: CanvasEntityRefV2 & { readonly kind: "edge" }
+      readonly handle: CanvasHistoryEdgeHandle
+      readonly ordinal: Uint32
+      readonly ref: CanvasEntityRef & { readonly kind: "edge" }
     }
   | {
       readonly kind: "relation"
-      readonly ordinal: Uint32V2
+      readonly ordinal: Uint32
       readonly relationId: string
-      readonly child: CanvasHistoryNodeTargetV2
+      readonly child: CanvasHistoryNodeTarget
     }
   | {
       readonly kind: "creation-group"
-      readonly handle: CanvasHistoryCreationGroupHandleV2
-      readonly ordinal: Uint32V2
+      readonly handle: CanvasHistoryCreationGroupHandle
+      readonly ordinal: Uint32
       readonly groupId: string
     }
 
-export interface CanvasSemanticOperationV2 {
-  readonly format: "convax.canvas-semantic-operation/2"
-  readonly template: CanvasHistoryTemplateV2
-  readonly materializedGuard: CanvasMaterializedHistoryGuardV2
-  readonly derived: readonly CanvasHistoryDerivedObjectV2[]
-  readonly guardDigest: DigestV2
+export interface CanvasSemanticOperation {
+  readonly format: "convax.canvas-semantic-operation"
+  readonly template: CanvasHistoryTemplate
+  readonly materializedGuard: CanvasMaterializedHistoryGuard
+  readonly derived: readonly CanvasHistoryDerivedObject[]
+  readonly guardDigest: Digest
   readonly retainedResourceProofs: readonly Extract<
-    CanvasResourceProofRefV2,
+    CanvasResourceProofRef,
     { readonly mode: "retained-canvas-history" }
   >[]
 }
 
-export interface SemanticHistoryRootV2 {
-  readonly format: "convax.canvas-semantic-history-root/2"
-  readonly rootOperationId: CanvasOperationIdV2
-  readonly sourceIntentKind: CanvasUndoableIntentKindV2
-  readonly sourceIntentDigest: DigestV2
-  readonly initialBindings: readonly CanvasHistoryBindingV2[]
-  readonly inverseTemplate: readonly CanvasHistoryTemplateV2[]
-  readonly forwardTemplate: readonly CanvasHistoryTemplateV2[]
-  readonly retainedResources: readonly CanvasResourceRefV2[]
-  readonly materialDigest: DigestV2
+export interface SemanticHistoryRoot {
+  readonly format: "convax.canvas-semantic-history-root"
+  readonly rootOperationId: CanvasOperationId
+  readonly sourceIntentKind: CanvasUndoableIntentKind
+  readonly sourceIntentDigest: Digest
+  readonly initialBindings: readonly CanvasHistoryBinding[]
+  readonly inverseTemplate: readonly CanvasHistoryTemplate[]
+  readonly forwardTemplate: readonly CanvasHistoryTemplate[]
+  readonly retainedResources: readonly CanvasResourceRef[]
+  readonly materialDigest: Digest
 }
 
-export interface SemanticHistoryTransitionV2 {
-  readonly format: "convax.canvas-semantic-history-transition/2"
-  readonly rootOperationId: CanvasOperationIdV2
+export interface SemanticHistoryTransition {
+  readonly format: "convax.canvas-semantic-history-transition"
+  readonly rootOperationId: CanvasOperationId
   readonly mode: "undone" | "redone"
-  readonly priorHistoryDigest: DigestV2
-  readonly transitionOperationId: CanvasOperationIdV2
-  readonly stamp: PortableStampV2
-  readonly materializationDigest: DigestV2
-  readonly resultFootprintDigest: DigestV2
-  readonly resultBindings: readonly CanvasHistoryBindingV2[]
+  readonly priorHistoryDigest: Digest
+  readonly transitionOperationId: CanvasOperationId
+  readonly stamp: PortableStamp
+  readonly materializationDigest: Digest
+  readonly resultFootprintDigest: Digest
+  readonly resultBindings: readonly CanvasHistoryBinding[]
 }
 
-export interface BoundedOperationReceiptV2 {
-  readonly format: "convax.canvas-operation-receipt/2"
-  readonly operationId: CanvasOperationIdV2
-  readonly actorId: ActorIdV2
-  readonly intentKind: CanvasIntentKindV2
-  readonly intentDigest: DigestV2
-  readonly baseFrontierDigest: DigestV2
-  readonly resultEntities: readonly CanvasEntityRefV2[]
+export interface BoundedOperationReceipt {
+  readonly format: "convax.canvas-operation-receipt"
+  readonly operationId: CanvasOperationId
+  readonly actorId: ActorId
+  readonly intentKind: CanvasIntentKind
+  readonly intentDigest: Digest
+  readonly baseFrontierDigest: Digest
+  readonly resultEntities: readonly CanvasEntityRef[]
   readonly semanticRoot: boolean
-  readonly historyMaterialDigest: DigestV2 | null
+  readonly historyMaterialDigest: Digest | null
 }
 
-export interface CanvasActualWriteV2 {
+export interface CanvasActualWrite {
   readonly entityKind: "canvas" | "node" | "edge" | "containment" | "generation" | "history" | "operation"
   readonly entityId: string
   readonly field: string
-  readonly valueDigest: DigestV2
+  readonly valueDigest: Digest
 }
 
-export interface CanvasActualWriteEvidenceV2 {
-  readonly format: "convax.canvas-actual-write-evidence/2"
+export interface CanvasActualWriteEvidence {
+  readonly format: "convax.canvas-actual-write-evidence"
   readonly changedPaths: readonly string[]
-  readonly writes: readonly CanvasActualWriteV2[]
+  readonly writes: readonly CanvasActualWrite[]
 }
 
-export interface CanvasIntentApplyResultV2 {
-  readonly format: "convax.canvas-intent-result/2"
-  readonly receipt: BoundedOperationReceiptV2
-  readonly actualWriteEvidence: CanvasActualWriteEvidenceV2
-  readonly semanticHistoryRoot: SemanticHistoryRootV2 | null
-  readonly invalidatedEntities: readonly CanvasEntityRefV2[]
+export interface CanvasIntentApplyResult {
+  readonly format: "convax.canvas-intent-result"
+  readonly receipt: BoundedOperationReceipt
+  readonly actualWriteEvidence: CanvasActualWriteEvidence
+  readonly semanticHistoryRoot: SemanticHistoryRoot | null
+  readonly invalidatedEntities: readonly CanvasEntityRef[]
   readonly invalidatedMetaFields: readonly ("title" | "description" | "tags")[]
 }
 
-export type CanvasIntentContractMapV2 = {
-  readonly "canvas.nodes.create/2": CanvasTypedIntentV2<
-    "canvas.nodes.create/2",
-    DerivedNodeAbsentGuardV2,
-    { readonly node: NodeCreateTemplateV2 }
+export type CanvasIntentContractMap = {
+  readonly "canvas.agent.create": CanvasTypedIntent<
+    "canvas.agent.create",
+    DerivedNodeAbsentGuard,
+    { readonly node: NodeCreateTemplate }
   >
-  readonly "canvas.resources.add/2": CanvasTypedIntentV2<
-    "canvas.resources.add/2",
+  readonly "canvas.resources.add": CanvasTypedIntent<
+    "canvas.resources.add",
     {
-      readonly existingEndpoints: readonly ConnectableNodeGuardV2[]
-      readonly derivedNodes: readonly DerivedNodeAbsentGuardV2[]
-      readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
-      readonly resourceProofs: readonly CreatedResourceProofBindingV2[]
+      readonly existingEndpoints: readonly ConnectableNodeGuard[]
+      readonly derivedNodes: readonly DerivedNodeAbsentGuard[]
+      readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
+      readonly resourceProofs: readonly CreatedResourceProofBinding[]
     },
     {
-      readonly placement: CausalPlacementV2
-      readonly nodes: readonly ResourceNodeCreateSpecV2[]
-      readonly edges: readonly EdgeCreateTemplateV2[]
+      readonly placement: CausalPlacement
+      readonly nodes: readonly ResourceNodeCreateSpec[]
+      readonly edges: readonly EdgeCreateTemplate[]
     }
   >
-  readonly "canvas.resources.pending.create/2": CanvasTypedIntentV2<
-    "canvas.resources.pending.create/2",
+  readonly "canvas.resources.pending.create": CanvasTypedIntent<
+    "canvas.resources.pending.create",
     {
-      readonly existingEndpoints: readonly ConnectableNodeGuardV2[]
-      readonly derivedNodes: readonly DerivedNodeAbsentGuardV2[]
-      readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
+      readonly existingEndpoints: readonly ConnectableNodeGuard[]
+      readonly derivedNodes: readonly DerivedNodeAbsentGuard[]
+      readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
     },
     {
-      readonly placement: CausalPlacementV2
-      readonly nodes: readonly PendingNodeCreateSpecV2[]
-      readonly edges: readonly EdgeCreateTemplateV2[]
+      readonly placement: CausalPlacement
+      readonly nodes: readonly PendingNodeCreateSpec[]
+      readonly edges: readonly EdgeCreateTemplate[]
     }
   >
-  readonly "canvas.resources.pending-generation.create/2": CanvasTypedIntentV2<
-    "canvas.resources.pending-generation.create/2",
+  readonly "canvas.resources.pending-generation.create": CanvasTypedIntent<
+    "canvas.resources.pending-generation.create",
     {
-      readonly existingEndpoints: readonly ConnectableNodeGuardV2[]
-      readonly derivedNode: DerivedNodeAbsentGuardV2
-      readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
+      readonly existingEndpoints: readonly ConnectableNodeGuard[]
+      readonly derivedNode: DerivedNodeAbsentGuard
+      readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
     },
     {
-      readonly placement: CausalPlacementV2
-      readonly node: PendingNodeCreateSpecV2
-      readonly edges: readonly EdgeCreateTemplateV2[]
+      readonly placement: CausalPlacement
+      readonly node: PendingNodeCreateSpec
+      readonly edges: readonly EdgeCreateTemplate[]
       readonly begin: GenerationBeginV2
     }
   >
-  readonly "canvas.elements.remove/2": CanvasTypedIntentV2<
-    "canvas.elements.remove/2",
+  readonly "canvas.elements.remove": CanvasTypedIntent<
+    "canvas.elements.remove",
     {
-      readonly nodes: readonly NodeLiveGuardV2[]
-      readonly edges: readonly EdgeLiveGuardV2[]
+      readonly nodes: readonly NodeLiveGuard[]
+      readonly edges: readonly EdgeLiveGuard[]
       readonly requireObservedIncidentEdgeClosure: true
     },
     {
-      readonly nodes: readonly (CanvasEntityRefV2 & { readonly kind: "node" })[]
-      readonly edges: readonly (CanvasEntityRefV2 & { readonly kind: "edge" })[]
+      readonly nodes: readonly (CanvasEntityRef & { readonly kind: "node" })[]
+      readonly edges: readonly (CanvasEntityRef & { readonly kind: "edge" })[]
     }
   >
-  readonly "canvas.nodes.set-geometry/2": CanvasTypedIntentV2<
-    "canvas.nodes.set-geometry/2",
-    { readonly nodes: readonly GeometryGuardV2[] },
-    { readonly updates: readonly GeometryUpdateV2[] }
+  readonly "canvas.nodes.set-geometry": CanvasTypedIntent<
+    "canvas.nodes.set-geometry",
+    { readonly nodes: readonly GeometryGuard[] },
+    { readonly updates: readonly GeometryUpdate[] }
   >
-  readonly "canvas.nodes.update-data/2": CanvasTypedIntentV2<
-    "canvas.nodes.update-data/2",
-    { readonly node: NodeDataGuardV2; readonly resourceProof: CanvasResourceProofRefV2 | null },
-    { readonly node: CanvasEntityRefV2 & { readonly kind: "node" }; readonly data: NodeDataEnvelopeV2 }
+  readonly "canvas.nodes.update-data": CanvasTypedIntent<
+    "canvas.nodes.update-data",
+    { readonly node: NodeDataGuard; readonly resourceProof: CanvasResourceProofRef | null },
+    { readonly node: CanvasEntityRef & { readonly kind: "node" }; readonly data: NodeDataEnvelope }
   >
-  readonly "canvas.nodes.set-plugin-state/2": CanvasTypedIntentV2<
-    "canvas.nodes.set-plugin-state/2",
-    { readonly node: PluginGuardV2 },
-    { readonly node: CanvasEntityRefV2 & { readonly kind: "node" }; readonly plugin: PluginStateEnvelopeV2 | null }
+  readonly "canvas.nodes.set-plugin-state": CanvasTypedIntent<
+    "canvas.nodes.set-plugin-state",
+    { readonly node: PluginGuard },
+    { readonly node: CanvasEntityRef & { readonly kind: "node" }; readonly plugin: PluginStateEnvelope | null }
   >
-  readonly "canvas.nodes.set-structural-parent/2": CanvasTypedIntentV2<
-    "canvas.nodes.set-structural-parent/2",
-    { readonly child: ContainmentGuardV2; readonly parent: NodeLiveGuardV2 | null },
+  readonly "canvas.nodes.set-structural-parent": CanvasTypedIntent<
+    "canvas.nodes.set-structural-parent",
+    { readonly child: ContainmentGuard; readonly parent: NodeLiveGuard | null },
     {
-      readonly child: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly parent: (CanvasEntityRefV2 & { readonly kind: "node" }) | null
+      readonly child: CanvasEntityRef & { readonly kind: "node" }
+      readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
       readonly relationId: string
     }
   >
-  readonly "canvas.nodes.group/2": CanvasTypedIntentV2<
-    "canvas.nodes.group/2",
+  readonly "canvas.nodes.group": CanvasTypedIntent<
+    "canvas.nodes.group",
     {
-      readonly group: DerivedNodeAbsentGuardV2
-      readonly children: readonly ContainmentGuardV2[]
-      readonly expectedGeometryPlanDigest: DigestV2
+      readonly group: DerivedNodeAbsentGuard
+      readonly children: readonly ContainmentGuard[]
+      readonly expectedGeometryPlanDigest: Digest
     },
     {
-      readonly group: NodeCreateTemplateV2
-      readonly children: readonly (CanvasEntityRefV2 & { readonly kind: "node" })[]
+      readonly group: NodeCreateTemplate
+      readonly children: readonly (CanvasEntityRef & { readonly kind: "node" })[]
       readonly relationIds: readonly string[]
     }
   >
-  readonly "canvas.nodes.ungroup/2": CanvasTypedIntentV2<
-    "canvas.nodes.ungroup/2",
+  readonly "canvas.nodes.ungroup": CanvasTypedIntent<
+    "canvas.nodes.ungroup",
     {
-      readonly group: NodeLiveGuardV2
-      readonly children: readonly ContainmentGuardV2[]
-      readonly expectedEffectiveChildSetDigest: DigestV2
+      readonly group: NodeLiveGuard
+      readonly children: readonly ContainmentGuard[]
+      readonly expectedEffectiveChildSetDigest: Digest
     },
     {
-      readonly group: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly children: readonly (CanvasEntityRefV2 & { readonly kind: "node" })[]
+      readonly group: CanvasEntityRef & { readonly kind: "node" }
+      readonly children: readonly (CanvasEntityRef & { readonly kind: "node" })[]
       readonly nullRelationIds: readonly string[]
     }
   >
-  readonly "canvas.edges.connect/2": CanvasTypedIntentV2<
-    "canvas.edges.connect/2",
+  readonly "canvas.edges.connect": CanvasTypedIntent<
+    "canvas.edges.connect",
     {
-      readonly edge: DerivedEdgeAbsentGuardV2
-      readonly source: ConnectableNodeGuardV2
-      readonly target: ConnectableNodeGuardV2
+      readonly edge: DerivedEdgeAbsentGuard
+      readonly source: ConnectableNodeGuard
+      readonly target: ConnectableNodeGuard
     },
-    { readonly edge: EdgeCreateTemplateV2 }
+    { readonly edge: EdgeCreateTemplate }
   >
-  readonly "canvas.metadata.update/2": CanvasTypedIntentV2<
-    "canvas.metadata.update/2",
-    { readonly fields: readonly MetadataFieldGuardV2[] },
-    { readonly fields: readonly MetadataFieldUpdateV2[] }
+  readonly "canvas.metadata.update": CanvasTypedIntent<
+    "canvas.metadata.update",
+    { readonly fields: readonly MetadataFieldGuard[] },
+    { readonly fields: readonly MetadataFieldUpdate[] }
   >
-  readonly "canvas.generation.begin/2": CanvasTypedIntentV2<
-    "canvas.generation.begin/2",
+  readonly "canvas.generation.begin": CanvasTypedIntent<
+    "canvas.generation.begin",
     GenerationBeginGuardV2,
     { readonly begin: GenerationBeginV2 }
   >
-  readonly "canvas.generation.complete/2": CanvasTypedIntentV2<
-    "canvas.generation.complete/2",
+  readonly "canvas.generation.complete": CanvasTypedIntent<
+    "canvas.generation.complete",
     GenerationObservedGuardV2 & {
-      readonly resourceProof: Extract<CanvasResourceProofRefV2, { readonly mode: "current-owner-state" }>
+      readonly resourceProof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>
     },
     { readonly terminal: Extract<OwnerGenerationTerminalV2, { readonly phase: "succeeded" }> }
   >
-  readonly "canvas.generation.fail/2": CanvasTypedIntentV2<
-    "canvas.generation.fail/2",
+  readonly "canvas.generation.fail": CanvasTypedIntent<
+    "canvas.generation.fail",
     GenerationObservedGuardV2,
     { readonly terminal: Extract<OwnerGenerationTerminalV2, { readonly phase: "failed" }> }
   >
-  readonly "canvas.generations.fail-owned/2": CanvasTypedIntentV2<
-    "canvas.generations.fail-owned/2",
+  readonly "canvas.generations.fail-owned": CanvasTypedIntent<
+    "canvas.generations.fail-owned",
     {
       readonly generations: readonly GenerationObservedGuardV2[]
       readonly requireBeginActorEqualsOperationActor: true
@@ -932,107 +956,117 @@ export type CanvasIntentContractMapV2 = {
     {
       readonly failures: readonly {
         readonly generationId: string
-        readonly beginDigest: DigestV2
+        readonly beginDigest: Digest
         readonly failureCode: string
         readonly publicMessage: string | null
       }[]
     }
   >
-  readonly "canvas.generation.dismiss/2": CanvasTypedIntentV2<
-    "canvas.generation.dismiss/2",
+  readonly "canvas.generation.dismiss": CanvasTypedIntent<
+    "canvas.generation.dismiss",
     GenerationObservedGuardV2,
     { readonly dismissal: GenerationDismissalV2 }
   >
-  readonly "canvas.generation.fail-recovery/2": CanvasTypedIntentV2<
-    "canvas.generation.fail-recovery/2",
+  readonly "canvas.generation.fail-recovery": CanvasTypedIntent<
+    "canvas.generation.fail-recovery",
     GenerationObservedGuardV2,
     { readonly recoveryFailure: GenerationRecoveryFailureV2 }
   >
-  readonly "canvas.plugin.creation-group.create/2": CanvasTypedIntentV2<
-    "canvas.plugin.creation-group.create/2",
+  readonly "canvas.plugin.creation-group.create": CanvasTypedIntent<
+    "canvas.plugin.creation-group.create",
     {
-      readonly source: NodeDataGuardV2
-      readonly pluginRequirement: PluginRequirementV2
-      readonly derivedNodes: readonly DerivedNodeAbsentGuardV2[]
-      readonly derivedEdges: readonly DerivedEdgeAbsentGuardV2[]
-      readonly resourceProofs: readonly CreatedResourceProofBindingV2[]
+      readonly source: NodeDataGuard
+      readonly pluginRequirement: PluginRequirement
+      readonly derivedNodes: readonly DerivedNodeAbsentGuard[]
+      readonly derivedEdges: readonly DerivedEdgeAbsentGuard[]
+      readonly resourceProofs: readonly CreatedResourceProofBinding[]
     },
     {
-      readonly groupOrdinal: Uint32V2
-      readonly source: CanvasEntityRefV2 & { readonly kind: "node" }
-      readonly nodes: readonly NodeCreateTemplateV2[]
-      readonly edges: readonly EdgeCreateTemplateV2[]
+      readonly groupOrdinal: Uint32
+      readonly source: CanvasEntityRef & { readonly kind: "node" }
+      readonly nodes: readonly NodeCreateTemplate[]
+      readonly edges: readonly EdgeCreateTemplate[]
     }
   >
-  readonly "canvas.undo.semantic-inverse/2": CanvasTypedIntentV2<
-    "canvas.undo.semantic-inverse/2",
-    SemanticHistoryGuardV2 & { readonly expectedMode: "applied" },
-    { readonly operations: readonly CanvasSemanticOperationV2[] }
+  /**
+   * Creates exactly one independent top-level Plugin surface node. There is no
+   * source, edge, parent, or creation group; the single derived-node guard and
+   * the causal placement are the whole contract.
+   */
+  readonly "canvas.plugin.surface.create": CanvasTypedIntent<
+    "canvas.plugin.surface.create",
+    { readonly derivedNode: DerivedNodeAbsentGuard },
+    { readonly placement: CausalPlacement; readonly node: PluginSurfaceCreateSpec }
   >
-  readonly "canvas.redo.semantic-forward/2": CanvasTypedIntentV2<
-    "canvas.redo.semantic-forward/2",
-    SemanticHistoryGuardV2 & { readonly expectedMode: "undone" },
-    { readonly operations: readonly CanvasSemanticOperationV2[] }
+  readonly "canvas.undo.semantic-inverse": CanvasTypedIntent<
+    "canvas.undo.semantic-inverse",
+    SemanticHistoryGuard & { readonly expectedMode: "applied" },
+    { readonly operations: readonly CanvasSemanticOperation[] }
+  >
+  readonly "canvas.redo.semantic-forward": CanvasTypedIntent<
+    "canvas.redo.semantic-forward",
+    SemanticHistoryGuard & { readonly expectedMode: "undone" },
+    { readonly operations: readonly CanvasSemanticOperation[] }
   >
 }
 
-export type CanvasTypedIntentUnionV2 = CanvasIntentContractMapV2[keyof CanvasIntentContractMapV2]
+export type CanvasTypedIntentUnion = CanvasIntentContractMap[keyof CanvasIntentContractMap]
 
-export interface CanvasNodeSnapshotV2 extends CanvasCanonicalNodeRecordV2 {
+export interface CanvasNodeSnapshot extends CanvasCanonicalNodeRecord {
   readonly key: string
 }
 
-export interface CanvasEdgeSnapshotV2 extends CanvasCanonicalEdgeRecordV2 {
+export interface CanvasEdgeSnapshot extends CanvasCanonicalEdgeRecord {
   readonly key: string
 }
 
-export interface CanvasSnapshotV2 {
-  readonly identity: CanvasIdentityV2
-  readonly meta: CanvasCanonicalMetaV2
-  readonly nodes: ReadonlyMap<string, CanvasNodeSnapshotV2>
-  readonly edges: ReadonlyMap<string, CanvasEdgeSnapshotV2>
-  readonly containments: ReadonlyMap<string, ContainmentChoiceV2>
+export interface CanvasSnapshot {
+  readonly identity: CanvasIdentity
+  readonly meta: CanvasCanonicalMeta
+  readonly nodes: ReadonlyMap<string, CanvasNodeSnapshot>
+  readonly edges: ReadonlyMap<string, CanvasEdgeSnapshot>
+  readonly containments: ReadonlyMap<string, ContainmentChoice>
   readonly generationBegins: ReadonlyMap<string, GenerationBeginV2>
   readonly generationTerminals: ReadonlyMap<string, OwnerGenerationTerminalV2>
   readonly generationDismissals: ReadonlyMap<string, GenerationDismissalV2>
   readonly generationRecoveryFailures: ReadonlyMap<string, GenerationRecoveryFailureV2>
-  readonly semanticHistory: ReadonlyMap<string, CanvasCanonicalSemanticHistoryValueV2>
-  readonly operations: ReadonlyMap<string, BoundedOperationReceiptV2>
+  readonly semanticHistory: ReadonlyMap<string, CanvasCanonicalSemanticHistoryValue>
+  readonly operations: ReadonlyMap<string, BoundedOperationReceipt>
 }
 
-export interface CanvasProjectedNodeV2 {
-  readonly ref: CanvasEntityRefV2 & { readonly kind: "node" }
+export interface CanvasProjectedNode {
+  readonly ref: CanvasEntityRef & { readonly kind: "node" }
   readonly role: "file" | "agent"
-  readonly position: CanvasPointV2
-  readonly size: CanvasSizeV2
-  readonly data: NodeDataEnvelopeV2
-  readonly plugin: PluginStateEnvelopeV2 | null
-  readonly parent: (CanvasEntityRefV2 & { readonly kind: "node" }) | null
+  readonly position: CanvasPoint
+  readonly size: CanvasSize
+  readonly data: NodeDataEnvelope
+  readonly plugin: PluginStateEnvelope | null
+  readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
   readonly generationLifecycle: "none" | "active" | "succeeded" | "failed" | "dismissed" | "recovery-failed"
 }
 
-export interface CanvasProjectedEdgeV2 {
-  readonly ref: CanvasEntityRefV2 & { readonly kind: "edge" }
-  readonly source: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly target: CanvasEntityRefV2 & { readonly kind: "node" }
-  readonly data: CanvasEdgeDataV2
+export interface CanvasProjectedEdge {
+  readonly ref: CanvasEntityRef & { readonly kind: "edge" }
+  readonly source: CanvasEntityRef & { readonly kind: "node" }
+  readonly target: CanvasEntityRef & { readonly kind: "node" }
+  readonly data: CanvasEdgeData
 }
 
-export interface CanvasProjectionV2 {
-  readonly identity: CanvasIdentityV2
+export interface CanvasProjection {
+  readonly identity: CanvasIdentity
   readonly title: string | null
   readonly description: string | null
   readonly tags: readonly string[]
-  readonly nodes: readonly CanvasProjectedNodeV2[]
-  readonly edges: readonly CanvasProjectedEdgeV2[]
+  readonly nodes: readonly CanvasProjectedNode[]
+  readonly edges: readonly CanvasProjectedEdge[]
 }
 
-export type CanvasFactResultV2 = "valid" | "pending" | "invalid"
+export type CanvasFactResult = "valid" | "pending" | "invalid"
 
-export interface CanvasExternalFactContextV2 {
-  validateCurrentResource(proof: CanvasResourceProofRefV2): CanvasFactResultV2
-  validatePluginArtifact(requirement: PluginRequirementV2): CanvasFactResultV2
-  validatePluginState(envelope: PluginStateEnvelopeV2): CanvasFactResultV2
-  validateGenerationBegin(begin: GenerationBeginV2): CanvasFactResultV2
-  validateGenerationRecovery(proofDigest: DigestV2): CanvasFactResultV2
+export interface CanvasExternalFactContext {
+  validateCurrentResource(proof: CanvasResourceProofRef): CanvasFactResult
+  validatePluginArtifact(requirement: PluginRequirement): CanvasFactResult
+  validatePluginState(envelope: PluginStateEnvelope): CanvasFactResult
+  validateGenerationBegin(begin: GenerationBeginV2): CanvasFactResult
+  validateGenerationRecovery(proofDigest: Digest): CanvasFactResult
 }

@@ -1,21 +1,21 @@
 import { describe, expect, mock, test } from "bun:test"
-import { parseActorIdV2, parseDigestV2, parseId128V2 } from "@convax/collaboration"
-import type { BoundedOperationReceiptV2 } from "../collaboration"
+import { parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
+import type { BoundedOperationReceipt } from "../collaboration"
 import { createCanvasDocument } from "../document"
 import type { CanvasUploadItem } from "../types"
 import { CanvasResourceBusinessService, CanvasResourcePartialFailureError } from "./resources"
 import type { CanvasApplicationCommandResult } from "./service"
 
-const receipt: BoundedOperationReceiptV2 = {
-  format: "convax.canvas-operation-receipt/2",
-  actorId: parseActorIdV2("A".repeat(43)),
-  operationId: parseId128V2("A".repeat(22)),
-  intentDigest: parseDigestV2("d".repeat(64)),
-  baseFrontierDigest: parseDigestV2("e".repeat(64)),
-  intentKind: "canvas.nodes.create/2",
+const receipt: BoundedOperationReceipt = {
+  format: "convax.canvas-operation-receipt",
+  actorId: parseActorId("A".repeat(43)),
+  operationId: parseId128("A".repeat(22)),
+  intentDigest: parseDigest("d".repeat(64)),
+  baseFrontierDigest: parseDigest("e".repeat(64)),
+  intentKind: "canvas.agent.create",
   resultEntities: [],
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("f".repeat(64)),
+  historyMaterialDigest: parseDigest("f".repeat(64)),
 }
 
 const image: CanvasUploadItem = {

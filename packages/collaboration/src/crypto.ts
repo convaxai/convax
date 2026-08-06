@@ -1,6 +1,6 @@
-import type { PublicKeyV2, SignatureV2 } from "./codecs"
-import { decodeBase64urlV2, parsePublicKeyV2, parseSignatureV2 } from "./codecs"
-import { CollaborationCodecErrorV2 } from "./errors"
+import type { PublicKey, Signature } from "./codecs"
+import { decodeBase64url, parsePublicKey, parseSignature } from "./codecs"
+import { CollaborationCodecError } from "./errors"
 
 const ED25519_L = BigInt("0x1000000000000000000000000000000014def9dea2f79cd65812631a5cf5d3ed")
 const FIELD_P = (1n << 255n) - 19n
@@ -15,30 +15,30 @@ const SMALL_ORDER_ENCODINGS = new Set([
   "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39cc3c6efda0203c7a037a",
 ])
 
-export interface Ed25519VerifierPortV2 {
+export interface Ed25519VerifierPort {
   verify(publicKey: Uint8Array, signature: Uint8Array, digest: Uint8Array): Promise<boolean>
 }
 
-export interface ReplicaSignerPortV2 {
-  sign(digest: Uint8Array): Promise<SignatureV2>
+export interface ReplicaSignerPort {
+  sign(digest: Uint8Array): Promise<Signature>
 }
 
-export async function verifyExactEd25519V2(
-  verifier: Ed25519VerifierPortV2,
-  publicKey: PublicKeyV2 | string,
-  signature: SignatureV2 | string,
+export async function verifyExactEd25519(
+  verifier: Ed25519VerifierPort,
+  publicKey: PublicKey | string,
+  signature: Signature | string,
   digest: Uint8Array,
 ): Promise<boolean> {
   if (!(digest instanceof Uint8Array) || digest.byteLength !== 32) invalid("Ed25519 purpose digest must contain exactly 32 bytes")
-  const keyBytes = decodeBase64urlV2(parsePublicKeyV2(publicKey))
-  const signatureBytes = decodeBase64urlV2(parseSignatureV2(signature))
+  const keyBytes = decodeBase64url(parsePublicKey(publicKey))
+  const signatureBytes = decodeBase64url(parseSignature(signature))
   assertCanonicalPoint(keyBytes, "Ed25519 public key")
   assertCanonicalPoint(signatureBytes.subarray(0, 32), "Ed25519 R")
   if (littleEndianInteger(signatureBytes.subarray(32)) >= ED25519_L) invalid("Ed25519 S is noncanonical")
   return verifier.verify(Uint8Array.from(keyBytes), Uint8Array.from(signatureBytes), Uint8Array.from(digest))
 }
 
-export function createWebCryptoEd25519VerifierV2(subtle: SubtleCrypto = crypto.subtle): Ed25519VerifierPortV2 {
+export function createWebCryptoEd25519Verifier(subtle: SubtleCrypto = crypto.subtle): Ed25519VerifierPort {
   return Object.freeze({
     async verify(publicKey: Uint8Array, signature: Uint8Array, digest: Uint8Array): Promise<boolean> {
       try {
@@ -76,5 +76,5 @@ function toHex(bytes: Uint8Array): string {
 }
 
 function invalid(message: string): never {
-  throw new CollaborationCodecErrorV2("invalid-codec", message)
+  throw new CollaborationCodecError("invalid-codec", message)
 }

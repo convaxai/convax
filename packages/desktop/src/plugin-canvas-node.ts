@@ -18,9 +18,9 @@ export function webPluginCanvasRendererId(pluginId: string) {
 }
 
 /**
- * Creates the host-owned persisted shape for an installed Plugin renderer.
- * Callers still choose how the node enters Canvas; business operations own
- * placement, relations and revision/CAS semantics.
+ * Builds the host-owned node shape for connected materialization only
+ * (`nodes.materialize-connected`). Independent root Plugin surfaces must go
+ * through Main `pluginSurfaces.create` → `plugin.surface.create`.
  */
 export function createWebPluginCanvasNode(
   plugin: InstalledWebPluginCanvasSurface,

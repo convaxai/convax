@@ -1,39 +1,39 @@
-import { assertVerifiedProtocolAuthorityV2, type VerifiedProtocolAuthorityV2 } from "./authority"
-import { cloneBytesV2 } from "./binary"
+import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from "./authority"
+import { cloneBytes } from "./binary"
 import {
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseProjectIdV2,
-  parseUint32V2,
-  parseUint64V2,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseProjectId,
+  parseUint32,
+  parseUint64,
 } from "./codecs"
-import { PINNED_AUTHORITY_IDENTITIES_V2 } from "./constants"
+import { CURRENT_PROTOCOL_IDENTITIES } from "./constants"
 import type {
-  CompletedRemoteUpdateIngressV2,
-  CompleteRemoteIngressStagingPortResultV2,
-  FullyValidatedRemoteIngressStagingV2,
-  PutImmutableCompletedRemoteIngressPortResultV2,
-  RemoteImmutableIngressObjectReceiptV2,
-  RemoteIngressByteCursorReadV2,
-  RemoteIngressByteCursorV2,
-  RemoteIngressCompletedStagingEvidenceV2,
-  RemoteIngressImmutableObjectPersistencePortV2,
-  RemoteIngressKindV2,
-  RemoteIngressOwnerValidationEvidenceV2,
-  RemoteIngressReservationReceiptV2,
-  RemoteIngressStagingPersistencePortV2,
-  RemoteTransferAttemptBindingFactoryV2,
-  RemoteTransferAttemptBindingV2,
-  ReserveRemoteIngressPortResultV2,
-  ReserveRemoteIngressRequestV2,
-  StableRemoteTransferKeyV2,
-  UpdateIngressChunkBytesV2,
+  CompletedRemoteUpdateIngress,
+  CompleteRemoteIngressStagingPortResult,
+  FullyValidatedRemoteIngressStaging,
+  PutImmutableCompletedRemoteIngressPortResult,
+  RemoteImmutableIngressObjectReceipt,
+  RemoteIngressByteCursorRead,
+  RemoteIngressByteCursor,
+  RemoteIngressCompletedStagingEvidence,
+  RemoteIngressImmutableObjectPersistencePort,
+  RemoteIngressKind,
+  RemoteIngressOwnerValidationEvidence,
+  RemoteIngressReservationReceipt,
+  RemoteIngressStagingPersistencePort,
+  RemoteTransferAttemptBindingFactory,
+  RemoteTransferAttemptBinding,
+  ReserveRemoteIngressPortResult,
+  ReserveRemoteIngressRequest,
+  StableRemoteTransferKey,
+  UpdateIngressChunkBytes,
 } from "./contracts"
-import { ordinarySha256V2 } from "./digest"
-import { CollaborationKernelErrorV2 } from "./errors"
-import { encodeRestrictedJcsV2 } from "./jcs"
-import { parseDocumentScopeV2 } from "./parse"
+import { ordinarySha256 } from "./digest"
+import { CollaborationKernelError } from "./errors"
+import { encodeRestrictedJcs } from "./jcs"
+import { parseDocumentScope } from "./parse"
 
 const TOKEN = /^[a-z][a-z0-9-]{0,127}$/u
 const MAX_PROJECT_OBJECTS = 8192n
@@ -41,122 +41,122 @@ const MAX_PROJECT_BYTES = 536_870_912n
 const MAX_MEMBER_OBJECTS = 512n
 const MAX_MEMBER_BYTES = 134_217_728n
 
-export type ReserveRemoteIngressCapabilityResultV2 =
-  | Readonly<{ status: "reserved"; receipt: RemoteIngressReservationReceiptV2 }>
-  | Exclude<ReserveRemoteIngressPortResultV2, { status: "reserved" }>
+export type ReserveRemoteIngressCapabilityResult =
+  | Readonly<{ status: "reserved"; receipt: RemoteIngressReservationReceipt }>
+  | Exclude<ReserveRemoteIngressPortResult, { status: "reserved" }>
 
-export type CompleteRemoteIngressCapabilityResultV2<K extends RemoteIngressKindV2> =
-  | Readonly<{ status: "complete"; completed: CompletedRemoteUpdateIngressV2<K> }>
-  | Exclude<CompleteRemoteIngressStagingPortResultV2, { status: "complete" }>
+export type CompleteRemoteIngressCapabilityResult<K extends RemoteIngressKind> =
+  | Readonly<{ status: "complete"; completed: CompletedRemoteUpdateIngress<K> }>
+  | Exclude<CompleteRemoteIngressStagingPortResult, { status: "complete" }>
 
-export type PutImmutableRemoteIngressCapabilityResultV2<K extends RemoteIngressKindV2> =
-  | Readonly<{ status: "durable"; receipt: RemoteImmutableIngressObjectReceiptV2<K> }>
-  | Exclude<PutImmutableCompletedRemoteIngressPortResultV2<K>, { status: "durable" }>
+export type PutImmutableRemoteIngressCapabilityResult<K extends RemoteIngressKind> =
+  | Readonly<{ status: "durable"; receipt: RemoteImmutableIngressObjectReceipt<K> }>
+  | Exclude<PutImmutableCompletedRemoteIngressPortResult<K>, { status: "durable" }>
 
-export interface RemoteIngressCapabilityFactoryV2 {
-  reserve(request: ReserveRemoteIngressRequestV2): Promise<ReserveRemoteIngressCapabilityResultV2>
-  complete<K extends RemoteIngressKindV2>(
-    reservation: RemoteIngressReservationReceiptV2 & { readonly kind: K },
-  ): Promise<CompleteRemoteIngressCapabilityResultV2<K>>
-  acceptOwnerValidation<K extends RemoteIngressKindV2>(
-    completed: CompletedRemoteUpdateIngressV2<K>,
-    evidence: RemoteIngressOwnerValidationEvidenceV2<K>,
-  ): FullyValidatedRemoteIngressStagingV2<K>
-  putImmutable<K extends RemoteIngressKindV2>(
-    validated: FullyValidatedRemoteIngressStagingV2<K>,
-  ): Promise<PutImmutableRemoteIngressCapabilityResultV2<K>>
-  readonly attemptBindings: RemoteTransferAttemptBindingFactoryV2
+export interface RemoteIngressCapabilityFactory {
+  reserve(request: ReserveRemoteIngressRequest): Promise<ReserveRemoteIngressCapabilityResult>
+  complete<K extends RemoteIngressKind>(
+    reservation: RemoteIngressReservationReceipt & { readonly kind: K },
+  ): Promise<CompleteRemoteIngressCapabilityResult<K>>
+  acceptOwnerValidation<K extends RemoteIngressKind>(
+    completed: CompletedRemoteUpdateIngress<K>,
+    evidence: RemoteIngressOwnerValidationEvidence<K>,
+  ): FullyValidatedRemoteIngressStaging<K>
+  putImmutable<K extends RemoteIngressKind>(
+    validated: FullyValidatedRemoteIngressStaging<K>,
+  ): Promise<PutImmutableRemoteIngressCapabilityResult<K>>
+  readonly attemptBindings: RemoteTransferAttemptBindingFactory
   dispose(): void
 }
 
-interface ReservationRecordV2 {
+interface ReservationRecord {
   readonly factory: object
-  readonly request: ReserveRemoteIngressRequestV2
+  readonly request: ReserveRemoteIngressRequest
 }
 
-interface CompletedRecordV2 {
+interface CompletedRecord {
   readonly factory: object
-  readonly reservation: RemoteIngressReservationReceiptV2
-  readonly evidence: RemoteIngressCompletedStagingEvidenceV2
+  readonly reservation: RemoteIngressReservationReceipt
+  readonly evidence: RemoteIngressCompletedStagingEvidence
   cursorOpen: boolean
 }
 
-interface ValidatedRecordV2 {
+interface ValidatedRecord {
   readonly factory: object
-  readonly completed: CompletedRemoteUpdateIngressV2
-  readonly evidence: RemoteIngressOwnerValidationEvidenceV2<RemoteIngressKindV2>
+  readonly completed: CompletedRemoteUpdateIngress
+  readonly evidence: RemoteIngressOwnerValidationEvidence<RemoteIngressKind>
 }
 
 const liveFactories = new WeakSet<object>()
-const reservations = new WeakMap<object, ReservationRecordV2>()
-const completedIngresses = new WeakMap<object, CompletedRecordV2>()
-const validatedIngresses = new WeakMap<object, ValidatedRecordV2>()
-const immutableReceipts = new WeakMap<object, FactoryIdentityV2>()
-const attemptBindingFactories = new WeakMap<object, FactoryIdentityV2>()
-const attemptBindings = new WeakMap<object, FactoryIdentityV2>()
+const reservations = new WeakMap<object, ReservationRecord>()
+const completedIngresses = new WeakMap<object, CompletedRecord>()
+const validatedIngresses = new WeakMap<object, ValidatedRecord>()
+const immutableReceipts = new WeakMap<object, FactoryIdentity>()
+const attemptBindingFactories = new WeakMap<object, FactoryIdentity>()
+const attemptBindings = new WeakMap<object, FactoryIdentity>()
 
-interface FactoryIdentityV2 {
+interface FactoryIdentity {
   readonly isDisposed: () => boolean
 }
 
-export function createRemoteIngressCapabilityFactoryV2(
-  authority: VerifiedProtocolAuthorityV2,
-  staging: RemoteIngressStagingPersistencePortV2,
-  immutable: RemoteIngressImmutableObjectPersistencePortV2,
-): RemoteIngressCapabilityFactoryV2 {
-  assertVerifiedProtocolAuthorityV2(authority)
+export function createRemoteIngressCapabilityFactory(
+  authority: CurrentProtocolAuthority,
+  staging: RemoteIngressStagingPersistencePort,
+  immutable: RemoteIngressImmutableObjectPersistencePort,
+): RemoteIngressCapabilityFactory {
+  assertCurrentProtocolAuthority(authority)
   let disposed = false
-  const identity: FactoryIdentityV2 = Object.freeze({ isDisposed: () => disposed })
+  const identity: FactoryIdentity = Object.freeze({ isDisposed: () => disposed })
   const attemptFactory = createAttemptBindingFactory(identity, () => disposed)
   const factory = Object.freeze({
-    async reserve(requestValue: ReserveRemoteIngressRequestV2): Promise<ReserveRemoteIngressCapabilityResultV2> {
+    async reserve(requestValue: ReserveRemoteIngressRequest): Promise<ReserveRemoteIngressCapabilityResult> {
       requireLive()
       const request = normalizeReservationRequest(requestValue)
       const result = await staging.reserveRemoteIngress(request)
       if (result.status === "rejected") return result
       validateReservationEvidence(result.evidence, request)
-      const receipt = Object.freeze(copyReservationEvidence(result.evidence)) as RemoteIngressReservationReceiptV2
+      const receipt = Object.freeze(copyReservationEvidence(result.evidence)) as RemoteIngressReservationReceipt
       reservations.set(receipt, { factory: identity, request })
       return Object.freeze({ status: "reserved", receipt })
     },
-    async complete<K extends RemoteIngressKindV2>(
-      reservation: RemoteIngressReservationReceiptV2 & { readonly kind: K },
-    ): Promise<CompleteRemoteIngressCapabilityResultV2<K>> {
+    async complete<K extends RemoteIngressKind>(
+      reservation: RemoteIngressReservationReceipt & { readonly kind: K },
+    ): Promise<CompleteRemoteIngressCapabilityResult<K>> {
       requireLive()
       const record = requireReservation(reservation, identity)
       const result = await staging.completeRemoteIngressStaging(reservation)
       if (result.status === "rejected") return result
       validateCompletedEvidence(result.evidence, reservation, record.request)
-      const evidence = Object.freeze(copyCompletedEvidence(result.evidence)) as RemoteIngressCompletedStagingEvidenceV2 & { readonly kind: K }
-      let completed!: CompletedRemoteUpdateIngressV2<K>
+      const evidence = Object.freeze(copyCompletedEvidence(result.evidence)) as RemoteIngressCompletedStagingEvidence & { readonly kind: K }
+      let completed!: CompletedRemoteUpdateIngress<K>
       completed = Object.freeze({
         evidence,
         openSequentialCursor: () => openCursor(staging, completed, identity),
-      }) as CompletedRemoteUpdateIngressV2<K>
+      }) as CompletedRemoteUpdateIngress<K>
       completedIngresses.set(completed, { factory: identity, reservation, evidence, cursorOpen: false })
       return Object.freeze({ status: "complete", completed })
     },
-    acceptOwnerValidation<K extends RemoteIngressKindV2>(
-      completed: CompletedRemoteUpdateIngressV2<K>,
-      evidenceValue: RemoteIngressOwnerValidationEvidenceV2<K>,
-    ): FullyValidatedRemoteIngressStagingV2<K> {
+    acceptOwnerValidation<K extends RemoteIngressKind>(
+      completed: CompletedRemoteUpdateIngress<K>,
+      evidenceValue: RemoteIngressOwnerValidationEvidence<K>,
+    ): FullyValidatedRemoteIngressStaging<K> {
       requireLive()
       const completedRecord = requireCompleted(completed, identity)
       const evidence = normalizeOwnerValidationEvidence(evidenceValue, completedRecord.evidence, authority)
-      const validated = Object.freeze({ completed, ownerArtifactDigest: evidence.ownerArtifactDigest }) as FullyValidatedRemoteIngressStagingV2<K>
+      const validated = Object.freeze({ completed, ownerArtifactDigest: evidence.ownerArtifactDigest }) as FullyValidatedRemoteIngressStaging<K>
       validatedIngresses.set(validated, { factory: identity, completed, evidence })
       return validated
     },
-    async putImmutable<K extends RemoteIngressKindV2>(
-      validated: FullyValidatedRemoteIngressStagingV2<K>,
-    ): Promise<PutImmutableRemoteIngressCapabilityResultV2<K>> {
+    async putImmutable<K extends RemoteIngressKind>(
+      validated: FullyValidatedRemoteIngressStaging<K>,
+    ): Promise<PutImmutableRemoteIngressCapabilityResult<K>> {
       requireLive()
       const validation = requireValidated(validated, identity)
       const completedRecord = requireCompleted(validation.completed, identity)
       const result = await immutable.putImmutableCompletedRemoteIngress(validated)
       if (result.status === "rejected") return result
       validateImmutableEvidence(result.evidence, completedRecord.evidence)
-      const receipt = Object.freeze({ ...result.evidence, stableKey: Object.freeze({ ...result.evidence.stableKey }), quota: copyQuota(result.evidence.quota) }) as RemoteImmutableIngressObjectReceiptV2<K>
+      const receipt = Object.freeze({ ...result.evidence, stableKey: Object.freeze({ ...result.evidence.stableKey }), quota: copyQuota(result.evidence.quota) }) as RemoteImmutableIngressObjectReceipt<K>
       immutableReceipts.set(receipt, identity)
       return Object.freeze({ status: "durable", receipt })
     },
@@ -164,39 +164,39 @@ export function createRemoteIngressCapabilityFactoryV2(
     dispose() {
       disposed = true
     },
-  }) as RemoteIngressCapabilityFactoryV2
+  }) as RemoteIngressCapabilityFactory
   liveFactories.add(factory)
   return factory
 
   function requireLive(): void {
-    if (disposed) throw new CollaborationKernelErrorV2("disposed", "Remote-ingress capability factory is disposed")
+    if (disposed) throw new CollaborationKernelError("disposed", "Remote-ingress capability factory is disposed")
   }
 }
 
-export function assertRemoteTransferAttemptBindingV2(
+export function assertRemoteTransferAttemptBinding(
   binding: unknown,
-  factory: RemoteTransferAttemptBindingFactoryV2,
-): asserts binding is RemoteTransferAttemptBindingV2<RemoteIngressKindV2> {
+  factory: RemoteTransferAttemptBindingFactory,
+): asserts binding is RemoteTransferAttemptBinding<RemoteIngressKind> {
   const identity = isObject(factory) ? attemptBindingFactories.get(factory) : undefined
   if (!isObject(binding) || !identity || identity.isDisposed() || identity !== attemptBindings.get(binding)) {
     invalid("A live transfer-attempt binding from the selected factory is required")
   }
 }
 
-export function assertRemoteImmutableIngressObjectReceiptV2(
+export function assertRemoteImmutableIngressObjectReceipt(
   receipt: unknown,
-): asserts receipt is RemoteImmutableIngressObjectReceiptV2<RemoteIngressKindV2> {
+): asserts receipt is RemoteImmutableIngressObjectReceipt<RemoteIngressKind> {
   const identity = isObject(receipt) ? immutableReceipts.get(receipt) : undefined
   if (!identity || identity.isDisposed()) invalid("A live immutable remote-ingress receipt is required")
 }
 
 async function openCursor(
-  staging: RemoteIngressStagingPersistencePortV2,
-  completed: CompletedRemoteUpdateIngressV2,
+  staging: RemoteIngressStagingPersistencePort,
+  completed: CompletedRemoteUpdateIngress,
   identity: object,
-): Promise<RemoteIngressByteCursorV2> {
+): Promise<RemoteIngressByteCursor> {
   const record = requireCompleted(completed, identity)
-  if (isFactoryIdentity(identity) && identity.isDisposed()) throw new CollaborationKernelErrorV2("disposed", "Remote-ingress capability factory is disposed")
+  if (isFactoryIdentity(identity) && identity.isDisposed()) throw new CollaborationKernelError("disposed", "Remote-ingress capability factory is disposed")
   if (record.cursorOpen) invalid("Remote-ingress cursor is already open")
   record.cursorOpen = true
   const opened = await staging.openRemoteIngressSequentialCursor(record.evidence)
@@ -217,7 +217,7 @@ async function openCursor(
     handle.closePersistedCursor()
   }
   return Object.freeze({
-    async next(): Promise<RemoteIngressByteCursorReadV2> {
+    async next(): Promise<RemoteIngressByteCursorRead> {
       if (closed) invalid("Remote-ingress cursor is closed")
       try {
         const value = await handle.nextPersistedChunk()
@@ -231,7 +231,7 @@ async function openCursor(
           close()
           return Object.freeze({ ...value })
         }
-        const bytes = cloneBytesV2(value.exactChunkBytes, "remote-ingress chunk")
+        const bytes = cloneBytes(value.exactChunkBytes, "remote-ingress chunk")
         const length = BigInt(value.exactByteLength)
         if (
           BigInt(value.chunkIndex) !== expectedIndex
@@ -239,7 +239,7 @@ async function openCursor(
           || length !== BigInt(bytes.byteLength)
           || length < 1n
           || length > chunkCapacity
-          || ordinarySha256V2(bytes) !== value.exactChunkSha256
+          || ordinarySha256(bytes) !== value.exactChunkSha256
           || expectedIndex >= expectedChunks
         ) invalid("Remote-ingress cursor chunk is non-contiguous or corrupt")
         expectedIndex += 1n
@@ -252,19 +252,19 @@ async function openCursor(
       }
     },
     close,
-  }) as RemoteIngressByteCursorV2
+  }) as RemoteIngressByteCursor
 }
 
-function createAttemptBindingFactory(identity: FactoryIdentityV2, isDisposed: () => boolean): RemoteTransferAttemptBindingFactoryV2 {
+function createAttemptBindingFactory(identity: FactoryIdentity, isDisposed: () => boolean): RemoteTransferAttemptBindingFactory {
   const factory = Object.freeze({
-    bind<K extends RemoteIngressKindV2>(input: Parameters<RemoteTransferAttemptBindingFactoryV2["bind"]>[0] & { readonly kind: K }): RemoteTransferAttemptBindingV2<K> {
-      if (isDisposed()) throw new CollaborationKernelErrorV2("disposed", "Transfer-attempt factory is disposed")
+    bind<K extends RemoteIngressKind>(input: Parameters<RemoteTransferAttemptBindingFactory["bind"]>[0] & { readonly kind: K }): RemoteTransferAttemptBinding<K> {
+      if (isDisposed()) throw new CollaborationKernelError("disposed", "Transfer-attempt factory is disposed")
       requireToken(input.kind, "remote-ingress kind")
       const stableKey = normalizeStableKey(input.stableKey)
       if (
-        stableKey.projectId !== parseProjectIdV2(input.projectId)
-        || stableKey.projectEpoch !== parseId128V2(input.projectEpoch)
-        || stableKey.sourceMemberId !== parseMemberIdV2(input.sourceMemberId)
+        stableKey.projectId !== parseProjectId(input.projectId)
+        || stableKey.projectEpoch !== parseId128(input.projectEpoch)
+        || stableKey.sourceMemberId !== parseMemberId(input.sourceMemberId)
       ) invalid("Transfer-attempt binding duplicates mismatch its stable key")
       const binding = Object.freeze({
         kind: input.kind,
@@ -272,42 +272,42 @@ function createAttemptBindingFactory(identity: FactoryIdentityV2, isDisposed: ()
         projectId: stableKey.projectId,
         projectEpoch: stableKey.projectEpoch,
         sourceMemberId: stableKey.sourceMemberId,
-        exactManifestDigest: parseDigestV2(input.exactManifestDigest),
-        subjectDigest: parseDigestV2(input.subjectDigest),
-      }) as RemoteTransferAttemptBindingV2<K>
+        exactManifestDigest: parseDigest(input.exactManifestDigest),
+        subjectDigest: parseDigest(input.subjectDigest),
+      }) as RemoteTransferAttemptBinding<K>
       attemptBindings.set(binding, identity)
       return binding
     },
-  }) as RemoteTransferAttemptBindingFactoryV2
+  }) as RemoteTransferAttemptBindingFactory
   attemptBindingFactories.set(factory, identity)
   return factory
 }
 
-function normalizeReservationRequest(value: ReserveRemoteIngressRequestV2): ReserveRemoteIngressRequestV2 {
+function normalizeReservationRequest(value: ReserveRemoteIngressRequest): ReserveRemoteIngressRequest {
   requireToken(value.kind, "remote-ingress kind")
-  const declared = BigInt(parseUint64V2(value.declaredByteLength))
-  const accounted = BigInt(parseUint64V2(value.accountedAdmissionByteLength))
+  const declared = BigInt(parseUint64(value.declaredByteLength))
+  const accounted = BigInt(parseUint64(value.accountedAdmissionByteLength))
   const chunkBytes = parseChunkBytes(value.chunkBytes)
-  const chunks = BigInt(parseUint32V2(value.chunkCount))
+  const chunks = BigInt(parseUint32(value.chunkCount))
   if (accounted < declared) invalid("Remote-ingress accounted length is smaller than its declared bytes")
   const expectedChunks = declared === 0n ? 0n : (declared + BigInt(chunkBytes) - 1n) / BigInt(chunkBytes)
   if (chunks !== expectedChunks) invalid("Remote-ingress chunk count mismatches declared bytes")
   return Object.freeze({
     stableKey: normalizeStableKey(value.stableKey),
-    exactManifestDigest: parseDigestV2(value.exactManifestDigest),
-    signedOfferEvidenceClosureRecordDigest: parseDigestV2(value.signedOfferEvidenceClosureRecordDigest),
+    exactManifestDigest: parseDigest(value.exactManifestDigest),
+    signedOfferEvidenceClosureRecordDigest: parseDigest(value.signedOfferEvidenceClosureRecordDigest),
     kind: value.kind,
-    scope: value.scope === null ? null : parseDocumentScopeV2(value.scope),
-    subjectDigest: parseDigestV2(value.subjectDigest),
-    ordinarySha256: parseDigestV2(value.ordinarySha256),
-    declaredByteLength: parseUint64V2(value.declaredByteLength),
-    accountedAdmissionByteLength: parseUint64V2(value.accountedAdmissionByteLength),
+    scope: value.scope === null ? null : parseDocumentScope(value.scope),
+    subjectDigest: parseDigest(value.subjectDigest),
+    ordinarySha256: parseDigest(value.ordinarySha256),
+    declaredByteLength: parseUint64(value.declaredByteLength),
+    accountedAdmissionByteLength: parseUint64(value.accountedAdmissionByteLength),
     chunkBytes,
-    chunkCount: parseUint32V2(value.chunkCount),
+    chunkCount: parseUint32(value.chunkCount),
   })
 }
 
-function validateReservationEvidence(evidence: import("./contracts").RemoteIngressReservationPortEvidenceV2, request: ReserveRemoteIngressRequestV2): void {
+function validateReservationEvidence(evidence: import("./contracts").RemoteIngressReservationPortEvidence, request: ReserveRemoteIngressRequest): void {
   if (
     !sameValue(evidence.stableKey, request.stableKey)
     || evidence.exactManifestDigest !== request.exactManifestDigest
@@ -320,15 +320,15 @@ function validateReservationEvidence(evidence: import("./contracts").RemoteIngre
     || evidence.chunkBytes !== request.chunkBytes
     || evidence.chunkCount !== request.chunkCount
   ) invalid("Remote-ingress reservation evidence mirrors mismatch")
-  parseDigestV2(evidence.reservationRecordDigest)
-  parseDigestV2(evidence.currentChunkSetHeadRecordDigest)
+  parseDigest(evidence.reservationRecordDigest)
+  parseDigest(evidence.currentChunkSetHeadRecordDigest)
   validateQuota(evidence.quota, request)
 }
 
 function validateCompletedEvidence(
-  evidence: RemoteIngressCompletedStagingEvidenceV2,
-  reservation: RemoteIngressReservationReceiptV2,
-  request: ReserveRemoteIngressRequestV2,
+  evidence: RemoteIngressCompletedStagingEvidence,
+  reservation: RemoteIngressReservationReceipt,
+  request: ReserveRemoteIngressRequest,
 ): void {
   if (
     !sameValue(evidence.stableKey, reservation.stableKey)
@@ -344,16 +344,16 @@ function validateCompletedEvidence(
     || evidence.chunkCount !== reservation.chunkCount
     || !sameValue(evidence.quota, reservation.quota)
   ) invalid("Remote-ingress completion evidence mirrors mismatch")
-  parseDigestV2(evidence.finalChunkSetHeadRecordDigest)
-  parseDigestV2(evidence.durableChunkSetDigest)
+  parseDigest(evidence.finalChunkSetHeadRecordDigest)
+  parseDigest(evidence.durableChunkSetDigest)
   validateQuota(evidence.quota, request)
 }
 
-function normalizeOwnerValidationEvidence<K extends RemoteIngressKindV2>(
-  value: RemoteIngressOwnerValidationEvidenceV2<K>,
-  completed: RemoteIngressCompletedStagingEvidenceV2,
-  authority: VerifiedProtocolAuthorityV2,
-): RemoteIngressOwnerValidationEvidenceV2<K> {
+function normalizeOwnerValidationEvidence<K extends RemoteIngressKind>(
+  value: RemoteIngressOwnerValidationEvidence<K>,
+  completed: RemoteIngressCompletedStagingEvidence,
+  authority: CurrentProtocolAuthority,
+): RemoteIngressOwnerValidationEvidence<K> {
   if (
     value.kind !== completed.kind
     || !sameValue(value.scope, completed.scope)
@@ -366,9 +366,9 @@ function normalizeOwnerValidationEvidence<K extends RemoteIngressKindV2>(
   return Object.freeze({ ...value })
 }
 
-function validateImmutableEvidence<K extends RemoteIngressKindV2>(
-  evidence: import("./contracts").RemoteImmutableIngressObjectPortEvidenceV2<K>,
-  completed: RemoteIngressCompletedStagingEvidenceV2,
+function validateImmutableEvidence<K extends RemoteIngressKind>(
+  evidence: import("./contracts").RemoteImmutableIngressObjectPortEvidence<K>,
+  completed: RemoteIngressCompletedStagingEvidence,
 ): void {
   const comparable = {
     stableKey: evidence.stableKey,
@@ -387,12 +387,12 @@ function validateImmutableEvidence<K extends RemoteIngressKindV2>(
     quota: evidence.quota,
   }
   if (!sameValue(comparable, completed)) invalid("Remote-ingress immutable-object evidence mirrors mismatch")
-  parseDigestV2(evidence.immutableObjectDigest)
+  parseDigest(evidence.immutableObjectDigest)
 }
 
-function validateQuota(quota: import("./contracts").RemoteIngressQuotaReservationPortEvidenceV2, request: ReserveRemoteIngressRequestV2): void {
+function validateQuota(quota: import("./contracts").RemoteIngressQuotaReservationPortEvidence, request: ReserveRemoteIngressRequest): void {
   if (
-    quota.limitsDigest !== PINNED_AUTHORITY_IDENTITIES_V2.limitsDigest
+    quota.limitsDigest !== CURRENT_PROTOCOL_IDENTITIES.limitsDigest
     || !sameValue(quota.stableKey, request.stableKey)
     || quota.exactManifestDigest !== request.exactManifestDigest
     || quota.kind !== request.kind
@@ -401,60 +401,60 @@ function validateQuota(quota: import("./contracts").RemoteIngressQuotaReservatio
     || quota.accountedAdmissionByteLength !== request.accountedAdmissionByteLength
   ) invalid("Remote-ingress quota evidence mirrors mismatch")
   if (
-    BigInt(parseUint32V2(quota.resultingProjectChargedClosureCount)) > MAX_PROJECT_OBJECTS
-    || BigInt(parseUint64V2(quota.resultingProjectAccountedAdmissionByteLength)) > MAX_PROJECT_BYTES
-    || BigInt(parseUint32V2(quota.resultingSourceMemberChargedClosureCount)) > MAX_MEMBER_OBJECTS
-    || BigInt(parseUint64V2(quota.resultingSourceMemberAccountedAdmissionByteLength)) > MAX_MEMBER_BYTES
+    BigInt(parseUint32(quota.resultingProjectChargedClosureCount)) > MAX_PROJECT_OBJECTS
+    || BigInt(parseUint64(quota.resultingProjectAccountedAdmissionByteLength)) > MAX_PROJECT_BYTES
+    || BigInt(parseUint32(quota.resultingSourceMemberChargedClosureCount)) > MAX_MEMBER_OBJECTS
+    || BigInt(parseUint64(quota.resultingSourceMemberAccountedAdmissionByteLength)) > MAX_MEMBER_BYTES
   ) invalid("Remote-ingress quota evidence exceeds the frozen caps")
-  parseDigestV2(quota.admissionEpochHeadRecordDigest)
-  parseDigestV2(quota.admissionTransitionRecordDigest)
-  parseDigestV2(quota.memberQuotaRecordDigest)
+  parseDigest(quota.admissionEpochHeadRecordDigest)
+  parseDigest(quota.admissionTransitionRecordDigest)
+  parseDigest(quota.memberQuotaRecordDigest)
 }
 
-function normalizeStableKey(value: StableRemoteTransferKeyV2): StableRemoteTransferKeyV2 {
+function normalizeStableKey(value: StableRemoteTransferKey): StableRemoteTransferKey {
   return Object.freeze({
-    projectId: parseProjectIdV2(value.projectId),
-    projectEpoch: parseId128V2(value.projectEpoch),
-    sourceMemberId: parseMemberIdV2(value.sourceMemberId),
-    transferId: parseId128V2(value.transferId),
+    projectId: parseProjectId(value.projectId),
+    projectEpoch: parseId128(value.projectEpoch),
+    sourceMemberId: parseMemberId(value.sourceMemberId),
+    transferId: parseId128(value.transferId),
   })
 }
 
-function copyReservationEvidence(value: import("./contracts").RemoteIngressReservationPortEvidenceV2) {
+function copyReservationEvidence(value: import("./contracts").RemoteIngressReservationPortEvidence) {
   return { ...value, stableKey: normalizeStableKey(value.stableKey), quota: copyQuota(value.quota) }
 }
 
-function copyCompletedEvidence(value: RemoteIngressCompletedStagingEvidenceV2) {
+function copyCompletedEvidence(value: RemoteIngressCompletedStagingEvidence) {
   return { ...value, stableKey: normalizeStableKey(value.stableKey), quota: copyQuota(value.quota) }
 }
 
-function copyQuota(value: import("./contracts").RemoteIngressQuotaReservationPortEvidenceV2) {
+function copyQuota(value: import("./contracts").RemoteIngressQuotaReservationPortEvidence) {
   return Object.freeze({ ...value, stableKey: normalizeStableKey(value.stableKey) })
 }
 
-function requireReservation(value: object, identity: object): ReservationRecordV2 {
+function requireReservation(value: object, identity: object): ReservationRecord {
   const record = reservations.get(value)
   if (!record || record.factory !== identity) invalid("Remote-ingress reservation receipt is structural, stale or cross-factory")
   return record
 }
 
-function requireCompleted(value: object, identity: object): CompletedRecordV2 {
+function requireCompleted(value: object, identity: object): CompletedRecord {
   const record = completedIngresses.get(value)
   if (!record || record.factory !== identity) invalid("Completed remote ingress is structural, stale or cross-factory")
   return record
 }
 
-function requireValidated(value: object, identity: object): ValidatedRecordV2 {
+function requireValidated(value: object, identity: object): ValidatedRecord {
   const record = validatedIngresses.get(value)
   if (!record || record.factory !== identity) invalid("Validated remote ingress is structural, stale or cross-factory")
   return record
 }
 
-function parseChunkBytes(value: string): UpdateIngressChunkBytesV2 {
+function parseChunkBytes(value: string): UpdateIngressChunkBytes {
   if (!["4096", "8192", "16384", "32768", "65536", "131072", "262144"].includes(value)) {
     invalid("Remote-ingress chunk size is invalid")
   }
-  return value as UpdateIngressChunkBytesV2
+  return value as UpdateIngressChunkBytes
 }
 
 function requireToken(value: string, label: string): void {
@@ -463,17 +463,17 @@ function requireToken(value: string, label: string): void {
 
 function sameValue(left: unknown, right: unknown): boolean {
   const decoder = new TextDecoder()
-  return decoder.decode(encodeRestrictedJcsV2(left)) === decoder.decode(encodeRestrictedJcsV2(right))
+  return decoder.decode(encodeRestrictedJcs(left)) === decoder.decode(encodeRestrictedJcs(right))
 }
 
 function isObject(value: unknown): value is object {
   return typeof value === "object" && value !== null
 }
 
-function isFactoryIdentity(value: object): value is FactoryIdentityV2 {
+function isFactoryIdentity(value: object): value is FactoryIdentity {
   return "isDisposed" in value && typeof value.isDisposed === "function"
 }
 
 function invalid(message: string): never {
-  throw new CollaborationKernelErrorV2("invalid-codec", message)
+  throw new CollaborationKernelError("invalid-codec", message)
 }

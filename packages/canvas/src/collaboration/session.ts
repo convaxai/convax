@@ -1,67 +1,83 @@
 import type {
-  ActualWriteEvidenceV2,
-  DigestV2,
-  DocumentOwnerProtocolDefinitionV2,
-  OwnerApplyResultV2,
-  OwnerIntentClosureDefinitionV2,
-  OwnerHistoryMaterializationDefinitionV2,
-  OwnerProcessValueFactoryV2,
-  OwnerIntentValidationContextV2,
-  SelectedDocumentOwnerArtifactDefinitionV2,
+  ActualWriteEvidence,
+  Digest,
+  DocumentOwnerProtocolDefinition,
+  OwnerApplyResult,
+  OwnerIntentClosureDefinition,
+  OwnerHistoryMaterializationDefinition,
+  OwnerProcessValueFactory,
+  OwnerIntentValidationContext,
+  SelectedDocumentOwnerArtifactDefinition,
 } from "@convax/collaboration"
-import { ownerCanonicalizerDescriptorDigestV2, parseDigestV2 } from "@convax/collaboration"
+import { currentProtocolDescriptor, ownerCanonicalizerDescriptorDigest, parseDigest } from "@convax/collaboration"
 import type * as Y from "yjs"
 import type { CanvasNodeGeometryUpdate } from "../commands"
 import { parseCanvasDocument } from "../document"
 import type { CanvasDocument } from "../types"
 import {
-  createCanvasExternalFactContextV2,
-  discoverCanvasIntentDependenciesV2,
+  createCanvasExternalFactContext,
+  discoverCanvasIntentDependencies,
 } from "./external-facts"
 import {
-  constructCanvasHistoryIntentV2,
-  discoverCanvasHistoryIntentDependenciesV2,
+  constructCanvasHistoryIntent,
+  discoverCanvasHistoryIntentDependencies,
 } from "./command-construction"
-import { assertCanvasTypedIntentV2, decodeCanvasTypedIntentV2 } from "./intent-validation"
-import { projectCanvasV2 } from "./projection"
-import { applyCanvasCandidateIntentV2 } from "./reducer"
+import { assertCanvasTypedIntent, decodeCanvasTypedIntent } from "./intent-validation"
+import { projectCanvas } from "./projection"
+import { applyCanvasCandidateIntent } from "./reducer"
 import type {
-  CanvasIntentApplyResultV2,
-  CanvasProjectionV2,
-  CanvasSnapshotV2,
-  CanvasEntityRefV2,
-  CanvasTypedIntentUnionV2,
-  Id128V2,
+  CanvasIntentApplyResult,
+  CanvasProjection,
+  CanvasSnapshot,
+  CanvasEntityRef,
+  CanvasTypedIntentUnion,
+  Id128,
 } from "./types"
-import { canvasOwnerCanonicalizerDescriptorV2 } from "./validation"
-import { encodeCanvasCanonicalStateV2, validateCanvasYDocV2 } from "./ydoc"
+import { canvasOwnerCanonicalizerDescriptor } from "./validation"
+import { encodeCanvasCanonicalState, validateCanvasYDoc } from "./ydoc"
 
-interface CanvasOwnerResultValueV2 {
-  readonly ownerOpaqueResult: CanvasIntentApplyResultV2
-  readonly semanticRootOperationId: Id128V2 | null
-  readonly scope: OwnerIntentValidationContextV2["scope"]
+interface CanvasOwnerResultValue {
+  readonly ownerOpaqueResult: CanvasIntentApplyResult
+  readonly semanticRootOperationId: Id128 | null
+  readonly scope: OwnerIntentValidationContext["scope"]
 }
 
-export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2: DigestV2 = parseDigestV2(
-  "cb69352106c9fc61d28c6412b22b7efb453cd7b9db5324946c0d978772c54d36",
-)
+const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_NAME = "canvas-schema"
+const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_FORMAT = "convax.canvas-protocol-schema"
 
-export const selectedCanvasDocumentOwnerArtifactDefinitionV2: SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> =
+/**
+ * The Canvas owner schema digest is the current protocol descriptor's
+ * domain-separated Canvas artifact. Canvas never anchors a second literal; a
+ * missing or renamed artifact fails closed before any decode or commit.
+ */
+export const CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST: Digest = canvasProtocolSchemaArtifactDigest()
+
+function canvasProtocolSchemaArtifactDigest(): Digest {
+  const artifact = currentProtocolDescriptor().artifacts.find(
+    (candidate) => candidate.name === CANVAS_PROTOCOL_SCHEMA_ARTIFACT_NAME,
+  )
+  if (artifact === undefined || artifact.format !== CANVAS_PROTOCOL_SCHEMA_ARTIFACT_FORMAT) {
+    throw new TypeError("The current protocol descriptor does not name the Canvas owner schema artifact")
+  }
+  return parseDigest(artifact.digest)
+}
+
+export const selectedCanvasDocumentOwnerArtifactDefinition: SelectedDocumentOwnerArtifactDefinition<"canvas"> =
   Object.freeze({
     owner: "canvas",
-    createDefinitions(processValues: OwnerProcessValueFactoryV2<"canvas">) {
-      const protocol = createCanvasProtocolDefinitionV2(processValues)
-      const closure = createCanvasClosureDefinitionV2()
+    createDefinitions(processValues: OwnerProcessValueFactory<"canvas">) {
+      const protocol = createCanvasProtocolDefinition(processValues)
+      const closure = createCanvasClosureDefinition()
       return Object.freeze({ protocol, closure })
     },
   })
 
-function createCanvasProtocolDefinitionV2(
-  processValues: OwnerProcessValueFactoryV2<"canvas">,
-): DocumentOwnerProtocolDefinitionV2<"canvas"> {
-  const schemaDigest = CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2
-  const canonicalizerDescriptor = canvasOwnerCanonicalizerDescriptorV2(schemaDigest)
-  const canonicalizerDigest = ownerCanonicalizerDescriptorDigestV2(canonicalizerDescriptor)
+function createCanvasProtocolDefinition(
+  processValues: OwnerProcessValueFactory<"canvas">,
+): DocumentOwnerProtocolDefinition<"canvas"> {
+  const schemaDigest = CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST
+  const canonicalizerDescriptor = canvasOwnerCanonicalizerDescriptor(schemaDigest)
+  const canonicalizerDigest = ownerCanonicalizerDescriptorDigest(canonicalizerDescriptor)
   return Object.freeze({
     owner: "canvas",
     schemaDigest,
@@ -69,46 +85,46 @@ function createCanvasProtocolDefinitionV2(
     canonicalizerDigest,
     decodeIntent(exactJcs: Uint8Array) {
       try {
-        return decodeCanvasTypedIntentV2(exactJcs)
+        return decodeCanvasTypedIntent(exactJcs)
       } catch {
         return "rejected"
       }
     },
     validateBase(document: Y.Doc) {
       try {
-        return processValues.wrapValidatedState(validateCanvasYDocV2(document))
+        return processValues.wrapValidatedState(validateCanvasYDoc(document))
       } catch {
         return "rejected"
       }
     },
     applyIntent(
       candidate: Y.Doc,
-      outerContext: OwnerIntentValidationContextV2,
+      outerContext: OwnerIntentValidationContext,
       intent: unknown,
-      facts: import("@convax/collaboration").OwnerExternalFactPortV2<"canvas">,
+      facts: import("@convax/collaboration").OwnerExternalFactPort<"canvas">,
     ) {
       try {
-        assertCanvasTypedIntentV2(intent)
+        assertCanvasTypedIntent(intent)
       } catch {
         return "rejected"
       }
-      const factContext = createCanvasExternalFactContextV2(outerContext, intent, facts)
+      const factContext = createCanvasExternalFactContext(outerContext, intent, facts)
       if (factContext === "pending" || factContext === "rejected") return factContext
-      const result = applyCanvasCandidateIntentV2(candidate, outerContext, intent, factContext)
+      const result = applyCanvasCandidateIntent(candidate, outerContext, intent, factContext)
       if (result === "pending" || result === "rejected") return result
       return processValues.wrapApplyResult(Object.freeze({
         ownerOpaqueResult: result,
         semanticRootOperationId: result.semanticHistoryRoot?.rootOperationId ?? null,
         scope: outerContext.scope,
-      } satisfies CanvasOwnerResultValueV2))
+      } satisfies CanvasOwnerResultValue))
     },
     validatePost(
-      _base: import("@convax/collaboration").OwnerValidatedStateV2<"canvas">,
+      _base: import("@convax/collaboration").OwnerValidatedState<"canvas">,
       candidate: Y.Doc,
-      result: OwnerApplyResultV2<"canvas">,
+      result: OwnerApplyResult<"canvas">,
     ) {
       try {
-        const snapshot = validateCanvasYDocV2(candidate)
+        const snapshot = validateCanvasYDoc(candidate)
         if (canvasOwnerResultValue(result) === null) return "rejected"
         return processValues.wrapValidatedState(snapshot)
       } catch {
@@ -117,65 +133,65 @@ function createCanvasProtocolDefinitionV2(
     },
     canonicalStateBytes(document: Y.Doc) {
       try {
-        return encodeCanvasCanonicalStateV2(document)
+        return encodeCanvasCanonicalState(document)
       } catch {
         return "rejected"
       }
     },
-    deriveActualWriteEvidence(result: OwnerApplyResultV2<"canvas">) {
+    deriveActualWriteEvidence(result: OwnerApplyResult<"canvas">) {
       const value = canvasOwnerResultValue(result)
       if (value === null) throw new TypeError("Canvas owner result is invalid")
       const evidence = value.ownerOpaqueResult.actualWriteEvidence
       return {
-        format: "convax.actual-write-evidence/2",
+        format: "convax.actual-write-evidence",
         scope: value.scope,
         owner: "canvas",
         ownerSchemaDigest: schemaDigest,
         intentDigest: value.ownerOpaqueResult.receipt.intentDigest,
         changedPaths: evidence.changedPaths,
         writes: evidence.writes,
-      } satisfies ActualWriteEvidenceV2
+      } satisfies ActualWriteEvidence
     },
   })
 }
 
-function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canvas"> {
+function createCanvasClosureDefinition(): OwnerIntentClosureDefinition<"canvas"> {
   return Object.freeze({
     inspectIntent(intent: unknown) {
       try {
-        assertCanvasTypedIntentV2(intent)
-        if (intent.kind === "canvas.undo.semantic-inverse/2")
+        assertCanvasTypedIntent(intent)
+        if (intent.kind === "canvas.undo.semantic-inverse")
           return Object.freeze({ kind: "history", direction: "undo", rootOperationId: intent.guard.rootOperationId })
-        if (intent.kind === "canvas.redo.semantic-forward/2")
+        if (intent.kind === "canvas.redo.semantic-forward")
           return Object.freeze({ kind: "history", direction: "redo", rootOperationId: intent.guard.rootOperationId })
         return Object.freeze({ kind: "ordinary" })
       } catch {
         return "rejected"
       }
     },
-    discoverDependencies(input: Parameters<OwnerIntentClosureDefinitionV2<"canvas">["discoverDependencies"]>[0]) {
+    discoverDependencies(input: Parameters<OwnerIntentClosureDefinition<"canvas">["discoverDependencies"]>[0]) {
       try {
-        assertCanvasTypedIntentV2(input.intent)
-        return discoverCanvasIntentDependenciesV2(input.context, input.intent)
+        assertCanvasTypedIntent(input.intent)
+        return discoverCanvasIntentDependencies(input.context, input.intent)
       } catch {
         return "rejected"
       }
     },
     history: Object.freeze({
-      discoverDependencies(input: Parameters<OwnerHistoryMaterializationDefinitionV2<"canvas">["discoverDependencies"]>[0]) {
-        const base = canvasSnapshotFromValidatedOwnerStateV2(input.base)
+      discoverDependencies(input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["discoverDependencies"]>[0]) {
+        const base = canvasSnapshotFromValidatedOwnerState(input.base)
         if (base === null) return "rejected"
-        return discoverCanvasHistoryIntentDependenciesV2({
+        return discoverCanvasHistoryIntentDependencies({
           snapshot: base,
           context: input.context,
           direction: input.direction,
           rootOperationId: input.rootOperationId,
         })
       },
-      materialize(input: Parameters<OwnerHistoryMaterializationDefinitionV2<"canvas">["materialize"]>[0]) {
-        const base = canvasSnapshotFromValidatedOwnerStateV2(input.base)
+      materialize(input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["materialize"]>[0]) {
+        const base = canvasSnapshotFromValidatedOwnerState(input.base)
         if (base === null) return "rejected"
-        const constructed = constructCanvasHistoryIntentV2({
+        const constructed = constructCanvasHistoryIntent({
           snapshot: base,
           context: input.context,
           direction: input.direction,
@@ -188,9 +204,9 @@ function createCanvasClosureDefinitionV2(): OwnerIntentClosureDefinitionV2<"canv
   })
 }
 
-export function canvasSnapshotFromValidatedOwnerStateV2(
-  base: import("@convax/collaboration").OwnerValidatedStateV2<"canvas">,
-): CanvasSnapshotV2 | null {
+export function canvasSnapshotFromValidatedOwnerState(
+  base: import("@convax/collaboration").OwnerValidatedState<"canvas">,
+): CanvasSnapshot | null {
   const value = base.value
   if (
     typeof value !== "object" ||
@@ -201,31 +217,31 @@ export function canvasSnapshotFromValidatedOwnerStateV2(
     !((value as { semanticHistory?: unknown }).semanticHistory instanceof Map) ||
     !((value as { operations?: unknown }).operations instanceof Map)
   ) return null
-  return value as CanvasSnapshotV2
+  return value as CanvasSnapshot
 }
 
-function canvasOwnerResultValue(result: OwnerApplyResultV2<"canvas">): CanvasOwnerResultValueV2 | null {
+function canvasOwnerResultValue(result: OwnerApplyResult<"canvas">): CanvasOwnerResultValue | null {
   const value = result.value
   return (
     typeof value === "object" &&
     value !== null &&
     typeof (value as { ownerOpaqueResult?: unknown }).ownerOpaqueResult === "object" &&
-    (value as { ownerOpaqueResult: { format?: unknown } }).ownerOpaqueResult.format === "convax.canvas-intent-result/2"
-  ) ? value as CanvasOwnerResultValueV2 : null
+    (value as { ownerOpaqueResult: { format?: unknown } }).ownerOpaqueResult.format === "convax.canvas-intent-result"
+  ) ? value as CanvasOwnerResultValue : null
 }
 
-export interface CanvasRendererProjectionStoreV2 {
+export interface CanvasRendererProjectionStore {
   getProjection(): CanvasDocument
-  resolveNodeEntity(nodeId: string): (CanvasEntityRefV2 & { readonly kind: "node" }) | undefined
+  resolveNodeEntity(nodeId: string): (CanvasEntityRef & { readonly kind: "node" }) | undefined
   subscribe(listener: () => void): () => void
 }
 
-export type CanvasRendererCommandV2 = Readonly<{
-  format: "convax.canvas-renderer-command/2"
-  kind: "canvas.nodes.set-geometry/2"
+export type CanvasRendererCommand = Readonly<{
+  format: "convax.canvas-renderer-command"
+  kind: "canvas.nodes.set-geometry"
   body: Readonly<{
     updates: readonly Readonly<{
-      node: CanvasEntityRefV2 & { readonly kind: "node" }
+      node: CanvasEntityRef & { readonly kind: "node" }
       position: Readonly<{ x: number; y: number }>
       size?: Readonly<{ width: number; height: number }> | null
     }>[]
@@ -233,20 +249,20 @@ export type CanvasRendererCommandV2 = Readonly<{
 }>
 
 /** Disposable renderer projection and typed-command proxy; never a Y.Doc owner. */
-export interface CanvasRendererCollaborationClientV2 extends CanvasRendererProjectionStoreV2 {
+export interface CanvasRendererCollaborationClient extends CanvasRendererProjectionStore {
   readonly authority: "project-collaboration-application"
   readonly undoModel: "project-yjs-semantic-history"
   canRedo(): boolean
   canUndo(): boolean
   flush(signal?: AbortSignal): Promise<void>
   redo(signal?: AbortSignal): Promise<void>
-  submit(command: CanvasRendererCommandV2, signal?: AbortSignal): Promise<void>
+  submit(command: CanvasRendererCommand, signal?: AbortSignal): Promise<void>
   undo(signal?: AbortSignal): Promise<void>
 }
 
-export function createReadonlyCanvasProjectionBootstrapV2(
+export function createReadonlyCanvasProjectionBootstrap(
   initialProjection: CanvasDocument,
-): CanvasRendererProjectionStoreV2 {
+): CanvasRendererProjectionStore {
   const parsed = parseCanvasDocument(initialProjection, initialProjection.id)
   if (!parsed) throw new Error("Readonly Canvas bootstrap projection is invalid")
   const projection = structuredClone(parsed)
@@ -257,10 +273,10 @@ export function createReadonlyCanvasProjectionBootstrapV2(
   })
 }
 
-export function canvasGeometryCommandV2(
+export function canvasGeometryCommand(
   updates: readonly CanvasNodeGeometryUpdate[],
-  resolveNodeEntity: (nodeId: string) => CanvasEntityRefV2 | undefined,
-): CanvasRendererCommandV2 {
+  resolveNodeEntity: (nodeId: string) => CanvasEntityRef | undefined,
+): CanvasRendererCommand {
   const bodyUpdates = updates.map((update) => {
     const node = resolveNodeEntity(update.nodeId)
     if (!node || node.kind !== "node") throw new Error(`Canvas geometry command cannot resolve live node ${update.nodeId}`)
@@ -273,15 +289,15 @@ export function canvasGeometryCommandV2(
   if (bodyUpdates.length === 0 || bodyUpdates.length > 256)
     throw new Error("Canvas geometry command must contain 1..256 updates")
   return Object.freeze({
-    format: "convax.canvas-renderer-command/2",
-    kind: "canvas.nodes.set-geometry/2",
+    format: "convax.canvas-renderer-command",
+    kind: "canvas.nodes.set-geometry",
     body: Object.freeze({ updates: Object.freeze(bodyUpdates) }),
   })
 }
 
 /** Converts one completed React Flow gesture into one bounded host command. */
-export async function submitCanvasGeometryGestureV2(
-  session: CanvasRendererCollaborationClientV2,
+export async function submitCanvasGeometryGesture(
+  session: CanvasRendererCollaborationClient,
   start: CanvasDocument,
   preview: CanvasDocument,
   signal?: AbortSignal,
@@ -294,59 +310,59 @@ export async function submitCanvasGeometryGestureV2(
     return [{ nodeId: node.id, position: { ...node.position } }]
   })
   if (updates.length === 0) return false
-  await session.submit(canvasGeometryCommandV2(updates, session.resolveNodeEntity.bind(session)), signal)
+  await session.submit(canvasGeometryCommand(updates, session.resolveNodeEntity.bind(session)), signal)
   return true
 }
 
-export type CanvasIntentCallerV2 = "ui" | "agent" | "plugin"
+export type CanvasIntentCaller = "ui" | "agent" | "plugin"
 
-export interface CanvasDurableIntentCommitV2 {
-  readonly operationId: Id128V2
-  readonly projection: CanvasProjectionV2
-  readonly semanticRootOperationId: Id128V2 | null
+export interface CanvasDurableIntentCommit {
+  readonly operationId: Id128
+  readonly projection: CanvasProjection
+  readonly semanticRootOperationId: Id128 | null
 }
 
-export interface CanvasIntentCommitPortV2 {
-  commit(intent: CanvasCallerIntentV2, signal?: AbortSignal): Promise<CanvasDurableIntentCommitV2>
+export interface CanvasIntentCommitPort {
+  commit(intent: CanvasCallerIntent, signal?: AbortSignal): Promise<CanvasDurableIntentCommit>
 }
 
-export type CanvasCallerIntentV2 = Exclude<
-  CanvasTypedIntentUnionV2,
-  { readonly kind: "canvas.undo.semantic-inverse/2" | "canvas.redo.semantic-forward/2" }
+export type CanvasCallerIntent = Exclude<
+  CanvasTypedIntentUnion,
+  { readonly kind: "canvas.undo.semantic-inverse" | "canvas.redo.semantic-forward" }
 >
 
 /** One service for UI, Agent and Plugin. Caller kind is audit metadata only. */
-export class CanvasIntentApplicationServiceV2 {
-  constructor(private readonly commits: CanvasIntentCommitPortV2) {}
+export class CanvasIntentApplicationService {
+  constructor(private readonly commits: CanvasIntentCommitPort) {}
 
   async apply(
-    _caller: CanvasIntentCallerV2,
-    intent: CanvasCallerIntentV2,
+    _caller: CanvasIntentCaller,
+    intent: CanvasCallerIntent,
     signal?: AbortSignal,
-  ): Promise<CanvasDurableIntentCommitV2> {
+  ): Promise<CanvasDurableIntentCommit> {
     assertNotAborted(signal)
-    assertCanvasTypedIntentV2(intent)
+    assertCanvasTypedIntent(intent)
     const committed = await this.commits.commit(intent, signal)
     assertNotAbortedAfterDurability(signal)
     return committed
   }
 }
 
-export interface CanvasTransientViewportV2 {
+export interface CanvasTransientViewport {
   readonly x: number
   readonly y: number
   readonly zoom: number
 }
 
 /** React Flow owns no history or document state; this cache is disposable. */
-export class CanvasReactFlowTransientStateV2 {
+export class CanvasReactFlowTransientState {
   private readonly measured = new Map<string, { width: number; height: number }>()
   private readonly selected = new Set<string>()
   private drag: { readonly entityKey: string; readonly startX: number; readonly startY: number } | null = null
   private connectionPreview: Readonly<{ sourceKey: string; targetPoint: { x: number; y: number } }> | null = null
-  private viewport: CanvasTransientViewportV2 = { x: 0, y: 0, zoom: 1 }
+  private viewport: CanvasTransientViewport = { x: 0, y: 0, zoom: 1 }
 
-  reconcile(projection: CanvasProjectionV2): void {
+  reconcile(projection: CanvasProjection): void {
     const live = new Set(projection.nodes.map((node) => `${node.ref.kind}/${node.ref.id}/${node.ref.incarnation}`))
     for (const key of this.measured.keys()) if (!live.has(key)) this.measured.delete(key)
     for (const key of this.selected) if (!live.has(key)) this.selected.delete(key)
@@ -379,10 +395,10 @@ export class CanvasReactFlowTransientStateV2 {
     this.drag = null
     this.connectionPreview = null
   }
-  setConnectionPreview(value: CanvasReactFlowTransientStateV2["connectionPreview"]): void {
+  setConnectionPreview(value: CanvasReactFlowTransientState["connectionPreview"]): void {
     this.connectionPreview = value
   }
-  setViewport(value: CanvasTransientViewportV2): void {
+  setViewport(value: CanvasTransientViewport): void {
     this.viewport = { ...value }
   }
   snapshot() {
@@ -396,8 +412,8 @@ export class CanvasReactFlowTransientStateV2 {
   }
 }
 
-export function projectReadonlyCanvasV2(document: Y.Doc): CanvasProjectionV2 {
-  return projectCanvasV2(validateCanvasYDocV2(document))
+export function projectReadonlyCanvas(document: Y.Doc): CanvasProjection {
+  return projectCanvas(validateCanvasYDoc(document))
 }
 
 function assertNotAborted(signal?: AbortSignal): void {

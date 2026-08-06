@@ -2,26 +2,26 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import type { ActorIdV2, ReplicaActorHeadSetV2 } from "@convax/collaboration"
-import type { NodeReplicaHeadMaterializerV2 } from "./persistence-store"
+import type { ActorId, ReplicaActorHeadSet } from "@convax/collaboration"
+import type { NodeReplicaHeadMaterializer } from "./persistence-store"
 import {
-  NodeProjectCollaborationRuntimeCoordinatorV2,
-  ProjectCollaborationRuntimeCoordinatorErrorV2,
-  type ProjectCollaborationRuntimeLeaseV2,
+  NodeProjectCollaborationRuntimeCoordinator,
+  ProjectCollaborationRuntimeCoordinatorError,
+  type ProjectCollaborationRuntimeLease,
 } from "./project-collaboration-runtime-coordinator"
 
 const roots: string[] = []
-const localActorId = Buffer.alloc(32, 7).toString("base64url") as ActorIdV2
-const otherActorId = Buffer.alloc(32, 8).toString("base64url") as ActorIdV2
+const localActorId = Buffer.alloc(32, 7).toString("base64url") as ActorId
+const otherActorId = Buffer.alloc(32, 8).toString("base64url") as ActorId
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { force: true, recursive: true })))
 })
 
-describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
+describe("NodeProjectCollaborationRuntimeCoordinator", () => {
   test("shares one Project-owned writer and closes it before reset mutation", async () => {
     const projectRoot = await createProjectRoot()
-    const leases: ProjectCollaborationRuntimeLeaseV2[] = []
+    const leases: ProjectCollaborationRuntimeLease[] = []
     const coordinator = createCoordinator(projectRoot, async () => {
       for (const lease of leases.splice(0)) lease.release()
     })
@@ -55,7 +55,7 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
     const secondRoot = await createProjectRoot()
     const rootsByProject = new Map([["project-a", firstRoot], ["project-b", secondRoot]])
     const actorsByProject = new Map([["project-a", localActorId], ["project-b", otherActorId]])
-    const coordinator = new NodeProjectCollaborationRuntimeCoordinatorV2({
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
       identity: {
         async resolveLocalActorId({ projectId }) { return actorsByProject.get(projectId)! },
       },
@@ -79,8 +79,8 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
   test("reset closes the old actor-bound writer and reopens with the new epoch actor", async () => {
     const projectRoot = await createProjectRoot()
     let actorId = localActorId
-    const leases: ProjectCollaborationRuntimeLeaseV2[] = []
-    const coordinator = new NodeProjectCollaborationRuntimeCoordinatorV2({
+    const leases: ProjectCollaborationRuntimeLease[] = []
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
       identity: { async resolveLocalActorId() { return actorId } },
       materializer: inertMaterializer(),
       projects: { async resolveProjectRoot() { return projectRoot } },
@@ -104,7 +104,7 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
   test("fails closed if the local actor binding drifts without a close/reset barrier", async () => {
     const projectRoot = await createProjectRoot()
     let actorId = localActorId
-    const coordinator = new NodeProjectCollaborationRuntimeCoordinatorV2({
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
       identity: { async resolveLocalActorId() { return actorId } },
       materializer: inertMaterializer(),
       projects: { async resolveProjectRoot() { return projectRoot } },
@@ -120,7 +120,7 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
   test("retains the actor binding when the close/reset operation fails", async () => {
     const projectRoot = await createProjectRoot()
     let actorId = localActorId
-    const coordinator = new NodeProjectCollaborationRuntimeCoordinatorV2({
+    const coordinator = new NodeProjectCollaborationRuntimeCoordinator({
       identity: { async resolveLocalActorId() { return actorId } },
       materializer: inertMaterializer(),
       projects: { async resolveProjectRoot() { return projectRoot } },
@@ -205,7 +205,7 @@ describe("NodeProjectCollaborationRuntimeCoordinatorV2", () => {
         projectId: "project-a",
         projectRoot: path.join(projectRoot, "stale"),
       }),
-    ).rejects.toBeInstanceOf(ProjectCollaborationRuntimeCoordinatorErrorV2)
+    ).rejects.toBeInstanceOf(ProjectCollaborationRuntimeCoordinatorError)
     expect(quiesced).toBe(false)
     await coordinator.dispose()
   })
@@ -230,7 +230,7 @@ async function createProjectRoot(): Promise<string> {
 }
 
 function createCoordinator(projectRoot: string, quiesceProject: () => Promise<void>) {
-  return new NodeProjectCollaborationRuntimeCoordinatorV2({
+  return new NodeProjectCollaborationRuntimeCoordinator({
     identity: { async resolveLocalActorId() { return localActorId } },
     materializer: inertMaterializer(),
     projects: {
@@ -247,10 +247,10 @@ function createCoordinator(projectRoot: string, quiesceProject: () => Promise<vo
   })
 }
 
-function inertMaterializer(): NodeReplicaHeadMaterializerV2 {
+function inertMaterializer(): NodeReplicaHeadMaterializer {
   return {
-    actorHeadsDigest(_actorHeads: ReplicaActorHeadSetV2) {
-      return "0".repeat(64) as ReturnType<NodeReplicaHeadMaterializerV2["actorHeadsDigest"]>
+    actorHeadsDigest(_actorHeads: ReplicaActorHeadSet) {
+      return "0".repeat(64) as ReturnType<NodeReplicaHeadMaterializer["actorHeadsDigest"]>
     },
     async applyAcceptedFrame() {
       throw new Error("not used")

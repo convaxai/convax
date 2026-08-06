@@ -1,30 +1,30 @@
 import { describe, expect, mock, test } from "bun:test"
 import {
-  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  createCanvasYDocV2,
-  validateCanvasYDocV2,
-  type BoundedOperationReceiptV2,
-  type CanvasSnapshotV2,
+  CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  createCanvasYDoc,
+  validateCanvasYDoc,
+  type BoundedOperationReceipt,
+  type CanvasSnapshot,
 } from "@convax/canvas/collaboration"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  type OwnerValidatedStateV2,
+  encodeBase64url,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseProjectId,
+  parseReplicaId,
+  type OwnerValidatedState,
 } from "@convax/collaboration"
-import type { MainCollaborationDocumentSessionV2 } from "./collaboration-document-session"
-import { createCanvasCollaborationSessionOwnerV2 } from "./canvas-collaboration-session-owner"
+import type { MainCollaborationDocumentSession } from "./collaboration-document-session"
+import { createCanvasCollaborationSessionOwner } from "./canvas-collaboration-session-owner"
 
 const ref = { scopeId: "project-a", canvasId: "canvas-a" }
 
-describe("CanvasCollaborationSessionOwnerV2 Project quiescence", () => {
+describe("CanvasCollaborationSessionOwner Project quiescence", () => {
   test("records Plugin semantic roots in the mounted Main undo chain and clears them on unmount", async () => {
     const session = semanticRootSession()
-    const owner = createCanvasCollaborationSessionOwnerV2({
+    const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
       openDocumentSession: async () => session.value,
     })
@@ -48,7 +48,7 @@ describe("CanvasCollaborationSessionOwnerV2 Project quiescence", () => {
 
   test("flushes, disposes, and blocks lazy reopen until the Project resumes", async () => {
     const sessions: ReturnType<typeof fakeSession>[] = []
-    const owner = createCanvasCollaborationSessionOwnerV2({
+    const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
       async openDocumentSession() {
         const session = fakeSession()
@@ -71,10 +71,10 @@ describe("CanvasCollaborationSessionOwnerV2 Project quiescence", () => {
   })
 
   test("a pending lazy open cannot publish after the Project quiescence barrier", async () => {
-    let resolveOpen!: (session: MainCollaborationDocumentSessionV2<"canvas">) => void
-    const pending = new Promise<MainCollaborationDocumentSessionV2<"canvas">>((resolve) => { resolveOpen = resolve })
+    let resolveOpen!: (session: MainCollaborationDocumentSession<"canvas">) => void
+    const pending = new Promise<MainCollaborationDocumentSession<"canvas">>((resolve) => { resolveOpen = resolve })
     const session = fakeSession()
-    const owner = createCanvasCollaborationSessionOwnerV2({
+    const owner = createCanvasCollaborationSessionOwner({
       ...inertOptions(),
       openDocumentSession: () => pending,
     })
@@ -92,8 +92,8 @@ describe("CanvasCollaborationSessionOwnerV2 Project quiescence", () => {
 
 function inertOptions() {
   return {
-    createSessionId: () => parseId128V2(Buffer.alloc(16, 1).toString("base64url")),
-    createCursorToken: () => parseId128V2(Buffer.alloc(16, 2).toString("base64url")),
+    createSessionId: () => parseId128(Buffer.alloc(16, 1).toString("base64url")),
+    createCursorToken: () => parseId128(Buffer.alloc(16, 2).toString("base64url")),
     resolveFacts: async () => ({ status: "rejected" as const }),
     applicationCommands: { construct: () => "rejected" as const },
   }
@@ -102,15 +102,15 @@ function inertOptions() {
 function fakeSession() {
   const flush = mock(async () => undefined)
   const dispose = mock(() => undefined)
-  const value: MainCollaborationDocumentSessionV2<"canvas"> = {
+  const value: MainCollaborationDocumentSession<"canvas"> = {
     scope: {
       projectId: "project-a" as never,
-      projectEpoch: parseId128V2(Buffer.alloc(16, 3).toString("base64url")),
+      projectEpoch: parseId128(Buffer.alloc(16, 3).toString("base64url")),
       docKind: "canvas",
       docId: `cv_${"a".repeat(64)}` as never,
-      shardEpoch: parseId128V2(Buffer.alloc(16, 4).toString("base64url")),
+      shardEpoch: parseId128(Buffer.alloc(16, 4).toString("base64url")),
     },
-    query: async <T>(_project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> => {
+    query: async <T>(_project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> => {
       throw new Error("unused")
     },
     submit: async () => { throw new Error("unused") },
@@ -122,40 +122,40 @@ function fakeSession() {
 }
 
 function semanticRootSession() {
-  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(3)))
-  const shardEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(4)))
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(3)))
+  const shardEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(4)))
   const scope = Object.freeze({
-    projectId: parseProjectIdV2("project-a"),
+    projectId: parseProjectId("project-a"),
     projectEpoch,
     docKind: "canvas" as const,
-    docId: parseCanvasIdV2(`cv_${"1".repeat(64)}`),
+    docId: parseCanvasId(`cv_${"1".repeat(64)}`),
     shardEpoch,
   })
-  const document = createCanvasYDocV2(
+  const document = createCanvasYDoc(
     scope,
-    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-    parseDigestV2("2".repeat(64)),
-    parseDigestV2("3".repeat(64)),
-    parseReplicaIdV2("replica_00000001"),
+    CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+    parseDigest("2".repeat(64)),
+    parseDigest("3".repeat(64)),
+    parseReplicaId("replica_00000001"),
   )
-  let snapshot: CanvasSnapshotV2 = validateCanvasYDocV2(document)
+  let snapshot: CanvasSnapshot = validateCanvasYDoc(document)
   document.destroy()
-  const value: MainCollaborationDocumentSessionV2<"canvas"> = {
+  const value: MainCollaborationDocumentSession<"canvas"> = {
     scope,
-    query: async <T>(project: (state: OwnerValidatedStateV2<"canvas">) => T): Promise<T> =>
-      project({ value: snapshot } as OwnerValidatedStateV2<"canvas">),
+    query: async <T>(project: (state: OwnerValidatedState<"canvas">) => T): Promise<T> =>
+      project({ value: snapshot } as OwnerValidatedState<"canvas">),
     submit: async (input) => {
       const operationId = input.operationId!
-      const receipt: BoundedOperationReceiptV2 = Object.freeze({
-        format: "convax.canvas-operation-receipt/2",
-        actorId: parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(5))),
+      const receipt: BoundedOperationReceipt = Object.freeze({
+        format: "convax.canvas-operation-receipt",
+        actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(5))),
         operationId,
-        intentKind: "canvas.nodes.create/2",
-        intentDigest: parseDigestV2("4".repeat(64)),
-        baseFrontierDigest: parseDigestV2("5".repeat(64)),
+        intentKind: "canvas.agent.create",
+        intentDigest: parseDigest("4".repeat(64)),
+        baseFrontierDigest: parseDigest("5".repeat(64)),
         resultEntities: Object.freeze([]),
         semanticRoot: true,
-        historyMaterialDigest: parseDigestV2("6".repeat(64)),
+        historyMaterialDigest: parseDigest("6".repeat(64)),
       })
       snapshot = Object.freeze({ ...snapshot, operations: new Map([[`operation/${operationId}`, receipt]]) })
       return { status: "saved-locally", frame: { header: { core: { operationId } } } } as never

@@ -50,8 +50,8 @@ random allocation, time, and signaling configuration through typed ports.
   validates the public carrier preamble/index and per-section length/hash while
   streaming into an injected process-scoped ephemeral store, and destroys every
   section on success, rejection, cancellation, audit failure, or adapter failure.
-  It signs only after `assertDocumentOwnerRuntimeV2` proves that the resolver
-  returned a live runtime from the exact selected R5 authority. Structural owner
+  It signs only after `assertDocumentOwnerRuntime` proves that the resolver
+  returned a live runtime from the current collaboration protocol. Structural owner
   ports, repository-current owner code, and a missing artifact executable resolver
   fail closed. The ordinary control router never mounts this payload endpoint.
 - Project bootstrap binds the exact Project manifest epoch, shard epoch,
@@ -64,8 +64,8 @@ random allocation, time, and signaling configuration through typed ports.
   atomic rollover transaction. A separately admitted service-signed reset receipt
   is not a valid mutation path.
 - Consume only the public root of `@convax/collaboration` and the browser-safe
-  `@convax/project/collaboration-protocol` export selected from the sealed R5
-  authority release. A missing or mismatched artifact/digest fails closed;
+  `@convax/project/collaboration-protocol` export for the current collaboration
+  protocol. A missing or mismatched artifact/digest fails closed;
   private Project/Canvas source and old drafts are never decoder fallbacks.
 
 ## Verification

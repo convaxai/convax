@@ -3,7 +3,7 @@ import { join } from "node:path"
 
 import { BrowserWindow, MessageChannelMain, session } from "electron"
 
-import type { CollaborationSessionDataPlaneV2, CollaborationSessionDataPlaneLifecycleV2 } from "../collaboration/session-orchestrator"
+import type { CollaborationSessionDataPlane, CollaborationSessionDataPlaneLifecycle } from "../collaboration/session-orchestrator"
 import type { CollaborationPeerWireIngress, CollaborationPeerChannel, CollaborationPeerSessionScope } from "../collaboration/peerjs-transport"
 import {
   parsePeerJsTransportHostEventV1,
@@ -18,7 +18,7 @@ const peerJsTransportPreload = join(import.meta.dirname, "../preload/peerjs-tran
 const peerJsTransportPage = `data:text/html;charset=UTF-8,${encodeURIComponent(`<!doctype html>
 <html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src https: wss:"></head><body></body></html>`)}`
 
-interface HostMessagePortMainV1 {
+interface HostMessagePortMain {
   close(): void
   on(event: "close", listener: () => void): unknown
   on(event: "message", listener: (event: { data: unknown }) => void): unknown
@@ -26,8 +26,8 @@ interface HostMessagePortMainV1 {
   start(): void
 }
 
-interface HostMessageChannelMainV1 {
-  port1: HostMessagePortMainV1
+interface HostMessageChannelMain {
+  port1: HostMessagePortMain
   port2: unknown
 }
 
@@ -47,7 +47,7 @@ interface PeerJsHostWindowV1 {
   once(event: "closed", listener: () => void): unknown
 }
 
-export interface ElectronPeerJsTransportDataPlaneV1 extends CollaborationSessionDataPlaneV2 {
+export interface ElectronPeerJsTransportDataPlaneV1 extends CollaborationSessionDataPlane {
   readonly whenReady: Promise<void>
   quiesce(): Promise<void>
 }
@@ -61,10 +61,10 @@ export function createElectronPeerJsTransportDataPlaneV1(input: {
   readonly sessionScope: CollaborationPeerSessionScope
   readonly server: PeerJsTransportServerConfigV1
   readonly ingress: CollaborationPeerWireIngress
-  readonly lifecycle: CollaborationSessionDataPlaneLifecycleV2
+  readonly lifecycle: CollaborationSessionDataPlaneLifecycle
   readonly onFatal?: (reason: "webrtc-unavailable" | "initialization-failed" | "protocol-invalid" | "host-closed") => void
   readonly preloadPath?: string
-  readonly createMessageChannel?: () => HostMessageChannelMainV1
+  readonly createMessageChannel?: () => HostMessageChannelMain
   readonly createWindow?: (options: Electron.BrowserWindowConstructorOptions) => PeerJsHostWindowV1
   readonly createSession?: () => Electron.Session
   readonly setTimeout?: (callback: () => void, delayMs: number) => unknown

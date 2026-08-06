@@ -1,57 +1,57 @@
 import {
-  causalFrontierDigestV2,
-  decodeCausalEditFrameV2,
-  frameObjectRefFromDecodedFrameV2,
-  inspectAcceptedFrameObjectV2,
-  materializeAcceptedFrameV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
-  replicaActorHeadSetDigestV2,
-  type CausalClosurePortV2,
-  type DecodedCausalEditFrameV2,
-  type DigestV2,
-  type DocumentOwnerRuntimeV2,
-  type DocumentScopeV2,
-  type ExactBaseResolverPortV2,
-  type VerifiedProtocolAuthorityV2,
-  type YjsDocumentFactoryV2,
+  causalFrontierDigest,
+  decodeCausalEditFrame,
+  frameObjectRefFromDecodedFrame,
+  inspectAcceptedFrameObject,
+  materializeAcceptedFrame,
+  parseDigest,
+  parseDocumentScope,
+  replicaActorHeadSetDigest,
+  type CausalClosurePort,
+  type DecodedCausalEditFrame,
+  type Digest,
+  type DocumentOwnerRuntime,
+  type DocumentScope,
+  type ExactBaseResolverPort,
+  type CurrentProtocolAuthority,
+  type YjsDocumentFactory,
 } from "@convax/collaboration"
 import type {
-  NodeAcceptedFrameObjectV2,
-  NodeAcceptedReplicaHeadV2,
-  NodeReplicaHeadMaterializerV2,
+  NodeAcceptedFrameObject,
+  NodeAcceptedReplicaHead,
+  NodeReplicaHeadMaterializer,
 } from "@convax/project/node"
 
-export interface AcceptedClosureStoreV2 {
-  loadInstalledBase(scope: DocumentScopeV2): Promise<NodeAcceptedReplicaHeadV2>
-  listAcceptedFrames(scope: DocumentScopeV2): Promise<readonly NodeAcceptedFrameObjectV2[]>
-  readAcceptedFrame(scope: DocumentScopeV2, frameDigest: DigestV2): Promise<Uint8Array | null>
+export interface AcceptedClosureStore {
+  loadInstalledBase(scope: DocumentScope): Promise<NodeAcceptedReplicaHead>
+  listAcceptedFrames(scope: DocumentScope): Promise<readonly NodeAcceptedFrameObject[]>
+  readAcceptedFrame(scope: DocumentScope, frameDigest: Digest): Promise<Uint8Array | null>
 }
 
-export interface AcceptedCausalClosureIndexV2 extends CausalClosurePortV2 {
-  warm(store: AcceptedClosureStoreV2): Promise<NodeAcceptedReplicaHeadV2>
-  hydrate(store: AcceptedClosureStoreV2, frameDigest: DigestV2): Promise<boolean>
-  materializationOrder(frontier: DecodedCausalEditFrameV2["context"]["baseFrontier"]): readonly DecodedCausalEditFrameV2[] | "pending"
+export interface AcceptedCausalClosureIndex extends CausalClosurePort {
+  warm(store: AcceptedClosureStore): Promise<NodeAcceptedReplicaHead>
+  hydrate(store: AcceptedClosureStore, frameDigest: Digest): Promise<boolean>
+  materializationOrder(frontier: DecodedCausalEditFrame["context"]["baseFrontier"]): readonly DecodedCausalEditFrame[] | "pending"
 }
 
 /**
  * Main-owned in-memory causal index over Project-owned exact durable bytes. It is
  * disposable reconstruction state, never a second accepted document or store.
  */
-export function createAcceptedCausalClosureIndexV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly scope: DocumentScopeV2
-}): AcceptedCausalClosureIndexV2 {
-  const scope = parseDocumentScopeV2(input.scope)
-  const roots = new Set<DigestV2>()
-  const frames = new Map<DigestV2, DecodedCausalEditFrameV2>()
-  const parents = new Map<DigestV2, readonly DigestV2[]>()
+export function createAcceptedCausalClosureIndex(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly scope: DocumentScope
+}): AcceptedCausalClosureIndex {
+  const scope = parseDocumentScope(input.scope)
+  const roots = new Set<Digest>()
+  const frames = new Map<Digest, DecodedCausalEditFrame>()
+  const parents = new Map<Digest, readonly Digest[]>()
   let warmed = false
 
-  const index: AcceptedCausalClosureIndexV2 = {
+  const index: AcceptedCausalClosureIndex = {
     contains(descendantInput, ancestorInput) {
-      const descendant = parseDigestV2(descendantInput)
-      const ancestor = parseDigestV2(ancestorInput)
+      const descendant = parseDigest(descendantInput)
+      const ancestor = parseDigest(ancestorInput)
       if (descendant === ancestor) return true
       if (!warmed || (!roots.has(descendant) && !frames.has(descendant))) return "pending"
       // A fully indexed accepted closure cannot contain a frame digest absent from
@@ -66,37 +66,37 @@ export function createAcceptedCausalClosureIndexV2(input: {
       if (warmed) throw new Error("Accepted causal closure index was already warmed")
       const base = await store.loadInstalledBase(scope)
       assertSameScope(base.scope, scope)
-      for (const head of base.frontier.heads) roots.add(parseDigestV2(head.frameDigest))
+      for (const head of base.frontier.heads) roots.add(parseDigest(head.frameDigest))
       warmed = true
       for (const object of await store.listAcceptedFrames(scope)) ingest(object)
       return cloneHead(base)
     },
     async hydrate(store, digestInput) {
       requireWarmed()
-      return hydrateDigest(store, parseDigestV2(digestInput), new Set())
+      return hydrateDigest(store, parseDigest(digestInput), new Set())
     },
     materializationOrder(frontier) {
       requireWarmed()
-      const ordered: DecodedCausalEditFrameV2[] = []
-      const emitted = new Set<DigestV2>()
+      const ordered: DecodedCausalEditFrame[] = []
+      const emitted = new Set<Digest>()
       for (const head of frontier.heads) {
-        if (!append(parseDigestV2(head.frameDigest), emitted, ordered, new Set())) return "pending"
+        if (!append(parseDigest(head.frameDigest), emitted, ordered, new Set())) return "pending"
       }
       return Object.freeze(ordered)
     },
   }
   return Object.freeze(index)
 
-  function ingest(object: NodeAcceptedFrameObjectV2): DecodedCausalEditFrameV2 {
-    const frame = inspectAcceptedFrameObjectV2(input.authority, object.ref, object.exactFrameBytes)
+  function ingest(object: NodeAcceptedFrameObject): DecodedCausalEditFrame {
+    const frame = inspectAcceptedFrameObject(input.authority, object.ref, object.exactFrameBytes)
     assertSameScope(frame.header.core.scope, scope)
-    const digest = parseDigestV2(frame.frameDigest)
+    const digest = parseDigest(frame.frameDigest)
     const existing = frames.get(digest)
     if (existing) {
       if (!sameBytes(existing.bytes, frame.bytes)) throw new Error("Accepted frame digest aliases different exact bytes")
       return existing
     }
-    const directParents = Object.freeze(frame.context.baseFrontier.heads.map((head) => parseDigestV2(head.frameDigest)))
+    const directParents = Object.freeze(frame.context.baseFrontier.heads.map((head) => parseDigest(head.frameDigest)))
     for (const parent of directParents) {
       if (!roots.has(parent) && !frames.has(parent)) {
         throw new Error("Accepted frame closure has a predecessor outside the installed base and durable suffix")
@@ -108,9 +108,9 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
 
   async function hydrateDigest(
-    store: AcceptedClosureStoreV2,
-    digest: DigestV2,
-    visiting: Set<DigestV2>,
+    store: AcceptedClosureStore,
+    digest: Digest,
+    visiting: Set<Digest>,
   ): Promise<boolean> {
     if (roots.has(digest) || frames.has(digest)) return true
     if (visiting.has(digest)) throw new Error("Accepted causal closure contains a cycle")
@@ -118,13 +118,13 @@ export function createAcceptedCausalClosureIndexV2(input: {
     try {
       const exact = await store.readAcceptedFrame(scope, digest)
       if (exact === null) return false
-      const frame = decodeCausalEditFrameV2(input.authority, exact)
+      const frame = decodeCausalEditFrame(input.authority, exact)
       if (frame.frameDigest !== digest) throw new Error("Accepted frame lookup returned another digest")
       assertSameScope(frame.header.core.scope, scope)
       for (const parent of frame.context.baseFrontier.heads) {
-        if (!await hydrateDigest(store, parseDigestV2(parent.frameDigest), visiting)) return false
+        if (!await hydrateDigest(store, parseDigest(parent.frameDigest), visiting)) return false
       }
-      ingest({ ref: frameObjectRefFromDecodedFrameV2(frame), exactFrameBytes: exact })
+      ingest({ ref: frameObjectRefFromDecodedFrame(frame), exactFrameBytes: exact })
       return true
     } finally {
       visiting.delete(digest)
@@ -132,10 +132,10 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
 
   function append(
-    digest: DigestV2,
-    emitted: Set<DigestV2>,
-    ordered: DecodedCausalEditFrameV2[],
-    visiting: Set<DigestV2>,
+    digest: Digest,
+    emitted: Set<Digest>,
+    ordered: DecodedCausalEditFrame[],
+    visiting: Set<Digest>,
   ): boolean {
     if (roots.has(digest) || emitted.has(digest)) return true
     const frame = frames.get(digest)
@@ -150,7 +150,7 @@ export function createAcceptedCausalClosureIndexV2(input: {
     return true
   }
 
-  function containsFrom(descendant: DigestV2, ancestor: DigestV2, visiting: Set<DigestV2>): boolean | "pending" {
+  function containsFrom(descendant: Digest, ancestor: Digest, visiting: Set<Digest>): boolean | "pending" {
     if (visiting.has(descendant)) throw new Error("Accepted causal closure contains a cycle")
     const directParents = parents.get(descendant)
     if (!directParents) return roots.has(descendant) ? false : "pending"
@@ -171,24 +171,24 @@ export function createAcceptedCausalClosureIndexV2(input: {
   }
 }
 
-export function createProductionNodeReplicaHeadMaterializerV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly owner: DocumentOwnerRuntimeV2
-  readonly causalClosure: CausalClosurePortV2
-  readonly createDocument: YjsDocumentFactoryV2["createDocument"]
-  readonly requiredBlobDigests: (frame: DecodedCausalEditFrameV2) => readonly DigestV2[]
-}): NodeReplicaHeadMaterializerV2 {
-  const materializer: NodeReplicaHeadMaterializerV2 = {
+export function createProductionNodeReplicaHeadMaterializer(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly owner: DocumentOwnerRuntime
+  readonly causalClosure: CausalClosurePort
+  readonly createDocument: YjsDocumentFactory["createDocument"]
+  readonly requiredBlobDigests: (frame: DecodedCausalEditFrame) => readonly Digest[]
+}): NodeReplicaHeadMaterializer {
+  const materializer: NodeReplicaHeadMaterializer = {
     async inspectFrame(ref, exactBytes) {
-      const frame = inspectAcceptedFrameObjectV2(input.authority, ref, exactBytes)
-      const requiredBlobDigests = [...input.requiredBlobDigests(frame)].map(parseDigestV2).sort()
+      const frame = inspectAcceptedFrameObject(input.authority, ref, exactBytes)
+      const requiredBlobDigests = [...input.requiredBlobDigests(frame)].map(parseDigest).sort()
       for (let index = 1; index < requiredBlobDigests.length; index += 1) {
         if (requiredBlobDigests[index - 1] === requiredBlobDigests[index]) throw new Error("Required blob digest set contains a duplicate")
       }
       return Object.freeze({ ref, requiredBlobDigests: Object.freeze(requiredBlobDigests) })
     },
     async applyAcceptedFrame({ previous, ref, exactBytes }) {
-      return materializeAcceptedFrameV2({
+      return materializeAcceptedFrame({
         authority: input.authority,
         owner: input.owner,
         previous,
@@ -198,23 +198,23 @@ export function createProductionNodeReplicaHeadMaterializerV2(input: {
         createDocument: input.createDocument,
       })
     },
-    actorHeadsDigest: replicaActorHeadSetDigestV2,
+    actorHeadsDigest: replicaActorHeadSetDigest,
   }
   return Object.freeze(materializer)
 }
 
-export function createDurableExactBaseResolverV2(input: {
-  readonly authority: VerifiedProtocolAuthorityV2
-  readonly scope: DocumentScopeV2
-  readonly owner: DocumentOwnerRuntimeV2
-  readonly store: AcceptedClosureStoreV2
-  readonly index: AcceptedCausalClosureIndexV2
-  readonly installedBase: NodeAcceptedReplicaHeadV2
-  readonly createDocument: YjsDocumentFactoryV2["createDocument"]
-}): ExactBaseResolverPortV2 {
-  const scope = parseDocumentScopeV2(input.scope)
+export function createDurableExactBaseResolver(input: {
+  readonly authority: CurrentProtocolAuthority
+  readonly scope: DocumentScope
+  readonly owner: DocumentOwnerRuntime
+  readonly store: AcceptedClosureStore
+  readonly index: AcceptedCausalClosureIndex
+  readonly installedBase: NodeAcceptedReplicaHead
+  readonly createDocument: YjsDocumentFactory["createDocument"]
+}): ExactBaseResolverPort {
+  const scope = parseDocumentScope(input.scope)
   assertSameScope(input.installedBase.scope, scope)
-  const resolver: ExactBaseResolverPortV2 = {
+  const resolver: ExactBaseResolverPort = {
     async reconstructExactBase(frame) {
       try {
         assertSameScope(frame.header.core.scope, scope)
@@ -225,8 +225,8 @@ export function createDurableExactBaseResolverV2(input: {
         if (order === "pending") return "pending"
         let current = cloneHead(input.installedBase)
         for (const accepted of order) {
-          const ref = frameObjectRefFromDecodedFrameV2(accepted)
-          current = materializeAcceptedFrameV2({
+          const ref = frameObjectRefFromDecodedFrame(accepted)
+          current = materializeAcceptedFrame({
             authority: input.authority,
             owner: input.owner,
             previous: current,
@@ -236,7 +236,7 @@ export function createDurableExactBaseResolverV2(input: {
             createDocument: input.createDocument,
           })
         }
-        if (current.frontierDigest !== causalFrontierDigestV2(frame.context.baseFrontier)) return "rejected"
+        if (current.frontierDigest !== causalFrontierDigest(frame.context.baseFrontier)) return "rejected"
         return Object.freeze({
           fullUpdate: Uint8Array.from(current.fullUpdate),
           stateVector: Uint8Array.from(current.stateVector) as typeof current.stateVector,
@@ -252,7 +252,7 @@ export function createDurableExactBaseResolverV2(input: {
   return Object.freeze(resolver)
 }
 
-function cloneHead(value: NodeAcceptedReplicaHeadV2): NodeAcceptedReplicaHeadV2 {
+function cloneHead(value: NodeAcceptedReplicaHead): NodeAcceptedReplicaHead {
   return Object.freeze({
     ...value,
     fullUpdate: Uint8Array.from(value.fullUpdate),
@@ -260,9 +260,9 @@ function cloneHead(value: NodeAcceptedReplicaHeadV2): NodeAcceptedReplicaHeadV2 
   })
 }
 
-function assertSameScope(leftValue: DocumentScopeV2, rightValue: DocumentScopeV2): void {
-  const left = parseDocumentScopeV2(leftValue)
-  const right = parseDocumentScopeV2(rightValue)
+function assertSameScope(leftValue: DocumentScope, rightValue: DocumentScope): void {
+  const left = parseDocumentScope(leftValue)
+  const right = parseDocumentScope(rightValue)
   if (
     left.projectId !== right.projectId || left.projectEpoch !== right.projectEpoch ||
     left.docKind !== right.docKind || left.docId !== right.docId || left.shardEpoch !== right.shardEpoch

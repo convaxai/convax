@@ -1,10 +1,10 @@
 import type { CanvasResourceSource } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument, CanvasPoint } from "@convax/canvas/core"
 import type { CanvasTextResourceService } from "@convax/canvas"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/33"
+export const desktopProtocolVersion = "convax.desktop-ipc/35"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -17,7 +17,7 @@ export type CanvasTextResourceClient = CanvasTextResourceService
 
 export interface CanvasResourceAddResult {
   createdNodeIds: readonly string[]
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
   warnings: readonly string[]
 }
@@ -59,7 +59,7 @@ export interface CanvasResourceSaveEditableCopyInput {
 }
 
 export interface CanvasResourceRelinkResult {
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
   projection: CanvasDocument
   warnings: readonly string[]
 }

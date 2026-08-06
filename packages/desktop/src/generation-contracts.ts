@@ -1,5 +1,5 @@
 import type { CanvasGenerationTargetGuard } from "@convax/canvas/application"
-import type { BoundedOperationReceiptV2 } from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 
 export type GenerationOutputModality = "text" | "image" | "video" | "audio"
@@ -161,7 +161,7 @@ export interface GenerationCanvasResult {
   createdNodeIds: readonly string[]
   /** Present only for a text operation whose declared delivery is `return`. */
   outputText?: string
-  operationReceipt: BoundedOperationReceiptV2 | null
+  operationReceipt: BoundedOperationReceipt | null
   projection: CanvasDocument
   toolId: string
   warnings: readonly string[]
@@ -176,7 +176,7 @@ export interface GenerationCanvasReconcileRequest {
 
 export interface GenerationCanvasReconcileResult {
   failedNodeIds: readonly string[]
-  operationReceipt: BoundedOperationReceiptV2 | null
+  operationReceipt: BoundedOperationReceipt | null
   projection: CanvasDocument
 }
 

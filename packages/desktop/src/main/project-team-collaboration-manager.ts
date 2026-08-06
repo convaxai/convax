@@ -1,72 +1,72 @@
-import { parseProjectIdV2 } from "@convax/collaboration"
+import { parseProjectId } from "@convax/collaboration"
 
 import {
-  parseProjectTeamBootstrapResultV2,
-  parseProjectTeamInvitationV2,
-  parseProjectTeamCollaborationStatusV2,
-  type ProjectTeamCollaborationAttentionReasonV2,
-  type ProjectTeamBootstrapResultV2,
-  type ProjectTeamCollaborationStatusV2,
-  type ProjectTeamInvitationCarrierV2,
+  parseProjectTeamBootstrapResult,
+  parseProjectTeamInvitation,
+  parseProjectTeamCollaborationStatus,
+  type ProjectTeamCollaborationAttentionReason,
+  type ProjectTeamBootstrapResult,
+  type ProjectTeamCollaborationStatus,
+  type ProjectTeamInvitationCarrier,
 } from "../project-team-collaboration-contracts"
 
-export interface ProjectTeamPeerSessionSnapshotV2 {
+export interface ProjectTeamPeerSessionSnapshot {
   readonly state: "online" | "offline" | "viewer" | "attention"
   readonly canEdit: boolean
   readonly connectedPeerCount: number
-  readonly reason: ProjectTeamCollaborationAttentionReasonV2 | null
+  readonly reason: ProjectTeamCollaborationAttentionReason | null
 }
 
 /** Exact verified session capability. It owns Control renewal and the PeerJS data plane. */
-export interface ProjectTeamPeerSessionV2 {
+export interface ProjectTeamPeerSession {
   readonly projectId: string
-  snapshot(): ProjectTeamPeerSessionSnapshotV2
-  subscribe(listener: (snapshot: ProjectTeamPeerSessionSnapshotV2) => void): () => void
+  snapshot(): ProjectTeamPeerSessionSnapshot
+  subscribe(listener: (snapshot: ProjectTeamPeerSessionSnapshot) => void): () => void
   setOnline(online: boolean): void
   quiesce(): Promise<void>
 }
 
-export type ProjectTeamPeerSessionOpenResultV2 =
-  | Readonly<{ status: "ready"; session: ProjectTeamPeerSessionV2 }>
+export type ProjectTeamPeerSessionOpenResult =
+  | Readonly<{ status: "ready"; session: ProjectTeamPeerSession }>
   | Readonly<{ status: "local-only" }>
-  | Readonly<{ status: "attention"; reason: ProjectTeamCollaborationAttentionReasonV2 }>
+  | Readonly<{ status: "attention"; reason: ProjectTeamCollaborationAttentionReason }>
 
-export interface ProjectTeamPeerBootstrapOpenResultV2 {
-  readonly session: ProjectTeamPeerSessionOpenResultV2
-  readonly invitation: ProjectTeamInvitationCarrierV2 | null
+export interface ProjectTeamPeerBootstrapOpenResult {
+  readonly session: ProjectTeamPeerSessionOpenResult
+  readonly invitation: ProjectTeamInvitationCarrier | null
 }
 
 /**
  * Main-only composition seam. Its implementation owns raw service DTOs, OS-vault
  * signers, credential refresh, exact handshake/channel admission and PeerJS.
  */
-export interface ProjectTeamPeerSessionFactoryV2 {
-  openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2>
-  bootstrapTeam(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerBootstrapOpenResultV2>
-  joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrierV2; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResultV2>
+export interface ProjectTeamPeerSessionFactory {
+  openExisting(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResult>
+  bootstrapTeam(input: { readonly projectId: string; readonly signal: AbortSignal }): Promise<ProjectTeamPeerBootstrapOpenResult>
+  joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrier; readonly signal: AbortSignal }): Promise<ProjectTeamPeerSessionOpenResult>
 }
 
 /**
  * Serialized Project lifecycle owner around the production Control/PeerJS factory.
  * A stale open can never publish or retain a session after Project switch/forget.
  */
-export class ProjectTeamCollaborationManagerV2 {
+export class ProjectTeamCollaborationManager {
   private activeProjectId: string | null = null
   private activeGeneration: object | null = null
   private activationAbort: AbortController | null = null
-  private session: ProjectTeamPeerSessionV2 | null = null
+  private session: ProjectTeamPeerSession | null = null
   private unsubscribeSession: (() => void) | null = null
   private online = true
   private disposed = false
   private lane: Promise<void> = Promise.resolve()
-  private readonly statuses = new Map<string, ProjectTeamCollaborationStatusV2>()
-  private readonly listeners = new Set<(status: ProjectTeamCollaborationStatusV2) => void>()
+  private readonly statuses = new Map<string, ProjectTeamCollaborationStatus>()
+  private readonly listeners = new Set<(status: ProjectTeamCollaborationStatus) => void>()
 
-  constructor(private readonly factory: ProjectTeamPeerSessionFactoryV2) {}
+  constructor(private readonly factory: ProjectTeamPeerSessionFactory) {}
 
   /** Activates the Project shell without probing or starting any Team runtime. */
-  activateLocalProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+  activateLocalProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatus> {
+    const projectId = parseProjectId(projectIdInput)
     return this.serialize(async () => {
       this.requireLive()
       this.activeGeneration = {}
@@ -80,31 +80,31 @@ export class ProjectTeamCollaborationManagerV2 {
     })
   }
 
-  activateProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+  activateProject(projectIdInput: string): Promise<ProjectTeamCollaborationStatus> {
+    const projectId = parseProjectId(projectIdInput)
     if (this.activeProjectId === projectId && this.session) return Promise.resolve(this.requireStatus(projectId))
     return this.replaceProject(projectId, (signal) => this.factory.openExisting({ projectId, signal }))
   }
 
-  async bootstrapTeam(projectIdInput: string): Promise<ProjectTeamBootstrapResultV2> {
-    const projectId = parseProjectIdV2(projectIdInput)
+  async bootstrapTeam(projectIdInput: string): Promise<ProjectTeamBootstrapResult> {
+    const projectId = parseProjectId(projectIdInput)
     this.requireActiveProject(projectId)
-    let invitation: ProjectTeamInvitationCarrierV2 | null = null
+    let invitation: ProjectTeamInvitationCarrier | null = null
     const status = await this.replaceProject(projectId, async (signal) => {
       const bootstrap = await this.factory.bootstrapTeam({ projectId, signal })
-      invitation = bootstrap.invitation === null ? null : parseProjectTeamInvitationV2(bootstrap.invitation)
+      invitation = bootstrap.invitation === null ? null : parseProjectTeamInvitation(bootstrap.invitation)
       if (invitation !== null && invitation.projectId !== projectId) {
         throw new Error("Project team bootstrap invitation crossed Project identity")
       }
       return bootstrap.session
     })
-    return parseProjectTeamBootstrapResultV2({ invitation, status })
+    return parseProjectTeamBootstrapResult({ invitation, status })
   }
 
-  joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrierV2 }): Promise<ProjectTeamCollaborationStatusV2> {
-    const projectId = parseProjectIdV2(input.projectId)
+  joinTeam(input: { readonly projectId: string; readonly invitation: ProjectTeamInvitationCarrier }): Promise<ProjectTeamCollaborationStatus> {
+    const projectId = parseProjectId(input.projectId)
     this.requireActiveProject(projectId)
-    const invitation = parseProjectTeamInvitationV2(input.invitation)
+    const invitation = parseProjectTeamInvitation(input.invitation)
     if (invitation.projectId !== projectId) {
       throw new Error("Project team collaboration invitation crossed Project identity")
     }
@@ -112,7 +112,7 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 
   async quiesceProject(projectIdInput: string): Promise<void> {
-    const projectId = parseProjectIdV2(projectIdInput)
+    const projectId = parseProjectId(projectIdInput)
     await this.serialize(async () => {
       if (this.activeProjectId !== projectId) return
       this.activeGeneration = null
@@ -124,12 +124,12 @@ export class ProjectTeamCollaborationManagerV2 {
     })
   }
 
-  getStatus(projectIdInput: string): ProjectTeamCollaborationStatusV2 {
-    const projectId = parseProjectIdV2(projectIdInput)
+  getStatus(projectIdInput: string): ProjectTeamCollaborationStatus {
+    const projectId = parseProjectId(projectIdInput)
     return this.statuses.get(projectId) ?? status(projectId, "local-only", false, 0, null)
   }
 
-  subscribe(listener: (status: ProjectTeamCollaborationStatusV2) => void): () => void {
+  subscribe(listener: (status: ProjectTeamCollaborationStatus) => void): () => void {
     this.requireLive()
     if (typeof listener !== "function") throw new TypeError("Project team collaboration listener is required")
     this.listeners.add(listener)
@@ -158,8 +158,8 @@ export class ProjectTeamCollaborationManagerV2 {
 
   private replaceProject(
     projectId: string,
-    open: (signal: AbortSignal) => Promise<ProjectTeamPeerSessionOpenResultV2>,
-  ): Promise<ProjectTeamCollaborationStatusV2> {
+    open: (signal: AbortSignal) => Promise<ProjectTeamPeerSessionOpenResult>,
+  ): Promise<ProjectTeamCollaborationStatus> {
     this.requireLive()
     const generation = {}
     const abort = new AbortController()
@@ -176,7 +176,7 @@ export class ProjectTeamCollaborationManagerV2 {
       }
       this.activeProjectId = projectId
       this.publish(status(projectId, "starting", false, 0, null))
-      let result: ProjectTeamPeerSessionOpenResultV2
+      let result: ProjectTeamPeerSessionOpenResult
       try {
         result = await open(abort.signal)
       } catch (error) {
@@ -195,14 +195,14 @@ export class ProjectTeamCollaborationManagerV2 {
       if (result.status === "attention") {
         return this.publish(status(projectId, "attention", false, 0, result.reason))
       }
-      if (parseProjectIdV2(result.session.projectId) !== projectId) {
+      if (parseProjectId(result.session.projectId) !== projectId) {
         await result.session.quiesce()
         this.publish(status(projectId, "attention", false, 0, "protocol-rejected"))
         throw new Error("Project team session crossed Project identity")
       }
       this.session = result.session
       result.session.setOnline(this.online)
-      const apply = (snapshot: ProjectTeamPeerSessionSnapshotV2) => {
+      const apply = (snapshot: ProjectTeamPeerSessionSnapshot) => {
         if (this.session !== result.session || this.activeGeneration !== generation || this.activeProjectId !== projectId) return
         const next = sessionStatus(projectId, snapshot)
         this.publish(next)
@@ -228,8 +228,8 @@ export class ProjectTeamCollaborationManagerV2 {
     if (current) await current.quiesce()
   }
 
-  private publish(next: ProjectTeamCollaborationStatusV2): ProjectTeamCollaborationStatusV2 {
-    const parsed = parseProjectTeamCollaborationStatusV2(next)
+  private publish(next: ProjectTeamCollaborationStatus): ProjectTeamCollaborationStatus {
+    const parsed = parseProjectTeamCollaborationStatus(next)
     const previous = this.statuses.get(parsed.projectId)
     if (previous && sameStatus(previous, parsed)) return previous
     this.statuses.set(parsed.projectId, parsed)
@@ -239,7 +239,7 @@ export class ProjectTeamCollaborationManagerV2 {
     return parsed
   }
 
-  private requireStatus(projectId: string): ProjectTeamCollaborationStatusV2 {
+  private requireStatus(projectId: string): ProjectTeamCollaborationStatus {
     return this.statuses.get(projectId) ?? status(projectId, "starting", false, 0, null)
   }
 
@@ -259,7 +259,7 @@ export class ProjectTeamCollaborationManagerV2 {
   }
 }
 
-function sessionStatus(projectId: string, snapshot: ProjectTeamPeerSessionSnapshotV2): ProjectTeamCollaborationStatusV2 {
+function sessionStatus(projectId: string, snapshot: ProjectTeamPeerSessionSnapshot): ProjectTeamCollaborationStatus {
   if (snapshot.state === "attention") {
     if (snapshot.reason === null) throw new TypeError("Attention session status requires a reason")
   } else if (snapshot.reason !== null) {
@@ -270,13 +270,13 @@ function sessionStatus(projectId: string, snapshot: ProjectTeamPeerSessionSnapsh
 
 function status(
   projectId: string,
-  state: ProjectTeamCollaborationStatusV2["state"],
+  state: ProjectTeamCollaborationStatus["state"],
   canEdit: boolean,
   connectedPeerCount: number,
-  reason: ProjectTeamCollaborationStatusV2["reason"],
-): ProjectTeamCollaborationStatusV2 {
-  return parseProjectTeamCollaborationStatusV2({
-    format: "convax.project-team-collaboration-status/2",
+  reason: ProjectTeamCollaborationStatus["reason"],
+): ProjectTeamCollaborationStatus {
+  return parseProjectTeamCollaborationStatus({
+    format: "convax.project-team-collaboration-status",
     projectId,
     state,
     canEdit,
@@ -285,7 +285,7 @@ function status(
   })
 }
 
-function sameStatus(left: ProjectTeamCollaborationStatusV2, right: ProjectTeamCollaborationStatusV2): boolean {
+function sameStatus(left: ProjectTeamCollaborationStatus, right: ProjectTeamCollaborationStatus): boolean {
   return left.projectId === right.projectId && left.state === right.state && left.canEdit === right.canEdit &&
     left.connectedPeerCount === right.connectedPeerCount && left.reason === right.reason
 }

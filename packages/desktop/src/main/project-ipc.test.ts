@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test"
 import { ProjectController, type ProjectLifecycleClient, type ProjectRecord } from "@convax/project"
-import type { ProjectIndexFileApplicationPortV2 } from "@convax/project/canvas"
+import type { ProjectIndexFileApplicationPort } from "@convax/project/canvas"
 import type { ProjectChangeEvent } from "@convax/project-files"
 import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 import type { DesktopProjectManager } from "./project-ipc"
@@ -156,7 +156,7 @@ test("publishes Project files before ProjectIndex and reports collaboration fail
     path: input.path,
     size: 7,
   }))
-  const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+  const projectIndexFiles: ProjectIndexFileApplicationPort = {
     admitManagedBlob: async () => ({ status: "partial-success", code: "index-commit-failed" }),
     createDirectory: async () => ({ status: "committed", entryId: `pd_${"a".repeat(64)}`, versionId: null }),
     publishFile: async (input) => {
@@ -195,7 +195,7 @@ test("publishes Project files before ProjectIndex and reports collaboration fail
 
 test("uses the manager's exact relocation receipt instead of guessing source paths by basename", async () => {
   const projectId = "project_0123456789abcdef0123456789abcdef"
-  const relocateEntry = mock(async (_input: Parameters<ProjectIndexFileApplicationPortV2["relocateEntry"]>[0]) => ({ status: "committed" as const, entryId: `pf_${"a".repeat(64)}` as const, versionId: null }))
+  const relocateEntry = mock(async (_input: Parameters<ProjectIndexFileApplicationPort["relocateEntry"]>[0]) => ({ status: "committed" as const, entryId: `pf_${"a".repeat(64)}` as const, versionId: null }))
   const moveEntries = mock(async () => ({
     operation: "move" as const,
     projectId,
@@ -215,7 +215,7 @@ test("uses the manager's exact relocation receipt instead of guessing source pat
     readTextFile: unsupported, readTextPreview: unsupported, rename: unsupported, renameEntry: unsupported,
     resolveEntryPath: unsupported, touch: unsupported, watchProject: () => () => undefined, writeTextFile: unsupported,
   } satisfies DesktopProjectManager
-  const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+  const projectIndexFiles: ProjectIndexFileApplicationPort = {
     admitManagedBlob: unsupported,
     createDirectory: unsupported,
     publishFile: unsupported,
@@ -255,7 +255,7 @@ test("commits ProjectIndex tombstones before native deletion and preserves the f
     readTextFile: unsupported, readTextPreview: unsupported, rename: unsupported, renameEntry: unsupported,
     resolveEntryPath: unsupported, touch: unsupported, watchProject: () => () => undefined, writeTextFile: unsupported,
   } satisfies DesktopProjectManager
-  const projectIndexFiles: ProjectIndexFileApplicationPortV2 = {
+  const projectIndexFiles: ProjectIndexFileApplicationPort = {
     admitManagedBlob: unsupported,
     createDirectory: unsupported, publishFile: unsupported, relocateEntry: unsupported, tombstoneEntry,
   }

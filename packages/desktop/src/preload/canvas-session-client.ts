@@ -3,29 +3,29 @@ import { parseCanvasDocument } from "@convax/canvas/core"
 
 import {
   canvasSessionIpcChannels,
-  type CanvasRendererSessionMutationResultV2,
-  type CanvasRendererSessionScopeV2,
-  type CanvasRendererSessionTransportV2,
-  type CanvasSessionInvalidationDtoV2,
-  type CanvasSessionProjectionDtoV2,
+  type CanvasRendererSessionMutationResult,
+  type CanvasRendererSessionScope,
+  type CanvasRendererSessionTransport,
+  type CanvasSessionInvalidationDto,
+  type CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
 import {
-  assertEntityRefDtoV2,
-  assertOperationReceiptDtoV2,
-  requireId128DtoV2,
+  assertEntityRefDto,
+  assertOperationReceiptDto,
+  requireId128Dto,
 } from "./canvas-operation-receipt-codec"
 
-export interface CanvasSessionPreloadClientOptionsV2 {
+export interface CanvasSessionPreloadClientOptions {
   readonly invoke: (channel: string, input: unknown) => Promise<unknown>
   readonly on: (channel: string, listener: (event: unknown, payload: unknown) => void) => void
   readonly removeListener: (channel: string, listener: (event: unknown, payload: unknown) => void) => void
 }
 
 /** Browser-safe DTO bridge. Main remains the only document/kernel owner. */
-export function createCanvasSessionPreloadClientV2(
-  options: CanvasSessionPreloadClientOptionsV2,
-): CanvasRendererSessionTransportV2 {
-  const client: CanvasRendererSessionTransportV2 = {
+export function createCanvasSessionPreloadClient(
+  options: CanvasSessionPreloadClientOptions,
+): CanvasRendererSessionTransport {
+  const client: CanvasRendererSessionTransport = {
     async open(ref) {
       return requireProjection(await options.invoke(canvasSessionIpcChannels.open, ref), ref)
     },
@@ -61,10 +61,10 @@ export function createCanvasSessionPreloadClientV2(
 
 function requireMutation(
   value: unknown,
-  scope: CanvasRendererSessionScopeV2,
-): CanvasRendererSessionMutationResultV2 {
+  scope: CanvasRendererSessionScope,
+): CanvasRendererSessionMutationResult {
   const record = exactRecord(value, ["operationReceipt", "projection"], "Canvas session mutation result")
-  assertOperationReceiptDtoV2(record.operationReceipt)
+  assertOperationReceiptDto(record.operationReceipt)
   return Object.freeze({
     operationReceipt: structuredClone(record.operationReceipt),
     projection: requireProjection(record.projection, scope.ref, scope.sessionId),
@@ -74,17 +74,17 @@ function requireMutation(
 function requireProjection(
   value: unknown,
   expectedRef: CanvasDocumentRef,
-  expectedSessionId?: CanvasSessionProjectionDtoV2["sessionId"],
-): CanvasSessionProjectionDtoV2 {
+  expectedSessionId?: CanvasSessionProjectionDto["sessionId"],
+): CanvasSessionProjectionDto {
   const record = exactRecord(
     value,
     ["canRedo", "canUndo", "document", "format", "nodeEntities", "ref", "sessionId"],
     "Canvas session projection",
   )
-  if (record.format !== "convax.canvas-session-projection/2") throw new Error("Canvas session projection format is invalid")
+  if (record.format !== "convax.canvas-session-projection") throw new Error("Canvas session projection format is invalid")
   const ref = requireRef(record.ref)
   if (!sameRef(ref, expectedRef)) throw new Error("Canvas session projection crossed document scope")
-  const sessionId = requireId128DtoV2(record.sessionId, "Canvas session id")
+  const sessionId = requireId128Dto(record.sessionId, "Canvas session id")
   if (expectedSessionId !== undefined && sessionId !== expectedSessionId) {
     throw new Error("Canvas session projection belongs to a stale renderer lease")
   }
@@ -105,7 +105,7 @@ function requireProjection(
   const nodeEntities = record.nodeEntities.map((value) => {
     const entry = exactRecord(value, ["entity", "nodeId"], "Canvas session entity entry")
     const entity = entry.entity
-    assertEntityRefDtoV2(entity, "node")
+    assertEntityRefDto(entity, "node")
     if (
       entity.kind !== "node" ||
       typeof entry.nodeId !== "string" ||
@@ -122,7 +122,7 @@ function requireProjection(
   })
   if (document.nodes.some((node) => !seen.has(node.id))) throw new Error("Canvas session entity projection is incomplete")
   return Object.freeze({
-    format: "convax.canvas-session-projection/2",
+    format: "convax.canvas-session-projection",
     ref,
     sessionId,
     document,
@@ -132,15 +132,15 @@ function requireProjection(
   })
 }
 
-function requireInvalidation(value: unknown): CanvasSessionInvalidationDtoV2 {
+function requireInvalidation(value: unknown): CanvasSessionInvalidationDto {
   const record = exactRecord(value, ["format", "ref", "sessionId"], "Canvas session invalidation")
-  if (record.format !== "convax.canvas-session-invalidation/2") {
+  if (record.format !== "convax.canvas-session-invalidation") {
     throw new Error("Canvas session invalidation has an invalid field set")
   }
   return Object.freeze({
-    format: "convax.canvas-session-invalidation/2",
+    format: "convax.canvas-session-invalidation",
     ref: requireRef(record.ref),
-    sessionId: requireId128DtoV2(record.sessionId, "Canvas session id"),
+    sessionId: requireId128Dto(record.sessionId, "Canvas session id"),
   })
 }
 

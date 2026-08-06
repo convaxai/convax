@@ -3,47 +3,48 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import {
-  causalFrontierDigestV2,
-  canonicalStateDigestV2,
-  encodeBase64urlV2,
-  encodeFullUpdateV2,
-  encodeRestrictedJcsV2,
-  encodeStateVectorV2,
-  ownerCanonicalizerDescriptorDigestV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  replicaActorHeadSetDigestV2,
-  replicaCheckpointCoreDigestV2,
-  stateVectorDigestV2,
-  yjsUpdateDigestV2,
-  type DocumentScopeV2,
-  type ReplicaCheckpointV2,
+  CURRENT_PROTOCOL_IDENTITIES,
+  causalFrontierDigest,
+  canonicalStateDigest,
+  encodeBase64url,
+  encodeFullUpdate,
+  encodeRestrictedJcs,
+  encodeStateVector,
+  ownerCanonicalizerDescriptorDigest,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseReplicaId,
+  parseSignature,
+  replicaActorHeadSetDigest,
+  replicaCheckpointCoreDigest,
+  stateVectorDigest,
+  yjsUpdateDigest,
+  type DocumentScope,
+  type ReplicaCheckpoint,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import {
-  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  createProjectIndexReconstructionYDocV2,
-  createProjectIndexYDocV2,
-  encodeProjectCanonicalStateV2,
-  projectIndexOwnerCanonicalizerDescriptorV2,
-  validateProjectIndexYDocV2,
-  type ProjectEntryRecordV2,
+  PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  createProjectIndexReconstructionYDoc,
+  createProjectIndexYDoc,
+  encodeProjectCanonicalState,
+  projectIndexOwnerCanonicalizerDescriptor,
+  validateProjectIndexYDoc,
+  type ProjectEntryRecord,
 } from "../../collaboration/project-index"
 import {
-  NodeCollaborationPersistenceV2,
-  type NodeReplicaHeadMaterializerV2,
+  NodeCollaborationPersistence,
+  type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
 import {
-  decodeProjectNativeStoreManifestV2,
-  encodeProjectNativeStoreManifestV2,
-  initializeUnteamedProjectIndexNativeStoreV2,
-  readProjectNativeStoreManifestV2,
-  resolveCurrentProjectIndexScopeV2,
-  verifyEmptyProjectIndexGenesisV2,
+  decodeProjectNativeStoreManifest,
+  encodeProjectNativeStoreManifest,
+  initializeUnteamedProjectIndexNativeStore,
+  readProjectNativeStoreManifest,
+  resolveCurrentProjectIndexScope,
+  verifyEmptyProjectIndexGenesis,
 } from "./project-index-genesis-store"
 
 const roots: string[] = []
@@ -58,9 +59,9 @@ const scope = {
   shardEpoch,
 }
 const authority = {
-  protocolDigest: parseDigestV2("de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5"),
-  schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
-  uriProtocolDigest: parseDigestV2("9030aecd6902888e5e91532fcc2ec3f1a377e79ae59c092ee80fbbf1a01fac38"),
+  protocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.protocolDigest),
+  schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+  uriProtocolDigest: parseDigest(CURRENT_PROTOCOL_IDENTITIES.uriProtocolDigest),
 }
 const localActor = actor(7)
 const durabilityTest = test.skipIf(process.platform === "win32")
@@ -72,15 +73,15 @@ afterEach(async () => {
 describe("ProjectIndex native genesis store", () => {
   durabilityTest("publishes a new unteamed Project atomically and reopens the exact installed base", async () => {
     const fixture = await createFixture()
-    const first = await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    const first = await initializeUnteamedProjectIndexNativeStore(fixture.input)
     expect(first.scope).toEqual(scope)
-    expect(await resolveCurrentProjectIndexScopeV2(fixture.target, authority)).toEqual(scope)
-    expect((await readProjectNativeStoreManifestV2(fixture.target, authority)).initializationAuthorityDigest)
+    expect(await resolveCurrentProjectIndexScope(fixture.target, authority)).toEqual(scope)
+    expect((await readProjectNativeStoreManifest(fixture.target, authority)).initializationAuthorityDigest)
       .toBe(digest("enrollment"))
 
-    const retry = await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    const retry = await initializeUnteamedProjectIndexNativeStore(fixture.input)
     expect(retry.canonicalStateDigest).toBe(first.canonicalStateDigest)
-    const store = await NodeCollaborationPersistenceV2.open({
+    const store = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.target,
       localActorId: localActor,
       materializer,
@@ -88,7 +89,7 @@ describe("ProjectIndex native genesis store", () => {
     try {
       const restarted = await store.loadInstalledBase(scope)
       expect(restarted.fullUpdate).toEqual(first.fullUpdate)
-      expect(validateProjectIndexYDocV2(reconstruct(restarted.fullUpdate), scope).entries.size).toBe(1)
+      expect(validateProjectIndexYDoc(reconstruct(restarted.fullUpdate), scope).entries.size).toBe(1)
     } finally {
       store.dispose()
     }
@@ -96,16 +97,16 @@ describe("ProjectIndex native genesis store", () => {
 
   durabilityTest("rejects unknown manifest fields, checksum tampering and stale live authority", async () => {
     const fixture = await createFixture()
-    const exact = encodeProjectNativeStoreManifestV2(fixture.genesis.manifest)
+    const exact = encodeProjectNativeStoreManifest(fixture.genesis.manifest)
     const payloadLength = Buffer.from(exact).readUInt32BE(8)
     const payload = JSON.parse(new TextDecoder().decode(exact.slice(12, 12 + payloadLength)))
-    expect(() => encodeProjectNativeStoreManifestV2({ ...payload, revision: 1 })).toThrow("schema")
+    expect(() => encodeProjectNativeStoreManifest({ ...payload, revision: 1 })).toThrow("schema")
     const tampered = Uint8Array.from(exact)
     tampered[tampered.length - 1] ^= 1
-    expect(() => decodeProjectNativeStoreManifestV2(tampered)).toThrow("checksum")
+    expect(() => decodeProjectNativeStoreManifest(tampered)).toThrow("checksum")
 
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
-    await expect(readProjectNativeStoreManifestV2(fixture.target, {
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
+    await expect(readProjectNativeStoreManifest(fixture.target, {
       ...authority, protocolDigest: digest("old-protocol"),
     })).rejects.toThrow("authority is not current")
   })
@@ -113,40 +114,40 @@ describe("ProjectIndex native genesis store", () => {
   durabilityTest("resumes the same staged genesis after crashes but rejects another epoch as equivocation", async () => {
     const fixture = await createFixture()
     let failManifest = true
-    await expect(initializeUnteamedProjectIndexNativeStoreV2({
+    await expect(initializeUnteamedProjectIndexNativeStore({
       ...fixture.input,
       faults: { async afterManifestFsync() { if (failManifest) { failManifest = false; throw new Error("crash-manifest") } } },
     })).rejects.toThrow("crash-manifest")
     expect(await fs.lstat(`${fixture.target}.staging`)).toBeTruthy()
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
 
     const another = await createFixture({ projectEpoch: id(9), target: fixture.target })
-    await expect(initializeUnteamedProjectIndexNativeStoreV2(another.input)).rejects.toThrow("equivocation")
+    await expect(initializeUnteamedProjectIndexNativeStore(another.input)).rejects.toThrow("equivocation")
   })
 
   durabilityTest("resumes after durable genesis and detects an altered installed base on restart", async () => {
     const fixture = await createFixture()
     let failGenesis = true
-    await expect(initializeUnteamedProjectIndexNativeStoreV2({
+    await expect(initializeUnteamedProjectIndexNativeStore({
       ...fixture.input,
       faults: { async afterGenesisFsync() { if (failGenesis) { failGenesis = false; throw new Error("crash-genesis") } } },
     })).rejects.toThrow("crash-genesis")
-    await initializeUnteamedProjectIndexNativeStoreV2(fixture.input)
+    await initializeUnteamedProjectIndexNativeStore(fixture.input)
 
     const baseFile = await findFirst(fixture.target, (value) => value.includes("/journals/bases/") && value.endsWith(".bin"))
     const bytes = await fs.readFile(baseFile)
     bytes[bytes.length - 1] ^= 1
     await fs.writeFile(baseFile, bytes)
-    await expect(initializeUnteamedProjectIndexNativeStoreV2(fixture.input)).rejects.toThrow()
+    await expect(initializeUnteamedProjectIndexNativeStore(fixture.input)).rejects.toThrow()
   })
 
   test("reconstruction factory binds only the owner root and validation rejects an unknown root", () => {
-    const reconstructed = createProjectIndexReconstructionYDocV2()
+    const reconstructed = createProjectIndexReconstructionYDoc()
     expect(reconstructed.gc).toBe(false)
-    Y.applyUpdate(reconstructed, encodeFullUpdateV2(genesisDocument()))
-    expect(validateProjectIndexYDocV2(reconstructed, scope).entries.size).toBe(1)
+    Y.applyUpdate(reconstructed, encodeFullUpdate(genesisDocument()))
+    expect(validateProjectIndexYDoc(reconstructed, scope).entries.size).toBe(1)
     reconstructed.getMap("rogue")
-    expect(() => validateProjectIndexYDocV2(reconstructed, scope)).toThrow("exactly convax.project-index.v2")
+    expect(() => validateProjectIndexYDoc(reconstructed, scope)).toThrow("exactly convax.project-index.v2")
   })
 })
 
@@ -160,12 +161,12 @@ async function createFixture(overrides: { projectEpoch?: ReturnType<typeof id>; 
   const candidateScope = {
     ...scope,
     projectEpoch: overrides.projectEpoch ?? projectEpoch,
-  } as DocumentScopeV2
+  } as DocumentScope
   const checkpoint = checkpointFor(candidate, candidateScope)
-  const genesis = await verifyEmptyProjectIndexGenesisV2({
+  const genesis = await verifyEmptyProjectIndexGenesis({
     scope: candidateScope,
     document: candidate,
-    checkpointExactBytes: encodeRestrictedJcsV2(checkpoint),
+    checkpointExactBytes: encodeRestrictedJcs(checkpoint),
     initializationAuthorityDigest: digest("enrollment"),
     verifier: { async verify() { return true } },
   })
@@ -184,8 +185,8 @@ async function createFixture(overrides: { projectEpoch?: ReturnType<typeof id>; 
 
 function genesisDocument(epoch = projectEpoch) {
   const rootDirectoryId = `pd_${"a".repeat(64)}` as const
-  const rootEntry: ProjectEntryRecordV2 = {
-    format: "convax.project-entry/2",
+  const rootEntry: ProjectEntryRecord = {
+    format: "convax.project-entry",
     entryId: rootDirectoryId,
     kind: "directory",
     storageClass: null,
@@ -195,15 +196,15 @@ function genesisDocument(epoch = projectEpoch) {
     createdByActorId: localActor,
     createdByOperationId: id(3),
     createdStamp: {
-      format: "convax.portable-stamp/2",
+      format: "convax.portable-stamp",
       lamport: "0" as never,
       actorId: localActor,
       operationId: id(3),
       writeOrdinal: "0" as never,
     },
   }
-  return createProjectIndexYDocV2({
-    format: "convax.project-index-identity/2",
+  return createProjectIndexYDoc({
+    format: "convax.project-index-identity",
     schema: "convax.project-index.v2",
     projectId: projectId as never,
     projectEpoch: epoch,
@@ -215,53 +216,53 @@ function genesisDocument(epoch = projectEpoch) {
   }, rootEntry)
 }
 
-function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScopeV2): ReplicaCheckpointV2 {
-  const fullUpdate = encodeFullUpdateV2(candidate)
-  const stateVector = encodeStateVectorV2(candidate)
-  const canonical = encodeProjectCanonicalStateV2(candidate)
-  const frontier = { format: "convax.causal-frontier/2" as const, heads: [] }
-  const actorHeads = { format: "convax.replica-actor-head-set/2" as const, scope: candidateScope, heads: [] }
+function checkpointFor(candidate: Y.Doc, candidateScope: DocumentScope): ReplicaCheckpoint {
+  const fullUpdate = encodeFullUpdate(candidate)
+  const stateVector = encodeStateVector(candidate)
+  const canonical = encodeProjectCanonicalState(candidate)
+  const frontier = { format: "convax.causal-frontier" as const, heads: [] }
+  const actorHeads = { format: "convax.replica-actor-head-set" as const, scope: candidateScope, heads: [] }
   const core = {
-    format: "convax.replica-checkpoint-core/2" as const,
+    format: "convax.replica-checkpoint-core" as const,
     scope: candidateScope,
     checkpointId: id(4),
-    authorMemberId: parseMemberIdV2(encodeBase64urlV2(Buffer.alloc(16, 5))),
-    authorReplicaId: parseReplicaIdV2("replica_0000002a"),
+    authorMemberId: parseMemberId(encodeBase64url(Buffer.alloc(16, 5))),
+    authorReplicaId: parseReplicaId("replica_0000002a"),
     authorActorId: localActor,
     authorAuthorizationDigest: digest("authorization"),
     directParentCheckpointDigests: [],
-    baseFrontierDigest: causalFrontierDigestV2(frontier),
-    computedFrontierDigest: causalFrontierDigestV2(frontier),
-    actorHeadBoundaryDigest: replicaActorHeadSetDigestV2(actorHeads),
-    stateVectorDigest: stateVectorDigestV2(stateVector),
-    canonicalStateDigest: canonicalStateDigestV2(authority.schemaDigest, canonical),
-    fullUpdateDigest: yjsUpdateDigestV2(fullUpdate),
+    baseFrontierDigest: causalFrontierDigest(frontier),
+    computedFrontierDigest: causalFrontierDigest(frontier),
+    actorHeadBoundaryDigest: replicaActorHeadSetDigest(actorHeads),
+    stateVectorDigest: stateVectorDigest(stateVector),
+    canonicalStateDigest: canonicalStateDigest(authority.schemaDigest, canonical),
+    fullUpdateDigest: yjsUpdateDigest(fullUpdate),
     fullUpdateByteLength: String(fullUpdate.byteLength) as never,
     protocolDigest: authority.protocolDigest,
     schemaDigest: authority.schemaDigest,
-    canonicalizerDigest: ownerCanonicalizerDescriptorDigestV2(
-      projectIndexOwnerCanonicalizerDescriptorV2(authority.schemaDigest),
+    canonicalizerDigest: ownerCanonicalizerDescriptorDigest(
+      projectIndexOwnerCanonicalizerDescriptor(authority.schemaDigest),
     ),
     validationArtifactSetDigest: digest("artifacts"),
   }
   return {
-    format: "convax.replica-checkpoint/2",
+    format: "convax.replica-checkpoint",
     core,
-    coreDigest: replicaCheckpointCoreDigestV2(core),
-    replicaSignature: parseSignatureV2(encodeBase64urlV2(Uint8Array.from(
+    coreDigest: replicaCheckpointCoreDigest(core),
+    replicaSignature: parseSignature(encodeBase64url(Uint8Array.from(
       { length: 64 }, (_, index) => index < 32 ? 3 : index === 32 ? 1 : 0,
     ))),
   }
 }
 
-const materializer: NodeReplicaHeadMaterializerV2 = {
+const materializer: NodeReplicaHeadMaterializer = {
   async inspectFrame() { throw new Error("unused") },
   async applyAcceptedFrame() { throw new Error("unused") },
-  actorHeadsDigest: replicaActorHeadSetDigestV2,
+  actorHeadsDigest: replicaActorHeadSetDigest,
 }
 
 function reconstruct(fullUpdate: Uint8Array) {
-  const result = createProjectIndexReconstructionYDocV2()
+  const result = createProjectIndexReconstructionYDoc()
   Y.applyUpdate(result, fullUpdate)
   return result
 }
@@ -280,13 +281,13 @@ async function findFirst(root: string, predicate: (value: string) => boolean): P
 }
 
 function id(byte: number) {
-  return parseId128V2(Buffer.alloc(16, byte).toString("base64url"))
+  return parseId128(Buffer.alloc(16, byte).toString("base64url"))
 }
 
 function actor(byte: number) {
-  return parseActorIdV2(Buffer.alloc(32, byte).toString("base64url"))
+  return parseActorId(Buffer.alloc(32, byte).toString("base64url"))
 }
 
 function digest(seed: string) {
-  return parseDigestV2(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
+  return parseDigest(Buffer.from(seed).toString("hex").padEnd(64, "0").slice(0, 64))
 }

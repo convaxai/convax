@@ -6,8 +6,8 @@ import {
   type CanvasResourceSource,
 } from "@convax/canvas/application"
 import {
-  assertResourceRefV2,
-  canvasProjectionResourceMetadataKeyV2,
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
 } from "@convax/canvas/collaboration"
 import {
   getIncomingConnectedCanvasFileNodeIds,
@@ -18,15 +18,15 @@ import {
 import {
   getProjectResourceReference,
   markProjectCanvasResourcesStale,
-  projectIndexResourceReferenceDigestV2,
   projectResourceBindingsKey,
   requireProjectResourceReference,
 } from "@convax/project/canvas"
+import { projectIndexResourceReferenceDigest } from "@convax/project"
 import type { ProjectResourceReference } from "@convax/project/canvas"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
+import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import type { ProjectCanvasResourceHydrator, ProjectCanvasResourcePreparation } from "@convax/project/node"
 import { ProjectTextFileConflictError, type ProjectTextFileCompareAndReplacePort } from "@convax/project-files"
-import { ordinarySha256V2, parseProjectIdV2 } from "@convax/collaboration"
+import { ordinarySha256, parseProjectId } from "@convax/collaboration"
 import { ipcMain, type IpcMainInvokeEvent } from "electron"
 import {
   canvasResourcePartialFailureKind,
@@ -181,7 +181,7 @@ export function registerCanvasTextResourceIpc(
   files: ProjectTextFileCompareAndReplacePort,
   application: Pick<CanvasApplicationService, "query">,
   options: {
-    currentResources: Pick<ProjectIndexCurrentBlobReferencePortV2, "queryCurrentResources">
+    currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
     isTrustedSender(event: IpcMainInvokeEvent): boolean
     preparation: Pick<ProjectCanvasResourcePreparation, "prepare">
     resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
@@ -202,13 +202,13 @@ export function registerCanvasTextResourceIpc(
         throw new CanvasTextResourceRequestError("Canvas text resource is not editable")
       }
 
-      const currentResources = await options.currentResources.queryCurrentResources({ projectId: parseProjectIdV2(active.projectId) })
+      const currentResources = await options.currentResources.queryCurrentResources({ projectId: parseProjectId(active.projectId) })
       const resourceEntry = currentResources.find(({ reference }) =>
         reference.canonicalUri === resource.uri &&
         reference.blob.digest === resource.contentDigest &&
         reference.blob.mime === resource.mime &&
         reference.blob.byteLength === resource.byteLength &&
-        projectIndexResourceReferenceDigestV2(reference) === resource.ownerProofDigest
+        projectIndexResourceReferenceDigest(reference) === resource.ownerProofDigest
       )
       const path = resourceEntry?.storageClass === "project-file" ? resourceEntry.materializedPath : null
       if (!path || !isEditableProjectTextPath(path)) {
@@ -222,7 +222,7 @@ export function registerCanvasTextResourceIpc(
         )
       }
 
-      const contentRevision = ordinarySha256V2(new TextEncoder().encode(input.content))
+      const contentRevision = ordinarySha256(new TextEncoder().encode(input.content))
       try {
         const saved = await files.compareAndReplaceTextFile({
           content: input.content,
@@ -254,7 +254,7 @@ export function registerCanvasTextResourceIpc(
       await options.resources.relinkPreparedResource({
         actor: { id: `desktop:renderer:${event.sender.id}`, kind: "renderer" },
         canvasId: active.canvasId,
-        commandId: `canvas-text-save:${ordinarySha256V2(new TextEncoder().encode(`${input.nodeId}\0${contentRevision}`))}`,
+        commandId: `canvas-text-save:${ordinarySha256(new TextEncoder().encode(`${input.nodeId}\0${contentRevision}`))}`,
         metadataKeysToRemove: [projectResourceBindingsKey],
         nodeId: input.nodeId,
         scopeId: active.projectId,
@@ -275,9 +275,9 @@ function canonicalCanvasTextResource(node: CanvasNode) {
   if (node.type !== "file" || node.data.kind !== "text") return null
   const metadata = node.data.metadata
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
-  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKeyV2]
+  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
   try {
-    assertResourceRefV2(value)
+    assertResourceRef(value)
   } catch {
     return null
   }

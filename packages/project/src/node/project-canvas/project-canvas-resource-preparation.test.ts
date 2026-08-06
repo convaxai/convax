@@ -4,19 +4,19 @@ import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import {
-  encodeBase64urlV2,
-  ordinarySha256V2,
-  parseId128V2,
-  parseProjectIdV2,
-  type DigestV2,
+  encodeBase64url,
+  ordinarySha256,
+  parseId128,
+  parseProjectId,
+  type Digest,
 } from "@convax/collaboration"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
-import type { ProjectResourceReferenceV2 } from "../../collaboration/project-index"
+import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
 import type {
-  ProjectIndexFileApplicationPortV2,
-  ProjectIndexFileMaterializationProjectionPortV2,
+  ProjectIndexFileApplicationPort,
+  ProjectIndexFileMaterializationProjectionPort,
 } from "../../canvas/project-index-file-application"
-import { getProjectResourceReference, type ProjectResourceReference } from "../../canvas/project-resources"
+import { getProjectResourceReference, type ProjectResourceReference as CanvasProjectResourceReference } from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
   type ProjectCanvasFilePublisher,
@@ -391,7 +391,7 @@ describe("project canvas resource preparation", () => {
 
   test("maps external admissions inside the managed-store callback without exposing source paths", async () => {
     const events: string[] = []
-    const references: ProjectResourceReference[] = [
+    const references: CanvasProjectResourceReference[] = [
       {
         kind: "managed-asset",
         mediaType: "image/png",
@@ -402,7 +402,7 @@ describe("project canvas resource preparation", () => {
     const assets = {
       async withAdmittedLocalFiles(
         _input: unknown,
-        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+        commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
       ) {
         events.push("store:enter")
         const result = await commit(references)
@@ -446,7 +446,7 @@ describe("project canvas resource preparation", () => {
     const assets = {
       async withAdmittedLocalFiles(
         _input: unknown,
-        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+        commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
       ) {
         return commit([reference])
       },
@@ -494,7 +494,7 @@ describe("project canvas resource preparation", () => {
     const publications: unknown[] = []
     const indexFiles = {
       async queryFileMaterializationPlan() {
-        return { projectId: parseProjectIdV2("project_one"), entries: [] }
+        return { projectId: parseProjectId("project_one"), entries: [] }
       },
       async createDirectory(input: { path: string }) {
         directories.push(input.path)
@@ -520,11 +520,11 @@ describe("project canvas resource preparation", () => {
       async tombstoneEntry() {
         throw new Error("not used")
       },
-    } as unknown as ProjectIndexFileApplicationPortV2 & ProjectIndexFileMaterializationProjectionPortV2
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
     const assets = {
       async withAdmittedLocalFiles(
         _input: unknown,
-        commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+        commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
       ) {
         return commit([{ kind: "project-file", path: "assets/characters/bear/hero.png" }])
       },
@@ -567,13 +567,13 @@ describe("project canvas resource preparation", () => {
           id: "local",
           kind: "image",
           metadata: {
-            convaxCanvasResourceProofV2: {
-              format: "convax.canvas-resource-proof-ref/2",
+            convaxCanvasResourceProof: {
+              format: "convax.canvas-resource-proof-ref",
               mode: "current-owner-state",
               requireCurrentLiveVersion: true,
               resource: {
                 byteLength: String(bytes.byteLength),
-                contentDigest: ordinarySha256V2(bytes),
+                contentDigest: ordinarySha256(bytes),
                 mediaClass: "image",
                 mime: "image/png",
                 uri: reference.canonicalUri,
@@ -603,7 +603,7 @@ describe("project canvas resource preparation", () => {
     const reference = projectIndexReference(bytes, "image/png")
     let admitted: Uint8Array | undefined
     const indexFiles = {
-      async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPortV2["admitManagedBlob"]>[0]) {
+      async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPort["admitManagedBlob"]>[0]) {
         const chunks: number[] = []
         await input.admission.readChunks(async (chunk) => { chunks.push(...chunk) })
         admitted = Uint8Array.from(chunks)
@@ -615,13 +615,13 @@ describe("project canvas resource preparation", () => {
         }
       },
       async queryFileMaterializationPlan() {
-        return { projectId: parseProjectIdV2("project_one"), entries: [] }
+        return { projectId: parseProjectId("project_one"), entries: [] }
       },
       async createDirectory() { throw new Error("not used") },
       async publishFile() { throw new Error("not used") },
       async relocateEntry() { throw new Error("not used") },
       async tombstoneEntry() { throw new Error("not used") },
-    } as unknown as ProjectIndexFileApplicationPortV2 & ProjectIndexFileMaterializationProjectionPortV2
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
     const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets, undefined, indexFiles)
 
     try {
@@ -636,10 +636,10 @@ describe("project canvas resource preparation", () => {
             id: "external",
             kind: "image",
             metadata: {
-              convaxCanvasResourceProofV2: {
+              convaxCanvasResourceProof: {
                 mode: "current-owner-state",
                 resource: {
-                  contentDigest: ordinarySha256V2(bytes),
+                  contentDigest: ordinarySha256(bytes),
                   mediaClass: "image",
                   mime: "image/png",
                 },
@@ -647,7 +647,7 @@ describe("project canvas resource preparation", () => {
               convaxProjectResource: {
                 kind: "managed-asset",
                 name: "outside.png",
-                sha256: ordinarySha256V2(bytes),
+                sha256: ordinarySha256(bytes),
               },
             },
           })
@@ -672,7 +672,7 @@ describe("project canvas resource preparation", () => {
       const assets = {
         async withAdmittedLocalFiles(
           _input: unknown,
-          commit: (value: readonly ProjectResourceReference[]) => Promise<unknown>,
+          commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
         ) {
           return commit([reference])
         },
@@ -740,13 +740,13 @@ function unusedPublisher(): ProjectCanvasFilePublisher {
   }
 }
 
-function projectIndexReference(bytes: Uint8Array, mime: string): ProjectResourceReferenceV2 {
-  const projectId = parseProjectIdV2("project_one")
-  const projectEpoch = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
-  const digest = ordinarySha256V2(bytes)
-  const fileId = `pf_${"a".repeat(64)}` as ProjectResourceReferenceV2["entryFileId"]
+function projectIndexReference(bytes: Uint8Array, mime: string): ProjectIndexResourceReference {
+  const projectId = parseProjectId("project_one")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(bytes)
+  const fileId = `pf_${"a".repeat(64)}` as ProjectIndexResourceReference["entryFileId"]
   return Object.freeze({
-    format: "convax.project-resource-reference/2",
+    format: "convax.project-resource-reference",
     projectId,
     projectEpoch,
     entryFileId: fileId,
@@ -754,13 +754,13 @@ function projectIndexReference(bytes: Uint8Array, mime: string): ProjectResource
     versionId: `pv_${"b".repeat(64)}`,
     canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
     blob: {
-      format: "convax.blob-ref/2" as const,
+      format: "convax.blob-ref" as const,
       algorithm: "sha256" as const,
       digest,
       byteLength: String(bytes.byteLength) as never,
       mime,
     },
-    versionRecordDigest: ordinarySha256V2(new TextEncoder().encode("version")) as DigestV2,
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode("version")) as Digest,
   })
 }
 

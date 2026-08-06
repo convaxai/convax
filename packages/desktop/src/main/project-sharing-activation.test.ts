@@ -1,10 +1,10 @@
 import { describe, expect, mock, test } from "bun:test"
 
 import {
-  ProjectTeamCollaborationManagerV2,
-  type ProjectTeamPeerSessionFactoryV2,
+  ProjectTeamCollaborationManager,
+  type ProjectTeamPeerSessionFactory,
 } from "./project-team-collaboration-manager"
-import { activateProjectSharingFromDurableBindingV2 } from "./project-sharing-activation"
+import { activateProjectSharingFromDurableBinding } from "./project-sharing-activation"
 
 const projectId = "project-local-first-activation"
 
@@ -15,9 +15,9 @@ describe("durable Project sharing activation", () => {
       bootstrapTeam: mock(async () => { throw new Error("Control bootstrap must stay cold") }),
       joinTeam: mock(async () => { throw new Error("Team join must stay cold") }),
     }
-    const manager = new ProjectTeamCollaborationManagerV2(calls as ProjectTeamPeerSessionFactoryV2)
+    const manager = new ProjectTeamCollaborationManager(calls as ProjectTeamPeerSessionFactory)
 
-    await expect(activateProjectSharingFromDurableBindingV2({
+    await expect(activateProjectSharingFromDurableBinding({
       projectId,
       sharing: { async open() { return "missing" } },
       service: manager,
@@ -33,14 +33,14 @@ describe("durable Project sharing activation", () => {
     for (const selected of [{ projectId } as never, "rejected" as const]) {
       const activateLocalProject = mock(async () => { throw new Error("must not downgrade to personal") })
       const activateProject = mock(async () => ({
-        format: "convax.project-team-collaboration-status/2" as const,
+        format: "convax.project-team-collaboration-status" as const,
         projectId,
         state: "attention" as const,
         canEdit: false,
         connectedPeerCount: 0,
         reason: "protocol-rejected" as const,
       }))
-      await expect(activateProjectSharingFromDurableBindingV2({
+      await expect(activateProjectSharingFromDurableBinding({
         projectId,
         sharing: { async open() { return selected } },
         service: { activateLocalProject, activateProject },

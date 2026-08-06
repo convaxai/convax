@@ -1,5 +1,5 @@
 import type { CanvasDocument } from "../types"
-import type { BoundedOperationReceiptV2 } from "../collaboration"
+import type { BoundedOperationReceipt } from "../collaboration"
 import type { CanvasBusinessCommandResult, CanvasCommandEnvelope } from "./commands"
 import type { CanvasDocumentRef } from "./persistence"
 import type { CanvasNodeQuery, CanvasNodeSummary } from "./queries"
@@ -13,7 +13,7 @@ export interface CanvasApplicationCommandRequest extends CanvasDocumentRef {
 
 /** A read-only UI/application projection, never a persistence payload. */
 export interface CanvasApplicationCommandResult extends CanvasBusinessCommandResult {
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
 }
 
 export interface CanvasApplicationQueryResult {
@@ -23,7 +23,7 @@ export interface CanvasApplicationQueryResult {
 
 export interface CanvasApplicationCommitEvent extends CanvasDocumentRef {
   actor: CanvasCommandEnvelope["actor"]
-  operationReceipt: BoundedOperationReceiptV2
+  operationReceipt: BoundedOperationReceipt
 }
 
 export interface CanvasApplicationServiceOptions {

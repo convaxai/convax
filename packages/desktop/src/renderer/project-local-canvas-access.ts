@@ -1,4 +1,4 @@
-import type { ProjectCanvasCatalogProjectionV2 } from "@convax/project/canvas"
+import type { ProjectCanvasCatalogProjection } from "@convax/project/canvas"
 
 export type ProjectLocalCanvasSurfaceAccess = "available" | "existing-selection" | "blocked"
 
@@ -9,7 +9,7 @@ export type ProjectLocalCanvasSurfaceAccess = "available" | "existing-selection"
  */
 export function resolveProjectLocalCanvasSurfaceAccess(input: {
   readonly activeCanvasId?: string
-  readonly creationAvailability: ProjectCanvasCatalogProjectionV2["creationAvailability"]
+  readonly creationAvailability: ProjectCanvasCatalogProjection["creationAvailability"]
 }): ProjectLocalCanvasSurfaceAccess {
   if (input.creationAvailability === "available") return "available"
   if (input.creationAvailability === "read-only-recovery-required") return "blocked"

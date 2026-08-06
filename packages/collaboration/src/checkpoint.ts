@@ -1,277 +1,277 @@
-import type { DigestV2, ReplicaIdV2 } from "./codecs"
+import type { Digest, ReplicaId } from "./codecs"
 import {
-  assertBoundedNfcStringV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  uint64ToBigIntV2,
+  assertBoundedNfcString,
+  parseActorId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parseReplicaId,
+  parseSignature,
+  parseUint64,
+  uint64ToBigInt,
 } from "./codecs"
-import { KERNEL_DIGEST_DOMAINS_V2, KERNEL_LIMITS_V2, PINNED_AUTHORITY_IDENTITIES_V2 } from "./constants"
+import { KERNEL_DIGEST_DOMAINS, KERNEL_LIMITS, CURRENT_PROTOCOL_IDENTITIES } from "./constants"
 import type {
-  CheckpointContentCertificateCoreV2,
-  CheckpointContentCertificateV2,
-  PrunableCheckpointSetCertificateCoreV2,
-  PrunableCheckpointSetCertificateV2,
-  ReplicaCausalFloorAckCoreV2,
-  ReplicaCausalFloorAckV2,
-  ReplicaCheckpointCoreV2,
-  ReplicaCheckpointV2,
-  StableCheckpointSetCoreV2,
+  CheckpointContentCertificateCore,
+  CheckpointContentCertificate,
+  PrunableCheckpointSetCertificateCore,
+  PrunableCheckpointSetCertificate,
+  ReplicaCausalFloorAckCore,
+  ReplicaCausalFloorAck,
+  ReplicaCheckpointCore,
+  ReplicaCheckpoint,
+  StableCheckpointSetCore,
 } from "./contracts"
-import { structuredDigestV2 } from "./digest"
+import { structuredDigest } from "./digest"
 import { failCodec } from "./errors"
-import { assertDenseArrayV2, assertExactKeysV2, compareUtf8V2 } from "./jcs"
-import { parseCausalHeadRefV2, parseDocumentScopeV2 } from "./parse"
+import { assertDenseArray, assertExactKeys, compareUtf8 } from "./jcs"
+import { parseCausalHeadRef, parseDocumentScope } from "./parse"
 
-export function parseReplicaCheckpointCoreV2(value: unknown): ReplicaCheckpointCoreV2 {
-  assertExactKeysV2(value, [
+export function parseReplicaCheckpointCore(value: unknown): ReplicaCheckpointCore {
+  assertExactKeys(value, [
     "format", "scope", "checkpointId", "authorMemberId", "authorReplicaId", "authorActorId",
     "authorAuthorizationDigest", "directParentCheckpointDigests", "baseFrontierDigest",
     "computedFrontierDigest", "actorHeadBoundaryDigest", "stateVectorDigest", "canonicalStateDigest",
     "fullUpdateDigest", "fullUpdateByteLength", "protocolDigest", "schemaDigest", "canonicalizerDigest",
     "validationArtifactSetDigest",
-  ], "ReplicaCheckpointCoreV2")
-  if (value.format !== "convax.replica-checkpoint-core/2") invalid("ReplicaCheckpointCoreV2 format is invalid")
+  ], "ReplicaCheckpointCore")
+  if (value.format !== "convax.replica-checkpoint-core") invalid("ReplicaCheckpointCore format is invalid")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    checkpointId: parseId128V2(value.checkpointId),
-    authorMemberId: parseMemberIdV2(value.authorMemberId),
-    authorReplicaId: parseReplicaIdV2(value.authorReplicaId),
-    authorActorId: parseActorIdV2(value.authorActorId),
-    authorAuthorizationDigest: parseDigestV2(value.authorAuthorizationDigest),
-    directParentCheckpointDigests: parseDigestList(value.directParentCheckpointDigests, 0, KERNEL_LIMITS_V2.checkpointParents, "checkpoint parents"),
-    baseFrontierDigest: parseDigestV2(value.baseFrontierDigest),
-    computedFrontierDigest: parseDigestV2(value.computedFrontierDigest),
-    actorHeadBoundaryDigest: parseDigestV2(value.actorHeadBoundaryDigest),
-    stateVectorDigest: parseDigestV2(value.stateVectorDigest),
-    canonicalStateDigest: parseDigestV2(value.canonicalStateDigest),
-    fullUpdateDigest: parseDigestV2(value.fullUpdateDigest),
-    fullUpdateByteLength: parseBoundedByteLength(value.fullUpdateByteLength, KERNEL_LIMITS_V2.checkpointSnapshotBytes, "checkpoint snapshot"),
+    scope: parseDocumentScope(value.scope),
+    checkpointId: parseId128(value.checkpointId),
+    authorMemberId: parseMemberId(value.authorMemberId),
+    authorReplicaId: parseReplicaId(value.authorReplicaId),
+    authorActorId: parseActorId(value.authorActorId),
+    authorAuthorizationDigest: parseDigest(value.authorAuthorizationDigest),
+    directParentCheckpointDigests: parseDigestList(value.directParentCheckpointDigests, 0, KERNEL_LIMITS.checkpointParents, "checkpoint parents"),
+    baseFrontierDigest: parseDigest(value.baseFrontierDigest),
+    computedFrontierDigest: parseDigest(value.computedFrontierDigest),
+    actorHeadBoundaryDigest: parseDigest(value.actorHeadBoundaryDigest),
+    stateVectorDigest: parseDigest(value.stateVectorDigest),
+    canonicalStateDigest: parseDigest(value.canonicalStateDigest),
+    fullUpdateDigest: parseDigest(value.fullUpdateDigest),
+    fullUpdateByteLength: parseBoundedByteLength(value.fullUpdateByteLength, KERNEL_LIMITS.checkpointSnapshotBytes, "checkpoint snapshot"),
     protocolDigest: requireProtocolDigest(value.protocolDigest),
-    schemaDigest: parseDigestV2(value.schemaDigest),
-    canonicalizerDigest: parseDigestV2(value.canonicalizerDigest),
-    validationArtifactSetDigest: parseDigestV2(value.validationArtifactSetDigest),
+    schemaDigest: parseDigest(value.schemaDigest),
+    canonicalizerDigest: parseDigest(value.canonicalizerDigest),
+    validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
   })
 }
 
-export function parseReplicaCheckpointV2(value: unknown): ReplicaCheckpointV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCheckpointV2")
-  if (value.format !== "convax.replica-checkpoint/2") invalid("ReplicaCheckpointV2 format is invalid")
-  const core = parseReplicaCheckpointCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== replicaCheckpointCoreDigestV2(core)) invalid("ReplicaCheckpointV2 core digest mismatches")
-  return Object.freeze({ format: value.format, core, coreDigest, replicaSignature: parseSignatureV2(value.replicaSignature) })
+export function parseReplicaCheckpoint(value: unknown): ReplicaCheckpoint {
+  assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCheckpoint")
+  if (value.format !== "convax.replica-checkpoint") invalid("ReplicaCheckpoint format is invalid")
+  const core = parseReplicaCheckpointCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== replicaCheckpointCoreDigest(core)) invalid("ReplicaCheckpoint core digest mismatches")
+  return Object.freeze({ format: value.format, core, coreDigest, replicaSignature: parseSignature(value.replicaSignature) })
 }
 
-export function parseCheckpointContentCertificateCoreV2(value: unknown): CheckpointContentCertificateCoreV2 {
-  assertExactKeysV2(value, [
+export function parseCheckpointContentCertificateCore(value: unknown): CheckpointContentCertificateCore {
+  assertExactKeys(value, [
     "format", "scope", "checkpointDigest", "parentCertificateDigests", "computedFrontierDigest",
     "actorHeadBoundaryDigest", "stateVectorDigest", "canonicalStateDigest", "fullUpdateDigest", "protocolDigest",
     "schemaDigest", "canonicalizerDigest", "validationArtifactSetDigest", "trustBundleDigest", "contentStatus",
     "serviceKeyPurpose", "serviceKeyId",
-  ], "CheckpointContentCertificateCoreV2")
-  if (value.format !== "convax.checkpoint-content-certificate-core/2" || value.contentStatus !== "service-validated-causal-closure" || value.serviceKeyPurpose !== "content-attestation") {
-    invalid("CheckpointContentCertificateCoreV2 discriminators are invalid")
+  ], "CheckpointContentCertificateCore")
+  if (value.format !== "convax.checkpoint-content-certificate-core" || value.contentStatus !== "service-validated-causal-closure" || value.serviceKeyPurpose !== "content-attestation") {
+    invalid("CheckpointContentCertificateCore discriminators are invalid")
   }
-  assertBoundedNfcStringV2(value.serviceKeyId, 1, 256, "content certificate serviceKeyId")
+  assertBoundedNfcString(value.serviceKeyId, 1, 256, "content certificate serviceKeyId")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    checkpointDigest: parseDigestV2(value.checkpointDigest),
-    parentCertificateDigests: parseDigestList(value.parentCertificateDigests, 0, KERNEL_LIMITS_V2.checkpointParents, "parent certificates"),
-    computedFrontierDigest: parseDigestV2(value.computedFrontierDigest),
-    actorHeadBoundaryDigest: parseDigestV2(value.actorHeadBoundaryDigest),
-    stateVectorDigest: parseDigestV2(value.stateVectorDigest),
-    canonicalStateDigest: parseDigestV2(value.canonicalStateDigest),
-    fullUpdateDigest: parseDigestV2(value.fullUpdateDigest),
+    scope: parseDocumentScope(value.scope),
+    checkpointDigest: parseDigest(value.checkpointDigest),
+    parentCertificateDigests: parseDigestList(value.parentCertificateDigests, 0, KERNEL_LIMITS.checkpointParents, "parent certificates"),
+    computedFrontierDigest: parseDigest(value.computedFrontierDigest),
+    actorHeadBoundaryDigest: parseDigest(value.actorHeadBoundaryDigest),
+    stateVectorDigest: parseDigest(value.stateVectorDigest),
+    canonicalStateDigest: parseDigest(value.canonicalStateDigest),
+    fullUpdateDigest: parseDigest(value.fullUpdateDigest),
     protocolDigest: requireProtocolDigest(value.protocolDigest),
-    schemaDigest: parseDigestV2(value.schemaDigest),
-    canonicalizerDigest: parseDigestV2(value.canonicalizerDigest),
-    validationArtifactSetDigest: parseDigestV2(value.validationArtifactSetDigest),
-    trustBundleDigest: parseDigestV2(value.trustBundleDigest),
+    schemaDigest: parseDigest(value.schemaDigest),
+    canonicalizerDigest: parseDigest(value.canonicalizerDigest),
+    validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
+    trustBundleDigest: parseDigest(value.trustBundleDigest),
     contentStatus: value.contentStatus,
     serviceKeyPurpose: value.serviceKeyPurpose,
     serviceKeyId: value.serviceKeyId,
   })
 }
 
-export function parseCheckpointContentCertificateV2(value: unknown): CheckpointContentCertificateV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "serviceSignature"], "CheckpointContentCertificateV2")
-  if (value.format !== "convax.checkpoint-content-certificate/2") invalid("CheckpointContentCertificateV2 format is invalid")
-  const core = parseCheckpointContentCertificateCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== checkpointContentCertificateCoreDigestV2(core)) invalid("Checkpoint content certificate core digest mismatches")
-  return Object.freeze({ format: value.format, core, coreDigest, serviceSignature: parseSignatureV2(value.serviceSignature) })
+export function parseCheckpointContentCertificate(value: unknown): CheckpointContentCertificate {
+  assertExactKeys(value, ["format", "core", "coreDigest", "serviceSignature"], "CheckpointContentCertificate")
+  if (value.format !== "convax.checkpoint-content-certificate") invalid("CheckpointContentCertificate format is invalid")
+  const core = parseCheckpointContentCertificateCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== checkpointContentCertificateCoreDigest(core)) invalid("Checkpoint content certificate core digest mismatches")
+  return Object.freeze({ format: value.format, core, coreDigest, serviceSignature: parseSignature(value.serviceSignature) })
 }
 
-export function parseStableCheckpointSetCoreV2(value: unknown): StableCheckpointSetCoreV2 {
-  assertExactKeysV2(value, [
+export function parseStableCheckpointSetCore(value: unknown): StableCheckpointSetCore {
+  assertExactKeys(value, [
     "format", "scope", "priorSetDigest", "contentCertificateDigests", "mergedFrontierDigest",
     "actorHeadBoundaryDigest", "membershipSnapshotDigest", "protocolDigest", "validationArtifactSetDigest",
-  ], "StableCheckpointSetCoreV2")
-  if (value.format !== "convax.stable-checkpoint-set-core/2") invalid("StableCheckpointSetCoreV2 format is invalid")
+  ], "StableCheckpointSetCore")
+  if (value.format !== "convax.stable-checkpoint-set-core") invalid("StableCheckpointSetCore format is invalid")
   return Object.freeze({
     format: value.format,
-    scope: parseDocumentScopeV2(value.scope),
-    priorSetDigest: value.priorSetDigest === null ? null : parseDigestV2(value.priorSetDigest),
-    contentCertificateDigests: parseDigestList(value.contentCertificateDigests, 1, KERNEL_LIMITS_V2.checkpointParents, "stable content certificates"),
-    mergedFrontierDigest: parseDigestV2(value.mergedFrontierDigest),
-    actorHeadBoundaryDigest: parseDigestV2(value.actorHeadBoundaryDigest),
-    membershipSnapshotDigest: parseDigestV2(value.membershipSnapshotDigest),
+    scope: parseDocumentScope(value.scope),
+    priorSetDigest: value.priorSetDigest === null ? null : parseDigest(value.priorSetDigest),
+    contentCertificateDigests: parseDigestList(value.contentCertificateDigests, 1, KERNEL_LIMITS.checkpointParents, "stable content certificates"),
+    mergedFrontierDigest: parseDigest(value.mergedFrontierDigest),
+    actorHeadBoundaryDigest: parseDigest(value.actorHeadBoundaryDigest),
+    membershipSnapshotDigest: parseDigest(value.membershipSnapshotDigest),
     protocolDigest: requireProtocolDigest(value.protocolDigest),
-    validationArtifactSetDigest: parseDigestV2(value.validationArtifactSetDigest),
+    validationArtifactSetDigest: parseDigest(value.validationArtifactSetDigest),
   })
 }
 
-export function parseReplicaCausalFloorAckCoreV2(value: unknown): ReplicaCausalFloorAckCoreV2 {
-  assertExactKeysV2(value, [
+export function parseReplicaCausalFloorAckCore(value: unknown): ReplicaCausalFloorAckCore {
+  assertExactKeys(value, [
     "format", "stableSetCoreDigest", "replicaId", "actorId", "replicaActorCredentialDigest",
     "actorHeadAtAck", "durableCheckpoint", "validatedExactClosure", "installedMonotonicFloor",
-  ], "ReplicaCausalFloorAckCoreV2")
-  if (value.format !== "convax.replica-causal-floor-ack-core/2" || value.durableCheckpoint !== true || value.validatedExactClosure !== true || value.installedMonotonicFloor !== true) {
-    invalid("ReplicaCausalFloorAckCoreV2 proof flags are invalid")
+  ], "ReplicaCausalFloorAckCore")
+  if (value.format !== "convax.replica-causal-floor-ack-core" || value.durableCheckpoint !== true || value.validatedExactClosure !== true || value.installedMonotonicFloor !== true) {
+    invalid("ReplicaCausalFloorAckCore proof flags are invalid")
   }
   return Object.freeze({
     format: value.format,
-    stableSetCoreDigest: parseDigestV2(value.stableSetCoreDigest),
-    replicaId: parseReplicaIdV2(value.replicaId),
-    actorId: parseActorIdV2(value.actorId),
-    replicaActorCredentialDigest: parseDigestV2(value.replicaActorCredentialDigest),
-    actorHeadAtAck: value.actorHeadAtAck === null ? null : parseCausalHeadRefV2(value.actorHeadAtAck),
+    stableSetCoreDigest: parseDigest(value.stableSetCoreDigest),
+    replicaId: parseReplicaId(value.replicaId),
+    actorId: parseActorId(value.actorId),
+    replicaActorCredentialDigest: parseDigest(value.replicaActorCredentialDigest),
+    actorHeadAtAck: value.actorHeadAtAck === null ? null : parseCausalHeadRef(value.actorHeadAtAck),
     durableCheckpoint: true,
     validatedExactClosure: true,
     installedMonotonicFloor: true,
   })
 }
 
-export function parseReplicaCausalFloorAckV2(value: unknown): ReplicaCausalFloorAckV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCausalFloorAckV2")
-  if (value.format !== "convax.replica-causal-floor-ack/2") invalid("ReplicaCausalFloorAckV2 format is invalid")
-  const core = parseReplicaCausalFloorAckCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== replicaCausalFloorAckCoreDigestV2(core)) invalid("Replica floor ACK core digest mismatches")
-  return Object.freeze({ format: value.format, core, coreDigest, replicaSignature: parseSignatureV2(value.replicaSignature) })
+export function parseReplicaCausalFloorAck(value: unknown): ReplicaCausalFloorAck {
+  assertExactKeys(value, ["format", "core", "coreDigest", "replicaSignature"], "ReplicaCausalFloorAck")
+  if (value.format !== "convax.replica-causal-floor-ack") invalid("ReplicaCausalFloorAck format is invalid")
+  const core = parseReplicaCausalFloorAckCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== replicaCausalFloorAckCoreDigest(core)) invalid("Replica floor ACK core digest mismatches")
+  return Object.freeze({ format: value.format, core, coreDigest, replicaSignature: parseSignature(value.replicaSignature) })
 }
 
-export function parsePrunableCheckpointSetCertificateCoreV2(value: unknown): PrunableCheckpointSetCertificateCoreV2 {
-  assertExactKeysV2(value, [
+export function parsePrunableCheckpointSetCertificateCore(value: unknown): PrunableCheckpointSetCertificateCore {
+  assertExactKeys(value, [
     "format", "stableSetCore", "floorAckDigests", "contentStatus", "trustBundleDigest", "serviceKeyPurpose", "serviceKeyId",
-  ], "PrunableCheckpointSetCertificateCoreV2")
-  if (value.format !== "convax.prunable-checkpoint-set-certificate-core/2" || value.contentStatus !== "service-validated-and-all-editors-acknowledged" || value.serviceKeyPurpose !== "checkpoint-stability") {
-    invalid("PrunableCheckpointSetCertificateCoreV2 discriminators are invalid")
+  ], "PrunableCheckpointSetCertificateCore")
+  if (value.format !== "convax.prunable-checkpoint-set-certificate-core" || value.contentStatus !== "service-validated-and-all-editors-acknowledged" || value.serviceKeyPurpose !== "checkpoint-stability") {
+    invalid("PrunableCheckpointSetCertificateCore discriminators are invalid")
   }
-  assertBoundedNfcStringV2(value.serviceKeyId, 1, 256, "prunable certificate serviceKeyId")
+  assertBoundedNfcString(value.serviceKeyId, 1, 256, "prunable certificate serviceKeyId")
   return Object.freeze({
     format: value.format,
-    stableSetCore: parseStableCheckpointSetCoreV2(value.stableSetCore),
-    floorAckDigests: parseDigestList(value.floorAckDigests, 0, KERNEL_LIMITS_V2.checkpointFrontierHeads, "floor ACK digests"),
+    stableSetCore: parseStableCheckpointSetCore(value.stableSetCore),
+    floorAckDigests: parseDigestList(value.floorAckDigests, 0, KERNEL_LIMITS.checkpointFrontierHeads, "floor ACK digests"),
     contentStatus: value.contentStatus,
-    trustBundleDigest: parseDigestV2(value.trustBundleDigest),
+    trustBundleDigest: parseDigest(value.trustBundleDigest),
     serviceKeyPurpose: value.serviceKeyPurpose,
     serviceKeyId: value.serviceKeyId,
   })
 }
 
-export function parsePrunableCheckpointSetCertificateV2(value: unknown): PrunableCheckpointSetCertificateV2 {
-  assertExactKeysV2(value, ["format", "core", "coreDigest", "serviceSignature"], "PrunableCheckpointSetCertificateV2")
-  if (value.format !== "convax.prunable-checkpoint-set-certificate/2") invalid("PrunableCheckpointSetCertificateV2 format is invalid")
-  const core = parsePrunableCheckpointSetCertificateCoreV2(value.core)
-  const coreDigest = parseDigestV2(value.coreDigest)
-  if (coreDigest !== prunableCheckpointSetCertificateCoreDigestV2(core)) invalid("Prunable checkpoint certificate core digest mismatches")
-  return Object.freeze({ format: value.format, core, coreDigest, serviceSignature: parseSignatureV2(value.serviceSignature) })
+export function parsePrunableCheckpointSetCertificate(value: unknown): PrunableCheckpointSetCertificate {
+  assertExactKeys(value, ["format", "core", "coreDigest", "serviceSignature"], "PrunableCheckpointSetCertificate")
+  if (value.format !== "convax.prunable-checkpoint-set-certificate") invalid("PrunableCheckpointSetCertificate format is invalid")
+  const core = parsePrunableCheckpointSetCertificateCore(value.core)
+  const coreDigest = parseDigest(value.coreDigest)
+  if (coreDigest !== prunableCheckpointSetCertificateCoreDigest(core)) invalid("Prunable checkpoint certificate core digest mismatches")
+  return Object.freeze({ format: value.format, core, coreDigest, serviceSignature: parseSignature(value.serviceSignature) })
 }
 
-export function replicaCheckpointCoreDigestV2(core: ReplicaCheckpointCoreV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.replicaCheckpointCore, parseReplicaCheckpointCoreV2(core))
+export function replicaCheckpointCoreDigest(core: ReplicaCheckpointCore): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.replicaCheckpointCore, parseReplicaCheckpointCore(core))
 }
 
 /** Digest of the complete closed checkpoint wrapper, including the signer signature. */
-export function replicaCheckpointObjectDigestV2(checkpoint: ReplicaCheckpointV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.replicaCheckpoint, parseReplicaCheckpointV2(checkpoint))
+export function replicaCheckpointObjectDigest(checkpoint: ReplicaCheckpoint): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.replicaCheckpoint, parseReplicaCheckpoint(checkpoint))
 }
 
-export function checkpointContentCertificateCoreDigestV2(core: CheckpointContentCertificateCoreV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.checkpointContentCertificateCore, parseCheckpointContentCertificateCoreV2(core))
+export function checkpointContentCertificateCoreDigest(core: CheckpointContentCertificateCore): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.checkpointContentCertificateCore, parseCheckpointContentCertificateCore(core))
 }
 
 /** Digest of the complete closed content-certificate wrapper. */
-export function checkpointContentCertificateObjectDigestV2(certificate: CheckpointContentCertificateV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.checkpointContentCertificate, parseCheckpointContentCertificateV2(certificate))
+export function checkpointContentCertificateObjectDigest(certificate: CheckpointContentCertificate): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.checkpointContentCertificate, parseCheckpointContentCertificate(certificate))
 }
 
-export function stableCheckpointSetCoreDigestV2(core: StableCheckpointSetCoreV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.stableCheckpointSetCore, parseStableCheckpointSetCoreV2(core))
+export function stableCheckpointSetCoreDigest(core: StableCheckpointSetCore): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.stableCheckpointSetCore, parseStableCheckpointSetCore(core))
 }
 
-export function replicaCausalFloorAckCoreDigestV2(core: ReplicaCausalFloorAckCoreV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.replicaCausalFloorAckCore, parseReplicaCausalFloorAckCoreV2(core))
+export function replicaCausalFloorAckCoreDigest(core: ReplicaCausalFloorAckCore): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.replicaCausalFloorAckCore, parseReplicaCausalFloorAckCore(core))
 }
 
 /** Digest of the complete closed replica floor-ACK wrapper. */
-export function replicaCausalFloorAckObjectDigestV2(ack: ReplicaCausalFloorAckV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.replicaCausalFloorAck, parseReplicaCausalFloorAckV2(ack))
+export function replicaCausalFloorAckObjectDigest(ack: ReplicaCausalFloorAck): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.replicaCausalFloorAck, parseReplicaCausalFloorAck(ack))
 }
 
-export function prunableCheckpointSetCertificateCoreDigestV2(core: PrunableCheckpointSetCertificateCoreV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.prunableCheckpointSetCertificateCore, parsePrunableCheckpointSetCertificateCoreV2(core))
+export function prunableCheckpointSetCertificateCoreDigest(core: PrunableCheckpointSetCertificateCore): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.prunableCheckpointSetCertificateCore, parsePrunableCheckpointSetCertificateCore(core))
 }
 
 /** Digest of the complete closed prunable-checkpoint certificate wrapper. */
-export function prunableCheckpointSetCertificateObjectDigestV2(certificate: PrunableCheckpointSetCertificateV2): DigestV2 {
-  return structuredDigestV2(KERNEL_DIGEST_DOMAINS_V2.prunableCheckpointSetCertificate, parsePrunableCheckpointSetCertificateV2(certificate))
+export function prunableCheckpointSetCertificateObjectDigest(certificate: PrunableCheckpointSetCertificate): Digest {
+  return structuredDigest(KERNEL_DIGEST_DOMAINS.prunableCheckpointSetCertificate, parsePrunableCheckpointSetCertificate(certificate))
 }
 
 /** Structural dual-gate check; signature, role and membership-snapshot authorization stay at the control-plane port. */
-export function assertExactPruningCoverageV2(input: {
-  readonly certificate: PrunableCheckpointSetCertificateV2
-  readonly contentCertificates: readonly Readonly<{ certificateDigest: DigestV2; certificate: CheckpointContentCertificateV2 }>[]
-  readonly floorAcks: readonly Readonly<{ ackDigest: DigestV2; ack: ReplicaCausalFloorAckV2 }>[]
-  readonly activeEditorReplicaIds: readonly ReplicaIdV2[]
+export function assertExactPruningCoverage(input: {
+  readonly certificate: PrunableCheckpointSetCertificate
+  readonly contentCertificates: readonly Readonly<{ certificateDigest: Digest; certificate: CheckpointContentCertificate }>[]
+  readonly floorAcks: readonly Readonly<{ ackDigest: Digest; ack: ReplicaCausalFloorAck }>[]
+  readonly activeEditorReplicaIds: readonly ReplicaId[]
 }): void {
-  const certificate = parsePrunableCheckpointSetCertificateV2(input.certificate)
+  const certificate = parsePrunableCheckpointSetCertificate(input.certificate)
   const stable = certificate.core.stableSetCore
-  const content = input.contentCertificates.map((item) => Object.freeze({ certificateDigest: parseDigestV2(item.certificateDigest), certificate: parseCheckpointContentCertificateV2(item.certificate) }))
-  const contentDigests = content.map((item) => item.certificateDigest).sort(compareUtf8V2)
+  const content = input.contentCertificates.map((item) => Object.freeze({ certificateDigest: parseDigest(item.certificateDigest), certificate: parseCheckpointContentCertificate(item.certificate) }))
+  const contentDigests = content.map((item) => item.certificateDigest).sort(compareUtf8)
   if (!sameStrings(contentDigests, stable.contentCertificateDigests)) invalid("Pruning lacks the exact service-certified checkpoint set")
-  const acks = input.floorAcks.map((item) => Object.freeze({ ackDigest: parseDigestV2(item.ackDigest), ack: parseReplicaCausalFloorAckV2(item.ack) }))
-  const ackDigests = acks.map((item) => item.ackDigest).sort(compareUtf8V2)
+  const acks = input.floorAcks.map((item) => Object.freeze({ ackDigest: parseDigest(item.ackDigest), ack: parseReplicaCausalFloorAck(item.ack) }))
+  const ackDigests = acks.map((item) => item.ackDigest).sort(compareUtf8)
   if (!sameStrings(ackDigests, certificate.core.floorAckDigests)) invalid("Pruning floor ACK digest set is not exact")
-  const expectedReplicas = input.activeEditorReplicaIds.map(parseReplicaIdV2).sort(compareUtf8V2)
+  const expectedReplicas = input.activeEditorReplicaIds.map(parseReplicaId).sort(compareUtf8)
   const actualReplicas = acks.map((item) => {
-    if (item.ack.core.stableSetCoreDigest !== stableCheckpointSetCoreDigestV2(stable)) invalid("Floor ACK is bound to another stable checkpoint set")
+    if (item.ack.core.stableSetCoreDigest !== stableCheckpointSetCoreDigest(stable)) invalid("Floor ACK is bound to another stable checkpoint set")
     return item.ack.core.replicaId
-  }).sort(compareUtf8V2)
+  }).sort(compareUtf8)
   if (!sameStrings(expectedReplicas, actualReplicas)) invalid("Floor ACKs do not exactly cover the active-editor replica set")
 }
 
-function parseDigestList(value: unknown, minimum: number, maximum: number, label: string): readonly DigestV2[] {
-  assertDenseArrayV2(value, label)
+function parseDigestList(value: unknown, minimum: number, maximum: number, label: string): readonly Digest[] {
+  assertDenseArray(value, label)
   if (value.length < minimum || value.length > maximum) invalid(`${label} count is outside ${minimum}..${maximum}`)
-  const result = value.map(parseDigestV2)
+  const result = value.map(parseDigest)
   assertSortedUnique(result, label)
   return Object.freeze(result)
 }
 
 function parseBoundedByteLength(value: unknown, maximum: number, label: string) {
-  const parsed = parseUint64V2(value)
-  if (uint64ToBigIntV2(parsed) > BigInt(maximum)) invalid(`${label} byte length exceeds ${maximum}`)
+  const parsed = parseUint64(value)
+  if (uint64ToBigInt(parsed) > BigInt(maximum)) invalid(`${label} byte length exceeds ${maximum}`)
   return parsed
 }
 
-function requireProtocolDigest(value: unknown): DigestV2 {
-  const digest = parseDigestV2(value)
-  if (digest !== PINNED_AUTHORITY_IDENTITIES_V2.protocolDigest) invalid("Checkpoint primitive protocol digest is not frozen v2")
+function requireProtocolDigest(value: unknown): Digest {
+  const digest = parseDigest(value)
+  if (digest !== CURRENT_PROTOCOL_IDENTITIES.protocolDigest) invalid("Checkpoint primitive protocol digest is not the current protocol digest")
   return digest
 }
 
 function assertSortedUnique(values: readonly string[], label: string): void {
   for (let index = 1; index < values.length; index += 1) {
-    if (compareUtf8V2(values[index - 1]!, values[index]!) >= 0) invalid(`${label} must be strictly sorted and unique`)
+    if (compareUtf8(values[index - 1]!, values[index]!) >= 0) invalid(`${label} must be strictly sorted and unique`)
   }
 }
 

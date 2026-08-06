@@ -1,416 +1,434 @@
 import {
-  assertDenseArrayV2,
-  assertExactKeysV2,
-  compareUtf8V2,
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  parseDigestV2,
-  parseId128V2,
-  parseUint32V2,
+  assertDenseArray,
+  assertExactKeys,
+  compareUtf8,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  parseDigest,
+  parseId128,
+  parseUint32,
 } from "@convax/collaboration"
 import type {
-  CanvasHistoryDerivedObjectV2,
-  CanvasHistoryTemplateV2,
-  CanvasIntentKindV2,
-  CanvasResourceRefV2,
-  CanvasSemanticOperationV2,
-  CanvasTypedIntentUnionV2,
-  ConnectableNodeGuardV2,
-  DerivedEdgeAbsentGuardV2,
-  DerivedNodeAbsentGuardV2,
-  EdgeCreateTemplateV2,
-  EdgeLiveGuardV2,
-  GeometryGuardV2,
-  NodeCreateTemplateV2,
-  NodeDataGuardV2,
-  NodeLiveGuardV2,
-  SemanticHistoryGuardV2,
+  CanvasHistoryDerivedObject,
+  CanvasHistoryTemplate,
+  CanvasIntentKind,
+  CanvasResourceRef,
+  CanvasSemanticOperation,
+  CanvasTypedIntentUnion,
+  ConnectableNodeGuard,
+  DerivedEdgeAbsentGuard,
+  DerivedNodeAbsentGuard,
+  EdgeCreateTemplate,
+  EdgeLiveGuard,
+  GeometryGuard,
+  NodeCreateTemplate,
+  NodeDataGuard,
+  NodeLiveGuard,
+  SemanticHistoryGuard,
 } from "./types"
 import {
-  assertContainmentChoiceV2,
-  assertDerivedIdV2,
-  assertEdgeDataV2,
-  assertEntityRefV2,
+  assertContainmentChoice,
+  assertDerivedId,
+  assertEdgeData,
+  assertEntityRef,
   assertGenerationBeginV2,
   assertGenerationDismissalV2,
   assertGenerationRecoveryFailureV2,
   assertGenerationTerminalV2,
-  assertHistoryTemplateV2,
-  assertNodeDataV2,
-  assertPluginRequirementV2,
-  assertPluginStateV2,
-  assertPointV2,
-  assertResourceProofV2,
-  assertResourceRefV2,
-  assertSizeV2,
-  canvasDigestV2,
-  CanvasSchemaErrorV2,
+  assertHistoryTemplate,
+  assertNodeData,
+  assertPluginRequirement,
+  assertPluginState,
+  assertPoint,
+  assertResourceProof,
+  assertResourceRef,
+  assertSize,
+  canvasDigest,
+  CanvasSchemaError,
 } from "./validation"
 
-export const CANVAS_INTENT_KINDS_V2 = Object.freeze([
-  "canvas.nodes.create/2",
-  "canvas.resources.add/2",
-  "canvas.resources.pending.create/2",
-  "canvas.resources.pending-generation.create/2",
-  "canvas.elements.remove/2",
-  "canvas.nodes.set-geometry/2",
-  "canvas.nodes.update-data/2",
-  "canvas.nodes.set-plugin-state/2",
-  "canvas.nodes.set-structural-parent/2",
-  "canvas.nodes.group/2",
-  "canvas.nodes.ungroup/2",
-  "canvas.edges.connect/2",
-  "canvas.metadata.update/2",
-  "canvas.generation.begin/2",
-  "canvas.generation.complete/2",
-  "canvas.generation.fail/2",
-  "canvas.generations.fail-owned/2",
-  "canvas.generation.dismiss/2",
-  "canvas.generation.fail-recovery/2",
-  "canvas.plugin.creation-group.create/2",
-  "canvas.undo.semantic-inverse/2",
-  "canvas.redo.semantic-forward/2",
-] as const satisfies readonly CanvasIntentKindV2[])
+export const CANVAS_INTENT_KINDS = Object.freeze([
+  "canvas.agent.create",
+  "canvas.resources.add",
+  "canvas.resources.pending.create",
+  "canvas.resources.pending-generation.create",
+  "canvas.elements.remove",
+  "canvas.nodes.set-geometry",
+  "canvas.nodes.update-data",
+  "canvas.nodes.set-plugin-state",
+  "canvas.nodes.set-structural-parent",
+  "canvas.nodes.group",
+  "canvas.nodes.ungroup",
+  "canvas.edges.connect",
+  "canvas.metadata.update",
+  "canvas.generation.begin",
+  "canvas.generation.complete",
+  "canvas.generation.fail",
+  "canvas.generations.fail-owned",
+  "canvas.generation.dismiss",
+  "canvas.generation.fail-recovery",
+  "canvas.plugin.creation-group.create",
+  "canvas.plugin.surface.create",
+  "canvas.undo.semantic-inverse",
+  "canvas.redo.semantic-forward",
+] as const satisfies readonly CanvasIntentKind[])
 
-const INTENT_KIND_SET = new Set<string>(CANVAS_INTENT_KINDS_V2)
+const INTENT_KIND_SET = new Set<string>(CANVAS_INTENT_KINDS)
 
-export function decodeCanvasTypedIntentV2(bytes: Uint8Array): CanvasTypedIntentUnionV2 {
+export function decodeCanvasTypedIntent(bytes: Uint8Array): CanvasTypedIntentUnion {
   if (!(bytes instanceof Uint8Array) || bytes.byteLength > 512 * 1024)
-    throw new CanvasSchemaErrorV2("intent-too-large", "Canvas typed intent exceeds 512 KiB")
-  const value = decodeRestrictedJcsV2(bytes)
-  assertCanvasTypedIntentV2(value)
-  if (encodeRestrictedJcsV2(value.guard).byteLength > 256 * 1024)
-    throw new CanvasSchemaErrorV2("guard-too-large", "Canvas intent guard exceeds 256 KiB")
+    throw new CanvasSchemaError("intent-too-large", "Canvas typed intent exceeds 512 KiB")
+  const value = decodeRestrictedJcs(bytes)
+  assertCanvasTypedIntent(value)
+  if (encodeRestrictedJcs(value.guard).byteLength > 256 * 1024)
+    throw new CanvasSchemaError("guard-too-large", "Canvas intent guard exceeds 256 KiB")
   return value
 }
 
-export function assertCanvasTypedIntentV2(value: unknown): asserts value is CanvasTypedIntentUnionV2 {
-  assertExactKeysV2(value, ["format", "kind", "guard", "body"], "CanvasTypedIntentV2")
-  if (value.format !== "convax.typed-intent/2" || typeof value.kind !== "string" || !INTENT_KIND_SET.has(value.kind)) {
-    throw new CanvasSchemaErrorV2("unknown-intent", "Canvas typed-intent discriminator is not in the closed /2 union")
+export function assertCanvasTypedIntent(value: unknown): asserts value is CanvasTypedIntentUnion {
+  assertExactKeys(value, ["format", "kind", "guard", "body"], "CanvasTypedIntent")
+  if (value.format !== "convax.typed-intent" || typeof value.kind !== "string" || !INTENT_KIND_SET.has(value.kind)) {
+    throw new CanvasSchemaError("unknown-intent", "Canvas typed-intent discriminator is not in the closed union")
   }
-  switch (value.kind as CanvasIntentKindV2) {
-    case "canvas.nodes.create/2":
+  switch (value.kind as CanvasIntentKind) {
+    case "canvas.agent.create":
       assertDerivedNodeGuard(value.guard)
-      assertExactKeysV2(value.body, ["node"], "nodes.create body")
+      assertExactKeys(value.body, ["node"], "agent.create body")
       assertNodeTemplate(value.body.node)
       return
-    case "canvas.resources.add/2":
+    case "canvas.resources.add":
       assertCreateSetGuard(value.guard, true)
-      assertExactKeysV2(value.body, ["placement", "nodes", "edges"], "resources.add body")
+      assertExactKeys(value.body, ["placement", "nodes", "edges"], "resources.add body")
       assertPlacement(value.body.placement)
       assertArray(value.body.nodes, assertResourceNode)
       assertArray(value.body.edges, assertEdgeTemplate)
       return
-    case "canvas.resources.pending.create/2":
+    case "canvas.resources.pending.create":
       assertCreateSetGuard(value.guard, false)
-      assertExactKeysV2(value.body, ["placement", "nodes", "edges"], "pending.create body")
+      assertExactKeys(value.body, ["placement", "nodes", "edges"], "pending.create body")
       assertPlacement(value.body.placement)
       assertArray(value.body.nodes, assertPendingNode)
       assertArray(value.body.edges, assertEdgeTemplate)
       return
-    case "canvas.resources.pending-generation.create/2":
-      assertExactKeysV2(value.guard, ["existingEndpoints", "derivedNode", "derivedEdges"], "pending-generation guard")
+    case "canvas.resources.pending-generation.create":
+      assertExactKeys(value.guard, ["existingEndpoints", "derivedNode", "derivedEdges"], "pending-generation guard")
       assertArray(value.guard.existingEndpoints, assertConnectableGuard)
       assertDerivedNodeGuard(value.guard.derivedNode)
       assertArray(value.guard.derivedEdges, assertDerivedEdgeGuard)
-      assertExactKeysV2(value.body, ["placement", "node", "edges", "begin"], "pending-generation body")
+      assertExactKeys(value.body, ["placement", "node", "edges", "begin"], "pending-generation body")
       assertPlacement(value.body.placement)
       assertPendingNode(value.body.node)
       assertArray(value.body.edges, assertEdgeTemplate)
       assertGenerationBeginV2(value.body.begin)
       return
-    case "canvas.elements.remove/2":
-      assertExactKeysV2(value.guard, ["nodes", "edges", "requireObservedIncidentEdgeClosure"], "remove guard")
+    case "canvas.elements.remove":
+      assertExactKeys(value.guard, ["nodes", "edges", "requireObservedIncidentEdgeClosure"], "remove guard")
       if (value.guard.requireObservedIncidentEdgeClosure !== true)
         invalid("remove guard must require incident edge closure")
       assertArray(value.guard.nodes, assertNodeLiveGuard)
       assertArray(value.guard.edges, assertEdgeLiveGuard)
-      assertExactKeysV2(value.body, ["nodes", "edges"], "remove body")
-      assertArray(value.body.nodes, (item) => assertEntityRefV2(item, "node"))
-      assertArray(value.body.edges, (item) => assertEntityRefV2(item, "edge"))
+      assertExactKeys(value.body, ["nodes", "edges"], "remove body")
+      assertArray(value.body.nodes, (item) => assertEntityRef(item, "node"))
+      assertArray(value.body.edges, (item) => assertEntityRef(item, "edge"))
       return
-    case "canvas.nodes.set-geometry/2":
-      assertExactKeysV2(value.guard, ["nodes"], "geometry guard")
+    case "canvas.nodes.set-geometry":
+      assertExactKeys(value.guard, ["nodes"], "geometry guard")
       assertArray(value.guard.nodes, assertGeometryGuard)
-      assertExactKeysV2(value.body, ["updates"], "geometry body")
+      assertExactKeys(value.body, ["updates"], "geometry body")
       assertArray(value.body.updates, (item) => {
-        assertExactKeysV2(item, ["node", "position", "size"], "geometry update")
-        assertEntityRefV2(item.node, "node")
-        assertPointV2(item.position)
-        if (item.size !== null) assertSizeV2(item.size)
+        assertExactKeys(item, ["node", "position", "size"], "geometry update")
+        assertEntityRef(item.node, "node")
+        assertPoint(item.position)
+        if (item.size !== null) assertSize(item.size)
       })
       return
-    case "canvas.nodes.update-data/2":
-      assertExactKeysV2(value.guard, ["node", "resourceProof"], "update-data guard")
+    case "canvas.nodes.update-data":
+      assertExactKeys(value.guard, ["node", "resourceProof"], "update-data guard")
       assertNodeDataGuard(value.guard.node)
-      if (value.guard.resourceProof !== null) assertResourceProofV2(value.guard.resourceProof, false)
-      assertExactKeysV2(value.body, ["node", "data"], "update-data body")
-      assertEntityRefV2(value.body.node, "node")
-      assertNodeDataV2(value.body.data)
+      if (value.guard.resourceProof !== null) assertResourceProof(value.guard.resourceProof, false)
+      assertExactKeys(value.body, ["node", "data"], "update-data body")
+      assertEntityRef(value.body.node, "node")
+      assertNodeData(value.body.data)
       return
-    case "canvas.nodes.set-plugin-state/2":
-      assertExactKeysV2(value.guard, ["node"], "plugin guard wrapper")
+    case "canvas.nodes.set-plugin-state":
+      assertExactKeys(value.guard, ["node"], "plugin guard wrapper")
       assertPluginGuard(value.guard.node)
-      assertExactKeysV2(value.body, ["node", "plugin"], "plugin body")
-      assertEntityRefV2(value.body.node, "node")
-      if (value.body.plugin !== null) assertPluginStateV2(value.body.plugin)
+      assertExactKeys(value.body, ["node", "plugin"], "plugin body")
+      assertEntityRef(value.body.node, "node")
+      if (value.body.plugin !== null) assertPluginState(value.body.plugin)
       return
-    case "canvas.nodes.set-structural-parent/2":
-      assertExactKeysV2(value.guard, ["child", "parent"], "parent guard")
+    case "canvas.nodes.set-structural-parent":
+      assertExactKeys(value.guard, ["child", "parent"], "parent guard")
       assertContainmentGuard(value.guard.child)
       if (value.guard.parent !== null) assertNodeLiveGuard(value.guard.parent)
-      assertExactKeysV2(value.body, ["child", "parent", "relationId"], "parent body")
-      assertEntityRefV2(value.body.child, "node")
-      if (value.body.parent !== null) assertEntityRefV2(value.body.parent, "node")
-      assertDerivedIdV2(value.body.relationId, "r_", "relation id")
+      assertExactKeys(value.body, ["child", "parent", "relationId"], "parent body")
+      assertEntityRef(value.body.child, "node")
+      if (value.body.parent !== null) assertEntityRef(value.body.parent, "node")
+      assertDerivedId(value.body.relationId, "r_", "relation id")
       return
-    case "canvas.nodes.group/2":
-      assertExactKeysV2(value.guard, ["group", "children", "expectedGeometryPlanDigest"], "group guard")
+    case "canvas.nodes.group":
+      assertExactKeys(value.guard, ["group", "children", "expectedGeometryPlanDigest"], "group guard")
       assertDerivedNodeGuard(value.guard.group)
       assertArray(value.guard.children, assertContainmentGuard)
-      parseDigestV2(value.guard.expectedGeometryPlanDigest)
-      assertExactKeysV2(value.body, ["group", "children", "relationIds"], "group body")
+      parseDigest(value.guard.expectedGeometryPlanDigest)
+      assertExactKeys(value.body, ["group", "children", "relationIds"], "group body")
       assertNodeTemplate(value.body.group)
-      assertArray(value.body.children, (item) => assertEntityRefV2(item, "node"))
-      assertArray(value.body.relationIds, (item) => assertDerivedIdV2(item, "r_", "relation id"))
+      assertArray(value.body.children, (item) => assertEntityRef(item, "node"))
+      assertArray(value.body.relationIds, (item) => assertDerivedId(item, "r_", "relation id"))
       return
-    case "canvas.nodes.ungroup/2":
-      assertExactKeysV2(value.guard, ["group", "children", "expectedEffectiveChildSetDigest"], "ungroup guard")
+    case "canvas.nodes.ungroup":
+      assertExactKeys(value.guard, ["group", "children", "expectedEffectiveChildSetDigest"], "ungroup guard")
       assertNodeLiveGuard(value.guard.group)
       assertArray(value.guard.children, assertContainmentGuard)
-      parseDigestV2(value.guard.expectedEffectiveChildSetDigest)
-      assertExactKeysV2(value.body, ["group", "children", "nullRelationIds"], "ungroup body")
-      assertEntityRefV2(value.body.group, "node")
-      assertArray(value.body.children, (item) => assertEntityRefV2(item, "node"))
-      assertArray(value.body.nullRelationIds, (item) => assertDerivedIdV2(item, "r_", "relation id"))
+      parseDigest(value.guard.expectedEffectiveChildSetDigest)
+      assertExactKeys(value.body, ["group", "children", "nullRelationIds"], "ungroup body")
+      assertEntityRef(value.body.group, "node")
+      assertArray(value.body.children, (item) => assertEntityRef(item, "node"))
+      assertArray(value.body.nullRelationIds, (item) => assertDerivedId(item, "r_", "relation id"))
       return
-    case "canvas.edges.connect/2":
-      assertExactKeysV2(value.guard, ["edge", "source", "target"], "connect guard")
+    case "canvas.edges.connect":
+      assertExactKeys(value.guard, ["edge", "source", "target"], "connect guard")
       assertDerivedEdgeGuard(value.guard.edge)
       assertConnectableGuard(value.guard.source)
       assertConnectableGuard(value.guard.target)
-      assertExactKeysV2(value.body, ["edge"], "connect body")
+      assertExactKeys(value.body, ["edge"], "connect body")
       assertEdgeTemplate(value.body.edge)
       return
-    case "canvas.metadata.update/2":
-      assertExactKeysV2(value.guard, ["fields"], "metadata guard")
+    case "canvas.metadata.update":
+      assertExactKeys(value.guard, ["fields"], "metadata guard")
       assertArray(value.guard.fields, assertMetadataGuard)
-      assertExactKeysV2(value.body, ["fields"], "metadata body")
+      assertExactKeys(value.body, ["fields"], "metadata body")
       assertArray(value.body.fields, assertMetadataUpdate)
       return
-    case "canvas.generation.begin/2":
+    case "canvas.generation.begin":
       assertGenerationBeginGuard(value.guard)
-      assertExactKeysV2(value.body, ["begin"], "generation begin body")
+      assertExactKeys(value.body, ["begin"], "generation begin body")
       assertGenerationBeginV2(value.body.begin)
       return
-    case "canvas.generation.complete/2":
+    case "canvas.generation.complete":
       assertGenerationObservedGuard(value.guard, true)
-      assertExactKeysV2(value.body, ["terminal"], "generation complete body")
+      assertExactKeys(value.body, ["terminal"], "generation complete body")
       assertGenerationTerminalV2(value.body.terminal)
       if (value.body.terminal.phase !== "succeeded") invalid("complete terminal must succeed")
       return
-    case "canvas.generation.fail/2":
+    case "canvas.generation.fail":
       assertGenerationObservedGuard(value.guard, false)
-      assertExactKeysV2(value.body, ["terminal"], "generation fail body")
+      assertExactKeys(value.body, ["terminal"], "generation fail body")
       assertGenerationTerminalV2(value.body.terminal)
       if (value.body.terminal.phase !== "failed") invalid("fail terminal must fail")
       return
-    case "canvas.generations.fail-owned/2":
-      assertExactKeysV2(value.guard, ["generations", "requireBeginActorEqualsOperationActor"], "fail-owned guard")
+    case "canvas.generations.fail-owned":
+      assertExactKeys(value.guard, ["generations", "requireBeginActorEqualsOperationActor"], "fail-owned guard")
       if (value.guard.requireBeginActorEqualsOperationActor !== true) invalid("fail-owned actor requirement missing")
       assertArray(value.guard.generations, (item) => assertGenerationObservedGuard(item, false))
-      assertExactKeysV2(value.body, ["failures"], "fail-owned body")
+      assertExactKeys(value.body, ["failures"], "fail-owned body")
       assertArray(value.body.failures, (item) => {
-        assertExactKeysV2(item, ["generationId", "beginDigest", "failureCode", "publicMessage"], "owned failure")
-        assertDerivedIdV2(item.generationId, "g_", "generation id")
-        parseDigestV2(item.beginDigest)
+        assertExactKeys(item, ["generationId", "beginDigest", "failureCode", "publicMessage"], "owned failure")
+        assertDerivedId(item.generationId, "g_", "generation id")
+        parseDigest(item.beginDigest)
         assertString(item.failureCode)
         if (item.publicMessage !== null) assertString(item.publicMessage)
       })
       return
-    case "canvas.generation.dismiss/2":
+    case "canvas.generation.dismiss":
       assertGenerationObservedGuard(value.guard, false)
-      assertExactKeysV2(value.body, ["dismissal"], "dismiss body")
+      assertExactKeys(value.body, ["dismissal"], "dismiss body")
       assertGenerationDismissalV2(value.body.dismissal)
       return
-    case "canvas.generation.fail-recovery/2":
+    case "canvas.generation.fail-recovery":
       assertGenerationObservedGuard(value.guard, false)
-      assertExactKeysV2(value.body, ["recoveryFailure"], "recovery body")
+      assertExactKeys(value.body, ["recoveryFailure"], "recovery body")
       assertGenerationRecoveryFailureV2(value.body.recoveryFailure)
       return
-    case "canvas.plugin.creation-group.create/2":
-      assertExactKeysV2(
+    case "canvas.plugin.creation-group.create":
+      assertExactKeys(
         value.guard,
         ["source", "pluginRequirement", "derivedNodes", "derivedEdges", "resourceProofs"],
         "creation-group guard",
       )
       assertNodeDataGuard(value.guard.source)
-      assertPluginRequirementV2(value.guard.pluginRequirement)
+      assertPluginRequirement(value.guard.pluginRequirement)
       assertArray(value.guard.derivedNodes, assertDerivedNodeGuard)
       assertArray(value.guard.derivedEdges, assertDerivedEdgeGuard)
       assertArray(value.guard.resourceProofs, assertProofBinding)
-      assertExactKeysV2(value.body, ["groupOrdinal", "source", "nodes", "edges"], "creation-group body")
-      parseUint32V2(value.body.groupOrdinal)
-      assertEntityRefV2(value.body.source, "node")
+      assertExactKeys(value.body, ["groupOrdinal", "source", "nodes", "edges"], "creation-group body")
+      parseUint32(value.body.groupOrdinal)
+      assertEntityRef(value.body.source, "node")
       assertArray(value.body.nodes, assertNodeTemplate)
       assertArray(value.body.edges, assertEdgeTemplate)
       return
-    case "canvas.undo.semantic-inverse/2":
-    case "canvas.redo.semantic-forward/2":
-      assertHistoryGuard(value.guard, value.kind === "canvas.undo.semantic-inverse/2" ? "applied" : "undone")
-      assertExactKeysV2(value.body, ["operations"], "semantic history body")
-      assertDenseArrayV2(value.body.operations, "semantic operations")
+    case "canvas.plugin.surface.create":
+      assertExactKeys(value.guard, ["derivedNode"], "plugin surface guard")
+      assertDerivedNodeGuard(value.guard.derivedNode)
+      assertExactKeys(value.body, ["placement", "node"], "plugin surface body")
+      assertPlacement(value.body.placement)
+      assertPluginSurfaceNode(value.body.node)
+      return
+    case "canvas.undo.semantic-inverse":
+    case "canvas.redo.semantic-forward":
+      assertHistoryGuard(value.guard, value.kind === "canvas.undo.semantic-inverse" ? "applied" : "undone")
+      assertExactKeys(value.body, ["operations"], "semantic history body")
+      assertDenseArray(value.body.operations, "semantic operations")
       for (const [index, operation] of value.body.operations.entries())
         assertSemanticOperation(
           operation,
           value.guard.rootOperationId,
-          value.kind === "canvas.undo.semantic-inverse/2" ? "inverse" : "forward",
-          parseUint32V2(String(index)),
+          value.kind === "canvas.undo.semantic-inverse" ? "inverse" : "forward",
+          parseUint32(String(index)),
         )
       return
   }
 }
 
-function assertNodeLiveGuard(value: unknown): asserts value is NodeLiveGuardV2 {
-  assertExactKeysV2(value, ["node", "expectedLive", "expectedIdentityDigest"], "NodeLiveGuardV2")
-  assertEntityRefV2(value.node, "node")
+function assertNodeLiveGuard(value: unknown): asserts value is NodeLiveGuard {
+  assertExactKeys(value, ["node", "expectedLive", "expectedIdentityDigest"], "NodeLiveGuard")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("node guard expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
+  parseDigest(value.expectedIdentityDigest)
 }
 
-function assertEdgeLiveGuard(value: unknown): asserts value is EdgeLiveGuardV2 {
-  assertExactKeysV2(value, ["edge", "expectedLive", "expectedIdentityDigest"], "EdgeLiveGuardV2")
-  assertEntityRefV2(value.edge, "edge")
+function assertEdgeLiveGuard(value: unknown): asserts value is EdgeLiveGuard {
+  assertExactKeys(value, ["edge", "expectedLive", "expectedIdentityDigest"], "EdgeLiveGuard")
+  assertEntityRef(value.edge, "edge")
   if (value.expectedLive !== true) invalid("edge guard expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
+  parseDigest(value.expectedIdentityDigest)
 }
 
-function assertNodeDataGuard(value: unknown): asserts value is NodeDataGuardV2 {
-  assertExactKeysV2(
+function assertNodeDataGuard(value: unknown): asserts value is NodeDataGuard {
+  assertExactKeys(
     value,
     ["node", "expectedLive", "expectedIdentityDigest", "expectedEffectiveDataDigest", "expectedDataRegisterDigest"],
-    "NodeDataGuardV2",
+    "NodeDataGuard",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("node guard expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
-  parseDigestV2(value.expectedEffectiveDataDigest)
-  parseDigestV2(value.expectedDataRegisterDigest)
+  parseDigest(value.expectedIdentityDigest)
+  parseDigest(value.expectedEffectiveDataDigest)
+  parseDigest(value.expectedDataRegisterDigest)
 }
 
-function assertGeometryGuard(value: unknown): asserts value is GeometryGuardV2 {
-  assertExactKeysV2(
+function assertGeometryGuard(value: unknown): asserts value is GeometryGuard {
+  assertExactKeys(
     value,
     ["node", "expectedLive", "expectedIdentityDigest", "expectedGeometryDigest"],
-    "GeometryGuardV2",
+    "GeometryGuard",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("geometry expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
-  parseDigestV2(value.expectedGeometryDigest)
+  parseDigest(value.expectedIdentityDigest)
+  parseDigest(value.expectedGeometryDigest)
 }
 
-function assertConnectableGuard(value: unknown): asserts value is ConnectableNodeGuardV2 {
-  assertExactKeysV2(
+function assertConnectableGuard(value: unknown): asserts value is ConnectableNodeGuard {
+  assertExactKeys(
     value,
     ["node", "expectedLive", "expectedIdentityDigest", "expectedConnectable"],
-    "ConnectableNodeGuardV2",
+    "ConnectableNodeGuard",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true || value.expectedConnectable !== true)
     invalid("connectable guard booleans are invalid")
-  parseDigestV2(value.expectedIdentityDigest)
+  parseDigest(value.expectedIdentityDigest)
 }
 
-function assertDerivedNodeGuard(value: unknown): asserts value is DerivedNodeAbsentGuardV2 {
-  assertExactKeysV2(value, ["ordinal", "node", "expectedAbsent"], "DerivedNodeAbsentGuardV2")
-  parseUint32V2(value.ordinal)
-  assertEntityRefV2(value.node, "node")
+function assertDerivedNodeGuard(value: unknown): asserts value is DerivedNodeAbsentGuard {
+  assertExactKeys(value, ["ordinal", "node", "expectedAbsent"], "DerivedNodeAbsentGuard")
+  parseUint32(value.ordinal)
+  assertEntityRef(value.node, "node")
   if (value.expectedAbsent !== true) invalid("derived node expectedAbsent must be true")
 }
 
-function assertDerivedEdgeGuard(value: unknown): asserts value is DerivedEdgeAbsentGuardV2 {
-  assertExactKeysV2(value, ["ordinal", "edge", "expectedAbsent"], "DerivedEdgeAbsentGuardV2")
-  parseUint32V2(value.ordinal)
-  assertEntityRefV2(value.edge, "edge")
+function assertDerivedEdgeGuard(value: unknown): asserts value is DerivedEdgeAbsentGuard {
+  assertExactKeys(value, ["ordinal", "edge", "expectedAbsent"], "DerivedEdgeAbsentGuard")
+  parseUint32(value.ordinal)
+  assertEntityRef(value.edge, "edge")
   if (value.expectedAbsent !== true) invalid("derived edge expectedAbsent must be true")
 }
 
-function assertNodeTemplate(value: unknown): asserts value is NodeCreateTemplateV2 {
-  assertExactKeysV2(
+function assertNodeTemplate(value: unknown): asserts value is NodeCreateTemplate {
+  assertExactKeys(
     value,
     ["ordinal", "nodeId", "incarnation", "role", "position", "size", "data", "plugin"],
-    "NodeCreateTemplateV2",
+    "NodeCreateTemplate",
   )
-  parseUint32V2(value.ordinal)
-  assertDerivedIdV2(value.nodeId, "n_", "nodeId")
-  assertDerivedIdV2(value.incarnation, "ni_", "incarnation")
+  parseUint32(value.ordinal)
+  assertDerivedId(value.nodeId, "n_", "nodeId")
+  assertDerivedId(value.incarnation, "ni_", "incarnation")
   if (value.role !== "file" && value.role !== "agent") invalid("node role is invalid")
-  assertPointV2(value.position)
-  assertSizeV2(value.size)
-  assertNodeDataV2(value.data)
-  if (value.plugin !== null) assertPluginStateV2(value.plugin)
+  assertPoint(value.position)
+  assertSize(value.size)
+  assertNodeData(value.data)
+  if (value.plugin !== null) assertPluginState(value.plugin)
 }
 
-function assertEdgeTemplate(value: unknown): asserts value is EdgeCreateTemplateV2 {
-  assertExactKeysV2(value, ["ordinal", "edgeId", "incarnation", "source", "target", "data"], "EdgeCreateTemplateV2")
-  parseUint32V2(value.ordinal)
-  assertDerivedIdV2(value.edgeId, "e_", "edgeId")
-  assertDerivedIdV2(value.incarnation, "ei_", "incarnation")
+function assertEdgeTemplate(value: unknown): asserts value is EdgeCreateTemplate {
+  assertExactKeys(value, ["ordinal", "edgeId", "incarnation", "source", "target", "data"], "EdgeCreateTemplate")
+  parseUint32(value.ordinal)
+  assertDerivedId(value.edgeId, "e_", "edgeId")
+  assertDerivedId(value.incarnation, "ei_", "incarnation")
   assertEndpoint(value.source)
   assertEndpoint(value.target)
-  assertEdgeDataV2(value.data)
+  assertEdgeData(value.data)
 }
 
 function assertEndpoint(value: unknown): void {
   if (typeof value === "object" && value !== null && "createdNodeOrdinal" in value) {
-    assertExactKeysV2(value, ["createdNodeOrdinal"], "created endpoint")
-    parseUint32V2(value.createdNodeOrdinal)
-  } else assertEntityRefV2(value, "node")
+    assertExactKeys(value, ["createdNodeOrdinal"], "created endpoint")
+    parseUint32(value.createdNodeOrdinal)
+  } else assertEntityRef(value, "node")
 }
 
 function assertPlacement(value: unknown): void {
-  assertExactKeysV2(value, ["anchor", "gap", "obstacleProjectionDigest"], "CausalPlacementV2")
-  assertPointV2(value.anchor)
+  assertExactKeys(value, ["anchor", "gap", "obstacleProjectionDigest"], "CausalPlacement")
+  assertPoint(value.anchor)
   if (value.gap !== 24) invalid("placement gap must be 24")
-  parseDigestV2(value.obstacleProjectionDigest)
+  parseDigest(value.obstacleProjectionDigest)
 }
 
 function assertResourceNode(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["ordinal", "nodeId", "incarnation", "size", "title", "resource"],
-    "ResourceNodeCreateSpecV2",
+    "ResourceNodeCreateSpec",
   )
-  parseUint32V2(value.ordinal)
-  assertDerivedIdV2(value.nodeId, "n_", "nodeId")
-  assertDerivedIdV2(value.incarnation, "ni_", "incarnation")
-  assertSizeV2(value.size)
+  parseUint32(value.ordinal)
+  assertDerivedId(value.nodeId, "n_", "nodeId")
+  assertDerivedId(value.incarnation, "ni_", "incarnation")
+  assertSize(value.size)
   assertString(value.title)
-  assertResourceRefV2(value.resource)
+  assertResourceRef(value.resource)
 }
 
 function assertPendingNode(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["ordinal", "nodeId", "incarnation", "size", "title", "expectedClass"],
-    "PendingNodeCreateSpecV2",
+    "PendingNodeCreateSpec",
   )
-  parseUint32V2(value.ordinal)
-  assertDerivedIdV2(value.nodeId, "n_", "nodeId")
-  assertDerivedIdV2(value.incarnation, "ni_", "incarnation")
-  assertSizeV2(value.size)
+  parseUint32(value.ordinal)
+  assertDerivedId(value.nodeId, "n_", "nodeId")
+  assertDerivedId(value.incarnation, "ni_", "incarnation")
+  assertSize(value.size)
   assertString(value.title)
   if (!new Set(["text", "image", "video", "audio", "file"]).has(value.expectedClass as string))
     invalid("expectedClass is invalid")
+}
+
+function assertPluginSurfaceNode(value: unknown): void {
+  assertExactKeys(value, ["ordinal", "nodeId", "incarnation", "size", "title", "plugin"], "PluginSurfaceCreateSpec")
+  parseUint32(value.ordinal)
+  assertDerivedId(value.nodeId, "n_", "nodeId")
+  assertDerivedId(value.incarnation, "ni_", "incarnation")
+  assertSize(value.size)
+  assertString(value.title)
+  assertPluginState(value.plugin)
 }
 
 function assertCreateSetGuard(value: unknown, resources: boolean): void {
   const keys = resources
     ? ["existingEndpoints", "derivedNodes", "derivedEdges", "resourceProofs"]
     : ["existingEndpoints", "derivedNodes", "derivedEdges"]
-  assertExactKeysV2(value, keys, "create-set guard")
+  assertExactKeys(value, keys, "create-set guard")
   assertArray(value.existingEndpoints, assertConnectableGuard)
   assertArray(value.derivedNodes, assertDerivedNodeGuard)
   assertArray(value.derivedEdges, assertDerivedEdgeGuard)
@@ -418,45 +436,45 @@ function assertCreateSetGuard(value: unknown, resources: boolean): void {
 }
 
 function assertProofBinding(value: unknown): void {
-  assertExactKeysV2(value, ["createdNodeOrdinal", "proof"], "resource proof binding")
-  parseUint32V2(value.createdNodeOrdinal)
-  assertResourceProofV2(value.proof, false)
+  assertExactKeys(value, ["createdNodeOrdinal", "proof"], "resource proof binding")
+  parseUint32(value.createdNodeOrdinal)
+  assertResourceProof(value.proof, false)
 }
 
 function assertPluginGuard(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["node", "expectedLive", "expectedIdentityDigest", "expectedPluginDigest", "requirement"],
-    "PluginGuardV2",
+    "PluginGuard",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("plugin expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
-  if (value.expectedPluginDigest !== null) parseDigestV2(value.expectedPluginDigest)
-  if (value.requirement !== null) assertPluginRequirementV2(value.requirement)
+  parseDigest(value.expectedIdentityDigest)
+  if (value.expectedPluginDigest !== null) parseDigest(value.expectedPluginDigest)
+  if (value.requirement !== null) assertPluginRequirement(value.requirement)
 }
 
 function assertContainmentGuard(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     ["node", "expectedLive", "expectedIdentityDigest", "expectedOwnSlotDigest"],
-    "ContainmentGuardV2",
+    "ContainmentGuard",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("containment expectedLive must be true")
-  parseDigestV2(value.expectedIdentityDigest)
-  if (value.expectedOwnSlotDigest !== null) parseDigestV2(value.expectedOwnSlotDigest)
+  parseDigest(value.expectedIdentityDigest)
+  if (value.expectedOwnSlotDigest !== null) parseDigest(value.expectedOwnSlotDigest)
 }
 
 function assertMetadataGuard(value: unknown): void {
-  assertExactKeysV2(value, ["field", "expectedEffectiveDigest", "expectedOwnSlotDigest"], "MetadataFieldGuardV2")
+  assertExactKeys(value, ["field", "expectedEffectiveDigest", "expectedOwnSlotDigest"], "MetadataFieldGuard")
   assertMetadataField(value.field)
-  parseDigestV2(value.expectedEffectiveDigest)
-  if (value.expectedOwnSlotDigest !== null) parseDigestV2(value.expectedOwnSlotDigest)
+  parseDigest(value.expectedEffectiveDigest)
+  if (value.expectedOwnSlotDigest !== null) parseDigest(value.expectedOwnSlotDigest)
 }
 
 function assertMetadataUpdate(value: unknown): void {
-  assertExactKeysV2(value, ["field", "value"], "MetadataFieldUpdateV2")
+  assertExactKeys(value, ["field", "value"], "MetadataFieldUpdate")
   assertMetadataField(value.field)
   if (value.field === "tags") {
     if (!Array.isArray(value.value)) invalid("tags update must be array")
@@ -464,7 +482,7 @@ function assertMetadataUpdate(value: unknown): void {
 }
 
 function assertGenerationBeginGuard(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "node",
@@ -477,7 +495,7 @@ function assertGenerationBeginGuard(value: unknown): void {
     ],
     "GenerationBeginGuardV2",
   )
-  assertEntityRefV2(value.node, "node")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("generation expectedLive must be true")
   for (const key of [
     "expectedIdentityDigest",
@@ -485,8 +503,8 @@ function assertGenerationBeginGuard(value: unknown): void {
     "expectedDataRegisterDigest",
     "expectedProjectedGenerationDigest",
   ] as const)
-    parseDigestV2(value[key])
-  if (value.expectedPluginDigest !== null) parseDigestV2(value.expectedPluginDigest)
+    parseDigest(value[key])
+  if (value.expectedPluginDigest !== null) parseDigest(value.expectedPluginDigest)
 }
 
 function assertGenerationObservedGuard(value: unknown, resource: boolean): void {
@@ -502,19 +520,19 @@ function assertGenerationObservedGuard(value: unknown, resource: boolean): void 
     "expectedRecoveryFailureDigest",
     ...(resource ? ["resourceProof"] : []),
   ]
-  assertExactKeysV2(value, keys, "GenerationObservedGuardV2")
-  assertEntityRefV2(value.node, "node")
+  assertExactKeys(value, keys, "GenerationObservedGuardV2")
+  assertEntityRef(value.node, "node")
   if (value.expectedLive !== true) invalid("generation expectedLive must be true")
-  assertDerivedIdV2(value.generationId, "g_", "generation id")
+  assertDerivedId(value.generationId, "g_", "generation id")
   for (const key of ["expectedIdentityDigest", "beginDigest", "expectedLifecycleDigest"] as const)
-    parseDigestV2(value[key])
+    parseDigest(value[key])
   for (const key of ["expectedTerminalDigest", "expectedDismissalDigest", "expectedRecoveryFailureDigest"] as const)
-    if (value[key] !== null) parseDigestV2(value[key])
-  if (resource) assertResourceProofV2(value.resourceProof, false)
+    if (value[key] !== null) parseDigest(value[key])
+  if (resource) assertResourceProof(value.resourceProof, false)
 }
 
-function assertHistoryGuard(value: unknown, mode: "applied" | "undone"): asserts value is SemanticHistoryGuardV2 {
-  assertExactKeysV2(
+function assertHistoryGuard(value: unknown, mode: "applied" | "undone"): asserts value is SemanticHistoryGuard {
+  assertExactKeys(
     value,
     [
       "rootOperationId",
@@ -523,35 +541,35 @@ function assertHistoryGuard(value: unknown, mode: "applied" | "undone"): asserts
       "expectedHistoryStateDigest",
       "expectedMode",
     ],
-    "SemanticHistoryGuardV2",
+    "SemanticHistoryGuard",
   )
-  parseId128V2(value.rootOperationId)
+  parseId128(value.rootOperationId)
   if (value.expectedMode !== mode) invalid("history mode is invalid")
   for (const key of ["expectedRootReceiptDigest", "expectedHistoryRootDigest", "expectedHistoryStateDigest"] as const)
-    parseDigestV2(value[key])
+    parseDigest(value[key])
 }
 
 function assertSemanticOperation(
   value: unknown,
-  rootOperationId: import("@convax/collaboration").Id128V2,
+  rootOperationId: import("@convax/collaboration").Id128,
   direction: "inverse" | "forward",
-  operationIndex: import("@convax/collaboration").Uint32V2,
-): asserts value is CanvasSemanticOperationV2 {
-  assertExactKeysV2(
+  operationIndex: import("@convax/collaboration").Uint32,
+): asserts value is CanvasSemanticOperation {
+  assertExactKeys(
     value,
     ["format", "template", "materializedGuard", "derived", "guardDigest", "retainedResourceProofs"],
-    "CanvasSemanticOperationV2",
+    "CanvasSemanticOperation",
   )
-  if (value.format !== "convax.canvas-semantic-operation/2") invalid("semantic operation format is invalid")
-  assertHistoryTemplateV2(value.template)
+  if (value.format !== "convax.canvas-semantic-operation") invalid("semantic operation format is invalid")
+  assertHistoryTemplate(value.template)
   assertMaterializedHistoryGuard(value.materializedGuard, value.template)
-  parseDigestV2(value.guardDigest)
-  assertDenseArrayV2(value.derived, "semantic derived")
+  parseDigest(value.guardDigest)
+  assertDenseArray(value.derived, "semantic derived")
   assertSemanticDerivedObjects(value.derived, value.template)
-  assertDenseArrayV2(value.retainedResourceProofs, "semantic retained proofs")
+  assertDenseArray(value.retainedResourceProofs, "semantic retained proofs")
   assertSemanticResourceProofs(value.retainedResourceProofs, value.template)
-  const guardDigest = canvasDigestV2("convax.canvas-semantic-guard/2", {
-    format: "convax.canvas-semantic-guard/2",
+  const guardDigest = canvasDigest("convax.canvas-semantic-guard", {
+    format: "convax.canvas-semantic-guard",
     rootOperationId,
     direction,
     operationIndex,
@@ -561,8 +579,8 @@ function assertSemanticOperation(
   if (value.guardDigest !== guardDigest) invalid("semantic operation guard digest is invalid")
 }
 
-function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryTemplateV2): void {
-  assertExactKeysV2(value, ["op", "guard"], "CanvasMaterializedHistoryGuardV2")
+function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryTemplate): void {
+  assertExactKeys(value, ["op", "guard"], "CanvasMaterializedHistoryGuard")
   if (value.op !== template.op) invalid("materialized history guard operation does not match template")
   switch (template.op) {
     case "node.create":
@@ -581,7 +599,7 @@ function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryT
       assertPluginGuard(value.guard)
       return
     case "edge.create":
-      assertExactKeysV2(value.guard, ["edge", "source", "target"], "history edge.create guard")
+      assertExactKeys(value.guard, ["edge", "source", "target"], "history edge.create guard")
       assertDerivedEdgeGuard(value.guard.edge)
       assertConnectableGuard(value.guard.source)
       assertConnectableGuard(value.guard.target)
@@ -590,7 +608,7 @@ function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryT
       assertEdgeLiveGuard(value.guard)
       return
     case "containment.set":
-      assertExactKeysV2(value.guard, ["child", "parent"], "history containment guard")
+      assertExactKeys(value.guard, ["child", "parent"], "history containment guard")
       assertContainmentGuard(value.guard.child)
       if (value.guard.parent !== null) assertNodeLiveGuard(value.guard.parent)
       return
@@ -598,18 +616,18 @@ function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryT
       assertMetadataGuard(value.guard)
       return
     case "creation-group.restore":
-      assertExactKeysV2(
+      assertExactKeys(
         value.guard,
         ["source", "pluginRequirement", "derivedNodes", "derivedEdges"],
         "history creation-group guard",
       )
       assertNodeDataGuard(value.guard.source)
-      assertPluginRequirementV2(value.guard.pluginRequirement)
+      assertPluginRequirement(value.guard.pluginRequirement)
       assertArray(value.guard.derivedNodes, assertDerivedNodeGuard)
       assertArray(value.guard.derivedEdges, assertDerivedEdgeGuard)
       return
     case "pending-generation.restore":
-      assertExactKeysV2(value.guard, ["lifecycle", "derivedNode", "derivedEdges"], "history pending guard")
+      assertExactKeys(value.guard, ["lifecycle", "derivedNode", "derivedEdges"], "history pending guard")
       assertHistoryGenerationGuard(value.guard.lifecycle)
       assertDerivedNodeGuard(value.guard.derivedNode)
       assertArray(value.guard.derivedEdges, assertDerivedEdgeGuard)
@@ -618,7 +636,7 @@ function assertMaterializedHistoryGuard(value: unknown, template: CanvasHistoryT
 }
 
 function assertHistoryGenerationGuard(value: unknown): void {
-  assertExactKeysV2(
+  assertExactKeys(
     value,
     [
       "rootOperationId",
@@ -632,21 +650,21 @@ function assertHistoryGenerationGuard(value: unknown): void {
     ],
     "CanvasHistoryGenerationGuardV2",
   )
-  parseId128V2(value.rootOperationId)
+  parseId128(value.rootOperationId)
   assertHistoryNodeHandle(value.nodeHandle)
-  assertDerivedIdV2(value.generationId, "g_", "generation id")
-  parseDigestV2(value.retainedBeginDigest)
-  parseDigestV2(value.expectedLifecycleDigest)
+  assertDerivedId(value.generationId, "g_", "generation id")
+  parseDigest(value.retainedBeginDigest)
+  parseDigest(value.expectedLifecycleDigest)
   for (const key of ["expectedTerminalDigest", "expectedDismissalDigest", "expectedRecoveryFailureDigest"] as const)
-    if (value[key] !== null) parseDigestV2(value[key])
+    if (value[key] !== null) parseDigest(value[key])
 }
 
-function assertSemanticDerivedObjects(values: readonly unknown[], template: CanvasHistoryTemplateV2): void {
-  const derived: CanvasHistoryDerivedObjectV2[] = []
+function assertSemanticDerivedObjects(values: readonly unknown[], template: CanvasHistoryTemplate): void {
+  const derived: CanvasHistoryDerivedObject[] = []
   let priorOrdinal = -1
   for (const value of values) {
     assertSemanticDerivedObject(value)
-    const ordinal = Number(parseUint32V2(value.ordinal))
+    const ordinal = Number(parseUint32(value.ordinal))
     if (ordinal <= priorOrdinal) invalid("semantic derived objects must be ordinal-sorted and unique")
     priorOrdinal = ordinal
     derived.push(value)
@@ -660,40 +678,40 @@ function assertSemanticDerivedObjects(values: readonly unknown[], template: Canv
     invalid("creation group ordinal must precede its members")
 }
 
-function assertSemanticDerivedObject(value: unknown): asserts value is CanvasHistoryDerivedObjectV2 {
+function assertSemanticDerivedObject(value: unknown): asserts value is CanvasHistoryDerivedObject {
   if (typeof value !== "object" || value === null) invalid("semantic derived object must be an object")
   const kind = (value as { kind?: unknown }).kind
   switch (kind) {
     case "node":
-      assertExactKeysV2(value, ["kind", "handle", "ordinal", "ref"], "history derived node")
+      assertExactKeys(value, ["kind", "handle", "ordinal", "ref"], "history derived node")
       assertHistoryNodeHandle(value.handle)
-      parseUint32V2(value.ordinal)
-      assertEntityRefV2(value.ref, "node")
+      parseUint32(value.ordinal)
+      assertEntityRef(value.ref, "node")
       return
     case "edge":
-      assertExactKeysV2(value, ["kind", "handle", "ordinal", "ref"], "history derived edge")
+      assertExactKeys(value, ["kind", "handle", "ordinal", "ref"], "history derived edge")
       assertHistoryEdgeHandle(value.handle)
-      parseUint32V2(value.ordinal)
-      assertEntityRefV2(value.ref, "edge")
+      parseUint32(value.ordinal)
+      assertEntityRef(value.ref, "edge")
       return
     case "relation":
-      assertExactKeysV2(value, ["kind", "ordinal", "relationId", "child"], "history derived relation")
-      parseUint32V2(value.ordinal)
-      assertDerivedIdV2(value.relationId, "r_", "relation id")
+      assertExactKeys(value, ["kind", "ordinal", "relationId", "child"], "history derived relation")
+      parseUint32(value.ordinal)
+      assertDerivedId(value.relationId, "r_", "relation id")
       assertHistoryNodeTarget(value.child)
       return
     case "creation-group":
-      assertExactKeysV2(value, ["kind", "handle", "ordinal", "groupId"], "history derived creation group")
+      assertExactKeys(value, ["kind", "handle", "ordinal", "groupId"], "history derived creation group")
       assertHistoryGroupHandle(value.handle)
-      parseUint32V2(value.ordinal)
-      assertDerivedIdV2(value.groupId, "cg_", "creation group id")
+      parseUint32(value.ordinal)
+      assertDerivedId(value.groupId, "cg_", "creation group id")
       return
     default:
       invalid("unknown semantic derived object kind")
   }
 }
 
-function expectedDerivedKeys(template: CanvasHistoryTemplateV2): readonly string[] {
+function expectedDerivedKeys(template: CanvasHistoryTemplate): readonly string[] {
   switch (template.op) {
     case "node.create":
       return [`node:${template.handle}`]
@@ -714,17 +732,17 @@ function expectedDerivedKeys(template: CanvasHistoryTemplateV2): readonly string
   }
 }
 
-function derivedObjectKey(value: CanvasHistoryDerivedObjectV2): string {
+function derivedObjectKey(value: CanvasHistoryDerivedObject): string {
   if (value.kind === "relation") return `relation:${historyTargetKey(value.child)}`
   return `${value.kind}:${value.handle}`
 }
 
-function assertSemanticResourceProofs(values: readonly unknown[], template: CanvasHistoryTemplateV2): void {
+function assertSemanticResourceProofs(values: readonly unknown[], template: CanvasHistoryTemplate): void {
   const resources = introducedResources(template)
-  let prior: CanvasResourceRefV2 | undefined
-  const actual: CanvasResourceRefV2[] = []
+  let prior: CanvasResourceRef | undefined
+  const actual: CanvasResourceRef[] = []
   for (const value of values) {
-    assertResourceProofV2(value, true)
+    assertResourceProof(value, true)
     if (value.mode !== "retained-canvas-history") invalid("semantic operation proof must be retained history")
     if (prior !== undefined && compareResources(prior, value.resource) >= 0)
       invalid("semantic resource proofs must be resource-sorted and duplicate-free")
@@ -741,8 +759,8 @@ function assertSemanticResourceProofs(values: readonly unknown[], template: Canv
     invalid("semantic resource proofs do not exactly cover introduced resources")
 }
 
-function introducedResources(template: CanvasHistoryTemplateV2): readonly CanvasResourceRefV2[] {
-  const values: CanvasResourceRefV2[] = []
+function introducedResources(template: CanvasHistoryTemplate): readonly CanvasResourceRef[] {
+  const values: CanvasResourceRef[] = []
   if (template.op === "node.create" && template.snapshot.resource !== null) values.push(template.snapshot.resource)
   if (template.op === "node.data" && template.resource !== null) values.push(template.resource)
   if (template.op === "creation-group.restore")
@@ -752,28 +770,28 @@ function introducedResources(template: CanvasHistoryTemplateV2): readonly Canvas
     .filter((resource, index, all) => index === 0 || canonicalJson(resource) !== canonicalJson(all[index - 1]))
 }
 
-function compareResources(left: CanvasResourceRefV2, right: CanvasResourceRefV2): number {
+function compareResources(left: CanvasResourceRef, right: CanvasResourceRef): number {
   return (
-    compareUtf8V2(left.contentDigest, right.contentDigest) ||
-    compareUtf8V2(left.uri, right.uri) ||
-    compareUtf8V2(canonicalJson(left), canonicalJson(right))
+    compareUtf8(left.contentDigest, right.contentDigest) ||
+    compareUtf8(left.uri, right.uri) ||
+    compareUtf8(canonicalJson(left), canonicalJson(right))
   )
 }
 
 function canonicalJson(value: unknown): string {
-  return new TextDecoder().decode(encodeRestrictedJcsV2(value))
+  return new TextDecoder().decode(encodeRestrictedJcs(value))
 }
 
 function assertHistoryNodeTarget(value: unknown): void {
   if (typeof value !== "object" || value === null) invalid("history node target must be an object")
   if ((value as { mode?: unknown }).mode === "handle") {
-    assertExactKeysV2(value, ["mode", "handle"], "history node handle target")
+    assertExactKeys(value, ["mode", "handle"], "history node handle target")
     assertHistoryNodeHandle(value.handle)
     return
   }
-  assertExactKeysV2(value, ["mode", "ref"], "history external node target")
+  assertExactKeys(value, ["mode", "ref"], "history external node target")
   if (value.mode !== "external") invalid("history node target mode is invalid")
-  assertEntityRefV2(value.ref, "node")
+  assertEntityRef(value.ref, "node")
 }
 
 function historyTargetKey(
@@ -802,11 +820,11 @@ function assertHistoryGroupHandle(value: unknown): void {
 function assertHistoryHandle(value: unknown, prefix: "n" | "e" | "g"): void {
   if (typeof value !== "string" || !new RegExp(`^${prefix}/(0|[1-9]\\d*)$`, "u").test(value))
     invalid("history handle is invalid")
-  parseUint32V2(value.slice(2))
+  parseUint32(value.slice(2))
 }
 
 function assertArray(value: unknown, validate: (item: any) => void): void {
-  assertDenseArrayV2(value, "array")
+  assertDenseArray(value, "array")
   for (const item of value) validate(item)
 }
 
@@ -819,15 +837,15 @@ function assertString(value: unknown): void {
 }
 
 function invalid(message: string): never {
-  throw new CanvasSchemaErrorV2("invalid-intent", message)
+  throw new CanvasSchemaError("invalid-intent", message)
 }
 
 // Compile-time equality: a missing/extra discriminator on either side is a type error.
-type _KindsEqual = CanvasIntentKindV2 extends keyof import("./types").CanvasIntentContractMapV2
-  ? keyof import("./types").CanvasIntentContractMapV2 extends CanvasIntentKindV2
+type _KindsEqual = CanvasIntentKind extends keyof import("./types").CanvasIntentContractMap
+  ? keyof import("./types").CanvasIntentContractMap extends CanvasIntentKind
     ? true
     : never
   : never
 const kindsEqual: _KindsEqual = true
 void kindsEqual
-void assertContainmentChoiceV2
+void assertContainmentChoice

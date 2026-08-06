@@ -1,6 +1,6 @@
 import type { ProjectCollaborationRecoveryClient, ProjectLifecycleClient, ProjectRecord } from "@convax/project"
-import type { ProjectIndexFileApplicationPortV2, ProjectIndexFileMutationResultV2 } from "@convax/project/canvas"
-import { parseProjectIdV2 } from "@convax/collaboration"
+import type { ProjectIndexFileApplicationPort, ProjectIndexFileMutationResult } from "@convax/project/canvas"
+import { parseProjectId } from "@convax/collaboration"
 import type { ProjectChangeEvent, ProjectFilesClient } from "@convax/project-files"
 import { BrowserWindow, dialog, ipcMain, shell } from "electron"
 import type { IpcMainInvokeEvent, OpenDialogOptions } from "electron"
@@ -148,7 +148,7 @@ type ProjectInvokeChannel = keyof ProjectIpcContract
 type StopWatching = () => void
 
 function parseProjectIdForCollaboration(projectId: string) {
-  return parseProjectIdV2(projectId)
+  return parseProjectId(projectId)
 }
 
 function decodeProjectFileDataUrl(dataUrl: string): Uint8Array {
@@ -243,7 +243,7 @@ export async function registerProjectIpc(
      */
     onActivated?(project: ProjectRecord): Promise<void> | void
     /** Main-owned ProjectIndex bridge. Production supplies it; unit adapters may omit it. */
-    projectIndexFiles?: ProjectIndexFileApplicationPortV2
+    projectIndexFiles?: ProjectIndexFileApplicationPort
   },
 ) {
   const handlerDisposers: Array<() => void> = []
@@ -292,7 +292,7 @@ export async function registerProjectIpc(
 
   const withCollaboration = async (
     result: FilesResult<"createEntry">,
-    operations: readonly Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResultV2> }>[],
+    operations: readonly Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResult> }>[],
   ): Promise<FilesResult<"createEntry">> => {
     if (!options.projectIndexFiles) return result
     const failedPaths: Array<{ path: string; code: string }> = []
@@ -322,7 +322,7 @@ export async function registerProjectIpc(
   }
 
   const publishTreeOperations = async (projectId: string, rootPath: string) => {
-    const operations: Array<Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResultV2> }>> = []
+    const operations: Array<Readonly<{ path: string; run: () => Promise<ProjectIndexFileMutationResult> }>> = []
     const visit = async (entryPath: string) => {
       try {
         await manager.readFileInfo({ projectId, path: entryPath })

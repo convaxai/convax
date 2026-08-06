@@ -49,7 +49,7 @@ describe("PetStateStore", () => {
     await fs.mkdir(path.dirname(file), { recursive: true })
     await fs.writeFile(file, "{broken")
     expect(await store.read()).toEqual(defaultPetState)
-    await fs.writeFile(file, JSON.stringify({ ...defaultPetState, schema: "convax.pet-state/2" }))
+    await fs.writeFile(file, JSON.stringify({ ...defaultPetState, schema: "convax.pet-state" }))
     expect(await store.read()).toEqual(defaultPetState)
 
     const first = await store.read()

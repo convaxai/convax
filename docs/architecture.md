@@ -39,44 +39,46 @@ Registry/Release artifacts or mechanically generated and verified bootstrap byte
 it does not duplicate hand-maintained Plugin source. No runtime semantic may depend
 on a concrete package id merely because a package was historically bundled here.
 
-The collaboration cutover uses Route F: the repository selects authority only via
-the global V11
-[`active pointer`](superpowers/specs/collaboration-v11-active-authority.json), never
-from a source constant, draft, old manifest, directory presence, or caller-selected
-path. That pointer selects the fixed
-[`V11/R1 release`](superpowers/specs/authorities/collaboration-v11/r1/). Its manifest
-covers eight whole files, including the shared global-URI member; the reviewed
-release adds the manifest, `review-evidence.json`, and three fixed report/receipt
-pairs. The resulting closure has sixteen verified snapshot paths, fifteen below the
-R1 directory. The separate active pointer is never a release member.
+Collaboration has exactly one current protocol. `@convax/collaboration` owns one
+kernel, one frame codec, one restricted JCS canonicalization, and one current
+protocol descriptor. That descriptor is generated deterministically from the owner
+schemas in source, recomputed in CI, and packaged with the application; its exact
+`protocolDigest` is the only protocol identity. Canvas owns one Canvas schema and
+reducer, Project owns one ProjectIndex schema and reducer, and Desktop composes one
+runtime around them.
 
-The active pointer SHA-256 is
-`2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6`;
-the manifest SHA-256 is
-`351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4`;
-the review-evidence SHA-256 is
-`ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2`;
-the protocol-bundle whole-file SHA-256 is
-`180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c`;
-and `ProtocolSchemaBundleV3.coreDigest`/`protocolDigest` is
-`5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f`.
-R1's `historical-v10-r5-pin.json` SHA-256 is
-`ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369`;
-it binds the complete sealed V10/R5 identity chain, including predecessor pointer
-SHA-256 `f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398`
-and historical protocol digest
-`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`.
-V10/R5 is therefore a required historical dependency for verified V2 dispatch, not
-a competing global selector or a fallback that can be reconstructed independently.
+There is no authority selector, no active/pinned release pair, no dual-version
+dispatch, no promotion bridge, no successor runtime, and no predecessor decoder.
+Runtime, build, and packaging never derive protocol behavior from a pointer file, a
+release directory, a durable record shape, or directory presence. Bytes whose frame
+magic, wire format, or `protocolDigest` differ from the built descriptor are
+`unsupported-project-data`: the runtime reports that one classification and never
+tries a second decoder or guesses a layout. A descriptor that is missing or does not
+match the build fails closed before decode, sign, reset, or mutation.
 
-At the first valid V11 activation tree (`T0`), the V11 pointer and all selected and
-pinned snapshot paths must be regular non-symlink Git blobs with mode `100644`.
-Descendant trees seal every path, byte, kind, and mode; a change is
-`activated-authority-mutation`. A missing, inactive, extra, reordered, or
-hash-mismatched identity-chain member is `protocol-schema-bundle-unavailable`; a
-real Main/owner-annex contradiction is `canonical-authority-conflict`. These states
-stop work. Older drafts, reviews, source constants, and implementation snapshots are
-evidence only and never fallback protocol authority.
+The archived V11 collaboration cutover uses Route F pointer selection, and that
+whole model is retired. Its
+[`pointer`](superpowers/specs/collaboration-v11-active-authority.json), its
+[`R1 release`](superpowers/specs/authorities/collaboration-v11/r1/) with its
+sixteen verified snapshot paths, and every other release below
+`superpowers/specs/authorities/**` are **non-runtime archive and review material**.
+Production source, build scripts, and packaging must not read, stage, copy, or
+import them. Their sealed bytes stay unchanged, and their identities remain recorded
+only so a reviewer can recognize archive tampering: pointer SHA-256
+`2c7ecc4c9a3d1b339c2f135babe874900e53af1a2d06379e67ab4fcacf2ad0f6`, manifest
+SHA-256 `351634036ae88bbe843430bb11b3e9d46e6b9bcd865df4aaf55e50fe55dfb1b4`,
+review-evidence SHA-256
+`ef820d44a350303fb5eb1f2d4bb1179c1800e7bc407e3debba52d7588c317dc2`, protocol-bundle
+SHA-256 `180199f3e77e5f4daa9c914f97b8e9a08293ba70e201656efe3bd0c10af70d6c`, recorded
+protocol digest
+`5fe693c9eb0485814fcbe11b6f0136bbc97870184530748ef58502c22ce7865f`, pin SHA-256
+`ac17fd5a5ee5b989909266bc58d616a1476a286ea7f27f7cda5819c0a857f369`, predecessor
+pointer SHA-256 `f1b6f1e09dba629ab06530b2e21c6ac451cd4c04c82ed21cd7cabfb9b7e78398`,
+and predecessor protocol digest
+`de192e03a7466b631b1cefa50f745e22b1ed997f5ce23cbb9c9aea7e46b73bf5`. Editing an
+archived byte is `activated-authority-mutation` and is rejected as tampering. These
+archives, drafts, reviews, and prior implementation snapshots are evidence only and
+never fallback protocol authority.
 
 The product model is local-first: every Project is one local durable aggregate, and
 sharing adds collaborators to that same Project rather than converting it into a
@@ -84,23 +86,23 @@ different Team Project kind. Project open and shell rendering therefore do not
 require Team creation, an invitation, membership bootstrap, a control-plane session,
 or PeerJS startup.
 
-Active V11/R1 is deliberately narrow. It admits only promotion of a verified
-pristine, unshared V10/R5 ProjectIndex into one local-owner V3 Project with one
-deterministic default Canvas. Promotion validates the complete V2 durable head,
-proves the absence of Team binding and sharing handoff, publishes immutable V3
-bridges without rewriting any V2 byte, and selects V3 only through the verified dual
-authority dispatcher. Shared, non-pristine, incomplete, or ambiguous V10 Projects
-remain on the pinned V10/R5 runtime. Direct-new V3 Projects, a second V3 Canvas, V3
-sharing, and an active sharing handoff are unavailable in R1 and fail closed rather
-than widening the selected release.
+Creating a Project therefore writes its current ProjectIndex genesis once, and each
+new Canvas writes its current Canvas genesis once. Sharing uses the same current
+Project and Canvas scopes and never switches protocol. The only local mutation
+outcomes are the current protocol, `unsupported-project-data`, and an explicit
+recovery-required classification; there is no legacy, successor, or promoted state.
+A missing local mutation authority remains `local-authority-unavailable`, and Team
+creation is never presented as recovery.
 
-The V11 design draft remains design evidence only; the selected R1 bytes define the
-runtime boundary. Browser-safe V3 DTO/codecs, Project/node local-owner records, and
-Desktop authority adapters are usable only through the verified R1 selector and its
-historical pin. Directory presence, public exports, passing unit tests, or a durable
-successor-shaped record cannot activate or downgrade a Project. An unavailable or
-ambiguous promotion remains `local-authority-unavailable` or its closed recovery
-classification; Team creation is never presented as recovery.
+Existing experimental collaboration trees written by the retired multi-release model
+are unsupported. They may be archived unchanged, exported as user-visible resources,
+or replaced by a new current genesis after an explicit user confirmation that retains
+a recoverable backup of the old bytes. A completed local reset moves the exact prior
+`.convax` tree to the inert sibling `.convax-archive-<reset-token-suffix>`; runtime
+resolution ignores that archive, and only an explicit later user action may delete
+it. Open, checkpoint, and GC never reset, delete,
+re-sign, renumber, or reinterpret them, and no migration helper keeps an old decoder
+inside the production bundle.
 
 Project/node retains each Project's canonical-root/local-actor binding even after
 the last runtime lease closes. A changed root or actor can be admitted only after a
@@ -149,7 +151,7 @@ flowchart TB
       Project["@convax/project"]
       Canvas["@convax/canvas<br/>schema, reducer, React Flow projection"]
       ProjectFiles["@convax/project-files"]
-      Collaboration["@convax/collaboration<br/>replicaDoc / candidateDoc kernel"]
+      Collaboration["@convax/collaboration<br/>one current protocol descriptor<br/>replicaDoc / candidateDoc kernel"]
       URI["@convax/uri"]
       UI["@convax/ui"]
       AgentRuntime["@convax/agent-runtime"]
@@ -167,6 +169,10 @@ flowchart TB
       Project --> UI
       PluginSdk --> PluginApi
     end
+
+    ProtocolDescriptor["Packaged current protocol descriptor<br/>generated from owner schemas · exact protocolDigest"]
+    Collaboration --> ProtocolDescriptor
+    ProtocolDescriptor --> Main
 
     MarketplaceKit --> Marketplace
     MarketplaceKit --> PluginSdk
@@ -280,15 +286,16 @@ selects them into Workbench, connects or moves them, or adds them to history.
 closed static scheme grammar. It does not resolve resources, perform I/O or auth,
 read the current Project, or host a dynamic scheme registry.
 
-`@convax/collaboration` is the generic headless owner of historical V2 and selected
-V3 primitives/JCS, causal frames/frontiers, exact Yjs wire codecs, protocol-authority
-validation and dispatch, one local `replicaDoc`, isolated `candidateDoc` validation,
-checkpoint/floor primitives, journal ports, and session undo coordination. It may
-depend on external `yjs` but on no Convax package. Project and Canvas own their exact
-logical schemas and pure reducers; Desktop owns PeerJS, OS-vault/writer-lock
-adapters, lifecycle, and composition;
-`@convax/project/node` implements native durability ports. There is no
-legacy multi-document promotion model or centralized edit-sequencing owner.
+`@convax/collaboration` is the generic headless owner of one current protocol
+descriptor and digest, one set of primitives/JCS, one causal frame/frontier model,
+one exact Yjs wire codec, descriptor validation, one local `replicaDoc`, isolated
+`candidateDoc` validation, checkpoint/floor primitives, journal ports, and session
+undo coordination. It may depend on external `yjs` but on no Convax package. Project
+and Canvas own their exact logical schemas and one pure reducer each; Desktop owns
+PeerJS, OS-vault/writer-lock adapters, lifecycle, and composition;
+`@convax/project/node` implements native durability ports. There is no second
+decoder, kernel, or reducer, no multi-document promotion model, and no centralized
+edit-sequencing owner.
 
 ### Workbench
 
@@ -466,7 +473,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics             |
 | `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                                                             |
 | `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                                                          |
-| `@convax/collaboration`     | Historical V2 and selected V3 primitives/JCS, authority validation and dispatch, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination |
+| `@convax/collaboration`     | One current protocol descriptor/digest, one primitives/JCS and frame codec, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination      |
 | `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                       |
 | `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                              |
 | `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                    |
@@ -534,9 +541,8 @@ The isolated checkpoint attester is a separate streaming composition, never an
 ordinary control route. It parses the public `CVXCAR02` preamble/index, verifies
 bounded section length/hash while writing only to process-scoped ephemeral handles,
 and destroys those bytes on every terminal path. A certificate signer is reachable
-only after an injected artifact resolver returns a live
-`DocumentOwnerRuntimeV2` bound to the exact pinned historical R5 authority and the carrier's
-artifact-set digest. Missing executable artifacts, structural owner-port copies,
+only after an injected artifact resolver returns a live document owner runtime bound
+to the exact current protocol descriptor and the carrier's artifact-set digest. Missing executable artifacts, structural owner-port copies,
 cancellation, or cleanup/audit failure produce no certificate. The generic shell is
 implemented; a deployment still remains fail-closed until it supplies the exact
 artifact executable resolver, ephemeral store, audit sink, and content-attestation
@@ -545,7 +551,7 @@ signer.
 Every implemented API slice remains closed and replay-safe. Challenge consumption,
 nonce use, counter advancement, current member/replica/actor/key/role recheck,
 credential signing, and publication commit occur in one injected transaction.
-`peerId` is routing data only. Unimplemented v10 control-plane surfaces return 404
+`peerId` is routing data only. Unimplemented control-plane surfaces return 404
 until their exact service stores, public verifiers, and stateless attester ports
 exist; an HTTP success must never stand in for a signed protocol result. The service
 never stores causal-frame, Yjs, checkpoint snapshot, typed-intent, Plugin-state, or
@@ -602,6 +608,7 @@ boundary checker fails closed until those admissions are complete.
 | Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                 |
 | Active Canvas/file                                                    | `WorkbenchController.activeInput/surface`                | Sole source for the displayed primary content                                                      |
 | Canvas node selection                                                 | Workbench selection plus mounted Canvas view             | Always scoped to the corresponding Input/view                                                      |
+| Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option     |
 | Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                      |
 | In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                |
 | Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                |
@@ -613,6 +620,7 @@ boundary checker fails closed until those admissions are complete.
 | React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                             |
 | Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                          |
 | Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                               |
+| Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                     | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids        |
 | Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                           |
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                         |
 | Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                               |
@@ -743,6 +751,11 @@ browser localStorage                    per-user Workbench/renderer preferences 
     staging/                            short-lived user-file publication staging
 ```
 
+Durable store filenames above are literal current on-disk names. A numeric suffix in
+one of them is inherited naming, not a protocol selector: the runtime never chooses a
+decoder, kernel, or reducer from a filename, and renaming such a file remains
+mechanical cleanup rather than a compatibility mechanism.
+
 `Create Project` receives only a portable project name from renderer and creates a
 new root at `<user Documents>/Convax/<project name>` without opening a native folder
 picker. `Open Project` is the explicit path-binding flow and keeps the native folder
@@ -840,16 +853,23 @@ product closure; it never routes the reserved Official identity through the
 user-added Network source manager, resolves a runtime “latest,” or grants a changed
 candidate.
 
-The v10 collaboration transition is an explicitly approved breaking cutover from the
-legacy JSON catalog/document plus global revision-counter model. Project open first
-detects the legacy portable schema and offers only an explicit user-confirmed reset;
-it must not hydrate JSON into Yjs, dual-write both stores, or silently migrate.
+The current collaboration protocol is an explicitly approved breaking cutover from
+both the legacy JSON catalog/document plus global revision-counter model and the
+retired multi-release experimental trees. Project open first detects unsupported
+portable collaboration data and offers only an explicit user-confirmed reset; it must
+not hydrate JSON into Yjs, dual-write both stores, keep an old decoder behind a
+migration helper, or silently migrate.
 Before confirmation, every unsupported byte is preserved unchanged and excluded
 from new mutation and GC paths. Reset stages a fresh ProjectIndexYDoc/per-Canvas
 binary tree, publishes it only after the required durable/service fences, and never
 deletes ordinary Project files, including conflict copies, `Notes/`, `Generated/`,
-or other user-visible content. Unsupported legacy bytes may be retired only by the
-explicit reset policy after confirmation, never by open, checkpoint, or GC.
+or other user-visible content. Unsupported bytes may be retired only by the
+explicit reset policy after confirmation, never by open, checkpoint, or GC. A
+completed reset retains a recoverable backup of the previous private tree until the
+user deletes it. The backup is the byte-exact inert sibling
+`.convax-archive-<reset-token-suffix>` and is never a runtime authority, so the only
+admitted handling of unsupported collaboration data is archive, export, or confirmed
+new-epoch genesis.
 The Node open guard runs before registry publication or recency mutation. Its
 host-local reset planner inventories and digests the exact private deletion set;
 ProjectIndex first registration independently repeats that cutover guard before it
@@ -862,9 +882,17 @@ frame, Canvas route, Team/control identity, reset evidence, or unknown native st
 This recognition treats the tree only as a rejected bootstrap artifact; it does not
 authorize reset of a current Project or reuse an old epoch. Any mismatch requires
 the control-plane rollover path and keeps the Project closed.
-publication requires the exact control/Project verifier to persist and approve the
+An explicitly retired V3 local tree may instead use the same unteamed reset surface
+without decoding its old frames only when both frozen local markers are exact plain
+files, no sharing handoff or Team/control namespace exists, and the durable Team
+authority store reports `missing`. Reset prepares a fresh owner binding and Project
+epoch, keeps that binding inert while staging and publishing the new genesis, verifies
+the byte-exact archive, and only then atomically makes the new binding current. Any
+missing marker, Team record, rejected Team record, or interrupted finalization keeps
+the Project closed as recovery-required.
+Publication requires the exact control/Project verifier to persist and approve the
 frozen confirmation/approval/rollover evidence, then re-verifies the complete
-published tree before retiring the old private tree. Stale plans, symlink changes,
+published tree before archiving the old private tree. Stale plans, symlink changes,
 receipt rejection, service unavailability, or ambiguous rename recovery keep the
 Project closed and retain the old bytes.
 
@@ -1583,6 +1611,38 @@ relationship creation, semantic guards, persistence, and optional view refresh a
 composed once. The UI and Agent call that same operation. A primitive remains
 available for precise low-level edits, but it is not the default product path.
 
+### Creating a generic Plugin Canvas surface
+
+```text
+Capability Center action
+  -> preload canvas.pluginSurfaces.create({ projectId, canvasId, pluginId })
+  -> trusted Main IPC
+  -> Main resolves one exact current ActiveSet lease
+  -> Main derives renderer, size, Plugin requirement, schema, validation artifact,
+     snapshot and initial state from that leased manifest
+  -> Canvas plugin-surface business command
+  -> one typed intent, one candidate transaction, one durable frame
+  -> receipt plus the Canvas-created node id
+```
+
+Canvas owns the host-neutral plugin-surface node kind, its business command, and the
+one atomic intent that creates it. The intent creates exactly one independent
+top-level `file` node with a Canvas-derived id and incarnation and a Canvas-computed
+deterministic position; it carries no source, edge, parent, creation group,
+caller-selected id, raw Yjs, actor, or digest. Adding a new Plugin changes only a
+validated manifest and its schema-valid state, never a Plugin-specific intent, node
+kind, role, or reducer branch, and Host code never branches on a concrete Plugin id.
+
+Renderer and Preload submit only Project, Canvas, and Plugin ids. They never supply a
+version, snapshot digest, schema digest, node id, position, complete node, or initial
+state, and no renderer-registered node factory, generic node-insert command, or
+connected-materialization command may create this root node instead. Main rechecks
+the exact lease immediately before the durable commit; a stale lease, missing
+validation artifact, or invalid initial state writes nothing. A failed renderer
+refresh cannot roll back an already durable creation. Uninstalling or unloading the
+Plugin retains the node and its portable state and degrades the projection to the
+unknown-file fallback.
+
 ### Canvas navigation and deletion
 
 `ProjectCanvasWorkbenchCoordinator` is a Desktop coordinator because the flow spans
@@ -1711,7 +1771,9 @@ validated Plugin manifest into those registries; it must not add another extensi
 bus, Canvas node role, or parallel mutation API. A Plugin surface remains a `file`
 node and calls existing clients/controllers through a narrow host adapter. The Web
 renderer is therefore a presentation contribution, not the owner of Plugin identity,
-permissions, Canvas transactions, or Project scope.
+permissions, Canvas transactions, or Project scope. It renders an existing
+plugin-surface node and never registers a local node factory or creates that node in
+the renderer; creation uses the Main-derived Canvas business command in §6.
 
 `canvas.commands` is the sole canonical Plugin UI command registry. Each command
 owns its localized title, optional fixed Host icon token, and one bounded
@@ -1956,7 +2018,9 @@ The public bridge keeps separate namespaces for Project lifecycle, Project Files
 Project Canvas, Canvas documents/views, Agent runtime, Plugin management, Plugin
 capabilities, and Plugin Services. Plugin Services accept only an installed Plugin
 id through fixed actions; Checkout additionally accepts one validated Plan key and
-never returns its external URL.
+never returns its external URL. Plugin surface creation is one narrow Canvas-namespace
+method that accepts only Project, Canvas, and Plugin ids and returns a receipt plus
+the Canvas-created node id.
 The Canvas native-drag bridge is a two-phase exception required by Electron: an
 async prepare call returns only an opaque sender-scoped ticket, then a synchronous
 `dragstart` message consumes it. Main rechecks the active Canvas selection before

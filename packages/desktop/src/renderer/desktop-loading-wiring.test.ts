@@ -48,7 +48,7 @@ describe("Desktop Project startup wiring", () => {
   })
 
   test("keeps Team collaboration lazy and exposes sharing as an explicit Project action", () => {
-    expect(mainSource).toContain("activateProjectSharingFromDurableBindingV2")
+    expect(mainSource).toContain("activateProjectSharingFromDurableBinding")
     expect(sharingActivationSource).toContain('binding === "missing"')
     expect(sharingActivationSource).toContain("input.service.activateLocalProject(projectId)")
     expect(indexSource).toContain('data-project-share=""')

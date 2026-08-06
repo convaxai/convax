@@ -1240,7 +1240,7 @@ describe("PluginConnectedMediaService", () => {
             title: "Canvas",
           }
           return {
-            format: "convax.project-canvas-catalog-projection/2",
+            format: "convax.project-canvas-catalog-projection",
             projectId,
             projectEpoch: "BBBBBBBBBBBBBBBBBBBBBB",
             routes: [route],

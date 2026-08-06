@@ -1,77 +1,77 @@
 import {
-  compareDecodedBase64urlV2,
-  compareUtf8V2,
-  documentScopeDigestV2,
-  encodeRestrictedJcsV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseReplicaIdV2,
-  replicaIdToYjsClientIdV2,
-  parseDocumentScopeV2,
+  compareDecodedBase64url,
+  compareUtf8,
+  documentScopeDigest,
+  encodeRestrictedJcs,
+  parseActorId,
+  parseDigest,
+  parseReplicaId,
+  replicaIdToYjsClientId,
+  parseDocumentScope,
 } from "@convax/collaboration"
 import * as Y from "yjs"
 import type {
-  BoundedOperationReceiptV2,
-  CanvasActorSlotEntriesV2,
-  CanvasCanonicalMapEntriesV2,
-  CanvasCanonicalMetaV2,
-  CanvasCanonicalSemanticHistoryValueV2,
-  CanvasCanonicalStateV2,
-  CanvasEdgeDataV2,
-  CanvasEdgeIdentityV2,
-  CanvasEdgeSnapshotV2,
-  CanvasEntityRefV2,
-  CanvasIdentityV2,
-  CanvasNodeIdentityV2,
-  CanvasNodeSnapshotV2,
-  CanvasPointV2,
-  CanvasSizeV2,
-  CanvasSnapshotV2,
-  ContainmentChoiceV2,
-  CreationGroupRefV2,
-  DigestV2,
-  DocumentScopeV2,
+  BoundedOperationReceipt,
+  CanvasActorSlotEntries,
+  CanvasCanonicalMapEntries,
+  CanvasCanonicalMeta,
+  CanvasCanonicalSemanticHistoryValue,
+  CanvasCanonicalState,
+  CanvasEdgeData,
+  CanvasEdgeIdentity,
+  CanvasEdgeSnapshot,
+  CanvasEntityRef,
+  CanvasIdentity,
+  CanvasNodeIdentity,
+  CanvasNodeSnapshot,
+  CanvasPoint,
+  CanvasSize,
+  CanvasSnapshot,
+  ContainmentChoice,
+  CreationGroupRef,
+  Digest,
+  DocumentScope,
   GenerationBeginV2,
   GenerationDismissalV2,
   GenerationRecoveryFailureV2,
-  NodeDataEnvelopeV2,
+  NodeDataEnvelope,
   OwnerGenerationTerminalV2,
-  PluginStateEnvelopeV2,
-  StampedClaimV2,
-  SemanticHistoryRootV2,
-  SemanticHistoryTransitionV2,
-  TombstoneFactV2,
+  PluginStateEnvelope,
+  StampedClaim,
+  SemanticHistoryRoot,
+  SemanticHistoryTransition,
+  TombstoneFact,
 } from "./types"
 import {
-  assertCanvasIdentityV2,
-  assertContainmentChoiceV2,
-  assertCreationGroupV2,
-  assertEdgeDataV2,
-  assertEdgeIdentityV2,
+  assertCanvasIdentity,
+  assertContainmentChoice,
+  assertCreationGroup,
+  assertEdgeData,
+  assertEdgeIdentity,
   assertGenerationBeginV2,
   assertGenerationDismissalV2,
   assertGenerationRecoveryFailureV2,
   assertGenerationTerminalV2,
-  assertNodeDataV2,
-  assertNodeIdentityV2,
-  assertOperationReceiptV2,
-  assertPluginStateV2,
-  assertPointV2,
-  assertSemanticHistoryValueV2,
-  assertSizeV2,
-  assertStampedClaimV2,
-  assertTombstoneV2,
-  canvasDigestV2,
-  canvasEntityKeyV2,
-  canvasOwnerCanonicalizerDigestV2,
-  CanvasSchemaErrorV2,
-  operationKeyV2,
-  sameCanonicalValueV2,
+  assertNodeData,
+  assertNodeIdentity,
+  assertOperationReceipt,
+  assertPluginState,
+  assertPoint,
+  assertSemanticHistoryValue,
+  assertSize,
+  assertStampedClaim,
+  assertTombstone,
+  canvasDigest,
+  canvasEntityKey,
+  canvasOwnerCanonicalizerDigest,
+  CanvasSchemaError,
+  operationKey,
+  sameCanonicalValue,
 } from "./validation"
-import { assertCanvasHistoryTemplateScheduleV2 } from "./history-schedule"
+import { assertCanvasHistoryTemplateSchedule } from "./history-schedule"
 
-export const CANVAS_ROOT_NAME_V2 = "convax.canvas.v2"
-export const CANVAS_ROOT_KEYS_V2 = Object.freeze([
+export const CANVAS_ROOT_NAME = "convax.canvas"
+export const CANVAS_ROOT_KEYS = Object.freeze([
   "identity",
   "meta",
   "nodes",
@@ -99,86 +99,86 @@ const IDENTITY_KEYS = [
   "genesisDigest",
 ] as const
 
-export function createCanvasYDocV2(
-  scopeInput: DocumentScopeV2,
-  ownerSchemaDigestInput: DigestV2,
-  protocolDigestInput: DigestV2,
-  projectIndexRouteDependencyFrameDigestInput: DigestV2,
-  checkpointAuthorReplicaIdInput: import("@convax/collaboration").ReplicaIdV2,
+export function createCanvasYDoc(
+  scopeInput: DocumentScope,
+  ownerSchemaDigestInput: Digest,
+  protocolDigestInput: Digest,
+  projectIndexRouteDependencyFrameDigestInput: Digest,
+  checkpointAuthorReplicaIdInput: import("@convax/collaboration").ReplicaId,
 ): Y.Doc {
-  const scope = parseDocumentScopeV2(scopeInput)
+  const scope = parseDocumentScope(scopeInput)
   if (scope.docKind !== "canvas")
-    throw new CanvasSchemaErrorV2("scope-mismatch", "Canvas genesis requires a Canvas scope")
-  const ownerSchemaDigest = parseDigestV2(ownerSchemaDigestInput)
-  const protocolDigest = parseDigestV2(protocolDigestInput)
-  const projectIndexRouteDependencyFrameDigest = parseDigestV2(projectIndexRouteDependencyFrameDigestInput)
-  const checkpointAuthorReplicaId = parseReplicaIdV2(checkpointAuthorReplicaIdInput)
-  const scopeId = documentScopeDigestV2(scope)
-  const canonicalizerDigest = canvasOwnerCanonicalizerDigestV2(ownerSchemaDigest)
+    throw new CanvasSchemaError("scope-mismatch", "Canvas genesis requires a Canvas scope")
+  const ownerSchemaDigest = parseDigest(ownerSchemaDigestInput)
+  const protocolDigest = parseDigest(protocolDigestInput)
+  const projectIndexRouteDependencyFrameDigest = parseDigest(projectIndexRouteDependencyFrameDigestInput)
+  const checkpointAuthorReplicaId = parseReplicaId(checkpointAuthorReplicaIdInput)
+  const scopeId = documentScopeDigest(scope)
+  const canonicalizerDigest = canvasOwnerCanonicalizerDigest(ownerSchemaDigest)
   const core = {
-    format: "convax.canvas-genesis-core/2",
+    format: "convax.canvas-genesis-core",
     scopeId,
-    canvasId: scope.docId as import("@convax/collaboration").CanvasIdV2,
+    canvasId: scope.docId as import("@convax/collaboration").CanvasId,
     ownerSchemaDigest,
     protocolDigest,
     canonicalizerDigest,
     projectIndexRouteDependencyFrameDigest,
   } as const
-  const identity: CanvasIdentityV2 = {
+  const identity: CanvasIdentity = {
     ...core,
-    format: "convax.canvas.v2",
-    genesisDigest: canvasDigestV2("convax.canvas-genesis-core/2", core),
+    format: "convax.canvas",
+    genesisDigest: canvasDigest("convax.canvas-genesis-core", core),
   }
-  const document = createCanvasReconstructionYDocV2()
+  const document = createCanvasReconstructionYDoc()
   // Genesis structs are authored by the checkpoint replica's reserved Yjs client
   // id. A random process client id would make otherwise identical genesis bytes
   // unverifiable against the retained author credential chain.
-  document.clientID = replicaIdToYjsClientIdV2(checkpointAuthorReplicaId)
+  document.clientID = replicaIdToYjsClientId(checkpointAuthorReplicaId)
   document.transact(() => {
-    const root = document.getMap(CANVAS_ROOT_NAME_V2)
+    const root = document.getMap(CANVAS_ROOT_NAME)
     const identityMap = new Y.Map<unknown>()
     for (const key of IDENTITY_KEYS) identityMap.set(key, identity[key])
     const meta = new Y.Map<unknown>()
     for (const key of META_KEYS) meta.set(key, new Y.Map<unknown>())
     root.set("identity", identityMap)
     root.set("meta", meta)
-    for (const key of CANVAS_ROOT_KEYS_V2.slice(2)) root.set(key, new Y.Map<unknown>())
+    for (const key of CANVAS_ROOT_KEYS.slice(2)) root.set(key, new Y.Map<unknown>())
   }, "canvas-genesis-v2")
-  validateCanvasYDocV2(document, scope)
+  validateCanvasYDoc(document, scope)
   return document
 }
 
-export function cloneCanvasYDocV2(document: Y.Doc): Y.Doc {
-  const clone = createCanvasReconstructionYDocV2()
+export function cloneCanvasYDoc(document: Y.Doc): Y.Doc {
+  const clone = createCanvasReconstructionYDoc()
   Y.applyUpdate(clone, Y.encodeStateAsUpdate(document), "canvas-candidate-clone-v2")
   return clone
 }
 
 /** Owner-specific reconstruction factory: binds the sole named root before an update is applied. */
-export function createCanvasReconstructionYDocV2(): Y.Doc {
+export function createCanvasReconstructionYDoc(): Y.Doc {
   const document = new Y.Doc()
-  document.getMap(CANVAS_ROOT_NAME_V2)
+  document.getMap(CANVAS_ROOT_NAME)
   return document
 }
 
-export function getCanvasRootV2(document: Y.Doc): Y.Map<unknown> {
-  const root = document.share.get(CANVAS_ROOT_NAME_V2)
+export function getCanvasRoot(document: Y.Doc): Y.Map<unknown> {
+  const root = document.share.get(CANVAS_ROOT_NAME)
   if (!(root instanceof Y.Map))
-    throw new CanvasSchemaErrorV2("invalid-root", "Canvas v2 root is missing or is not a Y.Map")
+    throw new CanvasSchemaError("invalid-root", "Canvas v2 root is missing or is not a Y.Map")
   return root
 }
 
-export function getCanvasChildMapV2(document: Y.Doc, key: (typeof CANVAS_ROOT_KEYS_V2)[number]): Y.Map<unknown> {
-  return asMap(getCanvasRootV2(document).get(key), `${CANVAS_ROOT_NAME_V2}.${key}`)
+export function getCanvasChildMap(document: Y.Doc, key: (typeof CANVAS_ROOT_KEYS)[number]): Y.Map<unknown> {
+  return asMap(getCanvasRoot(document).get(key), `${CANVAS_ROOT_NAME}.${key}`)
 }
 
-export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScopeV2): CanvasSnapshotV2 {
+export function validateCanvasYDoc(document: Y.Doc, scope?: DocumentScope): CanvasSnapshot {
   const sharedNames = [...document.share.keys()]
-  if (sharedNames.length !== 1 || sharedNames[0] !== CANVAS_ROOT_NAME_V2) {
-    throw new CanvasSchemaErrorV2("unknown-root", "Canvas Y.Doc must contain exactly the convax.canvas.v2 named root")
+  if (sharedNames.length !== 1 || sharedNames[0] !== CANVAS_ROOT_NAME) {
+    throw new CanvasSchemaError("unknown-root", "Canvas Y.Doc must contain exactly the convax.canvas.v2 named root")
   }
-  const root = getCanvasRootV2(document)
-  assertMapKeys(root, CANVAS_ROOT_KEYS_V2, CANVAS_ROOT_NAME_V2)
+  const root = getCanvasRoot(document)
+  assertMapKeys(root, CANVAS_ROOT_KEYS, CANVAS_ROOT_NAME)
   const identity = readIdentity(asMap(root.get("identity"), "identity"), scope)
   const meta = readMeta(asMap(root.get("meta"), "meta"))
   const nodes = readMap(root, "nodes", readNode)
@@ -192,8 +192,8 @@ export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScopeV2): 
   const operations = readMap(root, "operations", readOperation)
 
   for (const [key, choice] of containments) {
-    if (key !== `${canvasEntityKeyV2(choice.child)}/actor/${choice.stamp.actorId}`)
-      throw new CanvasSchemaErrorV2("containment-key-mismatch", `${key} does not match containment value`)
+    if (key !== `${canvasEntityKey(choice.child)}/actor/${choice.stamp.actorId}`)
+      throw new CanvasSchemaError("containment-key-mismatch", `${key} does not match containment value`)
   }
   validateGenerationRelations(
     nodes,
@@ -220,10 +220,10 @@ export function validateCanvasYDocV2(document: Y.Doc, scope?: DocumentScopeV2): 
   })
 }
 
-export function extractCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScopeV2): CanvasCanonicalStateV2 {
-  const snapshot = validateCanvasYDocV2(document, scope)
+export function extractCanvasCanonicalState(document: Y.Doc, scope?: DocumentScope): CanvasCanonicalState {
+  const snapshot = validateCanvasYDoc(document, scope)
   return {
-    format: "convax.canvas-canonical-state/2",
+    format: "convax.canvas-canonical-state",
     identity: snapshot.identity,
     meta: snapshot.meta,
     nodes: mapEntries(snapshot.nodes, ({ key: _key, ...record }) => record),
@@ -238,180 +238,180 @@ export function extractCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentS
   }
 }
 
-export function encodeCanvasCanonicalStateV2(document: Y.Doc, scope?: DocumentScopeV2): Uint8Array {
-  return encodeRestrictedJcsV2(extractCanvasCanonicalStateV2(document, scope))
+export function encodeCanvasCanonicalState(document: Y.Doc, scope?: DocumentScope): Uint8Array {
+  return encodeRestrictedJcs(extractCanvasCanonicalState(document, scope))
 }
 
-function readIdentity(map: Y.Map<unknown>, scope?: DocumentScopeV2): CanvasIdentityV2 {
+function readIdentity(map: Y.Map<unknown>, scope?: DocumentScope): CanvasIdentity {
   assertMapKeys(map, IDENTITY_KEYS, "identity")
   const value = Object.fromEntries(IDENTITY_KEYS.map((key) => [key, map.get(key)]))
-  assertCanvasIdentityV2(value, scope)
+  assertCanvasIdentity(value, scope)
   return value
 }
 
-function readMeta(map: Y.Map<unknown>): CanvasCanonicalMetaV2 {
+function readMeta(map: Y.Map<unknown>): CanvasCanonicalMeta {
   assertMapKeys(map, META_KEYS, "meta")
   return {
     title: actorEntries(asMap(map.get("title"), "meta.title"), (value) =>
-      assertStampedClaimV2(value, assertNullableText),
+      assertStampedClaim(value, assertNullableText),
     ),
     description: actorEntries(asMap(map.get("description"), "meta.description"), (value) =>
-      assertStampedClaimV2(value, assertNullableText),
+      assertStampedClaim(value, assertNullableText),
     ),
-    tags: actorEntries(asMap(map.get("tags"), "meta.tags"), (value) => assertStampedClaimV2(value, assertTags)),
+    tags: actorEntries(asMap(map.get("tags"), "meta.tags"), (value) => assertStampedClaim(value, assertTags)),
   }
 }
 
-function readNode(key: string, value: unknown): CanvasNodeSnapshotV2 {
+function readNode(key: string, value: unknown): CanvasNodeSnapshot {
   const record = asMap(value, `nodes.${key}`)
   assertMapKeys(record, NODE_KEYS, `nodes.${key}`)
   const identity = record.get("identity")
-  assertNodeIdentityV2(identity)
-  if (canvasEntityKeyV2(identity.ref) !== key)
-    throw new CanvasSchemaErrorV2("identity-key-mismatch", `Node ${key} identity does not match key`)
-  const position = actorEntries<StampedClaimV2<CanvasPointV2>>(
+  assertNodeIdentity(identity)
+  if (canvasEntityKey(identity.ref) !== key)
+    throw new CanvasSchemaError("identity-key-mismatch", `Node ${key} identity does not match key`)
+  const position = actorEntries<StampedClaim<CanvasPoint>>(
     asMap(record.get("position"), `${key}.position`),
-    (claim: unknown): asserts claim is StampedClaimV2<CanvasPointV2> => assertStampedClaimV2(claim, assertPointV2),
+    (claim: unknown): asserts claim is StampedClaim<CanvasPoint> => assertStampedClaim(claim, assertPoint),
   )
-  const size = actorEntries<StampedClaimV2<CanvasSizeV2>>(
+  const size = actorEntries<StampedClaim<CanvasSize>>(
     asMap(record.get("size"), `${key}.size`),
-    (claim: unknown): asserts claim is StampedClaimV2<CanvasSizeV2> => assertStampedClaimV2(claim, assertSizeV2),
+    (claim: unknown): asserts claim is StampedClaim<CanvasSize> => assertStampedClaim(claim, assertSize),
   )
-  const data = actorEntries<StampedClaimV2<NodeDataEnvelopeV2>>(
+  const data = actorEntries<StampedClaim<NodeDataEnvelope>>(
     asMap(record.get("data"), `${key}.data`),
-    (claim: unknown): asserts claim is StampedClaimV2<NodeDataEnvelopeV2> =>
-      assertStampedClaimV2(claim, assertNodeDataV2),
+    (claim: unknown): asserts claim is StampedClaim<NodeDataEnvelope> =>
+      assertStampedClaim(claim, assertNodeData),
   )
-  const plugin = actorEntries<StampedClaimV2<PluginStateEnvelopeV2 | null>>(
+  const plugin = actorEntries<StampedClaim<PluginStateEnvelope | null>>(
     asMap(record.get("plugin"), `${key}.plugin`),
-    (claim: unknown): asserts claim is StampedClaimV2<PluginStateEnvelopeV2 | null> =>
-      assertStampedClaimV2(claim, assertNullablePlugin),
+    (claim: unknown): asserts claim is StampedClaim<PluginStateEnvelope | null> =>
+      assertStampedClaim(claim, assertNullablePlugin),
   )
-  const tombstones = actorEntries<TombstoneFactV2>(
+  const tombstones = actorEntries<TombstoneFact>(
     asMap(record.get("tombstones"), `${key}.tombstones`),
-    (fact: unknown): asserts fact is TombstoneFactV2 => assertTombstoneV2(fact, identity.ref),
+    (fact: unknown): asserts fact is TombstoneFact => assertTombstone(fact, identity.ref),
     true,
   )
   if (position.length === 0 || size.length === 0 || data.length === 0 || plugin.length === 0)
-    throw new CanvasSchemaErrorV2("missing-register-value", `Node ${key} lacks a creator value`)
+    throw new CanvasSchemaError("missing-register-value", `Node ${key} lacks a creator value`)
   for (const [, claim] of data) {
     if (identity.role === "agent" ? claim.value.kind !== "agent" : claim.value.kind === "agent")
-      throw new CanvasSchemaErrorV2("role-data-mismatch", `Node ${key} role and data disagree`)
+      throw new CanvasSchemaError("role-data-mismatch", `Node ${key} role and data disagree`)
   }
   const creationGroup = record.get("creationGroup")
-  if (creationGroup !== null) assertCreationGroupV2(creationGroup)
+  if (creationGroup !== null) assertCreationGroup(creationGroup)
   return Object.freeze({ key, identity, position, size, data, plugin, tombstones, creationGroup })
 }
 
-function readEdge(key: string, value: unknown): CanvasEdgeSnapshotV2 {
+function readEdge(key: string, value: unknown): CanvasEdgeSnapshot {
   const record = asMap(value, `edges.${key}`)
   assertMapKeys(record, EDGE_KEYS, `edges.${key}`)
   const identity = record.get("identity")
-  assertEdgeIdentityV2(identity)
-  if (canvasEntityKeyV2(identity.ref) !== key)
-    throw new CanvasSchemaErrorV2("identity-key-mismatch", `Edge ${key} identity does not match key`)
-  const data = actorEntries<StampedClaimV2<CanvasEdgeDataV2>>(
+  assertEdgeIdentity(identity)
+  if (canvasEntityKey(identity.ref) !== key)
+    throw new CanvasSchemaError("identity-key-mismatch", `Edge ${key} identity does not match key`)
+  const data = actorEntries<StampedClaim<CanvasEdgeData>>(
     asMap(record.get("data"), `${key}.data`),
-    (claim: unknown): asserts claim is StampedClaimV2<CanvasEdgeDataV2> =>
-      assertStampedClaimV2(claim, assertEdgeDataV2),
+    (claim: unknown): asserts claim is StampedClaim<CanvasEdgeData> =>
+      assertStampedClaim(claim, assertEdgeData),
   )
-  const tombstones = actorEntries<TombstoneFactV2>(
+  const tombstones = actorEntries<TombstoneFact>(
     asMap(record.get("tombstones"), `${key}.tombstones`),
-    (fact: unknown): asserts fact is TombstoneFactV2 => assertTombstoneV2(fact, identity.ref),
+    (fact: unknown): asserts fact is TombstoneFact => assertTombstone(fact, identity.ref),
     true,
   )
-  if (data.length === 0) throw new CanvasSchemaErrorV2("missing-register-value", `Edge ${key} lacks creator data`)
+  if (data.length === 0) throw new CanvasSchemaError("missing-register-value", `Edge ${key} lacks creator data`)
   const creationGroup = record.get("creationGroup")
-  if (creationGroup !== null) assertCreationGroupV2(creationGroup)
+  if (creationGroup !== null) assertCreationGroup(creationGroup)
   return Object.freeze({ key, identity, data, tombstones, creationGroup })
 }
 
-function readContainment(key: string, value: unknown): ContainmentChoiceV2 {
-  assertContainmentChoiceV2(value)
+function readContainment(key: string, value: unknown): ContainmentChoice {
+  assertContainmentChoice(value)
   return value
 }
 
 function readBegin(key: string, value: unknown): GenerationBeginV2 {
   assertGenerationBeginV2(value)
   if (key !== value.generationId)
-    throw new CanvasSchemaErrorV2("generation-key-mismatch", "Generation begin key mismatch")
+    throw new CanvasSchemaError("generation-key-mismatch", "Generation begin key mismatch")
   return value
 }
 
 function readTerminal(key: string, value: unknown): OwnerGenerationTerminalV2 {
   assertGenerationTerminalV2(value)
   if (key !== `${value.generationId}/owner/${value.beginActorId}`)
-    throw new CanvasSchemaErrorV2("generation-key-mismatch", "Generation terminal key mismatch")
+    throw new CanvasSchemaError("generation-key-mismatch", "Generation terminal key mismatch")
   return value
 }
 
 function readDismissal(key: string, value: unknown): GenerationDismissalV2 {
   assertGenerationDismissalV2(value)
   if (key !== value.generationId)
-    throw new CanvasSchemaErrorV2("generation-key-mismatch", "Generation dismissal key mismatch")
+    throw new CanvasSchemaError("generation-key-mismatch", "Generation dismissal key mismatch")
   return value
 }
 
 function readRecovery(key: string, value: unknown): GenerationRecoveryFailureV2 {
   assertGenerationRecoveryFailureV2(value)
   if (key !== value.generationId)
-    throw new CanvasSchemaErrorV2("generation-key-mismatch", "Generation recovery key mismatch")
+    throw new CanvasSchemaError("generation-key-mismatch", "Generation recovery key mismatch")
   return value
 }
 
-function readHistory(_key: string, value: unknown): CanvasCanonicalSemanticHistoryValueV2 {
-  assertSemanticHistoryValueV2(value)
+function readHistory(_key: string, value: unknown): CanvasCanonicalSemanticHistoryValue {
+  assertSemanticHistoryValue(value)
   return value
 }
 
-function readOperation(key: string, value: unknown): BoundedOperationReceiptV2 {
-  assertOperationReceiptV2(value)
-  if (key !== operationKeyV2(value.actorId, value.operationId))
-    throw new CanvasSchemaErrorV2("operation-key-mismatch", "Operation receipt key mismatch")
+function readOperation(key: string, value: unknown): BoundedOperationReceipt {
+  assertOperationReceipt(value)
+  if (key !== operationKey(value.actorId, value.operationId))
+    throw new CanvasSchemaError("operation-key-mismatch", "Operation receipt key mismatch")
   return value
 }
 
 function validateGenerationRelations(
-  nodes: ReadonlyMap<string, CanvasNodeSnapshotV2>,
+  nodes: ReadonlyMap<string, CanvasNodeSnapshot>,
   begins: ReadonlyMap<string, GenerationBeginV2>,
   terminals: ReadonlyMap<string, OwnerGenerationTerminalV2>,
   dismissals: ReadonlyMap<string, GenerationDismissalV2>,
   recoveries: ReadonlyMap<string, GenerationRecoveryFailureV2>,
 ): void {
   for (const begin of begins.values()) {
-    if (!nodes.has(canvasEntityKeyV2(begin.node)))
-      throw new CanvasSchemaErrorV2("generation-node-missing", "Generation begin targets an unknown node")
+    if (!nodes.has(canvasEntityKey(begin.node)))
+      throw new CanvasSchemaError("generation-node-missing", "Generation begin targets an unknown node")
   }
   for (const terminal of terminals.values()) {
     const begin = begins.get(terminal.generationId)
     if (
       begin === undefined ||
       terminal.beginActorId !== begin.beginActorId ||
-      terminal.beginDigest !== canvasDigestV2("convax.canvas-generation-begin/2", begin) ||
-      canvasEntityKeyV2(terminal.node) !== canvasEntityKeyV2(begin.node)
+      terminal.beginDigest !== canvasDigest("convax.canvas-generation-begin/2", begin) ||
+      canvasEntityKey(terminal.node) !== canvasEntityKey(begin.node)
     ) {
-      throw new CanvasSchemaErrorV2("generation-begin-mismatch", "Generation terminal does not bind the exact begin")
+      throw new CanvasSchemaError("generation-begin-mismatch", "Generation terminal does not bind the exact begin")
     }
   }
   for (const marker of [...dismissals.values(), ...recoveries.values()]) {
     const begin = begins.get(marker.generationId)
-    if (begin === undefined || marker.beginDigest !== canvasDigestV2("convax.canvas-generation-begin/2", begin))
-      throw new CanvasSchemaErrorV2("generation-begin-mismatch", "Generation marker does not bind the exact begin")
+    if (begin === undefined || marker.beginDigest !== canvasDigest("convax.canvas-generation-begin/2", begin))
+      throw new CanvasSchemaError("generation-begin-mismatch", "Generation marker does not bind the exact begin")
   }
 }
 
 function validateCreationGroups(
-  nodes: ReadonlyMap<string, CanvasNodeSnapshotV2>,
-  edges: ReadonlyMap<string, CanvasEdgeSnapshotV2>,
-  operations: ReadonlyMap<string, BoundedOperationReceiptV2>,
+  nodes: ReadonlyMap<string, CanvasNodeSnapshot>,
+  edges: ReadonlyMap<string, CanvasEdgeSnapshot>,
+  operations: ReadonlyMap<string, BoundedOperationReceipt>,
 ): void {
-  const groups = new Map<string, { ref: CreationGroupRefV2; members: CanvasEntityRefV2[] }>()
+  const groups = new Map<string, { ref: CreationGroupRef; members: CanvasEntityRef[] }>()
   for (const record of [...nodes.values(), ...edges.values()]) {
     const ref = record.creationGroup
     if (ref === null) continue
     const current = groups.get(ref.groupId)
-    if (current !== undefined && !sameCanonicalValueV2(current.ref, ref))
-      throw new CanvasSchemaErrorV2("creation-group-equivocation", `Creation group ${ref.groupId} has divergent refs`)
+    if (current !== undefined && !sameCanonicalValue(current.ref, ref))
+      throw new CanvasSchemaError("creation-group-equivocation", `Creation group ${ref.groupId} has divergent refs`)
     const bucket = current ?? { ref, members: [] }
     bucket.members.push(record.identity.ref)
     groups.set(ref.groupId, bucket)
@@ -419,37 +419,37 @@ function validateCreationGroups(
   const groupByNode = new Map<string, string>()
   for (const [key, node] of nodes) if (node.creationGroup !== null) groupByNode.set(key, node.creationGroup.groupId)
   for (const [groupId, group] of groups) {
-    group.members.sort((left, right) => compareUtf8V2(canvasEntityKeyV2(left), canvasEntityKeyV2(right)))
+    group.members.sort((left, right) => compareUtf8(canvasEntityKey(left), canvasEntityKey(right)))
     const core = {
-      format: "convax.canvas-creation-group-member-set/2",
+      format: "convax.canvas-creation-group-member-set",
       groupId,
       source: group.ref.source,
       members: group.members,
     }
-    if (group.ref.memberSetDigest !== canvasDigestV2("convax.canvas-creation-group-member-set/2", core))
-      throw new CanvasSchemaErrorV2("member-set-mismatch", `Creation group ${groupId} member digest is invalid`)
-    const source = nodes.get(canvasEntityKeyV2(group.ref.source))
+    if (group.ref.memberSetDigest !== canvasDigest("convax.canvas-creation-group-member-set", core))
+      throw new CanvasSchemaError("member-set-mismatch", `Creation group ${groupId} member digest is invalid`)
+    const source = nodes.get(canvasEntityKey(group.ref.source))
     if (source === undefined)
-      throw new CanvasSchemaErrorV2("creation-group-source-missing", `Creation group ${groupId} source is absent`)
+      throw new CanvasSchemaError("creation-group-source-missing", `Creation group ${groupId} source is absent`)
     const creatorIds = new Set(
       group.members.map((member) =>
         member.kind === "node"
-          ? nodes.get(canvasEntityKeyV2(member))?.identity.createdBy
-          : edges.get(canvasEntityKeyV2(member))?.identity.createdBy,
+          ? nodes.get(canvasEntityKey(member))?.identity.createdBy
+          : edges.get(canvasEntityKey(member))?.identity.createdBy,
       ),
     )
     if (creatorIds.size !== 1 || creatorIds.has(undefined))
-      throw new CanvasSchemaErrorV2("creation-group-creator-mismatch", `Creation group ${groupId} spans creators`)
+      throw new CanvasSchemaError("creation-group-creator-mismatch", `Creation group ${groupId} spans creators`)
     const creator = [...creatorIds][0]
     const receipt = [...operations.values()].find((candidate) => candidate.operationId === creator)
     if (
       receipt === undefined ||
       receipt.resultEntities.length !== group.members.length ||
       receipt.resultEntities.some(
-        (member, index) => canvasEntityKeyV2(member) !== canvasEntityKeyV2(group.members[index]!),
+        (member, index) => canvasEntityKey(member) !== canvasEntityKey(group.members[index]!),
       )
     ) {
-      throw new CanvasSchemaErrorV2(
+      throw new CanvasSchemaError(
         "creation-group-receipt-mismatch",
         `Creation group ${groupId} is not the creator's complete result set`,
       )
@@ -459,11 +459,11 @@ function validateCreationGroups(
   const visited = new Set<string>()
   const visit = (groupId: string): void => {
     if (visiting.has(groupId))
-      throw new CanvasSchemaErrorV2("creation-group-source-cycle", "Creation-group source cycle is invalid")
+      throw new CanvasSchemaError("creation-group-source-cycle", "Creation-group source cycle is invalid")
     if (visited.has(groupId)) return
     visiting.add(groupId)
     const group = groups.get(groupId)
-    const parent = group === undefined ? undefined : groupByNode.get(canvasEntityKeyV2(group.ref.source))
+    const parent = group === undefined ? undefined : groupByNode.get(canvasEntityKey(group.ref.source))
     if (parent !== undefined) visit(parent)
     visiting.delete(groupId)
     visited.add(groupId)
@@ -472,20 +472,20 @@ function validateCreationGroups(
 }
 
 function validateSemanticHistory(
-  history: ReadonlyMap<string, CanvasCanonicalSemanticHistoryValueV2>,
-  operations: ReadonlyMap<string, BoundedOperationReceiptV2>,
+  history: ReadonlyMap<string, CanvasCanonicalSemanticHistoryValue>,
+  operations: ReadonlyMap<string, BoundedOperationReceipt>,
 ): void {
-  const roots = new Map<string, SemanticHistoryRootV2>()
+  const roots = new Map<string, SemanticHistoryRoot>()
   for (const [key, value] of history) {
     const expected =
-      value.format === "convax.canvas-semantic-history-root/2"
+      value.format === "convax.canvas-semantic-history-root"
         ? `root/${value.rootOperationId}`
         : `transition/${value.rootOperationId}/actor/${value.stamp.actorId}/operation/${value.transitionOperationId}`
     if (key !== expected)
-      throw new CanvasSchemaErrorV2("history-key-mismatch", `Semantic history key ${key} is invalid`)
-    if (value.format === "convax.canvas-semantic-history-root/2") {
-      assertCanvasHistoryTemplateScheduleV2(value.inverseTemplate, value.initialBindings)
-      assertCanvasHistoryTemplateScheduleV2(value.forwardTemplate, value.initialBindings)
+      throw new CanvasSchemaError("history-key-mismatch", `Semantic history key ${key} is invalid`)
+    if (value.format === "convax.canvas-semantic-history-root") {
+      assertCanvasHistoryTemplateSchedule(value.inverseTemplate, value.initialBindings)
+      assertCanvasHistoryTemplateSchedule(value.forwardTemplate, value.initialBindings)
       roots.set(value.rootOperationId, value)
     }
   }
@@ -498,15 +498,15 @@ function validateSemanticHistory(
       receipt.intentKind !== root.sourceIntentKind ||
       receipt.intentDigest !== root.sourceIntentDigest
     ) {
-      throw new CanvasSchemaErrorV2(
+      throw new CanvasSchemaError(
         "history-receipt-mismatch",
         `Semantic history root ${root.rootOperationId} does not bind its receipt`,
       )
     }
   }
   for (const value of history.values()) {
-    if (value.format === "convax.canvas-semantic-history-transition/2" && !roots.has(value.rootOperationId)) {
-      throw new CanvasSchemaErrorV2(
+    if (value.format === "convax.canvas-semantic-history-transition" && !roots.has(value.rootOperationId)) {
+      throw new CanvasSchemaError(
         "history-root-missing",
         `Semantic history transition ${value.transitionOperationId} has no root`,
       )
@@ -529,40 +529,40 @@ function actorEntries<T>(
   map: Y.Map<unknown>,
   validate: (value: unknown) => asserts value is T,
   tombstone = false,
-): CanvasActorSlotEntriesV2<T> {
-  const entries: [import("@convax/collaboration").ActorIdV2, T][] = []
+): CanvasActorSlotEntries<T> {
+  const entries: [import("@convax/collaboration").ActorId, T][] = []
   for (const [actor, value] of map.entries()) {
-    const actorId = parseActorIdV2(actor)
+    const actorId = parseActorId(actor)
     validate(value)
     const embeddedActor = tombstone
-      ? (value as TombstoneFactV2).stamp.actorId
-      : (value as StampedClaimV2<unknown>).stamp.actorId
+      ? (value as TombstoneFact).stamp.actorId
+      : (value as StampedClaim<unknown>).stamp.actorId
     if (embeddedActor !== actorId)
-      throw new CanvasSchemaErrorV2("actor-slot-mismatch", `Actor slot ${actor} disagrees with embedded stamp`)
+      throw new CanvasSchemaError("actor-slot-mismatch", `Actor slot ${actor} disagrees with embedded stamp`)
     entries.push([actorId, value])
   }
-  entries.sort((left, right) => compareDecodedBase64urlV2(left[0], right[0]))
+  entries.sort((left, right) => compareDecodedBase64url(left[0], right[0]))
   return entries
 }
 
 function mapEntries<K extends string, V, O = V>(
   map: ReadonlyMap<K, V>,
   convert?: (value: V) => O,
-): CanvasCanonicalMapEntriesV2<K, O> {
+): CanvasCanonicalMapEntries<K, O> {
   return [...map.entries()]
-    .sort((left, right) => compareUtf8V2(left[0], right[0]))
+    .sort((left, right) => compareUtf8(left[0], right[0]))
     .map(([key, value]) => [key, convert === undefined ? (value as unknown as O) : convert(value)] as const)
 }
 
 function assertMapKeys(map: Y.Map<unknown>, keys: readonly string[], label: string): void {
   if (map.size !== keys.length)
-    throw new CanvasSchemaErrorV2("closed-map-mismatch", `${label} has missing or unknown keys`)
+    throw new CanvasSchemaError("closed-map-mismatch", `${label} has missing or unknown keys`)
   for (const key of keys)
-    if (!map.has(key)) throw new CanvasSchemaErrorV2("closed-map-mismatch", `${label}.${key} is required`)
+    if (!map.has(key)) throw new CanvasSchemaError("closed-map-mismatch", `${label}.${key} is required`)
 }
 
 function asMap(value: unknown, label: string): Y.Map<unknown> {
-  if (!(value instanceof Y.Map)) throw new CanvasSchemaErrorV2("invalid-y-type", `${label} must be a Y.Map`)
+  if (!(value instanceof Y.Map)) throw new CanvasSchemaError("invalid-y-type", `${label} must be a Y.Map`)
   return value
 }
 
@@ -573,36 +573,36 @@ function assertNullableText(value: unknown): asserts value is string | null {
       value.normalize("NFC") !== value ||
       new TextEncoder().encode(value).length > 64 * 1024)
   )
-    throw new CanvasSchemaErrorV2("invalid-string", "Metadata string is invalid")
+    throw new CanvasSchemaError("invalid-string", "Metadata string is invalid")
 }
 
 function assertTags(value: unknown): asserts value is readonly string[] {
   if (!Array.isArray(value) || value.length > 128)
-    throw new CanvasSchemaErrorV2("invalid-tags", "Tags must be an array of at most 128 entries")
+    throw new CanvasSchemaError("invalid-tags", "Tags must be an array of at most 128 entries")
   let prior: string | undefined
   for (const tag of value) {
     if (typeof tag !== "string" || tag.normalize("NFC") !== tag || new TextEncoder().encode(tag).length > 256)
-      throw new CanvasSchemaErrorV2("invalid-tags", "Tag is invalid")
-    if (prior !== undefined && compareUtf8V2(prior, tag) >= 0)
-      throw new CanvasSchemaErrorV2("invalid-tags", "Tags must be UTF-8 sorted and duplicate-free")
+      throw new CanvasSchemaError("invalid-tags", "Tag is invalid")
+    if (prior !== undefined && compareUtf8(prior, tag) >= 0)
+      throw new CanvasSchemaError("invalid-tags", "Tags must be UTF-8 sorted and duplicate-free")
     prior = tag
   }
 }
 
-function assertNullablePlugin(value: unknown): asserts value is PluginStateEnvelopeV2 | null {
-  if (value !== null) assertPluginStateV2(value)
+function assertNullablePlugin(value: unknown): asserts value is PluginStateEnvelope | null {
+  if (value !== null) assertPluginState(value)
 }
 
 // Keeps these imports part of the closed canonical-state implementation instead of
 // allowing them to silently drift into renderer-only declarations.
 void (null as unknown as
-  | CanvasPointV2
-  | CanvasSizeV2
-  | NodeDataEnvelopeV2
-  | CanvasEdgeDataV2
-  | CanvasNodeIdentityV2
-  | CanvasEdgeIdentityV2
-  | StampedClaimV2<unknown>
-  | TombstoneFactV2
-  | SemanticHistoryRootV2
-  | SemanticHistoryTransitionV2)
+  | CanvasPoint
+  | CanvasSize
+  | NodeDataEnvelope
+  | CanvasEdgeData
+  | CanvasNodeIdentity
+  | CanvasEdgeIdentity
+  | StampedClaim<unknown>
+  | TombstoneFact
+  | SemanticHistoryRoot
+  | SemanticHistoryTransition)

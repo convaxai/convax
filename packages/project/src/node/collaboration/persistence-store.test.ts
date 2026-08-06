@@ -4,25 +4,25 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import type {
-  ActorIdV2,
-  CausalFrontierV2,
-  DecodedCausalEditFrameV2,
-  DigestV2,
-  DocumentScopeV2,
-  FrameObjectRefV2,
-  Id128V2,
-  ReplicaActorHeadSetV2,
-  MemberIdV2,
-  ReplicaIdV2,
-  StateVectorV2,
+  ActorId,
+  CausalFrontier,
+  DecodedCausalEditFrame,
+  Digest,
+  DocumentScope,
+  FrameObjectRef,
+  Id128,
+  ReplicaActorHeadSet,
+  MemberId,
+  ReplicaId,
+  StateVector,
 } from "@convax/collaboration"
-import { deriveDocumentNativeKeyV2, deriveObjectNativeKeyV2 } from "./native-store-keys"
+import { deriveDocumentNativeKey, deriveObjectNativeKey } from "./native-store-keys"
 import {
-  NodeCollaborationPersistenceErrorV2,
-  NodeCollaborationPersistenceV2,
-  type NodeAcceptedReplicaHeadV2,
-  type NodeCollaborationPersistenceFaultHooksV2,
-  type NodeReplicaHeadMaterializerV2,
+  NodeCollaborationPersistenceError,
+  NodeCollaborationPersistence,
+  type NodeAcceptedReplicaHead,
+  type NodeCollaborationPersistenceFaultHooks,
+  type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
 
 const roots: string[] = []
@@ -37,7 +37,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })))
 })
 
-describe("NodeCollaborationPersistenceV2", () => {
+describe("NodeCollaborationPersistence", () => {
   durabilityTest("physically shards ProjectIndex and Canvas without raw identities in paths", async () => {
     const fixture = await createFixture()
     const index = projectIndexScope()
@@ -46,11 +46,11 @@ describe("NodeCollaborationPersistenceV2", () => {
     await initialize(fixture.store, canvas)
 
     const names = (await fs.readdir(path.join(fixture.collaborationDirectory, "documents"))).sort()
-    expect(names).toEqual([deriveDocumentNativeKeyV2(index), deriveDocumentNativeKeyV2(canvas)].sort())
+    expect(names).toEqual([deriveDocumentNativeKey(index), deriveDocumentNativeKey(canvas)].sort())
     expect(names.join("/")).not.toContain("project-index")
     expect(names.join("/")).not.toContain("cv_")
-    expect((await fixture.store.loadReplicaHead(index) as NodeAcceptedReplicaHeadV2).scope).toEqual(index)
-    expect((await fixture.store.loadReplicaHead(canvas) as NodeAcceptedReplicaHeadV2).scope).toEqual(canvas)
+    expect((await fixture.store.loadReplicaHead(index) as NodeAcceptedReplicaHead).scope).toEqual(index)
+    expect((await fixture.store.loadReplicaHead(canvas) as NodeAcceptedReplicaHead).scope).toEqual(canvas)
     fixture.store.dispose()
   })
 
@@ -75,7 +75,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     const sets = path.join(
       fixture.collaborationDirectory,
       "documents",
-      deriveDocumentNativeKeyV2(scope),
+      deriveDocumentNativeKey(scope),
       "snapshots",
       "sets",
     )
@@ -89,7 +89,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     const fixture = await createFixture({}, undefined, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     const genesis = await initialize(fixture.store, scope)
-    const checkpoint = fixture.frames.createCheckpoint(await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2)
+    const checkpoint = fixture.frames.createCheckpoint(await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead)
     const contentCertificate = encoder.encode("content-certificate")
     const result = await fixture.store.installCheckpointSet({
       scope,
@@ -103,7 +103,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     expect((await fixture.store.loadInstalledBase(scope)).canonicalStateDigest).toBe(checkpoint.accepted.canonicalStateDigest)
     fixture.store.dispose()
 
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
@@ -117,7 +117,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     const fixture = await createFixture({}, undefined, { verifyCurrent: async () => true })
     const scope = projectIndexScope()
     await initialize(fixture.store, scope)
-    const checkpoint = fixture.frames.createCheckpoint(await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2)
+    const checkpoint = fixture.frames.createCheckpoint(await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead)
     const result = await fixture.store.installCheckpointSet({
       scope,
       expectedReplicaHeadRecordDigest: digest("stale-head"),
@@ -127,7 +127,7 @@ describe("NodeCollaborationPersistenceV2", () => {
       prunableSetCertificateObjects: [],
     })
     expect(result).toEqual({ status: "rejected", code: "head-stale" })
-    const checkpointDirectory = path.join(fixture.collaborationDirectory, "documents", deriveDocumentNativeKeyV2(scope), "objects", "checkpoints")
+    const checkpointDirectory = path.join(fixture.collaborationDirectory, "documents", deriveDocumentNativeKey(scope), "objects", "checkpoints")
     expect(await fs.readdir(checkpointDirectory)).toHaveLength(1)
     fixture.store.dispose()
   })
@@ -157,7 +157,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     })
     if (accepted.status !== "committed") throw new Error("expected accepted frame")
     await fixture.store.recordVerifiedReplicaDurableAck(durableAck(frame.ref))
-    const current = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2
+    const current = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
     const checkpoint = fixture.frames.createCheckpoint(current)
     const contentCertificate = encoder.encode("prune-content-certificate")
     const prunableCertificate = encoder.encode("prunable-set-certificate")
@@ -181,14 +181,14 @@ describe("NodeCollaborationPersistenceV2", () => {
     })
     expect(pruned.status).toBe("deleted")
     expect(pruned.deletedObjectCount).toBe(1)
-    expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2).canonicalStateDigest).toBe(current.canonicalStateDigest)
+    expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead).canonicalStateDigest).toBe(current.canonicalStateDigest)
     const framePath = path.join(
       fixture.collaborationDirectory,
       "documents",
-      deriveDocumentNativeKeyV2(scope),
+      deriveDocumentNativeKey(scope),
       "objects",
       "frames",
-      `${deriveObjectNativeKeyV2("frame", frame.ref.frameDigest)}.bin`,
+      `${deriveObjectNativeKey("frame", frame.ref.frameDigest)}.bin`,
     )
     await expect(fs.lstat(framePath)).rejects.toBeDefined()
     fixture.store.dispose()
@@ -206,7 +206,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     const scope = canvasScope()
     const input = genesisProofInput(scope, "proof-retry")
     await expect(fixture.store.initializeShardWithGenesisProof(input)).rejects.toMatchObject({ code: "durability-failed" })
-    const published = path.join(fixture.collaborationDirectory, "documents", deriveDocumentNativeKeyV2(scope))
+    const published = path.join(fixture.collaborationDirectory, "documents", deriveDocumentNativeKey(scope))
     await expect(fs.lstat(published)).rejects.toBeDefined()
     const recovered = await fixture.store.initializeShardWithGenesisProof(input)
     expect(recovered.scope).toEqual(scope)
@@ -284,13 +284,13 @@ describe("NodeCollaborationPersistenceV2", () => {
     const pendingDirectory = path.join(
       fixture.collaborationDirectory,
       "documents",
-      deriveDocumentNativeKeyV2(scope),
+      deriveDocumentNativeKey(scope),
       "inbox",
       "pending-frames",
     )
     expect(await fs.readdir(pendingDirectory)).toHaveLength(1)
     fixture.store.dispose()
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
@@ -361,7 +361,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     await expect(fixture.store.recordVerifiedReplicaDurableAck(durableAck(frame.ref))).rejects.toThrow("ack crash")
     expect(await fixture.store.listDurableReplicationOutbox(scope)).toHaveLength(1)
     fixture.store.dispose()
-    const reopened = await NodeCollaborationPersistenceV2.open({ collaborationDirectory: fixture.collaborationDirectory, localActorId: localActor, materializer: fixture.frames, replicaDurableAckVerifier: verifier })
+    const reopened = await NodeCollaborationPersistence.open({ collaborationDirectory: fixture.collaborationDirectory, localActorId: localActor, materializer: fixture.frames, replicaDurableAckVerifier: verifier })
     await reopened.loadReplicaHead(scope)
     expect(await reopened.listDurableReplicationOutbox(scope)).toEqual([])
     expect(await reopened.listDurableReplicaAcks(scope)).toHaveLength(1)
@@ -382,10 +382,10 @@ describe("NodeCollaborationPersistenceV2", () => {
     const ackPath = path.join(
       fixture.collaborationDirectory,
       "documents",
-      deriveDocumentNativeKeyV2(scope),
+      deriveDocumentNativeKey(scope),
       "objects",
       "acks",
-      `${deriveObjectNativeKeyV2("ack", ack.ackCoreDigest)}.bin`,
+      `${deriveObjectNativeKey("ack", ack.ackCoreDigest)}.bin`,
     )
     await fs.unlink(ackPath)
     await expect(fixture.store.loadReplicaHead(scope)).rejects.toMatchObject({ code: "store-corrupt" })
@@ -399,7 +399,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     const documentDirectory = path.join(
       fixture.collaborationDirectory,
       "documents",
-      deriveDocumentNativeKeyV2(scope),
+      deriveDocumentNativeKey(scope),
       "outbox",
       "frames",
     )
@@ -421,12 +421,12 @@ describe("NodeCollaborationPersistenceV2", () => {
     expect(fixture.frames.applyCount).toBe(1)
     fixture.store.dispose()
 
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
     })
-    const head = await reopened.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2
+    const head = await reopened.loadReplicaHead(scope) as NodeAcceptedReplicaHead
     expect(head.fullUpdate).toEqual(frame.bytes)
     expect(await reopened.isReachableFromAcceptedHead(frame.ref)).toBe(true)
     expect(fixture.frames.applyCount).toBeGreaterThanOrEqual(3)
@@ -458,7 +458,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     })).toEqual({ status: "rejected", code: "durability-failed" })
 
     fixture.store.dispose()
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
@@ -506,7 +506,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     )
     fixture.store.dispose()
 
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
@@ -539,7 +539,7 @@ describe("NodeCollaborationPersistenceV2", () => {
     })
     expect(result.status).toBe("quarantined")
     if (result.status !== "quarantined") throw new Error("expected quarantine evidence")
-    const disposition = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHeadV2
+    const disposition = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
     expect(disposition.headDigest).toBe(result.evidence.shardDispositionHeadRecordDigest)
     expect(await fixture.store.isFrameDurableForAck(frame.ref)).toBe(false)
     await expect(fixture.store.putReplicationOutboxRef(frame.ref)).rejects.toMatchObject({
@@ -550,13 +550,13 @@ describe("NodeCollaborationPersistenceV2", () => {
 
   test("enforces one Main-owned writer lease per Project in a process", async () => {
     const fixture = await createFixture()
-    await expect(NodeCollaborationPersistenceV2.open({
+    await expect(NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
-    })).rejects.toBeInstanceOf(NodeCollaborationPersistenceErrorV2)
+    })).rejects.toBeInstanceOf(NodeCollaborationPersistenceError)
     fixture.store.dispose()
-    const reopened = await NodeCollaborationPersistenceV2.open({
+    const reopened = await NodeCollaborationPersistence.open({
       collaborationDirectory: fixture.collaborationDirectory,
       localActorId: localActor,
       materializer: fixture.frames,
@@ -565,42 +565,42 @@ describe("NodeCollaborationPersistenceV2", () => {
   })
 })
 
-class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
-  readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRefV2 }>()
-  readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHeadV2, "headDigest"> }>()
+class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
+  readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRef }>()
+  readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHead, "headDigest"> }>()
   applyCount = 0
 
-  readonly create = (scope: DocumentScopeV2, actorId: ActorIdV2, actorSequence: string, operationId: Id128V2) => {
+  readonly create = (scope: DocumentScope, actorId: ActorId, actorSequence: string, operationId: Id128) => {
     const seed = encoder.encode(`${actorId}:${actorSequence}:${operationId}:${this.records.size}`)
     const frameDigest = digestBytes(seed)
-    const ref = { scope, actorId, actorSequence, operationId, frameDigest } as FrameObjectRefV2
+    const ref = { scope, actorId, actorSequence, operationId, frameDigest } as FrameObjectRef
     const bytes = Uint8Array.from(seed)
     this.records.set(frameDigest, { bytes, ref })
     return { bytes, ref }
   }
 
-  async inspectFrame(ref: FrameObjectRefV2, exactBytes: Readonly<Uint8Array>) {
+  async inspectFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>) {
     const expected = this.records.get(ref.frameDigest)
     if (!expected || !Buffer.from(expected.bytes).equals(Buffer.from(exactBytes))) throw new Error("unknown fake frame")
     return { ref: expected.ref, requiredBlobDigests: [] }
   }
 
   async applyAcceptedFrame(input: {
-    previous: NodeAcceptedReplicaHeadV2
-    ref: FrameObjectRefV2
+    previous: NodeAcceptedReplicaHead
+    ref: FrameObjectRef
     exactBytes: Readonly<Uint8Array>
-  }): Promise<NodeAcceptedReplicaHeadV2> {
+  }): Promise<NodeAcceptedReplicaHead> {
     await this.inspectFrame(input.ref, input.exactBytes)
     this.applyCount += 1
     const head = {
-      format: "convax.causal-head-ref/2",
+      format: "convax.causal-head-ref",
       actorId: input.ref.actorId,
       actorSequence: input.ref.actorSequence,
       frameDigest: input.ref.frameDigest,
       lamport: input.ref.actorSequence,
     } as const
-    const frontier = { format: "convax.causal-frontier/2", heads: [head] } as CausalFrontierV2
-    const actorHeads = { format: "convax.replica-actor-head-set/2", scope: input.ref.scope, heads: [head] } as ReplicaActorHeadSetV2
+    const frontier = { format: "convax.causal-frontier", heads: [head] } as CausalFrontier
+    const actorHeads = { format: "convax.replica-actor-head-set", scope: input.ref.scope, heads: [head] } as ReplicaActorHeadSet
     return {
       scope: input.ref.scope,
       headDigest: input.previous.headDigest,
@@ -608,16 +608,16 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
       frontierDigest: this.frontierDigest(input.ref),
       actorHeads,
       fullUpdate: Uint8Array.from(input.exactBytes),
-      stateVector: Uint8Array.of(Number(input.ref.actorSequence)) as StateVectorV2,
+      stateVector: Uint8Array.of(Number(input.ref.actorSequence)) as StateVector,
       canonicalStateDigest: digestBytes(input.exactBytes),
     }
   }
 
-  actorHeadsDigest(actorHeads: ReplicaActorHeadSetV2): DigestV2 {
+  actorHeadsDigest(actorHeads: ReplicaActorHeadSet): Digest {
     return digest(canonical(actorHeads))
   }
 
-  createCheckpoint(accepted: NodeAcceptedReplicaHeadV2) {
+  createCheckpoint(accepted: NodeAcceptedReplicaHead) {
     const bytes = encoder.encode(`checkpoint-install:${accepted.canonicalStateDigest}:${this.checkpoints.size}`)
     const objectDigest = digestBytes(bytes)
     const value = {
@@ -626,24 +626,24 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
       frontierDigest: accepted.frontierDigest,
       actorHeads: accepted.actorHeads,
       fullUpdate: Uint8Array.from(accepted.fullUpdate),
-      stateVector: Uint8Array.from(accepted.stateVector) as StateVectorV2,
+      stateVector: Uint8Array.from(accepted.stateVector) as StateVector,
       canonicalStateDigest: accepted.canonicalStateDigest,
     }
     this.checkpoints.set(objectDigest, { bytes, accepted: value })
     return { objectDigest, exactBytes: bytes, accepted: value }
   }
 
-  async materializeCheckpoint(input: { scope: DocumentScopeV2; checkpointObjectDigest: DigestV2; exactCheckpointBytes: Readonly<Uint8Array> }) {
+  async materializeCheckpoint(input: { scope: DocumentScope; checkpointObjectDigest: Digest; exactCheckpointBytes: Readonly<Uint8Array> }) {
     const value = this.checkpoints.get(input.checkpointObjectDigest)
     if (!value || !Buffer.from(value.bytes).equals(Buffer.from(input.exactCheckpointBytes))) throw new Error("unknown fake checkpoint")
     return value.accepted
   }
 
-  frontierDigest(ref: FrameObjectRefV2): DigestV2 {
+  frontierDigest(ref: FrameObjectRef): Digest {
     return digest(JSON.stringify({
-      format: "convax.causal-frontier/2",
+      format: "convax.causal-frontier",
       heads: [{
-        format: "convax.causal-head-ref/2",
+        format: "convax.causal-head-ref",
         actorId: ref.actorId,
         actorSequence: ref.actorSequence,
         frameDigest: ref.frameDigest,
@@ -654,7 +654,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializerV2 {
 }
 
 async function createFixture(
-  hooks: NodeCollaborationPersistenceFaultHooksV2 = {},
+  hooks: NodeCollaborationPersistenceFaultHooks = {},
   replicaDurableAckVerifier?: { verifyCurrent(input: unknown): Promise<boolean> },
   checkpointInstallationVerifier?: { verifyCurrent(input: unknown): Promise<boolean> },
   checkpointPruneAuthority?: { verifyCurrent(input: unknown): Promise<unknown> },
@@ -664,7 +664,7 @@ async function createFixture(
   roots.push(root)
   const collaborationDirectory = path.join(root, ".convax", "collaboration")
   const frames = new FakeFrameMaterializer()
-  const store = await NodeCollaborationPersistenceV2.open({
+  const store = await NodeCollaborationPersistence.open({
     collaborationDirectory,
     localActorId: localActor,
     materializer: frames,
@@ -677,12 +677,12 @@ async function createFixture(
   return { collaborationDirectory, frames, store }
 }
 
-function durableAck(ref: FrameObjectRefV2) {
+function durableAck(ref: FrameObjectRef) {
   return Object.freeze({
     scope: ref.scope,
     frameDigest: ref.frameDigest,
-    receiverMemberId: id128(7) as MemberIdV2,
-    receiverReplicaId: "replica_00000007" as ReplicaIdV2,
+    receiverMemberId: id128(7) as MemberId,
+    receiverReplicaId: "replica_00000007" as ReplicaId,
     receiverActorId: actorId(7),
     receiverAuthorizationDigest: digest("receiver-authorization"),
     ackCoreDigest: digest(`ack:${ref.frameDigest}`),
@@ -690,10 +690,10 @@ function durableAck(ref: FrameObjectRefV2) {
   })
 }
 
-async function initialize(store: NodeCollaborationPersistenceV2, scope: DocumentScopeV2) {
+async function initialize(store: NodeCollaborationPersistence, scope: DocumentScope) {
   const checkpoint = encoder.encode(`checkpoint:${scope.docKind}:${scope.docId}`)
-  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontierV2
-  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSetV2
+  const frontier = { format: "convax.causal-frontier", heads: [] } as CausalFrontier
+  const actorHeads = { format: "convax.replica-actor-head-set", scope, heads: [] } as ReplicaActorHeadSet
   return store.initializeShard({
     scope,
     checkpointObjectDigest: digestBytes(checkpoint),
@@ -704,16 +704,16 @@ async function initialize(store: NodeCollaborationPersistenceV2, scope: Document
       frontierDigest: digest(JSON.stringify(frontier)),
       actorHeads,
       fullUpdate: new Uint8Array(),
-      stateVector: Uint8Array.of(0) as StateVectorV2,
+      stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
     },
   })
 }
 
-function genesisProofInput(scope: DocumentScopeV2, proof: string) {
+function genesisProofInput(scope: DocumentScope, proof: string) {
   const checkpoint = encoder.encode(`checkpoint:${scope.docKind}:${scope.docId}`)
-  const frontier = { format: "convax.causal-frontier/2", heads: [] } as CausalFrontierV2
-  const actorHeads = { format: "convax.replica-actor-head-set/2", scope, heads: [] } as ReplicaActorHeadSetV2
+  const frontier = { format: "convax.causal-frontier", heads: [] } as CausalFrontier
+  const actorHeads = { format: "convax.replica-actor-head-set", scope, heads: [] } as ReplicaActorHeadSet
   return {
     scope,
     checkpointObjectDigest: digestBytes(checkpoint),
@@ -725,49 +725,49 @@ function genesisProofInput(scope: DocumentScopeV2, proof: string) {
       frontierDigest: digest(JSON.stringify(frontier)),
       actorHeads,
       fullUpdate: new Uint8Array(),
-      stateVector: Uint8Array.of(0) as StateVectorV2,
+      stateVector: Uint8Array.of(0) as StateVector,
       canonicalStateDigest: digest("empty"),
     },
   }
 }
 
-function projectIndexScope(): DocumentScopeV2 {
+function projectIndexScope(): DocumentScope {
   return {
     projectId: "project-a",
     projectEpoch,
     docKind: "project-index",
     docId: "project-index",
     shardEpoch,
-  } as DocumentScopeV2
+  } as DocumentScope
 }
 
-function canvasScope(): DocumentScopeV2 {
+function canvasScope(): DocumentScope {
   return {
     projectId: "project-a",
     projectEpoch,
     docKind: "canvas",
     docId: `cv_${"c".repeat(64)}`,
     shardEpoch: id128(3),
-  } as DocumentScopeV2
+  } as DocumentScope
 }
 
-function id128(byte: number): Id128V2 {
-  return Buffer.alloc(16, byte).toString("base64url") as Id128V2
+function id128(byte: number): Id128 {
+  return Buffer.alloc(16, byte).toString("base64url") as Id128
 }
 
-function actorId(byte: number): ActorIdV2 {
-  return Buffer.alloc(32, byte).toString("base64url") as ActorIdV2
+function actorId(byte: number): ActorId {
+  return Buffer.alloc(32, byte).toString("base64url") as ActorId
 }
 
-function digest(value: string): DigestV2 {
+function digest(value: string): Digest {
   return digestBytes(encoder.encode(value))
 }
 
-function digestBytes(value: Readonly<Uint8Array>): DigestV2 {
-  return createHash("sha256").update(value).digest("hex") as DigestV2
+function digestBytes(value: Readonly<Uint8Array>): Digest {
+  return createHash("sha256").update(value).digest("hex") as Digest
 }
 
-function decodedFrame(frame: { readonly ref: FrameObjectRefV2; readonly bytes: Uint8Array }): DecodedCausalEditFrameV2 {
+function decodedFrame(frame: { readonly ref: FrameObjectRef; readonly bytes: Uint8Array }): DecodedCausalEditFrame {
   return {
     bytes: frame.bytes,
     frameDigest: frame.ref.frameDigest,
@@ -777,7 +777,7 @@ function decodedFrame(frame: { readonly ref: FrameObjectRefV2; readonly bytes: U
       actorSequence: frame.ref.actorSequence,
       operationId: frame.ref.operationId,
     } },
-  } as unknown as DecodedCausalEditFrameV2
+  } as unknown as DecodedCausalEditFrame
 }
 
 function canonical(value: unknown): string {

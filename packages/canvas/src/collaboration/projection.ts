@@ -1,33 +1,33 @@
-import { comparePortableStampsV2, compareUtf8V2, encodeRestrictedJcsV2, ordinarySha256V2 } from "@convax/collaboration"
+import { comparePortableStamps, compareUtf8, encodeRestrictedJcs, ordinarySha256 } from "@convax/collaboration"
 import { canonicalize as canonicalizeUri } from "@convax/uri"
 import type { CanvasDocument, CanvasNode, CanvasNodeData } from "../types"
 import type {
-  BoundedOperationReceiptV2,
-  CanvasCanonicalNodeRecordV2,
-  CanvasEdgeSnapshotV2,
-  CanvasEntityRefV2,
-  CanvasNodeSnapshotV2,
-  CanvasProjectedEdgeV2,
-  CanvasProjectedNodeV2,
-  CanvasProjectionV2,
-  CanvasSnapshotV2,
-  ContainmentChoiceV2,
-  DigestV2,
+  BoundedOperationReceipt,
+  CanvasCanonicalNodeRecord,
+  CanvasEdgeSnapshot,
+  CanvasEntityRef,
+  CanvasNodeSnapshot,
+  CanvasProjectedEdge,
+  CanvasProjectedNode,
+  CanvasProjection,
+  CanvasSnapshot,
+  ContainmentChoice,
+  Digest,
   GenerationBeginV2,
-  NodeDataEnvelopeV2,
+  NodeDataEnvelope,
   OwnerGenerationTerminalV2,
-  PluginStateEnvelopeV2,
-  StampedClaimV2,
+  PluginStateEnvelope,
+  StampedClaim,
 } from "./types"
-import { canvasDigestV2, canvasEntityKeyV2, maxClaimV2 } from "./validation"
+import { canvasDigest, canvasEntityKey, maxClaim } from "./validation"
 
-export interface CanvasProjectionIndexV2 {
-  readonly projection: CanvasProjectionV2
-  readonly nodesByKey: ReadonlyMap<string, CanvasProjectedNodeV2>
-  readonly edgesByKey: ReadonlyMap<string, CanvasProjectedEdgeV2>
-  readonly selectedContainments: ReadonlyMap<string, ContainmentChoiceV2 | null>
-  readonly isNodeLive: (ref: CanvasEntityRefV2 & { readonly kind: "node" }) => boolean
-  readonly isEdgeLive: (ref: CanvasEntityRefV2 & { readonly kind: "edge" }) => boolean
+export interface CanvasProjectionIndex {
+  readonly projection: CanvasProjection
+  readonly nodesByKey: ReadonlyMap<string, CanvasProjectedNode>
+  readonly edgesByKey: ReadonlyMap<string, CanvasProjectedEdge>
+  readonly selectedContainments: ReadonlyMap<string, ContainmentChoice | null>
+  readonly isNodeLive: (ref: CanvasEntityRef & { readonly kind: "node" }) => boolean
+  readonly isEdgeLive: (ref: CanvasEntityRef & { readonly kind: "edge" }) => boolean
 }
 
 /**
@@ -35,13 +35,13 @@ export interface CanvasProjectionIndexV2 {
  * presentation metadata, not Plugin or resource authority: Main must still
  * resolve every URI and Plugin snapshot through its owning application ports.
  */
-export const canvasProjectionResourceMetadataKeyV2 = "convaxResource" as const
-export const canvasProjectionPluginIdentityMetadataKeyV2 = "convaxPlugin" as const
-export const canvasProjectionPluginStateMetadataKeyV2 = "convaxPluginState" as const
+export const canvasProjectionResourceMetadataKey = "convaxResource" as const
+export const canvasProjectionPluginIdentityMetadataKey = "convaxPlugin" as const
+export const canvasProjectionPluginStateMetadataKey = "convaxPluginState" as const
 
-export interface CanvasDocumentProjectionV2 {
+export interface CanvasDocumentProjection {
   readonly document: CanvasDocument
-  readonly nodeEntities: ReadonlyMap<string, CanvasEntityRefV2 & { readonly kind: "node" }>
+  readonly nodeEntities: ReadonlyMap<string, CanvasEntityRef & { readonly kind: "node" }>
 }
 
 /**
@@ -50,19 +50,19 @@ export interface CanvasDocumentProjectionV2 {
  * document so renderer commands can address the exact live entity without
  * persisting React Flow state or reconstructing identity from a node id.
  */
-export function projectCanvasDocumentV2(projection: CanvasProjectionV2): CanvasDocumentProjectionV2 {
-  const nodeEntities = new Map<string, CanvasEntityRefV2 & { readonly kind: "node" }>()
+export function projectCanvasDocument(projection: CanvasProjection): CanvasDocumentProjection {
+  const nodeEntities = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
   const nodes = projection.nodes.map((node): CanvasNode => {
     if (nodeEntities.has(node.ref.id)) {
       throw new Error(`Canvas projection contains duplicate live node id ${node.ref.id}`)
     }
-    nodeEntities.set(node.ref.id, cloneNodeRefV2(node.ref))
+    nodeEntities.set(node.ref.id, cloneNodeRef(node.ref))
     return {
       id: node.ref.id,
       type: node.role,
       position: { ...node.position },
       ...(node.parent === null ? {} : { parentId: node.parent.id }),
-      data: projectNodeDataV2(node),
+      data: projectNodeData(node),
       style: { width: node.size.width, height: node.size.height },
       ...(node.data.kind === "group" ? { zIndex: -1 } : {}),
     }
@@ -96,17 +96,17 @@ export function projectCanvasDocumentV2(projection: CanvasProjectionV2): CanvasD
   })
 }
 
-function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
+function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
   const pluginMetadata =
     node.plugin === null
       ? {}
       : {
-          [canvasProjectionPluginIdentityMetadataKeyV2]: {
+          [canvasProjectionPluginIdentityMetadataKey]: {
             id: node.plugin.pluginId,
             snapshotDigest: node.plugin.snapshotDigest,
             pluginStateSchemaDigest: node.plugin.pluginStateSchemaDigest,
           },
-          [canvasProjectionPluginStateMetadataKeyV2]: structuredClone(node.plugin.state),
+          [canvasProjectionPluginStateMetadataKey]: structuredClone(node.plugin.state),
         }
   const kind = node.plugin === null ? node.data.kind : `plugin.${node.plugin.pluginId}`
   switch (node.data.kind) {
@@ -118,6 +118,15 @@ function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
         ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
       }
     case "group":
+      return {
+        kind,
+        label: node.data.title,
+        ...(node.plugin === null ? {} : { metadata: pluginMetadata }),
+      }
+    case "plugin-surface":
+      // Without a live Plugin envelope the projected kind stays the bare
+      // `plugin-surface` discriminator, which no renderer claims, so the node
+      // degrades to the unknown-file fallback with its portable state intact.
       return {
         kind,
         label: node.data.title,
@@ -158,7 +167,7 @@ function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
         mimeType: resource.mime,
         metadata: {
           ...pluginMetadata,
-          [canvasProjectionResourceMetadataKeyV2]: resource,
+          [canvasProjectionResourceMetadataKey]: resource,
         },
         resourceState: {
           mediaType: resource.mime,
@@ -170,17 +179,17 @@ function projectNodeDataV2(node: CanvasProjectedNodeV2): CanvasNodeData {
   }
 }
 
-function cloneNodeRefV2(
-  ref: CanvasEntityRefV2 & { readonly kind: "node" },
-): CanvasEntityRefV2 & { readonly kind: "node" } {
+function cloneNodeRef(
+  ref: CanvasEntityRef & { readonly kind: "node" },
+): CanvasEntityRef & { readonly kind: "node" } {
   return Object.freeze({ kind: "node", id: ref.id, incarnation: ref.incarnation })
 }
 
-export function projectCanvasV2(snapshot: CanvasSnapshotV2): CanvasProjectionV2 {
-  return buildCanvasProjectionIndexV2(snapshot).projection
+export function projectCanvas(snapshot: CanvasSnapshot): CanvasProjection {
+  return buildCanvasProjectionIndex(snapshot).projection
 }
 
-export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): CanvasProjectionIndexV2 {
+export function buildCanvasProjectionIndex(snapshot: CanvasSnapshot): CanvasProjectionIndex {
   const isSemanticCreationEffective = semanticCreationLiveness(snapshot)
   const nodeMemo = new Map<string, boolean>()
   const visiting = new Set<string>()
@@ -192,7 +201,7 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
     if (!isSemanticCreationEffective(node.identity.createdBy, node.identity.ref)) return false
     if (visiting.has(key)) return false
     visiting.add(key)
-    const live = node.creationGroup === null || isNodeKeyLive(canvasEntityKeyV2(node.creationGroup.source))
+    const live = node.creationGroup === null || isNodeKeyLive(canvasEntityKey(node.creationGroup.source))
     visiting.delete(key)
     nodeMemo.set(key, live)
     return live
@@ -203,22 +212,22 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
     if (edge === undefined || edge.tombstones.length > 0) return false
     if (!isSemanticCreationEffective(edge.identity.createdBy, edge.identity.ref)) return false
     if (
-      !isNodeKeyLive(canvasEntityKeyV2(edge.identity.source)) ||
-      !isNodeKeyLive(canvasEntityKeyV2(edge.identity.target))
+      !isNodeKeyLive(canvasEntityKey(edge.identity.source)) ||
+      !isNodeKeyLive(canvasEntityKey(edge.identity.target))
     )
       return false
-    return edge.creationGroup === null || isNodeKeyLive(canvasEntityKeyV2(edge.creationGroup.source))
+    return edge.creationGroup === null || isNodeKeyLive(canvasEntityKey(edge.creationGroup.source))
   }
 
   const selectedContainments = selectContainments(snapshot, isNodeKeyLive)
-  const nodesByKey = new Map<string, CanvasProjectedNodeV2>()
-  for (const [key, node] of [...snapshot.nodes.entries()].sort((a, b) => compareUtf8V2(a[0], b[0]))) {
+  const nodesByKey = new Map<string, CanvasProjectedNode>()
+  for (const [key, node] of [...snapshot.nodes.entries()].sort((a, b) => compareUtf8(a[0], b[0]))) {
     if (!isNodeKeyLive(key)) continue
-    const position = maxClaimV2(node.position.map((entry) => entry[1]))
-    const size = maxClaimV2(node.size.map((entry) => entry[1]))
-    const plugin = maxClaimV2(node.plugin.map((entry) => entry[1]))
+    const position = maxClaim(node.position.map((entry) => entry[1]))
+    const size = maxClaim(node.size.map((entry) => entry[1]))
+    const plugin = maxClaim(node.plugin.map((entry) => entry[1]))
     if (position === null || size === null || plugin === null) continue
-    const effective = effectiveNodeDataV2(snapshot, node)
+    const effective = effectiveNodeData(snapshot, node)
     const parentChoice = selectedContainments.get(key) ?? null
     const parent = parentChoice?.parent ?? null
     nodesByKey.set(
@@ -236,10 +245,10 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
     )
   }
 
-  const edgesByKey = new Map<string, CanvasProjectedEdgeV2>()
-  for (const [key, edge] of [...snapshot.edges.entries()].sort((a, b) => compareUtf8V2(a[0], b[0]))) {
+  const edgesByKey = new Map<string, CanvasProjectedEdge>()
+  for (const [key, edge] of [...snapshot.edges.entries()].sort((a, b) => compareUtf8(a[0], b[0]))) {
     if (!isEdgeKeyLive(key)) continue
-    const data = maxClaimV2(edge.data.map((entry) => entry[1]))
+    const data = maxClaim(edge.data.map((entry) => entry[1]))
     if (data === null) continue
     edgesByKey.set(
       key,
@@ -265,21 +274,21 @@ export function buildCanvasProjectionIndexV2(snapshot: CanvasSnapshotV2): Canvas
     nodesByKey,
     edgesByKey,
     selectedContainments,
-    isNodeLive: (ref: CanvasEntityRefV2 & { readonly kind: "node" }) => isNodeKeyLive(canvasEntityKeyV2(ref)),
-    isEdgeLive: (ref: CanvasEntityRefV2 & { readonly kind: "edge" }) => isEdgeKeyLive(canvasEntityKeyV2(ref)),
+    isNodeLive: (ref: CanvasEntityRef & { readonly kind: "node" }) => isNodeKeyLive(canvasEntityKey(ref)),
+    isEdgeLive: (ref: CanvasEntityRef & { readonly kind: "edge" }) => isEdgeKeyLive(canvasEntityKey(ref)),
   })
 }
 
-function semanticCreationLiveness(snapshot: CanvasSnapshotV2): (createdBy: string, ref: CanvasEntityRefV2) => boolean {
-  const receiptByOperation = new Map<string, BoundedOperationReceiptV2[]>()
+function semanticCreationLiveness(snapshot: CanvasSnapshot): (createdBy: string, ref: CanvasEntityRef) => boolean {
+  const receiptByOperation = new Map<string, BoundedOperationReceipt[]>()
   for (const receipt of snapshot.operations.values()) {
     const values = receiptByOperation.get(receipt.operationId) ?? []
     values.push(receipt)
     receiptByOperation.set(receipt.operationId, values)
   }
   const transitions = [...snapshot.semanticHistory.entries()].filter(
-    (entry): entry is [string, import("./types").SemanticHistoryTransitionV2] =>
-      entry[1].format === "convax.canvas-semantic-history-transition/2",
+    (entry): entry is [string, import("./types").SemanticHistoryTransition] =>
+      entry[1].format === "convax.canvas-semantic-history-transition",
   )
   const effectiveByRoot = new Map<string, (typeof transitions)[number]>()
   for (const entry of transitions) {
@@ -288,8 +297,8 @@ function semanticCreationLiveness(snapshot: CanvasSnapshotV2): (createdBy: strin
       effectiveByRoot.set(entry[1].rootOperationId, entry)
       continue
     }
-    const stampOrder = comparePortableStampsV2(current[1].stamp, entry[1].stamp)
-    if (stampOrder < 0 || (stampOrder === 0 && compareUtf8V2(current[0], entry[0]) < 0))
+    const stampOrder = comparePortableStamps(current[1].stamp, entry[1].stamp)
+    if (stampOrder < 0 || (stampOrder === 0 && compareUtf8(current[0], entry[0]) < 0))
       effectiveByRoot.set(entry[1].rootOperationId, entry)
   }
 
@@ -298,8 +307,8 @@ function semanticCreationLiveness(snapshot: CanvasSnapshotV2): (createdBy: strin
     const semanticReceipts =
       receipts?.filter(
         (receipt) =>
-          receipt.intentKind === "canvas.undo.semantic-inverse/2" ||
-          receipt.intentKind === "canvas.redo.semantic-forward/2",
+          receipt.intentKind === "canvas.undo.semantic-inverse" ||
+          receipt.intentKind === "canvas.redo.semantic-forward",
       ) ?? []
     if (semanticReceipts.length === 0) return true
     if (semanticReceipts.length !== 1) return false
@@ -312,30 +321,30 @@ function semanticCreationLiveness(snapshot: CanvasSnapshotV2): (createdBy: strin
     const transition = matches[0]!
     if (effectiveByRoot.get(transition[1].rootOperationId)?.[0] !== transition[0]) return false
     return transition[1].resultBindings.some(
-      (binding) => binding.ref !== null && canvasEntityKeyV2(binding.ref) === canvasEntityKeyV2(ref),
+      (binding) => binding.ref !== null && canvasEntityKey(binding.ref) === canvasEntityKey(ref),
     )
   }
 }
 
-export function effectiveNodeDataV2(
-  snapshot: CanvasSnapshotV2,
-  node: CanvasNodeSnapshotV2,
+export function effectiveNodeData(
+  snapshot: CanvasSnapshot,
+  node: CanvasNodeSnapshot,
 ): {
-  readonly data: NodeDataEnvelopeV2
-  readonly stamp: import("@convax/collaboration").PortableStampV2
-  readonly lifecycle: CanvasProjectedNodeV2["generationLifecycle"]
+  readonly data: NodeDataEnvelope
+  readonly stamp: import("@convax/collaboration").PortableStamp
+  readonly lifecycle: CanvasProjectedNode["generationLifecycle"]
 } {
-  const claims: { claim: StampedClaimV2<NodeDataEnvelopeV2>; begin?: GenerationBeginV2 }[] = node.data.map((entry) => ({
+  const claims: { claim: StampedClaim<NodeDataEnvelope>; begin?: GenerationBeginV2 }[] = node.data.map((entry) => ({
     claim: entry[1],
   }))
-  let selectedLifecycle: { begin: GenerationBeginV2; lifecycle: CanvasProjectedNodeV2["generationLifecycle"] } | null =
+  let selectedLifecycle: { begin: GenerationBeginV2; lifecycle: CanvasProjectedNode["generationLifecycle"] } | null =
     null
   for (const begin of snapshot.generationBegins.values()) {
-    if (canvasEntityKeyV2(begin.node) !== node.key) continue
+    if (canvasEntityKey(begin.node) !== node.key) continue
     const dismissal = snapshot.generationDismissals.get(begin.generationId)
     const terminal = snapshot.generationTerminals.get(`${begin.generationId}/owner/${begin.beginActorId}`)
     const recovery = snapshot.generationRecoveryFailures.get(begin.generationId)
-    const lifecycle: CanvasProjectedNodeV2["generationLifecycle"] =
+    const lifecycle: CanvasProjectedNode["generationLifecycle"] =
       dismissal !== undefined
         ? "dismissed"
         : terminal?.phase === "succeeded"
@@ -345,69 +354,69 @@ export function effectiveNodeDataV2(
             : recovery !== undefined
               ? "recovery-failed"
               : "active"
-    if (selectedLifecycle === null || comparePortableStampsV2(selectedLifecycle.begin.beginStamp, begin.beginStamp) < 0)
+    if (selectedLifecycle === null || comparePortableStamps(selectedLifecycle.begin.beginStamp, begin.beginStamp) < 0)
       selectedLifecycle = { begin, lifecycle }
     if (dismissal === undefined && terminal?.phase === "succeeded") {
       claims.push({
-        claim: { format: "convax.canvas-stamped-claim/2", stamp: begin.outputClaimStamp, value: terminal.outputData },
+        claim: { format: "convax.canvas-stamped-claim", stamp: begin.outputClaimStamp, value: terminal.outputData },
         begin,
       })
     }
   }
   const winner = claims.reduce((current, next) =>
-    comparePortableStampsV2(current.claim.stamp, next.claim.stamp) < 0 ? next : current,
+    comparePortableStamps(current.claim.stamp, next.claim.stamp) < 0 ? next : current,
   )
   return { data: winner.claim.value, stamp: winner.claim.stamp, lifecycle: selectedLifecycle?.lifecycle ?? "none" }
 }
 
-export function nodeIdentityDigestV2(node: CanvasCanonicalNodeRecordV2): DigestV2 {
-  return canvasDigestV2("convax.canvas-node-identity/2", node.identity)
+export function nodeIdentityDigest(node: CanvasCanonicalNodeRecord): Digest {
+  return canvasDigest("convax.canvas-node-identity", node.identity)
 }
 
-export function edgeIdentityDigestV2(edge: CanvasEdgeSnapshotV2): DigestV2 {
-  return canvasDigestV2("convax.canvas-edge-identity/2", edge.identity)
+export function edgeIdentityDigest(edge: CanvasEdgeSnapshot): Digest {
+  return canvasDigest("convax.canvas-edge-identity", edge.identity)
 }
 
-export function effectiveDataDigestV2(snapshot: CanvasSnapshotV2, node: CanvasNodeSnapshotV2): DigestV2 {
-  return canvasDigestV2("convax.canvas-effective-data/2", {
-    format: "convax.canvas-effective-data/2",
-    data: effectiveNodeDataV2(snapshot, node).data,
+export function effectiveDataDigest(snapshot: CanvasSnapshot, node: CanvasNodeSnapshot): Digest {
+  return canvasDigest("convax.canvas-effective-data", {
+    format: "convax.canvas-effective-data",
+    data: effectiveNodeData(snapshot, node).data,
   })
 }
 
-export function dataRegisterDigestV2(node: CanvasNodeSnapshotV2): DigestV2 {
-  return canvasDigestV2("convax.canvas-data-register/2", {
-    format: "convax.canvas-data-register/2",
+export function dataRegisterDigest(node: CanvasNodeSnapshot): Digest {
+  return canvasDigest("convax.canvas-data-register", {
+    format: "convax.canvas-data-register",
     node: node.identity.ref,
     actorSlots: node.data,
   })
 }
 
-export function effectivePluginV2(node: CanvasNodeSnapshotV2): PluginStateEnvelopeV2 | null {
-  return maxClaimV2(node.plugin.map((entry) => entry[1]))?.value ?? null
+export function effectivePlugin(node: CanvasNodeSnapshot): PluginStateEnvelope | null {
+  return maxClaim(node.plugin.map((entry) => entry[1]))?.value ?? null
 }
 
-export function effectivePluginDigestV2(node: CanvasNodeSnapshotV2): DigestV2 | null {
-  const plugin = effectivePluginV2(node)
+export function effectivePluginDigest(node: CanvasNodeSnapshot): Digest | null {
+  const plugin = effectivePlugin(node)
   return plugin === null
     ? null
-    : canvasDigestV2("convax.canvas-effective-plugin/2", { format: "convax.canvas-effective-plugin/2", plugin })
+    : canvasDigest("convax.canvas-effective-plugin", { format: "convax.canvas-effective-plugin", plugin })
 }
 
-export function geometryDigestV2(node: CanvasNodeSnapshotV2): DigestV2 {
-  const position = maxClaimV2(node.position.map((entry) => entry[1]))
-  const size = maxClaimV2(node.size.map((entry) => entry[1]))
+export function geometryDigest(node: CanvasNodeSnapshot): Digest {
+  const position = maxClaim(node.position.map((entry) => entry[1]))
+  const size = maxClaim(node.size.map((entry) => entry[1]))
   if (position === null || size === null) throw new Error("Validated node has no effective geometry")
-  return canvasDigestV2("convax.canvas-geometry/2", {
-    format: "convax.canvas-geometry/2",
+  return canvasDigest("convax.canvas-geometry", {
+    format: "convax.canvas-geometry",
     node: node.identity.ref,
     position: position.value,
     size: size.value,
   })
 }
 
-export function generationLifecycleCoreV2(
-  snapshot: CanvasSnapshotV2,
+export function generationLifecycleCore(
+  snapshot: CanvasSnapshot,
   generationId: string,
 ): {
   readonly format: "convax.canvas-generation-lifecycle/2"
@@ -427,68 +436,68 @@ export function generationLifecycleCoreV2(
   }
 }
 
-export function generationLifecycleDigestV2(snapshot: CanvasSnapshotV2, generationId: string): DigestV2 {
-  return canvasDigestV2("convax.canvas-generation-lifecycle/2", generationLifecycleCoreV2(snapshot, generationId))
+export function generationLifecycleDigest(snapshot: CanvasSnapshot, generationId: string): Digest {
+  return canvasDigest("convax.canvas-generation-lifecycle/2", generationLifecycleCore(snapshot, generationId))
 }
 
 export function projectedGenerationDigestV2(
-  snapshot: CanvasSnapshotV2,
-  node: CanvasEntityRefV2 & { readonly kind: "node" },
-): DigestV2 {
+  snapshot: CanvasSnapshot,
+  node: CanvasEntityRef & { readonly kind: "node" },
+): Digest {
   const lifecycles = [...snapshot.generationBegins.values()]
-    .filter((begin) => canvasEntityKeyV2(begin.node) === canvasEntityKeyV2(node))
-    .sort((a, b) => compareUtf8V2(a.generationId, b.generationId))
-    .map((begin) => generationLifecycleCoreV2(snapshot, begin.generationId))
-  return canvasDigestV2("convax.canvas-projected-generation/2", {
+    .filter((begin) => canvasEntityKey(begin.node) === canvasEntityKey(node))
+    .sort((a, b) => compareUtf8(a.generationId, b.generationId))
+    .map((begin) => generationLifecycleCore(snapshot, begin.generationId))
+  return canvasDigest("convax.canvas-projected-generation/2", {
     format: "convax.canvas-projected-generation/2",
     node,
     lifecycles,
   })
 }
 
-export function obstacleProjectionDigestV2(snapshot: CanvasSnapshotV2): DigestV2 {
-  const index = buildCanvasProjectionIndexV2(snapshot)
+export function obstacleProjectionDigest(snapshot: CanvasSnapshot): Digest {
+  const index = buildCanvasProjectionIndex(snapshot)
   const obstacles = index.projection.nodes
     .filter((node) => node.parent === null)
     .map((node) => ({ node: node.ref, position: node.position, size: node.size }))
-    .sort((a, b) => compareUtf8V2(canvasEntityKeyV2(a.node), canvasEntityKeyV2(b.node)))
-  return canvasDigestV2("convax.canvas-obstacle-projection/2", {
-    format: "convax.canvas-obstacle-projection/2",
+    .sort((a, b) => compareUtf8(canvasEntityKey(a.node), canvasEntityKey(b.node)))
+  return canvasDigest("convax.canvas-obstacle-projection", {
+    format: "convax.canvas-obstacle-projection",
     obstacles,
   })
 }
 
-export function projectionDigestV2(snapshot: CanvasSnapshotV2): DigestV2 {
-  return ordinarySha256V2(canonicalProjectionBytesV2(snapshot))
+export function projectionDigest(snapshot: CanvasSnapshot): Digest {
+  return ordinarySha256(canonicalProjectionBytes(snapshot))
 }
 
-export function canonicalProjectionBytesV2(snapshot: CanvasSnapshotV2): Uint8Array {
-  return encodeRestrictedJcsV2(projectCanvasV2(snapshot))
+export function canonicalProjectionBytes(snapshot: CanvasSnapshot): Uint8Array {
+  return encodeRestrictedJcs(projectCanvas(snapshot))
 }
 
 function selectContainments(
-  snapshot: CanvasSnapshotV2,
+  snapshot: CanvasSnapshot,
   isNodeKeyLive: (key: string) => boolean,
-): ReadonlyMap<string, ContainmentChoiceV2 | null> {
-  const byChild = new Map<string, ContainmentChoiceV2[]>()
+): ReadonlyMap<string, ContainmentChoice | null> {
+  const byChild = new Map<string, ContainmentChoice[]>()
   for (const choice of snapshot.containments.values()) {
-    const childKey = canvasEntityKeyV2(choice.child)
+    const childKey = canvasEntityKey(choice.child)
     if (!isNodeKeyLive(childKey)) continue
     const values = byChild.get(childKey) ?? []
     values.push(choice)
     byChild.set(childKey, values)
   }
-  const selected = new Map<string, ContainmentChoiceV2 | null>()
+  const selected = new Map<string, ContainmentChoice | null>()
   for (const [child, choices] of byChild) {
     const maximum = choices.reduce((winner, next) =>
-      comparePortableStampsV2(winner.stamp, next.stamp) < 0 ? next : winner,
+      comparePortableStamps(winner.stamp, next.stamp) < 0 ? next : winner,
     )
     if (maximum.parent === null) selected.set(child, maximum)
     else {
-      const parent = snapshot.nodes.get(canvasEntityKeyV2(maximum.parent))
+      const parent = snapshot.nodes.get(canvasEntityKey(maximum.parent))
       selected.set(
         child,
-        parent !== undefined && isNodeKeyLive(parent.key) && effectiveNodeDataV2(snapshot, parent).data.kind === "group"
+        parent !== undefined && isNodeKeyLive(parent.key) && effectiveNodeData(snapshot, parent).data.kind === "group"
           ? maximum
           : null,
       )
@@ -502,17 +511,17 @@ function selectContainments(
       const left = selected.get(loser)
       const right = selected.get(candidate)
       if (left === null || left === undefined || right === null || right === undefined) continue
-      const order = comparePortableStampsV2(left.stamp, right.stamp)
-      if (order < 0 || (order === 0 && compareUtf8V2(left.relationId, right.relationId) < 0)) loser = candidate
+      const order = comparePortableStamps(left.stamp, right.stamp)
+      if (order < 0 || (order === 0 && compareUtf8(left.relationId, right.relationId) < 0)) loser = candidate
     }
     selected.set(loser, null)
   }
   return selected
 }
 
-function findContainmentCycle(selected: ReadonlyMap<string, ContainmentChoiceV2 | null>): string[] | null {
+function findContainmentCycle(selected: ReadonlyMap<string, ContainmentChoice | null>): string[] | null {
   const done = new Set<string>()
-  for (const start of [...selected.keys()].sort(compareUtf8V2)) {
+  for (const start of [...selected.keys()].sort(compareUtf8)) {
     if (done.has(start)) continue
     const path: string[] = []
     const positions = new Map<string, number>()
@@ -523,14 +532,14 @@ function findContainmentCycle(selected: ReadonlyMap<string, ContainmentChoiceV2 
       positions.set(current, path.length)
       path.push(current)
       const choice = selected.get(current)
-      current = choice?.parent === undefined || choice.parent === null ? undefined : canvasEntityKeyV2(choice.parent)
+      current = choice?.parent === undefined || choice.parent === null ? undefined : canvasEntityKey(choice.parent)
     }
     for (const key of path) done.add(key)
   }
   return null
 }
 
-function effectiveMetadata<T>(entries: readonly (readonly [string, StampedClaimV2<T>])[], fallback: T): T {
-  const winner = maxClaimV2(entries.map((entry) => entry[1]))
+function effectiveMetadata<T>(entries: readonly (readonly [string, StampedClaim<T>])[], fallback: T): T {
+  const winner = maxClaim(entries.map((entry) => entry[1]))
   return winner?.value ?? fallback
 }

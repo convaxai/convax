@@ -1,58 +1,58 @@
 import { describe, expect, test } from "bun:test"
 import * as Y from "yjs"
-import type { VerifiedProtocolAuthorityV2 } from "./authority"
-import { ownerCanonicalizerDescriptorDigestV2 } from "./canonicalizer"
-import { causalFrontierDigestV2 } from "./causal"
+import type { CurrentProtocolAuthority } from "./authority"
+import { ownerCanonicalizerDescriptorDigest } from "./canonicalizer"
+import { causalFrontierDigest } from "./causal"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseCanvasIdV2,
-  parseDigestV2,
-  parseId128V2,
-  parseMemberIdV2,
-  parsePublicKeyV2,
-  parseProjectIdV2,
-  parseReplicaIdV2,
-  parseSignatureV2,
-  parseUint64V2,
-  type Id128V2,
+  encodeBase64url,
+  parseActorId,
+  parseCanvasId,
+  parseDigest,
+  parseId128,
+  parseMemberId,
+  parsePublicKey,
+  parseProjectId,
+  parseReplicaId,
+  parseSignature,
+  parseUint64,
+  type Id128,
 } from "./codecs"
-import { PROTOCOL_SCHEMA_ARTIFACTS_V2 } from "./constants"
+import { PROTOCOL_SCHEMA_ARTIFACTS } from "./constants"
 import type {
-  DecodedCausalEditFrameV2,
-  DocumentOwnerRuntimeV2,
-  DocumentScopeV2,
-  FrameObjectRefV2,
-  OwnerExternalFactPortV2,
-  SelectedDocumentOwnerArtifactDefinitionV2,
+  DecodedCausalEditFrame,
+  DocumentOwnerRuntime,
+  DocumentScope,
+  FrameObjectRef,
+  OwnerExternalFactPort,
+  SelectedDocumentOwnerArtifactDefinition,
 } from "./contracts"
-import { canonicalStateDigestV2, ordinarySha256V2 } from "./digest"
-import { decodeCausalEditFrameV2 } from "./frame"
-import { decodeRestrictedJcsV2, encodeRestrictedJcsV2 } from "./jcs"
-import { CollaborationKernelV2, type LocalIntentRequestV2 } from "./kernel"
-import { createSelectedDocumentOwnerArtifactFactoryV2 } from "./owner-runtime"
+import { canonicalStateDigest, ordinarySha256 } from "./digest"
+import { decodeCausalEditFrame } from "./frame"
+import { decodeRestrictedJcs, encodeRestrictedJcs } from "./jcs"
+import { CollaborationKernel, type LocalIntentRequest } from "./kernel"
+import { createSelectedDocumentOwnerArtifactFactory } from "./owner-runtime"
 import type {
-  AcceptedHeadViewV2,
-  CollaborationKernelPortsV2,
-  CollaborationPersistencePortV2,
-  LocalFrameAuthorityV2,
-  OperationLookupV2,
+  AcceptedHeadView,
+  CollaborationKernelPorts,
+  CollaborationPersistencePort,
+  LocalFrameAuthority,
+  OperationLookup,
 } from "./ports"
-import { encodeFullUpdateV2, encodeStateVectorV2 } from "./yjs-codec"
-import { loadVerifiedTestAuthorityV2 } from "./authority.test-support"
+import { encodeFullUpdate, encodeStateVector } from "./yjs-codec"
+import { loadVerifiedTestAuthority } from "./authority.test-support"
 
 const encoder = new TextEncoder()
-const factPortFactories = new WeakMap<CollaborationKernelV2, () => OwnerExternalFactPortV2<"canvas">>()
-const ID = parseId128V2(encodeBase64urlV2(new Uint8Array(16)))
-const ACTOR = parseActorIdV2(encodeBase64urlV2(Uint8Array.from({ length: 32 }, () => 7)))
-const MEMBER = parseMemberIdV2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => 8)))
-const REPLICA = parseReplicaIdV2("replica_0000002a")
-const PUBLIC_KEY = parsePublicKeyV2(encodeBase64urlV2(Uint8Array.from({ length: 32 }, () => 2)))
-const SIGNATURE = parseSignatureV2(encodeBase64urlV2(Uint8Array.from({ length: 64 }, (_, index) => index < 32 ? 3 : index === 32 ? 1 : 0)))
-const SCHEMA = parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[0].artifactDigest)
-const CANONICAL_STATE_FORMAT = "convax.canvas-canonical-state/2" as const
+const factPortFactories = new WeakMap<CollaborationKernel, () => OwnerExternalFactPort<"canvas">>()
+const ID = parseId128(encodeBase64url(new Uint8Array(16)))
+const ACTOR = parseActorId(encodeBase64url(Uint8Array.from({ length: 32 }, () => 7)))
+const MEMBER = parseMemberId(encodeBase64url(Uint8Array.from({ length: 16 }, () => 8)))
+const REPLICA = parseReplicaId("replica_0000002a")
+const PUBLIC_KEY = parsePublicKey(encodeBase64url(Uint8Array.from({ length: 32 }, () => 2)))
+const SIGNATURE = parseSignature(encodeBase64url(Uint8Array.from({ length: 64 }, (_, index) => index < 32 ? 3 : index === 32 ? 1 : 0)))
+const SCHEMA = parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest)
+const CANONICAL_STATE_FORMAT = "convax.canvas-canonical-state" as const
 const CANONICALIZER_DESCRIPTOR = Object.freeze({
-  format: "convax.owner-canonicalizer-descriptor/2" as const,
+  format: "convax.owner-canonicalizer-descriptor" as const,
   owner: "canvas" as const,
   ownerSchemaDigest: SCHEMA,
   canonicalStateFormat: CANONICAL_STATE_FORMAT,
@@ -60,17 +60,17 @@ const CANONICALIZER_DESCRIPTOR = Object.freeze({
   exactBytePolicy: "parse-reencode-byte-equal" as const,
   unknownStatePolicy: "reject" as const,
 })
-const CANONICALIZER = ownerCanonicalizerDescriptorDigestV2(CANONICALIZER_DESCRIPTOR)
-const D1 = ordinarySha256V2(encoder.encode("membership"))
-const D2 = ordinarySha256V2(encoder.encode("actor-credential"))
-const D3 = ordinarySha256V2(encoder.encode("edit-authorization"))
-const SCOPE: DocumentScopeV2 = Object.freeze({ projectId: parseProjectIdV2("project"), projectEpoch: ID, docKind: "canvas", docId: parseCanvasIdV2(`cv_${"2".repeat(64)}`), shardEpoch: ID })
+const CANONICALIZER = ownerCanonicalizerDescriptorDigest(CANONICALIZER_DESCRIPTOR)
+const D1 = ordinarySha256(encoder.encode("membership"))
+const D2 = ordinarySha256(encoder.encode("actor-credential"))
+const D3 = ordinarySha256(encoder.encode("edit-authorization"))
+const SCOPE: DocumentScope = Object.freeze({ projectId: parseProjectId("project"), projectEpoch: ID, docKind: "canvas", docId: parseCanvasId(`cv_${"2".repeat(64)}`), shardEpoch: ID })
 
-function authority(): Promise<VerifiedProtocolAuthorityV2> {
-  return loadVerifiedTestAuthorityV2()
+function authority(): Promise<CurrentProtocolAuthority> {
+  return loadVerifiedTestAuthority()
 }
 
-function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArtifactDefinitionV2<"canvas">["createDefinitions"]>>): SelectedDocumentOwnerArtifactDefinitionV2<"canvas"> {
+function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArtifactDefinition<"canvas">["createDefinitions"]>>): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
   return {
     owner: "canvas",
     createDefinitions(processValues) {
@@ -80,7 +80,7 @@ function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArt
         canonicalizerDescriptor: CANONICALIZER_DESCRIPTOR,
         canonicalizerDigest: CANONICALIZER,
         decodeIntent(exactJcs: Uint8Array) {
-          const value = decodeRestrictedJcsV2(exactJcs)
+          const value = decodeRestrictedJcs(exactJcs)
           return typeof value === "object" && value !== null && (value as { kind?: unknown }).kind === "set" ? value : "rejected" as const
         },
         validateBase(document: Y.Doc) {
@@ -104,9 +104,9 @@ function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArt
         deriveActualWriteEvidence(result: { value: unknown }) {
           const { value, intentDigest } = result.value as { value: string; intentDigest: typeof D1 }
           return {
-            format: "convax.actual-write-evidence/2" as const, scope: SCOPE, owner: "canvas" as const, ownerSchemaDigest: SCHEMA,
+            format: "convax.actual-write-evidence" as const, scope: SCOPE, owner: "canvas" as const, ownerSchemaDigest: SCHEMA,
             intentDigest, changedPaths: ["root/value"],
-            writes: [{ entityKind: "root", entityId: "root", field: "value", valueDigest: ordinarySha256V2(encoder.encode(value)) }],
+            writes: [{ entityKind: "root", entityId: "root", field: "value", valueDigest: ordinarySha256(encoder.encode(value)) }],
           }
         },
       }
@@ -120,35 +120,35 @@ function ownerDefinition(overrides?: Partial<ReturnType<SelectedDocumentOwnerArt
   }
 }
 
-class MemoryPersistence implements CollaborationPersistencePortV2 {
+class MemoryPersistence implements CollaborationPersistencePort {
   readonly events: string[] = []
   readonly objects = new Map<string, Uint8Array>()
-  readonly accepted = new Map<string, FrameObjectRefV2>()
-  readonly refsByDigest = new Map<string, FrameObjectRefV2>()
+  readonly accepted = new Map<string, FrameObjectRef>()
+  readonly refsByDigest = new Map<string, FrameObjectRef>()
   failAt: "object" | "outbox" | "journal" | "head" | null = null
   stale = false
   throwAfterHeadCommit = false
-  private pendingJournal: FrameObjectRefV2 | null = null
-  head: AcceptedHeadViewV2
+  private pendingJournal: FrameObjectRef | null = null
+  head: AcceptedHeadView
 
   constructor() {
     this.head = emptyHead()
   }
 
-  async loadReplicaHead(): Promise<AcceptedHeadViewV2> { return this.head }
-  async putImmutableFrame(ref: FrameObjectRefV2, value: Uint8Array): Promise<void> {
+  async loadReplicaHead(): Promise<AcceptedHeadView> { return this.head }
+  async putImmutableFrame(ref: FrameObjectRef, value: Uint8Array): Promise<void> {
     this.events.push("object")
     if (this.failAt === "object") throw new Error("object crash")
     this.objects.set(ref.frameDigest, Uint8Array.from(value)); this.refsByDigest.set(ref.frameDigest, ref)
   }
   async putReplicationOutboxRef(): Promise<void> { this.events.push("outbox"); if (this.failAt === "outbox") throw new Error("outbox crash") }
-  async appendFrameJournal(ref: FrameObjectRefV2) {
+  async appendFrameJournal(ref: FrameObjectRef) {
     this.events.push("journal")
     if (this.failAt === "journal") throw new Error("journal crash")
     this.pendingJournal = ref
-    return { ref, journalRecordDigest: ordinarySha256V2(encoder.encode(`journal:${ref.frameDigest}`)) }
+    return { ref, journalRecordDigest: ordinarySha256(encoder.encode(`journal:${ref.frameDigest}`)) }
   }
-  async compareAndCommitReplicaHead(input: Parameters<CollaborationPersistencePortV2["compareAndCommitReplicaHead"]>[0]) {
+  async compareAndCommitReplicaHead(input: Parameters<CollaborationPersistencePort["compareAndCommitReplicaHead"]>[0]) {
     this.events.push("head")
     if (this.failAt === "head") throw new Error("head crash")
     if (this.stale) {
@@ -158,26 +158,26 @@ class MemoryPersistence implements CollaborationPersistencePortV2 {
           ref: input.ref,
           journalRecordDigest: input.journal.journalRecordDigest,
           expectedReplicaHeadRecordDigest: input.expectedReplicaHeadRecordDigest,
-          observedReplicaHeadRecordDigest: ordinarySha256V2(encoder.encode("other-head")),
-          quarantineCommitRecordDigest: ordinarySha256V2(encoder.encode("quarantine")),
+          observedReplicaHeadRecordDigest: ordinarySha256(encoder.encode("other-head")),
+          quarantineCommitRecordDigest: ordinarySha256(encoder.encode("quarantine")),
           shardDispositionHeadRecordDigest: this.head.headDigest,
         },
       }
     }
     const ref = this.pendingJournal!
-    const headDigest = ordinarySha256V2(encoder.encode(`head:${ref.frameDigest}`))
+    const headDigest = ordinarySha256(encoder.encode(`head:${ref.frameDigest}`))
     this.accepted.set(`${ref.actorId}:${ref.operationId}`, ref)
-    const frame = decodeCausalEditFrameV2(await authority(), this.objects.get(ref.frameDigest)!)
+    const frame = decodeCausalEditFrame(await authority(), this.objects.get(ref.frameDigest)!)
     const document = new Y.Doc()
     Y.applyUpdate(document, this.head.fullUpdate)
     Y.applyUpdate(document, frame.sections.yjsUpdate)
     const causalHead = headRef(frame)
-    const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([causalHead]) })
+    const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([causalHead]) })
     this.head = {
-      ...this.head, headDigest, frontier, frontierDigest: causalFrontierDigestV2(frontier),
-      actorHeads: { format: "convax.replica-actor-head-set/2", scope: SCOPE, heads: [causalHead] },
-      fullUpdate: encodeFullUpdateV2(document), stateVector: encodeStateVectorV2(document),
-      canonicalStateDigest: canonicalStateDigestV2(SCHEMA, canonicalStateBytes(document)),
+      ...this.head, headDigest, frontier, frontierDigest: causalFrontierDigest(frontier),
+      actorHeads: { format: "convax.replica-actor-head-set", scope: SCOPE, heads: [causalHead] },
+      fullUpdate: encodeFullUpdate(document), stateVector: encodeStateVector(document),
+      canonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes(document)),
     }
     document.destroy()
     if (this.throwAfterHeadCommit) throw new Error("post-head response loss")
@@ -192,8 +192,8 @@ class MemoryPersistence implements CollaborationPersistencePortV2 {
       },
     }
   }
-  async isReachableFromAcceptedHead(ref: FrameObjectRefV2): Promise<boolean> { return this.accepted.has(`${ref.actorId}:${ref.operationId}`) }
-  async lookupOperation(actorId: string, operationId: string): Promise<OperationLookupV2> {
+  async isReachableFromAcceptedHead(ref: FrameObjectRef): Promise<boolean> { return this.accepted.has(`${ref.actorId}:${ref.operationId}`) }
+  async lookupOperation(actorId: string, operationId: string): Promise<OperationLookup> {
     const ref = this.accepted.get(`${actorId}:${operationId}`)
     if (ref) return { status: "accepted", ref, bytes: this.objects.get(ref.frameDigest)! }
     const recovery = [...this.refsByDigest.values()].find((item) => item.actorId === actorId && item.operationId === operationId)
@@ -203,28 +203,28 @@ class MemoryPersistence implements CollaborationPersistencePortV2 {
   async quarantineExactObject(): Promise<void> { this.events.push("quarantine") }
 }
 
-function emptyHead(): AcceptedHeadViewV2 {
+function emptyHead(): AcceptedHeadView {
   const doc = new Y.Doc()
-  const frontier = Object.freeze({ format: "convax.causal-frontier/2" as const, heads: Object.freeze([]) })
-  const result: AcceptedHeadViewV2 = Object.freeze({
-    scope: SCOPE, headDigest: ordinarySha256V2(encoder.encode("genesis-head")), frontier,
-    frontierDigest: causalFrontierDigestV2(frontier), actorHeads: Object.freeze({ format: "convax.replica-actor-head-set/2", scope: SCOPE, heads: Object.freeze([]) }),
-    fullUpdate: encodeFullUpdateV2(doc), stateVector: encodeStateVectorV2(doc), canonicalStateDigest: canonicalStateDigestV2(SCHEMA, canonicalStateBytes(doc)),
+  const frontier = Object.freeze({ format: "convax.causal-frontier" as const, heads: Object.freeze([]) })
+  const result: AcceptedHeadView = Object.freeze({
+    scope: SCOPE, headDigest: ordinarySha256(encoder.encode("genesis-head")), frontier,
+    frontierDigest: causalFrontierDigest(frontier), actorHeads: Object.freeze({ format: "convax.replica-actor-head-set", scope: SCOPE, heads: Object.freeze([]) }),
+    fullUpdate: encodeFullUpdate(doc), stateVector: encodeStateVector(doc), canonicalStateDigest: canonicalStateDigest(SCHEMA, canonicalStateBytes(doc)),
   })
   doc.destroy()
   return result
 }
 
-function ports(persistence: MemoryPersistence): CollaborationKernelPortsV2 {
+function ports(persistence: MemoryPersistence): CollaborationKernelPorts {
   return {
     createDocument: () => new Y.Doc(),
     persistence,
     localAuthority: {
       actorId: ACTOR,
-      async prepareFinalFrameAuthority(): Promise<LocalFrameAuthorityV2> {
+      async prepareFinalFrameAuthority(): Promise<LocalFrameAuthority> {
         const last = [...persistence.accepted.values()].at(-1)
         return {
-          actorId: ACTOR, actorSequence: parseUint64V2(last ? String(BigInt(last.actorSequence) + 1n) : "1"),
+          actorId: ACTOR, actorSequence: parseUint64(last ? String(BigInt(last.actorSequence) + 1n) : "1"),
           predecessorFrameDigest: last?.frameDigest ?? null,
           signerAuthority: { memberId: MEMBER, replicaId: REPLICA, actorId: ACTOR, memberAuthorizationEpoch: ID, replicaAuthorizationEpoch: ID, membershipSnapshotDigest: D1, replicaActorCredentialCoreDigest: D2, replicaEditAuthorizationCoreDigest: D3 },
           dependencies: [
@@ -245,16 +245,16 @@ function ports(persistence: MemoryPersistence): CollaborationKernelPortsV2 {
 
 async function openKernel(
   persistence: MemoryPersistence,
-  override?: Partial<CollaborationKernelPortsV2>,
+  override?: Partial<CollaborationKernelPorts>,
   projection?: string[],
-  ownerRuntime?: DocumentOwnerRuntimeV2<"canvas">,
+  ownerRuntime?: DocumentOwnerRuntime<"canvas">,
 ) {
   const base = ports(persistence)
   const selectedAuthority = await authority()
-  const runtimeResult = ownerRuntime ?? createSelectedDocumentOwnerArtifactFactoryV2(selectedAuthority, "canvas").createRuntime(ownerDefinition())
+  const runtimeResult = ownerRuntime ?? createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime(ownerDefinition())
   if ("status" in runtimeResult) throw new Error(`owner runtime rejected: ${runtimeResult.code}`)
   const createFacts = () => emptyFacts(runtimeResult)
-  const kernel = await CollaborationKernelV2.open({
+  const kernel = await CollaborationKernel.open({
     authority: selectedAuthority, scope: SCOPE, owner: runtimeResult,
     ports: {
       ...base,
@@ -267,7 +267,7 @@ async function openKernel(
   return kernel
 }
 
-function emptyFacts(runtime: DocumentOwnerRuntimeV2<"canvas">): OwnerExternalFactPortV2<"canvas"> {
+function emptyFacts(runtime: DocumentOwnerRuntime<"canvas">): OwnerExternalFactPort<"canvas"> {
   const facts = runtime.externalFactPortFactory.createAttemptPort({
     declared: { validationArtifacts: [], externalFacts: [] },
     resolver: {
@@ -280,7 +280,7 @@ function emptyFacts(runtime: DocumentOwnerRuntimeV2<"canvas">): OwnerExternalFac
   return facts.port
 }
 
-describe("R5 owner boundary", () => {
+describe("Current protocol owner boundary", () => {
   test("rejects descriptor field tampering before constructing a Y.Doc", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
@@ -290,8 +290,8 @@ describe("R5 owner boundary", () => {
         const definitions = definition.createDefinitions(values)
         return { ...definitions, protocol: { ...definitions.protocol, canonicalizerDescriptor: { ...CANONICALIZER_DESCRIPTOR, unexpected: true } } }
       },
-    } as SelectedDocumentOwnerArtifactDefinitionV2<"canvas">
-    expect(createSelectedDocumentOwnerArtifactFactoryV2(selectedAuthority, "canvas").createRuntime(tampered)).toEqual({ status: "rejected", code: "owner-runtime-invalid" })
+    } as SelectedDocumentOwnerArtifactDefinition<"canvas">
+    expect(createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime(tampered)).toEqual({ status: "rejected", code: "owner-runtime-invalid" })
   })
 
   test("rejects a stale descriptor digest before any durable write", async () => {
@@ -304,23 +304,23 @@ describe("R5 owner boundary", () => {
         return { ...definitions, protocol: { ...definitions.protocol, canonicalizerDigest: D1 } }
       },
     }
-    expect(createSelectedDocumentOwnerArtifactFactoryV2(selectedAuthority, "canvas").createRuntime(stale)).toEqual({ status: "rejected", code: "owner-runtime-invalid" })
+    expect(createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime(stale)).toEqual({ status: "rejected", code: "owner-runtime-invalid" })
   })
 
   test("rejects wrong-format and defensively copies reused canonical-state bytes", async () => {
     const selectedAuthority = await authority()
     const definition = ownerDefinition()
-    const wrongFormat = createSelectedDocumentOwnerArtifactFactoryV2(selectedAuthority, "canvas").createRuntime({
+    const wrongFormat = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
       ...definition,
       createDefinitions(values) {
         const definitions = definition.createDefinitions(values)
-        return { ...definitions, protocol: { ...definitions.protocol, canonicalStateBytes: () => encodeRestrictedJcsV2({ format: "convax.other-state/2" }) } }
+        return { ...definitions, protocol: { ...definitions.protocol, canonicalStateBytes: () => encodeRestrictedJcs({ format: "convax.other-state" }) } }
       },
     })
     if ("status" in wrongFormat) throw new Error(wrongFormat.code)
     await expect(openKernel(new MemoryPersistence(), undefined, undefined, wrongFormat)).rejects.toThrow("wrong top-level format")
-    const shared = encodeRestrictedJcsV2({ format: CANONICAL_STATE_FORMAT, value: {} })
-    const reused = createSelectedDocumentOwnerArtifactFactoryV2(selectedAuthority, "canvas").createRuntime({
+    const shared = encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value: {} })
+    const reused = createSelectedDocumentOwnerArtifactFactory(selectedAuthority, "canvas").createRuntime({
       ...definition,
       createDefinitions(values) {
         const definitions = definition.createDefinitions(values)
@@ -341,7 +341,7 @@ describe("R5 owner boundary", () => {
         actorId: ACTOR,
         async prepareFinalFrameAuthority(input) {
           const result = await prepare(input)
-          return typeof result === "string" ? result : { ...result, validationArtifacts: { format: "convax.validation-artifact-set/2", artifacts: [] } }
+          return typeof result === "string" ? result : { ...result, validationArtifacts: { format: "convax.validation-artifact-set", artifacts: [] } }
         },
       },
     })
@@ -351,8 +351,8 @@ describe("R5 owner boundary", () => {
   })
 })
 
-async function commit(kernel: CollaborationKernelV2, value: string, operationId = ID) {
-  const typed = { format: "convax.typed-intent/2", kind: "set", value }
+async function commit(kernel: CollaborationKernel, value: string, operationId = ID) {
+  const typed = { format: "convax.typed-intent", kind: "set", value }
   const createFacts = factPortFactories.get(kernel)
   if (!createFacts) throw new Error("Kernel fact-port factory is absent")
   return kernel.commitLocalIntent({
@@ -397,7 +397,7 @@ describe("replicaDoc/candidateDoc durability", () => {
       prepare: () => {
         prepareCount += 1
         return {
-          typedIntent: { format: "convax.typed-intent/2", kind: "set", value: "committed-before-response" },
+          typedIntent: { format: "convax.typed-intent", kind: "set", value: "committed-before-response" },
           externalFacts: createFacts(),
         }
       },
@@ -416,12 +416,12 @@ describe("replicaDoc/candidateDoc durability", () => {
     const kernel = await openKernel(persistence)
     const createFacts = factPortFactories.get(kernel)!
     const observed: Array<{ base: unknown; actorSequence: string; lamport: string }> = []
-    const request = (operationId: Id128V2, value: string) => ({
+    const request = (operationId: Id128, value: string) => ({
       operationId,
-      prepare: ({ base, context }: Parameters<LocalIntentRequestV2["prepare"]>[0]) => {
+      prepare: ({ base, context }: Parameters<LocalIntentRequest["prepare"]>[0]) => {
         observed.push({ base: structuredClone(base.value), actorSequence: context.actorSequence, lamport: context.lamport })
         return {
-          typedIntent: { format: "convax.typed-intent/2", kind: "set", value },
+          typedIntent: { format: "convax.typed-intent", kind: "set", value },
           externalFacts: createFacts(),
         }
       },
@@ -442,10 +442,10 @@ describe("replicaDoc/candidateDoc durability", () => {
     const persistence = new MemoryPersistence()
     const kernel = await openKernel(persistence)
     const facts = factPortFactories.get(kernel)!()
-    const request = (operationId: Id128V2, value: string) => ({
+    const request = (operationId: Id128, value: string) => ({
       operationId,
       prepare: () => ({
-        typedIntent: { format: "convax.typed-intent/2", kind: "set", value },
+        typedIntent: { format: "convax.typed-intent", kind: "set", value },
         externalFacts: facts,
       }),
     })
@@ -494,8 +494,8 @@ describe("incoming exact-base arrival order", () => {
   test("retains a missing predecessor, then accepts the same signed bytes in causal order", async () => {
     const sourceStore = new MemoryPersistence()
     const source = await openKernel(sourceStore)
-    const first = await commit(source, "one", parseId128V2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => 1))))
-    const second = await commit(source, "two", parseId128V2(encodeBase64urlV2(Uint8Array.from({ length: 16 }, () => 2))))
+    const first = await commit(source, "one", parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => 1))))
+    const second = await commit(source, "two", parseId128(encodeBase64url(Uint8Array.from({ length: 16 }, () => 2))))
     const firstFrame = first.frame
     const secondFrame = second.frame
     const exactBases = new Map<string, ReturnType<typeof exactBase>>()
@@ -541,7 +541,7 @@ describe("incoming exact-base arrival order", () => {
     rejected.dispose()
 
     const controller = new AbortController()
-    let createFacts: (() => OwnerExternalFactPortV2<"canvas">) | undefined
+    let createFacts: (() => OwnerExternalFactPort<"canvas">) | undefined
     const cancelled = await openKernel(new MemoryPersistence(), {
       exactBaseResolver: { reconstructExactBase: async () => base },
       incomingFacts: {
@@ -560,44 +560,44 @@ describe("incoming exact-base arrival order", () => {
   })
 })
 
-function exactBase(frame: DecodedCausalEditFrameV2, prior: readonly DecodedCausalEditFrameV2[]) {
+function exactBase(frame: DecodedCausalEditFrame, prior: readonly DecodedCausalEditFrame[]) {
   const document = new Y.Doc()
   for (const item of prior) Y.applyUpdate(document, item.sections.yjsUpdate)
   const heads = prior.length === 0 ? [] : [headRef(prior.at(-1)!)]
   const value = {
-    fullUpdate: encodeFullUpdateV2(document), stateVector: frame.sections.baseStateVector,
-    frontier: frame.context.baseFrontier, actorHeads: { format: "convax.replica-actor-head-set/2" as const, scope: SCOPE, heads },
+    fullUpdate: encodeFullUpdate(document), stateVector: frame.sections.baseStateVector,
+    frontier: frame.context.baseFrontier, actorHeads: { format: "convax.replica-actor-head-set" as const, scope: SCOPE, heads },
     canonicalStateDigest: frame.header.core.baseCanonicalStateDigest,
   }
   document.destroy()
   return value
 }
 
-function headRef(frame: DecodedCausalEditFrameV2) {
+function headRef(frame: DecodedCausalEditFrame) {
   const core = frame.header.core
-  return { format: "convax.causal-head-ref/2" as const, actorId: core.actorId, actorSequence: core.actorSequence, frameDigest: frame.frameDigest, lamport: core.lamport }
+  return { format: "convax.causal-head-ref" as const, actorId: core.actorId, actorSequence: core.actorSequence, frameDigest: frame.frameDigest, lamport: core.lamport }
 }
 
 function canonicalStateBytes(document: Y.Doc): Uint8Array {
-  return encodeRestrictedJcsV2({ format: CANONICAL_STATE_FORMAT, value: document.getMap("root").toJSON() })
+  return encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value: document.getMap("root").toJSON() })
 }
 
 function canonicalStateDigestFor(value: unknown) {
-  return canonicalStateDigestV2(SCHEMA, encodeRestrictedJcsV2({ format: CANONICAL_STATE_FORMAT, value }))
+  return canonicalStateDigest(SCHEMA, encodeRestrictedJcs({ format: CANONICAL_STATE_FORMAT, value }))
 }
 
 function requiredValidationArtifacts() {
   return {
-    format: "convax.validation-artifact-set/2" as const,
+    format: "convax.validation-artifact-set" as const,
     artifacts: [
-      { owner: "canvas" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[0].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[0].artifactDigest) },
-      { owner: "control-plane" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[2].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[2].artifactDigest) },
-      { owner: "kernel" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[1].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[1].artifactDigest) },
-      { owner: "project-index" as const, format: PROTOCOL_SCHEMA_ARTIFACTS_V2[3].format, artifactDigest: parseDigestV2(PROTOCOL_SCHEMA_ARTIFACTS_V2[3].artifactDigest) },
+      { owner: "canvas" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[0].format, artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[0].artifactDigest) },
+      { owner: "control-plane" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[2].format, artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[2].artifactDigest) },
+      { owner: "kernel" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[1].format, artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[1].artifactDigest) },
+      { owner: "project-index" as const, format: PROTOCOL_SCHEMA_ARTIFACTS[3].format, artifactDigest: parseDigest(PROTOCOL_SCHEMA_ARTIFACTS[3].artifactDigest) },
     ],
   }
 }
 
-function id(seed: number): Id128V2 {
-  return parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(seed)))
+function id(seed: number): Id128 {
+  return parseId128(encodeBase64url(new Uint8Array(16).fill(seed)))
 }

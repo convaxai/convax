@@ -2,7 +2,7 @@ import { afterAll, expect, mock, test } from "bun:test"
 import { Window as HappyDOMWindow } from "happy-dom"
 import { StrictMode, type ReactNode, act } from "react"
 import { createRoot, type Root } from "react-dom/client"
-import type { CanvasRendererCollaborationClientV2, CanvasRendererCommandV2 } from "../collaboration"
+import type { CanvasRendererCollaborationClient, CanvasRendererCommand } from "../collaboration"
 import type { CanvasAssistantRequest } from "../services"
 import type { CanvasDocument, CanvasNode } from "../types"
 
@@ -128,9 +128,9 @@ const { createCanvasServices } = await import("../services")
 const { CanvasEditor } = await import("./canvas-editor")
 const { useStoreApi } = await import("@xyflow/react")
 
-class RealReactFlowCanvasSession implements CanvasRendererCollaborationClientV2 {
+class RealReactFlowCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
-  readonly commands: CanvasRendererCommandV2[] = []
+  readonly commands: CanvasRendererCommand[] = []
   readonly undoModel = "project-yjs-semantic-history" as const
   private readonly incarnations = new Map<string, string>()
   private readonly listeners = new Set<() => void>()
@@ -179,7 +179,7 @@ class RealReactFlowCanvasSession implements CanvasRendererCollaborationClientV2 
       : undefined
   }
 
-  async submit(command: CanvasRendererCommandV2) {
+  async submit(command: CanvasRendererCommand) {
     this.commands.push(command)
     const updates = new Map(command.body.updates.map((update) => [update.node.id, update]))
     this.publish({

@@ -339,7 +339,7 @@ async function runtimeFixture(
         canvases: {
           async getCanvasCatalog({ projectId }) {
             return {
-              format: "convax.project-canvas-catalog-projection/2",
+              format: "convax.project-canvas-catalog-projection",
               projectEpoch: "AAAAAAAAAAAAAAAAAAAAAA",
               projectId,
               routes: [],

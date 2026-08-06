@@ -7,85 +7,85 @@ import {
   type PortableBoundedValueSchemaV1,
 } from "@convax/bounded-value"
 import {
-  assertDenseArrayV2,
-  assertExactKeysV2,
-  compareBytesV2,
-  decodeRestrictedJcsV2,
-  encodeRestrictedJcsV2,
-  ordinarySha256V2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseDocumentScopeV2,
+  assertDenseArray,
+  assertExactKeys,
+  compareBytes,
+  decodeRestrictedJcs,
+  encodeRestrictedJcs,
+  ordinarySha256,
+  parseActorId,
+  parseDigest,
+  parseDocumentScope,
 } from "@convax/collaboration"
 import type {
-  OwnerExternalFactPortV2,
-  OwnerExternalFactRequirementV2,
-  OwnerIntentDependenciesV2,
-  OwnerIntentConstructionContextV2,
-  OwnerIntentDependencyContextV2,
+  OwnerExternalFactPort,
+  OwnerExternalFactRequirement,
+  OwnerIntentDependencies,
+  OwnerIntentConstructionContext,
+  OwnerIntentDependencyContext,
 } from "@convax/collaboration"
 import type {
-  CanvasExternalFactContextV2,
-  CanvasExternalFactKindV2,
-  CanvasExternalFactRequestV2,
-  CanvasExternalFactResultV2,
-  CanvasResourceProofRefV2,
-  CanvasTypedIntentUnionV2,
+  CanvasExternalFactContext,
+  CanvasExternalFactKind,
+  CanvasExternalFactRequest,
+  CanvasExternalFactResult,
+  CanvasResourceProofRef,
+  CanvasTypedIntentUnion,
   GenerationBeginV2,
-  PluginRequirementV2,
-  PluginStateEnvelopeV2,
+  PluginRequirement,
+  PluginStateEnvelope,
 } from "./types"
 import {
   assertGenerationBeginV2,
   assertGenerationRecoveryFailureV2,
-  assertPluginRequirementV2,
-  assertPluginStateV2,
-  assertResourceProofV2,
-  canvasDigestV2,
-  sameCanonicalValueV2,
+  assertPluginRequirement,
+  assertPluginState,
+  assertResourceProof,
+  canvasDigest,
+  sameCanonicalValue,
 } from "./validation"
 
 const FACT_REQUEST_LIMIT = 64 * 1024
 const FACT_REQUEST_TOTAL_LIMIT = 1024 * 1024
 const FACT_COUNT_LIMIT = 64
 
-type DependencyDiscoveryResultV2 = OwnerIntentDependenciesV2<"canvas"> | "rejected"
-type FactContextResultV2 = CanvasExternalFactContextV2 | "pending" | "rejected"
+type DependencyDiscoveryResult = OwnerIntentDependencies<"canvas"> | "rejected"
+type FactContextResult = CanvasExternalFactContext | "pending" | "rejected"
 
-export function encodeCanvasExternalFactRequestV2(
-  request: CanvasExternalFactRequestV2,
+export function encodeCanvasExternalFactRequest(
+  request: CanvasExternalFactRequest,
 ): Readonly<Uint8Array> | "rejected" {
   try {
-    assertCanvasExternalFactRequestV2(request)
-    return encodeRestrictedJcsV2(request)
+    assertCanvasExternalFactRequest(request)
+    return encodeRestrictedJcs(request)
   } catch {
     return "rejected"
   }
 }
 
-export function decodeCanvasExternalFactRequestV2(
+export function decodeCanvasExternalFactRequest(
   exactJcs: Readonly<Uint8Array>,
-): CanvasExternalFactRequestV2 | "rejected" {
+): CanvasExternalFactRequest | "rejected" {
   try {
-    const value = decodeRestrictedJcsV2(new Uint8Array(exactJcs))
-    assertCanvasExternalFactRequestV2(value)
+    const value = decodeRestrictedJcs(new Uint8Array(exactJcs))
+    assertCanvasExternalFactRequest(value)
     return value
   } catch {
     return "rejected"
   }
 }
 
-export function validateCanvasExternalFactResultV2(value: unknown): CanvasExternalFactResultV2 | "rejected" {
+export function validateCanvasExternalFactResult(value: unknown): CanvasExternalFactResult | "rejected" {
   try {
-    assertExactKeysV2(value, ["format", "kind", "requestSha256", "factDigest", "decision"], "Canvas external-fact result")
-    if (value.format !== "convax.canvas-external-fact-result/2" || !isFactKind(value.kind) || value.decision !== "verified") {
+    assertExactKeys(value, ["format", "kind", "requestSha256", "factDigest", "decision"], "Canvas external-fact result")
+    if (value.format !== "convax.canvas-external-fact-result" || !isFactKind(value.kind) || value.decision !== "verified") {
       return "rejected"
     }
     return Object.freeze({
       format: value.format,
       kind: value.kind,
-      requestSha256: parseDigestV2(value.requestSha256),
-      factDigest: parseDigestV2(value.factDigest),
+      requestSha256: parseDigest(value.requestSha256),
+      factDigest: parseDigest(value.factDigest),
       decision: value.decision,
     })
   } catch {
@@ -93,26 +93,26 @@ export function validateCanvasExternalFactResultV2(value: unknown): CanvasExtern
   }
 }
 
-export function discoverCanvasIntentDependenciesV2(
-  context: OwnerIntentDependencyContextV2,
-  intent: CanvasTypedIntentUnionV2,
-): DependencyDiscoveryResultV2 {
-  return discoverCanvasValueDependenciesV2(context, intent)
+export function discoverCanvasIntentDependencies(
+  context: OwnerIntentDependencyContext,
+  intent: CanvasTypedIntentUnion,
+): DependencyDiscoveryResult {
+  return discoverCanvasValueDependencies(context, intent)
 }
 
 /** Shared closed-value scanner used by ordinary intents and locally materialized history. */
-export function discoverCanvasValueDependenciesV2(
-  context: OwnerIntentConstructionContextV2,
+export function discoverCanvasValueDependencies(
+  context: OwnerIntentConstructionContext,
   value: unknown,
-): DependencyDiscoveryResultV2 {
+): DependencyDiscoveryResult {
   try {
-    const resources: CanvasResourceProofRefV2[] = []
-    const plugins: PluginRequirementV2[] = []
+    const resources: CanvasResourceProofRef[] = []
+    const plugins: PluginRequirement[] = []
     const begins: GenerationBeginV2[] = []
     const recoveryProofDigests: string[] = []
     walkClosedIntentValue(value, (record) => {
-      if (record.format === "convax.canvas-resource-proof-ref/2") {
-        assertResourceProofV2(record, true)
+      if (record.format === "convax.canvas-resource-proof-ref") {
+        assertResourceProof(record, true)
         resources.push(record)
       } else if (record.format === "convax.canvas-generation-begin/2") {
         assertGenerationBeginV2(record)
@@ -121,8 +121,8 @@ export function discoverCanvasValueDependenciesV2(
         assertGenerationRecoveryFailureV2(record)
         recoveryProofDigests.push(record.proofDigest)
       }
-      if (record.format === "convax.canvas-plugin-state/2") {
-        assertPluginStateV2(record)
+      if (record.format === "convax.canvas-plugin-state") {
+        assertPluginState(record)
         plugins.push(Object.freeze({
           pluginId: record.pluginId,
           snapshotDigest: record.snapshotDigest,
@@ -130,30 +130,30 @@ export function discoverCanvasValueDependenciesV2(
           validationArtifact: record.validationArtifact,
         }))
       } else if (looksLikePluginRequirement(record)) {
-        assertPluginRequirementV2(record)
+        assertPluginRequirement(record)
         plugins.push(record)
       }
     })
 
-    const validationArtifacts = uniqueSorted(plugins.map((plugin) => plugin.validationArtifact), encodeRestrictedJcsV2)
+    const validationArtifacts = uniqueSorted(plugins.map((plugin) => plugin.validationArtifact), encodeRestrictedJcs)
     const current = uniqueSorted(
-      resources.filter((proof): proof is Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }> => proof.mode === "current-owner-state"),
-      encodeRestrictedJcsV2,
+      resources.filter((proof): proof is Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> => proof.mode === "current-owner-state"),
+      encodeRestrictedJcs,
     )
     const retained = uniqueSorted(
-      resources.filter((proof): proof is Extract<CanvasResourceProofRefV2, { mode: "retained-canvas-history" }> => proof.mode === "retained-canvas-history"),
-      encodeRestrictedJcsV2,
+      resources.filter((proof): proof is Extract<CanvasResourceProofRef, { mode: "retained-canvas-history" }> => proof.mode === "retained-canvas-history"),
+      encodeRestrictedJcs,
     )
-    const requests: CanvasExternalFactRequestV2[] = [
+    const requests: CanvasExternalFactRequest[] = [
       ...batchProofRequests("current-resources", current),
       ...batchProofRequests("retained-resources", retained),
-      ...uniqueSorted(begins, encodeRestrictedJcsV2).map((begin) => generationBeginRequest(context, begin)),
-      ...uniqueSorted(recoveryProofDigests.map(parseDigestV2), (digest) => encodeRestrictedJcsV2(digest)).map(
-        (proofDigest) => ({ format: "convax.canvas-external-fact-request/2", kind: "generation-recovery", proofDigest }) as const,
+      ...uniqueSorted(begins, encodeRestrictedJcs).map((begin) => generationBeginRequest(context, begin)),
+      ...uniqueSorted(recoveryProofDigests.map(parseDigest), (digest) => encodeRestrictedJcs(digest)).map(
+        (proofDigest) => ({ format: "convax.canvas-external-fact-request", kind: "generation-recovery", proofDigest }) as const,
       ),
     ]
     const externalFacts = requests.map(requirementFromRequest)
-    const sortedFacts = [...externalFacts].sort((left, right) => compareBytesV2(requirementKey(left), requirementKey(right)))
+    const sortedFacts = [...externalFacts].sort((left, right) => compareBytes(requirementKey(left), requirementKey(right)))
     const totalBytes = sortedFacts.reduce((sum, requirement) => sum + requirement.request.exactJcs.byteLength, 0)
     if (sortedFacts.length > FACT_COUNT_LIMIT || totalBytes > FACT_REQUEST_TOTAL_LIMIT) return "rejected"
     return Object.freeze({
@@ -166,37 +166,37 @@ export function discoverCanvasValueDependenciesV2(
 }
 
 /** Resolves and consumes the complete declared ledger before reducer mutation. */
-export function createCanvasExternalFactContextV2(
-  context: OwnerIntentConstructionContextV2,
-  intent: CanvasTypedIntentUnionV2,
-  port: OwnerExternalFactPortV2<"canvas">,
-): FactContextResultV2 {
-  const declared = discoverCanvasValueDependenciesV2(context, intent)
+export function createCanvasExternalFactContext(
+  context: OwnerIntentConstructionContext,
+  intent: CanvasTypedIntentUnion,
+  port: OwnerExternalFactPort<"canvas">,
+): FactContextResult {
+  const declared = discoverCanvasValueDependencies(context, intent)
   if (declared === "rejected") return "rejected"
   const artifactSchemas = new Map<string, PortableBoundedValueSchemaV1>()
   for (const artifact of declared.validationArtifacts) {
     const result = port.resolveArtifact(artifact)
     if (result.status === "pending") return "pending"
-    if (result.status === "rejected" || !sameCanonicalValueV2(result.ref, artifact)) return "rejected"
+    if (result.status === "rejected" || !sameCanonicalValue(result.ref, artifact)) return "rejected"
     try {
       if (artifact.owner !== "plugin" || artifact.format !== portablePluginStateSchemaFormat) return "rejected"
-      const decoded = decodeRestrictedJcsV2(new Uint8Array(result.exactBytes))
+      const decoded = decodeRestrictedJcs(new Uint8Array(result.exactBytes))
       const schema = parsePortablePluginStateSchemaV1(decoded)
       const canonicalBytes = canonicalPortablePluginStateSchemaBytesV1(schema)
-      if (compareBytesV2(canonicalBytes, result.exactBytes) !== 0) return "rejected"
-      const schemaDigest = ordinarySha256V2(pluginStateSchemaDigestInputV1(schema))
+      if (compareBytes(canonicalBytes, result.exactBytes) !== 0) return "rejected"
+      const schemaDigest = ordinarySha256(pluginStateSchemaDigestInputV1(schema))
       if (schemaDigest !== artifact.artifactDigest) return "rejected"
-      artifactSchemas.set(bytesKey(encodeRestrictedJcsV2(artifact)), schema)
+      artifactSchemas.set(bytesKey(encodeRestrictedJcs(artifact)), schema)
     } catch {
       return "rejected"
     }
   }
-  const factResults = new Map<string, CanvasExternalFactResultV2>()
+  const factResults = new Map<string, CanvasExternalFactResult>()
   for (const requirement of declared.externalFacts) {
     const resolved = port.resolveFact(requirement)
     if (resolved.status === "pending") return "pending"
     if (resolved.status === "rejected") return "rejected"
-    const value = validateCanvasExternalFactResultV2(resolved.value)
+    const value = validateCanvasExternalFactResult(resolved.value)
     if (
       value === "rejected" ||
       value.kind !== requirement.kind ||
@@ -208,25 +208,25 @@ export function createCanvasExternalFactContextV2(
 
   const verifiedRequests = [...declared.externalFacts].map((requirement) => ({
     requirement,
-    request: decodeCanvasExternalFactRequestV2(requirement.request.exactJcs),
+    request: decodeCanvasExternalFactRequest(requirement.request.exactJcs),
   }))
   if (verifiedRequests.some((entry) => entry.request === "rejected")) return "rejected"
   return Object.freeze({
-    validateCurrentResource(proof: CanvasResourceProofRefV2) {
+    validateCurrentResource(proof: CanvasResourceProofRef) {
       return verifiedRequests.some((entry) =>
         entry.request !== "rejected" &&
         (entry.request.kind === "current-resources" || entry.request.kind === "retained-resources") &&
-        entry.request.proofs.some((candidate) => sameCanonicalValueV2(candidate, proof)) &&
+        entry.request.proofs.some((candidate) => sameCanonicalValue(candidate, proof)) &&
         factResults.has(bytesKey(requirementKey(entry.requirement)))) ? "valid" : "invalid"
     },
-    validatePluginArtifact(requirement: PluginRequirementV2) {
-      const schema = artifactSchemas.get(bytesKey(encodeRestrictedJcsV2(requirement.validationArtifact)))
+    validatePluginArtifact(requirement: PluginRequirement) {
+      const schema = artifactSchemas.get(bytesKey(encodeRestrictedJcs(requirement.validationArtifact)))
       return schema !== undefined && requirement.pluginStateSchemaDigest === requirement.validationArtifact.artifactDigest
         ? "valid"
         : "invalid"
     },
-    validatePluginState(envelope: PluginStateEnvelopeV2) {
-      const schema = artifactSchemas.get(bytesKey(encodeRestrictedJcsV2(envelope.validationArtifact)))
+    validatePluginState(envelope: PluginStateEnvelope) {
+      const schema = artifactSchemas.get(bytesKey(encodeRestrictedJcs(envelope.validationArtifact)))
       if (schema === undefined || envelope.pluginStateSchemaDigest !== envelope.validationArtifact.artifactDigest) {
         return "invalid"
       }
@@ -243,9 +243,9 @@ export function createCanvasExternalFactContextV2(
     },
     validateGenerationRecovery(proofDigest: string) {
       const request = {
-        format: "convax.canvas-external-fact-request/2",
+        format: "convax.canvas-external-fact-request",
         kind: "generation-recovery",
-        proofDigest: parseDigestV2(proofDigest),
+        proofDigest: parseDigest(proofDigest),
       } as const
       return hasVerifiedRequest(verifiedRequests, factResults, request) ? "valid" : "invalid"
     },
@@ -253,25 +253,25 @@ export function createCanvasExternalFactContextV2(
 }
 
 function hasVerifiedRequest(
-  entries: readonly { requirement: OwnerExternalFactRequirementV2<"canvas">; request: CanvasExternalFactRequestV2 | "rejected" }[],
-  results: ReadonlyMap<string, CanvasExternalFactResultV2>,
-  request: CanvasExternalFactRequestV2,
+  entries: readonly { requirement: OwnerExternalFactRequirement<"canvas">; request: CanvasExternalFactRequest | "rejected" }[],
+  results: ReadonlyMap<string, CanvasExternalFactResult>,
+  request: CanvasExternalFactRequest,
 ): boolean {
   return entries.some((entry) =>
     entry.request !== "rejected" &&
-    sameCanonicalValueV2(entry.request, request) &&
+    sameCanonicalValue(entry.request, request) &&
     results.has(bytesKey(requirementKey(entry.requirement))))
 }
 
 function generationBeginRequest(
-  context: OwnerIntentConstructionContextV2,
+  context: OwnerIntentConstructionContext,
   begin: GenerationBeginV2,
-): Extract<CanvasExternalFactRequestV2, { kind: "generation-begin" }> {
+): Extract<CanvasExternalFactRequest, { kind: "generation-begin" }> {
   return Object.freeze({
-    format: "convax.canvas-external-fact-request/2",
+    format: "convax.canvas-external-fact-request",
     kind: "generation-begin",
     scope: context.scope,
-    beginDigest: canvasDigestV2("convax.canvas-generation-begin/2", begin),
+    beginDigest: canvasDigest("convax.canvas-generation-begin/2", begin),
     beginActorId: begin.beginActorId,
     beginAuthorizationEpochDigest: begin.beginAuthorizationEpochDigest,
     toolRefDigest: begin.toolRefDigest,
@@ -282,33 +282,33 @@ function generationBeginRequest(
 function batchProofRequests<K extends "current-resources" | "retained-resources">(
   kind: K,
   proofs: readonly (K extends "current-resources"
-    ? Extract<CanvasResourceProofRefV2, { mode: "current-owner-state" }>
-    : Extract<CanvasResourceProofRefV2, { mode: "retained-canvas-history" }>)[],
-): CanvasExternalFactRequestV2[] {
-  const result: CanvasExternalFactRequestV2[] = []
-  let chunk: CanvasResourceProofRefV2[] = []
+    ? Extract<CanvasResourceProofRef, { mode: "current-owner-state" }>
+    : Extract<CanvasResourceProofRef, { mode: "retained-canvas-history" }>)[],
+): CanvasExternalFactRequest[] {
+  const result: CanvasExternalFactRequest[] = []
+  let chunk: CanvasResourceProofRef[] = []
   for (const proof of proofs) {
     const candidate = [...chunk, proof]
-    const request = { format: "convax.canvas-external-fact-request/2", kind, proofs: candidate }
-    if (encodeRestrictedJcsV2(request).byteLength <= FACT_REQUEST_LIMIT) {
+    const request = { format: "convax.canvas-external-fact-request", kind, proofs: candidate }
+    if (encodeRestrictedJcs(request).byteLength <= FACT_REQUEST_LIMIT) {
       chunk = candidate
       continue
     }
     if (chunk.length === 0) throw new TypeError("Canvas external-fact proof exceeds request cap")
-    result.push({ format: "convax.canvas-external-fact-request/2", kind, proofs: Object.freeze(chunk) } as CanvasExternalFactRequestV2)
+    result.push({ format: "convax.canvas-external-fact-request", kind, proofs: Object.freeze(chunk) } as CanvasExternalFactRequest)
     chunk = [proof]
-    if (encodeRestrictedJcsV2({ format: "convax.canvas-external-fact-request/2", kind, proofs: chunk }).byteLength > FACT_REQUEST_LIMIT)
+    if (encodeRestrictedJcs({ format: "convax.canvas-external-fact-request", kind, proofs: chunk }).byteLength > FACT_REQUEST_LIMIT)
       throw new TypeError("Canvas external-fact proof exceeds request cap")
   }
   if (chunk.length > 0)
-    result.push({ format: "convax.canvas-external-fact-request/2", kind, proofs: Object.freeze(chunk) } as CanvasExternalFactRequestV2)
+    result.push({ format: "convax.canvas-external-fact-request", kind, proofs: Object.freeze(chunk) } as CanvasExternalFactRequest)
   return result
 }
 
-function requirementFromRequest(request: CanvasExternalFactRequestV2): OwnerExternalFactRequirementV2<"canvas"> {
-  const exactJcs = encodeCanvasExternalFactRequestV2(request)
+function requirementFromRequest(request: CanvasExternalFactRequest): OwnerExternalFactRequirement<"canvas"> {
+  const exactJcs = encodeCanvasExternalFactRequest(request)
   if (exactJcs === "rejected" || exactJcs.byteLength > FACT_REQUEST_LIMIT) throw new TypeError("Canvas fact request is invalid")
-  const sha256 = ordinarySha256V2(new Uint8Array(exactJcs))
+  const sha256 = ordinarySha256(new Uint8Array(exactJcs))
   const factDigest = request.kind === "generation-begin"
     ? request.beginAuthorizationEpochDigest
     : request.kind === "generation-recovery"
@@ -322,34 +322,34 @@ function requirementFromRequest(request: CanvasExternalFactRequestV2): OwnerExte
   })
 }
 
-function assertCanvasExternalFactRequestV2(value: unknown): asserts value is CanvasExternalFactRequestV2 {
-  assertExactKeysV2(value, requestKeys(value), "Canvas external-fact request")
-  if (value.format !== "convax.canvas-external-fact-request/2" || !isFactKind(value.kind)) throw new TypeError("Invalid Canvas external-fact request")
+function assertCanvasExternalFactRequest(value: unknown): asserts value is CanvasExternalFactRequest {
+  assertExactKeys(value, requestKeys(value), "Canvas external-fact request")
+  if (value.format !== "convax.canvas-external-fact-request" || !isFactKind(value.kind)) throw new TypeError("Invalid Canvas external-fact request")
   if (value.kind === "current-resources" || value.kind === "retained-resources") {
-    assertDenseArrayV2(value.proofs, "Canvas resource proof batch")
+    assertDenseArray(value.proofs, "Canvas resource proof batch")
     if (value.proofs.length === 0) throw new TypeError("Canvas resource proof batch is empty")
     const mode = value.kind === "current-resources" ? "current-owner-state" : "retained-canvas-history"
     let prior: Uint8Array | undefined
     for (const proof of value.proofs) {
-      assertResourceProofV2(proof, true)
+      assertResourceProof(proof, true)
       if (proof.mode !== mode) throw new TypeError("Canvas resource proof mode does not match fact kind")
-      const bytes = encodeRestrictedJcsV2(proof)
-      if (prior !== undefined && compareBytesV2(prior, bytes) >= 0) throw new TypeError("Canvas resource proofs are not strict sorted")
+      const bytes = encodeRestrictedJcs(proof)
+      if (prior !== undefined && compareBytes(prior, bytes) >= 0) throw new TypeError("Canvas resource proofs are not strict sorted")
       prior = bytes
     }
     return
   }
   if (value.kind === "generation-begin") {
-    const scope = parseDocumentScopeV2(value.scope)
+    const scope = parseDocumentScope(value.scope)
     if (scope.docKind !== "canvas") throw new TypeError("Generation fact scope is not Canvas")
-    parseDigestV2(value.beginDigest)
-    parseActorIdV2(value.beginActorId)
-    parseDigestV2(value.beginAuthorizationEpochDigest)
-    parseDigestV2(value.toolRefDigest)
-    parseDigestV2(value.protocolDigest)
+    parseDigest(value.beginDigest)
+    parseActorId(value.beginActorId)
+    parseDigest(value.beginAuthorizationEpochDigest)
+    parseDigest(value.toolRefDigest)
+    parseDigest(value.protocolDigest)
     return
   }
-  parseDigestV2(value.proofDigest)
+  parseDigest(value.proofDigest)
 }
 
 function requestKeys(value: unknown): readonly string[] {
@@ -360,7 +360,7 @@ function requestKeys(value: unknown): readonly string[] {
   return ["format", "kind", "proofDigest"]
 }
 
-function isFactKind(value: unknown): value is CanvasExternalFactKindV2 {
+function isFactKind(value: unknown): value is CanvasExternalFactKind {
   return value === "current-resources" || value === "retained-resources" || value === "generation-begin" || value === "generation-recovery"
 }
 
@@ -380,12 +380,12 @@ function walkClosedIntentValue(value: unknown, visit: (value: Record<string, unk
 }
 
 function uniqueSorted<T>(values: readonly T[], encode: (value: T) => Uint8Array): T[] {
-  const sorted = [...values].sort((left, right) => compareBytesV2(encode(left), encode(right)))
-  return sorted.filter((value, index) => index === 0 || compareBytesV2(encode(sorted[index - 1]!), encode(value)) !== 0)
+  const sorted = [...values].sort((left, right) => compareBytes(encode(left), encode(right)))
+  return sorted.filter((value, index) => index === 0 || compareBytes(encode(sorted[index - 1]!), encode(value)) !== 0)
 }
 
-function requirementKey(requirement: OwnerExternalFactRequirementV2<"canvas">): Uint8Array {
-  return encodeRestrictedJcsV2({
+function requirementKey(requirement: OwnerExternalFactRequirement<"canvas">): Uint8Array {
+  return encodeRestrictedJcs({
     owner: requirement.owner,
     kind: requirement.kind,
     factDigest: requirement.factDigest,

@@ -155,7 +155,7 @@ function fixture(
         }
         const visibleCanvases = canvasCatalogued ? [route] : []
         return {
-          format: "convax.project-canvas-catalog-projection/2",
+          format: "convax.project-canvas-catalog-projection",
           projectEpoch: "BBBBBBBBBBBBBBBBBBBBBB",
           projectId,
           routes: visibleCanvases,

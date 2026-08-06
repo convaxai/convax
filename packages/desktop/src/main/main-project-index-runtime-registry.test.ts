@@ -2,19 +2,19 @@ import { afterEach, describe, expect, test } from "bun:test"
 import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { createWebCryptoEd25519VerifierV2, parseDigestV2, parseProjectIdV2 } from "@convax/collaboration"
-import type { ProjectIndexCurrentBlobReferencePortV2 } from "@convax/project"
-import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2 } from "@convax/project"
-import { readProjectNativeStoreManifestV2 } from "@convax/project/node"
+import { createWebCryptoEd25519Verifier, parseDigest, parseProjectId } from "@convax/collaboration"
+import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
+import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "@convax/project"
+import { readProjectNativeStoreManifest } from "@convax/project/node"
 
-import { loadHistoricalTestAuthorityV2 } from "./collaboration-authority.test-support"
-import { ElectronReplicaSigningVaultV2 } from "./electron-replica-signing-vault"
-import { NodeDurableLocalProjectOwnerAuthorityV2 } from "./local-project-owner-authority"
+import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
+import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
+import { NodeDurableLocalProjectOwnerAuthority } from "./local-project-owner-authority"
 import {
-  CollaborationEnrollmentRequiredErrorV2,
-  createExistingProjectIndexRegistrationPortV2,
-  createLocalProjectOwnerIndexRegistrationPortV2,
-  queryMainProjectIndexCurrentBlobDigestsV2,
+  CollaborationEnrollmentRequiredError,
+  createExistingProjectIndexRegistrationPort,
+  createLocalProjectOwnerIndexRegistrationPort,
+  queryMainProjectIndexCurrentBlobDigests,
 } from "./main-project-index-runtime-registry"
 
 const roots: string[] = []
@@ -28,15 +28,15 @@ describe("existing ProjectIndex registration", () => {
     const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "convax-unregistered-project-"))
     roots.push(projectRoot)
     await fs.mkdir(path.join(projectRoot, ".convax"))
-    const authority = await loadHistoricalTestAuthorityV2()
-    const registration = createExistingProjectIndexRegistrationPortV2(authority)
+    const authority = await loadHistoricalTestAuthority()
+    const registration = createExistingProjectIndexRegistrationPort(authority)
 
     await expect(
       registration.ensureRegistered({
-        projectId: parseProjectIdV2("project-unregistered"),
+        projectId: parseProjectId("project-unregistered"),
         projectRoot,
       }),
-    ).rejects.toBeInstanceOf(CollaborationEnrollmentRequiredErrorV2)
+    ).rejects.toBeInstanceOf(CollaborationEnrollmentRequiredError)
     expect(await fs.readdir(path.join(projectRoot, ".convax"))).toEqual([])
   })
 
@@ -49,9 +49,9 @@ describe("existing ProjectIndex registration", () => {
       JSON.stringify({ projectId: "project-legacy-first-register", schemaVersion: "convax.project/1" }),
     )
     await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "legacy")
-    const authority = await loadHistoricalTestAuthorityV2()
+    const authority = await loadHistoricalTestAuthority()
     let ownerCreated = false
-    const registration = createLocalProjectOwnerIndexRegistrationPortV2(authority, {
+    const registration = createLocalProjectOwnerIndexRegistrationPort(authority, {
       async ensureForDurableProject() {
         ownerCreated = true
         throw new Error("must not create owner")
@@ -66,10 +66,10 @@ describe("existing ProjectIndex registration", () => {
 
     await expect(
       registration.ensureRegistered({
-        projectId: parseProjectIdV2("project-legacy-first-register"),
+        projectId: parseProjectId("project-legacy-first-register"),
         projectRoot,
       }),
-    ).rejects.toMatchObject({ code: "unsupported-portable-version" })
+    ).rejects.toMatchObject({ code: "unsupported-project-data" })
     expect(ownerCreated).toBeFalse()
     await expect(fs.access(path.join(projectRoot, ".convax", "collaboration"))).rejects.toThrow()
   })
@@ -80,18 +80,18 @@ describe("existing ProjectIndex registration", () => {
     const projectRoot = path.join(root, "project")
     const userData = path.join(root, "user-data")
     await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
-    const authority = await loadHistoricalTestAuthorityV2()
-    const projectId = parseProjectIdV2("project-first-register")
-    const vault = new ElectronReplicaSigningVaultV2(path.join(userData, "vault"), {
+    const authority = await loadHistoricalTestAuthority()
+    const projectId = parseProjectId("project-first-register")
+    const vault = new ElectronReplicaSigningVault(path.join(userData, "vault"), {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "keychain",
       encryptString: (value) => Buffer.from(value, "utf8"),
       decryptString: (value) => value.toString("utf8"),
     })
-    const owners = new NodeDurableLocalProjectOwnerAuthorityV2({
+    const owners = new NodeDurableLocalProjectOwnerAuthority({
       rootDirectory: path.join(userData, "local-project-owner"),
       authority,
-      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
       projects: {
         async resolveProjectRoot({ projectId: requested }) {
           if (requested !== projectId) throw new Error("unknown Project")
@@ -99,16 +99,16 @@ describe("existing ProjectIndex registration", () => {
         },
       },
       vault,
-      verifier: createWebCryptoEd25519VerifierV2(),
+      verifier: createWebCryptoEd25519Verifier(),
     })
-    const registration = createLocalProjectOwnerIndexRegistrationPortV2(authority, owners)
+    const registration = createLocalProjectOwnerIndexRegistrationPort(authority, owners)
     const first = await registration.ensureRegistered({ projectId, projectRoot })
     const retry = await registration.ensureRegistered({ projectId, projectRoot })
     expect(retry).toEqual(first)
 
-    const manifest = await readProjectNativeStoreManifestV2(path.join(projectRoot, ".convax", "collaboration"), {
+    const manifest = await readProjectNativeStoreManifest(path.join(projectRoot, ".convax", "collaboration"), {
       protocolDigest: authority.protocolDigest,
-      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST_V2,
+      schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
       uriProtocolDigest: authority.protocolSchemaBundle.core.uriProtocolDigest,
     })
     const localOwner = await owners.resolveExact({
@@ -124,24 +124,24 @@ describe("existing ProjectIndex registration", () => {
 })
 
 describe("ProjectIndex current blob-reference Main bridge", () => {
-  const projectId = parseProjectIdV2("project-blob-references")
-  const digest = parseDigestV2("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+  const projectId = parseProjectId("project-blob-references")
+  const digest = parseDigest("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
   test("propagates an unavailable owner query and never guesses from another projection", async () => {
-    const application: ProjectIndexCurrentBlobReferencePortV2 = {
+    const application: ProjectIndexCurrentBlobReferencePort = {
       async queryCurrentResources() { return [] },
       async queryCurrentBlobDigests() {
         throw new Error("ProjectIndex session unavailable")
       },
     }
-    await expect(queryMainProjectIndexCurrentBlobDigestsV2(application, { projectId })).rejects.toThrow(
+    await expect(queryMainProjectIndexCurrentBlobDigests(application, { projectId })).rejects.toThrow(
       "session unavailable",
     )
   })
 
   test("rejects malformed collections and digests before native GC can observe them", async () => {
     await expect(
-      queryMainProjectIndexCurrentBlobDigestsV2(
+      queryMainProjectIndexCurrentBlobDigests(
         {
           async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
@@ -152,7 +152,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
       ),
     ).rejects.toThrow("malformed")
     await expect(
-      queryMainProjectIndexCurrentBlobDigestsV2(
+      queryMainProjectIndexCurrentBlobDigests(
         {
           async queryCurrentResources() { return [] },
           async queryCurrentBlobDigests() {
@@ -166,7 +166,7 @@ describe("ProjectIndex current blob-reference Main bridge", () => {
 
   test("returns a validated defensive set from the Project-owned query", async () => {
     const ownerValues = new Set([digest])
-    const result = await queryMainProjectIndexCurrentBlobDigestsV2(
+    const result = await queryMainProjectIndexCurrentBlobDigests(
       {
         async queryCurrentResources() { return [] },
         async queryCurrentBlobDigests() {

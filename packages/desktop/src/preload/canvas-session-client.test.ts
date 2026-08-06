@@ -1,18 +1,18 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import {
-  encodeBase64urlV2,
-  parseActorIdV2,
-  parseDigestV2,
-  parseId128V2,
+  encodeBase64url,
+  parseActorId,
+  parseDigest,
+  parseId128,
 } from "@convax/collaboration"
 
 import { canvasSessionIpcChannels } from "../canvas-session-contracts"
-import { createCanvasSessionPreloadClientV2 } from "./canvas-session-client"
+import { createCanvasSessionPreloadClient } from "./canvas-session-client"
 
 const ref = Object.freeze({ canvasId: "canvas-one", scopeId: "project-one" })
-const sessionId = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(1)))
-const entitySuffix = encodeBase64urlV2(new Uint8Array(32).fill(2))
+const sessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+const entitySuffix = encodeBase64url(new Uint8Array(32).fill(2))
 const entity = Object.freeze({
   kind: "node" as const,
   id: `n_${entitySuffix}`,
@@ -30,7 +30,7 @@ const document = createCanvasDocument({
   ],
 })
 const projection = Object.freeze({
-  format: "convax.canvas-session-projection/2" as const,
+  format: "convax.canvas-session-projection" as const,
   ref,
   sessionId,
   document,
@@ -39,15 +39,15 @@ const projection = Object.freeze({
   canRedo: false,
 })
 const operationReceipt = Object.freeze({
-  format: "convax.canvas-operation-receipt/2" as const,
-  actorId: parseActorIdV2(encodeBase64urlV2(new Uint8Array(32).fill(3))),
-  operationId: parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(4))),
-  intentKind: "canvas.nodes.set-geometry/2" as const,
-  intentDigest: parseDigestV2("a".repeat(64)),
-  baseFrontierDigest: parseDigestV2("b".repeat(64)),
+  format: "convax.canvas-operation-receipt" as const,
+  actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(3))),
+  operationId: parseId128(encodeBase64url(new Uint8Array(16).fill(4))),
+  intentKind: "canvas.nodes.set-geometry" as const,
+  intentDigest: parseDigest("a".repeat(64)),
+  baseFrontierDigest: parseDigest("b".repeat(64)),
   resultEntities: Object.freeze([entity]),
   semanticRoot: true,
-  historyMaterialDigest: parseDigestV2("c".repeat(64)),
+  historyMaterialDigest: parseDigest("c".repeat(64)),
 })
 
 function setup(respond: (channel: string, input: unknown) => unknown | Promise<unknown>) {
@@ -62,7 +62,7 @@ function setup(respond: (channel: string, input: unknown) => unknown | Promise<u
     eventListeners.delete(listener)
   })
   return {
-    client: createCanvasSessionPreloadClientV2({ invoke, on, removeListener }),
+    client: createCanvasSessionPreloadClient({ invoke, on, removeListener }),
     emit(payload: unknown) {
       for (const listener of eventListeners) listener({}, payload)
     },
@@ -84,8 +84,8 @@ describe("preload Canvas session client", () => {
     })
     const scope = { ref, sessionId }
     const command = {
-      format: "convax.canvas-renderer-command/2" as const,
-      kind: "canvas.nodes.set-geometry/2" as const,
+      format: "convax.canvas-renderer-command" as const,
+      kind: "canvas.nodes.set-geometry" as const,
       body: { updates: [{ node: entity, position: { x: 30, y: 40 } }] },
     }
 
@@ -127,7 +127,7 @@ describe("preload Canvas session client", () => {
     const wrongScope = setup(() => ({ ...projection, ref: { ...ref, scopeId: "project-two" } }))
     await expect(wrongScope.client.open(ref)).rejects.toThrow("crossed document scope")
 
-    const otherSessionId = parseId128V2(encodeBase64urlV2(new Uint8Array(16).fill(9)))
+    const otherSessionId = parseId128(encodeBase64url(new Uint8Array(16).fill(9)))
     const wrongSession = setup(() => ({ ...projection, sessionId: otherSessionId }))
     await expect(wrongSession.client.query({ ref, sessionId })).rejects.toThrow("stale renderer lease")
 
@@ -137,7 +137,7 @@ describe("preload Canvas session client", () => {
     }))
     await expect(
       malformedReceipt.client.redo({ ref, sessionId, commandId: "redo-one" }),
-    ).rejects.toThrow("BoundedOperationReceiptV2")
+    ).rejects.toThrow("BoundedOperationReceipt")
   })
 
   test("does not deliver an invalid Main invalidation to renderer listeners", () => {
@@ -146,14 +146,14 @@ describe("preload Canvas session client", () => {
     const unsubscribe = bridge.client.subscribe(listener)
 
     expect(() => bridge.emit({
-      format: "convax.canvas-session-invalidation/2",
+      format: "convax.canvas-session-invalidation",
       ref,
       sessionId,
       revision: 7,
     })).toThrow("field set")
     expect(listener).not.toHaveBeenCalled()
 
-    bridge.emit({ format: "convax.canvas-session-invalidation/2", ref, sessionId })
+    bridge.emit({ format: "convax.canvas-session-invalidation", ref, sessionId })
     expect(listener).toHaveBeenCalledTimes(1)
     unsubscribe()
     expect(bridge.removeListener).toHaveBeenCalledTimes(1)

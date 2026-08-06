@@ -511,7 +511,7 @@ try {
         documentId: initialDocument.projection.id,
         offlineMutation: true,
         projectId,
-        startupMode: "v11-local-offline",
+        startupMode: "local-offline",
       }
     }
     const persistedGenerationRace = JSON.parse(
@@ -983,9 +983,9 @@ try {
       throw new Error(`Unexpected personal Project startup result: ${JSON.stringify(summary)}`)
     }
     console.log(
-      `Desktop opened a personal local-first Project without starting Team collaboration; the selected protocol correctly reported unavailable local editing authority (${summary.projectId})`,
+      `Desktop opened a personal local-first Project without starting Team collaboration; the current protocol runtime correctly reported unavailable local editing authority (${summary.projectId})`,
     )
-  } else if (summary.startupMode === "v11-local-offline") {
+  } else if (summary.startupMode === "local-offline") {
     if (
       !summary.projectId ||
       !summary.activeCanvasId?.startsWith("cv_") ||
@@ -993,10 +993,10 @@ try {
       summary.documentId !== summary.activeCanvasId ||
       summary.offlineMutation !== true
     ) {
-      throw new Error(`Unexpected V11 offline Project result: ${JSON.stringify(summary)}`)
+      throw new Error(`Unexpected offline Project result: ${JSON.stringify(summary)}`)
     }
     console.log(
-      `Desktop opened a V11 local-owner Project and preserved add/update/delete operations across Renderer reloads (${summary.projectId})`,
+      `Desktop opened a local-owner Project and preserved add/update/delete operations across Renderer reloads (${summary.projectId})`,
     )
   } else {
     if (
