@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { createHash } from "node:crypto"
 import fs from "node:fs/promises"
 import os from "node:os"
@@ -22,6 +22,8 @@ import {
   NodeCollaborationPersistence,
   type NodeAcceptedReplicaHead,
   type NodeCollaborationPersistenceFaultHooks,
+  type NodeLocalCommitDurabilityDiagnostics,
+  type NodeLocalCommitDurabilityMeasurement,
   type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
 
@@ -38,6 +40,81 @@ afterEach(async () => {
 })
 
 describe("NodeCollaborationPersistence", () => {
+  durabilityTest("transfers the privately owned pending head into the hot cache without recopying its full update", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(119))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+
+    const from = spyOn(Uint8Array, "from")
+    try {
+      const committed = await fixture.store.compareAndCommitReplicaHead({
+        ref: frame.ref,
+        journal,
+        expectedReplicaHeadRecordDigest: genesis.headDigest,
+        resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+      })
+      expect(committed.status).toBe("committed")
+      // The only same-sized conversion is the required frame file read. A pending
+      // head rebind or cache install must not clone the full update again.
+      expect(from.mock.calls.filter(([value]) =>
+        value instanceof Uint8Array && value.byteLength === frame.bytes.byteLength
+      )).toHaveLength(1)
+    } finally {
+      from.mockRestore()
+    }
+
+    const exposed = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
+    const expected = Uint8Array.from(exposed.fullUpdate)
+    exposed.fullUpdate.fill(0xff)
+    expect((await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead).fullUpdate).toEqual(expected)
+    fixture.store.dispose()
+  })
+
+  durabilityTest("fast head verification is disk-bound and fails closed for mismatch, cache mutation, and below-head recovery", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: genesis.headDigest,
+      expectedFrontierDigest: genesis.frontierDigest,
+    })).toBe("verified")
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: digest("stale-head"),
+      expectedFrontierDigest: genesis.frontierDigest,
+    })).toBe("reload-required")
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: genesis.headDigest,
+      expectedFrontierDigest: digest("stale-frontier"),
+    })).toBe("reload-required")
+
+    const exposed = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
+    exposed.fullUpdate.fill(0xff)
+    exposed.stateVector.fill(0xff)
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: genesis.headDigest,
+      expectedFrontierDigest: genesis.frontierDigest,
+    })).toBe("verified")
+
+    const frame = fixture.frames.create(scope, localActor, "1", id128(120))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    await fixture.store.appendFrameJournal(frame.ref)
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: genesis.headDigest,
+      expectedFrontierDigest: genesis.frontierDigest,
+    })).toBe("reload-required")
+    fixture.store.dispose()
+  })
+
   durabilityTest("physically shards ProjectIndex and Canvas without raw identities in paths", async () => {
     const fixture = await createFixture()
     const index = projectIndexScope()
@@ -65,6 +142,20 @@ describe("NodeCollaborationPersistence", () => {
       ...input,
       proofCarrierExactBytes: encoder.encode("proof-equivocation"),
     })).rejects.toMatchObject({ code: "store-corrupt" })
+    fixture.store.dispose()
+  })
+
+  durabilityTest("inspects the durable frame only once while deriving its outbox record", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    await initialize(fixture.store, scope)
+    const frame = fixture.frames.create(scope, localActor, "1", id128(121))
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    const beforeOutbox = fixture.frames.inspectCount
+
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+
+    expect(fixture.frames.inspectCount - beforeOutbox).toBe(1)
     fixture.store.dispose()
   })
 
@@ -253,6 +344,74 @@ describe("NodeCollaborationPersistence", () => {
     fixture.store.dispose()
   })
 
+  durabilityTest("observes the real local commit durability calls per root attempt", async () => {
+    const measurements: NodeLocalCommitDurabilityMeasurement[] = []
+    let attemptId: string | undefined
+    const diagnostics: NodeLocalCommitDurabilityDiagnostics = {
+      currentAttemptId: () => attemptId,
+      observe: (measurement) => measurements.push(measurement),
+      observeLocalStep: () => {
+        throw new Error("local profiling sink unavailable")
+      },
+    }
+    const fixture = await createFixture({}, undefined, undefined, undefined, undefined, diagnostics)
+    const scope = projectIndexScope()
+    const genesis = await initialize(fixture.store, scope)
+    expect(measurements).toEqual([])
+    const frame = fixture.frames.create(scope, localActor, "1", id128(211))
+
+    attemptId = "root-1"
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    const journal = await fixture.store.appendFrameJournal(frame.ref)
+    const result = await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })
+    expect(result.status).toBe("committed")
+    expect(measurements.every((entry) => entry.attemptId === "root-1" && entry.operationId === frame.ref.operationId)).toBe(true)
+    expect(measurements.every((entry) => entry.callCount === 1 && entry.durationNanoseconds >= 0n && entry.outcome === "succeeded")).toBe(true)
+    expect(measurements.map(({ stage, barrierKind }) => `${stage}:${barrierKind}`)).toEqual([
+      "object-frame:file-sync",
+      "object-frame:directory-sync",
+      "object-operation-sidecar:file-sync",
+      "object-operation-sidecar:directory-sync",
+      "outbox:file-sync",
+      "outbox:directory-sync",
+      "journal:file-sync",
+      "journal:directory-sync",
+      "journal:directory-sync",
+      "head:file-sync",
+      "head:directory-sync",
+    ])
+
+    const counts = Object.fromEntries(["object-frame", "object-operation-sidecar", "outbox", "journal", "head"].map(
+      (stage) => [stage, measurements.filter((entry) => entry.stage === stage).reduce((sum, entry) => sum + entry.callCount, 0)],
+    ))
+    expect(counts).toEqual({
+      "object-frame": 2,
+      "object-operation-sidecar": 2,
+      outbox: 2,
+      journal: 3,
+      head: 2,
+    })
+
+    attemptId = "root-1-retry"
+    const beforeRetry = measurements.length
+    await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
+    await fixture.store.putReplicationOutboxRef(frame.ref)
+    await fixture.store.compareAndCommitReplicaHead({
+      ref: frame.ref,
+      journal,
+      expectedReplicaHeadRecordDigest: genesis.headDigest,
+      resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })
+    expect(measurements).toHaveLength(beforeRetry)
+    fixture.store.dispose()
+  })
+
   durabilityTest("exposes only the installed base and accepted exact frame closure", async () => {
     const fixture = await createFixture()
     const scope = projectIndexScope()
@@ -266,12 +425,13 @@ describe("NodeCollaborationPersistence", () => {
     expect(await fixture.store.readAcceptedFrame(scope, frame.ref.frameDigest)).toBeNull()
     await fixture.store.putReplicationOutboxRef(frame.ref)
     const journal = await fixture.store.appendFrameJournal(frame.ref)
-    await fixture.store.compareAndCommitReplicaHead({
+    const committed = await fixture.store.compareAndCommitReplicaHead({
       ref: frame.ref,
       journal,
       expectedReplicaHeadRecordDigest: genesis.headDigest,
       resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
     })
+    if (committed.status !== "committed") throw new Error("expected committed frame")
     expect(await fixture.store.readAcceptedFrame(scope, frame.ref.frameDigest)).toEqual(frame.bytes)
     expect(await fixture.store.listAcceptedFrames(scope)).toEqual([{ ref: frame.ref, exactFrameBytes: frame.bytes }])
     expect((await fixture.store.loadInstalledBase(scope)).frontier.heads).toEqual([])
@@ -556,12 +716,13 @@ describe("NodeCollaborationPersistence", () => {
     await fixture.store.putImmutableFrame(frame.ref, frame.bytes)
     await fixture.store.putReplicationOutboxRef(frame.ref)
     const journal = await fixture.store.appendFrameJournal(frame.ref)
-    await fixture.store.compareAndCommitReplicaHead({
+    const committed = await fixture.store.compareAndCommitReplicaHead({
       ref: frame.ref,
       journal,
       expectedReplicaHeadRecordDigest: genesis.headDigest,
       resultingFrontierDigest: fixture.frames.frontierDigest(frame.ref),
     })
+    if (committed.status !== "committed") throw new Error("expected committed frame")
     const result = await fixture.store.compareAndCommitReplicaHead({
       ref: frame.ref,
       journal,
@@ -570,6 +731,11 @@ describe("NodeCollaborationPersistence", () => {
     })
     expect(result.status).toBe("quarantined")
     if (result.status !== "quarantined") throw new Error("expected quarantine evidence")
+    expect(await fixture.store.verifyReplicaHeadCurrent({
+      scope,
+      expectedHeadDigest: committed.evidence.resultingReplicaHeadRecordDigest,
+      expectedFrontierDigest: fixture.frames.frontierDigest(frame.ref),
+    })).toBe("reload-required")
     const disposition = await fixture.store.loadReplicaHead(scope) as NodeAcceptedReplicaHead
     expect(disposition.headDigest).toBe(result.evidence.shardDispositionHeadRecordDigest)
     expect(await fixture.store.isFrameDurableForAck(frame.ref)).toBe(false)
@@ -600,6 +766,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
   readonly records = new Map<string, { bytes: Uint8Array; ref: FrameObjectRef }>()
   readonly checkpoints = new Map<string, { bytes: Uint8Array; accepted: Omit<NodeAcceptedReplicaHead, "headDigest"> }>()
   applyCount = 0
+  inspectCount = 0
 
   readonly create = (scope: DocumentScope, actorId: ActorId, actorSequence: string, operationId: Id128) => {
     const seed = encoder.encode(`${actorId}:${actorSequence}:${operationId}:${this.records.size}`)
@@ -611,6 +778,7 @@ class FakeFrameMaterializer implements NodeReplicaHeadMaterializer {
   }
 
   async inspectFrame(ref: FrameObjectRef, exactBytes: Readonly<Uint8Array>) {
+    this.inspectCount += 1
     const expected = this.records.get(ref.frameDigest)
     if (!expected || !Buffer.from(expected.bytes).equals(Buffer.from(exactBytes))) throw new Error("unknown fake frame")
     return { ref: expected.ref, requiredBlobDigests: [] }
@@ -690,6 +858,7 @@ async function createFixture(
   checkpointInstallationVerifier?: { verifyCurrent(input: unknown): Promise<boolean> },
   checkpointPruneAuthority?: { verifyCurrent(input: unknown): Promise<unknown> },
   checkpointPruneRootScanner?: { scanComplete(input: unknown): Promise<unknown> },
+  durabilityDiagnostics?: NodeLocalCommitDurabilityDiagnostics,
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-r5-persistence-"))
   roots.push(root)
@@ -704,6 +873,7 @@ async function createFixture(
     checkpointPruneAuthority: checkpointPruneAuthority as never,
     checkpointPruneRootScanner: checkpointPruneRootScanner as never,
     hooks,
+    durabilityDiagnostics,
   })
   return { collaborationDirectory, frames, store }
 }

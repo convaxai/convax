@@ -80,6 +80,8 @@ export function createKernelBackedMainCollaborationDocumentSession<K extends Doc
 
 export function createMainCollaborationLatencyDiagnosticsPort(input: {
   readonly sample: () => CollaborationLatencySample | Promise<CollaborationLatencySample>
+  /** Benchmark-only escape from the production slow-command filter. */
+  readonly recordAll?: boolean
   readonly slowThresholdMs?: number
   readonly write?: (diagnostic: CollaborationLatencyDiagnostic) => void
 }): CollaborationLatencyDiagnosticsPort {
@@ -88,9 +90,11 @@ export function createMainCollaborationLatencyDiagnosticsPort(input: {
     console.warn("[convax:collaboration-latency]", JSON.stringify(diagnostic))
   })
   return Object.freeze({
+    shouldSample(diagnostic: CollaborationLatencyDiagnostic) {
+      return input.recordAll === true || diagnostic.totalDurationMs > threshold
+    },
     sample: input.sample,
     record(diagnostic: CollaborationLatencyDiagnostic) {
-      if (diagnostic.totalDurationMs <= threshold) return
       try { write(diagnostic) } catch { /* Diagnostics never affect a durable command. */ }
     },
   })

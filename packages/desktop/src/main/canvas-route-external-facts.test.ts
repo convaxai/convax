@@ -52,13 +52,9 @@ describe("route-scoped Canvas external facts", () => {
 
   test("verifies current resource proofs only from the exact live ProjectIndex reference", async () => {
     const fixture = currentResourceFixture()
-    const queryCurrentResources = mock(async () => [{
-      materializedPath: "Notes/a.md",
-      reference: fixture.reference,
-      storageClass: "project-file" as const,
-    }])
+    const queryCurrentResourceReferences = mock(async () => [fixture.reference])
     const authority = createProjectIndexBackedCanvasExternalFactAuthority({
-      currentResources: { queryCurrentResources },
+      currentResources: { queryCurrentResourceReferences },
     })
     const request = {
       format: "convax.canvas-external-fact-request" as const,
@@ -75,7 +71,7 @@ describe("route-scoped Canvas external facts", () => {
       },
       requirement: {} as never,
     })).resolves.toBe("rejected")
-    expect(queryCurrentResources).toHaveBeenCalledWith({ projectId: fixture.scope.projectId })
+    expect(queryCurrentResourceReferences).toHaveBeenCalledWith({ projectId: fixture.scope.projectId })
   })
 
   test("rejects a resource fact envelope whose exact bytes do not match its declared digest", async () => {

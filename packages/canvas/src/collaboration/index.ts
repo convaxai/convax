@@ -5,10 +5,26 @@ export * from "./command-construction"
 export * from "./external-facts"
 export * from "./genesis"
 export * from "./history-schedule"
-export * from "./reducer"
+export {
+  applyCanvasCandidateIntent,
+  materializeCanvasSemanticHistoryIntent,
+  reduceCanvasIntent,
+  type CanvasReducerOutcome,
+} from "./reducer"
 export * from "./session"
 export * from "./intent-validation"
 export * from "./operation-id"
 export * from "./types"
 export * from "./validation"
-export * from "./ydoc"
+export {
+  CANVAS_ROOT_KEYS,
+  CANVAS_ROOT_NAME,
+  cloneCanvasYDoc,
+  createCanvasReconstructionYDoc,
+  createCanvasYDoc,
+  encodeCanvasCanonicalState,
+  extractCanvasCanonicalState,
+  getCanvasChildMap,
+  getCanvasRoot,
+  validateCanvasYDoc,
+} from "./ydoc"

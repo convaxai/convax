@@ -8,6 +8,11 @@ export {
 } from "./current-protocol"
 export { CURRENT_PROTOCOL_IDENTITIES } from "./constants"
 export type {
+  CanonicalJcsEvidence,
+  CanonicalJcsEvidenceIssuer,
+} from "./canonical-jcs-evidence"
+
+export type {
   CurrentProtocolArtifactDescriptor,
   CurrentProtocolDescriptor,
   CurrentProtocolTypeNamespaceDescriptor,
@@ -244,12 +249,14 @@ export type {
 } from "./latency-diagnostics"
 
 export {
+  acceptedHeadMaterializedStateDigest,
   causalHeadRefFromDecodedFrame,
   frameObjectRefFromDecodedFrame,
   incomingFrameClosure,
   inspectAcceptedFrameObject,
   materializeAcceptedFrame,
   replicaActorHeadSetDigest,
+  validateAcceptedHeadMaterializationEvidence,
 } from "./accepted-head"
 export type { MaterializeAcceptedFrameInput } from "./accepted-head"
 
@@ -265,6 +272,7 @@ export {
 export { canonicalStateDigest } from "./digest"
 
 export type {
+  AcceptedHeadMaterializationEvidence,
   AcceptedHeadView,
   CollaborationKernelPorts,
   CollaborationPersistencePort,

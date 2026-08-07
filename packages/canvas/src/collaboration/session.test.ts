@@ -5,8 +5,14 @@ import { context, createAgent, id128, newCanvas, U0 } from "./test-fixtures.test
 import { derivedNodeRef } from "./validation"
 import { projectCanvas } from "./projection"
 import { validateCanvasYDoc } from "./ydoc"
+import * as publicSurface from "./index"
 
 describe("Canvas v2 caller and React Flow boundaries", () => {
+  test("does not expose selected owner acceleration hooks", () => {
+    expect("selectedCanvasDocumentOwnerArtifactDefinition" in publicSurface).toBeFalse()
+    expect("armCanvasDuplicateCandidateCapture" in publicSurface).toBeFalse()
+    expect("consumeCanvasDuplicateValidatedPost" in publicSurface).toBeFalse()
+  })
   test("UI, Agent and Plugin use the same typed-intent commit service", async () => {
     const calls: CanvasCallerIntent[] = []
     const port: CanvasIntentCommitPort = {

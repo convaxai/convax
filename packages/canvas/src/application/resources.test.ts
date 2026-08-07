@@ -50,11 +50,17 @@ describe("Canvas resource collaboration orchestration", () => {
   test("prepares host bytes before one collaboration submit and preserves warnings", async () => {
     const prepare = mock(async () => ({ items: [image], warnings: ["prepared"] }))
     const execute = mock(async () => result(["committed"]))
-    const service = new CanvasResourceBusinessService({ prepare }, { execute, query: mock() })
+    const diagnostics: Array<{ stage: string; resources?: number }> = []
+    const service = new CanvasResourceBusinessService(
+      { prepare },
+      { execute, query: mock() },
+      { record: (diagnostic) => diagnostics.push({ stage: diagnostic.stage, resources: diagnostic.sizes?.resources }) },
+    )
 
     await expect(service.addResources(baseRequest)).resolves.toMatchObject({ warnings: ["prepared", "committed"] })
     expect(prepare).toHaveBeenCalledTimes(1)
     expect(execute).toHaveBeenCalledTimes(1)
+    expect(diagnostics).toEqual([{ stage: "business-prepare", resources: 1 }])
     expect(execute.mock.calls[0]?.[0]).toMatchObject({
       canvasId: "canvas",
       envelope: { command: { type: "resources.add" }, commandId: "add-one" },

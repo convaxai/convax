@@ -27,7 +27,9 @@
     "smoke:open-project": "bun scripts/ensure-electron-runtime.ts && bun run build && bun ../../scripts/desktop-open-project-built-smoke.ts",
     "probe:peerjs-main": "bun scripts/peerjs-electron-main-probe.ts",
     "test": "bun scripts/desktop-test-suite.ts",
-    "typecheck": "tsgo --noEmit"
+    "typecheck": "tsgo --noEmit",
+    "benchmark:project-index-durable": "bun scripts/project-index-durable-benchmark.ts",
+    "benchmark:project-index-durable:full": "CONVAX_BENCH_FULL=1 bun scripts/project-index-durable-benchmark.ts"
   },
   "dependencies": {
     "@convax/agent-runtime": "workspace:*",

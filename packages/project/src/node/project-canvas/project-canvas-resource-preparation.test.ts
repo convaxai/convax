@@ -319,6 +319,7 @@ describe("project canvas resource preparation", () => {
     let planQueryStarted = false
     let publicationObservedPlanQuery = false
     const directories: string[] = []
+    const diagnostics: Array<{ byteLength: number; callCount: number; stage: string }> = []
     const indexFiles = {
       async queryFileMaterializationPlan() {
         planQueries += 1
@@ -360,6 +361,11 @@ describe("project canvas resource preparation", () => {
       unusedAssets(),
       undefined,
       indexFiles,
+      {
+        record({ byteLength, callCount, stage }) {
+          diagnostics.push({ byteLength, callCount, stage })
+        },
+      },
     )
 
     const result = await preparation.prepare({
@@ -370,6 +376,14 @@ describe("project canvas resource preparation", () => {
     expect(publicationObservedPlanQuery).toBeTrue()
     expect(planQueries).toBe(1)
     expect(directories).toEqual(["Notes"])
+    expect(diagnostics
+      .map(({ byteLength, callCount, stage }) => ({ byteLength, callCount, stage }))
+      .sort((left, right) => left.stage.localeCompare(right.stage))).toEqual([
+      { byteLength: 0, callCount: 1, stage: "initial-plan" },
+      { byteLength: bytes.byteLength, callCount: 1, stage: "pi-submit" },
+      { byteLength: bytes.byteLength, callCount: 1, stage: "post-pi-proof" },
+      { byteLength: bytes.byteLength, callCount: 1, stage: "resource-file-publication" },
+    ])
     expect(result.items[0]?.metadata).toMatchObject({
       convaxCanvasResourceProof: { mode: "current-owner-state" },
     })

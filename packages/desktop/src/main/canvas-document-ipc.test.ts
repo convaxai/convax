@@ -166,6 +166,7 @@ describe("Canvas document IPC", () => {
 describe("Canvas resource IPC", () => {
   test("binds resource creation to the invoking Workbench scope and returns receipt plus projection", async () => {
     const addResources = mock(async () => commandResult())
+    const diagnostics: Array<{ byteLength: number; callCount: number; stage: string }> = []
     registerCanvasResourceIpc(
       { addPreparedResources: mock(), addResources },
       { withAdmittedLocalFiles: mock() },
@@ -174,6 +175,11 @@ describe("Canvas resource IPC", () => {
         isTrustedSender: () => true,
         resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
         sessions: resourceSessions,
+        diagnostics: {
+          record({ byteLength, callCount, stage }) {
+            diagnostics.push({ byteLength, callCount, stage })
+          },
+        },
       },
     )
     const input = {
@@ -201,6 +207,10 @@ describe("Canvas resource IPC", () => {
       scopeId: "project-one",
       sources: input.sources,
     })
+    expect(diagnostics).toEqual([
+      { byteLength: 5, callCount: 1, stage: "canvas-submit" },
+      { byteLength: 0, callCount: 1, stage: "response-projection-invalidation" },
+    ])
   })
 
   test("retains strict relation validation before invoking the typed Canvas application", async () => {

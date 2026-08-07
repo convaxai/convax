@@ -19,6 +19,7 @@ import type {
   CanvasApplicationCommandRequest,
   CanvasApplicationCommandResult,
   CanvasApplicationService,
+  CanvasSubmitDiagnosticsPort,
 } from "./service"
 
 class CanvasResourceRequestConflictError extends Error {
@@ -174,6 +175,7 @@ export class CanvasResourceBusinessService {
   constructor(
     private readonly preparation: CanvasResourcePreparationPort,
     private readonly application: CanvasCommandExecutor,
+    private readonly diagnostics?: CanvasSubmitDiagnosticsPort,
   ) {}
 
   createPendingResource(request: CanvasCreatePendingResourceRequest): Promise<CanvasApplicationCommandResult> {
@@ -466,6 +468,7 @@ export class CanvasResourceBusinessService {
     request: CanvasAddResourceSourcesRequest,
     hostPrepared?: CanvasResourcePreparationResult,
   ): Promise<CanvasApplicationCommandResult> {
+    const businessStartedAt = this.diagnostics ? performance.now() : undefined
     throwIfAborted(request.signal)
     validateCanvasResourceCommandIdentity(request)
     const sourceIds = validateCanvasResourceSources(request.sources)
@@ -515,6 +518,16 @@ export class CanvasResourceBusinessService {
       canvasId: request.canvasId,
       envelope: { actor: request.actor, command, commandId: request.commandId },
       scopeId: request.scopeId,
+    }
+    if (businessStartedAt !== undefined) {
+      try {
+        this.diagnostics?.record({
+          callCount: 1,
+          durationMs: performance.now() - businessStartedAt,
+          sizes: { resources: prepared.items.length },
+          stage: "business-prepare",
+        })
+      } catch {}
     }
     try {
       throwIfAborted(request.signal)

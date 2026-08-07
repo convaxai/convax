@@ -86,6 +86,17 @@ export interface ProjectIndexCurrentBlobReferencePort {
   }): Promise<ReadonlySet<Digest>>
 }
 
+/**
+ * Narrow owner-reference query for proof verification. Unlike the native
+ * materialization projection above, this port does not resolve a portable
+ * entry to a current filesystem path.
+ */
+export interface ProjectIndexCurrentResourceReferenceQueryPort {
+  queryCurrentResourceReferences(input: {
+    readonly projectId: ProjectId
+  }): Promise<readonly ProjectIndexResourceReference[]>
+}
+
 export function blobDurableAckCoreDigest(core: BlobDurableAckCore): Digest {
   return structuredDigest("convax.blob-durable-ack-core", parseBlobDurableAckCore(core))
 }

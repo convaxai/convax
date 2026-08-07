@@ -2,6 +2,7 @@ import path from "node:path"
 import { parseActorId, type ActorId } from "@convax/collaboration"
 import {
   NodeCollaborationPersistence,
+  type NodeLocalCommitDurabilityDiagnostics,
   type NodeReplicaHeadMaterializer,
 } from "./persistence-store"
 import type {
@@ -36,6 +37,7 @@ export interface ProjectCollaborationRuntimeIdentityPort {
 export interface ProjectCollaborationWriterFactory {
   open(input: {
     readonly collaborationDirectory: string
+    readonly durabilityDiagnostics?: NodeLocalCommitDurabilityDiagnostics
     readonly localActorId: ActorId
     readonly materializer: NodeReplicaHeadMaterializer
   }): Promise<NodeCollaborationPersistence>
@@ -66,6 +68,7 @@ export class ProjectCollaborationRuntimeCoordinatorError extends Error {
 }
 
 export interface NodeProjectCollaborationRuntimeCoordinatorOptions {
+  readonly durabilityDiagnostics?: NodeLocalCommitDurabilityDiagnostics
   readonly identity: ProjectCollaborationRuntimeIdentityPort
   readonly materializer: NodeReplicaHeadMaterializer
   readonly projects: ProjectCollaborationRuntimeRootPort
@@ -141,6 +144,9 @@ export class NodeProjectCollaborationRuntimeCoordinator
       if (!runtime) {
         const persistence = await this.writerFactory.open({
           collaborationDirectory,
+          ...(this.options.durabilityDiagnostics === undefined
+            ? {}
+            : { durabilityDiagnostics: this.options.durabilityDiagnostics }),
           localActorId,
           materializer: this.options.materializer,
         })

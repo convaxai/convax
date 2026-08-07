@@ -6,7 +6,7 @@ import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VA
 import { derivedNodeRef } from "./validation"
 import { validateCanvasYDoc } from "./ydoc"
 import { projectCanvas, projectCanvasDocument } from "./projection"
-import type { CanvasResourceProofRef } from "./types"
+import type { CanvasResourceProofRef, CanvasSnapshot } from "./types"
 import { parseUint32, parseUint64 } from "@convax/collaboration"
 
 describe("Canvas v2 application command adapter", () => {
@@ -251,6 +251,33 @@ describe("Canvas v2 application command adapter", () => {
         expect.objectContaining({ source: pendingNode, target: anchor }),
       ]),
     )
+  })
+
+  test("maps an unrelated resource without traversing the existing Canvas projection", () => {
+    const document = newCanvas()
+    const snapshot = new Proxy(validateCanvasYDoc(document), {
+      get(target, property, receiver) {
+        if (property === "nodes" || property === "edges" || property === "operations") {
+          throw new Error(`Unexpected Canvas projection read: ${String(property)}`)
+        }
+        return Reflect.get(target, property, receiver)
+      },
+    }) as CanvasSnapshot
+    const proof = currentResourceProof("text", 91)
+    const adaptation = adaptCanvasApplicationCommand({
+      request: request({
+        type: "resources.add",
+        items: [{ item: resourceItem("text", proof, "Notes/Fast.md"), nodeId: "ignored" }],
+        placement: { anchor: { x: 0, y: 0 } },
+      }),
+      snapshot,
+      context: context(9, 4, 4),
+    })
+    expect(adaptation).not.toBe("rejected")
+    expect(adaptation === "rejected" ? null : adaptation.command).toMatchObject({
+      kind: "resources-create",
+      relation: null,
+    })
   })
 
   test("rejects connected resource creation when an anchor is stale or duplicated", () => {

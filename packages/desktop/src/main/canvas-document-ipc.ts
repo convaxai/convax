@@ -304,6 +304,13 @@ interface CanvasResourceMainRequest {
   sources: readonly CanvasResourceSource[]
 }
 
+export interface CanvasResourceBusinessDiagnostic {
+  readonly byteLength: number
+  readonly callCount: number
+  readonly durationMs: number
+  readonly stage: "canvas-prepare" | "canvas-submit" | "response-projection-invalidation"
+}
+
 export function registerCanvasResourceIpc(
   resources: CanvasResourcePort,
   preparation: CanvasLocalFilePreparationPort,
@@ -313,6 +320,7 @@ export function registerCanvasResourceIpc(
     isTrustedSender(event: IpcMainInvokeEvent): boolean
     resolveActiveCanvas(event: IpcMainInvokeEvent): Promise<ActiveCanvasScope | null>
     sessions: Pick<CanvasCollaborationSessionOwner, "deliverApplicationCommit">
+    diagnostics?: { record(diagnostic: CanvasResourceBusinessDiagnostic): void }
   },
 ) {
   const localFileTokens = new Map<string, { expiresAt: number; sourcePath: string }>()
@@ -346,6 +354,32 @@ export function registerCanvasResourceIpc(
       throw new Error("Canvas resource request does not match the invoking window's live Workbench scope")
     }
     return (async () => {
+      const trace = async <T>(
+        stage: CanvasResourceBusinessDiagnostic["stage"],
+        byteLength: number,
+        operation: () => Promise<T>,
+      ): Promise<T> => {
+        if (!options.diagnostics) return operation()
+        const startedAt = performance.now()
+        try {
+          return await operation()
+        } finally {
+          try {
+            options.diagnostics.record({
+              byteLength,
+              callCount: 1,
+              durationMs: performance.now() - startedAt,
+              stage,
+            })
+          } catch { /* Diagnostics never affect a Canvas command. */ }
+        }
+      }
+      const sourceBytes = options.diagnostics
+        ? input.sources.reduce(
+            (total, source) => total + (source.kind === "new-text" ? new TextEncoder().encode(source.text).byteLength : 0),
+            0,
+          )
+        : 0
       const request = {
         actor: { id: "desktop:renderer", kind: "ui" as const },
         anchor: input.anchor,
@@ -360,11 +394,11 @@ export function registerCanvasResourceIpc(
       try {
         if (input.externalFiles.length > 0 && input.sources.length > 0) {
           if (!preparation.prepare) throw new Error("Canvas resource source preparation is unavailable")
-          sourcePrepared = await preparation.prepare({
+          sourcePrepared = await trace("canvas-prepare", sourceBytes, () => preparation.prepare!({
             canvasId: active.canvasId,
             scopeId: active.projectId,
             sources: input.sources,
-          })
+          }))
         }
         result = input.pending
           ? await (() => {
@@ -390,7 +424,7 @@ export function registerCanvasResourceIpc(
                   mergeCanvasResourcePreparation(sourcePrepared, localPrepared),
                 ),
             )
-          : await resources.addResources(request)
+          : await trace("canvas-submit", sourceBytes, () => resources.addResources(request))
       } catch (error) {
         console.error("Canvas resource mutation failed", error)
         const failure =
@@ -409,12 +443,12 @@ export function registerCanvasResourceIpc(
         }
         throw error
       }
-      const delivery = await options.sessions.deliverApplicationCommit({
+      const delivery = await trace("response-projection-invalidation", 0, () => options.sessions.deliverApplicationCommit({
         ref: { canvasId: active.canvasId, scopeId: active.projectId },
         rendererActorId: `desktop:renderer:${event.sender.id}`,
         sessionId: input.sessionId,
         result,
-      })
+      }))
       return {
         createdNodeIds: result.createdNodeIds,
         delivery,

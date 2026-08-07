@@ -1,4 +1,5 @@
 import {
+  canvasOperationReceipt,
   canvasSnapshotFromValidatedOwnerState,
   constructCanvasAuthoritativeIntent,
   constructCanvasHistoryIntent,
@@ -23,6 +24,7 @@ import {
   type CanvasCollaborationApplicationPort,
   type CanvasDocumentRef,
   type CanvasNodeQuery,
+  type CanvasSubmitDiagnosticsPort,
 } from "@convax/canvas/application"
 import type { CanvasDocument } from "@convax/canvas"
 import {
@@ -90,6 +92,7 @@ export interface CreateCanvasCollaborationSessionOwnerOptions {
     readonly signal?: AbortSignal
   }) => Promise<CanvasFactResolution>
   readonly applicationCommands: CanvasApplicationCommandAdapter
+  readonly diagnostics?: CanvasSubmitDiagnosticsPort
 }
 
 export interface CanvasCollaborationSessionOwner extends CanvasCollaborationApplicationPort {
@@ -168,6 +171,19 @@ interface CanvasRendererLease {
   readonly deliveredOperationIds: Set<Id128>
 }
 
+interface CachedCanvasProjection {
+  readonly document: CanvasDocument
+  readonly nodeEntities: readonly Readonly<{
+    readonly nodeId: string
+    readonly entity: CanvasEntityRef & { readonly kind: "node" }
+  }>[]
+}
+
+// One accepted owner snapshot can feed both the application result and the
+// mounted-session response. This cache owns no document authority: keys are
+// validated snapshots, are weakly held, and change after every Y.Doc mutation.
+const cachedCanvasProjections = new WeakMap<CanvasSnapshot, CachedCanvasProjection>()
+
 export function createCanvasCollaborationSessionOwner(
   options: CreateCanvasCollaborationSessionOwnerOptions,
 ): CanvasCollaborationSessionOwner {
@@ -239,8 +255,10 @@ export function createCanvasCollaborationSessionOwner(
           const frameDigest = input.result.acceptedFrameDigest
           if (!frameDigest) return Object.freeze({ status: "unavailable" as const })
           const snapshot = await lease.owner.document.query(requireCanvasSnapshot)
-          const receipt = [...snapshot.operations.values()].find(
-            (candidate) => candidate.operationId === input.result.operationReceipt.operationId,
+          const receipt = canvasOperationReceipt(
+            snapshot,
+            input.result.operationReceipt.actorId,
+            input.result.operationReceipt.operationId,
           )
           if (!receipt || JSON.stringify(receipt) !== JSON.stringify(input.result.operationReceipt)) {
             return Object.freeze({ status: "unavailable" as const })
@@ -330,9 +348,9 @@ export function createCanvasCollaborationSessionOwner(
       return { nodes: queryCanvasNodes(projection, query), projection }
     },
     async submit(request): Promise<CanvasApplicationCommandResult> {
-      const current = await documentEntry(request)
+      const current = await trace(request.envelope.commandId, "session-acquire/open", () => documentEntry(request))
       const result = await submitApplicationCommand(current, undefined, request)
-      return {
+      return traceSync(request.envelope.commandId, result.operationReceipt.operationId, "post-root-projection", () => ({
         affectedNodeIds: result.affectedNodeIds,
         changed: true,
         createdNodeIds: result.createdNodeIds,
@@ -340,7 +358,7 @@ export function createCanvasCollaborationSessionOwner(
         operationReceipt: result.operationReceipt,
         acceptedFrameDigest: result.acceptedFrameDigest,
         warnings: [],
-      }
+      }))
     },
     dispose() {
       if (disposed) return
@@ -402,7 +420,11 @@ export function createCanvasCollaborationSessionOwner(
       prepare: ({ base, context, signal: attemptSignal }) =>
         prepareCanvasCommand(current, requireCanvasSnapshot(base), context, command, attemptSignal),
     })
-    const result = await resultForCommit(current, committed.frame.header.core.operationId)
+    const result = await resultForCommit(
+      current,
+      committed.frame.header.core.actorId,
+      committed.frame.header.core.operationId,
+    )
     recordLocalSemanticRoot(
       current,
       caller === "ui" ? lease : undefined,
@@ -427,27 +449,46 @@ export function createCanvasCollaborationSessionOwner(
     warnings: string[]
   }>> {
     let beforeIds = new Set<string>()
+    let createdNodesAreReceiptNodes = false
     let caller: CanvasIntentCaller | undefined
-    const committed = await current.document.submit({
-      operationId: deriveCanvasCommandOperationId({
-        ref: request,
-        actor: request.envelope.actor,
-        commandId: request.envelope.commandId,
-      }),
+    const operationId = deriveCanvasCommandOperationId({
+      ref: request,
+      actor: request.envelope.actor,
+      commandId: request.envelope.commandId,
+    })
+    const committed = await trace(request.envelope.commandId, "kernel-root", () => current.document.submit({
+      operationId,
       signal: request.signal,
       prepare: async ({ base, context, signal }) => {
         const snapshot = requireCanvasSnapshot(base)
-        beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
-        const adapted = options.applicationCommands.construct({ request, snapshot, context })
+        const adapted = traceSync(
+          request.envelope.commandId,
+          operationId,
+          "command-adapter-prepare",
+          () => options.applicationCommands.construct({ request, snapshot, context }),
+          { edges: snapshot.edges.size, nodes: snapshot.nodes.size },
+        )
         if (adapted === "rejected") {
           console.error("Canvas application command mapping rejected", JSON.stringify(request.envelope.command))
           throw new Error("Canvas application command has no frozen authoritative mapping")
         }
+        // resources-create has only expected-absent derived node/edge results;
+        // its receipt therefore already is the exact created-entity set. Avoid
+        // projecting the whole pre-commit Canvas solely to rediscover that set.
+        createdNodesAreReceiptNodes = adapted.command.kind === "resources-create"
+        if (!createdNodesAreReceiptNodes) {
+          beforeIds = new Set(projectCanvas(snapshot).nodes.map((node) => node.ref.id))
+        }
         caller = adapted.caller
         return prepareCanvasCommand(current, snapshot, context, adapted.command, signal)
       },
-    })
-    const result = await resultForCommit(current, committed.frame.header.core.operationId)
+    }))
+    const result = await trace(
+      request.envelope.commandId,
+      "post-root-receipt-lookup",
+      () => resultForCommit(current, committed.frame.header.core.actorId, committed.frame.header.core.operationId),
+      operationId,
+    )
     recordLocalSemanticRoot(
       current,
       caller === "ui" ? lease : undefined,
@@ -455,18 +496,68 @@ export function createCanvasCollaborationSessionOwner(
       result.operationReceipt,
       committed.frame.frameDigest,
     )
-    const document = canvasDocumentFromSnapshot(result.snapshot)
+    const createdNodeIds = createdNodesAreReceiptNodes
+      ? result.operationReceipt.resultEntities
+          .filter((entity) => entity.kind === "node")
+          .map((entity) => entity.id)
+      : canvasDocumentFromSnapshot(result.snapshot).nodes
+          .map((node) => node.id)
+          .filter((id) => !beforeIds.has(id))
     return Object.freeze({
       affectedNodeIds: result.operationReceipt.resultEntities
         .filter((entity) => entity.kind === "node")
         .map((entity) => entity.id),
       changed: true,
-      createdNodeIds: document.nodes.map((node) => node.id).filter((id) => !beforeIds.has(id)),
+      createdNodeIds,
       operationReceipt: result.operationReceipt,
       snapshot: result.snapshot,
       acceptedFrameDigest: committed.frame.frameDigest,
       warnings: [],
     })
+  }
+
+  async function trace<T>(
+    _commandId: string,
+    stage: import("@convax/canvas/application").CanvasSubmitDiagnosticStage,
+    operation: () => Promise<T>,
+    _operationId?: string,
+  ): Promise<T> {
+    if (!options.diagnostics) return operation()
+    const startedAt = performance.now()
+    try {
+      return await operation()
+    } finally {
+      try {
+        options.diagnostics.record({
+          callCount: 1,
+          durationMs: performance.now() - startedAt,
+          stage,
+        })
+      } catch {}
+    }
+  }
+
+  function traceSync<T>(
+    _commandId: string,
+    _operationId: string,
+    stage: import("@convax/canvas/application").CanvasSubmitDiagnosticStage,
+    operation: () => T,
+    sizes?: Readonly<Record<string, number>>,
+  ): T {
+    if (!options.diagnostics) return operation()
+    const startedAt = performance.now()
+    try {
+      return operation()
+    } finally {
+      try {
+        options.diagnostics.record({
+          callCount: 1,
+          durationMs: performance.now() - startedAt,
+          ...(sizes ? { sizes } : {}),
+          stage,
+        })
+      } catch {}
+    }
   }
 
   function recordLocalSemanticRoot(
@@ -554,7 +645,11 @@ export function createCanvasCollaborationSessionOwner(
       if (direction === "undo") lease.undo.commitUndo(cursor.cursorToken, operationId)
       else lease.undo.commitRedo(cursor.cursorToken, operationId)
     }
-    const result = await resultForCommit(lease.owner, committed.frame.header.core.operationId)
+    const result = await resultForCommit(
+      lease.owner,
+      committed.frame.header.core.actorId,
+      committed.frame.header.core.operationId,
+    )
     const transition = [...result.snapshot.semanticHistory.values()].find((value) =>
       value.format === "convax.canvas-semantic-history-transition" &&
       value.transitionOperationId === committed.frame.header.core.operationId)
@@ -577,9 +672,13 @@ export function createCanvasCollaborationSessionOwner(
     return response
   }
 
-  async function resultForCommit(current: CanvasDocumentEntry, operationId: Id128): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot }>> {
+  async function resultForCommit(
+    current: CanvasDocumentEntry,
+    actorId: import("@convax/collaboration").ActorId,
+    operationId: Id128,
+  ): Promise<Readonly<{ operationReceipt: BoundedOperationReceipt; snapshot: CanvasSnapshot }>> {
     const snapshot = await current.document.query(requireCanvasSnapshot)
-    const receipt = [...snapshot.operations.values()].find((candidate) => candidate.operationId === operationId)
+    const receipt = canvasOperationReceipt(snapshot, actorId, operationId)
     if (!receipt) throw new Error("Durable Canvas operation receipt is absent from the authoritative projection")
     return Object.freeze({ operationReceipt: structuredClone(receipt), snapshot })
   }
@@ -589,14 +688,13 @@ export function createCanvasCollaborationSessionOwner(
   }
 
   function projectSnapshot(current: CanvasDocumentEntry, lease: CanvasRendererLease, snapshot: CanvasSnapshot): CanvasSessionProjectionDto {
-    const projected = projectCanvasDocument(projectCanvas(snapshot))
+    const projected = cachedCanvasProjection(snapshot)
     return Object.freeze({
       format: "convax.canvas-session-projection",
       ref: current.ref,
       sessionId: lease.sessionId,
       document: structuredClone(projected.document),
-      nodeEntities: Object.freeze([...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
-        Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }))),
+      nodeEntities: projected.nodeEntities,
       canUndo: lease.undo.getSnapshot().undo.length > 0,
       canRedo: lease.undo.getSnapshot().redo.length > 0,
     })
@@ -687,16 +785,28 @@ function requireCanvasSnapshot(state: OwnerValidatedState<"canvas">): CanvasSnap
 }
 
 function canvasDocumentFromSnapshot(snapshot: CanvasSnapshot): CanvasDocument {
-  return structuredClone(projectCanvasDocument(projectCanvas(snapshot)).document)
+  return structuredClone(cachedCanvasProjection(snapshot).document)
 }
 
 function authoritativeProjection(snapshot: CanvasSnapshot): CanvasAuthoritativeProjection {
-  const projected = projectCanvasDocument(projectCanvas(snapshot))
+  const projected = cachedCanvasProjection(snapshot)
   return Object.freeze({
     document: structuredClone(projected.document),
+    nodeEntities: projected.nodeEntities,
+  })
+}
+
+function cachedCanvasProjection(snapshot: CanvasSnapshot): CachedCanvasProjection {
+  const existing = cachedCanvasProjections.get(snapshot)
+  if (existing !== undefined) return existing
+  const projected = projectCanvasDocument(projectCanvas(snapshot))
+  const value = Object.freeze({
+    document: projected.document,
     nodeEntities: Object.freeze([...projected.nodeEntities.entries()].map(([nodeId, entity]) =>
       Object.freeze({ nodeId, entity: Object.freeze({ ...entity }) }))),
   })
+  cachedCanvasProjections.set(snapshot, value)
+  return value
 }
 
 function normalizeActor(actor: CanvasCommandActor): CanvasCommandActor {

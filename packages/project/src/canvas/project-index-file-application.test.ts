@@ -105,6 +105,53 @@ describe("ProjectIndexFileApplication", () => {
     expect(plan.entries[0]?.reference?.blob.digest).toBe(digestBytes(new TextEncoder().encode("hello\n")))
   })
 
+  test("resolves a nested path through the current path-claim winner", async () => {
+    const document = genesis()
+    const application = (context: OwnerIntentConstructionContext) => new ProjectIndexFileApplication({
+      session: applyingSession(document, context, []),
+      facts: { async resolve() { return { status: "resolved", port: {} as never } } },
+      blobs: {
+        async admitManaged() { throw new Error("not used") },
+        async publish() {},
+      },
+      createOperationId: () => context.operationId,
+    })
+    const first = await application(constructionContext(actor(1), id128(30), "1"))
+      .createDirectory({ projectId, path: "Notes" })
+    const winner = await application(constructionContext(actor(1), id128(31), "2"))
+      .createDirectory({ projectId, path: "Notes" })
+    const file = await application(constructionContext(actor(1), id128(32), "3"))
+      .publishFile({
+        projectId,
+        path: "Notes/nested.md",
+        exactBytes: new TextEncoder().encode("nested\n"),
+        mime: "text/markdown",
+        contentPolicy: "conflict-preserving-text",
+      })
+
+    expect(first.status).toBe("committed")
+    expect(winner.status).toBe("committed")
+    expect(file.status).toBe("committed")
+    if (winner.status !== "committed" || file.status !== "committed") throw new Error("nested path setup failed")
+    const snapshot = validateProjectIndexYDoc(document)
+    const selected = [...snapshot.entryLocations.values()]
+      .filter((claim) => claim.entryId === file.entryId)
+      .at(-1)
+    expect(String(selected?.parentDirectoryId)).toBe(String(winner.entryId))
+    const plan = await application(constructionContext(actor(1), id128(33), "4"))
+      .queryFileMaterializationPlan({ projectId })
+    expect(plan.entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entryId: winner.entryId, path: "Notes" }),
+      expect.objectContaining({ entryId: file.entryId, path: "Notes/nested.md" }),
+      expect.objectContaining({
+        entryId: first.status === "committed" ? first.entryId : "",
+        path: first.status === "committed"
+          ? `.convax-conflicts/path-claims/${first.entryId}/content`
+          : "",
+      }),
+    ]))
+  })
+
   test("reports durable blob admission failure without committing ProjectIndex", async () => {
     const document = genesis()
     const order: string[] = []

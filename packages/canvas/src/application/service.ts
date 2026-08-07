@@ -31,6 +31,29 @@ export interface CanvasApplicationCommitEvent extends CanvasDocumentRef {
 export interface CanvasApplicationServiceOptions {
   /** Failure-isolated host invalidation hook; durable Main commit stays authoritative. */
   onDidCommit?(event: CanvasApplicationCommitEvent): void
+  diagnostics?: CanvasSubmitDiagnosticsPort
+}
+
+export type CanvasSubmitDiagnosticStage =
+  | "business-prepare"
+  | "application-intent"
+  | "document-service-submit"
+  | "session-acquire/open"
+  | "command-adapter-prepare"
+  | "kernel-root"
+  | "post-root-receipt-lookup"
+  | "post-root-projection"
+  | "onDidCommit/event"
+
+export interface CanvasSubmitDiagnostic {
+  readonly callCount: 1
+  readonly durationMs: number
+  readonly stage: CanvasSubmitDiagnosticStage
+  readonly sizes?: Readonly<Record<string, number>>
+}
+
+export interface CanvasSubmitDiagnosticsPort {
+  record(diagnostic: CanvasSubmitDiagnostic): void
 }
 
 /**
@@ -57,23 +80,49 @@ export class CanvasApplicationService {
 
   async execute(request: CanvasApplicationCommandRequest): Promise<CanvasApplicationCommandResult> {
     throwIfAborted(request.signal)
-    const result = await this.collaboration.submit(request)
+    const result = await traceSubmit(this.options.diagnostics, "application-intent", () =>
+      this.collaboration.submit(request))
     throwIfAborted(request.signal)
-    try {
-      this.options.onDidCommit?.({
+    traceSubmitSync(this.options.diagnostics, "onDidCommit/event", () => this.options.onDidCommit?.({
         canvasId: request.canvasId,
         scopeId: request.scopeId,
         actor: { ...request.envelope.actor },
         operationReceipt: structuredClone(result.operationReceipt),
-      })
-    } catch {
-      // A projection invalidation listener cannot reverse a durable Main commit.
-    }
+      }))
     return result
   }
 
   query(ref: CanvasDocumentRef, query: CanvasNodeQuery = {}): Promise<CanvasApplicationQueryResult> {
     return this.collaboration.query(ref, query)
+  }
+}
+
+async function traceSubmit<T>(
+  port: CanvasSubmitDiagnosticsPort | undefined,
+  stage: CanvasSubmitDiagnosticStage,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (!port) return operation()
+  const startedAt = performance.now()
+  try {
+    return await operation()
+  } finally {
+    try { port.record({ callCount: 1, durationMs: performance.now() - startedAt, stage }) } catch {}
+  }
+}
+
+function traceSubmitSync(
+  port: CanvasSubmitDiagnosticsPort | undefined,
+  stage: CanvasSubmitDiagnosticStage,
+  operation: () => void,
+): void {
+  if (!port) {
+    try { operation() } catch {}
+    return
+  }
+  const startedAt = performance.now()
+  try { operation() } catch {} finally {
+    try { port.record({ callCount: 1, durationMs: performance.now() - startedAt, stage }) } catch {}
   }
 }
 

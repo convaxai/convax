@@ -18,8 +18,11 @@ const openAgentPanelSelector =
 // the final exact-state wait can report its own bounded failure.
 const evaluationTimeoutMs = timeoutMs * 4 + 30_000
 const latencyMode = process.env.CONVAX_DESKTOP_SMOKE_LATENCY === "1"
-const latencyIterations = 100
+const latencyIterations = Number(process.env.CONVAX_DESKTOP_SMOKE_LATENCY_ITERATIONS ?? "100")
 const latencyLimitMs = 500
+const latencyRecordOnly = process.env.CONVAX_DESKTOP_SMOKE_LATENCY_RECORD_ONLY === "1"
+const latencyQuickCreateOnly = process.env.CONVAX_DESKTOP_SMOKE_LATENCY_QUICK_CREATE_ONLY === "1"
+const forwardLatencyDiagnostics = process.env.CONVAX_DESKTOP_SMOKE_FORWARD_LATENCY_DIAGNOSTICS === "1"
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
 const electronPackageRoot = path.dirname(require.resolve("electron/package.json"))
@@ -246,6 +249,12 @@ const child = Bun.spawn(
     env: {
       ...process.env,
       CONVAX_ALLOW_MULTIPLE_INSTANCES: "1",
+      ...(latencyMode
+        ? {
+            CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL: "1",
+            CONVAX_COLLABORATION_LATENCY_RECORD_ALL: "1",
+          }
+        : {}),
       CONVAX_USER_DATA_DIR: userDataRoot,
     },
     stderr: "pipe",
@@ -499,6 +508,13 @@ try {
         const sorted = [...values].sort((left, right) => left - right)
         return sorted[Math.max(0, Math.ceil(sorted.length * quantile) - 1)] ?? 0
       }
+      const summarizeOperations = (operationNames) => Object.fromEntries(operationNames.map((operation) => {
+        const rows = samples.filter((sample) => sample.operation === operation)
+        const metrics = Object.fromEntries(["rendererFirstFeedbackMs", "mainCommitMs", "authoritativeReconcileMs", "totalMs"].map(
+          (metric) => [metric, { p50: percentile(rows.map((row) => row[metric]), 0.50), p95: percentile(rows.map((row) => row[metric]), 0.95), p99: percentile(rows.map((row) => row[metric]), 0.99) }],
+        ))
+        return [operation, { count: rows.length, metrics }]
+      }))
       const documentState = async () => {
         const projection = await window.convax.canvas.sessions.query({
           ref,
@@ -557,7 +573,7 @@ try {
           samples.push(sample)
           if (sample.totalMs > limitMs) {
             console.error("[convax:desktop-latency-slow] " + JSON.stringify(sample))
-            throw new Error(operation + " exceeded 500ms: " + JSON.stringify(sample))
+            if (!${latencyRecordOnly}) throw new Error(operation + " exceeded 500ms: " + JSON.stringify(sample))
           }
           return { before, committed }
         } catch (error) {
@@ -616,6 +632,13 @@ try {
           authoritative: (before, after) => after.nodes.length === before.nodes.length + 1,
           reconciled: () => ghostElements() === 0,
         }, invokeQuickCreate)
+      }
+      if (${latencyQuickCreateOnly}) {
+        const summary = summarizeOperations(["quick-create"])
+        console.log("[convax:desktop-latency-summary] " + JSON.stringify(summary))
+        unsubscribeProbe()
+        await window.convax.canvas.sessions.close({ ref, sessionId: probeSession.sessionId })
+        return { latencyMode: true, latencySummary: summary, projectId }
       }
       const selectLastNode = () => {
         const node = nodeElements().at(-1)
@@ -680,13 +703,7 @@ try {
         }, () => invokeHistory("z", true))
         historyEdgeId = addedEntityId(redone.before, redone.committed, "edges")
       }
-      const summary = Object.fromEntries(["duplicate", "connect", "quick-create", "undo", "redo"].map((operation) => {
-        const rows = samples.filter((sample) => sample.operation === operation)
-        const metrics = Object.fromEntries(["rendererFirstFeedbackMs", "mainCommitMs", "authoritativeReconcileMs", "totalMs"].map(
-          (metric) => [metric, { p95: percentile(rows.map((row) => row[metric]), 0.95), p99: percentile(rows.map((row) => row[metric]), 0.99) }],
-        ))
-        return [operation, { count: rows.length, metrics }]
-      }))
+      const summary = summarizeOperations(["duplicate", "connect", "quick-create", "undo", "redo"])
       console.log("[convax:desktop-latency-summary] " + JSON.stringify(summary))
       unsubscribeProbe()
       await window.convax.canvas.sessions.close({ ref, sessionId: probeSession.sessionId })
@@ -1230,6 +1247,7 @@ try {
     if (!summary.projectId || !summary.latencySummary) {
       throw new Error(`Unexpected latency result: ${JSON.stringify(summary)}`)
     }
+    console.log(`[convax:desktop-latency-summary] ${JSON.stringify(summary.latencySummary)}`)
     console.log(`Desktop mounted-session latency smoke passed (${summary.projectId})`)
   } else if (summary.startupMode === "local-authority-unavailable") {
     if (
@@ -1557,5 +1575,12 @@ try {
 } finally {
   child.kill("SIGKILL")
   await child.exited
+  if (forwardLatencyDiagnostics) {
+    const [capturedStdout, capturedStderr] = await Promise.all([stdout, stderr])
+    const diagnostics = `${capturedStdout}\n${capturedStderr}`
+      .split(/\r?\n/u)
+      .filter((line) => /\[convax:[^\]]*latency[^\]]*\]/u.test(line))
+    if (diagnostics.length > 0) console.log(diagnostics.join("\n"))
+  }
   await fs.rm(temporaryRoot, { force: true, recursive: true })
 }

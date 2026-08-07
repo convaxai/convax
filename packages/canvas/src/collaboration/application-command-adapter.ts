@@ -35,6 +35,17 @@ export function adaptCanvasApplicationCommand(input: {
     const caller = callerFromActorKind(input.request.envelope.actor.kind)
     if (caller === "rejected") return "rejected"
     const command = input.request.envelope.command
+    // The common Project resource-publication path has no Canvas relation. It
+    // carries a complete current-owner proof and does not need an existing
+    // Canvas entity lookup, so avoid constructing the full live projection
+    // merely to pass an empty relation through the adapter. Authoritative
+    // construction still binds placement to the full obstacle digest below.
+    if (command.type === "resources.add" && hasNoCreatedResourceRelation(command.relation)) {
+      return adaptResourcesAdd(caller, command, new Map())
+    }
+    if (command.type === "resources.pending.create" && hasNoCreatedResourceRelation(command.relation)) {
+      return adaptPendingResourceCreate(caller, command, new Map())
+    }
     const index = buildCanvasProjectionIndex(input.snapshot)
     const nodeById = new Map(index.projection.nodes.map((node) => [node.ref.id, node] as const))
     const edgeById = new Map(index.projection.edges.map((edge) => [edge.ref.id, edge] as const))
@@ -325,52 +336,10 @@ export function adaptCanvasApplicationCommand(input: {
         }))
       }
       case "resources.add": {
-        if (command.items.length < 1 || command.items.length > 85 || command.placement.parentId !== undefined) {
-          return "rejected"
-        }
-        const relation = adaptCreatedResourceRelation(command.relation, nodeById)
-        if (relation === "rejected" || !boundedCreatedResourceSet(command.items.length, relation)) return "rejected"
-        const items = command.items.map(({ item }) => {
-          const metadata = item.metadata
-          if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
-            throw new TypeError("Canvas resource proof metadata is missing")
-          }
-          const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKey]
-          assertResourceProof(proof, false)
-          if (proof.mode !== "current-owner-state") throw new TypeError("Canvas resource proof is not current")
-          return Object.freeze({
-            title: item.name ?? (item.kind === "text" ? "Text" : item.kind === "folder" ? "Folder" : "Resource"),
-            proof,
-            size: Object.freeze(item.kind === "text" ? { width: 320, height: 180 } : { width: 240, height: 180 }),
-          })
-        })
-        return Object.freeze({
-          caller,
-          command: Object.freeze({
-            kind: "resources-create",
-            anchor: Object.freeze({ ...command.placement.anchor }),
-            items: Object.freeze(items),
-            relation,
-          }),
-        })
+        return adaptResourcesAdd(caller, command, nodeById)
       }
       case "resources.pending.create": {
-        if (command.placement.parentId !== undefined) return "rejected"
-        const relation = adaptCreatedResourceRelation(command.relation, nodeById)
-        if (relation === "rejected" || !boundedCreatedResourceSet(1, relation)) return "rejected"
-        return Object.freeze({
-          caller,
-          command: Object.freeze({
-            kind: "manual-resource-placeholders-create",
-            anchor: Object.freeze({ ...command.placement.anchor }),
-            items: Object.freeze([Object.freeze({
-              title: command.label,
-              expectedClass: command.kind,
-              size: Object.freeze({ width: 240, height: 180 }),
-            })]),
-            relation,
-          }),
-        })
+        return adaptPendingResourceCreate(caller, command, nodeById)
       }
       case "resources.relink": {
         const node = nodeById.get(command.nodeId)
@@ -449,6 +418,70 @@ export function adaptCanvasApplicationCommand(input: {
   } catch {
     return "rejected"
   }
+}
+
+function hasNoCreatedResourceRelation(
+  relation: Extract<CanvasApplicationCommand, { type: "resources.add" }>["relation"],
+): boolean {
+  return relation === undefined || relation.mode === "none"
+}
+
+function adaptResourcesAdd(
+  caller: CanvasIntentCaller,
+  command: Extract<CanvasApplicationCommand, { readonly type: "resources.add" }>,
+  nodeById: ReadonlyMap<string, { readonly ref: CanvasEntityRef & { readonly kind: "node" } }>,
+): CanvasApplicationCommandAdaptation | "rejected" {
+  if (command.items.length < 1 || command.items.length > 85 || command.placement.parentId !== undefined) {
+    return "rejected"
+  }
+  const relation = adaptCreatedResourceRelation(command.relation, nodeById)
+  if (relation === "rejected" || !boundedCreatedResourceSet(command.items.length, relation)) return "rejected"
+  const items = command.items.map(({ item }) => {
+    const metadata = item.metadata
+    if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) {
+      throw new TypeError("Canvas resource proof metadata is missing")
+    }
+    const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKey]
+    assertResourceProof(proof, false)
+    if (proof.mode !== "current-owner-state") throw new TypeError("Canvas resource proof is not current")
+    return Object.freeze({
+      title: item.name ?? (item.kind === "text" ? "Text" : item.kind === "folder" ? "Folder" : "Resource"),
+      proof,
+      size: Object.freeze(item.kind === "text" ? { width: 320, height: 180 } : { width: 240, height: 180 }),
+    })
+  })
+  return Object.freeze({
+    caller,
+    command: Object.freeze({
+      kind: "resources-create",
+      anchor: Object.freeze({ ...command.placement.anchor }),
+      items: Object.freeze(items),
+      relation,
+    }),
+  })
+}
+
+function adaptPendingResourceCreate(
+  caller: CanvasIntentCaller,
+  command: Extract<CanvasApplicationCommand, { readonly type: "resources.pending.create" }>,
+  nodeById: ReadonlyMap<string, { readonly ref: CanvasEntityRef & { readonly kind: "node" } }>,
+): CanvasApplicationCommandAdaptation | "rejected" {
+  if (command.placement.parentId !== undefined) return "rejected"
+  const relation = adaptCreatedResourceRelation(command.relation, nodeById)
+  if (relation === "rejected" || !boundedCreatedResourceSet(1, relation)) return "rejected"
+  return Object.freeze({
+    caller,
+    command: Object.freeze({
+      kind: "manual-resource-placeholders-create",
+      anchor: Object.freeze({ ...command.placement.anchor }),
+      items: Object.freeze([Object.freeze({
+        title: command.label,
+        expectedClass: command.kind,
+        size: Object.freeze({ width: 240, height: 180 }),
+      })]),
+      relation,
+    }),
+  })
 }
 
 function adaptCreatedResourceRelation(

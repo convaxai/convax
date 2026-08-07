@@ -28,9 +28,13 @@ import {
   projectIndexSnapshotFromValidatedOwnerState,
   projectEntryLocationProjection,
   projectProjectIndexSnapshot,
+  type ProjectIndexResourceReference,
   type ProjectIndexSnapshot,
 } from "../collaboration/project-index"
-import type { ProjectIndexCurrentBlobReferencePort } from "../collaboration/blob-replication"
+import type {
+  ProjectIndexCurrentBlobReferencePort,
+  ProjectIndexCurrentResourceReferenceQueryPort,
+} from "../collaboration/blob-replication"
 import {
   parseProjectCanvasCatalogProjection,
   validateProjectCanvasTitle,
@@ -110,7 +114,10 @@ class ProjectCanvasApplicationAttemptError extends Error {
  * failure after F deliberately leaves a staged invisible route for deterministic
  * recovery; this service never rolls it back or claims the Canvas is live.
  */
-export class ProjectIndexCanvasApplication implements ProjectIndexCanvasApplicationPort, ProjectIndexCurrentBlobReferencePort {
+export class ProjectIndexCanvasApplication implements
+  ProjectIndexCanvasApplicationPort,
+  ProjectIndexCurrentBlobReferencePort,
+  ProjectIndexCurrentResourceReferenceQueryPort {
   constructor(private readonly options: CreateProjectIndexCanvasApplicationOptions) {}
 
   async queryCatalog(input: { readonly projectId: ProjectId }): Promise<ProjectCanvasCatalogProjection> {
@@ -132,6 +139,13 @@ export class ProjectIndexCanvasApplication implements ProjectIndexCanvasApplicat
   async queryCurrentBlobDigests(input: { readonly projectId: ProjectId }): Promise<ReadonlySet<Digest>> {
     this.requireProject(input.projectId)
     return new Set((await this.queryCurrentResources(input)).map(({ reference }) => reference.blob.digest))
+  }
+
+  async queryCurrentResourceReferences(input: {
+    readonly projectId: ProjectId
+  }): Promise<readonly ProjectIndexResourceReference[]> {
+    this.requireProject(input.projectId)
+    return this.options.session.query(projectIndexCurrentBlobReferencesFromValidatedOwnerState)
   }
 
   async queryCurrentResources(input: {

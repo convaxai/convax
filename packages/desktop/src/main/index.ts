@@ -37,6 +37,8 @@ import {
   NodeProjectManager,
   NodeProjectCollaborationRecoveryService,
   NodeProjectCollaborationRuntimeCoordinator,
+  type NodeLocalCommitDurabilityDiagnostics,
+  type NodeLocalCommitDurabilityMeasurement,
   ProjectAssetGc,
   ProjectCanvasDocumentService,
   ProjectFilePublisher,
@@ -790,7 +792,9 @@ function startApplication() {
         console.warn("Could not start Project sharing; the local Project remains open", error)
       }
     })
+    const durabilityDiagnostics = createPackagedDurabilityDiagnostics()
     const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinator({
+      ...(durabilityDiagnostics === undefined ? {} : { durabilityDiagnostics }),
       materializer: collaborationMaterializers,
       projects: projectManager,
       identity: {
@@ -957,6 +961,15 @@ function startApplication() {
     const pluginStateSchemaArtifactAuthority: {
       current?: Pick<PluginStateSchemaAuthorityV1, "resolveArtifact">
     } = {}
+    const canvasSubmitDiagnostics = process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
+      ? {
+          record(diagnostic: object) {
+            try {
+              console.warn("[convax:canvas-submit-latency]", JSON.stringify(diagnostic))
+            } catch { /* Benchmark diagnostics never affect a Canvas command. */ }
+          },
+        }
+      : undefined
     collaborationCanvasComposition = createMainCanvasCollaborationComposition({
       authority: collaborationAuthority,
       canvasOwner,
@@ -967,6 +980,7 @@ function startApplication() {
       incomingAuthority: incomingCollaborationAuthority,
       signatureVerifier: collaborationSignatureVerifier,
       applicationCommands: createProductionCanvasApplicationCommandAdapter(),
+      diagnostics: canvasSubmitDiagnostics,
       createOperationId: createCollaborationId,
       createSessionId: createCollaborationId,
       createCursorToken: createCollaborationId,
@@ -1210,7 +1224,7 @@ function startApplication() {
         if (!collaborationCanvasSessions) throw new Error("Canvas collaboration runtime is unavailable")
         return collaborationCanvasSessions.submit(request)
       },
-    })
+    }, canvasSubmitDiagnostics)
     const canvasResourceHydrator = new ProjectCanvasResourceHydrator(
       projectManager,
       projectAssets,
@@ -1222,6 +1236,7 @@ function startApplication() {
     // The application service uses the initializing document service so a
     // Plugin/Agent can address a catalogued Canvas before it has ever mounted.
     const canvasApplication = new CanvasApplicationService(canvasDocuments, {
+      diagnostics: canvasSubmitDiagnostics,
       onDidCommit(event) {
         canvasDocumentChanges.publish({
           ref: { canvasId: event.canvasId, projectId: event.scopeId },
@@ -1230,14 +1245,28 @@ function startApplication() {
         })
       },
     })
+    const canvasResourceBusinessDiagnostics = process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
+      ? {
+          record(diagnostic: object) {
+            try {
+              console.warn("[convax:canvas-resource-latency]", JSON.stringify(diagnostic))
+            } catch { /* Benchmark diagnostics never affect a business command. */ }
+          },
+        }
+      : undefined
     const canvasResourcePreparation = new ProjectCanvasResourcePreparation(
       projectManager,
       projectFilePublisher,
       projectAssets,
       undefined,
       collaborationFacade.projectIndexes,
+      canvasResourceBusinessDiagnostics,
     )
-    const canvasResources = new CanvasResourceBusinessService(canvasResourcePreparation, canvasApplication)
+    const canvasResources = new CanvasResourceBusinessService(
+      canvasResourcePreparation,
+      canvasApplication,
+      canvasSubmitDiagnostics,
+    )
     const canvasGenerationRuns = new CanvasNodeGenerationRunBusinessService(canvasApplication)
     const managedCanvasMedia = new ManagedCanvasMediaResolver({
       assets: projectAssets,
@@ -2398,6 +2427,7 @@ function startApplication() {
       images: canvasResourceHydrator,
       resolveActiveCanvas,
       sessions: collaborationCanvasSessions,
+      ...(canvasResourceBusinessDiagnostics ? { diagnostics: canvasResourceBusinessDiagnostics } : {}),
     })
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasApplication, {
       ...ipcSecurity,
@@ -2758,6 +2788,44 @@ function startApplication() {
   app.on("window-all-closed", () => {
     if (process.platform === "darwin") return
     app.quit()
+  })
+}
+
+function createPackagedDurabilityDiagnostics(): NodeLocalCommitDurabilityDiagnostics | undefined {
+  if (process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL !== "1") return undefined
+  const attempts = new Map<string, NodeLocalCommitDurabilityMeasurement[]>()
+  return Object.freeze({
+    currentAttemptId(ref: Parameters<NodeLocalCommitDurabilityDiagnostics["currentAttemptId"]>[0]) {
+      return `${ref.scope.docKind}:${ref.operationId}`
+    },
+    observe(measurement: NodeLocalCommitDurabilityMeasurement) {
+      let entries = attempts.get(measurement.attemptId)
+      if (entries === undefined) {
+        entries = []
+        attempts.set(measurement.attemptId, entries)
+        while (attempts.size > 256) attempts.delete(attempts.keys().next().value!)
+      }
+      entries.push(measurement)
+      const completed =
+        measurement.outcome === "failed" ||
+        (measurement.stage === "head" && measurement.barrierKind === "directory-sync")
+      if (!completed) return
+      attempts.delete(measurement.attemptId)
+      const ownerKind = measurement.attemptId.startsWith("canvas:") ? "canvas" : "project-index"
+      console.warn("[convax:durability-latency]", JSON.stringify({
+        format: "convax.durability-latency-diagnostic",
+        version: 1,
+        ownerKind,
+        barrierCount: entries.length,
+        barriers: entries.map((entry) => ({
+          stage: entry.stage,
+          barrierKind: entry.barrierKind,
+          callCount: entry.callCount,
+          durationMs: Number(entry.durationNanoseconds) / 1_000_000,
+          outcome: entry.outcome,
+        })),
+      }))
+    },
   })
 }
 

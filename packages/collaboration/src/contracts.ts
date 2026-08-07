@@ -1,4 +1,5 @@
 import type * as Y from "yjs"
+import type { CanonicalJcsEvidence, CanonicalJcsEvidenceIssuer } from "./canonical-jcs-evidence"
 import type {
   ActorId,
   CanvasId,
@@ -328,6 +329,12 @@ export interface OwnerApplyResult<K extends DocumentOwnerKind = DocumentOwnerKin
 export interface OwnerProcessValueFactory<K extends DocumentOwnerKind> {
   wrapValidatedState(value: unknown): OwnerValidatedState<K>
   wrapApplyResult(value: unknown): OwnerApplyResult<K>
+  readonly canonicalJcs: CanonicalJcsEvidenceIssuer
+  bindCanonicalJcsEvidence(
+    document: Y.Doc,
+    state: OwnerValidatedState<K>,
+    evidence: CanonicalJcsEvidence,
+  ): OwnerValidatedState<K>
   readonly [ownerProcessValueFactoryBrand]: true
 }
 
@@ -437,6 +444,7 @@ export interface DocumentOwnerProtocolDefinition<K extends DocumentOwnerKind> {
   decodeIntent(exactJcs: Uint8Array): unknown | "rejected"
   validateBase(document: Y.Doc): OwnerValidatedState<K> | "pending" | "rejected"
   applyIntent(
+    base: OwnerValidatedState<K>,
     candidate: Y.Doc,
     context: OwnerIntentValidationContext,
     intent: unknown,
@@ -458,6 +466,29 @@ export interface DocumentOwnerProtocolPort<K extends DocumentOwnerKind = Documen
 
 export interface SelectedDocumentOwnerArtifactDefinition<K extends DocumentOwnerKind> {
   readonly owner: K
+  armCandidateTransactionCapture?(input: Readonly<{
+    readonly base: OwnerValidatedState<K>
+    readonly candidate: Y.Doc
+    readonly context: OwnerIntentValidationContext
+    readonly baseCanonicalProof?: Readonly<{
+      readonly canonicalStateDigest: Digest
+      readonly durableHeadDigest: Digest
+    }>
+  }>): void
+  installValidatedPostCache?(input: Readonly<{
+    readonly scope: DocumentScope
+    readonly source: Y.Doc
+    readonly target: Y.Doc
+    readonly state: OwnerValidatedState<K>
+    readonly canonicalStateDigest: Digest
+    readonly durableHeadDigest: Digest
+  }>): void
+  readCertifiedCanonicalDigest?(input: Readonly<{
+    readonly scope: DocumentScope
+    readonly document: Y.Doc
+    readonly durableHeadDigest: Digest
+    readonly expectedCanonicalStateDigest: Digest
+  }>): Digest | null
   createDefinitions(processValues: OwnerProcessValueFactory<K>): Readonly<{
     protocol: DocumentOwnerProtocolDefinition<K>
     closure: OwnerIntentClosureDefinition<K>

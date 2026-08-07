@@ -4,6 +4,7 @@ import fs from "node:fs/promises"
 import path from "node:path"
 import type {
   ActorId,
+  AcceptedHeadMaterializationEvidence,
   CausalFrontier,
   CollaborationPersistencePort,
   CompareAndCommitReplicaHeadPortResult,
@@ -29,6 +30,7 @@ import {
   parseMemberId,
   parseReplicaId,
   parseUint64,
+  validateAcceptedHeadMaterializationEvidence,
 } from "@convax/collaboration"
 import {
   deriveDocumentNativeKey,
@@ -235,6 +237,54 @@ export interface NodeCollaborationPersistenceFaultHooks {
   afterHeadDirectoryFsync?(): Promise<void>
 }
 
+export type NodeDurabilityBarrierKind = "directory-sync" | "file-sync"
+export type NodeLocalCommitDurabilityStage = "head" | "journal" | "object-frame" | "object-operation-sidecar" | "outbox"
+
+export interface NodeLocalCommitDurabilityMeasurement {
+  readonly attemptId: string
+  readonly barrierKind: NodeDurabilityBarrierKind
+  readonly callCount: number
+  readonly durationNanoseconds: bigint
+  readonly operationId: Id128
+  readonly outcome: "failed" | "succeeded"
+  readonly stage: NodeLocalCommitDurabilityStage
+}
+
+export interface NodeLocalCommitDurabilityDiagnostics {
+  /** Returns the benchmark-owned root attempt. Undefined excludes this call from sampling. */
+  readonly currentAttemptId: (ref: FrameObjectRef) => string | undefined
+  readonly observe: (measurement: Readonly<NodeLocalCommitDurabilityMeasurement>) => void
+  /** Optional local-only profiling. Values contain timing and bounded enum labels only. */
+  readonly observeLocalStep?: (measurement: Readonly<NodeLocalCommitStepMeasurement>) => void
+}
+
+export type NodeLocalCommitStep =
+  | "trust"
+  | "lstat"
+  | "open-write-close"
+  | "read"
+  | "decode-JCS"
+  | "inspect"
+  | "capacity"
+  | "encode"
+  | "rename"
+  | "cache"
+
+export interface NodeLocalCommitStepMeasurement {
+  readonly attemptId: string
+  readonly durationNanoseconds: bigint
+  readonly operationId: Id128
+  readonly outcome: "failed" | "succeeded"
+  readonly stage: "object" | "outbox" | "journal" | "head"
+  readonly step: NodeLocalCommitStep
+}
+
+interface DurabilityMeasurementContext {
+  readonly attemptId: string
+  readonly operationId: Id128
+  readonly stage: NodeLocalCommitDurabilityStage
+}
+
 export type NodeCollaborationPersistenceErrorCode =
   | "aborted"
   | "document-already-exists"
@@ -430,13 +480,19 @@ interface VerifiedMaterializedHeadCache {
   readonly reachableFrameDigests: ReadonlySet<Digest>
 }
 
+const INTERNALLY_OWNED_HEAD = Symbol("convax.project.node.internally-owned-head")
+
+type InternallyOwnedAcceptedHead = NodeAcceptedReplicaHead & {
+  readonly [INTERNALLY_OWNED_HEAD]: true
+}
+
 interface PendingHeadTransition {
   readonly expectedHeadDigest: Digest
   readonly priorJournalTailDigest: Digest
   readonly journalRecordDigest: Digest
   readonly frameDigest: Digest
   readonly resultingFrontierDigest: Digest
-  readonly acceptedHead: NodeAcceptedReplicaHead
+  readonly acceptedHead: InternallyOwnedAcceptedHead
   readonly reachableFrameDigests: ReadonlySet<Digest>
 }
 
@@ -475,6 +531,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     private readonly checkpointPruneAuthority: NodeCheckpointPruneAuthority | undefined,
     private readonly checkpointPruneRootScanner: NodeCheckpointPruneRootScanner | undefined,
     private readonly hooks: NodeCollaborationPersistenceFaultHooks,
+    private readonly durabilityDiagnostics: NodeLocalCommitDurabilityDiagnostics | undefined,
     private readonly ownsRootWriterLease = true,
   ) {}
 
@@ -487,6 +544,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     readonly checkpointPruneAuthority?: NodeCheckpointPruneAuthority
     readonly checkpointPruneRootScanner?: NodeCheckpointPruneRootScanner
     readonly hooks?: NodeCollaborationPersistenceFaultHooks
+    readonly durabilityDiagnostics?: NodeLocalCommitDurabilityDiagnostics
   }): Promise<NodeCollaborationPersistence> {
     if (!path.isAbsolute(input.collaborationDirectory)) invalid("Collaboration directory must be absolute")
     await ensureTrustedDirectory(input.collaborationDirectory)
@@ -507,6 +565,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       input.checkpointPruneAuthority,
       input.checkpointPruneRootScanner,
       input.hooks ?? {},
+      input.durabilityDiagnostics,
       true,
     )
     try {
@@ -531,6 +590,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       input.checkpointPruneAuthority,
       input.checkpointPruneRootScanner,
       input.hooks ?? {},
+      input.durabilityDiagnostics,
       false,
     )
   }
@@ -787,6 +847,30 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     this.requireLive()
     const layout = this.layout(scope)
     return this.serial(layout.directory, async () => this.loadAcceptedHeadInternal(layout, scope, true))
+  }
+
+  async verifyReplicaHeadCurrent(input: {
+    readonly scope: DocumentScope
+    readonly expectedHeadDigest: Digest
+    readonly expectedFrontierDigest: Digest
+  }): Promise<"verified" | "reload-required"> {
+    this.requireLive()
+    validateDigest(input.expectedHeadDigest, "Expected replica head digest")
+    validateDigest(input.expectedFrontierDigest, "Expected replica frontier digest")
+    const layout = this.layout(input.scope)
+    return this.serial(layout.directory, async () => {
+      await this.assertReadableDocument(layout)
+      const durable = await this.readDurableHead(layout, input.scope)
+      if (
+        durable.digest !== input.expectedHeadDigest ||
+        durable.record.acceptedFrontierDigest !== input.expectedFrontierDigest
+      ) return "reload-required"
+      if (await fileExists(layout.dispositionHead)) return "reload-required"
+      const nextSequence = incrementUint64(durable.record.localHeadGeneration)
+      const nextPath = path.join(layout.journalSegments, deriveJournalSegmentNativeKey(nextSequence))
+      if (await fileExists(nextPath)) return "reload-required"
+      return "verified"
+    })
   }
 
   /** Process-local, identity-free counters for optional slow-command diagnostics. */
@@ -1188,17 +1272,36 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       invalid("Frame bytes must be a non-empty causal envelope within 2 MiB")
     }
     const layout = this.layout(ref.scope)
+    const attemptId = this.currentDurabilityAttemptId(ref)
     await this.serial(layout.directory, async () => {
-      await this.assertWritableDocument(layout)
-      const inspected = await this.materializer.inspectFrame(ref, exactBytes)
+      await this.profileLocalStep(attemptId, ref, "object", "trust", () => this.assertWritableDocument(layout))
+      const inspected = await this.profileLocalStep(attemptId, ref, "object", "inspect", () =>
+        this.materializer.inspectFrame(ref, exactBytes),
+      )
       assertSameFrameRef(inspected.ref, ref)
-      await putImmutableExact(layout.frames, "frame", ref.frameDigest, exactBytes)
+      await putImmutableExact(
+        layout.frames,
+        "frame",
+        ref.frameDigest,
+        exactBytes,
+        this.measurement(attemptId, ref, "object-frame"),
+        this.durabilityDiagnostics,
+      )
       const operationDirectory = path.join(layout.operationRefs, operationIndexKey(ref.actorId, ref.operationId))
       await ensureTrustedDirectory(operationDirectory, this.collaborationDirectory)
       const operationRef: LocalOperationObjectRef = { format: "convax.local-operation-object-ref", ref }
-      await putImmutableRecord(operationDirectory, "operation-ref", ref.frameDigest, operationRef)
-      await this.ensureOperationRecoveryIndex()
-      this.addOperationRecoveryIndexEntry({ ref, layout })
+      await putImmutableRecord(
+        operationDirectory,
+        "operation-ref",
+        ref.frameDigest,
+        operationRef,
+        this.measurement(attemptId, ref, "object-operation-sidecar"),
+        this.durabilityDiagnostics,
+      )
+      await this.profileLocalStep(attemptId, ref, "object", "cache", async () => {
+        await this.ensureOperationRecoveryIndex()
+        this.addOperationRecoveryIndexEntry({ ref, layout })
+      })
       // The operation sidecar is part of the immutable-object durability barrier:
       // recovery must be able to rediscover opaque frame paths by actor/operation.
       await this.hooks.afterFrameFileFsync?.()
@@ -1209,11 +1312,12 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     this.requireLive()
     validateFrameRef(ref)
     const layout = this.layout(ref.scope)
+    const attemptId = this.currentDurabilityAttemptId(ref)
     await this.serial(layout.directory, async () => {
-      await this.assertWritableDocument(layout)
-      const frame = await this.readFrame(layout, ref)
-      const inspected = await this.materializer.inspectFrame(ref, frame)
-      assertSameFrameRef(inspected.ref, ref)
+      await this.profileLocalStep(attemptId, ref, "outbox", "trust", () => this.assertWritableDocument(layout))
+      const { bytes: frame, inspected } = await this.profileLocalStep(attemptId, ref, "outbox", "read", () =>
+        this.readInspectedFrame(layout, ref),
+      )
       const requiredBlobDigests = normalizeDigestSet(inspected.requiredBlobDigests, 256)
       const record: LocalReplicationOutboxRef = {
         format: "convax.local-replication-outbox-ref",
@@ -1226,20 +1330,34 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
       }
       const target = path.join(layout.outboxFrames, `${deriveObjectNativeKey("outbox-ref", ref.frameDigest)}.ref`)
       const exists = await fileExists(target)
-      if (!exists) await this.assertOutboxCapacity(layout, frame.byteLength)
-      await writeDurableNewOrVerify(target, encodeRecord(record))
+      if (!exists) await this.profileLocalStep(attemptId, ref, "outbox", "capacity", () =>
+        this.assertOutboxCapacity(layout, frame.byteLength),
+      )
+      const encodedRecord = await this.profileLocalStep(attemptId, ref, "outbox", "encode", () => encodeRecord(record))
+      await writeDurableNewOrVerify(
+        target,
+        encodedRecord,
+        this.measurement(attemptId, ref, "outbox"),
+        this.durabilityDiagnostics,
+      )
       if (!exists) this.recordOutboxPut(layout, ref.frameDigest, frame.byteLength)
       await this.hooks.afterOutboxFileFsync?.()
     })
   }
 
-  async appendFrameJournal(ref: FrameObjectRef): Promise<JournalAppendPortEvidence> {
+  async appendFrameJournal(
+    ref: FrameObjectRef,
+    materialization?: AcceptedHeadMaterializationEvidence,
+  ): Promise<JournalAppendPortEvidence> {
     this.requireLive()
     validateFrameRef(ref)
     const layout = this.layout(ref.scope)
+    const attemptId = this.currentDurabilityAttemptId(ref)
     return this.serial(layout.directory, async () => {
-      await this.assertWritableDocument(layout)
-      const head = await this.readDurableHead(layout, ref.scope)
+      await this.profileLocalStep(attemptId, ref, "journal", "trust", () => this.assertWritableDocument(layout))
+      const head = await this.profileLocalStep(attemptId, ref, "journal", "read", () =>
+        this.readDurableHead(layout, ref.scope),
+      )
       const nextSequence = incrementUint64(head.record.localHeadGeneration)
       const target = path.join(layout.journalSegments, deriveJournalSegmentNativeKey(nextSequence))
       if (await fileExists(target)) {
@@ -1247,10 +1365,15 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         assertJournalRef(existing.record, ref)
         return Object.freeze({ ref, journalRecordDigest: existing.digest })
       }
-      const frame = await this.readFrame(layout, ref)
-      const outbox = await this.readOutbox(layout, ref)
+      const frame = await this.profileLocalStep(attemptId, ref, "journal", "read", () => this.readFrame(layout, ref))
+      const outbox = await this.profileLocalStep(attemptId, ref, "journal", "read", () => this.readOutbox(layout, ref))
       const previous = await this.reconstructHead(layout, ref.scope, head.record, head.digest)
-      const next = await this.materializer.applyAcceptedFrame({ previous, ref, exactBytes: frame })
+      const prepared = materialization
+        ? validateAcceptedHeadMaterializationEvidence({ previous, ref, evidence: materialization })
+        : "rejected"
+      const next = prepared === "rejected"
+        ? await this.materializer.applyAcceptedFrame({ previous, ref, exactBytes: frame })
+        : prepared
       validateAcceptedBase(next, ref.scope)
       const record: LocalJournalRecord = {
         format: "convax.local-journal-record",
@@ -1264,17 +1387,21 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         operationRef: { actorId: ref.actorId, operationId: ref.operationId },
       }
       const journalRecordDigest = localRecordDigest(record)
-      await writeDurableNewFile(target, encodeRecord(record))
-      await fsyncProjectDirectory(layout.journalSegments)
+      const measurement = this.measurement(attemptId, ref, "journal")
+      const encodedRecord = await this.profileLocalStep(attemptId, ref, "journal", "encode", () => encodeRecord(record))
+      await writeDurableNewFile(target, encodedRecord, measurement, this.durabilityDiagnostics)
+      await syncDirectory(layout.journalSegments, measurement, this.durabilityDiagnostics)
       await this.hooks.afterJournalFileFsync?.()
-      const previousCache = this.requireMaterializedHeadCache(layout, head.record, head.digest)
+      const previousCache = await this.profileLocalStep(attemptId, ref, "journal", "cache", () =>
+        this.requireMaterializedHeadCache(layout, head.record, head.digest),
+      )
       this.pendingHeadTransitions.set(layout.directory, {
         expectedHeadDigest: head.digest,
         priorJournalTailDigest: head.record.journalTailDigest,
         journalRecordDigest,
         frameDigest: ref.frameDigest,
         resultingFrontierDigest: next.frontierDigest,
-        acceptedHead: freezeHead(next, head.digest),
+        acceptedHead: freezeOwnedHead(next, head.digest),
         reachableFrameDigests: new Set([...previousCache.reachableFrameDigests, ref.frameDigest]),
       })
       return Object.freeze({ ref, journalRecordDigest })
@@ -1294,10 +1421,13 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     validateDigest(input.expectedReplicaHeadRecordDigest, "Expected replica head digest")
     validateDigest(input.resultingFrontierDigest, "Resulting frontier digest")
     const layout = this.layout(input.ref.scope)
+    const attemptId = this.currentDurabilityAttemptId(input.ref)
     return this.serial(layout.directory, async () => {
       try {
-        await this.assertWritableDocument(layout)
-        const current = await this.readDurableHead(layout, input.ref.scope)
+        await this.profileLocalStep(attemptId, input.ref, "head", "trust", () => this.assertWritableDocument(layout))
+        const current = await this.profileLocalStep(attemptId, input.ref, "head", "read", () =>
+          this.readDurableHead(layout, input.ref.scope),
+        )
         if (current.digest !== input.expectedReplicaHeadRecordDigest) {
           if (
             current.record.priorHeadDigest === input.expectedReplicaHeadRecordDigest &&
@@ -1311,18 +1441,23 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           return await this.quarantineStaleHead(layout, input, current.digest)
         }
         const sequence = incrementUint64(current.record.localHeadGeneration)
-        const journal = await readJournalRecord(
-          path.join(layout.journalSegments, deriveJournalSegmentNativeKey(sequence)),
-          input.ref.scope,
+        const journal = await this.profileLocalStep(attemptId, input.ref, "head", "read", () =>
+          readJournalRecord(
+            path.join(layout.journalSegments, deriveJournalSegmentNativeKey(sequence)),
+            input.ref.scope,
+          ),
         )
         if (journal.digest !== input.journal.journalRecordDigest) corrupt("Journal evidence does not name the next durable record")
         assertJournalRef(journal.record, input.ref)
         if (journal.record.priorJournalRecordDigest !== current.record.journalTailDigest) corrupt("Journal predecessor differs from the sole durable head")
         if (journal.record.resultingFrontierDigest !== input.resultingFrontierDigest) corrupt("Journal frontier differs from the Kernel result")
-        const frame = await this.readFrame(layout, input.ref)
-        await this.readOutbox(layout, input.ref)
+        const frame = await this.profileLocalStep(attemptId, input.ref, "head", "read", () =>
+          this.readFrame(layout, input.ref),
+        )
+        await this.profileLocalStep(attemptId, input.ref, "head", "read", () => this.readOutbox(layout, input.ref))
         const pending = this.pendingHeadTransitions.get(layout.directory)
         let next: NodeAcceptedReplicaHead
+        let transferredNext: InternallyOwnedAcceptedHead | undefined
         let reachableFrameDigests: ReadonlySet<Digest>
         if (
           pending &&
@@ -1332,7 +1467,8 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           pending.frameDigest === input.ref.frameDigest &&
           pending.resultingFrontierDigest === input.resultingFrontierDigest
         ) {
-          next = freezeHead(pending.acceptedHead, current.digest)
+          transferredNext = rebindOwnedHead(pending.acceptedHead, current.digest)
+          next = transferredNext
           reachableFrameDigests = pending.reachableFrameDigests
         } else {
           this.pendingHeadTransitions.delete(layout.directory)
@@ -1354,11 +1490,23 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
           acceptedFrontierDigest: next.frontierDigest,
           acceptedActorHeadsDigest: this.materializer.actorHeadsDigest(next.actorHeads),
         }
-        await replaceDurableRecord(layout.durableHead, head, this.hooks)
+        await replaceDurableRecord(
+          layout.durableHead,
+          head,
+          this.hooks,
+          this.measurement(attemptId, input.ref, "head"),
+          this.durabilityDiagnostics,
+        )
         const headDigest = localRecordDigest(head)
-        this.storeMaterializedHeadCache(layout, head, headDigest, next, reachableFrameDigests)
-        this.pendingHeadTransitions.delete(layout.directory)
-        this.materializer.observeAcceptedFrame?.(input.ref, frame)
+        await this.profileLocalStep(attemptId, input.ref, "head", "cache", () => {
+          if (transferredNext) {
+            this.storeTransferredMaterializedHeadCache(layout, head, headDigest, transferredNext, reachableFrameDigests)
+          } else {
+            this.storeMaterializedHeadCache(layout, head, headDigest, next, reachableFrameDigests)
+          }
+          this.pendingHeadTransitions.delete(layout.directory)
+          this.materializer.observeAcceptedFrame?.(input.ref, frame)
+        })
         return committedEvidence(input, headDigest)
       } catch (error) {
         this.pendingHeadTransitions.delete(layout.directory)
@@ -1368,6 +1516,52 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
         return { status: "rejected", code: "durability-failed" }
       }
     })
+  }
+
+  private measurement(
+    attemptId: string | undefined,
+    ref: FrameObjectRef,
+    stage: NodeLocalCommitDurabilityStage,
+  ): DurabilityMeasurementContext | undefined {
+    return attemptId === undefined ? undefined : { attemptId, operationId: ref.operationId, stage }
+  }
+
+  private currentDurabilityAttemptId(ref: FrameObjectRef): string | undefined {
+    try {
+      return this.durabilityDiagnostics?.currentAttemptId(ref)
+    } catch {
+      return undefined
+    }
+  }
+
+  private async profileLocalStep<T>(
+    attemptId: string | undefined,
+    ref: FrameObjectRef,
+    stage: NodeLocalCommitStepMeasurement["stage"],
+    step: NodeLocalCommitStep,
+    operation: () => Promise<T> | T,
+  ): Promise<T> {
+    const started = process.hrtime.bigint()
+    let outcome: NodeLocalCommitStepMeasurement["outcome"] = "succeeded"
+    try {
+      return await operation()
+    } catch (error) {
+      outcome = "failed"
+      throw error
+    } finally {
+      if (attemptId !== undefined && this.durabilityDiagnostics?.observeLocalStep) {
+        try {
+          this.durabilityDiagnostics.observeLocalStep({
+            attemptId,
+            durationNanoseconds: process.hrtime.bigint() - started,
+            operationId: ref.operationId,
+            outcome,
+            stage,
+            step,
+          })
+        } catch { /* Diagnostics never affect a durable commit. */ }
+      }
+    }
   }
 
   async isReachableFromAcceptedHead(ref: FrameObjectRef): Promise<boolean> {
@@ -1792,13 +1986,20 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
   }
 
   private async readFrame(layout: DocumentLayout, ref: FrameObjectRef): Promise<Uint8Array> {
+    return (await this.readInspectedFrame(layout, ref)).bytes
+  }
+
+  private async readInspectedFrame(
+    layout: DocumentLayout,
+    ref: FrameObjectRef,
+  ): Promise<Readonly<{ bytes: Uint8Array; inspected: NodeInspectedFrame }>> {
     const target = path.join(layout.frames, `${deriveObjectNativeKey("frame", ref.frameDigest)}.bin`)
     const bytes = Uint8Array.from(await fs.readFile(target).catch((error) => {
       throw new NodeCollaborationPersistenceError("store-corrupt", "Referenced frame object is missing", { cause: error })
     }))
     const inspected = await this.materializer.inspectFrame(ref, bytes)
     assertSameFrameRef(inspected.ref, ref)
-    return bytes
+    return Object.freeze({ bytes, inspected })
   }
 
   private async readOutbox(layout: DocumentLayout, ref: FrameObjectRef): Promise<LocalReplicationOutboxRef> {
@@ -1932,7 +2133,27 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     acceptedHead: NodeAcceptedReplicaHead,
     reachableFrameDigests: ReadonlySet<Digest>,
   ): void {
-    const defensiveHead = freezeHead(acceptedHead, headDigest)
+    this.storeTransferredMaterializedHeadCache(
+      layout,
+      head,
+      headDigest,
+      freezeOwnedHead(acceptedHead, headDigest),
+      reachableFrameDigests,
+    )
+  }
+
+  /**
+   * Transfers a module-private head whose binary fields have already been cloned
+   * away from every caller-visible value. This is intentionally not a general
+   * no-copy option: only freezeOwnedHead/rebindOwnedHead can construct its brand.
+   */
+  private storeTransferredMaterializedHeadCache(
+    layout: DocumentLayout,
+    head: LocalDurableHead,
+    headDigest: Digest,
+    defensiveHead: InternallyOwnedAcceptedHead,
+    reachableFrameDigests: ReadonlySet<Digest>,
+  ): void {
     if (
       defensiveHead.frontierDigest !== head.acceptedFrontierDigest ||
       this.materializer.actorHeadsDigest(defensiveHead.actorHeads) !== head.acceptedActorHeadsDigest
@@ -2395,6 +2616,33 @@ function freezeHead(
     fullUpdate: Uint8Array.from(input.fullUpdate),
     stateVector: Uint8Array.from(input.stateVector) as StateVector,
     canonicalStateDigest: input.canonicalStateDigest,
+  })
+}
+
+function freezeOwnedHead(
+  input: Omit<NodeAcceptedReplicaHead, "headDigest"> | NodeAcceptedReplicaHead,
+  headDigest: Digest,
+): InternallyOwnedAcceptedHead {
+  return Object.freeze({
+    ...freezeHead(input, headDigest),
+    [INTERNALLY_OWNED_HEAD]: true as const,
+  })
+}
+
+function rebindOwnedHead(
+  input: InternallyOwnedAcceptedHead,
+  headDigest: Digest,
+): InternallyOwnedAcceptedHead {
+  return Object.freeze({
+    scope: input.scope,
+    headDigest,
+    frontier: input.frontier,
+    frontierDigest: input.frontierDigest,
+    actorHeads: input.actorHeads,
+    fullUpdate: input.fullUpdate,
+    stateVector: input.stateVector,
+    canonicalStateDigest: input.canonicalStateDigest,
+    [INTERNALLY_OWNED_HEAD]: true as const,
   })
 }
 
@@ -2872,8 +3120,15 @@ function restrictedJcs(value: unknown): string {
   return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${restrictedJcs(value[key])}`).join(",")}}`
 }
 
-async function putImmutableRecord(directory: string, kind: string, digest: Digest, record: unknown): Promise<void> {
-  await putImmutableExact(directory, kind, digest, encodeRecord(record))
+async function putImmutableRecord(
+  directory: string,
+  kind: string,
+  digest: Digest,
+  record: unknown,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
+): Promise<void> {
+  await putImmutableExact(directory, kind, digest, encodeRecord(record), measurement, diagnostics)
 }
 
 async function putImmutableExact(
@@ -2881,15 +3136,22 @@ async function putImmutableExact(
   kind: string,
   digest: Digest,
   exactBytes: Readonly<Uint8Array>,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
 ): Promise<void> {
   await ensureTrustedDirectory(directory)
   const target = path.join(directory, `${deriveObjectNativeKey(kind, digest)}.bin`)
-  await writeDurableNewOrVerify(target, exactBytes)
+  await writeDurableNewOrVerify(target, exactBytes, measurement, diagnostics)
 }
 
-async function writeDurableNewOrVerify(target: string, exactBytes: Readonly<Uint8Array>): Promise<void> {
+async function writeDurableNewOrVerify(
+  target: string,
+  exactBytes: Readonly<Uint8Array>,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
+): Promise<void> {
   try {
-    await writeDurableNewFile(target, exactBytes)
+    await writeDurableNewFile(target, exactBytes, measurement, diagnostics)
   } catch (error) {
     if (!isNodeError(error) || error.code !== "EEXIST") throw error
     const existing = await fs.readFile(target)
@@ -2897,7 +3159,12 @@ async function writeDurableNewOrVerify(target: string, exactBytes: Readonly<Uint
   }
 }
 
-async function writeDurableNewFile(target: string, exactBytes: Readonly<Uint8Array>): Promise<void> {
+async function writeDurableNewFile(
+  target: string,
+  exactBytes: Readonly<Uint8Array>,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
+): Promise<void> {
   await assertTrustedParent(target)
   const handle = await fs.open(
     target,
@@ -2906,17 +3173,19 @@ async function writeDurableNewFile(target: string, exactBytes: Readonly<Uint8Arr
   )
   try {
     await handle.writeFile(exactBytes)
-    await handle.sync()
+    await measureSync(() => handle.sync(), "file-sync", measurement, diagnostics)
   } finally {
     await handle.close()
   }
-  await fsyncProjectDirectory(path.dirname(target))
+  await syncDirectory(path.dirname(target), measurement, diagnostics)
 }
 
 async function replaceDurableRecord(
   target: string,
   record: unknown,
   hooks: NodeCollaborationPersistenceFaultHooks = {},
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
 ): Promise<void> {
   await assertTrustedParent(target)
   const directory = path.dirname(target)
@@ -2929,7 +3198,7 @@ async function replaceDurableRecord(
     )
     try {
       await handle.writeFile(encodeRecord(record))
-      await handle.sync()
+      await measureSync(() => handle.sync(), "file-sync", measurement, diagnostics)
     } finally {
       await handle.close()
     }
@@ -2938,10 +3207,54 @@ async function replaceDurableRecord(
     if (destination?.isSymbolicLink()) corrupt("Durable pointer destination is a symbolic link")
     await fs.rename(temporary, target)
     await hooks.afterHeadRename?.()
-    await fsyncProjectDirectory(directory)
+    await syncDirectory(directory, measurement, diagnostics)
     await hooks.afterHeadDirectoryFsync?.()
   } finally {
     await fs.rm(temporary, { force: true }).catch(() => undefined)
+  }
+}
+
+async function syncDirectory(
+  directory: string,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
+): Promise<void> {
+  await measureSync(() => fsyncProjectDirectory(directory), "directory-sync", measurement, diagnostics)
+}
+
+async function measureSync(
+  sync: () => Promise<void>,
+  barrierKind: NodeDurabilityBarrierKind,
+  measurement?: DurabilityMeasurementContext,
+  diagnostics?: NodeLocalCommitDurabilityDiagnostics,
+): Promise<void> {
+  if (measurement === undefined || diagnostics === undefined) {
+    await sync()
+    return
+  }
+  const startedAt = process.hrtime.bigint()
+  let outcome: NodeLocalCommitDurabilityMeasurement["outcome"] = "succeeded"
+  try {
+    await sync()
+  } catch (error) {
+    outcome = "failed"
+    throw error
+  } finally {
+    emitMeasurement(measurement, diagnostics, barrierKind, process.hrtime.bigint() - startedAt, outcome)
+  }
+}
+
+function emitMeasurement(
+  measurement: DurabilityMeasurementContext,
+  diagnostics: NodeLocalCommitDurabilityDiagnostics,
+  barrierKind: NodeDurabilityBarrierKind,
+  durationNanoseconds: bigint,
+  outcome: NodeLocalCommitDurabilityMeasurement["outcome"],
+): void {
+  try {
+    diagnostics.observe(Object.freeze({ ...measurement, barrierKind, callCount: 1, durationNanoseconds, outcome }))
+  } catch {
+    // A diagnostic consumer cannot change persistence ordering or error propagation.
   }
 }
 
@@ -2989,6 +3302,7 @@ async function fileExists(target: string): Promise<boolean> {
     throw error
   }
 }
+
 
 async function directoryExists(target: string): Promise<boolean> {
   try {

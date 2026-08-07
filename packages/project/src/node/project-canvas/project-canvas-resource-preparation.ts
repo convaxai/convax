@@ -59,6 +59,24 @@ export interface ProjectCanvasMediaInspector {
   }): Promise<ProjectCanvasMediaInspection>
 }
 
+export type ProjectCanvasResourcePreparationStage =
+  | "resource-file-publication"
+  | "initial-plan"
+  | "blob-publication"
+  | "pi-submit"
+  | "post-pi-proof"
+
+export interface ProjectCanvasResourcePreparationDiagnostic {
+  readonly byteLength: number
+  readonly callCount: number
+  readonly durationMs: number
+  readonly stage: ProjectCanvasResourcePreparationStage
+}
+
+export interface ProjectCanvasResourcePreparationDiagnosticsPort {
+  record(diagnostic: ProjectCanvasResourcePreparationDiagnostic): void
+}
+
 export class ProjectCanvasResourcePreparation implements CanvasResourcePreparationPort {
   constructor(
     private readonly project: ProjectCanvasResourceHost,
@@ -66,7 +84,24 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     private readonly assets: ProjectManagedAssetStore,
     private readonly mediaInspector?: ProjectCanvasMediaInspector,
     private readonly indexFiles?: ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort,
+    private readonly diagnostics?: ProjectCanvasResourcePreparationDiagnosticsPort,
   ) {}
+
+  private async trace<T>(
+    stage: ProjectCanvasResourcePreparationStage,
+    byteLength: number,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.diagnostics) return operation()
+    const startedAt = performance.now()
+    try {
+      return await operation()
+    } finally {
+      try {
+        this.diagnostics.record({ byteLength, callCount: 1, durationMs: performance.now() - startedAt, stage })
+      } catch { /* Diagnostics never affect resource publication. */ }
+    }
+  }
 
   async prepare(request: CanvasResourcePreparationRequest): Promise<CanvasResourcePreparationResult> {
     throwIfAborted(request.signal)
@@ -233,15 +268,16 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
   ): Promise<{ item: CanvasUploadItem; retainedOnFailure?: { label: string } }> {
     throwIfAborted(signal)
     if (source.kind === "new-text") {
+      const byteLength = new TextEncoder().encode(source.text).byteLength
       const [publication, initialPlan] = await Promise.allSettled([
-        this.publisher.publishText({
+        this.trace("resource-file-publication", byteLength, () => this.publisher.publishText({
           content: source.text,
           directory: "Notes",
           extension: ".md",
           name: source.name,
           projectId,
-        }),
-        this.prepareProjectIndexParent(projectId, "Notes/pending.md"),
+        })),
+        this.trace("initial-plan", 0, () => this.prepareProjectIndexParent(projectId, "Notes/pending.md")),
       ])
       if (publication.status === "rejected") throw publication.reason
       const published = publication.value
@@ -251,13 +287,13 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       const reference = requireProjectFileReference(published.path)
       let proof: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> | undefined
       try {
-        proof = await this.publishTextProof({
+        proof = await this.trace("post-pi-proof", byteLength, () => this.publishTextProof({
           content: source.text,
           ...(initialPlan.value === undefined ? {} : { initialPlan: initialPlan.value }),
           mime: "text/markdown",
           path: reference.path,
           projectId,
-        })
+        }))
       } catch (error) {
         if (error instanceof CanvasResourcePartialFailureError) throw error
         throw new CanvasResourcePartialFailureError(error, [{ label: reference.path }])
@@ -424,14 +460,14 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     await this.ensureProjectIndexDirectories(projectId, input.path, plan)
-    const result = await this.indexFiles.publishFile({
+    const result = await this.trace("pi-submit", bytes.byteLength, () => this.indexFiles!.publishFile({
       projectId,
       path: input.path,
       exactBytes: bytes,
       mime: input.mime,
       contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
       provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
-    })
+    }))
     if (result.status !== "committed" || result.reference == null) {
       throw new Error("ProjectIndex did not publish the Canvas resource")
     }
