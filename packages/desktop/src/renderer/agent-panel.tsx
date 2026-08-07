@@ -368,6 +368,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
   const composerPickerRef = useRef<HTMLDivElement>(null)
+  const modelPickerAnchorRef = useRef<HTMLButtonElement>(null)
   const composerDraftRef = useRef(composerDraft)
   const composerQueryRangeRef = useRef<AgentComposerQueryRange | undefined>(undefined)
   const composerSelectionRef = useRef<Range | undefined>(undefined)
@@ -2216,6 +2217,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                 {generationModelPickerOpen ? (
                   <AgentGenerationModelPicker
                     activeTab={modelPickerTab}
+                    anchorElement={modelPickerAnchorRef.current}
                     description={
                       currentGenerationDescription?.status === "ready" ? currentGenerationDescription.value : undefined
                     }
@@ -2550,6 +2552,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           void loadLlmModels({ refreshShared: true })
                         }
                       }}
+                      ref={modelPickerAnchorRef}
                       type="button"
                     >
                       <Sparkles className="size-3.5 shrink-0" />
