@@ -7,3 +7,4 @@ packages/desktop/.packaging/
 *.log
 .DS_Store
 /.convax/
+.worktrees/
