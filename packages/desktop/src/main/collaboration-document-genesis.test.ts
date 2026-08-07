@@ -4,11 +4,10 @@ import os from "node:os"
 import path from "node:path"
 import {
   installCanvasGenesisProofCarrierVerifierFactory,
-  selectedCanvasDocumentOwnerArtifactDefinition,
+  createCanvasDocumentOwnerRuntime,
   type CanvasGenesisBuildAuthor,
 } from "@convax/canvas/collaboration"
 import {
-  createSelectedDocumentOwnerArtifactFactory,
   encodeBase64url,
   ordinarySha256,
   parseActorId,
@@ -60,9 +59,7 @@ const predecessor = Object.freeze({
 describe("Desktop wiring to the Project-owned document genesis barrier", () => {
   test("stages the exact current Canvas genesis candidate through the real Node sole-writer barrier", async () => {
     const authority = await loadHistoricalTestAuthority()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
-    if ("status" in runtimeResult) throw new Error(runtimeResult.code)
+    const runtimeResult = createCanvasDocumentOwnerRuntime(authority)
     const author = canvasGenesisAuthor(authority)
     const factory = installCanvasGenesisProofCarrierVerifierFactory({
       authority,

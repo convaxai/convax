@@ -17,7 +17,7 @@ import {
 } from "@convax/canvas/collaboration"
 import {
   projectIndexResourceReferenceDigest,
-  type ProjectIndexCurrentBlobReferencePort,
+  type ProjectIndexCurrentResourceReferenceQueryPort,
 } from "@convax/project"
 import { parseProjectUri } from "@convax/uri"
 
@@ -115,18 +115,17 @@ export function createRouteScopedCanvasFactResolver(input: {
 
 /** Current Canvas resource facts resolve only from ProjectIndex's live owner projection. */
 export function createProjectIndexBackedCanvasExternalFactAuthority(input: {
-  readonly currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
+  readonly currentResources: Pick<ProjectIndexCurrentResourceReferenceQueryPort, "queryCurrentResourceReferences">
 }): CanvasRouteExternalFactAuthority {
   return Object.freeze({
     async verify(request: Parameters<CanvasRouteExternalFactAuthority["verify"]>[0]) {
       request.signal?.throwIfAborted()
       if (request.request.kind !== "current-resources") return "pending"
-      const current = await input.currentResources.queryCurrentResources({
+      const current = await input.currentResources.queryCurrentResourceReferences({
         projectId: request.scope.projectId,
       })
       request.signal?.throwIfAborted()
-      return request.request.proofs.every((proof) => current.some((entry) => {
-        const reference = entry.reference
+      return request.request.proofs.every((proof) => current.some((reference) => {
         const digest = projectIndexResourceReferenceDigest(reference)
         return proof.ownerProofDigest === digest &&
           proof.resource.ownerProofDigest === digest &&

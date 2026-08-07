@@ -1,6 +1,5 @@
 import path from "node:path"
 import {
-  createSelectedDocumentOwnerArtifactFactory,
   encodeRestrictedJcs,
   parseDigest,
   parseProjectId,
@@ -13,6 +12,7 @@ import {
   type DocumentScope,
   type Id128,
   type IncomingOwnerFactResolverPort,
+  type ProjectId,
   type CurrentProtocolAuthority,
   type YjsDocumentFactory,
 } from "@convax/collaboration"
@@ -27,8 +27,9 @@ import {
 } from "@convax/project/canvas"
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
-  selectedProjectIndexDocumentOwnerArtifactDefinition,
+  createProjectIndexDocumentOwnerRuntime,
   type ProjectIndexCurrentBlobReferencePort,
+  type ProjectIndexCurrentResourceReferenceQueryPort,
 } from "@convax/project"
 import type {
   NodeProjectCollaborationRuntimeCoordinator,
@@ -312,7 +313,9 @@ interface OpenProjectIndexEntry {
   readonly project: ProjectCollaborationRuntimeLease
   readonly runtime: MainCollaborationProductionRuntime<"project-index">
   readonly session: MainCollaborationDocumentSession<"project-index">
-  readonly application: ProjectIndexCanvasApplicationPort & ProjectIndexCurrentBlobReferencePort
+  readonly application: ProjectIndexCanvasApplicationPort &
+    ProjectIndexCurrentBlobReferencePort &
+    ProjectIndexCurrentResourceReferenceQueryPort
   readonly fileApplication: ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
   readonly disposeFileMaterialization: () => void
 }
@@ -374,6 +377,11 @@ export class MainProjectIndexRuntimeRegistry
   ) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResources({ projectId })
+  }
+
+  async queryCurrentResourceReferences(input: { readonly projectId: ProjectId }) {
+    const projectId = parseProjectId(input.projectId)
+    return (await this.open(projectId)).application.queryCurrentResourceReferences({ projectId })
   }
 
   async createDirectory(input: Parameters<ProjectIndexFileApplicationPort["createDirectory"]>[0]) {
@@ -492,7 +500,12 @@ export class MainProjectIndexRuntimeRegistry
         signatureVerifier: this.options.signatureVerifier,
         createOperationId: this.options.createOperationId,
         diagnostics: createMainCollaborationLatencyDiagnosticsPort({
-          sample: () => runtime!.persistence.sampleLatencyDiagnostics(registeredScope),
+          recordAll: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1",
+          // Record-all is a benchmark mode. Avoid letting an O(outbox) sampler
+          // contend with the following root and perturb the latency distribution.
+          sample: process.env.CONVAX_COLLABORATION_LATENCY_RECORD_ALL === "1"
+            ? () => ({})
+            : () => runtime!.persistence.sampleLatencyDiagnostics(registeredScope),
         }),
       })
       const application = new ProjectIndexCanvasApplication({
@@ -502,13 +515,30 @@ export class MainProjectIndexRuntimeRegistry
         createOperationId: this.options.createOperationId,
         createShardEpoch: this.options.createShardEpoch,
       })
+      const traceBlobPublication = async <T>(byteLength: number, operation: () => Promise<T>): Promise<T> => {
+        if (process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL !== "1") return operation()
+        const startedAt = performance.now()
+        try {
+          return await operation()
+        } finally {
+          try {
+            console.warn("[convax:canvas-resource-latency]", JSON.stringify({
+              byteLength,
+              callCount: 1,
+              durationMs: performance.now() - startedAt,
+              stage: "blob-publication",
+            }))
+          } catch { /* Benchmark diagnostics never affect blob publication. */ }
+        }
+      }
       const fileApplication = new ProjectIndexFileApplication({
         session,
         facts: descriptor.facts,
         blobs: {
           admitManaged: ({ reference, admission }) =>
             blobs.admitVerifiedStream(reference, admission).then(() => undefined),
-          publish: ({ reference, exactBytes }) => blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined),
+          publish: ({ reference, exactBytes }) => traceBlobPublication(exactBytes.byteLength, () =>
+            blobs.admitVerifiedBytes(reference, exactBytes).then(() => undefined)),
         },
         createOperationId: this.options.createOperationId,
       })
@@ -598,9 +628,5 @@ export async function queryMainProjectIndexCurrentBlobDigests(
 export function createMainProjectIndexOwnerRuntime(
   authority: CurrentProtocolAuthority,
 ): DocumentOwnerRuntime<"project-index"> {
-  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "project-index").createRuntime(
-    selectedProjectIndexDocumentOwnerArtifactDefinition,
-  )
-  if ("status" in selected) throw new Error(`ProjectIndex owner runtime is ${selected.code}`)
-  return selected
+  return createProjectIndexDocumentOwnerRuntime(authority)
 }

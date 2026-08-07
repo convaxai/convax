@@ -168,9 +168,10 @@ function semanticRootSession() {
       project({ value: snapshot } as OwnerValidatedState<"canvas">),
     submit: async (input) => {
       const operationId = input.operationId!
+      const actorId = parseActorId(encodeBase64url(new Uint8Array(32).fill(5)))
       const receipt: BoundedOperationReceipt = Object.freeze({
         format: "convax.canvas-operation-receipt",
-        actorId: parseActorId(encodeBase64url(new Uint8Array(32).fill(5))),
+        actorId,
         operationId,
         intentKind: "canvas.agent.create",
         intentDigest: parseDigest("4".repeat(64)),
@@ -179,10 +180,10 @@ function semanticRootSession() {
         semanticRoot: true,
         historyMaterialDigest: parseDigest("6".repeat(64)),
       })
-      snapshot = Object.freeze({ ...snapshot, operations: new Map([[`operation/${operationId}`, receipt]]) })
+      snapshot = Object.freeze({ ...snapshot, operations: new Map([[`operation/${actorId}/${operationId}`, receipt]]) })
       return {
         status: "saved-locally",
-        frame: { frameDigest: parseDigest("7".repeat(64)), header: { core: { operationId } } },
+        frame: { frameDigest: parseDigest("7".repeat(64)), header: { core: { actorId, operationId } } },
       } as never
     },
     flush: async () => undefined,

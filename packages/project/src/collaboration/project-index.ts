@@ -10,6 +10,7 @@ import {
   compareUtf8,
   decodeRestrictedJcs,
   encodeRestrictedJcs,
+  createSelectedDocumentOwnerArtifactFactory,
   ordinarySha256,
   ownerCanonicalizerDescriptorDigest,
   parseActorId,
@@ -25,13 +26,17 @@ import {
   parseUint32,
   parseUint64,
   structuredDigest,
+  canonicalStateDigest,
   type ActualWriteEvidence,
   type ActorId,
   type CanvasId,
   type Digest,
   type DecodedCausalEditFrame,
   type DocumentOwnerProtocolDefinition,
+  type DocumentOwnerRuntime,
   type DocumentScope,
+  type CurrentProtocolAuthority,
+  type CanonicalJcsEvidence,
   type Id128,
   type OwnerApplyResult,
   type OwnerCanonicalizerDescriptor,
@@ -478,6 +483,83 @@ export interface ProjectIndexSnapshot {
   readonly operations: ReadonlyMap<string, ProjectOperationReceipt>
 }
 
+class ProjectIndexReadonlyMapView<K, V> implements ReadonlyMap<K, V> {
+  readonly #map: Map<K, V>
+
+  constructor(source: ReadonlyMap<K, V>) {
+    this.#map = source instanceof Map ? source : new Map(source)
+    Object.freeze(this)
+  }
+
+  get size(): number { return this.#map.size }
+  has(key: K): boolean { return this.#map.has(key) }
+  get(key: K): V | undefined { return this.#map.get(key) }
+  entries(): MapIterator<[K, V]> { return this.#map.entries() }
+  keys(): MapIterator<K> { return this.#map.keys() }
+  values(): MapIterator<V> { return this.#map.values() }
+  forEach(callbackfn: (value: V, key: K, map: ReadonlyMap<K, V>) => void, thisArg?: unknown): void {
+    this.#map.forEach((value, key) => callbackfn.call(thisArg, value, key, this))
+  }
+  [Symbol.iterator](): MapIterator<[K, V]> { return this.#map[Symbol.iterator]() }
+}
+
+function readonlyProjectIndexMap<K, V>(source: ReadonlyMap<K, V>): ReadonlyMap<K, V> {
+  return source instanceof ProjectIndexReadonlyMapView ? source : new ProjectIndexReadonlyMapView(source)
+}
+
+interface ProjectIndexValidatedViewCacheEntry {
+  readonly root: object
+  readonly snapshot: ProjectIndexSnapshot
+  readonly canonicalStateBytes: Uint8Array | null
+  readonly canonicalStateDigest: Digest | null
+  readonly certifiedDurableHeadDigest: Digest | null
+}
+
+interface ProjectIndexCanonicalFragments {
+  readonly values: ReadonlyMap<keyof ProjectCanonicalState, Uint8Array>
+  readonly collections: ReadonlyMap<ProjectCanonicalCollectionKey, readonly ProjectCanonicalPair[]>
+  readonly bytes: Uint8Array | null
+  readonly digest: Digest | null
+  readonly evidence: CanonicalJcsEvidence | null
+  readonly evidenceValues: ReadonlyMap<keyof ProjectCanonicalState, CanonicalJcsEvidence>
+  readonly certifiedDurableHeadDigest: Digest | null
+}
+
+type ProjectCanonicalCollectionKey = Exclude<keyof ProjectCanonicalState, "format" | "identity">
+interface ProjectCanonicalPair { readonly key: string; readonly value: unknown; readonly bytes: Uint8Array; readonly evidence: CanonicalJcsEvidence | null }
+
+const projectIndexCanonicalFragments = new WeakMap<ProjectIndexSnapshot, ProjectIndexCanonicalFragments>()
+
+interface ProjectIndexValidatedViewTracker {
+  transactionDepth: number
+  completedTransactions: number
+  transactionBoundaryRequired: boolean
+  cache: ProjectIndexValidatedViewCacheEntry | null
+  capture: ProjectIndexCreateTransactionCapture | null
+}
+
+interface ProjectIndexCreateTransactionCapture {
+  readonly base: ProjectIndexSnapshot
+  readonly context: OwnerIntentValidationContext
+  readonly generation: number
+  readonly root: Y.Map<unknown>
+  readonly childMaps: ReadonlyMap<string, Y.Map<unknown>>
+  readonly baseCanonicalFragments: ProjectIndexCanonicalFragments | null
+  transaction: Y.Transaction | null
+  seal: ProjectIndexCreateTransactionSeal | null
+  invalid: boolean
+}
+
+interface ProjectIndexCreateTransactionSeal {
+  readonly generation: number
+  readonly changed: ReadonlyMap<string, readonly string[]>
+  readonly deleteSetEmpty: boolean
+}
+
+// Owner-runtime-only, process-local and rebuildable. Y.Doc state remains the sole
+// authority; public validators deliberately bypass this projection.
+const projectIndexValidatedViewTrackers = new WeakMap<Y.Doc, ProjectIndexValidatedViewTracker>()
+
 export interface ProjectIndexApplyResult {
   readonly format: "convax.project-index-intent-result"
   readonly intentDigest: Digest
@@ -541,6 +623,257 @@ export function cloneProjectIndexYDoc(document: Y.Doc): Y.Doc {
   return clone
 }
 
+function ensureProjectIndexValidatedViewTracker(
+  document: Y.Doc,
+  transactionBoundaryRequired = false,
+): ProjectIndexValidatedViewTracker {
+  const existing = projectIndexValidatedViewTrackers.get(document)
+  if (existing) {
+    if (transactionBoundaryRequired && existing.cache === null) existing.transactionBoundaryRequired = true
+    return existing
+  }
+  const tracker: ProjectIndexValidatedViewTracker = {
+    transactionDepth: 0,
+    completedTransactions: 0,
+    transactionBoundaryRequired,
+    cache: null,
+    capture: null,
+  }
+  projectIndexValidatedViewTrackers.set(document, tracker)
+  document.on("beforeTransaction", (transaction) => {
+    const capture = tracker.capture
+    if (capture !== null && capture.seal === null) {
+      if (tracker.transactionDepth !== 0 || tracker.completedTransactions !== capture.generation || capture.transaction !== null) {
+        capture.invalid = true
+      } else {
+        capture.transaction = transaction
+      }
+    }
+    tracker.transactionDepth += 1
+    tracker.cache = null
+  })
+  document.on("afterTransaction", (transaction) => {
+    const capture = tracker.capture
+    if (capture !== null && capture.seal === null) {
+      const changed = new Map<string, readonly string[]>()
+      let invalid = capture.invalid || tracker.transactionDepth !== 1 || capture.transaction !== transaction
+      for (const [type, keys] of transaction.changed) {
+        const rootName = [...capture.childMaps].find(([, map]) => (map as object) === (type as object))?.[0]
+        if (rootName === undefined || [...keys].some((key) => key === null)) {
+          invalid = true
+          continue
+        }
+        changed.set(rootName, Object.freeze([...keys as Set<string>].sort(compareUtf8)))
+      }
+      capture.invalid = invalid
+      capture.seal = Object.freeze({
+        generation: tracker.completedTransactions + 1,
+        changed: readonlyProjectIndexMap(changed),
+        deleteSetEmpty: transaction.deleteSet.clients.size === 0,
+      })
+    }
+    tracker.transactionDepth -= 1
+    if (tracker.transactionDepth < 0) tracker.transactionDepth = 0
+    tracker.completedTransactions += 1
+    // The tracker may have been installed after an outer transaction started,
+    // so beforeTransaction was not necessarily observed. Always discard any
+    // view captured from that transaction before it can cross phases.
+    tracker.cache = null
+  })
+  document.on("destroy", () => {
+    tracker.cache = null
+    tracker.capture = null
+    projectIndexValidatedViewTrackers.delete(document)
+  })
+  return tracker
+}
+
+function armProjectIndexCreateTransactionCapture(input: Readonly<{
+  readonly base: OwnerValidatedState<"project-index">
+  readonly candidate: Y.Doc
+  readonly context: OwnerIntentValidationContext
+  readonly baseCanonicalProof?: Readonly<{ readonly canonicalStateDigest: Digest; readonly durableHeadDigest: Digest }>
+}>): void {
+  const base = projectIndexSnapshotFromValidatedOwnerState(input.base)
+  if (base === null) throw new TypeError("ProjectIndex candidate capture requires a validated base")
+  if (input.candidate._transaction !== null) throw new TypeError("ProjectIndex candidate capture must arm before a transaction")
+  assertProjectIndexOwnerCandidateStructure(input.candidate, input.context, base)
+  const tracker = ensureProjectIndexValidatedViewTracker(input.candidate, true)
+  if (tracker.transactionDepth !== 0) throw new TypeError("ProjectIndex candidate capture must arm before a transaction")
+  const root = getRoot(input.candidate)
+  const childMaps = new Map<string, Y.Map<unknown>>()
+  for (const key of PROJECT_INDEX_ROOT_KEYS) childMaps.set(key, childMap(root, key))
+  const fragments = projectIndexCanonicalFragments.get(base) ?? null
+  const baseCanonicalFragments = fragments !== null
+    && input.baseCanonicalProof !== undefined
+    && fragments.digest === input.baseCanonicalProof.canonicalStateDigest
+    && fragments.certifiedDurableHeadDigest === input.baseCanonicalProof.durableHeadDigest
+    && (fragments.evidence !== null || fragments.bytes !== null)
+    ? fragments
+    : null
+  tracker.capture = {
+    base,
+    context: input.context,
+    generation: tracker.completedTransactions,
+    root,
+    childMaps: readonlyProjectIndexMap(childMaps),
+    baseCanonicalFragments,
+    transaction: null,
+    seal: null,
+    invalid: false,
+  }
+}
+
+function currentProjectIndexRootIdentity(document: Y.Doc): object | null {
+  const names = [...document.share.keys()]
+  if (names.length !== 1 || names[0] !== PROJECT_INDEX_ROOT_NAME) return null
+  return document.share.get(PROJECT_INDEX_ROOT_NAME) ?? null
+}
+
+function cachedProjectIndexValidatedView(document: Y.Doc): ProjectIndexValidatedViewCacheEntry | null {
+  const tracker = ensureProjectIndexValidatedViewTracker(document)
+  const cached = tracker.cache
+  if (
+    tracker.transactionDepth !== 0
+    || cached === null
+    || (tracker.transactionBoundaryRequired && tracker.completedTransactions === 0)
+    || currentProjectIndexRootIdentity(document) !== cached.root
+  ) return null
+  return cached
+}
+
+function cacheProjectIndexValidatedView(
+  document: Y.Doc,
+  snapshot: ProjectIndexSnapshot,
+  canonicalStateBytes: Uint8Array | null,
+  canonicalDigest: Digest | null = null,
+  certifiedDurableHeadDigest: Digest | null = null,
+): void {
+  const tracker = ensureProjectIndexValidatedViewTracker(document)
+  const root = currentProjectIndexRootIdentity(document)
+  if (
+    tracker.transactionDepth !== 0
+    || (tracker.transactionBoundaryRequired && tracker.completedTransactions === 0)
+    || root === null
+  ) return
+  tracker.cache = Object.freeze({ root, snapshot, canonicalStateBytes, canonicalStateDigest: canonicalDigest, certifiedDurableHeadDigest })
+}
+
+function cacheProjectIndexValidatedPostView(document: Y.Doc, snapshot: ProjectIndexSnapshot): void {
+  const tracker = projectIndexValidatedViewTrackers.get(document)
+  // applyProjectIndexCandidateIntent installs the tracker before its transaction.
+  // If it was first called from an already-open outer transaction, no public
+  // before/after pair was observed and this post-state must not cross phases.
+  if (!tracker || tracker.completedTransactions === 0) return
+  const fragments = projectIndexCanonicalFragments.get(snapshot)
+  cacheProjectIndexValidatedView(document, snapshot, fragments?.bytes?.slice() ?? null, fragments?.digest ?? null)
+}
+
+function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false
+  for (let index = 0; index < left.byteLength; index += 1) if (left[index] !== right[index]) return false
+  return true
+}
+
+function installProjectIndexValidatedPostCache(input: Readonly<{
+  readonly scope: DocumentScope
+  readonly source: Y.Doc
+  readonly target: Y.Doc
+  readonly state: OwnerValidatedState<"project-index">
+  readonly canonicalStateDigest: Digest
+  readonly durableHeadDigest: Digest
+}>): void {
+  if (input.scope.docKind !== "project-index" || input.scope.docId !== "project-index") return
+  const source = cachedProjectIndexValidatedView(input.source)
+  if (source === null || source.snapshot !== input.state.value) return
+  if (
+    source.snapshot.identity.projectId !== input.scope.projectId
+    || source.snapshot.identity.projectEpoch !== input.scope.projectEpoch
+    || source.snapshot.identity.shardEpoch !== input.scope.shardEpoch
+  ) return
+  const sourceRoot = currentProjectIndexRootIdentity(input.source)
+  const targetRoot = currentProjectIndexRootIdentity(input.target)
+  if (!(sourceRoot instanceof Y.Map) || !(targetRoot instanceof Y.Map)) return
+  if (!sameBytes(Y.encodeStateVector(input.source), Y.encodeStateVector(input.target))) return
+  const sourceKeys = [...sourceRoot.keys()]
+  const targetKeys = [...targetRoot.keys()]
+  if (
+    sourceKeys.length !== PROJECT_INDEX_ROOT_KEYS.length
+    || targetKeys.length !== PROJECT_INDEX_ROOT_KEYS.length
+    || PROJECT_INDEX_ROOT_KEYS.some((key, index) => sourceKeys[index] !== key || targetKeys[index] !== key)
+  ) return
+  const fragments = projectIndexCanonicalFragments.get(source.snapshot)
+  if (fragments === undefined) return
+  if (fragments.evidence !== null) {
+    const certified = Object.freeze({ ...fragments, digest: input.canonicalStateDigest, certifiedDurableHeadDigest: input.durableHeadDigest })
+    projectIndexCanonicalFragments.set(source.snapshot, certified)
+    cacheProjectIndexValidatedView(input.target, source.snapshot, null, input.canonicalStateDigest, input.durableHeadDigest)
+    return
+  }
+  if (source.canonicalStateBytes === null || fragments.bytes === null || fragments.digest === null) return
+  const bytesDigest = canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, source.canonicalStateBytes)
+  if (
+    bytesDigest !== input.canonicalStateDigest
+    || source.canonicalStateDigest !== bytesDigest
+    || fragments.digest !== bytesDigest
+    || !sameBytes(fragments.bytes, source.canonicalStateBytes)
+  ) return
+  projectIndexCanonicalFragments.set(source.snapshot, Object.freeze({ ...fragments, certifiedDurableHeadDigest: input.durableHeadDigest }))
+  cacheProjectIndexValidatedView(input.target, source.snapshot, source.canonicalStateBytes.slice(), bytesDigest, input.durableHeadDigest)
+}
+
+function readProjectIndexCertifiedCanonicalDigest(input: Readonly<{
+  readonly scope: DocumentScope
+  readonly document: Y.Doc
+  readonly durableHeadDigest: Digest
+  readonly expectedCanonicalStateDigest: Digest
+}>): Digest | null {
+  const cached = cachedProjectIndexValidatedView(input.document)
+  if (!cached || cached.certifiedDurableHeadDigest !== input.durableHeadDigest) return null
+  if (input.scope.docKind !== "project-index" || input.scope.docId !== "project-index") return null
+  const identity = cached.snapshot.identity
+  if (identity.projectId !== input.scope.projectId || identity.projectEpoch !== input.scope.projectEpoch || identity.shardEpoch !== input.scope.shardEpoch) return null
+  const fragments = projectIndexCanonicalFragments.get(cached.snapshot)
+  if (!fragments || fragments.certifiedDurableHeadDigest !== input.durableHeadDigest) return null
+  if (fragments.evidence === null && cached.canonicalStateBytes === null) return null
+  return fragments.digest !== null
+    && fragments.digest === cached.canonicalStateDigest
+    && fragments.digest === input.expectedCanonicalStateDigest
+    ? fragments.digest
+    : null
+}
+
+function validateProjectIndexOwnerView(document: Y.Doc): ProjectIndexSnapshot {
+  const cached = cachedProjectIndexValidatedView(document)
+  if (cached !== null) return cached.snapshot
+  const snapshot = validateProjectIndexYDoc(document)
+  cacheProjectIndexValidatedView(document, snapshot, null)
+  return snapshot
+}
+
+function encodeProjectCanonicalOwnerView(document: Y.Doc): Uint8Array {
+  const cached = cachedProjectIndexValidatedView(document)
+  if (cached?.canonicalStateBytes !== null && cached?.canonicalStateBytes !== undefined) {
+    return cached.canonicalStateBytes.slice()
+  }
+  const snapshot = cached?.snapshot ?? validateProjectIndexYDoc(document)
+  const fragments = projectIndexCanonicalFragments.get(snapshot) ?? createProjectIndexCanonicalFragments(snapshot)
+  const complete = fragments.bytes === null || fragments.digest === null
+    ? createProjectIndexCanonicalFragments(snapshot)
+    : fragments
+  const retainedEvidence = fragments.evidence === null ? complete : Object.freeze({
+    ...complete,
+    evidence: fragments.evidence,
+    evidenceValues: fragments.evidenceValues,
+    collections: fragments.collections,
+  })
+  const bytes = retainedEvidence.bytes!
+  const digest = retainedEvidence.digest!
+  projectIndexCanonicalFragments.set(snapshot, retainedEvidence)
+  cacheProjectIndexValidatedView(document, snapshot, bytes.slice(), digest)
+  return bytes
+}
+
 export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexScope): ProjectIndexSnapshot {
   const names = [...document.share.keys()]
   if (names.length !== 1 || names[0] !== PROJECT_INDEX_ROOT_NAME) fail("unknown-root", "ProjectIndex must contain exactly convax.project-index.v2")
@@ -567,11 +900,24 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
     fail("invalid-root-entry", "Project root cannot have location or tombstone facts")
   }
   validateRelations({ identity, entries, entryLocations, entryTombstones, contentFamilies, contentConflictCopies, pathReservations, canvasRoutes, operations })
-  return Object.freeze({ identity, entries, entryLocations, entryTombstones, contentFamilies, contentConflictCopies, pathReservations, canvasRoutes, operations })
+  return Object.freeze({
+    identity,
+    entries: readonlyProjectIndexMap(entries),
+    entryLocations: readonlyProjectIndexMap(entryLocations),
+    entryTombstones: readonlyProjectIndexMap(entryTombstones),
+    contentFamilies: readonlyProjectIndexMap(contentFamilies),
+    contentConflictCopies: readonlyProjectIndexMap(contentConflictCopies),
+    pathReservations: readonlyProjectIndexMap(pathReservations),
+    canvasRoutes: readonlyProjectIndexMap(canvasRoutes),
+    operations: readonlyProjectIndexMap(operations),
+  })
 }
 
 export function extractProjectCanonicalState(document: Y.Doc): ProjectCanonicalState {
-  const snapshot = validateProjectIndexYDoc(document)
+  return extractProjectCanonicalStateFromSnapshot(validateProjectIndexYDoc(document))
+}
+
+function extractProjectCanonicalStateFromSnapshot(snapshot: ProjectIndexSnapshot): ProjectCanonicalState {
   return Object.freeze({
     format: "convax.project-index-canonical-state",
     identity: Object.freeze([["project", snapshot.identity] as const]),
@@ -584,6 +930,158 @@ export function extractProjectCanonicalState(document: Y.Doc): ProjectCanonicalS
     canvasRoutes: canonicalEntries(snapshot.canvasRoutes),
     operations: canonicalEntries(snapshot.operations),
   })
+}
+
+const PROJECT_CANONICAL_STATE_KEYS = Object.freeze([
+  "canvasRoutes", "contentConflictCopies", "contentFamilies", "entries", "entryLocations",
+  "entryTombstones", "format", "identity", "operations", "pathReservations",
+] as const satisfies readonly (keyof ProjectCanonicalState)[])
+
+function assembleProjectCanonicalFragments(values: ReadonlyMap<keyof ProjectCanonicalState, Uint8Array>): Uint8Array {
+  const parts: Uint8Array[] = [encoder.encode("{")]
+  PROJECT_CANONICAL_STATE_KEYS.forEach((key, index) => {
+    const value = values.get(key)
+    if (value === undefined) throw new TypeError(`Missing ProjectIndex canonical fragment: ${key}`)
+    if (index !== 0) parts.push(encoder.encode(","))
+    parts.push(encodeRestrictedJcs(key), encoder.encode(":"), value)
+  })
+  parts.push(encoder.encode("}"))
+  const length = parts.reduce((total, part) => total + part.byteLength, 0)
+  const result = new Uint8Array(length)
+  let offset = 0
+  for (const part of parts) {
+    result.set(part, offset)
+    offset += part.byteLength
+  }
+  return result
+}
+
+function createProjectIndexCanonicalFragments(
+  snapshot: ProjectIndexSnapshot,
+  base?: ProjectIndexCanonicalFragments,
+  changedRoots?: ReadonlySet<string>,
+  insertedByRoot?: ReadonlyMap<string, ReadonlyMap<string, object>>,
+  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
+  flatten = true,
+): ProjectIndexCanonicalFragments {
+  const values = new Map<keyof ProjectCanonicalState, Uint8Array>()
+  const collections = new Map<ProjectCanonicalCollectionKey, readonly ProjectCanonicalPair[]>()
+  const evidenceValues = new Map<keyof ProjectCanonicalState, CanonicalJcsEvidence>()
+  for (const key of PROJECT_CANONICAL_STATE_KEYS) {
+    const unchanged = base !== undefined && changedRoots !== undefined && !changedRoots.has(key)
+    if (unchanged) {
+      const retained = base.values.get(key)
+      if (flatten && retained !== undefined) values.set(key, retained.slice())
+      const retainedEvidence = base?.evidenceValues.get(key)
+      if (retainedEvidence !== undefined) evidenceValues.set(key, retainedEvidence)
+      if (isProjectCanonicalCollectionKey(key)) {
+        const retainedCollection = base?.collections.get(key)
+        if (retainedCollection === undefined) throw new TypeError(`Missing ProjectIndex canonical collection index: ${key}`)
+        collections.set(key, retainedCollection)
+      }
+      continue
+    }
+    if (isProjectCanonicalCollectionKey(key)) {
+      const basePairs = base?.collections.get(key)
+      const inserted = insertedByRoot?.get(key)
+      const pairs = basePairs !== undefined && inserted !== undefined
+        ? insertProjectCanonicalPairs(basePairs, inserted, issuer)
+        : createProjectCanonicalPairs(projectCanonicalCollection(snapshot, key), issuer)
+      collections.set(key, pairs)
+      if (flatten) values.set(key, encodeProjectCanonicalPairs(pairs))
+      if (issuer) evidenceValues.set(key, issuer.composeArray(pairs.map((pair) => pair.evidence ?? issuer.encodeEvidence([pair.key, pair.value]))))
+    } else {
+      const value = projectCanonicalFragmentValue(snapshot, key)
+      if (flatten) values.set(key, encodeRestrictedJcs(value))
+      if (issuer) evidenceValues.set(key, issuer.encodeEvidence(value))
+    }
+  }
+  const readonlyValues = readonlyProjectIndexMap(values)
+  const bytes = flatten ? assembleProjectCanonicalFragments(readonlyValues) : null
+  let evidence: CanonicalJcsEvidence | null = null
+  if (issuer && evidenceValues.size === PROJECT_CANONICAL_STATE_KEYS.length) {
+    try { evidence = issuer.composeObject(PROJECT_CANONICAL_STATE_KEYS.map((key) => [key, evidenceValues.get(key)!] as const)) } catch {}
+  }
+  return Object.freeze({
+    values: readonlyValues,
+    collections: readonlyProjectIndexMap(collections),
+    bytes,
+    digest: bytes === null ? null : canonicalStateDigest(PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST, bytes),
+    evidence,
+    evidenceValues: readonlyProjectIndexMap(evidenceValues),
+    certifiedDurableHeadDigest: null,
+  })
+}
+
+function isProjectCanonicalCollectionKey(key: keyof ProjectCanonicalState): key is ProjectCanonicalCollectionKey {
+  return key !== "format" && key !== "identity"
+}
+
+function projectCanonicalCollection(snapshot: ProjectIndexSnapshot, key: ProjectCanonicalCollectionKey): ReadonlyMap<string, unknown> {
+  return snapshot[key] as ReadonlyMap<string, unknown>
+}
+
+function createProjectCanonicalPairs(
+  collection: ReadonlyMap<string, unknown>,
+  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
+): readonly ProjectCanonicalPair[] {
+  return Object.freeze([...collection.entries()]
+    .sort(([left], [right]) => compareUtf8(left, right))
+    .map(([key, value]) => {
+      const pair = Object.freeze([key, value])
+      return Object.freeze({ key, value, bytes: encodeRestrictedJcs(pair), evidence: issuer?.encodeEvidence(pair) ?? null })
+    }))
+}
+
+function insertProjectCanonicalPairs(
+  base: readonly ProjectCanonicalPair[],
+  inserted: ReadonlyMap<string, object>,
+  issuer?: OwnerProcessValueFactory<"project-index">["canonicalJcs"],
+): readonly ProjectCanonicalPair[] {
+  const pairs = [...base]
+  for (const [key, value] of inserted) {
+    let low = 0
+    let high = pairs.length
+    while (low < high) {
+      const middle = (low + high) >>> 1
+      const order = compareUtf8(pairs[middle]!.key, key)
+      if (order < 0) low = middle + 1
+      else high = middle
+    }
+    if (pairs[low]?.key === key) throw new TypeError(`Duplicate ProjectIndex canonical pair: ${key}`)
+    const pair = Object.freeze([key, value])
+    pairs.splice(low, 0, Object.freeze({ key, value, bytes: encodeRestrictedJcs(pair), evidence: issuer?.encodeEvidence(pair) ?? null }))
+  }
+  return Object.freeze(pairs)
+}
+
+function encodeProjectCanonicalPairs(pairs: readonly ProjectCanonicalPair[]): Uint8Array {
+  const parts: Uint8Array[] = [encoder.encode("[")]
+  pairs.forEach((pair, index) => {
+    if (index !== 0) parts.push(encoder.encode(","))
+    parts.push(pair.bytes)
+  })
+  parts.push(encoder.encode("]"))
+  const length = parts.reduce((total, part) => total + part.byteLength, 0)
+  const bytes = new Uint8Array(length)
+  let offset = 0
+  for (const part of parts) { bytes.set(part, offset); offset += part.byteLength }
+  return bytes
+}
+
+function projectCanonicalFragmentValue(snapshot: ProjectIndexSnapshot, key: keyof ProjectCanonicalState): ProjectCanonicalState[keyof ProjectCanonicalState] {
+  switch (key) {
+    case "format": return "convax.project-index-canonical-state"
+    case "identity": return Object.freeze([["project", snapshot.identity] as const])
+    case "entries": return canonicalEntries(snapshot.entries)
+    case "entryLocations": return canonicalEntries(snapshot.entryLocations)
+    case "entryTombstones": return canonicalEntries(snapshot.entryTombstones)
+    case "contentFamilies": return canonicalEntries(snapshot.contentFamilies)
+    case "contentConflictCopies": return canonicalEntries(snapshot.contentConflictCopies)
+    case "pathReservations": return canonicalEntries(snapshot.pathReservations)
+    case "canvasRoutes": return canonicalEntries(snapshot.canvasRoutes)
+    case "operations": return canonicalEntries(snapshot.operations)
+  }
 }
 
 export function encodeProjectCanonicalState(document: Y.Doc): Uint8Array {
@@ -1070,7 +1568,7 @@ function snapshotWithoutRecord(
 ): ProjectIndexSnapshot {
   const replacement = new Map(snapshot[root] as ReadonlyMap<string, unknown>)
   replacement.delete(key)
-  return Object.freeze({ ...snapshot, [root]: replacement }) as ProjectIndexSnapshot
+  return Object.freeze({ ...snapshot, [root]: readonlyProjectIndexMap(replacement) }) as ProjectIndexSnapshot
 }
 
 export type ProjectDerivedIdentityKind = "file" | "directory" | "version" | "location" | "tombstone" | "conflictCopy" | "reservation" | "canvas" | "route-transition"
@@ -1114,9 +1612,9 @@ export function projectIndexSnapshotFromValidatedOwnerState(
   if (
     typeof value !== "object" ||
     value === null ||
-    !((value as { entries?: unknown }).entries instanceof Map) ||
-    !((value as { canvasRoutes?: unknown }).canvasRoutes instanceof Map) ||
-    !((value as { operations?: unknown }).operations instanceof Map)
+    !((value as { entries?: unknown }).entries instanceof ProjectIndexReadonlyMapView) ||
+    !((value as { canvasRoutes?: unknown }).canvasRoutes instanceof ProjectIndexReadonlyMapView) ||
+    !((value as { operations?: unknown }).operations instanceof ProjectIndexReadonlyMapView)
   ) {
     return null
   }
@@ -1601,51 +2099,280 @@ export function applyProjectIndexCandidateIntent(
   facts: ProjectIndexExternalFactContext,
 ): ProjectIndexApplyResult | "rejected" {
   try {
-    const intent = parseIntent(intentInput)
-    const snapshot = validateProjectIndexYDoc(document, parseProjectIndexScope(context.scope))
-    // Current frame authority is validated by the collaboration kernel; the
-    // owner still binds the exact ProjectIndex schema here.
-    if (context.ownerSchemaDigest !== snapshot.identity.schemaDigest) return "rejected"
-    // The durable receipt and actual-write evidence bind the current wire
-    // protocol's typed-intent digest. ProjectIndex's domain digest remains for
-    // dependency requests and deterministic construction only.
-    const intentDigest = parseDigest(context.intentDigest)
-    const operationKey = `o:${context.actorId}:${context.operationId}`
-    const existing = snapshot.operations.get(operationKey)
-    if (existing) return existing.intentDigest === intentDigest && existing.intentKind === intent.kind ? { format: "convax.project-index-intent-result", intentDigest, inserted: [] } : "rejected"
-    const inserted = recordsForIntent(snapshot, context, intent, facts)
-    if (inserted === "rejected") return "rejected"
-    const allocatedIds = [...new Set(inserted.flatMap((item) => allocatedRecordIds(item.record)))].sort(compareUtf8)
-    const ordinals = inserted.map((item) => parseUint32(recordStamp(item.record).writeOrdinal)).map(Number)
-    const receipt: ProjectOperationReceipt = {
-      format: "convax.project-operation-receipt",
-      actorId: context.actorId,
-      operationId: context.operationId,
-      intentKind: intent.kind,
-      intentDigest,
-      allocatedIds,
-      firstWriteOrdinal: String(Math.min(...ordinals)) as Uint32,
-      writeCount: String(inserted.length + 1) as Uint32,
-      stampLamport: context.lamport,
-    }
-    const all = [...inserted, { root: "operations" as const, key: operationKey, record: receipt }]
-    document.transact(() => {
-      const root = getRoot(document)
-      for (const item of all) putImmutableFact(childMap(root, item.root), item.key, item.record)
-    }, "project-index-intent-v2")
+    const result = reduceProjectIndexCandidateIntent(document, context, intentInput, facts)
+    if (result === "rejected") return "rejected"
+    // Keep this full post-mutation validation. Yjs state vectors advance for
+    // inserted structs but do not prove that deletes (including nested deletes)
+    // were absent, so comparing state vectors cannot safely replace validation.
     validateProjectIndexYDoc(document, parseProjectIndexScope(context.scope))
-    return Object.freeze({ format: "convax.project-index-intent-result", intentDigest, inserted: Object.freeze(all) })
+    return result
   } catch {
     return "rejected"
   }
 }
 
+// Package-private and deliberately bound only into the owner protocol below.
+// CollaborationKernel invokes validatePost synchronously and unconditionally
+// after a successful applyIntent, before evidence, delta encoding or durability.
+// Direct callers must use applyProjectIndexCandidateIntent, whose postcondition
+// includes an independent full schema validation.
+function applyProjectIndexOwnerProtocolIntent(
+  base: OwnerValidatedState<"project-index">,
+  document: Y.Doc,
+  context: OwnerIntentValidationContext,
+  intentInput: ProjectIndexIntent,
+  facts: ProjectIndexExternalFactContext,
+): ProjectIndexApplyResult | "rejected" {
+  try {
+    const snapshot = projectIndexSnapshotFromValidatedOwnerState(base)
+    if (snapshot === null) return "rejected"
+    assertProjectIndexOwnerCandidateStructure(document, context, snapshot)
+    return reduceProjectIndexCandidateIntentFromSnapshot(document, context, intentInput, facts, snapshot)
+  } catch {
+    return "rejected"
+  }
+}
+
+function assertProjectIndexOwnerCandidateStructure(
+  document: Y.Doc,
+  context: OwnerIntentValidationContext,
+  snapshot: ProjectIndexSnapshot,
+): void {
+  const scope = parseProjectIndexScope(context.scope)
+  const identity = snapshot.identity
+  if (
+    scope.projectId !== identity.projectId
+    || scope.projectEpoch !== identity.projectEpoch
+    || scope.shardEpoch !== identity.shardEpoch
+  ) fail("scope-mismatch", "ProjectIndex base identity differs from the outer scope")
+  const names = [...document.share.keys()]
+  if (names.length !== 1 || names[0] !== PROJECT_INDEX_ROOT_NAME) {
+    fail("unknown-root", "ProjectIndex candidate must contain exactly convax.project-index.v2")
+  }
+  const root = document.share.get(PROJECT_INDEX_ROOT_NAME)
+  if (!(root instanceof Y.Map)) fail("invalid-root", "ProjectIndex candidate root is not a Y.Map")
+  assertMapKeys(root, PROJECT_INDEX_ROOT_KEYS, "ProjectIndex candidate root")
+  for (const key of PROJECT_INDEX_ROOT_KEYS) childMap(root, key)
+  const identityMap = childMap(root, "identity")
+  if (identityMap.size !== 1 || !identityMap.has("project")) {
+    fail("invalid-identity", "ProjectIndex candidate identity must contain only project")
+  }
+  if (!encodeEqual(parseIdentity(identityMap.get("project")), identity)) {
+    fail("scope-mismatch", "ProjectIndex candidate identity differs from its validated base")
+  }
+}
+
+function reduceProjectIndexCandidateIntent(
+  document: Y.Doc,
+  context: OwnerIntentValidationContext,
+  intentInput: ProjectIndexIntent,
+  facts: ProjectIndexExternalFactContext,
+): ProjectIndexApplyResult | "rejected" {
+  ensureProjectIndexValidatedViewTracker(document, true)
+  const intent = parseIntent(intentInput)
+  const snapshot = validateProjectIndexYDoc(document, parseProjectIndexScope(context.scope))
+  return reduceProjectIndexCandidateIntentFromSnapshot(document, context, intent, facts, snapshot)
+}
+
+function reduceProjectIndexCandidateIntentFromSnapshot(
+  document: Y.Doc,
+  context: OwnerIntentValidationContext,
+  intentInput: ProjectIndexIntent,
+  facts: ProjectIndexExternalFactContext,
+  snapshot: ProjectIndexSnapshot,
+): ProjectIndexApplyResult | "rejected" {
+  ensureProjectIndexValidatedViewTracker(document, true)
+  const intent = parseIntent(intentInput)
+  // Current frame authority is validated by the collaboration kernel; the
+  // owner still binds the exact ProjectIndex schema here.
+  if (context.ownerSchemaDigest !== snapshot.identity.schemaDigest) return "rejected"
+  // The durable receipt and actual-write evidence bind the current wire
+  // protocol's typed-intent digest. ProjectIndex's domain digest remains for
+  // dependency requests and deterministic construction only.
+  const intentDigest = parseDigest(context.intentDigest)
+  const operationKey = `o:${context.actorId}:${context.operationId}`
+  const existing = snapshot.operations.get(operationKey)
+  if (existing) return existing.intentDigest === intentDigest && existing.intentKind === intent.kind ? { format: "convax.project-index-intent-result", intentDigest, inserted: [] } : "rejected"
+  const inserted = recordsForIntent(snapshot, context, intent, facts)
+  if (inserted === "rejected") return "rejected"
+  const allocatedIds = [...new Set(inserted.flatMap((item) => allocatedRecordIds(item.record)))].sort(compareUtf8)
+  const ordinals = inserted.map((item) => parseUint32(recordStamp(item.record).writeOrdinal)).map(Number)
+  const receipt: ProjectOperationReceipt = {
+    format: "convax.project-operation-receipt",
+    actorId: context.actorId,
+    operationId: context.operationId,
+    intentKind: intent.kind,
+    intentDigest,
+    allocatedIds,
+    firstWriteOrdinal: String(Math.min(...ordinals)) as Uint32,
+    writeCount: String(inserted.length + 1) as Uint32,
+    stampLamport: context.lamport,
+  }
+  const all = [...inserted, { root: "operations" as const, key: operationKey, record: receipt }]
+  document.transact(() => {
+    const root = getRoot(document)
+    for (const item of all) putImmutableFact(childMap(root, item.root), item.key, item.record)
+  }, "project-index-intent-v2")
+  return Object.freeze({ format: "convax.project-index-intent-result", intentDigest, inserted: Object.freeze(all) })
+}
+
+function tryValidateProjectIndexCreatePost(
+  document: Y.Doc,
+  baseState: OwnerValidatedState<"project-index">,
+  applyResult: ProjectIndexApplyResult,
+  processValues?: OwnerProcessValueFactory<"project-index">,
+): ProjectIndexSnapshot | null {
+  try {
+    if (applyResult.inserted.length === 0) return null
+    const tracker = projectIndexValidatedViewTrackers.get(document)
+    const capture = tracker?.capture
+    const base = projectIndexSnapshotFromValidatedOwnerState(baseState)
+    if (
+      !tracker || !capture || !base || capture.base !== base || capture.invalid || capture.transaction === null || capture.seal === null
+      || tracker.transactionDepth !== 0 || tracker.completedTransactions !== capture.seal.generation
+      || capture.generation + 1 !== capture.seal.generation || !capture.seal.deleteSetEmpty
+    ) return null
+    const root = currentProjectIndexRootIdentity(document)
+    if (!(root instanceof Y.Map) || root !== capture.root) return null
+    assertMapKeys(root, PROJECT_INDEX_ROOT_KEYS, "ProjectIndex post candidate root")
+    for (const key of PROJECT_INDEX_ROOT_KEYS) if (childMap(root, key) !== capture.childMaps.get(key)) return null
+
+    const byRoot = new Map<string, Map<string, object>>()
+    for (const item of applyResult.inserted) {
+      const items = byRoot.get(item.root) ?? new Map<string, object>()
+      if (items.has(item.key)) return null
+      items.set(item.key, item.record)
+      byRoot.set(item.root, items)
+    }
+    const operations = byRoot.get("operations")
+    if (operations?.size !== 1) return null
+    const [operationKey, resultReceipt] = [...operations][0]!
+    const receiptRaw = childMap(root, "operations").get(operationKey)
+    if (receiptRaw instanceof Y.AbstractType || !encodeEqual(receiptRaw, resultReceipt)) return null
+    const receipt = parseReceipt(receiptRaw)
+    if (receipt.intentKind !== "project.directory.create" && receipt.intentKind !== "project.file.create") return null
+
+    const expectedChanged = new Map<string, readonly string[]>()
+    for (const [rootName, items] of byRoot) expectedChanged.set(rootName, Object.freeze([...items.keys()].sort(compareUtf8)))
+    if (!mapOfStringArraysEqual(capture.seal.changed, expectedChanged)) return null
+    for (const [rootName, items] of byRoot) {
+      const baseMap = base[rootName as keyof ProjectIndexSnapshot]
+      if (!(baseMap instanceof ProjectIndexReadonlyMapView)) return null
+      for (const [key, record] of items) {
+        if ((baseMap as ReadonlyMap<string, unknown>).has(key)) return null
+        const raw = childMap(root, rootName as (typeof PROJECT_INDEX_ROOT_KEYS)[number]).get(key)
+        if (raw instanceof Y.AbstractType || !encodeEqual(raw, record)) return null
+      }
+    }
+
+    const entries = new Map(base.entries)
+    const entryLocations = new Map(base.entryLocations)
+    const contentFamilies = new Map(base.contentFamilies)
+    const operationMap = new Map(base.operations)
+    const entryItems = byRoot.get("entries")
+    const locationItems = byRoot.get("entryLocations")
+    const versionItems = byRoot.get("contentFamilies")
+    if (entryItems?.size !== 1) return null
+    const [entryKey] = [...entryItems][0]!
+    const entry = parseEntry(childMap(root, "entries").get(entryKey))
+    if (entry.entryId !== entryKey || !recordMatchesContext(entry, capture.context, entry.kind, "0")) return null
+    entries.set(entryKey as ProjectEntryId, entry)
+
+    let location: ProjectEntryLocationClaim | null = null
+    if (locationItems !== undefined) {
+      if (locationItems.size !== 1) return null
+      const [locationKey] = [...locationItems][0]!
+      location = parseLocation(childMap(root, "entryLocations").get(locationKey))
+      if (locationKey !== `l:${location.entryId}:${location.claimId}` || !recordMatchesContext(location, capture.context, "location", "1")) return null
+      entryLocations.set(locationKey, location)
+    }
+    const parent = location === null ? null : base.entries.get(location.parentDirectoryId)
+    if (location !== null && (location.entryId !== entry.entryId || !parent || parent.kind !== "directory" || !isLiveEntry(base, location.parentDirectoryId))) return null
+
+    if (receipt.intentKind === "project.directory.create") {
+      if (entry.kind !== "directory" || location === null || versionItems !== undefined || byRoot.size !== 3) return null
+    } else {
+      if (entry.kind !== "file" || versionItems?.size !== 1 || byRoot.size !== (location === null ? 3 : 4)) return null
+      const [versionKey] = [...versionItems][0]!
+      const version = parseContentVersion(childMap(root, "contentFamilies").get(versionKey), base.identity)
+      if (
+        versionKey !== `v:${version.primaryFileId}:${version.versionId}` || version.primaryFileId !== entry.entryId
+        || version.writeClass !== "initial" || version.supersedesVersionIds.length !== 0
+        || !recordMatchesContext(version, capture.context, "version", "2")
+        || (entry.storageClass === "project-file") !== (location !== null)
+        || ((entry.provenance === "generated" || entry.provenance === "managed-admission") && entry.contentPolicy !== "immutable")
+      ) return null
+      validateVersionDag(version.primaryFileId, [version])
+      contentFamilies.set(versionKey, version)
+    }
+
+    const nonReceipt = applyResult.inserted.filter((item) => item.root !== "operations")
+    const allocatedIds = [...new Set(nonReceipt.flatMap((item) => allocatedRecordIds(item.record)))].sort(compareUtf8)
+    const ordinals = nonReceipt.map((item) => Number(parseUint32(recordStamp(item.record).writeOrdinal)))
+    const expectedReceipt = {
+      format: "convax.project-operation-receipt",
+      actorId: capture.context.actorId,
+      operationId: capture.context.operationId,
+      intentKind: receipt.intentKind,
+      intentDigest: applyResult.intentDigest,
+      allocatedIds,
+      firstWriteOrdinal: String(Math.min(...ordinals)),
+      writeCount: String(applyResult.inserted.length),
+      stampLamport: capture.context.lamport,
+    }
+    if (operationKey !== `o:${receipt.actorId}:${receipt.operationId}` || !encodeEqual(receipt, expectedReceipt)) return null
+    operationMap.set(operationKey, receipt)
+    const snapshot = Object.freeze({
+      ...base,
+      entries: readonlyProjectIndexMap(entries),
+      entryLocations: readonlyProjectIndexMap(entryLocations),
+      contentFamilies: readonlyProjectIndexMap(contentFamilies),
+      operations: readonlyProjectIndexMap(operationMap),
+    })
+    if (capture.baseCanonicalFragments !== null) {
+      const fragments = createProjectIndexCanonicalFragments(
+        snapshot,
+        capture.baseCanonicalFragments,
+        new Set(byRoot.keys()),
+        byRoot,
+        processValues?.canonicalJcs,
+        processValues?.canonicalJcs ? false : true,
+      )
+      projectIndexCanonicalFragments.set(snapshot, fragments)
+    }
+    return snapshot
+  } catch {
+    return null
+  }
+}
+
+function mapOfStringArraysEqual(left: ReadonlyMap<string, readonly string[]>, right: ReadonlyMap<string, readonly string[]>): boolean {
+  if (left.size !== right.size) return false
+  for (const [key, values] of left) {
+    const expected = right.get(key)
+    if (expected === undefined || values.length !== expected.length || values.some((value, index) => value !== expected[index])) return false
+  }
+  return true
+}
+
 export const selectedProjectIndexDocumentOwnerArtifactDefinition: SelectedDocumentOwnerArtifactDefinition<"project-index"> = Object.freeze({
   owner: "project-index",
+  armCandidateTransactionCapture: armProjectIndexCreateTransactionCapture,
+  installValidatedPostCache: installProjectIndexValidatedPostCache,
+  readCertifiedCanonicalDigest: readProjectIndexCertifiedCanonicalDigest,
   createDefinitions(processValues: OwnerProcessValueFactory<"project-index">) {
     return Object.freeze({ protocol: projectIndexProtocolDefinition(processValues), closure: projectIndexClosureDefinition() })
   },
 })
+
+export function createProjectIndexDocumentOwnerRuntime(
+  authority: CurrentProtocolAuthority,
+): DocumentOwnerRuntime<"project-index"> {
+  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "project-index")
+    .createRuntime(selectedProjectIndexDocumentOwnerArtifactDefinition)
+  if ("status" in selected) throw new Error(`ProjectIndex owner runtime is ${selected.code}`)
+  return selected
+}
 
 function projectIndexProtocolDefinition(processValues: OwnerProcessValueFactory<"project-index">): DocumentOwnerProtocolDefinition<"project-index"> {
   const schemaDigest = PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST
@@ -1660,23 +2387,60 @@ function projectIndexProtocolDefinition(processValues: OwnerProcessValueFactory<
       try { return parseIntent(decodeRestrictedJcs(exactJcs)) } catch { return "rejected" }
     },
     validateBase(document: Y.Doc) {
-      try { return processValues.wrapValidatedState(validateProjectIndexYDoc(document)) } catch { return "rejected" }
+      try {
+        const snapshot = validateProjectIndexOwnerView(document)
+        const fragments = projectIndexCanonicalFragments.get(snapshot)
+        if (processValues.canonicalJcs && !fragments?.evidence) {
+          try {
+            projectIndexCanonicalFragments.set(
+              snapshot,
+              createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, processValues.canonicalJcs, false),
+            )
+          } catch {
+            // Evidence limits are acceleration-only. The validated snapshot and
+            // authoritative canonical encoder remain admissible.
+          }
+        }
+        return processValues.wrapValidatedState(snapshot)
+      } catch { return "rejected" }
     },
-    applyIntent(candidate: Y.Doc, context: OwnerIntentValidationContext, intent: unknown, externalFacts: OwnerExternalFactPort<"project-index">) {
+    applyIntent(base: OwnerValidatedState<"project-index">, candidate: Y.Doc, context: OwnerIntentValidationContext, intent: unknown, externalFacts: OwnerExternalFactPort<"project-index">) {
       try {
         const parsed = parseIntent(intent)
         const dependencies = projectIndexIntentDependencies(context, parsed)
         const factContext = consumeExternalFacts(dependencies, externalFacts)
         if (factContext === "pending" || factContext === "rejected") return factContext
-        const result = applyProjectIndexCandidateIntent(candidate, context, parsed, factContext)
+        const result = applyProjectIndexOwnerProtocolIntent(base, candidate, context, parsed, factContext)
         return result === "rejected" ? "rejected" : processValues.wrapApplyResult(Object.freeze({ result, scope: context.scope }))
       } catch { return "rejected" }
     },
-    validatePost(_base: OwnerValidatedState<"project-index">, candidate: Y.Doc, result: OwnerApplyResult<"project-index">) {
-      return ownerResult(result) === null ? "rejected" : processValues.wrapValidatedState(validateProjectIndexYDoc(candidate))
+    validatePost(base: OwnerValidatedState<"project-index">, candidate: Y.Doc, result: OwnerApplyResult<"project-index">) {
+      // This independently validates the candidate at the owner boundary. Do not
+      // reuse the reducer's snapshot: callers may invoke the protocol phases from
+      // an outer transaction, and deletion-only mutations can preserve a state vector.
+      const value = ownerResult(result)
+      if (value === null) return "rejected"
+      const incremental = tryValidateProjectIndexCreatePost(candidate, base, value.result, processValues)
+      const snapshot = incremental ?? validateProjectIndexYDoc(candidate)
+      const fastEvidence = incremental !== null && projectIndexCanonicalFragments.get(snapshot)?.evidence !== null
+        && projectIndexCanonicalFragments.get(snapshot)?.evidence !== undefined
+      if (!fastEvidence && processValues.canonicalJcs) {
+        try {
+          projectIndexCanonicalFragments.set(
+            snapshot,
+            createProjectIndexCanonicalFragments(snapshot, undefined, undefined, undefined, processValues.canonicalJcs, false),
+          )
+        } catch {
+          // Acceleration limits do not change owner admission.
+        }
+      }
+      cacheProjectIndexValidatedPostView(candidate, snapshot)
+      const state = processValues.wrapValidatedState(snapshot)
+      const evidence = projectIndexCanonicalFragments.get(snapshot)?.evidence
+      return fastEvidence && evidence ? processValues.bindCanonicalJcsEvidence(candidate, state, evidence) : state
     },
     canonicalStateBytes(document: Y.Doc) {
-      try { return encodeProjectCanonicalState(document) } catch { return "rejected" }
+      try { return encodeProjectCanonicalOwnerView(document) } catch { return "rejected" }
     },
     deriveActualWriteEvidence(result: OwnerApplyResult<"project-index">) {
       const value = ownerResult(result)

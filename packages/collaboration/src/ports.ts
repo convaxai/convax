@@ -54,6 +54,30 @@ export interface AcceptedHeadView {
   readonly canonicalStateDigest: Digest
 }
 
+/**
+ * Process-local proof that the Kernel already materialized and validated the
+ * exact accepted state for one final frame. It is never encoded into a frame or
+ * durable record, and persistence must discard it unless every binding matches
+ * its currently verified durable base.
+ */
+export interface AcceptedHeadMaterializationEvidence {
+  readonly format: "convax.accepted-head-materialization-evidence"
+  readonly scope: DocumentScope
+  readonly baseDurableHeadRecordDigest: Digest
+  readonly baseMaterializedStateDigest: Digest
+  readonly frameDigest: Digest
+  readonly resultingFrontier: CausalFrontier
+  readonly resultingFrontierDigest: Digest
+  readonly resultingActorHeads: ReplicaActorHeadSet
+  readonly resultingActorHeadsDigest: Digest
+  readonly fullUpdate: Uint8Array
+  readonly fullUpdateDigest: Digest
+  readonly stateVector: StateVector
+  readonly stateVectorDigest: Digest
+  readonly canonicalStateDigest: Digest
+  readonly evidenceDigest: Digest
+}
+
 export type OperationLookup =
   | { readonly status: "absent" }
   | { readonly status: "accepted"; readonly ref: FrameObjectRef; readonly bytes: Uint8Array }
@@ -70,9 +94,24 @@ export type KernelQuarantineReason = "equivocation" | "invalid-object" | "incomp
 
 export interface CollaborationPersistencePort {
   loadReplicaHead(scope: DocumentScope): Promise<unknown>
+  /**
+   * Optional native fast verification of the sole durable head. `verified` may
+   * be returned only after checking the authoritative durable-head record and
+   * proving that no below-head recovery or read-only disposition is pending.
+   * Any uncertainty must return `reload-required`; the Kernel then uses the
+   * full `loadReplicaHead` recovery path.
+   */
+  verifyReplicaHeadCurrent?(input: {
+    readonly scope: DocumentScope
+    readonly expectedHeadDigest: Digest
+    readonly expectedFrontierDigest: Digest
+  }): Promise<"verified" | "reload-required">
   putImmutableFrame(ref: FrameObjectRef, bytes: Readonly<Uint8Array>): Promise<void>
   putReplicationOutboxRef(ref: FrameObjectRef): Promise<void>
-  appendFrameJournal(ref: FrameObjectRef): Promise<JournalAppendPortEvidence>
+  appendFrameJournal(
+    ref: FrameObjectRef,
+    materialization?: AcceptedHeadMaterializationEvidence,
+  ): Promise<JournalAppendPortEvidence>
   compareAndCommitReplicaHead(input: {
     readonly ref: FrameObjectRef
     readonly journal: JournalAppendPortEvidence

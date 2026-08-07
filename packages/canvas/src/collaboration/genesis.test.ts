@@ -10,11 +10,10 @@ import {
   parseProjectId,
   parseReplicaId,
   parseSignature,
-  createSelectedDocumentOwnerArtifactFactory,
   type ValidationArtifactRef,
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
-import { selectedCanvasDocumentOwnerArtifactDefinition } from "./session"
+import { createCanvasDocumentOwnerRuntime } from "./session"
 import {
   buildCanvasGenesisProofCarrier,
   installCanvasGenesisProofCarrierVerifierFactory,
@@ -25,9 +24,7 @@ import {
 describe("current CVXCGP03 Canvas genesis proof carrier", () => {
   test("builds exact checkpoint/carrier bytes and validates the closed Canvas identity", async () => {
     const authority = await loadAuthority()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
-    if ("status" in runtimeResult) throw new Error(runtimeResult.code)
+    const runtimeResult = createCanvasDocumentOwnerRuntime(authority)
     const author = buildAuthor(authority)
     const historicalAuthorVerifier: CanvasGenesisHistoricalAuthorVerifierPort = {
       verifyHistoricalAuthor(input) {
@@ -72,9 +69,7 @@ describe("current CVXCGP03 Canvas genesis proof carrier", () => {
 
   test("rejects a tampered section and never exposes a partial identity", async () => {
     const authority = await loadAuthority()
-    const runtimeResult = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-      .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
-    if ("status" in runtimeResult) throw new Error(runtimeResult.code)
+    const runtimeResult = createCanvasDocumentOwnerRuntime(authority)
     const author = buildAuthor(authority)
     const factory = installCanvasGenesisProofCarrierVerifierFactory({
       authority,

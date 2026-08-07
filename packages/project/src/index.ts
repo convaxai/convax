@@ -6,6 +6,7 @@ export * from "./collaboration/blob-replication"
 export {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexReconstructionYDoc,
+  createProjectIndexDocumentOwnerRuntime,
   decodeProjectIndexBlobPublicationCurrentnessRequest,
   decodeProjectIndexCanvasGenesisCurrentnessRequest,
   deriveProjectCanvasIdForOperation,
@@ -14,7 +15,6 @@ export {
   parseProjectIndexResourceReference,
   projectIndexResourceReferenceDigest,
   requiredProjectIndexBlobDigests,
-  selectedProjectIndexDocumentOwnerArtifactDefinition,
   type ProjectIndexCanvasGenesisCurrentnessRequest,
   type ProjectIndexBlobPublicationCurrentnessRequest,
 } from "./collaboration/project-index"

@@ -1,7 +1,9 @@
+import type * as Y from "yjs"
 import { assertCurrentProtocolAuthority, type CurrentProtocolAuthority } from "./authority"
+import { consumeCanonicalJcsEvidence, createCanonicalJcsEvidenceIssuer, type CanonicalJcsEvidence } from "./canonical-jcs-evidence"
 import { cloneBytes } from "./binary"
 import { assertDocumentOwnerBinding } from "./canonicalizer"
-import { parseDigest } from "./codecs"
+import { parseDigest, type Digest } from "./codecs"
 import type {
   CreateOwnerExternalFactAttemptPortResult,
   DocumentOwnerKind,
@@ -34,9 +36,14 @@ const OWNER_FACT_KIND = /^[a-z][a-z0-9.-]{0,127}$/u
 interface OwnerRuntimeRecord {
   readonly owner: DocumentOwnerKind
   readonly authority: CurrentProtocolAuthority
+  readonly factoryIdentity: object
+  readonly canonicalJcs: ReturnType<typeof createCanonicalJcsEvidenceIssuer>
   readonly protocolPort: object
   readonly closurePort: object
   readonly externalFactPortFactory: object
+  readonly armCandidateTransactionCapture: ((input: never) => void) | undefined
+  readonly installValidatedPostCache: ((input: never) => void) | undefined
+  readonly readCertifiedCanonicalDigest: ((input: never) => unknown) | undefined
 }
 
 interface ProcessValueRecord {
@@ -52,6 +59,45 @@ const liveClosurePorts = new WeakMap<object, OwnerRuntimeRecord>()
 const liveExternalFactFactories = new WeakMap<object, OwnerRuntimeRecord>()
 const liveExternalFactPorts = new WeakMap<object, OwnerRuntimeRecord>()
 const liveProcessValues = new WeakMap<object, ProcessValueRecord>()
+const documentGenerations = new WeakMap<object, { depth: number; generation: number }>()
+const liveCanonicalEvidence = new WeakMap<object, Readonly<{ runtimeIdentity: object; document: object; generation: number; evidence: CanonicalJcsEvidence }>>()
+const liveAcceptedReplicaApplyEvidence = new WeakMap<object, Readonly<{
+  runtime: object
+  target: object
+  state: object
+  scopeDigest: Digest
+  canonicalStateDigest: Digest
+  fullUpdateDigest: Digest
+  postStateVectorDigest: Digest
+  yjsUpdateDigest: Digest
+  generation: number
+}>>()
+
+function ensureDocumentGenerationTracker(document: Y.Doc): { depth: number; generation: number } {
+  const existing = documentGenerations.get(document)
+  if (existing) return existing
+  const tracker = { depth: 0, generation: 0 }
+  documentGenerations.set(document, tracker)
+  document.on("beforeTransaction", () => { tracker.depth += 1 })
+  document.on("afterTransaction", () => {
+    tracker.depth = Math.max(0, tracker.depth - 1)
+    tracker.generation += 1
+  })
+  document.on("destroy", () => documentGenerations.delete(document))
+  return tracker
+}
+
+export function issueAcceptedReplicaApplyEvidence<K extends DocumentOwnerKind>(runtime: DocumentOwnerRuntime<K>, input: Readonly<{
+  scopeDigest: Digest; target: object; state: OwnerValidatedState<K>; canonicalStateDigest: Digest; fullUpdateDigest: Digest
+  postStateVectorDigest: Digest; yjsUpdateDigest: Digest; generation: number
+}>): object {
+  const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const stateRecord = objectRecord(input.state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+  if (stateRecord.owner !== record.owner || stateRecord.factoryIdentity !== record.factoryIdentity || stateRecord.kind !== "state") invalid("Owner process value is structural, stale or belongs to another runtime")
+  const evidence = Object.freeze({})
+  liveAcceptedReplicaApplyEvidence.set(evidence, { runtime: runtime as object, target: input.target, state: input.state as object, scopeDigest: parseDigest(input.scopeDigest), canonicalStateDigest: parseDigest(input.canonicalStateDigest), fullUpdateDigest: parseDigest(input.fullUpdateDigest), postStateVectorDigest: parseDigest(input.postStateVectorDigest), yjsUpdateDigest: parseDigest(input.yjsUpdateDigest), generation: input.generation })
+  return evidence
+}
 
 export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwnerKind>(
   authority: CurrentProtocolAuthority,
@@ -59,26 +105,42 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
 ): SelectedDocumentOwnerArtifactFactory<K> {
   assertCurrentProtocolAuthority(authority)
   const artifactDigest = selectedArtifactDigest(authority, owner)
-  const factoryIdentity = Object.freeze({})
-
-  const processValues = Object.freeze({
-    wrapValidatedState(value: unknown): OwnerValidatedState<K> {
-      const wrapped = Object.freeze({ owner, value }) as OwnerValidatedState<K>
-      liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "state" })
-      return wrapped
-    },
-    wrapApplyResult(value: unknown): OwnerApplyResult<K> {
-      const wrapped = Object.freeze({ owner, value }) as OwnerApplyResult<K>
-      liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "result" })
-      return wrapped
-    },
-  }) as OwnerProcessValueFactory<K>
 
   const factory = Object.freeze({
     createRuntime(definition: SelectedDocumentOwnerArtifactDefinition<K>) {
       if (!isObject(definition) || definition.owner !== owner || typeof definition.createDefinitions !== "function") {
         return rejectedRuntime("owner-definition-mismatch")
       }
+      const factoryIdentity = Object.freeze({})
+      const canonicalJcs = createCanonicalJcsEvidenceIssuer()
+      const processValues = Object.freeze({
+        canonicalJcs,
+        wrapValidatedState(value: unknown): OwnerValidatedState<K> {
+          const wrapped = Object.freeze({ owner, value }) as OwnerValidatedState<K>
+          liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "state" })
+          return wrapped
+        },
+        wrapApplyResult(value: unknown): OwnerApplyResult<K> {
+          const wrapped = Object.freeze({ owner, value }) as OwnerApplyResult<K>
+          liveProcessValues.set(wrapped, { owner, factoryIdentity, kind: "result" })
+          return wrapped
+        },
+        bindCanonicalJcsEvidence(document: Y.Doc, state: OwnerValidatedState<K>, evidence: CanonicalJcsEvidence) {
+          const stateRecord = objectRecord(state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+          const tracker = documentGenerations.get(document)
+          if (
+            stateRecord.owner === owner
+            && stateRecord.kind === "state"
+            && stateRecord.factoryIdentity === factoryIdentity
+            && tracker
+            && tracker.depth === 0
+            && tracker.generation >= 1
+          ) {
+            liveCanonicalEvidence.set(state, { runtimeIdentity: factoryIdentity, document, generation: tracker.generation, evidence })
+          }
+          return state
+        },
+      }) as OwnerProcessValueFactory<K>
       let definitions: Readonly<{
         protocol: DocumentOwnerProtocolDefinition<K>
         closure: OwnerIntentClosureDefinition<K>
@@ -91,6 +153,9 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
       if (!isObject(definitions) || !isObject(definitions.protocol) || !isObject(definitions.closure)) {
         return rejectedRuntime("owner-runtime-invalid")
       }
+      if (definition.installValidatedPostCache !== undefined && typeof definition.installValidatedPostCache !== "function") return rejectedRuntime("owner-runtime-invalid")
+      if (definition.armCandidateTransactionCapture !== undefined && typeof definition.armCandidateTransactionCapture !== "function") return rejectedRuntime("owner-runtime-invalid")
+      if (definition.readCertifiedCanonicalDigest !== undefined && typeof definition.readCertifiedCanonicalDigest !== "function") return rejectedRuntime("owner-runtime-invalid")
       if (definitions.protocol.owner !== owner) return rejectedRuntime("owner-definition-mismatch")
       if (definitions.protocol.schemaDigest !== artifactDigest) return rejectedRuntime("owner-artifact-mismatch")
       try {
@@ -99,13 +164,18 @@ export function createSelectedDocumentOwnerArtifactFactory<K extends DocumentOwn
         const runtimeRecordShell = {
           owner,
           authority,
+          factoryIdentity,
+          canonicalJcs,
           protocolPort,
           closurePort: Object.freeze({}),
           externalFactPortFactory: Object.freeze({}),
+          armCandidateTransactionCapture: undefined,
+          installValidatedPostCache: undefined,
+          readCertifiedCanonicalDigest: undefined,
         }
         const externalFactPortFactory = createExternalFactPortFactory(owner, factoryIdentity, runtimeRecordShell)
         const closurePort = createClosurePort(definitions.closure, protocolPort, owner, factoryIdentity, runtimeRecordShell)
-        const record: OwnerRuntimeRecord = Object.freeze({ owner, authority, protocolPort, closurePort, externalFactPortFactory })
+        const record: OwnerRuntimeRecord = Object.freeze({ owner, authority, factoryIdentity, canonicalJcs, protocolPort, closurePort, externalFactPortFactory, armCandidateTransactionCapture: definition.armCandidateTransactionCapture, installValidatedPostCache: definition.installValidatedPostCache, readCertifiedCanonicalDigest: definition.readCertifiedCanonicalDigest })
         const runtime = Object.freeze({ artifactDigest, protocolPort, closurePort, externalFactPortFactory }) as DocumentOwnerRuntime<K>
         liveRuntimes.set(runtime, record)
         liveProtocolPorts.set(protocolPort, record)
@@ -138,6 +208,80 @@ export function assertDocumentOwnerRuntime(
     || selected.externalFactPortFactory !== record.externalFactPortFactory
     || selected.closurePort.protocolPort !== selected.protocolPort
   ) invalid("Document-owner runtime closure is invalid")
+}
+
+export function installOwnerValidatedPostCache<K extends DocumentOwnerKind>(
+  runtime: DocumentOwnerRuntime<K>,
+  input: Readonly<{
+    readonly scope: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["scope"]
+    readonly source: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["source"]
+    readonly target: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["target"]
+    readonly state: OwnerValidatedState<K>
+    readonly canonicalStateDigest: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["canonicalStateDigest"]
+    readonly durableHeadDigest: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["installValidatedPostCache"]>>[0]["durableHeadDigest"]
+    readonly applyEvidence: object
+    readonly scopeDigest: Digest
+    readonly fullUpdateDigest: Digest
+    readonly postStateVectorDigest: Digest
+    readonly yjsUpdateDigest: Digest
+  }>,
+): void {
+  const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const stateRecord = objectRecord(input.state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+  if (stateRecord.owner !== record.owner || stateRecord.factoryIdentity !== record.factoryIdentity || stateRecord.kind !== "state") {
+    invalid("Owner process value is structural, stale or belongs to another runtime")
+  }
+  const evidence = liveAcceptedReplicaApplyEvidence.get(input.applyEvidence)
+  if (!evidence || evidence.runtime !== runtime || evidence.target !== input.target || evidence.state !== input.state || evidence.scopeDigest !== input.scopeDigest || evidence.canonicalStateDigest !== input.canonicalStateDigest || evidence.fullUpdateDigest !== input.fullUpdateDigest || evidence.postStateVectorDigest !== input.postStateVectorDigest || evidence.yjsUpdateDigest !== input.yjsUpdateDigest || evidence.generation < 1) return
+  liveAcceptedReplicaApplyEvidence.delete(input.applyEvidence)
+  record.installValidatedPostCache?.(input as never)
+}
+
+export function ownerUsesValidatedPostCache(runtime: DocumentOwnerRuntime): boolean {
+  return objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required").installValidatedPostCache !== undefined
+}
+
+export function readOwnerCertifiedCanonicalDigest<K extends DocumentOwnerKind>(
+  runtime: DocumentOwnerRuntime<K>,
+  input: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["readCertifiedCanonicalDigest"]>>[0],
+): Digest | null {
+  const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const value = record.readCertifiedCanonicalDigest?.(input as never)
+  return value === undefined || value === null ? null : parseDigest(value)
+}
+
+export function armOwnerCandidateTransactionCapture<K extends DocumentOwnerKind>(
+  runtime: DocumentOwnerRuntime<K>,
+  input: Readonly<{
+    readonly base: OwnerValidatedState<K>
+    readonly candidate: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["armCandidateTransactionCapture"]>>[0]["candidate"]
+    readonly context: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["armCandidateTransactionCapture"]>>[0]["context"]
+    readonly baseCanonicalProof?: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<K>["armCandidateTransactionCapture"]>>[0]["baseCanonicalProof"]
+  }>,
+): void {
+  const record = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const stateRecord = objectRecord(input.base, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+  if (stateRecord.owner !== record.owner || stateRecord.factoryIdentity !== record.factoryIdentity || stateRecord.kind !== "state") {
+    invalid("Owner process value is structural, stale or belongs to another runtime")
+  }
+  ensureDocumentGenerationTracker(input.candidate)
+  record.armCandidateTransactionCapture?.(input as never)
+}
+
+export function consumeOwnerCanonicalJcsEvidence<K extends DocumentOwnerKind>(
+  runtime: DocumentOwnerRuntime<K>,
+  document: Y.Doc,
+  state: OwnerValidatedState<K>,
+): Uint8Array | null {
+  const runtimeRecord = objectRecord(runtime, liveRuntimes, "A live selected document-owner runtime is required")
+  const stateRecord = objectRecord(state, liveProcessValues, "Owner process value is structural, stale or belongs to another runtime")
+  const binding = liveCanonicalEvidence.get(state)
+  const tracker = documentGenerations.get(document)
+  if (!binding || !tracker || tracker.depth !== 0 || tracker.generation !== binding.generation
+    || binding.runtimeIdentity !== runtimeRecord.factoryIdentity || binding.document !== document
+    || stateRecord.factoryIdentity !== runtimeRecord.factoryIdentity) return null
+  liveCanonicalEvidence.delete(state)
+  return consumeCanonicalJcsEvidence(runtimeRecord.canonicalJcs, binding.evidence)?.bytes ?? null
 }
 
 export function assertOwnerExternalFactPort(
@@ -179,12 +323,14 @@ function createProtocolPort<K extends DocumentOwnerKind>(
       return result
     },
     applyIntent(
-      candidate: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[0],
-      context: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[1],
+      base: OwnerValidatedState<K>,
+      candidate: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[1],
+      context: Parameters<DocumentOwnerProtocolDefinition<K>["applyIntent"]>[2],
       intent: unknown,
       externalFacts: OwnerExternalFactPort<K>,
     ) {
-      const result = definition.applyIntent(candidate, context, intent, externalFacts)
+      requireProcessValue(base, owner, factoryIdentity, "state")
+      const result = definition.applyIntent(base, candidate, context, intent, externalFacts)
       if (typeof result !== "string") requireProcessValue(result, owner, factoryIdentity, "result")
       return result
     },

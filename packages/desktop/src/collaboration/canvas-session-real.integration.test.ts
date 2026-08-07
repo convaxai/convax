@@ -7,10 +7,10 @@ import {
   CANVAS_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   buildCanvasProjectionIndex,
   createCanvasReconstructionYDoc,
+  createCanvasDocumentOwnerRuntime,
   createCanvasYDoc,
   derivedNodeRef,
   encodeCanvasCanonicalState,
-  selectedCanvasDocumentOwnerArtifactDefinition,
   validateCanvasYDoc,
   type CanvasTypedIntentUnion,
 } from "@convax/canvas/collaboration"
@@ -19,7 +19,6 @@ import {
   applyYjsUpdate,
   canonicalStateDigest,
   causalFrontierDigest,
-  createSelectedDocumentOwnerArtifactFactory,
   encodeBase64url,
   encodeFullUpdate,
   encodeStateVector,
@@ -212,10 +211,7 @@ describe("real Canvas collaboration session", () => {
 })
 
 function createCanvasRuntime(authority: CurrentProtocolAuthority): DocumentOwnerRuntime<"canvas"> {
-  const result = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-    .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
-  if ("status" in result) throw new Error(`Canvas owner runtime rejected: ${result.code}`)
-  return result
+  return createCanvasDocumentOwnerRuntime(authority)
 }
 
 function canvasScope(): DocumentScope {

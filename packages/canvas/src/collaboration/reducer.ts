@@ -71,7 +71,17 @@ import {
   strictSortedUnique,
   CanvasSchemaError,
 } from "./validation"
-import { getCanvasChildMap, validateCanvasYDoc } from "./ydoc"
+import {
+  CANVAS_ROOT_KEYS,
+  CANVAS_ROOT_NAME,
+  getCanvasChildMap,
+  readCanvasContainmentRecordForOwner,
+  readCanvasEdgeRecordForOwner,
+  readCanvasHistoryRecordForOwner,
+  readCanvasNodeRecordForOwner,
+  readCanvasOperationRecordForOwner,
+  validateCanvasYDoc,
+} from "./ydoc"
 import { planCanvasHistoryDerivedOrdinals, scheduleCanvasHistoryTemplates } from "./history-schedule"
 
 export type CanvasReducerOutcome = CanvasIntentApplyResult | "pending" | "rejected"
@@ -83,6 +93,59 @@ interface PlannedWrite {
   readonly field: string
   readonly value: (ordinal: Uint32) => unknown
   readonly apply: (value: unknown) => void
+}
+
+interface CanvasDuplicateFastPost {
+  readonly base: CanvasSnapshot
+  readonly snapshot: CanvasSnapshot
+  readonly expectedTopLevelChanges: ReadonlyMap<string, readonly string[]>
+  readonly createdNodeKeys: readonly string[]
+  readonly createdEdgeKeys: readonly string[]
+}
+
+interface CanvasDuplicateCapture {
+  readonly base: CanvasSnapshot
+  readonly context: OwnerIntentValidationContext
+  readonly root: Y.Map<unknown>
+  readonly childMaps: ReadonlyMap<string, Y.Map<unknown>>
+  transaction: Y.Transaction | null
+  seal: Readonly<{ transaction: Y.Transaction; changed: ReadonlyMap<Y.AbstractType<any>, ReadonlySet<string | null>>; deletedStructCount: number }> | null
+  invalid: boolean
+}
+
+const canvasDuplicateFastPosts = new WeakMap<Y.Doc, CanvasDuplicateFastPost>()
+const canvasDuplicateCaptures = new WeakMap<Y.Doc, CanvasDuplicateCapture>()
+
+export function armCanvasDuplicateCandidateCapture(
+  candidate: Y.Doc,
+  base: CanvasSnapshot,
+  context: OwnerIntentValidationContext,
+): void {
+  if (candidate._transaction !== null) throw new TypeError("Canvas candidate capture must arm before a transaction")
+  const names = [...candidate.share.keys()]
+  const root = candidate.share.get(CANVAS_ROOT_NAME)
+  if (names.length !== 1 || names[0] !== CANVAS_ROOT_NAME || !(root instanceof Y.Map))
+    throw new TypeError("Canvas candidate capture requires the exact Canvas root")
+  const childMaps = new Map<string, Y.Map<unknown>>()
+  for (const key of CANVAS_ROOT_KEYS) childMaps.set(key, getCanvasChildMap(candidate, key))
+  const capture: CanvasDuplicateCapture = { base, context, root, childMaps, transaction: null, seal: null, invalid: false }
+  canvasDuplicateCaptures.set(candidate, capture)
+  const before = (transaction: Y.Transaction) => {
+    if (capture.transaction !== null || capture.seal !== null) capture.invalid = true
+    else capture.transaction = transaction
+  }
+  const after = (transaction: Y.Transaction) => {
+    if (capture.transaction !== transaction || capture.seal !== null) capture.invalid = true
+    capture.seal = Object.freeze({
+      transaction,
+      changed: new Map([...transaction.changed].map(([type, keys]) => [type, new Set(keys)] as const)),
+      deletedStructCount: [...transaction.deleteSet.clients.values()].flat().reduce((total, range) => total + range.len, 0),
+    })
+    candidate.off("beforeTransaction", before)
+    candidate.off("afterTransaction", after)
+  }
+  candidate.on("beforeTransaction", before)
+  candidate.on("afterTransaction", after)
 }
 
 const UNDOABLE = new Set<string>([
@@ -236,10 +299,11 @@ function reduceCanvasIntentInternal(
   context: OwnerIntentValidationContext,
   intent: CanvasTypedIntentUnion,
   externalFacts: CanvasExternalFactContext,
+  validatedBase?: CanvasSnapshot,
 ): CanvasReducerOutcome {
   try {
     assertContext(context)
-    const base = validateCanvasYDoc(candidate)
+    const base = validatedBase ?? validateCanvasYDoc(candidate)
     if (
       context.scope.docKind !== "canvas" ||
       base.identity.canvasId !== context.scope.docId ||
@@ -291,8 +355,13 @@ function reduceCanvasIntentInternal(
       // transaction-local acyclic receipt before reading the authored post state;
       // the same key is replaced with its final history binding below.
       const operations = getCanvasChildMap(candidate, "operations")
-      writeJson(operations, receiptKey, provisionalReceipt)
-      const postDomain = validateCanvasYDoc(candidate)
+      // Duplicate's incremental history snapshot does not require a temporary
+      // receipt. Avoiding an in-transaction overwrite keeps its exact append-only
+      // transaction seal free of a Yjs delete set.
+      if (intent.kind !== "canvas.nodes.duplicate") writeJson(operations, receiptKey, provisionalReceipt)
+      const postDomain = intent.kind === "canvas.nodes.duplicate"
+        ? buildCanvasDuplicateIncrementalSnapshot(candidate, base, writes)
+        : validateCanvasYDoc(candidate)
       if (UNDOABLE.has(intent.kind))
         historyRoot = captureHistoryRoot(base, postDomain, intent, context, resultEntities)
       const receipt: BoundedOperationReceipt = {
@@ -346,11 +415,14 @@ function reduceCanvasIntentInternal(
     }
     if (encodeRestrictedJcs(evidence).byteLength > 256 * 1024)
       throw new CanvasSchemaError("evidence-too-large", "Canvas write evidence exceeds 256 KiB")
-    validateCanvasYDoc(candidate)
+    const fastPost = intent.kind === "canvas.nodes.duplicate"
+      ? buildCanvasDuplicateIncrementalSnapshot(candidate, base, writes)
+      : null
+    if (fastPost === null) validateCanvasYDoc(candidate)
     const receipt = getCanvasChildMap(candidate, "operations").get(
       operationKey(context.actorId, context.operationId),
     ) as BoundedOperationReceipt
-    return Object.freeze({
+    const outcome = Object.freeze({
       format: "convax.canvas-intent-result",
       receipt,
       actualWriteEvidence: evidence,
@@ -358,12 +430,139 @@ function reduceCanvasIntentInternal(
       invalidatedEntities: sortedRefs(invalidatedEntities),
       invalidatedMetaFields: [...new Set(invalidatedMetaFields)].sort(compareUtf8),
     })
+    if (fastPost !== null) {
+      canvasDuplicateFastPosts.set(candidate, Object.freeze({
+        base,
+        snapshot: fastPost,
+        expectedTopLevelChanges: duplicateExpectedTopLevelChanges(writes),
+        createdNodeKeys: Object.freeze(resultEntities.filter((ref) => ref.kind === "node").map(canvasEntityKey).sort(compareUtf8)),
+        createdEdgeKeys: Object.freeze(resultEntities.filter((ref) => ref.kind === "edge").map(canvasEntityKey).sort(compareUtf8)),
+      }))
+    }
+    return outcome
   } catch (error) {
     if (error instanceof CanvasPendingFactError) return "pending"
     if (error instanceof CanvasSchemaError || error instanceof TypeError || error instanceof RangeError)
       return "rejected"
     throw error
   }
+}
+
+function duplicateWriteRootAndKey(path: string): readonly [string, string] | null {
+  const parts = path.split("/")
+  const root = parts[0]!
+  if (root === "nodes" || root === "edges") return [root, parts.slice(1, 4).join("/")]
+  if (root === "containments" || root === "semanticHistory" || root === "operations")
+    return [root, parts.slice(1).join("/")]
+  return null
+}
+
+function duplicateExpectedTopLevelChanges(writes: readonly PlannedWrite[]): ReadonlyMap<string, readonly string[]> {
+  const changed = new Map<string, Set<string>>()
+  for (const write of writes) {
+    const entry = duplicateWriteRootAndKey(write.path)
+    if (entry === null) continue
+    const keys = changed.get(entry[0]) ?? new Set<string>()
+    keys.add(entry[1])
+    changed.set(entry[0], keys)
+  }
+  return new Map([...changed].map(([root, keys]) => [root, Object.freeze([...keys].sort(compareUtf8))] as const))
+}
+
+function buildCanvasDuplicateIncrementalSnapshot(
+  candidate: Y.Doc,
+  base: CanvasSnapshot,
+  writes: readonly PlannedWrite[],
+): CanvasSnapshot {
+  const changed = duplicateExpectedTopLevelChanges(writes)
+  const nodes = new Map(base.nodes)
+  const edges = new Map(base.edges)
+  const containments = new Map(base.containments)
+  const semanticHistory = new Map(base.semanticHistory)
+  const operations = new Map(base.operations)
+  for (const key of changed.get("nodes") ?? []) {
+    if (base.nodes.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote node ${key}`)
+    nodes.set(key, readCanvasNodeRecordForOwner(candidate, key))
+  }
+  for (const key of changed.get("edges") ?? []) {
+    if (base.edges.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote edge ${key}`)
+    edges.set(key, readCanvasEdgeRecordForOwner(candidate, key))
+  }
+  for (const key of changed.get("containments") ?? []) {
+    if (base.containments.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote containment ${key}`)
+    const choice = readCanvasContainmentRecordForOwner(candidate, key)
+    if (key !== `${canvasEntityKey(choice.child)}/actor/${choice.stamp.actorId}`)
+      throw new CanvasSchemaError("containment-key-mismatch", `${key} does not match containment value`)
+    containments.set(key, choice)
+  }
+  for (const key of changed.get("semanticHistory") ?? []) {
+    if (base.semanticHistory.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote history ${key}`)
+    semanticHistory.set(key, readCanvasHistoryRecordForOwner(candidate, key))
+  }
+  for (const key of changed.get("operations") ?? []) {
+    if (base.operations.has(key)) throw new CanvasSchemaError("fast-path-overwrite", `Duplicate overwrote operation ${key}`)
+    operations.set(key, readCanvasOperationRecordForOwner(candidate, key))
+  }
+  return Object.freeze({
+    ...base,
+    nodes,
+    edges,
+    containments,
+    semanticHistory,
+    operations,
+  })
+}
+
+export function consumeCanvasDuplicateValidatedPost(
+  candidate: Y.Doc,
+  base: CanvasSnapshot,
+  result: CanvasIntentApplyResult,
+): Readonly<{ snapshot: CanvasSnapshot; changed: ReadonlyMap<string, readonly string[]> }> | null {
+  try {
+    const post = canvasDuplicateFastPosts.get(candidate)
+    canvasDuplicateFastPosts.delete(candidate)
+    const capture = canvasDuplicateCaptures.get(candidate)
+    canvasDuplicateCaptures.delete(candidate)
+    if (!post || !capture || post.base !== base || capture.base !== base || capture.invalid || !capture.transaction || !capture.seal) {
+      return null
+    }
+    if (capture.transaction !== capture.seal.transaction) return null
+    // Node/edge record construction replaces exactly two integrated placeholders
+    // (identity and creationGroup) per created entity. Any additional deletion is
+    // an unplanned delete/reinsert and forces the full validator.
+    if (capture.seal.deletedStructCount !== 2 * (post.createdNodeKeys.length + post.createdEdgeKeys.length)) {
+      return null
+    }
+    if ((candidate.share.get(CANVAS_ROOT_NAME) as object | undefined) !== (capture.root as object)) return null
+    for (const key of CANVAS_ROOT_KEYS) if (getCanvasChildMap(candidate, key) !== capture.childMaps.get(key)) return null
+
+    const allowedNested = new Set<Y.AbstractType<any>>()
+    for (const [rootName, keys] of post.expectedTopLevelChanges) {
+      const rootMap = capture.childMaps.get(rootName)
+      if (!rootMap) return null
+      const actual = capture.seal.changed.get(rootMap)
+      if (!actual || actual.has(null) || actual.size !== keys.length || keys.some((key) => !actual.has(key))) {
+        return null
+      }
+    }
+    for (const key of post.createdNodeKeys) collectCanvasNestedTypes(getCanvasChildMap(candidate, "nodes").get(key), allowedNested)
+    for (const key of post.createdEdgeKeys) collectCanvasNestedTypes(getCanvasChildMap(candidate, "edges").get(key), allowedNested)
+    for (const [type] of capture.seal.changed) {
+      const isExpectedRoot = [...post.expectedTopLevelChanges.keys()].some((name) => capture.childMaps.get(name) === type)
+      if (!isExpectedRoot && !allowedNested.has(type)) {
+        return null
+      }
+    }
+    return Object.freeze({ snapshot: post.snapshot, changed: post.expectedTopLevelChanges })
+  } catch {
+    return null
+  }
+}
+
+function collectCanvasNestedTypes(value: unknown, result: Set<Y.AbstractType<any>>): void {
+  if (!(value instanceof Y.AbstractType) || result.has(value)) return
+  result.add(value)
+  if (value instanceof Y.Map) for (const child of value.values()) collectCanvasNestedTypes(child, result)
 }
 
 function planIntent(
@@ -2924,6 +3123,23 @@ export function applyCanvasCandidateIntent(
   applyingDocument = candidate
   try {
     return reduceCanvasIntentInternal(candidate, context, intent, facts)
+  } finally {
+    applyingDocument = null
+  }
+}
+
+/** Owner-runtime-only entry: the base is a branded, already validated snapshot. */
+export function applyCanvasOwnerCandidateIntent(
+  candidate: Y.Doc,
+  base: CanvasSnapshot,
+  context: OwnerIntentValidationContext,
+  intent: CanvasTypedIntentUnion,
+  facts: CanvasExternalFactContext,
+): CanvasReducerOutcome {
+  if (applyingDocument !== null) return "rejected"
+  applyingDocument = candidate
+  try {
+    return reduceCanvasIntentInternal(candidate, context, intent, facts, base)
   } finally {
     applyingDocument = null
   }

@@ -46,8 +46,15 @@ describe("Canvas application collaboration facade", () => {
     }))
     const query = mock(async () => ({ nodes: [], projection: document }))
     const commits: unknown[] = []
+    const diagnostics: string[] = []
     const port: CanvasCollaborationApplicationPort = { query, submit }
     const service = new CanvasApplicationService(port, {
+      diagnostics: {
+        record(diagnostic) {
+          diagnostics.push(diagnostic.stage)
+          throw new Error("diagnostic failure is isolated")
+        },
+      },
       onDidCommit(event) {
         commits.push(event)
         throw new Error("observer failure is isolated")
@@ -57,6 +64,7 @@ describe("Canvas application collaboration facade", () => {
 
     await expect(service.execute(command)).resolves.toMatchObject({ operationReceipt: receipt })
     expect(submit).toHaveBeenCalledWith(command)
+    expect(diagnostics).toEqual(["application-intent", "onDidCommit/event"])
     expect(commits).toEqual([{
       actor: { id: "agent", kind: "agent" },
       canvasId: "canvas",

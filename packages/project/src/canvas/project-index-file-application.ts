@@ -1,4 +1,6 @@
 import {
+  comparePortableStamps,
+  compareUtf8,
   ordinarySha256,
   parseId128,
   parseProjectId,
@@ -25,6 +27,7 @@ import {
   type ProjectBlobRef,
   type ProjectContentPolicy,
   type ProjectDirectoryId,
+  type ProjectEntryLocationClaim,
   type ProjectIndexIntent,
   type ProjectIndexSnapshot,
   type ProjectIndexResourceReference,
@@ -128,17 +131,32 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         projectIndexCurrentBlobReferencesFromValidatedOwnerState(state)
           .map((reference) => [reference.entryFileId, reference] as const),
       )
+      const ordinaryPaths = createReachableOrdinaryPathIndex(snapshot)
       const entries: ProjectIndexFileMaterializationEntry[] = []
       for (const entry of snapshot.entries.values()) {
         if (entry.entryId === snapshot.identity.rootDirectoryId || entry.storageClass === "managed-blob") continue
-        const location = projectEntryLocationProjection(snapshot, entry.entryId)
-        if ((location.state !== "live-linked" && location.state !== "conflict-path") || location.portablePath === null) continue
+        const ordinaryPath = entry.provenance === "content-conflict-copy"
+          ? undefined
+          : ordinaryPaths.pathByEntryId.get(entry.entryId)
+        let materializedPath: string | null
+        if (ordinaryPath !== undefined) {
+          materializedPath = ordinaryPath
+        } else {
+          // Exceptional paths keep the complete counterfactual projection.
+          // Only a live rooted path-claim winner takes the linear fast path.
+          const location = projectEntryLocationProjection(snapshot, entry.entryId)
+          materializedPath =
+            (location.state === "live-linked" || location.state === "conflict-path")
+              ? location.portablePath
+              : null
+        }
+        if (materializedPath === null) continue
         const reference = entry.kind === "file" ? references.get(entry.entryId as ProjectFileId) ?? null : null
         if (entry.kind === "file" && reference === null) throw new FileApplicationError("index-commit-failed")
         entries.push(Object.freeze({
           entryId: parseProjectEntryId(entry.entryId),
           kind: entry.kind,
-          path: location.portablePath,
+          path: materializedPath,
           reference,
         }))
       }
@@ -160,7 +178,7 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
-          const parent = resolvePath(snapshot, target.parentPath)
+          const parent = createPathResolver(snapshot)(target.parentPath)
           if (!parent || parent.kind !== "directory") throw new FileApplicationError("parent-not-found")
           const constructed = constructProjectDirectoryCreateIntent({ snapshot, context, parentDirectoryId: parent.entryId as ProjectDirectoryId, basename: target.basename })
           if (constructed === "rejected") throw new FileApplicationError("index-commit-failed")
@@ -195,11 +213,12 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         operationId: parseId128(this.options.createOperationId()),
         prepare: async ({ base, context }) => {
           const snapshot = requireSnapshot(base)
-          const existing = resolvePath(snapshot, target.path)
+          const resolvePath = createPathResolver(snapshot)
+          const existing = resolvePath(target.path)
           let intent: ProjectIndexIntent
           let reference: ProjectIndexResourceReference
           if (existing === null) {
-            const parent = resolvePath(snapshot, target.parentPath)
+            const parent = resolvePath(target.parentPath)
             if (!parent || parent.kind !== "directory") throw new FileApplicationError("parent-not-found")
             const constructed = constructProjectFileCreateIntent({
               snapshot,
@@ -327,9 +346,10 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
-          const current = resolvePath(snapshot, currentPath)
+          const resolvePath = createPathResolver(snapshot)
+          const current = resolvePath(currentPath)
           if (!current) throw new FileApplicationError("entry-not-found")
-          const parent = resolvePath(snapshot, next.parentPath)
+          const parent = resolvePath(next.parentPath)
           if (!parent || parent.kind !== "directory") throw new FileApplicationError("parent-not-found")
           const intent = constructProjectEntryLocateIntent({ snapshot, context, entryId: current.entryId, parentDirectoryId: parent.entryId as ProjectDirectoryId, basename: next.basename, reason: input.reason })
           if (intent === "rejected") throw new FileApplicationError("index-commit-failed")
@@ -351,7 +371,7 @@ export class ProjectIndexFileApplication implements ProjectIndexFileApplicationP
         operationId: parseId128(this.options.createOperationId()),
         prepare: ({ base, context }) => {
           const snapshot = requireSnapshot(base)
-          const current = resolvePath(snapshot, path)
+          const current = createPathResolver(snapshot)(path)
           if (!current) throw new FileApplicationError("entry-not-found")
           const intent = constructProjectEntryTombstoneIntent({ snapshot, context, entryId: current.entryId })
           if (intent === "rejected") throw new FileApplicationError("index-commit-failed")
@@ -393,13 +413,82 @@ function requireSnapshot(base: Parameters<ProjectIndexDocumentSessionPort["query
   return snapshot
 }
 
-function resolvePath(snapshot: ProjectIndexSnapshot, path: string): { readonly entryId: ProjectEntryId; readonly kind: "file" | "directory" } | null {
-  if (path === "") return { entryId: snapshot.identity.rootDirectoryId, kind: "directory" }
-  for (const entry of snapshot.entries.values()) {
-    const projection = projectEntryLocationProjection(snapshot, entry.entryId)
-    if (projection.state === "live-linked" && projection.portablePath === path) return { entryId: parseProjectEntryId(entry.entryId), kind: entry.kind }
+function createPathResolver(snapshot: ProjectIndexSnapshot): (
+  path: string,
+) => { readonly entryId: ProjectEntryId; readonly kind: "file" | "directory" } | null {
+  const index = createReachableOrdinaryPathIndex(snapshot)
+  return (path) => {
+    if (path === "") return { entryId: snapshot.identity.rootDirectoryId, kind: "directory" }
+    const winner = index.entryIdByPath.get(path)
+    if (winner === undefined) return null
+    const entry = snapshot.entries.get(winner)!
+    // Conflict-copy activation has additional family semantics. Keep that rare
+    // case on the complete projection path; ordinary path lookup remains linear.
+    if (entry.provenance === "content-conflict-copy") {
+      const projection = projectEntryLocationProjection(snapshot, winner)
+      if (projection.state !== "live-linked" || projection.portablePath !== path) return null
+    }
+    return { entryId: parseProjectEntryId(entry.entryId), kind: entry.kind }
   }
-  return null
+}
+
+function createReachableOrdinaryPathIndex(snapshot: ProjectIndexSnapshot): Readonly<{
+  entryIdByPath: ReadonlyMap<string, ProjectEntryId>
+  pathByEntryId: ReadonlyMap<string, string>
+}> {
+  const tombstoned = new Set([...snapshot.entryTombstones.values()].map((record) => record.entryId))
+  const selectedClaims = new Map<ProjectEntryId, ProjectEntryLocationClaim>()
+  for (const claim of snapshot.entryLocations.values()) {
+    const selected = selectedClaims.get(claim.entryId)
+    if (selected === undefined || comparePortableStamps(selected.stamp, claim.stamp) <= 0) {
+      selectedClaims.set(claim.entryId, claim)
+    }
+  }
+
+  const winnersBySlot = new Map<string, Readonly<{
+    entryId: ProjectEntryId
+    claim: ProjectEntryLocationClaim
+  }>>()
+  for (const [entryId, claim] of selectedClaims) {
+    const entry = snapshot.entries.get(entryId)
+    if (!entry || tombstoned.has(entryId) || claim.state !== "linked") continue
+    const slot = `${claim.parentDirectoryId}\0${claim.basename}`
+    const selected = winnersBySlot.get(slot)
+    const byStamp = selected === undefined ? 1 : comparePortableStamps(claim.stamp, selected.claim.stamp)
+    if (byStamp > 0 || (byStamp === 0 && selected !== undefined && compareUtf8(entryId, selected.entryId) > 0)) {
+      winnersBySlot.set(slot, Object.freeze({ entryId: parseProjectEntryId(entryId), claim }))
+    }
+  }
+
+  const childrenByParent = new Map<ProjectDirectoryId, Array<Readonly<{
+    entryId: ProjectEntryId
+    basename: string
+  }>>>()
+  for (const winner of winnersBySlot.values()) {
+    const children = childrenByParent.get(winner.claim.parentDirectoryId) ?? []
+    children.push(Object.freeze({ entryId: winner.entryId, basename: winner.claim.basename }))
+    childrenByParent.set(winner.claim.parentDirectoryId, children)
+  }
+
+  const entryIdByPath = new Map<string, ProjectEntryId>()
+  const pathByEntryId = new Map<string, string>()
+  const queue: Array<Readonly<{ directoryId: ProjectDirectoryId; path: string }>> = [
+    Object.freeze({ directoryId: snapshot.identity.rootDirectoryId, path: "" }),
+  ]
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const parent = queue[cursor]!
+    for (const child of childrenByParent.get(parent.directoryId) ?? []) {
+      const entry = snapshot.entries.get(child.entryId)
+      if (!entry) continue
+      const path = parent.path === "" ? child.basename : `${parent.path}/${child.basename}`
+      entryIdByPath.set(path, child.entryId)
+      pathByEntryId.set(child.entryId, path)
+      if (entry.kind === "directory") {
+        queue.push(Object.freeze({ directoryId: child.entryId as ProjectDirectoryId, path }))
+      }
+    }
+  }
+  return Object.freeze({ entryIdByPath, pathByEntryId })
 }
 
 function parsePortablePath(input: string): { readonly path: string; readonly parentPath: string; readonly basename: string } {

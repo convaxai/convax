@@ -242,6 +242,24 @@ export function encodeCanvasCanonicalState(document: Y.Doc, scope?: DocumentScop
   return encodeRestrictedJcs(extractCanvasCanonicalState(document, scope))
 }
 
+/** Internal owner-runtime helper for encoding an already fully validated snapshot. */
+export function encodeValidatedCanvasCanonicalState(snapshot: CanvasSnapshot): Uint8Array {
+  return encodeRestrictedJcs({
+    format: "convax.canvas-canonical-state",
+    identity: snapshot.identity,
+    meta: snapshot.meta,
+    nodes: mapEntries(snapshot.nodes, ({ key: _key, ...record }) => record),
+    edges: mapEntries(snapshot.edges, ({ key: _key, ...record }) => record),
+    containments: mapEntries(snapshot.containments),
+    generationBegins: mapEntries(snapshot.generationBegins),
+    generationTerminals: mapEntries(snapshot.generationTerminals),
+    generationDismissals: mapEntries(snapshot.generationDismissals),
+    generationRecoveryFailures: mapEntries(snapshot.generationRecoveryFailures),
+    semanticHistory: mapEntries(snapshot.semanticHistory),
+    operations: mapEntries(snapshot.operations),
+  } satisfies CanvasCanonicalState)
+}
+
 function readIdentity(map: Y.Map<unknown>, scope?: DocumentScope): CanvasIdentity {
   assertMapKeys(map, IDENTITY_KEYS, "identity")
   const value = Object.fromEntries(IDENTITY_KEYS.map((key) => [key, map.get(key)]))
@@ -369,6 +387,31 @@ function readOperation(key: string, value: unknown): BoundedOperationReceipt {
   if (key !== operationKey(value.actorId, value.operationId))
     throw new CanvasSchemaError("operation-key-mismatch", "Operation receipt key mismatch")
   return value
+}
+
+/** Package-internal owner fast-path readers. They validate one exact changed
+ * record with the same parsers used by the public full-document validator. */
+export function readCanvasNodeRecordForOwner(document: Y.Doc, key: string): CanvasNodeSnapshot {
+  return readNode(key, getCanvasChildMap(document, "nodes").get(key))
+}
+
+export function readCanvasEdgeRecordForOwner(document: Y.Doc, key: string): CanvasEdgeSnapshot {
+  return readEdge(key, getCanvasChildMap(document, "edges").get(key))
+}
+
+export function readCanvasContainmentRecordForOwner(document: Y.Doc, key: string): ContainmentChoice {
+  return readContainment(key, getCanvasChildMap(document, "containments").get(key))
+}
+
+export function readCanvasHistoryRecordForOwner(
+  document: Y.Doc,
+  key: string,
+): CanvasCanonicalSemanticHistoryValue {
+  return readHistory(key, getCanvasChildMap(document, "semanticHistory").get(key))
+}
+
+export function readCanvasOperationRecordForOwner(document: Y.Doc, key: string): BoundedOperationReceipt {
+  return readOperation(key, getCanvasChildMap(document, "operations").get(key))
 }
 
 function validateGenerationRelations(

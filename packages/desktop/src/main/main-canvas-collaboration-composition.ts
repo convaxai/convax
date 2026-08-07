@@ -1,16 +1,16 @@
 import {
   createCanvasReconstructionYDoc,
+  createCanvasDocumentOwnerRuntime,
   requiredCanvasBlobDigests,
-  selectedCanvasDocumentOwnerArtifactDefinition,
 } from "@convax/canvas/collaboration"
 import {
-  createSelectedDocumentOwnerArtifactFactory,
   type CollaborationKernelOptions,
   type DocumentOwnerRuntime,
   type Id128,
   type CurrentProtocolAuthority,
 } from "@convax/collaboration"
 import type { ProjectIndexCanvasApplicationPort } from "@convax/project/canvas"
+import type { CanvasSubmitDiagnosticsPort } from "@convax/canvas/application"
 import type { NodeProjectCollaborationRuntimeCoordinator } from "@convax/project/node"
 
 import {
@@ -43,10 +43,7 @@ export interface MainCanvasCollaborationComposition {
 export function createMainCanvasOwnerRuntime(
   authority: CurrentProtocolAuthority,
 ): DocumentOwnerRuntime<"canvas"> {
-  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-    .createRuntime(selectedCanvasDocumentOwnerArtifactDefinition)
-  if ("status" in selected) throw new Error(`Canvas owner runtime is ${selected.code}`)
-  return selected
+  return createCanvasDocumentOwnerRuntime(authority)
 }
 
 /**
@@ -69,6 +66,7 @@ export function createMainCanvasCollaborationComposition(input: {
   readonly createCursorToken: () => Id128
   readonly artifactAuthority?: CanvasRouteArtifactAuthority
   readonly factAuthority?: CanvasRouteExternalFactAuthority
+  readonly diagnostics?: CanvasSubmitDiagnosticsPort
 }): MainCanvasCollaborationComposition {
   const canvasOwner = input.canvasOwner ?? createMainCanvasOwnerRuntime(input.authority)
   const resolveFacts = createRouteScopedCanvasFactResolver({
@@ -102,6 +100,7 @@ export function createMainCanvasCollaborationComposition(input: {
     openDocumentSession: (ref) => routes.openDocumentSession(ref),
     resolveFacts: ({ scope, dependencies, signal }) => resolveFacts({ scope, dependencies, signal }),
     applicationCommands: input.applicationCommands,
+    diagnostics: input.diagnostics,
   })
   let disposed = false
   return Object.freeze({
