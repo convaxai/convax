@@ -128,7 +128,7 @@ describe("ProjectResetRecoveryState", () => {
     })
   })
 
-  test("requires two explicit steps and submits only the opaque preview token", async () => {
+  test("requires three explicit steps, shows archive path on success, and submits only the opaque preview token", async () => {
     await withDom(async (root) => {
       const client = recoveryClient()
       const onPublished = mock(async () => undefined)
@@ -142,6 +142,12 @@ describe("ProjectResetRecoveryState", () => {
       await act(async () => button("Archive legacy data and reset")?.click())
       expect(client.confirmReset).toHaveBeenCalledTimes(1)
       expect(client.confirmReset).toHaveBeenCalledWith({ projectId: "project-legacy", token })
+      // After successful reset, the published state is shown before onPublished fires
+      expect(onPublished).not.toHaveBeenCalled()
+      expect(document.querySelector("[data-project-reset-published]")).toBeTruthy()
+      expect(document.querySelector("[data-project-reset-published]")?.textContent).toContain(".convax-archive-")
+
+      await act(async () => button("Open Project")?.click())
       expect(onPublished).toHaveBeenCalledWith("project-legacy")
     })
   })
