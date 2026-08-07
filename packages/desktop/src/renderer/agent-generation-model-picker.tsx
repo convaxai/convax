@@ -7,7 +7,8 @@ import type {
 } from "../generation-contracts"
 import { Button, SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
 import { Check, LoaderCircle, Settings2 } from "lucide-react"
-import { useEffect, useId, useRef } from "react"
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import {
   agentGenerationOutputs,
   agentGenerationModelDisplayTitle,
@@ -15,12 +16,17 @@ import {
   type AgentGenerationOutput,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
+import {
+  createAgentComposerPickerAnchor,
+  positionAgentComposerPicker,
+} from "./agent-composer-picker"
 import { availableAgentLlmProviders, type AgentLlmModelSelection } from "./agent-llm-models"
 
 export type AgentModelPickerTab = AgentGenerationOutput | "llm"
 
 export interface AgentGenerationModelPickerProps {
   activeTab: AgentModelPickerTab
+  anchorElement?: HTMLElement | null
   error?: string
   loading: boolean
   llmCatalog?: AgentModelCatalog
@@ -67,6 +73,8 @@ function OpenServicesPrompt(props: { error?: boolean; message: string; onOpenSer
 export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProps) {
   const instanceId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
+  const pickerSurfaceRef = useRef<HTMLDivElement>(null)
+  const [pickerHeight, setPickerHeight] = useState(0)
   const modelPickerTabs: readonly AgentModelPickerTab[] = ["llm", ...agentGenerationOutputs]
   const tabs = modelPickerTabs.map((tab) => ({
     id: `${instanceId}-agent-generation-model-tab-${tab}`,
@@ -86,6 +94,34 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     provider.models.map((model) => ({ model, providerId: provider.providerId, providerName: provider.providerName })),
   )
   const activeTab = tabs.find((tab) => tab.value === props.activeTab)!
+
+  const anchor = props.anchorElement
+    ? createAgentComposerPickerAnchor(
+        props.anchorElement.getBoundingClientRect(),
+        pickerSurfaceRef.current?.getBoundingClientRect() ??
+          props.anchorElement.getBoundingClientRect(),
+        { height: window.innerHeight, width: window.innerWidth },
+      )
+    : undefined
+  const position = anchor ? positionAgentComposerPicker(anchor, pickerHeight) : undefined
+  const setPickerSurfaceRef = useCallback(
+    (element: HTMLDivElement | null) => {
+      pickerSurfaceRef.current = element
+      dialogRef.current = element
+    },
+    [],
+  )
+
+  useLayoutEffect(() => {
+    if (!position) return
+    const picker = pickerSurfaceRef.current
+    if (!picker) return
+    const updateHeight = () => setPickerHeight(picker.getBoundingClientRect().height)
+    updateHeight()
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(picker)
+    return () => observer.disconnect()
+  }, [position])
 
   useEffect(() => {
     if (!activeOutput || props.loading || props.error || selectedGenerationModel || !defaultGenerationModel) {
@@ -107,10 +143,10 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     return () => previousFocus?.focus({ preventScroll: true })
   }, [])
 
-  return (
+  const picker = (
     <div
       aria-label="Agent models"
-      className="absolute inset-x-0 bottom-full z-30 mb-2 overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
+      className="fixed z-50 overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
       data-agent-generation-model-picker
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -118,8 +154,18 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
           props.onClose()
         }
       }}
-      ref={dialogRef}
+      ref={setPickerSurfaceRef}
       role="dialog"
+      style={
+        position
+          ? {
+              left: position.left,
+              maxWidth: "min(22rem, calc(100vw - 1rem))",
+              top: position.top,
+              transform: position.placement === "above" ? "translateY(-100%)" : undefined,
+            }
+          : undefined
+      }
       tabIndex={-1}
     >
       <div className="mb-2 flex items-center justify-between px-1">
@@ -236,4 +282,6 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       ) : null}
     </div>
   )
+  if (typeof document === "undefined" || !props.anchorElement) return picker
+  return createPortal(picker, document.body)
 }
