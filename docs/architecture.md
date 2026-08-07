@@ -1097,6 +1097,32 @@ active Project and activates the next available binding only through a fresh
 `project:touch`; if that barrier fails, the window remains fail-closed with no active
 Project rather than projecting either the removed Project or an unactivated fallback.
 
+### Legacy format cleanup guidance
+
+When a Project contains retired collaboration data (`.convax/protocol-v3/`,
+`.convax/canvases/catalog.json`, or `.convax/canvases/<id>/document.json`), the
+open guard reports `unsupported-project-data` and blocks activation. The user
+sees a guided reset dialog that:
+
+1. Lists every unsupported path found in the private tree.
+2. Explains that ordinary Project files (`Notes/`, `Generated/`, and root-level
+   files) are preserved unchanged.
+3. Requires explicit confirmation before archiving the legacy private data to
+   `.convax-archive-<token-suffix>` and creating a fresh empty Canvas.
+
+After a successful reset, the archive directory is inert: runtime open, mutation,
+checkpoint, and GC paths ignore it. Only an explicit later user action may delete
+it. The archive is the byte-exact copy of the prior `.convax` tree, not a
+selective migration.
+
+Desktop renders a post-reset success surface that includes the archive
+directory name so the user can locate and optionally remove it through the
+operating system. No runtime path removes the archive automatically.
+
+A Project with unsupported data is never silently opened, migrated, or reset.
+Checkpoint, GC, and ordinary open never delete or rewrite the legacy bytes.
+This one-time confirmed reset is the only admitted cleanup path.
+
 ### Marketplace listing, install and setup
 
 ```text
