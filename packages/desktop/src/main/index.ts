@@ -916,6 +916,7 @@ function startApplication() {
       firstRegistration: createLocalProjectOwnerIndexRegistrationPort(
         collaborationAuthority,
         localProjectOwnerAuthority,
+        projectManager,
       ),
       materializers: collaborationMaterializers,
       localAuthority: localCollaborationAuthority,

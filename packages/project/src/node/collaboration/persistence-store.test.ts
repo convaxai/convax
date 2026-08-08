@@ -131,6 +131,30 @@ describe("NodeCollaborationPersistence", () => {
     fixture.store.dispose()
   })
 
+  durabilityTest("ignores only a regular macOS metadata file in the document inventory", async () => {
+    const fixture = await createFixture()
+    const scope = projectIndexScope()
+    await initialize(fixture.store, scope)
+    fixture.store.dispose()
+    const documents = path.join(fixture.collaborationDirectory, "documents")
+    await fs.writeFile(path.join(documents, ".DS_Store"), "ambient metadata")
+
+    const reopened = await NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })
+    expect((await reopened.loadReplicaHead(scope) as NodeAcceptedReplicaHead).scope).toEqual(scope)
+    reopened.dispose()
+
+    await fs.writeFile(path.join(documents, "unexpected"), "not a document shard")
+    await expect(NodeCollaborationPersistence.open({
+      collaborationDirectory: fixture.collaborationDirectory,
+      localActorId: localActor,
+      materializer: fixture.frames,
+    })).rejects.toMatchObject({ code: "store-corrupt" })
+  })
+
   durabilityTest("publishes checkpoint, base, head and genesis proof behind one idempotent shard barrier", async () => {
     const fixture = await createFixture()
     const scope = canvasScope()

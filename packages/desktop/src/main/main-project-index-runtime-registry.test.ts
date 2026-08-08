@@ -5,7 +5,7 @@ import path from "node:path"
 import { createWebCryptoEd25519Verifier, parseDigest, parseProjectId } from "@convax/collaboration"
 import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import { PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST } from "@convax/project"
-import { readProjectNativeStoreManifest } from "@convax/project/node"
+import { NodeProjectManager, readProjectNativeStoreManifest } from "@convax/project/node"
 
 import { loadHistoricalTestAuthority } from "./collaboration-authority.test-support"
 import { ElectronReplicaSigningVault } from "./electron-replica-signing-vault"
@@ -51,18 +51,27 @@ describe("existing ProjectIndex registration", () => {
     await fs.writeFile(path.join(projectRoot, ".convax", "canvases", "catalog.json"), "legacy")
     const authority = await loadHistoricalTestAuthority()
     let ownerCreated = false
-    const registration = createLocalProjectOwnerIndexRegistrationPort(authority, {
-      async ensureForDurableProject() {
-        ownerCreated = true
-        throw new Error("must not create owner")
+    let privateStorageRepaired = false
+    const registration = createLocalProjectOwnerIndexRegistrationPort(
+      authority,
+      {
+        async ensureForDurableProject() {
+          ownerCreated = true
+          throw new Error("must not create owner")
+        },
+        async resolveExact() {
+          return "missing" as const
+        },
+        async verifyCheckpointSignature() {
+          return false
+        },
       },
-      async resolveExact() {
-        return "missing" as const
+      {
+        async ensureRegisteredProjectPrivateStorage() {
+          privateStorageRepaired = true
+        },
       },
-      async verifyCheckpointSignature() {
-        return false
-      },
-    })
+    )
 
     await expect(
       registration.ensureRegistered({
@@ -71,6 +80,7 @@ describe("existing ProjectIndex registration", () => {
       }),
     ).rejects.toMatchObject({ code: "unsupported-project-data" })
     expect(ownerCreated).toBeFalse()
+    expect(privateStorageRepaired).toBeFalse()
     await expect(fs.access(path.join(projectRoot, ".convax", "collaboration"))).rejects.toThrow()
   })
 
@@ -79,9 +89,11 @@ describe("existing ProjectIndex registration", () => {
     roots.push(root)
     const projectRoot = path.join(root, "project")
     const userData = path.join(root, "user-data")
-    await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
+    await fs.mkdir(projectRoot, { recursive: true })
     const authority = await loadHistoricalTestAuthority()
-    const projectId = parseProjectId("project-first-register")
+    const projects = new NodeProjectManager({ registryFile: path.join(userData, "projects.json") })
+    const projectId = parseProjectId((await projects.addProject(projectRoot)).id)
+    await fs.rm(path.join(projectRoot, ".convax"), { force: true, recursive: true })
     const vault = new ElectronReplicaSigningVault(path.join(userData, "vault"), {
       isEncryptionAvailable: () => true,
       getSelectedStorageBackend: () => "keychain",
@@ -101,7 +113,7 @@ describe("existing ProjectIndex registration", () => {
       vault,
       verifier: createWebCryptoEd25519Verifier(),
     })
-    const registration = createLocalProjectOwnerIndexRegistrationPort(authority, owners)
+    const registration = createLocalProjectOwnerIndexRegistrationPort(authority, owners, projects)
     const first = await registration.ensureRegistered({ projectId, projectRoot })
     const retry = await registration.ensureRegistered({ projectId, projectRoot })
     expect(retry).toEqual(first)
@@ -120,6 +132,10 @@ describe("existing ProjectIndex registration", () => {
     expect(localOwner).not.toBe("rejected")
     if (localOwner === "missing" || localOwner === "rejected") throw new Error("unreachable")
     expect(localOwner.binding.projectIndexShardEpoch).toBe(manifest.projectIndexScope.shardEpoch)
+    expect(JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))).toEqual({
+      projectId,
+      schemaVersion: "convax.project/1",
+    })
   })
 })
 

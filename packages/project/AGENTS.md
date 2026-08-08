@@ -131,6 +131,11 @@ This package owns the durable Project aggregate and native Project adapters.
   native-key hashing belong exclusively to `@convax/project/node`; durable head is
   the sole accepted local pointer and directory scans are recovery evidence only.
   Store filenames are literal on-disk names and never select a protocol.
+- A registered local Project with no collaboration authority bytes may recreate its
+  missing manifest and exact durable-owner current genesis from the canonical
+  registry binding. Unsupported, Team-bound, or unknown private data never takes
+  this recovery path. Document-root inventory ignores only a regular `.DS_Store`;
+  every other non-document entry remains store corruption.
 - The pending-editor required floor is the content-certified ProjectIndex scope plus
   every current live route in the exact `ProjectIndexLiveScopeManifestV2`. Registry
   state is advisory anti-rollback/discovery metadata and never grants, denies, adds,

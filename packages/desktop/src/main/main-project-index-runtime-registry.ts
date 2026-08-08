@@ -45,6 +45,7 @@ import {
   verifyEmptyProjectIndexGenesis,
   verifyPristineUnteamedProjectIndexNativeStore,
   type NodeReplicaHeadMaterializer,
+  type RegisteredProjectPrivateStorageRecoveryPort,
 } from "@convax/project/node"
 
 import {
@@ -131,6 +132,7 @@ export function createLocalProjectOwnerIndexRegistrationPort(
   authority: CurrentProtocolAuthority,
   owners: DurableLocalProjectOwnerAuthorityResolver &
     Pick<NodeDurableLocalProjectOwnerAuthority, "verifyCheckpointSignature">,
+  projects: RegisteredProjectPrivateStorageRecoveryPort,
 ): MainProjectIndexFirstRegistrationPort {
   const port: MainProjectIndexFirstRegistrationPort = {
     async ensureRegistered({ projectId, projectRoot }) {
@@ -139,6 +141,7 @@ export function createLocalProjectOwnerIndexRegistrationPort(
       if (resolution.status === "recovery-required") {
         throw new Error("Project collaboration reset recovery must finish before first registration")
       }
+      await projects.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot })
       const authorityTuple = {
         protocolDigest: authority.protocolDigest,
         schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
