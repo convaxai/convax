@@ -34,7 +34,7 @@ describe("Canvas visual history", () => {
         entity: { entityId: "duplicate", incarnation: "duplicate-incarnation", kind: "node" },
       },
     ])
-    expect(history.reconcile(prediction, { direction: "undo", rootOperationId: "root-duplicate" })).toBeTrue()
+    expect(history.reconcile(prediction, { direction: "undo", rootOperationId: "root-duplicate" }, before)).toBeTrue()
     expect(history.overlay.getSnapshot().pendingOperationCount).toBe(0)
   })
 
@@ -45,7 +45,7 @@ describe("Canvas visual history", () => {
     history.record("root-duplicate", before, after)
     const prediction = history.begin("undo", "session-a")
 
-    expect(history.reconcile(prediction, { direction: "undo", rootOperationId: "another-root" })).toBeFalse()
+    expect(history.reconcile(prediction, { direction: "undo", rootOperationId: "another-root" }, before)).toBeFalse()
     expect(history.overlay.getSnapshot().pendingOperationCount).toBe(0)
     expect(history.begin("redo", "session-a")).toBeNull()
   })
@@ -72,7 +72,28 @@ describe("Canvas visual history", () => {
         },
       },
     ])
-    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-create" })).toBeTrue()
+    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-create" }, before)).toBeTrue()
+  })
+
+  test("tracks the authoritative incarnation created by redo for the next immediate undo", () => {
+    const history = new CanvasVisualHistoryCoordinator()
+    const before = authority([])
+    const firstCreation = authority(["created-first"])
+    history.record("root-create", before, firstCreation)
+
+    const undo = history.begin("undo", "session-a")
+    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-create" }, before)).toBeTrue()
+    const redo = history.begin("redo", "session-a")
+    const recreated = authority(["created-again"])
+    expect(history.reconcile(redo, { direction: "redo", rootOperationId: "root-create" }, recreated)).toBeTrue()
+
+    history.begin("undo", "session-a")
+    expect(history.overlay.getSnapshot().operations[0]?.items).toEqual([
+      {
+        kind: "hide-entity",
+        entity: { entityId: "created-again", incarnation: "created-again-incarnation", kind: "node" },
+      },
+    ])
   })
 
   test("drops only the failed provisional suffix and retains earlier durable history", () => {
@@ -86,7 +107,7 @@ describe("Canvas visual history", () => {
 
     expect(history.canUndo()).toBeTrue()
     const undo = history.begin("undo", "session-a")
-    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-durable" })).toBeTrue()
+    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-durable" }, before)).toBeTrue()
   })
 
   test("projects complete node data and exact edge removal/restoration", () => {
@@ -141,7 +162,7 @@ describe("Canvas visual history", () => {
         },
       ]),
     )
-    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-complete" })).toBeTrue()
+    expect(history.reconcile(undo, { direction: "undo", rootOperationId: "root-complete" }, before)).toBeTrue()
 
     const redo = history.begin("redo", "session-a")
     expect(history.overlay.getSnapshot().operations[0]?.items).toEqual(

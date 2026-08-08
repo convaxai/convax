@@ -72,4 +72,57 @@ describe("Canvas optimistic overlay", () => {
     expect(notifications).toEqual([{ authoritative: "after", overlay: expect.objectContaining({ pendingOperationCount: 0 }) }])
     store.dispose()
   })
+
+  test("invokes the presentation scheduler without rebinding its receiver", () => {
+    const overlay = new CanvasOptimisticOverlayCoordinator()
+    const scheduled: Array<() => void> = []
+    let receiver: unknown = "not-called"
+    const schedule = function (this: unknown, task: () => void) {
+      receiver = this
+      scheduled.push(task)
+    }
+    const store = new CanvasCombinedPresentationStore({
+      authoritative: {
+        getSnapshot: () => "authority",
+        subscribe: () => () => undefined,
+      },
+      overlay,
+      schedule,
+    })
+    store.subscribe(() => undefined)
+
+    overlay.begin("scope", [ghost("saving")])
+
+    expect(receiver).toBeUndefined()
+    expect(scheduled).toHaveLength(1)
+    scheduled[0]!()
+    store.dispose()
+  })
+
+  test("does not strand the coalescing latch when scheduling throws", () => {
+    const overlay = new CanvasOptimisticOverlayCoordinator()
+    let attempts = 0
+    const scheduled: Array<() => void> = []
+    const store = new CanvasCombinedPresentationStore({
+      authoritative: {
+        getSnapshot: () => "authority",
+        subscribe: () => () => undefined,
+      },
+      overlay,
+      schedule: (task) => {
+        attempts += 1
+        if (attempts === 1) throw new Error("scheduler unavailable")
+        scheduled.push(task)
+      },
+    })
+    store.subscribe(() => undefined)
+
+    expect(() => overlay.begin("scope", [ghost("first")])).toThrow("scheduler unavailable")
+    overlay.begin("scope", [ghost("second")])
+
+    expect(attempts).toBe(2)
+    expect(scheduled).toHaveLength(1)
+    scheduled[0]!()
+    store.dispose()
+  })
 })

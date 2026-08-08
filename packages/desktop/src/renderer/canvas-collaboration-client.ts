@@ -273,7 +273,7 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
         }
         this.#acceptMutation(result.projection, result.acceptedFrameDigest)
         const transition = result.historyTransition ?? null
-        this.#visualHistory.reconcile(prediction, transition)
+        this.#visualHistory.reconcile(prediction, transition, this.#visualAuthority())
         this.#publish()
         return transition
       } catch (error) {

@@ -51,6 +51,19 @@ export interface ProjectBlobHave {
   readonly byteLength: Uint64
 }
 
+/**
+ * Project-scoped availability projection over exact durable blob material.
+ *
+ * This port answers only whether immutable bytes are locally available. It
+ * never selects a ProjectIndex version or grants Canvas history authority.
+ */
+export interface ProjectBlobAvailabilityQueryPort {
+  queryAvailableBlobs(input: {
+    readonly projectId: ProjectId
+    readonly blobs: readonly ProjectBlobHave[]
+  }): Promise<readonly ProjectBlobHave[]>
+}
+
 export interface ProjectBlobHolder {
   readonly memberId: MemberId
   readonly replicaId: ReplicaId

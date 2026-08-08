@@ -28,6 +28,7 @@ import {
 import {
   PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
   createProjectIndexDocumentOwnerRuntime,
+  type ProjectBlobAvailabilityQueryPort,
   type ProjectIndexCurrentBlobReferencePort,
   type ProjectIndexCurrentResourceReferenceQueryPort,
 } from "@convax/project"
@@ -314,6 +315,7 @@ export interface MainProjectIndexDescriptor {
 interface OpenProjectIndexEntry {
   readonly scope: ProjectIndexScope
   readonly project: ProjectCollaborationRuntimeLease
+  readonly blobs: ProjectBlobReplicationStore
   readonly runtime: MainCollaborationProductionRuntime<"project-index">
   readonly session: MainCollaborationDocumentSession<"project-index">
   readonly application: ProjectIndexCanvasApplicationPort &
@@ -330,6 +332,7 @@ interface OpenProjectIndexEntry {
 export class MainProjectIndexRuntimeRegistry
   implements
     ProjectIndexCanvasApplicationPort,
+    ProjectBlobAvailabilityQueryPort,
     ProjectIndexCurrentBlobReferencePort,
     ProjectIndexFileApplicationPort,
     ProjectIndexFileMaterializationProjectionPort
@@ -385,6 +388,11 @@ export class MainProjectIndexRuntimeRegistry
   async queryCurrentResourceReferences(input: { readonly projectId: ProjectId }) {
     const projectId = parseProjectId(input.projectId)
     return (await this.open(projectId)).application.queryCurrentResourceReferences({ projectId })
+  }
+
+  async queryAvailableBlobs(input: Parameters<ProjectBlobAvailabilityQueryPort["queryAvailableBlobs"]>[0]) {
+    const projectId = parseProjectId(input.projectId)
+    return (await this.open(projectId)).blobs.queryHave(input.blobs)
   }
 
   async createDirectory(input: Parameters<ProjectIndexFileApplicationPort["createDirectory"]>[0]) {
@@ -566,6 +574,7 @@ export class MainProjectIndexRuntimeRegistry
       return Object.freeze({
         scope: registeredScope,
         project,
+        blobs,
         runtime,
         session,
         application,

@@ -92,6 +92,9 @@ This package owns the durable Project aggregate and native Project adapters.
   evidence can be signed. A remote blob ACK is audit/status evidence only and marks
   a new reference replicated only together with a frame ACK from that same current
   credential-bound replica.
+- Project may expose exact local blob availability by digest and byte length for a
+  retained-history verifier. That answer is material presence only: it never selects
+  a ProjectIndex winner, proves currentness, or grants Canvas history authority.
 - Durable collaboration publication is supported by the current Project/node
   adapter on macOS and Linux only. Ordinary Node/Bun directory `fsync` reports
   `EPERM` on Windows and is normalized solely to

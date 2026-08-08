@@ -12,6 +12,7 @@ import {
   projectionDigest,
 } from "./projection"
 import { applyCanvasCandidateIntent, materializeCanvasSemanticHistoryIntent } from "./reducer"
+import { constructCanvasHistoryIntent } from "./command-construction"
 import { discoverCanvasValueDependencies } from "./external-facts"
 import type {
   CanvasExternalFactContext,
@@ -329,10 +330,71 @@ describe("Canvas v2 reducer and merge invariants", () => {
           edges: [],
         },
       }).semanticHistoryRoot!
+      const undoContext = context(79, 169, 2)
+      const undo = materializeCanvasSemanticHistoryIntent(
+        validateCanvasYDoc(document),
+        undoContext,
+        "undo",
+        root.rootOperationId,
+      )
+      if (undo === "rejected") throw new Error("resource history undo did not materialize")
+      applyOk(document, undoContext, undo)
       const redoContext = context(80, 170, 3)
-      const roundTrip = materializedRoundTrip(document, root, context(79, 169, 2), redoContext)
-      const dependencies = discoverCanvasValueDependencies(redoContext, roundTrip.redo)
-      expect(dependencies === "rejected" ? [] : dependencies.externalFacts).toHaveLength(1)
+      const redo = materializeCanvasSemanticHistoryIntent(
+        validateCanvasYDoc(document),
+        redoContext,
+        "redo",
+        root.rootOperationId,
+      )
+      if (redo === "rejected") throw new Error("resource history redo did not materialize")
+      const dependencies = discoverCanvasValueDependencies(redoContext, redo)
+      if (dependencies === "rejected") throw new Error("resource history dependencies were rejected")
+      expect(dependencies.externalFacts).toHaveLength(1)
+      const constructed = constructCanvasHistoryIntent({
+        snapshot: validateCanvasYDoc(document),
+        context: redoContext,
+        direction: "redo",
+        rootOperationId: root.rootOperationId,
+        externalFacts: {
+          resolveArtifact: (artifact) => ({ status: "rejected", code: "artifact-not-declared", ref: artifact } as never),
+          resolveFact: (requirement) => ({
+            status: "resolved",
+            requirement,
+            value: {
+              format: "convax.canvas-external-fact-result",
+              kind: requirement.kind,
+              requestSha256: requirement.request.sha256,
+              factDigest: requirement.factDigest,
+              decision: "verified",
+            },
+          }),
+          consumedDependencies: () => dependencies,
+        },
+      })
+      expect(typeof constructed).not.toBe("string")
+      if (typeof constructed === "string") throw new Error(`resource history construction ${constructed}`)
+      const retainedProof = constructed.intent.body.operations[0]?.retainedResourceProofs[0]
+      if (!retainedProof) throw new Error("resource history construction omitted its retained proof")
+      const tamperedCandidate = fork(document)
+      const beforeTamper = encodeCanvasCanonicalState(tamperedCandidate)
+      const tamperedIntent = {
+        ...constructed.intent,
+        body: {
+          operations: constructed.intent.body.operations.map((operation, index) =>
+            index === 0
+              ? {
+                  ...operation,
+                  retainedResourceProofs: [
+                    { ...retainedProof, sourceDataDigest: digest(249) },
+                  ],
+                }
+              : operation,
+          ),
+        },
+      } as CanvasTypedIntentUnion
+      expect(applyCanvasCandidateIntent(tamperedCandidate, redoContext, tamperedIntent, VALID_FACTS)).toBe("rejected")
+      expect(encodeCanvasCanonicalState(tamperedCandidate)).toEqual(beforeTamper)
+      applyOk(document, redoContext, constructed.intent)
     }
   })
 

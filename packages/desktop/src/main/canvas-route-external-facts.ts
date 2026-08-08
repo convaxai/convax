@@ -17,6 +17,7 @@ import {
 } from "@convax/canvas/collaboration"
 import {
   projectIndexResourceReferenceDigest,
+  type ProjectBlobAvailabilityQueryPort,
   type ProjectIndexCurrentResourceReferenceQueryPort,
 } from "@convax/project"
 import { parseProjectUri } from "@convax/uri"
@@ -113,28 +114,48 @@ export function createRouteScopedCanvasFactResolver(input: {
   }
 }
 
-/** Current Canvas resource facts resolve only from ProjectIndex's live owner projection. */
+/** Resolves current-resource authority and retained immutable material through distinct Project ports. */
 export function createProjectIndexBackedCanvasExternalFactAuthority(input: {
   readonly currentResources: Pick<ProjectIndexCurrentResourceReferenceQueryPort, "queryCurrentResourceReferences">
+  readonly availableBlobs: Pick<ProjectBlobAvailabilityQueryPort, "queryAvailableBlobs">
 }): CanvasRouteExternalFactAuthority {
   return Object.freeze({
     async verify(request: Parameters<CanvasRouteExternalFactAuthority["verify"]>[0]) {
       request.signal?.throwIfAborted()
-      if (request.request.kind !== "current-resources") return "pending"
-      const current = await input.currentResources.queryCurrentResourceReferences({
+      if (request.request.kind === "current-resources") {
+        const current = await input.currentResources.queryCurrentResourceReferences({
+          projectId: request.scope.projectId,
+        })
+        request.signal?.throwIfAborted()
+        return request.request.proofs.every((proof) => current.some((reference) => {
+          const digest = projectIndexResourceReferenceDigest(reference)
+          return proof.ownerProofDigest === digest &&
+            proof.resource.ownerProofDigest === digest &&
+            proof.resource.uri === reference.canonicalUri &&
+            proof.resource.contentDigest === reference.blob.digest &&
+            proof.resource.byteLength === reference.blob.byteLength &&
+            proof.resource.mime === reference.blob.mime &&
+            proof.resource.mediaClass === mediaClassForMime(reference.blob.mime)
+        })) ? "verified" : "rejected"
+      }
+      if (request.request.kind !== "retained-resources") return "pending"
+      const wanted = request.request.proofs.map((proof) => Object.freeze({
+        blobSha256: proof.resource.contentDigest,
+        byteLength: proof.resource.byteLength,
+      }))
+      const available = await input.availableBlobs.queryAvailableBlobs({
         projectId: request.scope.projectId,
+        blobs: wanted,
       })
       request.signal?.throwIfAborted()
-      return request.request.proofs.every((proof) => current.some((reference) => {
-        const digest = projectIndexResourceReferenceDigest(reference)
-        return proof.ownerProofDigest === digest &&
-          proof.resource.ownerProofDigest === digest &&
-          proof.resource.uri === reference.canonicalUri &&
-          proof.resource.contentDigest === reference.blob.digest &&
-          proof.resource.byteLength === reference.blob.byteLength &&
-          proof.resource.mime === reference.blob.mime &&
-          proof.resource.mediaClass === mediaClassForMime(reference.blob.mime)
-      })) ? "verified" : "rejected"
+      const wantedKeys = new Set(wanted.map(blobKey))
+      const availableKeys = new Set<string>()
+      for (const blob of available) {
+        const key = blobKey(blob)
+        if (!wantedKeys.has(key) || availableKeys.has(key)) return "rejected"
+        availableKeys.add(key)
+      }
+      return wanted.every((blob) => availableKeys.has(blobKey(blob))) ? "verified" : "pending"
     },
   })
 }
@@ -191,6 +212,10 @@ function mediaClassForMime(mime: string): "text" | "image" | "video" | "audio" |
   if (normalized.startsWith("video/")) return "video"
   if (normalized.startsWith("audio/")) return "audio"
   return "file"
+}
+
+function blobKey(blob: { readonly blobSha256: string; readonly byteLength: string }): string {
+  return `${blob.blobSha256}\0${blob.byteLength}`
 }
 
 function sameScope(left: DocumentScope, right: DocumentScope): boolean {

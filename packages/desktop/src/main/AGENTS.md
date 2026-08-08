@@ -262,6 +262,10 @@ For any matching change, read the full routed reference before planning or editi
   current-resource projection and verify the exact URI, blob tuple, owner-proof
   digest, and MIME-derived media class. A native path, prepared UI item, or retained
   file alone is not current-owner authority.
+- Resolve Canvas `retained-resources` facts only by composing Canvas's exact retained
+  proof with Project's project-scoped digest-and-length blob availability port.
+  Missing material stays pending; availability never substitutes for current-owner
+  authority and unexpected or duplicate availability results fail closed.
 - Compose local-owner authority adapters only through the one packaged current
   protocol descriptor. Load it once, verify its exact digest against the build, and
   build one kernel, one codec, and one document session type from it. Never load an

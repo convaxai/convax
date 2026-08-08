@@ -3,7 +3,7 @@ import type {
   OwnerIntentConstructionContext,
   OwnerIntentDependencies,
 } from "@convax/collaboration"
-import { parseUint32 } from "@convax/collaboration"
+import { compareBytes, parseUint32 } from "@convax/collaboration"
 import type { CanvasRendererCommand } from "./session"
 import {
   dataRegisterDigest,
@@ -242,8 +242,27 @@ export function constructCanvasHistoryIntent(input: {
   if (facts === "pending" || facts === "rejected") return facts
   // Requiring the exact consumed ledger prevents a caller from supplying a
   // broader or stale fact port to the history commit.
-  if (!sameCanonicalValue(input.externalFacts.consumedDependencies(), dependencies)) return "rejected"
+  if (!sameIntentDependencies(input.externalFacts.consumedDependencies(), dependencies)) return "rejected"
   return Object.freeze({ intent, dependencies })
+}
+
+function sameIntentDependencies(
+  left: OwnerIntentDependencies<"canvas">,
+  right: OwnerIntentDependencies<"canvas">,
+): boolean {
+  return left.validationArtifacts.length === right.validationArtifacts.length &&
+    left.externalFacts.length === right.externalFacts.length &&
+    left.validationArtifacts.every((artifact, index) =>
+      sameCanonicalValue(artifact, right.validationArtifacts[index])) &&
+    left.externalFacts.every((fact, index) => {
+      const candidate = right.externalFacts[index]
+      return candidate !== undefined &&
+        fact.owner === candidate.owner &&
+        fact.kind === candidate.kind &&
+        fact.factDigest === candidate.factDigest &&
+        fact.request.sha256 === candidate.request.sha256 &&
+        compareBytes(fact.request.exactJcs, candidate.request.exactJcs) === 0
+    })
 }
 
 function constructIntent(

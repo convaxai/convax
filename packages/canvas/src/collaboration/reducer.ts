@@ -248,7 +248,6 @@ export function materializeCanvasSemanticHistoryIntent(
         rootValue,
         direction,
         template,
-        bindings,
       )
       const operationIndex = parseUint32(String(index))
       const guardDigest = canvasDigest("convax.canvas-semantic-guard", {
@@ -1387,6 +1386,7 @@ function planSemanticOperations(
   if (intent.body.operations.length < 1 || intent.body.operations.length > 510) return "invalid"
   const selectedTemplates =
     intent.kind === "canvas.undo.semantic-inverse" ? rootValue.inverseTemplate : rootValue.forwardTemplate
+  const historyDirection = intent.kind === "canvas.undo.semantic-inverse" ? "undo" : "redo"
   const scheduledTemplates = scheduleCanvasHistoryTemplates(selectedTemplates, state.bindings)
   if (
     scheduledTemplates.length !== intent.body.operations.length ||
@@ -1418,6 +1418,13 @@ function planSemanticOperations(
     })
     if (guardDigest !== operation.guardDigest) return "invalid"
     if (!validateSemanticDerivedIdentities(operation.derived, base, context)) return "invalid"
+    const expectedRetainedResourceProofs = retainedHistoryProofs(
+      base,
+      rootValue,
+      historyDirection,
+      operation.template,
+    )
+    if (!sameCanonicalValue(operation.retainedResourceProofs, expectedRetainedResourceProofs)) return "invalid"
     for (const proof of operation.retainedResourceProofs) requireFact(facts.validateCurrentResource(proof))
     const template = operation.template
     if (template.op === "node.tombstone" || template.op === "edge.tombstone") {
@@ -2234,7 +2241,6 @@ function retainedHistoryProofs(
   root: SemanticHistoryRoot,
   direction: "undo" | "redo",
   template: CanvasHistoryTemplate,
-  bindings: ReadonlyMap<string, CanvasEntityRef | null>,
 ): Extract<CanvasResourceProofRef, { mode: "retained-canvas-history" }>[] {
   const sources: { handle: string; data: NodeDataEnvelope }[] = []
   if (template.op === "node.create") sources.push({ handle: template.handle, data: template.snapshot.data })
@@ -2268,7 +2274,6 @@ function retainedHistoryProofs(
     const key = new TextDecoder().decode(encodeRestrictedJcs(source.data.resource))
     if (!proofByResource.has(key)) proofByResource.set(key, proof)
   }
-  void bindings
   return [...proofByResource.values()].sort((left, right) =>
     compareUtf8(new TextDecoder().decode(encodeRestrictedJcs(left.resource)), new TextDecoder().decode(encodeRestrictedJcs(right.resource))),
   )
