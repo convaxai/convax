@@ -6,10 +6,7 @@ import type {
 } from "@convax/canvas/collaboration"
 import type { CanvasApplicationCommand, CanvasApplicationCommandResult } from "@convax/canvas/application"
 import type { CanvasDocument } from "@convax/canvas/core"
-import {
-  CanvasVisualHistoryCoordinator,
-  type CanvasVisualHistoryAuthority,
-} from "@convax/canvas/view"
+import { CanvasVisualHistoryCoordinator, type CanvasVisualHistoryAuthority } from "@convax/canvas/view"
 import type { CanvasDocumentRef } from "@convax/canvas/application"
 import type { Digest } from "@convax/collaboration"
 import type { CanvasResourceAddResult, CanvasResourceRelinkResult } from "../desktop-protocol"
@@ -23,7 +20,10 @@ import type {
 export interface DesktopCanvasRendererSession extends CanvasRendererCollaborationClient {
   readonly ref: CanvasDocumentRef
   readonly sessionId: CanvasSessionProjectionDto["sessionId"]
-  acceptApplicationMutation(result: CanvasRendererApplicationMutationResult, signal?: AbortSignal): Promise<CanvasApplicationCommandResult>
+  acceptApplicationMutation(
+    result: CanvasRendererApplicationMutationResult,
+    signal?: AbortSignal,
+  ): Promise<CanvasApplicationCommandResult>
   runResourceMutation<T extends CanvasResourceAddResult | CanvasResourceRelinkResult>(
     operation: () => Promise<T>,
     signal?: AbortSignal,
@@ -67,6 +67,7 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   readonly #createCommandId: () => string
   readonly #listeners = new Set<() => void>()
   readonly #entities = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
+  readonly #edgeEntities = new Map<string, CanvasEntityRef & { readonly kind: "edge" }>()
   readonly #unsubscribe: () => void
   #snapshot: CanvasSessionProjectionDto
   #lane: Promise<void> = Promise.resolve()
@@ -99,6 +100,10 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     return this.#entities.get(nodeId)
   }
 
+  resolveEdgeEntity(edgeId: string) {
+    return this.#edgeEntities.get(edgeId)
+  }
+
   subscribe(listener: () => void): () => void {
     this.#assertLive()
     this.#listeners.add(listener)
@@ -106,11 +111,11 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   }
 
   canUndo(): boolean {
-    return this.#snapshot.canUndo
+    return this.#visualHistory.canUndo() || this.#snapshot.canUndo
   }
 
   canRedo(): boolean {
-    return this.#snapshot.canRedo
+    return this.#visualHistory.canRedo() || this.#snapshot.canRedo
   }
 
   get sessionId() {
@@ -119,28 +124,47 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
 
   submit(command: CanvasRendererCommand, signal?: AbortSignal): Promise<void> {
     const commandId = this.#createCommandId()
+    const before = this.#visualAuthority()
+    const stagedRoot = this.#visualHistory.stageRendererCommand(commandId, command, before)
+    if (stagedRoot) this.#publish()
     return this.#enqueue(async () => {
-      throwIfAborted(signal)
-      const before = this.#visualAuthority()
-      const result = await this.#transport.submit({ ...this.#scope(), command, commandId })
-      // A returned mutation result is already durable. A late abort must not turn a
-      // committed command into an apparent failure or skip its authoritative projection.
-      this.#acceptMutation(result.projection, result.acceptedFrameDigest)
-      this.#recordVisualHistory(result.operationReceipt, before)
+      const durableBefore = this.#visualAuthority()
+      try {
+        throwIfAborted(signal)
+        const result = await this.#transport.submit({ ...this.#scope(), command, commandId })
+        // A returned mutation result is already durable. A late abort must not turn a
+        // committed command into an apparent failure or skip its authoritative projection.
+        this.#acceptMutation(result.projection, result.acceptedFrameDigest)
+        this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, durableBefore, this.#visualAuthority())
+        this.#publish()
+      } catch (error) {
+        this.#visualHistory.rejectStagedRoot(stagedRoot)
+        if (stagedRoot) this.#publish()
+        throw error
+      }
     })
   }
 
   executeApplication(command: CanvasApplicationCommand, signal?: AbortSignal): Promise<CanvasApplicationCommandResult> {
     const commandId = this.#createCommandId()
+    const stagedRoot = this.#visualHistory.stagePendingRoot(commandId, this.#visualAuthority())
+    if (stagedRoot) this.#publish()
     return this.#enqueue(async () => {
-      throwIfAborted(signal)
       const before = this.#visualAuthority()
-      const result = await this.#transport.executeApplication({ ...this.#scope(), command, commandId })
-      // The transport only returns after the durable head barrier. Reconcile even when
-      // the caller aborts while that barrier is completing.
-      const accepted = this.#acceptApplicationMutation(result)
-      this.#recordVisualHistory(result.operationReceipt, before)
-      return accepted
+      try {
+        throwIfAborted(signal)
+        const result = await this.#transport.executeApplication({ ...this.#scope(), command, commandId })
+        // The transport only returns after the durable head barrier. Reconcile even when
+        // the caller aborts while that barrier is completing.
+        const accepted = this.#acceptApplicationMutation(result)
+        this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
+        this.#publish()
+        return accepted
+      } catch (error) {
+        this.#visualHistory.rejectStagedRoot(stagedRoot)
+        if (stagedRoot) this.#publish()
+        throw error
+      }
     })
   }
 
@@ -191,24 +215,36 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     operation: () => Promise<T>,
     signal?: AbortSignal,
   ): Promise<Readonly<{ result: T; projectionDelivered: boolean }>> {
+    const stagedRoot = this.#visualHistory.stagePendingRoot(this.#createCommandId(), this.#visualAuthority())
+    if (stagedRoot) this.#publish()
     return this.#enqueue(async () => {
-      throwIfAborted(signal)
       const before = this.#visualAuthority()
-      const result = await operation()
-      if (result.delivery.status === "accepted") {
-        this.#acceptMutation(result.delivery.projection, result.delivery.acceptedFrameDigest)
-        this.#recordVisualHistory(result.operationReceipt, before)
-        return Object.freeze({ result, projectionDelivered: true })
-      }
       try {
-        const pending = [...this.#pendingInvalidationDigests]
-        this.#pendingInvalidationDigests.clear()
-        this.#accept(await this.#transport.query(this.#scope()))
-        for (const digest of pending) rememberBounded(this.#coveredFrameDigests, digest)
-        this.#recordVisualHistory(result.operationReceipt, before)
-        return Object.freeze({ result, projectionDelivered: true })
-      } catch {
-        return Object.freeze({ result, projectionDelivered: false })
+        throwIfAborted(signal)
+        const result = await operation()
+        if (result.delivery.status === "accepted") {
+          this.#acceptMutation(result.delivery.projection, result.delivery.acceptedFrameDigest)
+          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
+          this.#publish()
+          return Object.freeze({ result, projectionDelivered: true })
+        }
+        try {
+          const pending = [...this.#pendingInvalidationDigests]
+          this.#pendingInvalidationDigests.clear()
+          this.#accept(await this.#transport.query(this.#scope()))
+          for (const digest of pending) rememberBounded(this.#coveredFrameDigests, digest)
+          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before, this.#visualAuthority())
+          this.#publish()
+          return Object.freeze({ result, projectionDelivered: true })
+        } catch {
+          this.#reconcileMutationRoot(stagedRoot, result.operationReceipt, before)
+          this.#publish()
+          return Object.freeze({ result, projectionDelivered: false })
+        }
+      } catch (error) {
+        this.#visualHistory.rejectStagedRoot(stagedRoot)
+        if (stagedRoot) this.#publish()
+        throw error
       }
     })
   }
@@ -224,10 +260,12 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
 
   #history(direction: "undo" | "redo", signal?: AbortSignal) {
     const commandId = this.#createCommandId()
-    const prediction = this.#visualHistory.begin(direction, this.#visualAuthority(), this.#visualScopeKey())
+    const prediction = this.#visualHistory.begin(direction, this.#visualScopeKey())
     return this.#enqueue(async () => {
       try {
         throwIfAborted(signal)
+        if (prediction && !this.#visualHistory.isPredictionActive(prediction)) return null
+        if (!prediction && !(direction === "undo" ? this.#snapshot.canUndo : this.#snapshot.canRedo)) return null
         const result = await this.#transport[direction]({ ...this.#scope(), commandId })
         if (!result) {
           this.#visualHistory.reject(prediction)
@@ -236,9 +274,11 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
         this.#acceptMutation(result.projection, result.acceptedFrameDigest)
         const transition = result.historyTransition ?? null
         this.#visualHistory.reconcile(prediction, transition)
+        this.#publish()
         return transition
       } catch (error) {
         this.#visualHistory.reject(prediction)
+        this.#publish()
         throw error
       }
     })
@@ -269,12 +309,13 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
         }
       } finally {
         this.#refreshScheduled = false
-        if (this.#pendingInvalidationDigests.size > 0) this.#onInvalidation({
-          format: "convax.canvas-session-invalidation",
-          ref: this.ref,
-          sessionId: this.#snapshot.sessionId,
-          frameDigest: this.#pendingInvalidationDigests.values().next().value!,
-        })
+        if (this.#pendingInvalidationDigests.size > 0)
+          this.#onInvalidation({
+            format: "convax.canvas-session-invalidation",
+            ref: this.ref,
+            sessionId: this.#snapshot.sessionId,
+            frameDigest: this.#pendingInvalidationDigests.values().next().value!,
+          })
       }
     }).catch(() => undefined)
   }
@@ -282,7 +323,10 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
     this.#assertLive()
     const current = this.#lane.then(operation)
-    this.#lane = current.then(() => undefined, () => undefined)
+    this.#lane = current.then(
+      () => undefined,
+      () => undefined,
+    )
     return current
   }
 
@@ -290,7 +334,7 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
     if (this.#disposed) return
     this.#snapshot = requireProjection(this.ref, next, this.#snapshot.sessionId)
     this.#replaceEntities(next)
-    for (const listener of [...this.#listeners]) listener()
+    this.#publish()
   }
 
   #acceptMutation(next: CanvasSessionProjectionDto, frameDigest: Digest): void {
@@ -315,19 +359,29 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
   #replaceEntities(next: CanvasSessionProjectionDto): void {
     this.#entities.clear()
     for (const entry of next.nodeEntities) this.#entities.set(entry.nodeId, entry.entity)
+    this.#edgeEntities.clear()
+    for (const entry of next.edgeEntities) this.#edgeEntities.set(entry.edgeId, entry.entity)
   }
 
-  #recordVisualHistory(
+  #reconcileMutationRoot(
+    stagedRoot: string | null,
     receipt: BoundedOperationReceipt,
     before: CanvasVisualHistoryAuthority,
+    after?: CanvasVisualHistoryAuthority,
   ): void {
-    if (!receipt.semanticRoot) return
-    this.#visualHistory.record(receipt.operationId, before, this.#visualAuthority())
+    if (stagedRoot && receipt.semanticRoot) {
+      this.#visualHistory.bindStagedRoot(stagedRoot, receipt.operationId, before, after)
+    } else if (stagedRoot) {
+      this.#visualHistory.rejectStagedRoot(stagedRoot)
+    } else if (after) {
+      this.#visualHistory.record(receipt.operationId, before, after)
+    }
   }
 
   #visualAuthority(): CanvasVisualHistoryAuthority {
     return Object.freeze({
       document: this.#snapshot.document,
+      edgeEntities: this.#snapshot.edgeEntities,
       nodeEntities: this.#snapshot.nodeEntities,
     })
   }
@@ -342,6 +396,10 @@ class MountedDesktopCanvasRendererSession implements DesktopCanvasRendererSessio
 
   #assertLive(): void {
     if (this.#disposed) throw new Error("Canvas renderer session is closed")
+  }
+
+  #publish(): void {
+    for (const listener of Array.from(this.#listeners)) listener()
   }
 }
 
@@ -367,6 +425,16 @@ function requireProjection(
   }
   if (value.document.nodes.some((node) => !ids.has(node.id)) || ids.size !== value.document.nodes.length) {
     throw new Error("Canvas renderer session entity projection is incomplete")
+  }
+  const edgeIds = new Set<string>()
+  for (const entry of value.edgeEntities) {
+    if (edgeIds.has(entry.edgeId) || entry.edgeId !== entry.entity.id || entry.entity.kind !== "edge") {
+      throw new Error("Canvas renderer session edge entity projection is invalid")
+    }
+    edgeIds.add(entry.edgeId)
+  }
+  if (value.document.edges.some((edge) => !edgeIds.has(edge.id)) || edgeIds.size !== value.document.edges.length) {
+    throw new Error("Canvas renderer session edge entity projection is incomplete")
   }
   return value
 }

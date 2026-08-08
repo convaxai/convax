@@ -35,6 +35,16 @@ describe("Canvas optimistic overlay", () => {
     expect(overlay.getSnapshot().pendingOperationCount).toBe(0)
   })
 
+  test("fills an existing opaque operation without changing its token or order", () => {
+    const overlay = new CanvasOptimisticOverlayCoordinator()
+    const first = overlay.begin("scope", [])
+    const second = overlay.begin("scope", [ghost("second")])
+
+    expect(overlay.replace(first.token, [ghost("first")])).toBeTrue()
+    expect(overlay.getSnapshot().operations.map((operation) => operation.token)).toEqual([first.token, second.token])
+    expect(overlay.getSnapshot().operations[0]?.items).toEqual([ghost("first")])
+  })
+
   test("coalesces authority installation and overlay reconciliation into one snapshot", () => {
     let authority = "before"
     const authorityListeners = new Set<() => void>()

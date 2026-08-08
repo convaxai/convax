@@ -14,6 +14,7 @@ export interface ProjectResourceReadHandle {
   close(): Promise<void>
   createReadStream(input: { end: number; signal?: AbortSignal; start: number }): ReadableStream<Uint8Array>
   digest(signal?: AbortSignal): Promise<string>
+  readAll(signal?: AbortSignal): Promise<Uint8Array>
 }
 
 export interface ProjectResourceAssetResolver {

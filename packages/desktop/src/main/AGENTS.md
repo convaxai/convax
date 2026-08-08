@@ -31,6 +31,10 @@ authority and lifecycle coordination, not reusable domain semantics.
   can suppress the matching query while retaining a trailing remote refresh. Renderer reload,
   selection, reveal, or reconciliation is fallible projection work and cannot undo
   or misreport a durable mutation.
+- Compose Project's stable resource reader with Electron's image decoder before a
+  Canvas image-create command. Decode only the admitted Project file or verified
+  managed blob, bound memory, fail closed to the Canvas default size, and never use
+  renderer-supplied intrinsic dimensions as authority.
 - Bind every IPC, MessagePort, tool, and external-operation request to its trusted
   sender/principal and current Project/Canvas scope. Recheck permissions, identity,
   catalog membership, revision, target, and cancellation after awaited preparation

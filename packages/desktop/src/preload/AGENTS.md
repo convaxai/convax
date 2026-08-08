@@ -48,7 +48,8 @@ and closed typed Canvas commands; never add whole-document save or
 renderer-supplied native authority.
 
 Canvas session mutation DTOs carry a strict accepted frame digest and complete
-session projection; invalidations carry their frame digest. Resource mutation
+session projection, including exact live node and edge incarnation tables;
+invalidations carry their frame digest. Resource mutation
 requests carry the current session id and responses use a strict
 `accepted | unavailable` projection-delivery union. Preload does not synthesize a
 projection or downgrade malformed markers into a refresh.

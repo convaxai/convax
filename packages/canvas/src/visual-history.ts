@@ -1,11 +1,20 @@
 import { getCanvasNodePresentationSize } from "./document"
 import { CanvasOptimisticOverlayCoordinator } from "./optimistic-overlay"
-import { createCanvasConnectionGhost, createCanvasHideEntityOverlay, createCanvasReplacePresentationOverlay } from "./optimistic-overlay-plans"
+import {
+  createCanvasConnectionGhost,
+  createCanvasHideEntityOverlay,
+  createCanvasReplacePresentationOverlay,
+} from "./optimistic-overlay-plans"
 import type { CanvasGhostNode, CanvasOptimisticOverlayItem, CanvasOptimisticOperationToken } from "./optimistic-overlay"
 import type { CanvasDocument, CanvasNode } from "./types"
+import type { CanvasRendererCommand } from "./collaboration/session"
 
 export interface CanvasVisualHistoryAuthority {
   readonly document: CanvasDocument
+  readonly edgeEntities: readonly Readonly<{
+    readonly edgeId: string
+    readonly entity: Readonly<{ readonly id: string; readonly incarnation: string; readonly kind: "edge" }>
+  }>[]
   readonly nodeEntities: readonly Readonly<{
     readonly nodeId: string
     readonly entity: Readonly<{ readonly id: string; readonly incarnation: string; readonly kind: "node" }>
@@ -18,14 +27,16 @@ export interface CanvasVisualHistoryTransition {
 }
 
 interface CanvasVisualHistoryEntry {
-  readonly rootOperationId: string
-  readonly before: CanvasVisualHistoryAuthority
-  readonly after: CanvasVisualHistoryAuthority
+  readonly entryKey: string
+  rootOperationId: string
+  provisional: boolean
+  before: CanvasVisualHistoryAuthority | null
+  after: CanvasVisualHistoryAuthority | null
 }
 
 export interface CanvasVisualHistoryPrediction {
   readonly direction: "undo" | "redo"
-  readonly expectedRootOperationId: string
+  readonly entryKey: string
   readonly token: CanvasOptimisticOperationToken
 }
 
@@ -48,25 +59,94 @@ export class CanvasVisualHistoryCoordinator {
     if (!rootOperationId || !hasPresentationDifference(before.document, after.document)) return
     if (this.#pending.length > 0) this.reset()
     this.#entries.splice(this.#cursor)
-    this.#entries.push(Object.freeze({
+    this.#entries.push({
+      entryKey: `committed:${rootOperationId}`,
       rootOperationId,
+      provisional: false,
       before: cloneAuthority(before),
       after: cloneAuthority(after),
-    }))
+    })
     while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
     this.#cursor = this.#entries.length
   }
 
-  begin(direction: "undo" | "redo", current: CanvasVisualHistoryAuthority, scopeKey: string): CanvasVisualHistoryPrediction | null {
+  /**
+   * Installs an immediate visual root for a typed renderer geometry command.
+   * The command id is only a session-local correlation key; Main later binds
+   * the entry to the durable semantic root returned by the authority.
+   */
+  stageRendererCommand(
+    commandId: string,
+    command: CanvasRendererCommand,
+    current: CanvasVisualHistoryAuthority,
+  ): string | null {
+    if (!commandId || command.kind !== "canvas.nodes.set-geometry") return null
+    const before = this.#authorityAtCursor(current)
+    if (!before) return null
+    const after = applyRendererGeometryPresentation(before, command)
+    return after ? this.#stageAuthority(commandId, before, after) : null
+  }
+
+  /**
+   * Reserves one ordered visual-history root without executing a business
+   * command in Renderer. Main later supplies the exact before/after authority.
+   */
+  stagePendingRoot(commandId: string, current: CanvasVisualHistoryAuthority): string | null {
+    if (!commandId) return null
+    const before = this.#authorityAtCursor(current)
+    return this.#stageAuthority(commandId, before, null)
+  }
+
+  bindStagedRoot(
+    entryKey: string,
+    rootOperationId: string,
+    actualBefore: CanvasVisualHistoryAuthority,
+    actualAfter?: CanvasVisualHistoryAuthority,
+  ): boolean {
+    const entry = this.#entries.find((candidate) => candidate.entryKey === entryKey)
+    if (!entry || !entry.provisional || !rootOperationId) return false
+    entry.rootOperationId = rootOperationId
+    entry.provisional = false
+    entry.before = cloneAuthority(actualBefore)
+    entry.after = actualAfter ? cloneAuthority(actualAfter) : null
+    this.#refreshPendingPredictions(entry)
+    return true
+  }
+
+  rejectStagedRoot(entryKey: string | null): void {
+    if (!entryKey) return
+    const index = this.#entries.findIndex((entry) => entry.entryKey === entryKey)
+    if (index < 0) return
+    const removedKeys = new Set(this.#entries.slice(index).map((entry) => entry.entryKey))
+    for (let pendingIndex = this.#pending.length - 1; pendingIndex >= 0; pendingIndex -= 1) {
+      const prediction = this.#pending[pendingIndex]
+      if (!removedKeys.has(prediction.entryKey)) continue
+      this.overlay.settle(prediction.token)
+      this.#pending.splice(pendingIndex, 1)
+    }
+    this.#entries.splice(index)
+    this.#cursor = Math.min(this.#cursor, index)
+  }
+
+  canUndo(): boolean {
+    return this.#cursor > 0
+  }
+
+  canRedo(): boolean {
+    return this.#cursor < this.#entries.length
+  }
+
+  begin(direction: "undo" | "redo", scopeKey: string): CanvasVisualHistoryPrediction | null {
     const index = direction === "undo" ? this.#cursor - 1 : this.#cursor
     const entry = this.#entries[index]
     if (!entry) return null
     const target = direction === "undo" ? entry.before : entry.after
-    const overlay = createPresentationDelta(current, target)
+    const source = direction === "undo" ? entry.after : entry.before
+    const overlay = source && target ? createPresentationDelta(source, target) : []
     const operation = this.overlay.begin(scopeKey, overlay)
     const prediction = Object.freeze({
       direction,
-      expectedRootOperationId: entry.rootOperationId,
+      entryKey: entry.entryKey,
       token: operation.token,
     })
     this.#pending.push(prediction)
@@ -75,11 +155,14 @@ export class CanvasVisualHistoryCoordinator {
   }
 
   reconcile(prediction: CanvasVisualHistoryPrediction | null, actual: CanvasVisualHistoryTransition | null): boolean {
+    const entry = prediction ? this.#entries.find((candidate) => candidate.entryKey === prediction.entryKey) : undefined
     if (
       !prediction ||
+      !entry ||
+      entry.provisional ||
       !actual ||
       prediction.direction !== actual.direction ||
-      prediction.expectedRootOperationId !== actual.rootOperationId
+      entry.rootOperationId !== actual.rootOperationId
     ) {
       this.reset()
       return false
@@ -88,6 +171,10 @@ export class CanvasVisualHistoryCoordinator {
     const pendingIndex = this.#pending.findIndex((candidate) => candidate.token === prediction.token)
     if (pendingIndex >= 0) this.#pending.splice(pendingIndex, 1)
     return true
+  }
+
+  isPredictionActive(prediction: CanvasVisualHistoryPrediction | null): boolean {
+    return prediction !== null && this.#pending.some((candidate) => candidate.token === prediction.token)
   }
 
   reject(_prediction: CanvasVisualHistoryPrediction | null): void {
@@ -100,6 +187,41 @@ export class CanvasVisualHistoryCoordinator {
     this.#pending.splice(0)
     this.#cursor = 0
   }
+
+  #authorityAtCursor(fallback: CanvasVisualHistoryAuthority): CanvasVisualHistoryAuthority {
+    if (this.#cursor === 0) return this.#entries[0]?.before ?? fallback
+    return this.#entries[this.#cursor - 1]?.after ?? fallback
+  }
+
+  #stageAuthority(
+    commandId: string,
+    before: CanvasVisualHistoryAuthority | null,
+    after: CanvasVisualHistoryAuthority | null,
+  ): string | null {
+    if (before && after && !hasPresentationDifference(before.document, after.document)) return null
+    this.#entries.splice(this.#cursor)
+    const entryKey = `provisional:${commandId}`
+    this.#entries.push({
+      entryKey,
+      rootOperationId: commandId,
+      provisional: true,
+      before: before ? cloneAuthority(before) : null,
+      after: after ? cloneAuthority(after) : null,
+    })
+    while (this.#entries.length > this.#maximumEntries) this.#entries.shift()
+    this.#cursor = this.#entries.length
+    return entryKey
+  }
+
+  #refreshPendingPredictions(entry: CanvasVisualHistoryEntry): void {
+    if (!entry.before || !entry.after) return
+    for (const prediction of this.#pending) {
+      if (prediction.entryKey !== entry.entryKey) continue
+      const source = prediction.direction === "undo" ? entry.after : entry.before
+      const target = prediction.direction === "undo" ? entry.before : entry.after
+      this.overlay.replace(prediction.token, createPresentationDelta(source, target))
+    }
+  }
 }
 
 function createPresentationDelta(
@@ -109,8 +231,15 @@ function createPresentationDelta(
   const currentNodes = new Map(current.document.nodes.map((node) => [node.id, node]))
   const targetNodes = new Map(target.document.nodes.map((node) => [node.id, node]))
   const currentEntities = new Map(current.nodeEntities.map((entry) => [entry.nodeId, entry.entity]))
+  const currentEdgeEntities = new Map(current.edgeEntities.map((entry) => [entry.edgeId, entry.entity]))
   const items: CanvasOptimisticOverlayItem[] = []
   const ghostKeys = new Map<string, string>()
+
+  for (const [nodeId] of targetNodes) {
+    if (!currentNodes.has(nodeId)) {
+      ghostKeys.set(nodeId, `ghost-history-node:${globalThis.crypto.randomUUID()}`)
+    }
+  }
 
   for (const [nodeId] of currentNodes) {
     if (targetNodes.has(nodeId)) continue
@@ -121,38 +250,63 @@ function createPresentationDelta(
   for (const [nodeId, targetNode] of targetNodes) {
     const currentNode = currentNodes.get(nodeId)
     if (!currentNode) {
-      const presentationKey = `ghost-history-node:${globalThis.crypto.randomUUID()}`
-      ghostKeys.set(nodeId, presentationKey)
-      items.push(canvasNodeGhost(targetNode, presentationKey))
+      items.push(canvasNodeGhost(targetNode, ghostKeys.get(nodeId)!, ghostKeys))
       continue
     }
     if (!sameNodePresentation(currentNode, targetNode)) {
       const entity = currentEntities.get(nodeId)
       if (!entity) continue
-      items.push(createCanvasReplacePresentationOverlay({
-        entity: { entityId: nodeId, incarnation: entity.incarnation, kind: "node" },
-        position: targetNode.position,
-        size: getCanvasNodePresentationSize(targetNode),
-        title: targetNode.data.label,
-      }))
+      items.push(
+        createCanvasReplacePresentationOverlay({
+          entity: { entityId: nodeId, incarnation: entity.incarnation, kind: "node" },
+          snapshot: canvasNodePresentationSnapshot(
+            targetNode,
+            targetNode.parentId ? (ghostKeys.get(targetNode.parentId) ?? targetNode.parentId) : undefined,
+          ),
+        }),
+      )
     }
   }
+  const currentEdges = new Map(current.document.edges.map((edge) => [edge.id, edge]))
+  const targetEdges = new Map(target.document.edges.map((edge) => [edge.id, edge]))
+  for (const [edgeId] of currentEdges) {
+    if (targetEdges.has(edgeId)) continue
+    const entity = currentEdgeEntities.get(edgeId)
+    if (entity)
+      items.push(createCanvasHideEntityOverlay({ entityId: edgeId, incarnation: entity.incarnation, kind: "edge" }))
+  }
   for (const edge of target.document.edges) {
-    if (current.document.edges.some((candidate) => candidate.id === edge.id)) continue
+    const currentEdge = currentEdges.get(edge.id)
+    if (currentEdge && sameEdgePresentation(currentEdge, edge)) continue
+    if (currentEdge) {
+      const entity = currentEdgeEntities.get(edge.id)
+      if (entity)
+        items.push(createCanvasHideEntityOverlay({ entityId: edge.id, incarnation: entity.incarnation, kind: "edge" }))
+    }
     const source = ghostKeys.get(edge.source) ?? edge.source
     const targetKey = ghostKeys.get(edge.target) ?? edge.target
-    items.push(createCanvasConnectionGhost(source, targetKey))
+    const ghost = createCanvasConnectionGhost(source, targetKey)
+    items.push(
+      Object.freeze({
+        ...ghost,
+        ...(typeof edge.data?.label === "string" ? { label: edge.data.label } : {}),
+      }),
+    )
   }
   return Object.freeze(items)
 }
 
-function canvasNodeGhost(node: CanvasNode, presentationKey: string): CanvasGhostNode {
-  const nodeType = node.data.kind === "text" ? "text" as const : "file" as const
+function canvasNodeGhost(
+  node: CanvasNode,
+  presentationKey: string,
+  ghostKeys: ReadonlyMap<string, string>,
+): CanvasGhostNode {
+  const nodeType = node.data.kind === "text" ? ("text" as const) : ("file" as const)
   const mediaKind =
     node.data.kind === "audio" || node.data.kind === "image" || node.data.kind === "video"
       ? node.data.kind
       : nodeType === "file"
-        ? "file" as const
+        ? ("file" as const)
         : undefined
   return Object.freeze({
     kind: "ghost-node",
@@ -165,17 +319,48 @@ function canvasNodeGhost(node: CanvasNode, presentationKey: string): CanvasGhost
       title: node.data.label,
     }),
     size: Object.freeze(getCanvasNodePresentationSize(node)),
+    snapshot: canvasNodePresentationSnapshot(
+      node,
+      node.parentId ? (ghostKeys.get(node.parentId) ?? node.parentId) : undefined,
+    ),
+  })
+}
+
+function canvasNodePresentationSnapshot(node: CanvasNode, parentPresentationKey = node.parentId) {
+  return Object.freeze({
+    data: Object.freeze(structuredClone(node.data)),
+    nodeType: node.type ?? "file",
+    ...(parentPresentationKey ? { parentPresentationKey } : {}),
+    position: Object.freeze({ ...node.position }),
+    size: Object.freeze(getCanvasNodePresentationSize(node)),
+    ...(node.zIndex === undefined ? {} : { zIndex: node.zIndex }),
   })
 }
 
 function cloneAuthority(authority: CanvasVisualHistoryAuthority): CanvasVisualHistoryAuthority {
   return Object.freeze({
     document: structuredClone(authority.document),
-    nodeEntities: Object.freeze(authority.nodeEntities.map((entry) => Object.freeze({
-      nodeId: entry.nodeId,
-      entity: Object.freeze({ ...entry.entity }),
-    }))),
+    edgeEntities: Object.freeze(
+      authority.edgeEntities.map((entry) =>
+        Object.freeze({
+          edgeId: entry.edgeId,
+          entity: Object.freeze({ ...entry.entity }),
+        }),
+      ),
+    ),
+    nodeEntities: Object.freeze(
+      authority.nodeEntities.map((entry) =>
+        Object.freeze({
+          nodeId: entry.nodeId,
+          entity: Object.freeze({ ...entry.entity }),
+        }),
+      ),
+    ),
   })
+}
+
+function sameEdgePresentation(left: CanvasDocument["edges"][number], right: CanvasDocument["edges"][number]) {
+  return left.source === right.source && left.target === right.target && left.data?.label === right.data?.label
 }
 
 function hasPresentationDifference(left: CanvasDocument, right: CanvasDocument): boolean {
@@ -183,13 +368,31 @@ function hasPresentationDifference(left: CanvasDocument, right: CanvasDocument):
 }
 
 function sameNodePresentation(left: CanvasNode, right: CanvasNode): boolean {
-  const leftSize = getCanvasNodePresentationSize(left)
-  const rightSize = getCanvasNodePresentationSize(right)
-  return (
-    left.position.x === right.position.x &&
-    left.position.y === right.position.y &&
-    leftSize.width === rightSize.width &&
-    leftSize.height === rightSize.height &&
-    left.data.label === right.data.label
-  )
+  return JSON.stringify(canvasNodePresentationSnapshot(left)) === JSON.stringify(canvasNodePresentationSnapshot(right))
+}
+
+function applyRendererGeometryPresentation(
+  authority: CanvasVisualHistoryAuthority,
+  command: CanvasRendererCommand,
+): CanvasVisualHistoryAuthority | null {
+  const entities = new Map(authority.nodeEntities.map((entry) => [entry.nodeId, entry.entity]))
+  const updates = new Map(command.body.updates.map((update) => [update.node.id, update]))
+  let changed = false
+  const nodes = authority.document.nodes.map((node) => {
+    const update = updates.get(node.id)
+    const entity = entities.get(node.id)
+    if (!update || !entity || entity.incarnation !== update.node.incarnation) return node
+    changed = true
+    return {
+      ...node,
+      ...(update.position ? { position: { ...update.position } } : {}),
+      ...(update.size ? { style: { ...node.style, height: update.size.height, width: update.size.width } } : {}),
+    }
+  })
+  if (!changed) return null
+  return cloneAuthority({
+    document: { ...authority.document, nodes },
+    edgeEntities: authority.edgeEntities,
+    nodeEntities: authority.nodeEntities,
+  })
 }

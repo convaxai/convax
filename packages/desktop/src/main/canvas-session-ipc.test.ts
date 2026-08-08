@@ -25,7 +25,9 @@ function sender(id: number): TestSender {
   return {
     id,
     destroyed: false,
-    isDestroyed() { return this.destroyed },
+    isDestroyed() {
+      return this.destroyed
+    },
     once(event, listener) {
       expect(event).toBe("destroyed")
       this.destroyListener = listener
@@ -44,6 +46,7 @@ function projection() {
     ref,
     sessionId,
     document: Object.freeze({ id: ref.canvasId }),
+    edgeEntities: Object.freeze([]),
     nodeEntities: Object.freeze([]),
     canUndo: false,
     canRedo: false,
@@ -62,11 +65,15 @@ function ownerFixture() {
     flush: mock(async () => undefined),
     subscribe(listener: (event: unknown) => void) {
       invalidationListener = listener
-      return mock(() => { invalidationListener = undefined })
+      return mock(() => {
+        invalidationListener = undefined
+      })
     },
   }
   return {
-    emit(event: unknown) { invalidationListener?.(event) },
+    emit(event: unknown) {
+      invalidationListener?.(event)
+    },
     owner: owner as unknown as CanvasCollaborationSessionOwner,
     spies: owner,
   }
@@ -81,8 +88,12 @@ function register(
 ) {
   const handlers = new Map<string, Handler>()
   const ipc = {
-    handle(channel: string, handler: Handler) { handlers.set(channel, handler) },
-    removeHandler(channel: string) { handlers.delete(channel) },
+    handle(channel: string, handler: Handler) {
+      handlers.set(channel, handler)
+    },
+    removeHandler(channel: string) {
+      handlers.delete(channel)
+    },
   }
   const dispose = registerCanvasSessionIpc(owner, {
     ipcMain: ipc,
@@ -108,10 +119,14 @@ describe("Canvas collaboration session IPC", () => {
       ref,
       actor: { id: "desktop:renderer:7", kind: "renderer" },
     })
-    await expect(Promise.resolve().then(() => invoke(ipc.handlers.get(canvasSessionIpcChannels.query)!, second, {
-      ref,
-      sessionId,
-    }))).rejects.toThrow("belongs to another renderer")
+    await expect(
+      Promise.resolve().then(() =>
+        invoke(ipc.handlers.get(canvasSessionIpcChannels.query)!, second, {
+          ref,
+          sessionId,
+        }),
+      ),
+    ).rejects.toThrow("belongs to another renderer")
     expect(fixture.spies.queryRenderer).not.toHaveBeenCalled()
     ipc.dispose()
   })
@@ -121,12 +136,17 @@ describe("Canvas collaboration session IPC", () => {
     const ipc = register(fixture.owner)
     const current = sender(7)
 
-    await expect(Promise.resolve().then(() => invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, {
-      ...ref,
-      actorId: "caller-selected",
-    }))).rejects.toThrow("field set")
-    await expect(Promise.resolve().then(() => invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, sender(0), ref)))
-      .rejects.toThrow("untrusted renderer")
+    await expect(
+      Promise.resolve().then(() =>
+        invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, {
+          ...ref,
+          actorId: "caller-selected",
+        }),
+      ),
+    ).rejects.toThrow("field set")
+    await expect(
+      Promise.resolve().then(() => invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, sender(0), ref)),
+    ).rejects.toThrow("untrusted renderer")
     expect(fixture.spies.open).not.toHaveBeenCalled()
     ipc.dispose()
   })
@@ -140,10 +160,12 @@ describe("Canvas collaboration session IPC", () => {
     })
     const current = sender(7)
 
-    await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, {
-      canvasId: "canvas-other",
-      scopeId: ref.scopeId,
-    })).rejects.toThrow("live Workbench scope")
+    await expect(
+      invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, {
+        canvasId: "canvas-other",
+        scopeId: ref.scopeId,
+      }),
+    ).rejects.toThrow("live Workbench scope")
     expect(prepareProject).not.toHaveBeenCalled()
     await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, ref)).resolves.toMatchObject({ ref })
     expect(prepareProject).toHaveBeenCalledWith(ref.scopeId)
@@ -162,8 +184,9 @@ describe("Canvas collaboration session IPC", () => {
       },
     })
 
-    await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, sender(7), ref))
-      .rejects.toThrow("live Workbench scope")
+    await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, sender(7), ref)).rejects.toThrow(
+      "live Workbench scope",
+    )
     expect(fixture.spies.open).toHaveBeenCalledTimes(1)
     expect(fixture.spies.close).toHaveBeenCalledWith({ ref, sessionId })
     ipc.dispose()
@@ -177,8 +200,9 @@ describe("Canvas collaboration session IPC", () => {
     await invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, ref)
     active = { canvasId: "canvas-other", projectId: ref.scopeId }
 
-    await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.query)!, current, { ref, sessionId }))
-      .rejects.toThrow("live Workbench scope")
+    await expect(
+      invoke(ipc.handlers.get(canvasSessionIpcChannels.query)!, current, { ref, sessionId }),
+    ).rejects.toThrow("live Workbench scope")
     expect(fixture.spies.close).toHaveBeenCalledWith({ ref, sessionId })
     expect(fixture.spies.queryRenderer).not.toHaveBeenCalled()
     ipc.dispose()
@@ -192,8 +216,9 @@ describe("Canvas collaboration session IPC", () => {
     await invoke(ipc.handlers.get(canvasSessionIpcChannels.open)!, current, ref)
     active = { canvasId: "canvas-other", projectId: ref.scopeId }
 
-    await expect(invoke(ipc.handlers.get(canvasSessionIpcChannels.close)!, current, { ref, sessionId }))
-      .resolves.toBeUndefined()
+    await expect(
+      invoke(ipc.handlers.get(canvasSessionIpcChannels.close)!, current, { ref, sessionId }),
+    ).resolves.toBeUndefined()
     expect(fixture.spies.close).toHaveBeenCalledWith({ ref, sessionId })
     ipc.dispose()
   })
@@ -214,10 +239,14 @@ describe("Canvas collaboration session IPC", () => {
     first.destroyed = true
     first.destroyListener?.()
     expect(fixture.spies.close).toHaveBeenCalledWith({ ref, sessionId })
-    await expect(Promise.resolve().then(() => invoke(ipc.handlers.get(canvasSessionIpcChannels.flush)!, first, {
-      ref,
-      sessionId,
-    }))).rejects.toThrow("stale")
+    await expect(
+      Promise.resolve().then(() =>
+        invoke(ipc.handlers.get(canvasSessionIpcChannels.flush)!, first, {
+          ref,
+          sessionId,
+        }),
+      ),
+    ).rejects.toThrow("stale")
     ipc.dispose()
   })
 })

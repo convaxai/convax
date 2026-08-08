@@ -141,12 +141,7 @@ import {
 } from "../clipboard"
 import { createDefaultCanvasFileRendererRegistry, createDefaultCanvasNodeRegistry } from "../builtin-registry"
 import { CANVAS_NODE_INPUT_HANDLE_ID, CANVAS_NODE_OUTPUT_HANDLE_ID } from "../connections"
-import {
-  CANVAS_GROUP_FOLDER_SIZE,
-  createCanvasId,
-  getCanvasNodePresentationSize,
-  getCanvasNodeSize,
-} from "../document"
+import { CANVAS_GROUP_FOLDER_SIZE, createCanvasId, getCanvasNodePresentationSize, getCanvasNodeSize } from "../document"
 import { createCanvasFolderFocusNodes, getCanvasFolderFocusEntry } from "../directory-focus"
 import { CanvasOverlayRootProvider } from "../editor-context"
 import { CanvasEditorMutationSurfaceProvider } from "./canvas-mutation-surface"
@@ -184,6 +179,7 @@ import {
 import { deriveCanvasSelectionContext, isNodeOnlySelectionContext } from "../selection-context"
 import {
   createOptimisticResourceGhosts,
+  inspectDroppedCanvasResourcePresentations,
 } from "../optimistic-resource-projection"
 import {
   CanvasCombinedPresentationStore,
@@ -1153,27 +1149,29 @@ function CanvasEditorContent(
   ) {
     throw new Error("CanvasEditor requires a Main-owned Yjs collaboration projection client")
   }
-  const [optimisticOverlay] = useState(
-    () => new CanvasOptimisticOverlayCoordinator(),
-  )
+  const [optimisticOverlay] = useState(() => new CanvasOptimisticOverlayCoordinator())
   const mergedOptimisticOverlay = useMemo(
     () => new CanvasMergedOptimisticOverlayStore([optimisticOverlay, sessionVisualOverlay]),
     [optimisticOverlay, sessionVisualOverlay],
   )
   const combinedPresentationStore = useMemo(
-    () => new CanvasCombinedPresentationStore({
-      authoritative: {
-        getSnapshot: projectionStore.getProjection.bind(projectionStore),
-        subscribe: projectionStore.subscribe.bind(projectionStore),
-      },
-      overlay: mergedOptimisticOverlay,
-    }),
+    () =>
+      new CanvasCombinedPresentationStore({
+        authoritative: {
+          getSnapshot: projectionStore.getProjection.bind(projectionStore),
+          subscribe: projectionStore.subscribe.bind(projectionStore),
+        },
+        overlay: mergedOptimisticOverlay,
+      }),
     [mergedOptimisticOverlay, projectionStore],
   )
-  useEffect(() => () => {
-    combinedPresentationStore.dispose()
-    mergedOptimisticOverlay.dispose()
-  }, [combinedPresentationStore, mergedOptimisticOverlay])
+  useEffect(
+    () => () => {
+      combinedPresentationStore.dispose()
+      mergedOptimisticOverlay.dispose()
+    },
+    [combinedPresentationStore, mergedOptimisticOverlay],
+  )
   const combinedPresentation = useSyncExternalStore(
     combinedPresentationStore.subscribe.bind(combinedPresentationStore),
     combinedPresentationStore.getSnapshot.bind(combinedPresentationStore),
@@ -1213,8 +1211,20 @@ function CanvasEditorContent(
     }
     return hidden
   }, [optimisticOverlayItems, projectionStore])
+  const optimisticHiddenEdgeIds = useMemo(() => {
+    const hidden = new Set<string>()
+    for (const item of optimisticOverlayItems) {
+      if (item.kind !== "hide-entity" || item.entity.kind !== "edge") continue
+      const current = projectionStore.resolveEdgeEntity?.(item.entity.entityId)
+      if (current?.incarnation === item.entity.incarnation) hidden.add(item.entity.entityId)
+    }
+    return hidden
+  }, [optimisticOverlayItems, projectionStore])
   const optimisticNodeReplacements = useMemo(() => {
-    const replacements = new Map<string, Extract<(typeof optimisticOverlayItems)[number], { kind: "replace-presentation" }>>()
+    const replacements = new Map<
+      string,
+      Extract<(typeof optimisticOverlayItems)[number], { kind: "replace-presentation" }>
+    >()
     for (const item of optimisticOverlayItems) {
       if (item.kind !== "replace-presentation" || item.entity.kind !== "node") continue
       const current = projectionStore.resolveNodeEntity(item.entity.entityId)
@@ -1891,18 +1901,31 @@ function CanvasEditorContent(
   const edges = useMemo(() => {
     if (edgesHidden || folderFocus) return []
     const authoritativeEdges = groupFocus.edges
-      .filter((edge) => !optimisticHiddenNodeIds.has(edge.source) && !optimisticHiddenNodeIds.has(edge.target))
+      .filter(
+        (edge) =>
+          !optimisticHiddenEdgeIds.has(edge.id) &&
+          !optimisticHiddenNodeIds.has(edge.source) &&
+          !optimisticHiddenNodeIds.has(edge.target),
+      )
       .map((edge) => ({
-      ...edge,
-      animated: shouldAnimateCanvasEdge(edge, selection),
-      selected: selection.edgeIds.has(edge.id),
-      sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
-      targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
-      type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
-    }))
+        ...edge,
+        animated: shouldAnimateCanvasEdge(edge, selection),
+        selected: selection.edgeIds.has(edge.id),
+        sourceHandle: CANVAS_NODE_OUTPUT_HANDLE_ID,
+        targetHandle: CANVAS_NODE_INPUT_HANDLE_ID,
+        type: !edge.type || edge.type === "smoothstep" ? "canvas" : edge.type,
+      }))
     const ghostEdges = optimisticGhostEdges.map(projectCanvasGhostEdgeForReactFlow)
     return [...authoritativeEdges, ...ghostEdges]
-  }, [edgesHidden, folderFocus, groupFocus.edges, optimisticGhostEdges, optimisticHiddenNodeIds, selection])
+  }, [
+    edgesHidden,
+    folderFocus,
+    groupFocus.edges,
+    optimisticGhostEdges,
+    optimisticHiddenEdgeIds,
+    optimisticHiddenNodeIds,
+    selection,
+  ])
   const nodeTypes = useMemo(() => {
     const fallback = props.nodeRegistry.get("file")?.component
     const definitions = props.nodeRegistry.list()
@@ -3255,39 +3278,48 @@ function CanvasEditorContent(
             : input.sources.some((source) => source.kind === "new-text")
               ? [new File([], "Untitled", { type: "text/plain" })]
               : []
-      const optimisticGhosts =
-        optimisticFiles.length > 0
-          ? createOptimisticResourceGhosts({
-              anchor: input.anchor,
-              document: documentRef.current,
-              files: optimisticFiles,
-              ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
-            })
-          : []
-      const optimisticEdges = input.relation?.mode === "connect"
-        ? optimisticGhosts.flatMap((ghost) =>
-            input.relation!.anchorNodeIds.map((anchorNodeId) =>
-              input.relation!.direction === "to-anchor"
-                ? createCanvasConnectionGhost(ghost.presentationKey, anchorNodeId)
-                : createCanvasConnectionGhost(anchorNodeId, ghost.presentationKey),
-            ),
-          )
-        : []
-      const optimisticOperation = optimisticGhosts.length > 0
-        ? optimisticOverlay.begin(optimisticResourceScopeKey, [...optimisticGhosts, ...optimisticEdges])
-        : undefined
-      if (optimisticOperation?.status === "bounded") {
-        notificationService?.show({ kind: "info", title: "Saving Canvas changes…" })
-      }
       void (async () => {
         const operationScope = resourceMutationScopeRef.current
+        let optimisticToken: symbol | undefined
         let optimisticSettled = false
         const settleOptimistic = () => {
-          if (!optimisticOperation || optimisticSettled) return
+          if (!optimisticToken || optimisticSettled) return
           optimisticSettled = true
-          optimisticOverlay.settle(optimisticOperation.token)
+          optimisticOverlay.settle(optimisticToken)
         }
         try {
+          const intrinsicSizes =
+            optimisticFiles.length > 0
+              ? await inspectDroppedCanvasResourcePresentations(optimisticFiles, controller.signal)
+              : []
+          const optimisticGhosts =
+            optimisticFiles.length > 0
+              ? createOptimisticResourceGhosts({
+                  anchor: input.anchor,
+                  document: documentRef.current,
+                  files: optimisticFiles,
+                  intrinsicSizes,
+                  ...(options.parentGroupId ? { parentPresentationKey: options.parentGroupId } : {}),
+                })
+              : []
+          const optimisticEdges =
+            input.relation?.mode === "connect"
+              ? optimisticGhosts.flatMap((ghost) =>
+                  input.relation!.anchorNodeIds.map((anchorNodeId) =>
+                    input.relation!.direction === "to-anchor"
+                      ? createCanvasConnectionGhost(ghost.presentationKey, anchorNodeId)
+                      : createCanvasConnectionGhost(anchorNodeId, ghost.presentationKey),
+                  ),
+                )
+              : []
+          const optimisticOperation =
+            optimisticGhosts.length > 0
+              ? optimisticOverlay.begin(optimisticResourceScopeKey, [...optimisticGhosts, ...optimisticEdges])
+              : undefined
+          optimisticToken = optimisticOperation?.token
+          if (optimisticOperation?.status === "bounded") {
+            notificationService?.show({ kind: "info", title: "Saving Canvas changes…" })
+          }
           const result = await mutationService.add({
             ...input,
             ...(options.parentGroupId ? { parentId: options.parentGroupId } : {}),
@@ -3651,10 +3683,13 @@ function CanvasEditorContent(
       createCanvasDuplicateOverlay({ document: canonicalDocument, nodeIds: selectedNodeIds }),
     )
     try {
-      void props.executeCommand({ type: "nodes.duplicate", nodeIds: selectedNodeIds }).then((result) => {
-        presentNodeEntries(result.createdNodeIds)
-        selectNodes(result.createdNodeIds)
-      }, reportFailure).finally(() => optimisticOverlay.settle(optimisticOperation.token))
+      void props
+        .executeCommand({ type: "nodes.duplicate", nodeIds: selectedNodeIds })
+        .then((result) => {
+          presentNodeEntries(result.createdNodeIds)
+          selectNodes(result.createdNodeIds)
+        }, reportFailure)
+        .finally(() => optimisticOverlay.settle(optimisticOperation.token))
     } catch (error) {
       optimisticOverlay.settle(optimisticOperation.token)
       reportFailure(error)
@@ -3674,19 +3709,25 @@ function CanvasEditorContent(
   const createCommandPresentationOverlay = useCallback(
     (command: CanvasApplicationCommand) => {
       const replacements: ReturnType<typeof createCanvasReplacePresentationOverlay>[] = []
-      const add = (nodeId: string, update: { position?: CanvasPoint; size?: { height: number; width: number }; title?: string }) => {
+      const add = (
+        nodeId: string,
+        update: { position?: CanvasPoint; size?: { height: number; width: number }; title?: string },
+      ) => {
         const entity = projectionStore.resolveNodeEntity(nodeId)
         if (!entity) return
-        replacements.push(createCanvasReplacePresentationOverlay({
-          entity: { entityId: entity.id, incarnation: entity.incarnation, kind: "node" },
-          ...update,
-        }))
+        replacements.push(
+          createCanvasReplacePresentationOverlay({
+            entity: { entityId: entity.id, incarnation: entity.incarnation, kind: "node" },
+            ...update,
+          }),
+        )
       }
       if (command.type === "nodes.setTitle") add(command.nodeId, { title: command.title.trim().slice(0, 200) })
       if (command.type === "nodes.move") {
         for (const nodeId of command.nodeIds) {
           const node = canonicalDocument.nodes.find((candidate) => candidate.id === nodeId)
-          if (node) add(nodeId, { position: { x: node.position.x + command.delta.x, y: node.position.y + command.delta.y } })
+          if (node)
+            add(nodeId, { position: { x: node.position.x + command.delta.x, y: node.position.y + command.delta.y } })
         }
       }
       if (command.type === "nodes.setGeometry") {
@@ -3699,8 +3740,11 @@ function CanvasEditorContent(
       }
       const pendingNodeIds =
         command.type === "canvas.auto-layout"
-          ? command.nodeIds ?? canonicalDocument.nodes.map((node) => node.id)
-          : command.type === "nodes.align" || command.type === "nodes.distribute" || command.type === "nodes.layout" || command.type === "nodes.reparent"
+          ? (command.nodeIds ?? canonicalDocument.nodes.map((node) => node.id))
+          : command.type === "nodes.align" ||
+              command.type === "nodes.distribute" ||
+              command.type === "nodes.layout" ||
+              command.type === "nodes.reparent"
             ? command.nodeIds
             : command.type === "nodes.setFolded" || command.type === "nodes.ungroup"
               ? [command.nodeId]
@@ -3729,9 +3773,7 @@ function CanvasEditorContent(
         return
       }
       const overlays = createCommandPresentationOverlay(command)
-      const operation = overlays.length > 0
-        ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays)
-        : undefined
+      const operation = overlays.length > 0 ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays) : undefined
       try {
         void props.executeCommand(command).then(
           () => {
@@ -3768,10 +3810,13 @@ function CanvasEditorContent(
         createCanvasDuplicateOverlay({ document: canonicalDocument, nodeIds: [nodeId] }),
       )
       try {
-        void props.executeCommand({ type: "nodes.duplicate", nodeIds: [nodeId] }).then((result) => {
-          presentNodeEntries(result.createdNodeIds)
-          selectNodes(result.createdNodeIds)
-        }, reportFailure).finally(() => optimisticOverlay.settle(optimisticOperation.token))
+        void props
+          .executeCommand({ type: "nodes.duplicate", nodeIds: [nodeId] })
+          .then((result) => {
+            presentNodeEntries(result.createdNodeIds)
+            selectNodes(result.createdNodeIds)
+          }, reportFailure)
+          .finally(() => optimisticOverlay.settle(optimisticOperation.token))
       } catch (error) {
         optimisticOverlay.settle(optimisticOperation.token)
         reportFailure(error)
@@ -3804,11 +3849,10 @@ function CanvasEditorContent(
           x: anchor.position.x + parentPosition.x,
           y: anchor.position.y + parentPosition.y,
         }
-        const position =
-          targetPosition ?? {
-            x: side === "right" ? anchorWorld.x + anchorSize.width + 160 : anchorWorld.x - 480,
-            y: anchorWorld.y,
-          }
+        const position = targetPosition ?? {
+          x: side === "right" ? anchorWorld.x + anchorSize.width + 160 : anchorWorld.x - 480,
+          y: anchorWorld.y,
+        }
         const relation = {
           anchorNodeIds: [nodeId],
           direction: side === "right" ? ("from-anchor" as const) : ("to-anchor" as const),
@@ -3931,14 +3975,14 @@ function CanvasEditorContent(
         const entity = projectionStore.resolveNodeEntity(nodeId)
         return entity ? [entity] : []
       })
-      const overlays = entities.map((entity) => createCanvasHideEntityOverlay({
-        entityId: entity.id,
-        incarnation: entity.incarnation,
-        kind: "node",
-      }))
-      const operation = overlays.length > 0
-        ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays)
-        : undefined
+      const overlays = entities.map((entity) =>
+        createCanvasHideEntityOverlay({
+          entityId: entity.id,
+          incarnation: entity.incarnation,
+          kind: "node",
+        }),
+      )
+      const operation = overlays.length > 0 ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays) : undefined
       void props.executeCommand({ type: "elements.remove", nodeIds, edgeIds }).then(
         () => {
           if (operation) optimisticOverlay.settle(operation.token)
@@ -4002,9 +4046,9 @@ function CanvasEditorContent(
     }
     if (!groupMenuCapabilities.canFold || selectionContext.kind !== "single-node") return
     if (!props.executeCommand) return rejectUnmappedCanvasMutation()
-    void props.executeCommand({ type: "nodes.setFolded", nodeId: selectionContext.nodeId, folded: true }).catch((error) =>
-      notifyError("Could not fold Canvas group", error),
-    )
+    void props
+      .executeCommand({ type: "nodes.setFolded", nodeId: selectionContext.nodeId, folded: true })
+      .catch((error) => notifyError("Could not fold Canvas group", error))
   }, [
     groupMenuCapabilities.canFold,
     notifyError,
@@ -4018,10 +4062,16 @@ function CanvasEditorContent(
   const unfold = useCallback(() => {
     if (!groupMenuCapabilities.canUnfold || selectionContext.kind !== "single-node") return
     if (!props.executeCommand) return rejectUnmappedCanvasMutation()
-    void props.executeCommand({ type: "nodes.setFolded", nodeId: selectionContext.nodeId, folded: false }).catch((error) =>
-      notifyError("Could not unfold Canvas group", error),
-    )
-  }, [groupMenuCapabilities.canUnfold, notifyError, props.executeCommand, rejectUnmappedCanvasMutation, selectionContext])
+    void props
+      .executeCommand({ type: "nodes.setFolded", nodeId: selectionContext.nodeId, folded: false })
+      .catch((error) => notifyError("Could not unfold Canvas group", error))
+  }, [
+    groupMenuCapabilities.canUnfold,
+    notifyError,
+    props.executeCommand,
+    rejectUnmappedCanvasMutation,
+    selectionContext,
+  ])
   const ungroup = useCallback(() => {
     if (!groupMenuCapabilities.canUngroup || selectionContext.kind !== "single-node") return
     const groupId = selectionContext.nodeId
@@ -4033,18 +4083,35 @@ function CanvasEditorContent(
     const selectedAfterCommit = ungroupCanvasNode(history.document, groupId).selectedNodeIds
     const reportFailure = (error: unknown) => notifyError("Could not ungroup Canvas nodes", error)
     try {
-      void props.executeCommand({ type: "nodes.ungroup", nodeId: groupId }).then(() => selectNodes(selectedAfterCommit), reportFailure)
+      void props
+        .executeCommand({ type: "nodes.ungroup", nodeId: groupId })
+        .then(() => selectNodes(selectedAfterCommit), reportFailure)
     } catch (error) {
       reportFailure(error)
     }
-  }, [groupMenuCapabilities.canUngroup, history.document, notifyError, props.executeCommand, rejectUnmappedCanvasMutation, selectNodes, selectionContext])
+  }, [
+    groupMenuCapabilities.canUngroup,
+    history.document,
+    notifyError,
+    props.executeCommand,
+    rejectUnmappedCanvasMutation,
+    selectNodes,
+    selectionContext,
+  ])
   const align = useCallback(
     (direction: CanvasAlign) => {
       if (!hasNodeOnlySelection || !canArrangeSelection) return
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
       executeControllerCommand({ type: "nodes.align", nodeIds: arrangeNodeIds, direction })
     },
-    [arrangeNodeIds, canArrangeSelection, executeControllerCommand, hasNodeOnlySelection, props.executeCommand, rejectUnmappedCanvasMutation],
+    [
+      arrangeNodeIds,
+      canArrangeSelection,
+      executeControllerCommand,
+      hasNodeOnlySelection,
+      props.executeCommand,
+      rejectUnmappedCanvasMutation,
+    ],
   )
   const distribute = useCallback(
     (axis: CanvasDistribute) => {
@@ -4052,7 +4119,14 @@ function CanvasEditorContent(
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
       executeControllerCommand({ type: "nodes.distribute", nodeIds: arrangeNodeIds, axis })
     },
-    [arrangeNodeIds, canDistributeSelection, executeControllerCommand, hasNodeOnlySelection, props.executeCommand, rejectUnmappedCanvasMutation],
+    [
+      arrangeNodeIds,
+      canDistributeSelection,
+      executeControllerCommand,
+      hasNodeOnlySelection,
+      props.executeCommand,
+      rejectUnmappedCanvasMutation,
+    ],
   )
   const layout = useCallback(
     (value: CanvasLayout = "grid") => {
@@ -4060,7 +4134,14 @@ function CanvasEditorContent(
       if (!props.executeCommand) return rejectUnmappedCanvasMutation()
       executeControllerCommand({ type: "nodes.layout", nodeIds: arrangeNodeIds, layout: value })
     },
-    [arrangeNodeIds, canArrangeSelection, executeControllerCommand, hasNodeOnlySelection, props.executeCommand, rejectUnmappedCanvasMutation],
+    [
+      arrangeNodeIds,
+      canArrangeSelection,
+      executeControllerCommand,
+      hasNodeOnlySelection,
+      props.executeCommand,
+      rejectUnmappedCanvasMutation,
+    ],
   )
   const tidySelection = useCallback(() => {
     if (!canArrangeSelection) return
@@ -4070,7 +4151,14 @@ function CanvasEditorContent(
       nodeIds: arrangeNodeIds,
       options: { strategy: autoLayoutStrategy },
     })
-  }, [arrangeNodeIds, autoLayoutStrategy, canArrangeSelection, executeControllerCommand, props.executeCommand, rejectUnmappedCanvasMutation])
+  }, [
+    arrangeNodeIds,
+    autoLayoutStrategy,
+    canArrangeSelection,
+    executeControllerCommand,
+    props.executeCommand,
+    rejectUnmappedCanvasMutation,
+  ])
   const runCanvasLayout = useCallback(
     (strategy: CanvasDirectedAutoLayoutStrategy) => {
       if (!canLayoutCanvas || hydratingRef.current || leavingRef.current) return
@@ -4081,9 +4169,7 @@ function CanvasEditorContent(
         type: "canvas.auto-layout",
       }
       const overlays = createCommandPresentationOverlay(command)
-      const operation = overlays.length > 0
-        ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays)
-        : undefined
+      const operation = overlays.length > 0 ? optimisticOverlay.begin(optimisticResourceScopeKey, overlays) : undefined
       void props.executeCommand(command).then(
         (result) => {
           if (operation) optimisticOverlay.settle(operation.token)
@@ -4145,7 +4231,11 @@ function CanvasEditorContent(
           : undefined
       const liveNodeIds = new Set(documentRef.current.nodes.map((node) => node.id))
       const sourceNodeIds = payload.nodes.map((node) => node.id)
-      if (!props.executeCommand || sourceNodeIds.length === 0 || sourceNodeIds.some((nodeId) => !liveNodeIds.has(nodeId))) {
+      if (
+        !props.executeCommand ||
+        sourceNodeIds.length === 0 ||
+        sourceNodeIds.some((nodeId) => !liveNodeIds.has(nodeId))
+      ) {
         notificationService?.show({
           kind: "warning",
           title: "Canvas paste unavailable",
@@ -4162,18 +4252,21 @@ function CanvasEditorContent(
           offset: duplicateOffset,
         }),
       )
-      void props.executeCommand({
-        type: "nodes.duplicate",
-        nodeIds: sourceNodeIds,
-        offset: duplicateOffset,
-        edgeScope: "internal",
-      }).then(
-        (result) => {
-          presentNodeEntries(result.createdNodeIds)
-          selectNodes(result.createdNodeIds)
-        },
-        (error) => notifyError("Could not paste Canvas nodes", error),
-      ).finally(() => optimisticOverlay.settle(optimisticOperation.token))
+      void props
+        .executeCommand({
+          type: "nodes.duplicate",
+          nodeIds: sourceNodeIds,
+          offset: duplicateOffset,
+          edgeScope: "internal",
+        })
+        .then(
+          (result) => {
+            presentNodeEntries(result.createdNodeIds)
+            selectNodes(result.createdNodeIds)
+          },
+          (error) => notifyError("Could not paste Canvas nodes", error),
+        )
+        .finally(() => optimisticOverlay.settle(optimisticOperation.token))
       return true
     },
     [
@@ -4663,7 +4756,8 @@ function CanvasEditorContent(
               change.dimensions === undefined ||
               !isPositiveFiniteDimension(change.dimensions.width) ||
               !isPositiveFiniteDimension(change.dimensions.height)
-            ) return false
+            )
+              return false
             const node = nodeById.get(change.id)
             return (
               node?.data.kind !== "group" || (!isCanvasGroupFolded(node) && change.id !== groupFocus.focusedGroupId)
@@ -4749,15 +4843,15 @@ function CanvasEditorContent(
         return
       }
       const reportFailure = (error: unknown) => notifyError("Could not connect Canvas nodes", error)
-      const optimisticOperation = optimisticOverlay.begin(
-        optimisticResourceScopeKey,
-        [createCanvasConnectionGhost(source, target)],
-      )
+      const optimisticOperation = optimisticOverlay.begin(optimisticResourceScopeKey, [
+        createCanvasConnectionGhost(source, target),
+      ])
       if (optimisticOperation.status === "bounded") {
         notificationService?.show({ kind: "info", title: "Saving Canvas changes…" })
       }
       try {
-        void props.executeCommand({ type: "nodes.connect", connection: { source, target } })
+        void props
+          .executeCommand({ type: "nodes.connect", connection: { source, target } })
           .catch(reportFailure)
           .finally(() => optimisticOverlay.settle(optimisticOperation.token))
       } catch (error) {
@@ -4875,11 +4969,7 @@ function CanvasEditorContent(
           )
         : null
     },
-    [
-      canvasPointerMutationEnabled,
-      dispatch,
-      updateGroupDropTarget,
-    ],
+    [canvasPointerMutationEnabled, dispatch, updateGroupDropTarget],
   )
   const handleNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
@@ -4889,9 +4979,7 @@ function CanvasEditorContent(
         updateGroupDropTarget(null)
         return
       }
-      const draggedIds = new Set(
-        (draggedNodes.length > 0 ? draggedNodes : [node]).map((draggedNode) => draggedNode.id),
-      )
+      const draggedIds = new Set((draggedNodes.length > 0 ? draggedNodes : [node]).map((draggedNode) => draggedNode.id))
       if (draggedIds.size !== 1) {
         updateGroupDropTarget(null)
         return
@@ -4902,38 +4990,41 @@ function CanvasEditorContent(
     },
     [canvasPointerMutationEnabled, updateGroupDropTarget],
   )
-  const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
-    () => {
-      const targetGroupId = groupDropTargetIdRef.current
-      if (canvasPointerMutationEnabled && targetGroupId) {
-        const movedNodeIds = [...gestureGeometryRef.current.keys()]
-        const nodeId = movedNodeIds.length === 1 ? movedNodeIds[0] : undefined
-        const source = nodeId ? gestureStartRef.current?.nodes.find((node) => node.id === nodeId) : undefined
-        const finalPosition = nodeId ? gestureGeometryRef.current.get(nodeId)?.position : undefined
-        altDragRef.current = null
-        snapSessionRef.current = null
-        setSnapLines([])
-        updateGroupDropTarget(null)
-        dispatch({ type: "cancel-gesture" })
-        if (!nodeId || !source || !finalPosition || !props.executeCommand) {
-          rejectUnmappedCanvasMutation()
-          return
-        }
-        const entity = projectionStore.resolveNodeEntity(nodeId)
-        const operation = entity
-          ? optimisticOverlay.begin(optimisticResourceScopeKey, [createCanvasReplacePresentationOverlay({
+  const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(() => {
+    const targetGroupId = groupDropTargetIdRef.current
+    if (canvasPointerMutationEnabled && targetGroupId) {
+      const movedNodeIds = [...gestureGeometryRef.current.keys()]
+      const nodeId = movedNodeIds.length === 1 ? movedNodeIds[0] : undefined
+      const source = nodeId ? gestureStartRef.current?.nodes.find((node) => node.id === nodeId) : undefined
+      const finalPosition = nodeId ? gestureGeometryRef.current.get(nodeId)?.position : undefined
+      altDragRef.current = null
+      snapSessionRef.current = null
+      setSnapLines([])
+      updateGroupDropTarget(null)
+      dispatch({ type: "cancel-gesture" })
+      if (!nodeId || !source || !finalPosition || !props.executeCommand) {
+        rejectUnmappedCanvasMutation()
+        return
+      }
+      const entity = projectionStore.resolveNodeEntity(nodeId)
+      const operation = entity
+        ? optimisticOverlay.begin(optimisticResourceScopeKey, [
+            createCanvasReplacePresentationOverlay({
               entity: { entityId: entity.id, incarnation: entity.incarnation, kind: "node" },
               position: finalPosition,
               size: getCanvasNodePresentationSize(source),
-            })])
-          : undefined
-        void props.executeCommand({
+            }),
+          ])
+        : undefined
+      void props
+        .executeCommand({
           type: "nodes.reparent",
           nodeIds: [nodeId],
           parentId: targetGroupId,
           preserveWorldPosition: true,
           delta: { x: finalPosition.x - source.position.x, y: finalPosition.y - source.position.y },
-        }).then(
+        })
+        .then(
           () => {
             if (operation) optimisticOverlay.settle(operation.token)
             selectNodes([nodeId])
@@ -4943,38 +5034,40 @@ function CanvasEditorContent(
             notifyError("Could not move Canvas node into Group", error)
           },
         )
+      return
+    }
+    const altDrag = altDragRef.current
+    if (canvasPointerMutationEnabled && altDrag) {
+      const sourceId = altDrag.sourceNodeIds[0]
+      const source = sourceId ? gestureStartRef.current?.nodes.find((node) => node.id === sourceId) : undefined
+      const finalPosition = sourceId ? gestureGeometryRef.current.get(sourceId)?.position : undefined
+      altDragRef.current = null
+      snapSessionRef.current = null
+      setSnapLines([])
+      updateGroupDropTarget(null)
+      dispatch({ type: "cancel-gesture" })
+      if (!source || !finalPosition || !props.executeCommand) {
+        rejectUnmappedCanvasMutation()
         return
       }
-      const altDrag = altDragRef.current
-      if (canvasPointerMutationEnabled && altDrag) {
-        const sourceId = altDrag.sourceNodeIds[0]
-        const source = sourceId ? gestureStartRef.current?.nodes.find((node) => node.id === sourceId) : undefined
-        const finalPosition = sourceId ? gestureGeometryRef.current.get(sourceId)?.position : undefined
-        altDragRef.current = null
-        snapSessionRef.current = null
-        setSnapLines([])
-        updateGroupDropTarget(null)
-        dispatch({ type: "cancel-gesture" })
-        if (!source || !finalPosition || !props.executeCommand) {
-          rejectUnmappedCanvasMutation()
-          return
-        }
-        const offset = { x: finalPosition.x - source.position.x, y: finalPosition.y - source.position.y }
-        if (offset.x === 0 && offset.y === 0) return
-        const operation = optimisticOverlay.begin(
-          optimisticResourceScopeKey,
-          createCanvasDuplicateOverlay({
-            document: canonicalDocument,
-            nodeIds: altDrag.sourceNodeIds,
-            offset,
-          }),
-        )
-        void props.executeCommand({
+      const offset = { x: finalPosition.x - source.position.x, y: finalPosition.y - source.position.y }
+      if (offset.x === 0 && offset.y === 0) return
+      const operation = optimisticOverlay.begin(
+        optimisticResourceScopeKey,
+        createCanvasDuplicateOverlay({
+          document: canonicalDocument,
+          nodeIds: altDrag.sourceNodeIds,
+          offset,
+        }),
+      )
+      void props
+        .executeCommand({
           type: "nodes.duplicate",
           nodeIds: altDrag.sourceNodeIds,
           offset,
           edgeScope: altDrag.edgeScope,
-        }).then(
+        })
+        .then(
           (result) => {
             optimisticOverlay.settle(operation.token)
             presentNodeEntries(result.createdNodeIds)
@@ -4985,29 +5078,27 @@ function CanvasEditorContent(
             notifyError("Could not duplicate dragged Canvas nodes", error)
           },
         )
-        return
-      }
-      altDragRef.current = null
-      snapSessionRef.current = null
-      setSnapLines([])
-      updateGroupDropTarget(null)
-      dispatch({ type: "end-gesture" })
-    },
-    [
-      canonicalDocument,
-      canvasPointerMutationEnabled,
-      dispatch,
-      notifyError,
-      optimisticOverlay,
-      optimisticResourceScopeKey,
-      presentNodeEntries,
-      projectionStore,
-      props.executeCommand,
-      rejectUnmappedCanvasMutation,
-      selectNodes,
-      updateGroupDropTarget,
-    ],
-  )
+      return
+    }
+    altDragRef.current = null
+    snapSessionRef.current = null
+    setSnapLines([])
+    updateGroupDropTarget(null)
+    dispatch({ type: "end-gesture" })
+  }, [
+    canonicalDocument,
+    canvasPointerMutationEnabled,
+    dispatch,
+    notifyError,
+    optimisticOverlay,
+    optimisticResourceScopeKey,
+    presentNodeEntries,
+    projectionStore,
+    props.executeCommand,
+    rejectUnmappedCanvasMutation,
+    selectNodes,
+    updateGroupDropTarget,
+  ])
   const handleBoxSelectionStart = useCallback(() => {
     if (!canvasPointerSelectionEnabled) {
       boxSelectionActiveRef.current = false
@@ -5116,7 +5207,6 @@ function CanvasEditorContent(
                       {
                         data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
                         types,
-
                       },
                     )
                   }}

@@ -3,11 +3,7 @@ import type {
   CanvasApplicationCommandResult,
   CanvasDocumentRef,
 } from "@convax/canvas/application"
-import type {
-  BoundedOperationReceipt,
-  CanvasEntityRef,
-  CanvasRendererCommand,
-} from "@convax/canvas/collaboration"
+import type { BoundedOperationReceipt, CanvasEntityRef, CanvasRendererCommand } from "@convax/canvas/collaboration"
 import type { CanvasDocument } from "@convax/canvas/core"
 import type { Digest, Id128 } from "@convax/collaboration"
 
@@ -29,6 +25,10 @@ export interface CanvasSessionProjectionDto {
   /** Renderer mount identity only; never a document version or mutation guard. */
   readonly sessionId: Id128
   readonly document: CanvasDocument
+  readonly edgeEntities: readonly Readonly<{
+    readonly edgeId: string
+    readonly entity: CanvasEntityRef & { readonly kind: "edge" }
+  }>[]
   readonly nodeEntities: readonly Readonly<{
     readonly nodeId: string
     readonly entity: CanvasEntityRef & { readonly kind: "node" }
@@ -54,8 +54,7 @@ export interface CanvasRendererSessionMutationResult {
   }>
 }
 
-export interface CanvasRendererApplicationMutationResult
-  extends Omit<CanvasApplicationCommandResult, "document"> {
+export interface CanvasRendererApplicationMutationResult extends Omit<CanvasApplicationCommandResult, "document"> {
   readonly projection: CanvasSessionProjectionDto
   readonly acceptedFrameDigest: Digest
 }
@@ -75,8 +74,12 @@ export interface CanvasRendererSessionTransport {
   submit(
     input: CanvasRendererSessionScope & { readonly command: CanvasRendererCommand; readonly commandId: string },
   ): Promise<CanvasRendererSessionMutationResult>
-  undo(scope: CanvasRendererSessionScope & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResult | null>
-  redo(scope: CanvasRendererSessionScope & { readonly commandId: string }): Promise<CanvasRendererSessionMutationResult | null>
+  undo(
+    scope: CanvasRendererSessionScope & { readonly commandId: string },
+  ): Promise<CanvasRendererSessionMutationResult | null>
+  redo(
+    scope: CanvasRendererSessionScope & { readonly commandId: string },
+  ): Promise<CanvasRendererSessionMutationResult | null>
   flush(scope: CanvasRendererSessionScope): Promise<void>
   close(scope: CanvasRendererSessionScope): Promise<void>
   subscribe(listener: (event: CanvasSessionInvalidationDto) => void): () => void

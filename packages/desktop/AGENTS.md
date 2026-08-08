@@ -104,6 +104,10 @@ contract and its routed references.
   projection. Ghost/token/visual-history values never cross preload or IPC. Resource
   preparation remains in Main; post-commit session delivery may be unavailable
   without changing durable success, in which case Renderer performs one refresh.
+- The strict session projection carries exact node and edge incarnation tables for
+  guarded presentation only. Provisional visual roots and renderer-decoded image
+  hints remain Canvas-owned transient state; Main binds history to durable roots and
+  derives authoritative image geometry from Project-admitted bytes.
 - Collaboration composition loads only the packaged current protocol descriptor and
   composes exactly one kernel, one codec, and one document session type. There is no
   authority selector, release pair, dual-version dispatch, promotion bridge, or

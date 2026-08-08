@@ -7,6 +7,7 @@ import type {
   CanvasSessionInvalidationDto,
   CanvasSessionProjectionDto,
 } from "../canvas-session-contracts"
+import type { CanvasResourceAddResult } from "../desktop-protocol"
 import { openDesktopCanvasRendererSession } from "./canvas-collaboration-client"
 
 const ref = { canvasId: "canvas-one", scopeId: "project-one" }
@@ -34,8 +35,11 @@ function projection(x: number, overrides: Partial<CanvasSessionProjectionDto> = 
     sessionId,
     document: createCanvasDocument({
       id: ref.canvasId,
-      nodes: [createTextNode({ id: entity.id, metadata: {}, position: { x, y: 0 }, resourceState: { status: "stale" } })],
+      nodes: [
+        createTextNode({ id: entity.id, metadata: {}, position: { x, y: 0 }, resourceState: { status: "stale" } }),
+      ],
     }),
+    edgeEntities: [],
     nodeEntities: [{ nodeId: entity.id, entity }],
     canUndo: x > 0,
     canRedo: false,
@@ -161,12 +165,13 @@ describe("Desktop Canvas renderer collaboration client", () => {
       return { acceptedFrameDigest: frameDigest("d"), operationReceipt: receipt, projection: next }
     })
     const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
-    emit = () => bridge.emit({
-      format: "convax.canvas-session-invalidation",
-      ref,
-      sessionId,
-      frameDigest: frameDigest("d"),
-    })
+    emit = () =>
+      bridge.emit({
+        format: "convax.canvas-session-invalidation",
+        ref,
+        sessionId,
+        frameDigest: frameDigest("d"),
+      })
     await client.submit(command(3))
     await client.drain()
     expect(bridge.query).not.toHaveBeenCalled()
@@ -227,7 +232,9 @@ describe("Desktop Canvas renderer collaboration client", () => {
     await client.submit(command(6))
     let release!: () => void
     bridge.undo = mock(async () => {
-      await new Promise<void>((resolve) => { release = resolve })
+      await new Promise<void>((resolve) => {
+        release = resolve
+      })
       const next = projection(0, { canRedo: true, canUndo: false })
       bridge.setProjection(next)
       return {
@@ -248,6 +255,260 @@ describe("Desktop Canvas renderer collaboration client", () => {
     client.dispose()
   })
 
+  test("accepts undo immediately while the geometry root is still crossing Main's durable barrier", async () => {
+    const bridge = transport()
+    let releaseSubmit!: () => void
+    bridge.submit = mock(async ({ command: submitted }) => {
+      await new Promise<void>((resolve) => {
+        releaseSubmit = resolve
+      })
+      const next = projection(submitted.body.updates[0]!.position.x)
+      bridge.setProjection(next)
+      return { acceptedFrameDigest: frameDigest("d"), operationReceipt: receipt, projection: next }
+    })
+    bridge.undo = mock(async () => {
+      const next = projection(0, { canRedo: true, canUndo: false })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("f"),
+        historyTransition: { direction: "undo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+
+    const pendingSubmit = client.submit(command(6))
+    expect(client.canUndo()).toBeTrue()
+    const pendingUndo = client.undo()
+    expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toMatchObject([
+      { kind: "replace-presentation", snapshot: { position: { x: 0, y: 0 } } },
+    ])
+    expect(bridge.undo).not.toHaveBeenCalled()
+
+    await Promise.resolve()
+    releaseSubmit()
+    await pendingSubmit
+    await expect(pendingUndo).resolves.toEqual({ direction: "undo", rootOperationId: receipt.operationId })
+    expect(bridge.undo).toHaveBeenCalledTimes(1)
+    expect(client.getProjection().nodes[0]?.position.x).toBe(0)
+    client.dispose()
+  })
+
+  test("rolls back a provisional root and suppresses its queued undo when Main rejects the write", async () => {
+    const bridge = transport()
+    let rejectSubmit!: (error: Error) => void
+    bridge.submit = mock(
+      async () =>
+        new Promise<never>((_resolve, reject) => {
+          rejectSubmit = reject
+        }),
+    )
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+
+    const pendingSubmit = client.submit(command(6))
+    const pendingUndo = client.undo()
+    expect(client.canUndo()).toBeFalse()
+    await Promise.resolve()
+    rejectSubmit(new Error("durable barrier failed"))
+
+    await expect(pendingSubmit).rejects.toThrow("durable barrier failed")
+    await expect(pendingUndo).resolves.toBeNull()
+    expect(bridge.undo).not.toHaveBeenCalled()
+    expect(client.visualOverlay?.getSnapshot().pendingOperationCount).toBe(0)
+    client.dispose()
+  })
+
+  test("accepts undo immediately for an opaque application root", async () => {
+    const bridge = transport()
+    let releaseApplication!: () => void
+    bridge.executeApplication = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseApplication = resolve
+      })
+      const next = projection(0, {
+        canUndo: true,
+        document: createCanvasDocument({
+          id: ref.canvasId,
+          nodes: [
+            createTextNode({
+              id: entity.id,
+              label: "Renamed",
+              metadata: {},
+              position: { x: 0, y: 0 },
+              resourceState: { status: "stale" },
+            }),
+          ],
+        }),
+      })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("d"),
+        affectedNodeIds: [entity.id],
+        changed: true as const,
+        createdNodeIds: [],
+        operationReceipt: receipt,
+        projection: next,
+        warnings: [],
+      }
+    })
+    let releaseUndo!: () => void
+    bridge.undo = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseUndo = resolve
+      })
+      const next = projection(0, { canRedo: true, canUndo: false })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("f"),
+        historyTransition: { direction: "undo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+
+    const pendingApplication = client.executeApplication({ type: "nodes.setTitle", nodeId: entity.id, title: "Renamed" })
+    expect(client.canUndo()).toBeTrue()
+    const pendingUndo = client.undo()
+    expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toEqual([])
+    expect(bridge.undo).not.toHaveBeenCalled()
+
+    await Promise.resolve()
+    releaseApplication()
+    await pendingApplication
+    expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toMatchObject([
+      { kind: "replace-presentation", snapshot: { data: { label: "Text" } } },
+    ])
+    await Promise.resolve()
+    releaseUndo()
+    await pendingUndo
+    expect(bridge.undo).toHaveBeenCalledTimes(1)
+    expect(client.getProjection().nodes[0]?.data.label).toBe("Text")
+    client.dispose()
+  })
+
+  test("undoes an owner-derived resource creation without predicting its entity id", async () => {
+    const bridge = transport()
+    const createdEntity = { kind: "node" as const, id: "node-created", incarnation: id(5) }
+    let releaseResource!: () => void
+    const operation = () =>
+      new Promise<CanvasResourceAddResult>((resolve) => {
+        releaseResource = () => {
+          const next = projection(0, {
+            canUndo: true,
+            document: createCanvasDocument({
+              id: ref.canvasId,
+              nodes: [
+                createTextNode({
+                  id: entity.id,
+                  metadata: {},
+                  position: { x: 0, y: 0 },
+                  resourceState: { status: "stale" },
+                }),
+                createTextNode({
+                  id: createdEntity.id,
+                  label: "Created by Main",
+                  metadata: {},
+                  position: { x: 320, y: 0 },
+                  resourceState: { status: "stale" },
+                }),
+              ],
+            }),
+            nodeEntities: [
+              { nodeId: entity.id, entity },
+              { nodeId: createdEntity.id, entity: createdEntity },
+            ],
+          })
+          bridge.setProjection(next)
+          resolve({
+            createdNodeIds: [createdEntity.id],
+            delivery: { status: "accepted", acceptedFrameDigest: frameDigest("d"), projection: next },
+            operationReceipt: receipt,
+            warnings: [],
+          })
+        }
+      })
+    let releaseUndo!: () => void
+    bridge.undo = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseUndo = resolve
+      })
+      const next = projection(0, { canRedo: true, canUndo: false })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("f"),
+        historyTransition: { direction: "undo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+
+    const pendingResource = client.runResourceMutation(operation)
+    const pendingUndo = client.undo()
+    expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toEqual([])
+
+    await Promise.resolve()
+    releaseResource()
+    await pendingResource
+    expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toEqual([
+      {
+        kind: "hide-entity",
+        entity: { entityId: createdEntity.id, incarnation: createdEntity.incarnation, kind: "node" },
+      },
+    ])
+    await Promise.resolve()
+    releaseUndo()
+    await pendingUndo
+    expect(client.getProjection().nodes).toHaveLength(1)
+    client.dispose()
+  })
+
+  test("publishes redo immediately while the durable undo is still pending", async () => {
+    const bridge = transport()
+    const client = await openDesktopCanvasRendererSession({ ref, transport: bridge })
+    await client.submit(command(6))
+    let releaseUndo!: () => void
+    bridge.undo = mock(async () => {
+      await new Promise<void>((resolve) => {
+        releaseUndo = resolve
+      })
+      const next = projection(0, { canRedo: true, canUndo: false })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("f"),
+        historyTransition: { direction: "undo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+    bridge.redo = mock(async () => {
+      const next = projection(6, { canRedo: false, canUndo: true })
+      bridge.setProjection(next)
+      return {
+        acceptedFrameDigest: frameDigest("e"),
+        historyTransition: { direction: "redo" as const, rootOperationId: receipt.operationId },
+        operationReceipt: receipt,
+        projection: next,
+      }
+    })
+
+    const pendingUndo = client.undo()
+    expect(client.canRedo()).toBeTrue()
+    const pendingRedo = client.redo()
+    expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
+      { kind: "replace-presentation", snapshot: { position: { x: 6, y: 0 } } },
+    ])
+    await Promise.resolve()
+    releaseUndo()
+    await pendingUndo
+    await pendingRedo
+    expect(bridge.redo).toHaveBeenCalledTimes(1)
+    expect(client.getProjection().nodes[0]?.position.x).toBe(6)
+    client.dispose()
+  })
+
   test("preserves a trailing refresh when another remote frame arrives during query", async () => {
     const bridge = transport()
     let releaseFirst!: () => void
@@ -255,7 +516,9 @@ describe("Desktop Canvas renderer collaboration client", () => {
     bridge.query = mock(async () => {
       if (first) {
         first = false
-        await new Promise<void>((resolve) => { releaseFirst = resolve })
+        await new Promise<void>((resolve) => {
+          releaseFirst = resolve
+        })
       }
       return bridge.open(ref)
     })

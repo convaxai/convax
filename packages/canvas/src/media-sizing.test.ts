@@ -44,6 +44,31 @@ describe("Canvas media sizing", () => {
     expect(fitted.nodes[0]?.height).toBeUndefined()
   })
 
+  test("does not request a second geometry when the first resource intent already used the intrinsic fit", () => {
+    const image = {
+      ...createMediaNode({
+        id: "image",
+        position: { x: 0, y: 0 },
+        resource: {
+          id: "image",
+          kind: "image",
+          metadata: {},
+          state: { status: "ready", url: "asset://landscape" },
+        },
+      }),
+      style: { height: 180, width: 320 },
+    }
+    const document = createCanvasDocument({ nodes: [image] })
+    const fitted = fitCanvasMediaNodeToIntrinsicSize(document, {
+      height: 900,
+      nodeId: image.id,
+      sourceUrl: "asset://landscape",
+      width: 1_600,
+    })
+
+    expect(fitted.nodes[0]?.style).toEqual({ height: 180, width: 320 })
+  })
+
   test("ignores stale loads and preserves a card that already knows its image dimensions", () => {
     const image = createMediaNode({
       id: "image",

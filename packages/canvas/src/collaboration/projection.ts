@@ -41,6 +41,7 @@ export const canvasProjectionPluginStateMetadataKey = "convaxPluginState" as con
 
 export interface CanvasDocumentProjection {
   readonly document: CanvasDocument
+  readonly edgeEntities: ReadonlyMap<string, CanvasEntityRef & { readonly kind: "edge" }>
   readonly nodeEntities: ReadonlyMap<string, CanvasEntityRef & { readonly kind: "node" }>
 }
 
@@ -52,6 +53,7 @@ export interface CanvasDocumentProjection {
  */
 export function projectCanvasDocument(projection: CanvasProjection): CanvasDocumentProjection {
   const nodeEntities = new Map<string, CanvasEntityRef & { readonly kind: "node" }>()
+  const edgeEntities = new Map<string, CanvasEntityRef & { readonly kind: "edge" }>()
   const nodes = projection.nodes.map((node): CanvasNode => {
     if (nodeEntities.has(node.ref.id)) {
       throw new Error(`Canvas projection contains duplicate live node id ${node.ref.id}`)
@@ -67,10 +69,10 @@ export function projectCanvasDocument(projection: CanvasProjection): CanvasDocum
       ...(node.data.kind === "group" ? { zIndex: -1 } : {}),
     }
   })
-  const edgeIds = new Set<string>()
   const edges = projection.edges.map((edge) => {
-    if (edgeIds.has(edge.ref.id)) throw new Error(`Canvas projection contains duplicate live edge id ${edge.ref.id}`)
-    edgeIds.add(edge.ref.id)
+    if (edgeEntities.has(edge.ref.id))
+      throw new Error(`Canvas projection contains duplicate live edge id ${edge.ref.id}`)
+    edgeEntities.set(edge.ref.id, cloneEdgeRef(edge.ref))
     if (!nodeEntities.has(edge.source.id) || !nodeEntities.has(edge.target.id)) {
       throw new Error(`Canvas projection edge ${edge.ref.id} references a non-live node`)
     }
@@ -92,8 +94,13 @@ export function projectCanvasDocument(projection: CanvasProjection): CanvasDocum
       nodes,
       edges,
     },
+    edgeEntities,
     nodeEntities,
   })
+}
+
+function cloneEdgeRef(ref: CanvasEntityRef & { readonly kind: "edge" }): CanvasEntityRef & { readonly kind: "edge" } {
+  return Object.freeze({ kind: "edge", id: ref.id, incarnation: ref.incarnation })
 }
 
 function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
@@ -214,9 +221,7 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
   }
 }
 
-function cloneNodeRef(
-  ref: CanvasEntityRef & { readonly kind: "node" },
-): CanvasEntityRef & { readonly kind: "node" } {
+function cloneNodeRef(ref: CanvasEntityRef & { readonly kind: "node" }): CanvasEntityRef & { readonly kind: "node" } {
   return Object.freeze({ kind: "node", id: ref.id, incarnation: ref.incarnation })
 }
 
@@ -246,10 +251,7 @@ export function buildCanvasProjectionIndex(snapshot: CanvasSnapshot): CanvasProj
     const edge = snapshot.edges.get(key)
     if (edge === undefined || edge.tombstones.length > 0) return false
     if (!isSemanticCreationEffective(edge.identity.createdBy, edge.identity.ref)) return false
-    if (
-      !isNodeKeyLive(canvasEntityKey(edge.identity.source)) ||
-      !isNodeKeyLive(canvasEntityKey(edge.identity.target))
-    )
+    if (!isNodeKeyLive(canvasEntityKey(edge.identity.source)) || !isNodeKeyLive(canvasEntityKey(edge.identity.target)))
       return false
     return edge.creationGroup === null || isNodeKeyLive(canvasEntityKey(edge.creationGroup.source))
   }

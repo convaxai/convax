@@ -49,6 +49,7 @@ function resourceResult(createdNodeIds: readonly string[] = ["created"]) {
         ref: { canvasId: "canvas-main", scopeId: "project-one" },
         sessionId: resourceSessionId,
         document: createCanvasDocument({ id: "canvas-main" }),
+        edgeEntities: [],
         nodeEntities: [],
         canUndo: true,
         canRedo: false,
@@ -70,6 +71,7 @@ function resourceAddResult(createdNodeIds: readonly string[] = ["created"]) {
         ref: { canvasId: "canvas-main", scopeId: "project-one" },
         sessionId: resourceSessionId,
         document: createCanvasDocument({ id: "canvas-main" }),
+        edgeEntities: [],
         nodeEntities: [],
         canUndo: true,
         canRedo: false,
@@ -127,9 +129,7 @@ describe("preload Canvas resource client", () => {
   test("registers and consumes a local-file relink token exactly once while keeping its path out of relink IPC", async () => {
     const invoke = mock(
       async (channel?: string, _input?: unknown): Promise<unknown> =>
-        channel === "canvas:resource-local-file-register"
-          ? undefined
-          : resourceResult([]),
+        channel === "canvas:resource-local-file-register" ? undefined : resourceResult([]),
     )
     const { client } = setup(invoke)
     const file = new File(["replacement"], "replacement.png", { type: "image/png" })
@@ -143,7 +143,9 @@ describe("preload Canvas resource client", () => {
       source: { kind: "local-file" as const, mediaType: file.type, name: file.name, sourceToken },
     }
 
-    await expect(client.relink(input)).resolves.toMatchObject({ delivery: { projection: { document: { id: "canvas-main" } } } })
+    await expect(client.relink(input)).resolves.toMatchObject({
+      delivery: { projection: { document: { id: "canvas-main" } } },
+    })
     expect(invoke.mock.calls[0]).toEqual([
       "canvas:resource-local-file-register",
       { sourcePath: "/native/replacement.png", sourceToken },

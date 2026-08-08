@@ -112,13 +112,19 @@ describe("Canvas v2 application command adapter", () => {
     const first = createAgent(document, context(21, 1, 1), "First")
     const second = createAgent(document, context(21, 2, 2), "Second")
     const groupContext = context(21, 3, 3)
-    applyAdapted(document, groupContext, requireAdaptation(document, groupContext, {
-      type: "nodes.group",
-      nodeIds: [first.id, second.id],
-      folded: true,
-    }).command)
+    applyAdapted(
+      document,
+      groupContext,
+      requireAdaptation(document, groupContext, {
+        type: "nodes.group",
+        nodeIds: [first.id, second.id],
+        folded: true,
+      }).command,
+    )
     const group = derivedNodeRef(groupContext, parseUint32("0"))
-    expect(projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === group.id)?.data).toMatchObject({
+    expect(
+      projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === group.id)?.data,
+    ).toMatchObject({
       kind: "group",
       folded: true,
     })
@@ -137,12 +143,18 @@ describe("Canvas v2 application command adapter", () => {
     expect(projection.nodes.find((node) => node.ref.id === clonedSecond.id)?.parent).toEqual(clonedGroup)
 
     const unfoldContext = context(21, 5, 5)
-    applyAdapted(document, unfoldContext, requireAdaptation(document, unfoldContext, {
-      type: "nodes.setFolded",
-      nodeId: clonedGroup.id,
-      folded: false,
-    }).command)
-    expect(projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === clonedGroup.id)?.data).toEqual({
+    applyAdapted(
+      document,
+      unfoldContext,
+      requireAdaptation(document, unfoldContext, {
+        type: "nodes.setFolded",
+        nodeId: clonedGroup.id,
+        folded: false,
+      }).command,
+    )
+    expect(
+      projectCanvas(validateCanvasYDoc(document)).nodes.find((node) => node.ref.id === clonedGroup.id)?.data,
+    ).toEqual({
       format: "convax.canvas-node-data",
       kind: "group",
       title: "Group",
@@ -154,40 +166,60 @@ describe("Canvas v2 application command adapter", () => {
     const first = createAgent(document, context(22, 1, 1), "First")
     const second = createAgent(document, context(22, 2, 2), "Second")
     const groupContext = context(22, 3, 3)
-    applyAdapted(document, groupContext, requireAdaptation(document, groupContext, {
-      type: "nodes.group",
-      nodeIds: [first.id, second.id],
-    }).command)
+    applyAdapted(
+      document,
+      groupContext,
+      requireAdaptation(document, groupContext, {
+        type: "nodes.group",
+        nodeIds: [first.id, second.id],
+      }).command,
+    )
     const group = derivedNodeRef(groupContext, parseUint32("0"))
 
     const appearanceContext = context(22, 4, 4)
-    applyAdapted(document, appearanceContext, requireAdaptation(document, appearanceContext, {
-      type: "nodes.setGroupAppearance",
-      nodeId: group.id,
-      appearance: { color: "blue", emoji: "rocket" },
-    }).command)
+    applyAdapted(
+      document,
+      appearanceContext,
+      requireAdaptation(document, appearanceContext, {
+        type: "nodes.setGroupAppearance",
+        nodeId: group.id,
+        appearance: { color: "blue", emoji: "rocket" },
+      }).command,
+    )
     const titleContext = context(22, 5, 5)
-    applyAdapted(document, titleContext, requireAdaptation(document, titleContext, {
-      type: "nodes.setTitle",
-      nodeId: group.id,
-      title: "Launch",
-    }).command)
+    applyAdapted(
+      document,
+      titleContext,
+      requireAdaptation(document, titleContext, {
+        type: "nodes.setTitle",
+        nodeId: group.id,
+        title: "Launch",
+      }).command,
+    )
 
     const pendingContext = context(22, 6, 6)
-    applyAdapted(document, pendingContext, requireAdaptation(document, pendingContext, {
-      type: "resources.pending.create",
-      kind: "image",
-      label: "Image",
-      nodeId: "ignored",
-      placement: { anchor: { x: 0, y: 0 } },
-    }).command)
+    applyAdapted(
+      document,
+      pendingContext,
+      requireAdaptation(document, pendingContext, {
+        type: "resources.pending.create",
+        kind: "image",
+        label: "Image",
+        nodeId: "ignored",
+        placement: { anchor: { x: 0, y: 0 } },
+      }).command,
+    )
     const pending = derivedNodeRef(pendingContext, parseUint32("0"))
     const preferenceContext = context(22, 7, 7)
-    applyAdapted(document, preferenceContext, requireAdaptation(document, preferenceContext, {
-      type: "nodes.setGenerationToolId",
-      nodeId: pending.id,
-      toolId: "plugin.example:image.generate",
-    }).command)
+    applyAdapted(
+      document,
+      preferenceContext,
+      requireAdaptation(document, preferenceContext, {
+        type: "nodes.setGenerationToolId",
+        nodeId: pending.id,
+        toolId: "plugin.example:image.generate",
+      }).command,
+    )
 
     const projection = projectCanvas(validateCanvasYDoc(document))
     expect(projection.nodes.find((node) => node.ref.id === group.id)?.data).toMatchObject({
@@ -247,9 +279,7 @@ describe("Canvas v2 application command adapter", () => {
     applyAdapted(document, pendingContext, pending.command)
     const pendingNode = derivedNodeRef(pendingContext, parseUint32("0"))
     expect(projectCanvas(validateCanvasYDoc(document)).edges).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ source: pendingNode, target: anchor }),
-      ]),
+      expect.arrayContaining([expect.objectContaining({ source: pendingNode, target: anchor })]),
     )
   })
 
@@ -280,6 +310,26 @@ describe("Canvas v2 application command adapter", () => {
     })
   })
 
+  test("commits the Canvas-owned intrinsic media size in the first resource intent", () => {
+    const document = newCanvas()
+    const proof = currentResourceProof("image", 92)
+    const adaptation = requireAdaptation(document, context(9, 5, 5), {
+      type: "resources.add",
+      items: [
+        {
+          item: { ...resourceItem("image", proof, "hero.png"), height: 900, width: 1_600 },
+          nodeId: "ignored",
+        },
+      ],
+      placement: { anchor: { x: 0, y: 0 } },
+    })
+
+    expect(adaptation.command).toMatchObject({
+      kind: "resources-create",
+      items: [{ size: { height: 180, width: 320 } }],
+    })
+  })
+
   test("rejects connected resource creation when an anchor is stale or duplicated", () => {
     const document = newCanvas()
     const anchor = createAgent(document, context(10, 1, 1), "Anchor")
@@ -290,14 +340,18 @@ describe("Canvas v2 application command adapter", () => {
       nodeId: "caller-pending-id",
       placement: { anchor: { x: 400, y: 120 } },
     }
-    expect(adapt(document, context(10, 2, 2), {
-      ...command,
-      relation: { anchorNodeIds: ["missing"], mode: "connect" },
-    })).toBe("rejected")
-    expect(adapt(document, context(10, 3, 3), {
-      ...command,
-      relation: { anchorNodeIds: [anchor.id, anchor.id], mode: "connect" },
-    })).toBe("rejected")
+    expect(
+      adapt(document, context(10, 2, 2), {
+        ...command,
+        relation: { anchorNodeIds: ["missing"], mode: "connect" },
+      }),
+    ).toBe("rejected")
+    expect(
+      adapt(document, context(10, 3, 3), {
+        ...command,
+        relation: { anchorNodeIds: [anchor.id, anchor.id], mode: "connect" },
+      }),
+    ).toBe("rejected")
   })
 
   test("maps one reparent command to the guarded structural-parent intent and rejects an unclosed batch", () => {

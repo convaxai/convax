@@ -25,6 +25,20 @@ export interface CanvasPresentationEntityGuard {
   readonly kind: "edge" | "node"
 }
 
+/**
+ * Complete renderer presentation for one node. It deliberately omits canonical
+ * identity and authority metadata, and can only be consumed by the last-mile
+ * React Flow adapter.
+ */
+export interface CanvasNodePresentationSnapshot {
+  readonly data: Readonly<Record<string, unknown>>
+  readonly nodeType: "agent" | "file"
+  readonly parentPresentationKey?: string
+  readonly position: CanvasPresentationPoint
+  readonly size: CanvasPresentationSize
+  readonly zIndex?: number
+}
+
 export interface CanvasGhostNode {
   readonly kind: "ghost-node"
   readonly presentationKey: string
@@ -37,6 +51,7 @@ export interface CanvasGhostNode {
     readonly title: string
   }>
   readonly size: CanvasPresentationSize
+  readonly snapshot?: CanvasNodePresentationSnapshot
 }
 
 export interface CanvasGhostEdge {
@@ -44,6 +59,7 @@ export interface CanvasGhostEdge {
   readonly presentationKey: string
   readonly source: CanvasPresentationEndpoint
   readonly target: CanvasPresentationEndpoint
+  readonly label?: string
 }
 
 export interface CanvasHideEntity {
@@ -56,6 +72,7 @@ export interface CanvasReplacePresentation {
   readonly entity: CanvasPresentationEntityGuard
   readonly position?: CanvasPresentationPoint
   readonly size?: CanvasPresentationSize
+  readonly snapshot?: CanvasNodePresentationSnapshot
   readonly title?: string
 }
 
@@ -144,6 +161,27 @@ export class CanvasOptimisticOverlayCoordinator {
     this.#publish()
   }
 
+  replace(token: CanvasOptimisticOperationToken, items: readonly CanvasOptimisticOverlayItem[]): boolean {
+    const operation = this.#operations.get(token)
+    if (!operation) return false
+    const normalized = Object.freeze(items.map(requireOverlayItem))
+    const existingGhostCount = operation.items.filter(
+      (item) => item.kind === "ghost-node" || item.kind === "ghost-edge",
+    ).length
+    const nextGhostCount = normalized.filter(
+      (item) => item.kind === "ghost-node" || item.kind === "ghost-edge",
+    ).length
+    if (this.#snapshot.ghostEntityCount - existingGhostCount + nextGhostCount > this.#limits.maximumGhostEntities) {
+      this.#operations.delete(token)
+      this.#bounded.add(token)
+      this.#publish()
+      return false
+    }
+    this.#operations.set(token, Object.freeze({ ...operation, items: normalized }))
+    this.#publish()
+    return true
+  }
+
   clear(): void {
     if (this.#operations.size === 0 && this.#bounded.size === 0) return
     this.#operations.clear()
@@ -174,7 +212,8 @@ export class CanvasOptimisticOverlayCoordinator {
     const operations = Object.freeze([...this.#operations.values()])
     this.#snapshot = Object.freeze({
       ghostEntityCount: operations.reduce(
-        (count, operation) => count + operation.items.filter((item) => item.kind === "ghost-node" || item.kind === "ghost-edge").length,
+        (count, operation) =>
+          count + operation.items.filter((item) => item.kind === "ghost-node" || item.kind === "ghost-edge").length,
         0,
       ),
       operations,
@@ -199,16 +238,20 @@ export class CanvasMergedOptimisticOverlayStore {
   readonly #unsubscribes: readonly (() => void)[]
   #snapshot: CanvasOptimisticOverlaySnapshot
 
-  constructor(sources: readonly Readonly<{
-    getSnapshot(): CanvasOptimisticOverlaySnapshot
-    subscribe(listener: () => void): () => void
-  }>[]) {
+  constructor(
+    sources: readonly Readonly<{
+      getSnapshot(): CanvasOptimisticOverlaySnapshot
+      subscribe(listener: () => void): () => void
+    }>[],
+  ) {
     this.#sources = [...sources]
     this.#snapshot = mergeOverlaySnapshots(this.#sources.map((source) => source.getSnapshot()))
-    this.#unsubscribes = this.#sources.map((source) => source.subscribe(() => {
-      this.#snapshot = mergeOverlaySnapshots(this.#sources.map((current) => current.getSnapshot()))
-      for (const listener of [...this.#listeners]) listener()
-    }))
+    this.#unsubscribes = this.#sources.map((source) =>
+      source.subscribe(() => {
+        this.#snapshot = mergeOverlaySnapshots(this.#sources.map((current) => current.getSnapshot()))
+        for (const listener of [...this.#listeners]) listener()
+      }),
+    )
   }
 
   getSnapshot(): CanvasOptimisticOverlaySnapshot {
@@ -328,13 +371,23 @@ function requireOverlayItem(item: CanvasOptimisticOverlayItem): CanvasOptimistic
     requirePresentationKey(item.presentationKey)
     requirePoint(item.position)
     requireSize(item.size)
-    return Object.freeze({ ...item, position: Object.freeze({ ...item.position }), size: Object.freeze({ ...item.size }), presentation: Object.freeze({ ...item.presentation }) })
+    return Object.freeze({
+      ...item,
+      position: Object.freeze({ ...item.position }),
+      size: Object.freeze({ ...item.size }),
+      presentation: Object.freeze({ ...item.presentation }),
+      ...(item.snapshot ? { snapshot: requireNodePresentationSnapshot(item.snapshot) } : {}),
+    })
   }
   if (item.kind === "ghost-edge") {
     requirePresentationKey(item.presentationKey)
     requirePresentationKey(item.source.key)
     requirePresentationKey(item.target.key)
-    return Object.freeze({ ...item, source: Object.freeze({ ...item.source }), target: Object.freeze({ ...item.target }) })
+    return Object.freeze({
+      ...item,
+      source: Object.freeze({ ...item.source }),
+      target: Object.freeze({ ...item.target }),
+    })
   }
   if (item.kind === "hide-entity") return Object.freeze({ ...item, entity: requireEntityGuard(item.entity) })
   if (item.kind === "replace-presentation") {
@@ -345,9 +398,33 @@ function requireOverlayItem(item: CanvasOptimisticOverlayItem): CanvasOptimistic
       entity: requireEntityGuard(item.entity),
       ...(item.position ? { position: Object.freeze({ ...item.position }) } : {}),
       ...(item.size ? { size: Object.freeze({ ...item.size }) } : {}),
+      ...(item.snapshot ? { snapshot: requireNodePresentationSnapshot(item.snapshot) } : {}),
     })
   }
   throw new TypeError("Canvas optimistic overlay kind is invalid")
+}
+
+function requireNodePresentationSnapshot(value: CanvasNodePresentationSnapshot): CanvasNodePresentationSnapshot {
+  if (!value || typeof value !== "object" || (value.nodeType !== "agent" && value.nodeType !== "file")) {
+    throw new TypeError("Canvas node presentation snapshot is invalid")
+  }
+  requirePoint(value.position)
+  requireSize(value.size)
+  if (!value.data || typeof value.data !== "object" || Array.isArray(value.data)) {
+    throw new TypeError("Canvas node presentation data is invalid")
+  }
+  if (value.parentPresentationKey !== undefined) requirePresentationKey(value.parentPresentationKey)
+  if (value.zIndex !== undefined && !Number.isFinite(value.zIndex)) {
+    throw new TypeError("Canvas node presentation z-index is invalid")
+  }
+  return Object.freeze({
+    data: Object.freeze(structuredClone(value.data)),
+    nodeType: value.nodeType,
+    ...(value.parentPresentationKey ? { parentPresentationKey: value.parentPresentationKey } : {}),
+    position: Object.freeze({ ...value.position }),
+    size: Object.freeze({ ...value.size }),
+    ...(value.zIndex === undefined ? {} : { zIndex: value.zIndex }),
+  })
 }
 
 function requireEntityGuard(value: CanvasPresentationEntityGuard): CanvasPresentationEntityGuard {

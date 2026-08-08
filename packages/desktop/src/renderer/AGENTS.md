@@ -20,6 +20,14 @@ or durable domain authority.
   local response projection before covering its frame digest, skip the matching
   invalidation query, and preserve one trailing query for unknown frames arriving
   during refresh.
+- Every local Canvas mutation may reserve only a Canvas-owned opaque provisional root
+  before the durable lane; Renderer never applies the business command or constructs
+  a candidate document. Geometry may attach its already-known presentation result;
+  all other before/after snapshots come from Main's accepted projection. Undo/Redo
+  uses that visual cursor immediately and still sends no caller-selected operation
+  id. Never invent identities for create commands. Dropped-image decoding is likewise
+  presentation-only: wait for the hint before showing a full ghost card and use the
+  Canvas sizing policy, while Main independently inspects admitted bytes.
 - Main mutations never depend on Renderer flush, lock, mounted editor, selection,
   reveal, panel lifetime, or acknowledgement. Projection failure after commit is a
   UI recovery condition, not a failed domain mutation.
