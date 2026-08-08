@@ -1328,10 +1328,11 @@ specific controls come only from the selected MCP tool's current
 `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
 validates them again immediately before execution. A manifest-declared model tool
 may explicitly mark one required bounded string select with
-`x-convax-role: generation-model-id`. Once the owning service is connected, Main
-projects those choices into concrete opaque model selections instead of a second
-renderer control. The marker field is absent from ordinary tool options; Main
-reloads the live schema, rejects a removed choice and binds the exact value before
+`x-convax-role: generation-model-id`. Main may inspect the installed sidecar's
+current schema without first waiting for `service.status` and projects those choices
+into concrete opaque model selections instead of a second renderer control. The
+marker field is absent from ordinary tool options; Main reloads the live schema,
+rejects a removed choice, checks service readiness, and binds the exact value before
 the external call. No Plugin id, provider name, field name or choice value changes
 this behavior without that explicit role.
 
@@ -1433,13 +1434,14 @@ service status.
 
 Dynamic model identity is the one semantic projection on that schema. A declared
 model tool may mark exactly one required bounded string select with
-`x-convax-role: generation-model-id`. Service availability is established before
-Main starts or expands the family. Each choice receives a stable host-opaque
-selection id while retaining the same manifest tool id for service authorization.
-The selector is removed from `describeTool`; preparation enumerates it again and
-merges the Main-owned value only if the exact choice remains live. Renderer input
-cannot name or override that binding. Unmarked model tools keep their single static
-selection, and unmarked schema fields remain ordinary tool options.
+`x-convax-role: generation-model-id`. Exact installed manifest/service membership
+is established before Main starts or expands the family; discovery never waits for
+`service.status`. Each choice receives a stable host-opaque selection id while
+retaining the same manifest tool id for service authorization. The selector is
+removed from `describeTool`; preparation enumerates it again, checks live service
+readiness, and merges the Main-owned value only if the exact choice remains live.
+Renderer input cannot name or override that binding. Unmarked model tools keep their
+single static selection, and unmarked schema fields remain ordinary tool options.
 
 The Agent generation model is a user-global renderer preference. Agent and card
 pickers present concrete models in one selection layer; the contributing service is
@@ -1457,14 +1459,15 @@ mounted composer keeps model and tool-option state isolated by output and never
 persists one owner override across those result kinds.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
-catalog only when the owning Plugin contributes the same model through a service and
-Main's bounded status checks admit that service into the current display snapshot.
-Missing, disconnected, attention, unknown, timed-out, or invalid service status
-hides that service's models; service-independent operations remain manifest-driven.
+catalog when the exact installed Plugin contributes the same model through its
+service projection and Main validates the current bounded tool schema. Missing,
+disconnected, attention, unknown, timed-out, or invalid service status does not erase
+an installed model from this display-only catalog and never blocks discovery.
 Preparation and dispatch recheck live service status and the exact tool schema, so a
-stale display snapshot cannot authorize a call. When no model is available, Agent
-and card composers offer the Services route instead of synthesizing an `auto`
-choice. The available catalog is never pruned by current `@` inputs: when no model
+stale display snapshot cannot authorize a call. When no installed schema-valid model
+is available, Agent and card composers offer the Services route instead of
+synthesizing an `auto` choice. The available catalog is never pruned by current `@`
+inputs: when no model
 accepts all inputs, the card still shows a concrete matching Agent default or first
 available model and blocks execution until the user removes incompatible inputs or
 chooses a compatible model. A manual image/video replacement-card choice stores only
@@ -1607,11 +1610,13 @@ projection of its connected non-Plugin LLM model catalog through
 generation continues to select a generation tool id and Agent prompts continue to
 select an OpenCode provider/model pair.
 
-The Services page may display installed model rows while a service is disconnected so
-the user can understand and configure that installation. Executable model catalogs are
-stricter: Main joins each model back to the exact service projection, performs a
-bounded live status check, and exposes it to Agent, card, Plugin and IPC callers only
-while that service is connected.
+The Services page and generation pickers may display installed model rows while a
+service is disconnected so the user can understand, select, and configure that
+installation. Main joins each model back to the exact installed service projection
+and validates its bounded current tool schema without using `service.status` as a
+discovery gate. Execution is stricter: preparation and dispatch perform bounded live
+status checks and cross the external-call boundary only while the service is
+connected.
 
 The v8 manifest may add one generic LLM contribution without introducing a built-in
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated

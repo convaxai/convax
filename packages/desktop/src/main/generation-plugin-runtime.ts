@@ -967,8 +967,9 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   }
 
   /**
-   * Expands one manifest-declared model only after its owning service has been
-   * admitted by Main. Unmarked tools preserve their static manifest summary.
+   * Expands one installed manifest-declared model from the current sidecar
+   * schema. Service status is checked at preparation and dispatch, not discovery.
+   * Unmarked tools preserve their static manifest summary.
    */
   async expandModelTool(
     expected: GenerationToolSummary,

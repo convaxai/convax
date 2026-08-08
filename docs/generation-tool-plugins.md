@@ -77,8 +77,11 @@ Concurrent refreshes for one epoch are single-flight and commit atomically. An
 age-triggered refresh serves the prior same-epoch snapshot until replacement
 succeeds. Empty model results and transient failures remain retryable with bounded
 backoff so a still-starting service is not cached as permanently ready. The
-snapshot is never persisted or treated as execution authority: Main reloads the
-selected tool schema and service status immediately before execution.
+snapshot is never persisted or treated as execution authority. Installed
+manifest/service membership and the current bounded tool schema admit display;
+`service.status` is neither awaited nor used to remove installed models during
+discovery. Main reloads the selected tool schema and service status immediately
+before execution.
 
 An optional fixed `service.usage.list` call is a Services display projection only.
 Its bounded history never participates in generation availability, preparation,

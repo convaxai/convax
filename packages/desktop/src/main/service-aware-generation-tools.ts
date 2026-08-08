@@ -30,7 +30,7 @@ function isAvailable(status: PluginServiceStatus) {
 const defaultAvailabilityTimeoutMs = 15_000
 const defaultCatalogRefreshAgeMs = 5 * 60_000
 const maximumCatalogRefreshAgeMs = 24 * 60 * 60_000
-const maximumConcurrentStatusChecks = 4
+const maximumConcurrentCatalogInspections = 4
 
 interface GenerationToolCatalogSnapshot {
   descriptions: ReadonlyMap<string, GenerationToolDescription>
@@ -213,30 +213,21 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
     }
     const services = await this.services.listServices()
     const serviceByPluginId = new Map(services.map((service) => [service.pluginId, service]))
-    const relevantServices = [
-      ...new Map(
-        models.flatMap((tool) => {
-          const service = serviceByPluginId.get(tool.pluginId)
-          return service && serviceProvidesModel(service, tool) ? [[service.pluginId, service] as const] : []
-        }),
-      ).values(),
-    ]
-    const availablePluginIds = await this.#availablePluginIds(relevantServices)
     const modelsByPluginId = new Map<string, GenerationToolSummary[]>()
     for (const model of models) {
       const service = serviceByPluginId.get(model.pluginId)
-      if (!service || !serviceProvidesModel(service, model) || !availablePluginIds.has(model.pluginId)) continue
+      if (!service || !serviceProvidesModel(service, model)) continue
       const grouped = modelsByPluginId.get(model.pluginId) ?? []
       grouped.push(model)
       modelsByPluginId.set(model.pluginId, grouped)
     }
     const inspectedByBaseId = new Map<string, readonly InspectedGenerationModel[]>()
     const groups = [...modelsByPluginId.values()]
-    for (let index = 0; index < groups.length; index += maximumConcurrentStatusChecks) {
-      const batch = groups.slice(index, index + maximumConcurrentStatusChecks)
+    for (let index = 0; index < groups.length; index += maximumConcurrentCatalogInspections) {
+      const batch = groups.slice(index, index + maximumConcurrentCatalogInspections)
       const inspected = await Promise.all(batch.map((tools) => this.#inspectModelCatalog(tools)))
       for (let groupIndex = 0; groupIndex < batch.length; groupIndex += 1) {
-        const expected = batch[groupIndex]!
+        const expected = batch[groupIndex]
         const entries =
           inspected[groupIndex] ??
           expected.flatMap((base) =>
@@ -253,18 +244,9 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
         }
       }
     }
-    const inspectedPluginIds = new Set(
-      [...modelsByPluginId.entries()]
-        .filter(([, tools]) => tools.some((tool) => (inspectedByBaseId.get(tool.id)?.length ?? 0) > 0))
-        .map(([pluginId]) => pluginId),
-    )
-    const stillAvailablePluginIds = await this.#availablePluginIds(
-      relevantServices.filter(({ pluginId }) => inspectedPluginIds.has(pluginId)),
-    )
     const descriptions = new Map<string, GenerationToolDescription>()
     const tools = declaredTools.flatMap((tool) => {
       if (tool.kind !== "model") return [tool]
-      if (!stillAvailablePluginIds.has(tool.pluginId)) return []
       const entries = inspectedByBaseId.get(tool.id) ?? []
       for (const { description, summary } of entries) descriptions.set(summary.id, description)
       return entries.map(({ summary }) => summary)
@@ -331,20 +313,6 @@ export class ServiceAwareGenerationTools implements GenerationToolExecutionPort 
       clearTimeout(timeout)
       controller.signal.removeEventListener("abort", onAbort)
     }
-  }
-
-  async #availablePluginIds(services: readonly PluginServiceSummary[]) {
-    const availablePluginIds = new Set<string>()
-    for (let index = 0; index < services.length; index += maximumConcurrentStatusChecks) {
-      const batch = services.slice(index, index + maximumConcurrentStatusChecks)
-      const availability = await Promise.all(
-        batch.map(async (service) => [service.pluginId, await this.#isServiceAvailable(service)] as const),
-      )
-      for (const [pluginId, available] of availability) {
-        if (available) availablePluginIds.add(pluginId)
-      }
-    }
-    return availablePluginIds
   }
 
   async #isServiceAvailable(service: PluginServiceSummary, signal?: AbortSignal) {

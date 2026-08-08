@@ -368,6 +368,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
   const composerPickerRef = useRef<HTMLDivElement>(null)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
   const modelPickerAnchorRef = useRef<HTMLButtonElement>(null)
   const composerDraftRef = useRef(composerDraft)
   const composerQueryRangeRef = useRef<AgentComposerQueryRange | undefined>(undefined)
@@ -385,6 +386,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const activeScopeRef = useRef(conversationScope)
   const setComposerPickerElement = useCallback((element: HTMLDivElement | null) => {
     composerPickerRef.current = element
+  }, [])
+  const setModelPickerElement = useCallback((element: HTMLDivElement | null) => {
+    modelPickerRef.current = element
   }, [])
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
   const compositionControllerRef = useRef(new AgentComposerCompositionController())
@@ -1163,7 +1167,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   useEffect(() => {
     if (!generationModelPickerOpen) return
     const dismiss = (event: PointerEvent) => {
-      if (!(event.target instanceof Node) || !composerSurfaceRef.current?.contains(event.target)) {
+      if (
+        !(event.target instanceof Node) ||
+        shouldDismissAgentResourcePicker(composerSurfaceRef.current, event.target, modelPickerRef.current)
+      ) {
         closeGenerationModelPicker()
       }
     }
@@ -2236,6 +2243,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     loading={generationToolsLoading}
                     onClose={closeGenerationModelPicker}
                     onLlmSelect={setLlmSelection}
+                    onElementChange={setModelPickerElement}
                     onOpenServices={() => {
                       closeGenerationModelPicker()
                       props.onOpenServices?.()

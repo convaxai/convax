@@ -160,7 +160,7 @@ describe("ServiceAwareGenerationTools", () => {
     expect(getStatus).not.toHaveBeenCalled()
   })
 
-  test("exposes only models whose owning service is connected", async () => {
+  test("exposes installed service models without waiting for live service status", async () => {
     const available = generationTool("available-images")
     const disconnected = generationTool("disconnected-images")
     const attention = generationTool("attention-images")
@@ -182,41 +182,43 @@ describe("ServiceAwareGenerationTools", () => {
       tools: [available, disconnected, attention, operation],
     })
 
-    expect(await subject.listTools({ output: "image" })).toEqual([available, operation])
-    expect(getStatus).toHaveBeenCalledTimes(4)
+    expect(await subject.listTools({ output: "image" })).toEqual([available, disconnected, attention, operation])
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
-  test("expands model catalogs only after the owning service is connected", async () => {
+  test("does not start an unresponsive service-status request while listing models", async () => {
+    const model = generationTool("remote-images")
+    const { getStatus, subject } = setup({
+      getStatus: async () => new Promise<PluginServiceStatus>(() => undefined),
+      tools: [model],
+    })
+
+    expect(await subject.listTools()).toEqual([model])
+    expect(getStatus).not.toHaveBeenCalled()
+  })
+
+  test("expands installed model catalogs without a service-status admission request", async () => {
     const events: string[] = []
     const available = generationTool("available-images")
     const unavailable = generationTool("disconnected-images")
     const operation = operationTool("local-images")
     const alpha = modelVariant(available, "a", "Alpha Image")
     const beta = modelVariant(available, "b", "Beta Image")
-    const { expandModelTool, subject } = setup({
+    const offline = modelVariant(unavailable, "c", "Offline Image")
+    const { expandModelTool, getStatus, subject } = setup({
       expandModelTool: async (tool) => {
         events.push(`expand:${tool.pluginId}`)
-        return [alpha, beta]
-      },
-      getStatus: async (pluginId) => {
-        events.push(`status:${pluginId}`)
-        return pluginId === available.pluginId
-          ? connected
-          : {
-              ...connected,
-              credential: { configured: false, verification: "unknown" },
-              state: "disconnected",
-            }
+        return tool.pluginId === available.pluginId ? [alpha, beta] : [offline]
       },
       services: [service(available.pluginId), service(unavailable.pluginId)],
       tools: [available, unavailable, operation],
     })
 
-    expect(await subject.listTools()).toEqual([alpha, beta, operation])
-    expect(expandModelTool).toHaveBeenCalledTimes(1)
+    expect(await subject.listTools()).toEqual([alpha, beta, offline, operation])
+    expect(expandModelTool).toHaveBeenCalledTimes(2)
     expect(expandModelTool.mock.calls[0]?.[0]).toEqual(available)
-    expect(events.indexOf(`status:${available.pluginId}`)).toBeLessThan(events.indexOf(`expand:${available.pluginId}`))
-    expect(events).not.toContain(`expand:${unavailable.pluginId}`)
+    expect(events).toEqual([`expand:${available.pluginId}`, `expand:${unavailable.pluginId}`])
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
   test("isolates one connected service catalog failure", async () => {
@@ -236,7 +238,7 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([variant, operation])
   })
 
-  test("drops expanded model variants when their service disconnects during catalog loading", async () => {
+  test("does not let a service-status change erase an inspected model catalog", async () => {
     const model = generationTool("remote-images")
     const variant = modelVariant(model, "a", "Runtime Image")
     const operation = operationTool("local-images")
@@ -254,9 +256,9 @@ describe("ServiceAwareGenerationTools", () => {
       tools: [model, operation],
     })
 
-    expect(await subject.listTools()).toEqual([operation])
+    expect(await subject.listTools()).toEqual([variant, operation])
     expect(expandModelTool).toHaveBeenCalledTimes(1)
-    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
   test("keeps the declared base tool identity on runtime model variants", async () => {
@@ -284,7 +286,7 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.describeTool(selected.id)).toEqual({ fields: [], toolId: selected.id })
 
     expect(listTools).toHaveBeenCalledTimes(1)
-    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(getStatus).not.toHaveBeenCalled()
     expect(describeTool).toHaveBeenCalledTimes(1)
   })
 
@@ -455,9 +457,9 @@ describe("ServiceAwareGenerationTools", () => {
     expect(await subject.listTools()).toEqual([variant])
   })
 
-  test("treats connected as authoritative even when credential verification is not yet refreshed", async () => {
+  test("does not use credential verification to admit the installed display catalog", async () => {
     const model = generationTool("available-images")
-    const { subject } = setup({
+    const { getStatus, subject } = setup({
       services: [service("available-images")],
       statuses: {
         "available-images": {
@@ -469,6 +471,7 @@ describe("ServiceAwareGenerationTools", () => {
     })
 
     expect(await subject.listTools()).toEqual([model])
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
   test("uses the same fail-closed service rule for Agent LLM provider availability", async () => {
@@ -496,25 +499,27 @@ describe("ServiceAwareGenerationTools", () => {
     })
     expect(await subject.listTools()).toHaveLength(1)
     const catalogStatusCalls = getStatus.mock.calls.length
+    expect(catalogStatusCalls).toBe(0)
     status = { ...connected, state: "disconnected" }
 
     expect(await subject.isPluginAvailable("remote-images")).toBeFalse()
     expect(getStatus).toHaveBeenCalledTimes(catalogStatusCalls + 1)
   })
 
-  test("treats one failed status check as unavailable without hiding other usable tools", async () => {
+  test("does not let a failed status request hide installed models", async () => {
     const failed = generationTool("failed-images")
     const available = generationTool("available-images")
-    const { subject } = setup({
+    const { getStatus, subject } = setup({
       services: [service("failed-images"), service("available-images")],
       statuses: { "failed-images": new Error("private sidecar diagnostic") },
       tools: [failed, available],
     })
 
-    expect(await subject.listTools()).toEqual([available])
+    expect(await subject.listTools()).toEqual([failed, available])
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
-  test("reflects sign-out and reauthorization after an explicit background refresh", async () => {
+  test("keeps installed models visible across sign-out and background refresh", async () => {
     let status = connected
     const model = generationTool("remote-images")
     const { subject } = setup({
@@ -529,13 +534,13 @@ describe("ServiceAwareGenerationTools", () => {
       state: "disconnected",
     }
     await subject.refresh()
-    expect(await subject.listTools()).toEqual([])
+    expect(await subject.listTools()).toEqual([model])
     status = connected
     await subject.refresh()
     expect(await subject.listTools()).toEqual([model])
   })
 
-  test("checks one service once per availability phase even when it owns several models", async () => {
+  test("does not request service status for a catalog with several installed models", async () => {
     const remoteService = service("remote-images")
     remoteService.models = [
       { capability: "image", id: "generate.one", name: "Image Model One" },
@@ -547,7 +552,7 @@ describe("ServiceAwareGenerationTools", () => {
     })
 
     expect(await subject.listTools()).toHaveLength(2)
-    expect(getStatus).toHaveBeenCalledTimes(2)
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
   test("requires the service model projection to match the exact tool id and output", async () => {
@@ -573,11 +578,11 @@ describe("ServiceAwareGenerationTools", () => {
     expect(describeTool).toHaveBeenCalledWith(selected.id, expect.any(AbortSignal))
     expect(describeTool).toHaveBeenCalledTimes(1)
     expect(prepareTool).toHaveBeenCalledWith(selected, undefined)
-    expect(statusCallsAfterDescription).toBe(2)
-    expect(getStatus).toHaveBeenCalledTimes(3)
+    expect(statusCallsAfterDescription).toBe(0)
+    expect(getStatus).toHaveBeenCalledTimes(1)
   })
 
-  test("blocks a stale model before description or preparation when its service disconnects", async () => {
+  test("describes an installed model but blocks preparation when its service is disconnected", async () => {
     const selected = generationTool("remote-images")
     const { describeTool, prepareTool, subject } = setup({
       statuses: {
@@ -590,9 +595,9 @@ describe("ServiceAwareGenerationTools", () => {
       tools: [selected],
     })
 
-    await expect(subject.describeTool(selected.id)).rejects.toThrow("not installed")
+    expect(await subject.describeTool(selected.id)).toEqual({ fields: [], toolId: selected.id })
     await expect(subject.prepareTool(selected)).rejects.toThrow("Open Services")
-    expect(describeTool).not.toHaveBeenCalled()
+    expect(describeTool).toHaveBeenCalledTimes(1)
     expect(prepareTool).not.toHaveBeenCalled()
   })
 
@@ -644,17 +649,17 @@ describe("ServiceAwareGenerationTools", () => {
     expect(getStatus).toHaveBeenCalledTimes(3)
   })
 
-  test("bounds concurrent service status checks", async () => {
+  test("bounds concurrent model catalog inspections", async () => {
     let active = 0
     let maximumActive = 0
     const pluginIds = Array.from({ length: 9 }, (_, index) => `remote-images-${index}`)
-    const { subject } = setup({
-      getStatus: async () => {
+    const { getStatus, subject } = setup({
+      expandModelTool: async (tool) => {
         active += 1
         maximumActive = Math.max(maximumActive, active)
         await Promise.resolve()
         active -= 1
-        return connected
+        return [tool]
       },
       services: pluginIds.map(service),
       tools: pluginIds.map((pluginId) => generationTool(pluginId)),
@@ -662,9 +667,10 @@ describe("ServiceAwareGenerationTools", () => {
 
     expect(await subject.listTools()).toHaveLength(9)
     expect(maximumActive).toBe(4)
+    expect(getStatus).not.toHaveBeenCalled()
   })
 
-  test("times out an unresponsive status check and aborts its Main request", async () => {
+  test("times out an unresponsive Agent-provider status check and aborts its Main request", async () => {
     let statusSignal: AbortSignal | undefined
     const { subject } = setup({
       availabilityTimeoutMs: 1,
@@ -674,7 +680,7 @@ describe("ServiceAwareGenerationTools", () => {
       },
     })
 
-    expect(await subject.listTools()).toEqual([])
+    expect(await subject.isPluginAvailable("remote-images")).toBeFalse()
     expect(statusSignal?.aborted).toBeTrue()
   })
 

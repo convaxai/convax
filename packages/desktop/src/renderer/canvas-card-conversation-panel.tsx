@@ -606,13 +606,11 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
                 ? generationInputError
                 : unsupportedMentionedNodes.length > 0
                   ? `当前模型不支持以下 @ 输入：${unsupportedMentionedNodes.map((node) => node.data.label).join("、")}。请移除这些输入或选择支持它们的模型。`
-                  : currentDescription?.status === "loading" || !currentDescription
-                    ? "正在加载模型选项…"
-                    : currentDescription.status === "error"
-                      ? currentDescription.error
-                      : inputValidation && !inputValidation.valid
-                        ? "请完成必填的模型选项。"
-                        : undefined
+                  : currentDescription?.status === "error"
+                    ? currentDescription.error
+                    : currentDescription?.status === "ready" && inputValidation && !inputValidation.valid
+                      ? "请完成必填的模型选项。"
+                      : undefined
   const modelHintIsError = currentCatalog?.status === "error" || currentDescription?.status === "error"
   const modelHintIsWarning = Boolean(resolvedTool && (generationInputError || unsupportedMentionedNodes.length > 0))
   const shouldOpenServices =

@@ -987,6 +987,39 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).not.toContain("h-[380px]")
   })
 
+  test("renders a shared cached model immediately while its options load in the background", () => {
+    const owner = imageNode()
+    const tools: readonly CanvasGenerationToolSummary[] = [
+      {
+        acceptedInputs: [],
+        description: "Cached image model",
+        id: "tools/cached-image",
+        modelName: "Cached Image",
+        output: "image",
+        serviceId: "cached-service",
+        serviceName: "Cached Service",
+        title: "Image model",
+      },
+    ]
+    const markup = renderToStaticMarkup(
+      <CanvasCardConversationPanel
+        agent={<div data-agent-panel>Agent conversation</div>}
+        request={assistantRequest(owner)}
+        service={{
+          describeTool: () => new Promise<CanvasGenerationToolDescription>(() => undefined),
+          generate: async () => ({ createdNodeIds: [], toolId: tools[0]!.id, warnings: [] }),
+          getCachedTools: () => tools,
+          listTools: () => new Promise<readonly CanvasGenerationToolSummary[]>(() => undefined),
+        }}
+      />,
+    )
+
+    expect(markup).toContain("Cached Service · Cached Image")
+    expect(markup).not.toContain("正在加载模型…")
+    expect(markup).not.toContain("正在加载可用模型…")
+    expect(markup).not.toContain("正在加载模型选项…")
+  })
+
   test("shows every incoming card as a removable @ and flags unsupported generation inputs", () => {
     const owner = imageNode()
     const folder = createFolderNode({

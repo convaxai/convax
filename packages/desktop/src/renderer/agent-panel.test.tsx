@@ -708,6 +708,11 @@ describe("Agent composer source contract", () => {
     expect(source).toContain('data-agent-composer-action="skill"')
     expect(source).toContain('data-agent-composer-action="model"')
     expect(source).toContain("data-agent-composer-editor")
+    expect(source).toContain("modelPickerRef.current")
+    expect(source).toContain(
+      "shouldDismissAgentResourcePicker(composerSurfaceRef.current, event.target, modelPickerRef.current)",
+    )
+    expect(source).toContain("onElementChange={setModelPickerElement}")
     expect(source).toContain("data-agent-runtime-state")
     expect(source).toContain("await sharedGenerationController.refresh()")
     expect(source).toContain("reconcileReady: false")
