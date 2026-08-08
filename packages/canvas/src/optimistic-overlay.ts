@@ -291,7 +291,14 @@ export class CanvasCombinedPresentationStore<Authoritative> {
   }) {
     this.#authoritative = input.authoritative
     this.#overlay = input.overlay
-    this.#schedule = input.schedule ?? queueMicrotask
+    if (input.schedule) {
+      const schedule = input.schedule
+      this.#schedule = (task) => schedule(task)
+    } else {
+      // Browser queueMicrotask is receiver-sensitive. Keep the global member
+      // call so this store cannot become its accidental receiver.
+      this.#schedule = (task) => globalThis.queueMicrotask(task)
+    }
     this.#snapshot = Object.freeze({
       authoritative: input.authoritative.getSnapshot(),
       overlay: input.overlay.getSnapshot(),
@@ -338,14 +345,19 @@ export class CanvasCombinedPresentationStore<Authoritative> {
   ): void {
     if (this.#scheduled) return
     this.#scheduled = true
-    this.#schedule(() => {
-      this.#scheduled = false
-      this.#snapshot = Object.freeze({
-        authoritative: authoritative.getSnapshot(),
-        overlay: overlay.getSnapshot(),
+    try {
+      this.#schedule(() => {
+        this.#scheduled = false
+        this.#snapshot = Object.freeze({
+          authoritative: authoritative.getSnapshot(),
+          overlay: overlay.getSnapshot(),
+        })
+        for (const listener of [...this.#listeners]) listener()
       })
-      for (const listener of [...this.#listeners]) listener()
-    })
+    } catch (error) {
+      this.#scheduled = false
+      throw error
+    }
   }
 }
 

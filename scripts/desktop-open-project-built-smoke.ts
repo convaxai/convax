@@ -22,6 +22,7 @@ const latencyIterations = Number(process.env.CONVAX_DESKTOP_SMOKE_LATENCY_ITERAT
 const latencyLimitMs = 500
 const latencyRecordOnly = process.env.CONVAX_DESKTOP_SMOKE_LATENCY_RECORD_ONLY === "1"
 const latencyQuickCreateOnly = process.env.CONVAX_DESKTOP_SMOKE_LATENCY_QUICK_CREATE_ONLY === "1"
+const latencyUndoOnly = process.env.CONVAX_DESKTOP_SMOKE_LATENCY_UNDO_ONLY === "1"
 const forwardLatencyDiagnostics = process.env.CONVAX_DESKTOP_SMOKE_FORWARD_LATENCY_DIAGNOSTICS === "1"
 
 const require = createRequire(path.join(desktopRoot, "package.json"))
@@ -578,6 +579,14 @@ try {
           return { before, committed }
         } catch (error) {
           const elapsedMs = performance.now() - startedAt
+          const failureDocument = await documentState().catch(() => null)
+          const failureState = {
+            operation,
+            authoritativeNodeIds: failureDocument?.nodes.map((node) => node.id) ?? null,
+            renderedNodeIds: nodeElements().map((node) => node.getAttribute("data-id")),
+            ghostCount: ghostElements(),
+          }
+          console.error("[convax:desktop-latency-failure-state] " + JSON.stringify(failureState))
           if (elapsedMs > limitMs) {
             console.error("[convax:desktop-latency-slow] " + JSON.stringify({
               operation,
@@ -586,7 +595,7 @@ try {
               error: String(error),
             }))
           }
-          throw error
+          throw new Error(String(error) + "; state=" + JSON.stringify(failureState))
         } finally {
           observer.disconnect()
         }
@@ -625,6 +634,35 @@ try {
       const warmAfter = await documentState()
       if (warmAfter.nodes.length !== warmBefore.nodes.length + 1) {
         throw new Error("Latency warm-up did not commit exactly one text node")
+      }
+      if (${latencyUndoOnly}) {
+        let historyNodeId = addedEntityId(warmBefore, warmAfter, "nodes")
+        if (!historyNodeId) throw new Error("Latency undo-only mode lost the visual-history node identity")
+        const invokeHistory = (key, shiftKey) => window.dispatchEvent(new KeyboardEvent("keydown", {
+          bubbles: true, cancelable: true, key, metaKey: true, shiftKey,
+        }))
+        for (let index = 0; index < 2; index += 1) {
+          const targetNodeId = historyNodeId
+          const undone = await run("undo", {
+            rendererFeedback: () => !hasRenderedEntity(targetNodeId),
+            authoritative: (before, after) => after.nodes.length === before.nodes.length - 1
+              && !after.nodes.some((node) => node.id === targetNodeId),
+            reconciled: () => !hasRenderedEntity(targetNodeId) && ghostElements() === 0,
+          }, () => invokeHistory("z", false))
+          const redone = await run("redo", {
+            rendererFeedback: (_before, _document, visualBefore) => hasNewRenderedEntity(visualBefore, "node"),
+            authoritative: (before, after) => after.nodes.length === before.nodes.length + 1
+              && after.nodes.some((node) => node.id !== targetNodeId),
+            reconciled: (before) => nodeElements().length === before.nodes.length + 1 && ghostElements() === 0,
+          }, () => invokeHistory("z", true))
+          historyNodeId = addedEntityId(undone.committed, redone.committed, "nodes")
+          if (!historyNodeId) throw new Error("Latency undo-only mode lost the recreated visual-history identity")
+        }
+        const summary = summarizeOperations(["undo", "redo"])
+        console.log("[convax:desktop-latency-summary] " + JSON.stringify(summary))
+        unsubscribeProbe()
+        await window.convax.canvas.sessions.close({ ref, sessionId: probeSession.sessionId })
+        return { latencyMode: true, latencySummary: summary, projectId }
       }
       for (let index = 0; index < iterations; index += 1) {
         await run("quick-create", {

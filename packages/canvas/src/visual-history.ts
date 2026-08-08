@@ -154,7 +154,11 @@ export class CanvasVisualHistoryCoordinator {
     return prediction
   }
 
-  reconcile(prediction: CanvasVisualHistoryPrediction | null, actual: CanvasVisualHistoryTransition | null): boolean {
+  reconcile(
+    prediction: CanvasVisualHistoryPrediction | null,
+    actual: CanvasVisualHistoryTransition | null,
+    actualAuthority: CanvasVisualHistoryAuthority,
+  ): boolean {
     const entry = prediction ? this.#entries.find((candidate) => candidate.entryKey === prediction.entryKey) : undefined
     if (
       !prediction ||
@@ -167,6 +171,8 @@ export class CanvasVisualHistoryCoordinator {
       this.reset()
       return false
     }
+    if (prediction.direction === "undo") entry.before = cloneAuthority(actualAuthority)
+    else entry.after = cloneAuthority(actualAuthority)
     this.overlay.settle(prediction.token)
     const pendingIndex = this.#pending.findIndex((candidate) => candidate.token === prediction.token)
     if (pendingIndex >= 0) this.#pending.splice(pendingIndex, 1)

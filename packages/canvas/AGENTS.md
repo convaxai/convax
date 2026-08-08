@@ -62,6 +62,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   not select Main's root, cache Y.Doc, or send its provisional id as a command.
   Reconcile only against the actual Main `historyTransition`; mismatch/failure clears
   the speculative suffix and suppresses any inverse queued only for a rejected root.
+  A successful transition replaces that direction's saved endpoint with Main's exact
+  accepted projection so a recreated id/incarnation guards the next immediate inverse.
+  Combined presentation scheduling must invoke browser scheduling APIs with their
+  required receiver and must never strand its coalescing latch after a scheduling error.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
   parent coordinates. Do not wait for or trust stale mounted renderer geometry.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas

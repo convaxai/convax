@@ -55,6 +55,7 @@ describe("route-scoped Canvas external facts", () => {
     const queryCurrentResourceReferences = mock(async () => [fixture.reference])
     const authority = createProjectIndexBackedCanvasExternalFactAuthority({
       currentResources: { queryCurrentResourceReferences },
+      availableBlobs: { queryAvailableBlobs: async () => [] },
     })
     const request = {
       format: "convax.canvas-external-fact-request" as const,
@@ -72,6 +73,44 @@ describe("route-scoped Canvas external facts", () => {
       requirement: {} as never,
     })).resolves.toBe("rejected")
     expect(queryCurrentResourceReferences).toHaveBeenCalledWith({ projectId: fixture.scope.projectId })
+  })
+
+  test("verifies retained history resources from exact durable blob availability", async () => {
+    const fixture = currentResourceFixture()
+    const queryAvailableBlobs = mock(async (input: { blobs: readonly unknown[] }) => input.blobs as never)
+    const authority = createProjectIndexBackedCanvasExternalFactAuthority({
+      currentResources: { queryCurrentResourceReferences: async () => [] },
+      availableBlobs: { queryAvailableBlobs },
+    })
+    const proof = {
+      format: "convax.canvas-resource-proof-ref" as const,
+      mode: "retained-canvas-history" as const,
+      sourceState: "history-root-post" as const,
+      sourceOperationId: "AQEBAQEBAQEBAQEBAQEBAQ" as never,
+      sourceNode: { kind: "node" as const, id: "node-a", incarnation: "AgICAgICAgICAgICAgICAg" } as never,
+      sourceDataDigest: ordinarySha256(new TextEncoder().encode("source-data")),
+      resource: fixture.proof.resource,
+      requireExactRetainedMaterial: true as const,
+    }
+    const request = {
+      format: "convax.canvas-external-fact-request" as const,
+      kind: "retained-resources" as const,
+      proofs: [proof],
+    }
+
+    await expect(authority.verify({ scope: fixture.scope, request, requirement: {} as never }))
+      .resolves.toBe("verified")
+    expect(queryAvailableBlobs).toHaveBeenCalledWith({
+      projectId: fixture.scope.projectId,
+      blobs: [{ blobSha256: proof.resource.contentDigest, byteLength: proof.resource.byteLength }],
+    })
+
+    const pending = createProjectIndexBackedCanvasExternalFactAuthority({
+      currentResources: { queryCurrentResourceReferences: async () => [] },
+      availableBlobs: { queryAvailableBlobs: async () => [] },
+    })
+    await expect(pending.verify({ scope: fixture.scope, request, requirement: {} as never }))
+      .resolves.toBe("pending")
   })
 
   test("rejects a resource fact envelope whose exact bytes do not match its declared digest", async () => {

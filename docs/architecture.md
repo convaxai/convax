@@ -1013,9 +1013,15 @@ than the file-only materialization plan. The same surface owns deterministic
 holder/bootstrap planning, the
 `BlobDurableAckV2` codec and the rule that one same current credential-bound remote
 replica must durably ACK the structural frame and every newly referenced blob.
-Main implements the query by delegating to the live ProjectIndex owner session's
-validated state; Desktop and native GC never receive the Y.Doc or infer currentness
-from paths. Unavailable or malformed owner projections fail closed before hydration,
+Project also exposes a narrow project-scoped query for exact local blob availability
+by SHA-256 and byte length. Canvas retained-history verification may consume that
+material-presence answer, but it does not select a ProjectIndex version, establish
+resource currentness, or authorize a history transition; Canvas recomputes the exact
+retained proof set from the semantic root and rejects substituted proofs.
+Main implements current-reference queries from the live ProjectIndex owner session's
+validated state and exact availability queries from that Project runtime's blob
+store. Neither Desktop nor native GC receives the Y.Doc or infers currentness from
+paths. Unavailable or malformed owner projections fail closed before hydration,
 Canvas mutation, or GC timing state changes.
 `@convax/project/node` implements these ports through
 `ProjectBlobReplicationStoreV2`: restartable receive persists only one bounded
@@ -1698,7 +1704,12 @@ chooses and materializes undo/redo intent; the renderer binds the provisional en
 to the returned durable operation id and accepts only the actual
 `historyTransition`. A failed/canceled root clears its speculative suffix and any
 queued inverse is suppressed before Main. Authority installation and overlay
-settlement are microtask coalesced into one combined presentation snapshot.
+settlement are microtask coalesced into one combined presentation snapshot. Browser
+scheduling APIs are invoked with their required receiver so the coalescing latch
+cannot become permanently scheduled without publishing. After each accepted
+transition, the visual cursor replaces the reached endpoint with Main's exact
+projection, including recreated ids and incarnations, before predicting another
+inverse.
 
 Node duplication submits only the selected live node ids and a bounded offset. The
 Canvas owner resolves the latest source identities and content, derives all clone

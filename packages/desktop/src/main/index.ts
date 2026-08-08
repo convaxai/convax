@@ -1018,6 +1018,7 @@ function startApplication() {
       },
       factAuthority: createProjectIndexBackedCanvasExternalFactAuthority({
         currentResources: collaborationProjectIndexes,
+        availableBlobs: collaborationProjectIndexes,
       }),
     })
     collaborationCanvasSessions = collaborationCanvasComposition.sessions
