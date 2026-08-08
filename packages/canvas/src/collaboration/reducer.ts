@@ -650,14 +650,23 @@ function planIntent(
               ...node,
               role: "file",
               position: positions[positionIndex]!,
-              data: {
-                format: "convax.canvas-node-data",
-                kind: "placeholder",
-                owner: "manual-pending",
-                title: node.title,
-                expectedClass: pending.expectedClass,
-                state: { phase: "pending" },
-              },
+              data: pending.generationRun === undefined
+                ? {
+                    format: "convax.canvas-node-data",
+                    kind: "placeholder",
+                    owner: "manual-pending",
+                    title: node.title,
+                    expectedClass: pending.expectedClass,
+                    state: { phase: "pending" },
+                  }
+                : {
+                    format: "convax.canvas-node-data",
+                    kind: "placeholder",
+                    owner: "generation",
+                    title: node.title,
+                    expectedClass: pending.expectedClass,
+                    generationRun: structuredClone(pending.generationRun),
+                  },
               plugin: null,
             },
             context,
@@ -908,6 +917,43 @@ function planIntent(
       planClaim(writes, "node", intent.body.node, "data", intent.body.data, context)
       results.push(intent.body.node)
       invalidated.push(intent.body.node)
+      return "valid"
+    }
+    case "canvas.generation.runs.update": {
+      if (
+        intent.body.updates.length < 1 ||
+        intent.body.updates.length > 256 ||
+        intent.body.updates.length !== intent.guard.updates.length
+      ) return "invalid"
+      const seen = new Set<string>()
+      for (const update of intent.body.updates) {
+        const key = canvasEntityKey(update.node)
+        if (seen.has(key)) return "invalid"
+        seen.add(key)
+        const guarded = intent.guard.updates.find(
+          (candidate) => canvasEntityKey(candidate.node.node) === key,
+        )
+        if (!guarded) return "invalid"
+        const node = requireNodeData(base, index, guarded.node)
+        if (update.data.kind !== "resource" && update.data.kind !== "placeholder") return "invalid"
+        if (update.data.generationRun === undefined || node.identity.role !== "file") return "invalid"
+        const before = effectiveNodeData(base, node).data
+        const changesResource = !sameCanonicalValue(
+          before.kind === "resource" ? before.resource : null,
+          update.data.kind === "resource" ? update.data.resource : null,
+        )
+        if (changesResource !== (guarded.resourceProof !== null)) return "invalid"
+        if (guarded.resourceProof !== null) {
+          if (
+            update.data.kind !== "resource" ||
+            !sameCanonicalValue(guarded.resourceProof.resource, update.data.resource)
+          ) return "invalid"
+          requireFact(facts.validateCurrentResource(guarded.resourceProof))
+        }
+        planClaim(writes, "node", update.node, "data", update.data, context)
+        results.push(update.node)
+        invalidated.push(update.node)
+      }
       return "valid"
     }
     case "canvas.nodes.set-plugin-state": {

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { CanvasApplicationCommand, CanvasApplicationCommandRequest } from "../application"
+import { createCanvasGenerationTargetGuard } from "../application"
+import { getCanvasNodeGenerationRun } from "../generation-run"
 import { adaptCanvasApplicationCommand } from "./application-command-adapter"
 import { constructCanvasAuthoritativeIntent } from "./command-construction"
 import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VALID_FACTS } from "./test-fixtures.test"
@@ -497,6 +499,102 @@ describe("Canvas v2 application command adapter", () => {
     ).toBe("rejected")
   })
 
+  test("persists the portable generation run from pending creation through task receipt and generated replacement", () => {
+    const document = newCanvas()
+    const createContext = context(30, 1, 1)
+    const created = requireAdaptation(document, createContext, {
+      type: "resources.pending-generation.create",
+      generation: { operationId: "generation-one", prompt: "Draw a fox", toolId: "plugin.example:image.generate" },
+      kind: "image",
+      label: "Pending image",
+      nodeId: "caller-node-id",
+      placement: { anchor: { x: 0, y: 0 } },
+    })
+    expect(created.command.kind).toBe("manual-resource-placeholders-create")
+    applyAdapted(document, createContext, created.command)
+    const node = derivedNodeRef(createContext, parseUint32("0"))
+    let projected = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document
+    expect(getCanvasNodeGenerationRun(projected.nodes[0]!)).toMatchObject({
+      operationId: "generation-one",
+      status: "submitting",
+      toolId: "plugin.example:image.generate",
+    })
+
+    const runningContext = context(30, 2, 2)
+    const running = requireAdaptation(document, runningContext, {
+      type: "generation.run.mark-running",
+      nodeId: node.id,
+      operationId: "generation-one",
+      taskId: "task_safe_123",
+    })
+    expect(running.command.kind).toBe("generation-runs-update")
+    applyAdapted(document, runningContext, running.command)
+    projected = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document
+    const target = projected.nodes.find((candidate) => candidate.id === node.id)!
+    expect(getCanvasNodeGenerationRun(target)).toMatchObject({ status: "running", taskId: "task_safe_123" })
+
+    const proof = currentResourceProof("image", 95)
+    const completeContext = context(30, 3, 3)
+    const completed = requireAdaptation(document, completeContext, {
+      type: "resources.replace-generated",
+      expectedTarget: createCanvasGenerationTargetGuard(target),
+      item: resourceItem("image", proof, "Generated/fox.png"),
+      operationId: "generation-one",
+      targetNodeId: node.id,
+    })
+    expect(completed.command.kind).toBe("generation-runs-update")
+    applyAdapted(document, completeContext, completed.command)
+    const output = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document.nodes[0]!
+    expect(output.data.kind).toBe("image")
+    expect(getCanvasNodeGenerationRun(output)).toMatchObject({
+      operationId: "generation-one",
+      status: "succeeded",
+      taskId: "task_safe_123",
+    })
+  })
+
+  test("maps existing-node start, failure, and startup interruption to non-undoable run updates", () => {
+    const document = newCanvas()
+    const first = createPendingFile(document, context(31, 1, 1), "First")
+    const second = createPendingFile(document, context(31, 2, 2), "Second")
+    for (const [position, node] of [first, second].entries()) {
+      const before = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document.nodes.find(
+        (candidate) => candidate.id === node.id,
+      )!
+      const targetGuard = createCanvasGenerationTargetGuard(before)
+      const startContext = context(31, position + 3, position + 3)
+      const started = requireAdaptation(document, startContext, {
+        type: "generation.run.start",
+        nodeId: node.id,
+        operationId: `generation-${position}`,
+        prompt: "prompt",
+        toolId: "plugin.example:image.generate",
+      })
+      applyAdapted(document, startContext, started.command)
+      const after = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document.nodes.find(
+        (candidate) => candidate.id === node.id,
+      )!
+      expect(after.data.status).toBe("pending")
+      expect(createCanvasGenerationTargetGuard(after)).toEqual(targetGuard)
+    }
+    const failureContext = context(31, 5, 5)
+    applyAdapted(document, failureContext, requireAdaptation(document, failureContext, {
+      type: "generation.run.finish",
+      failureMessage: "Service failed",
+      nodeId: first.id,
+      operationId: "generation-0",
+    }).command)
+    const interruptContext = context(31, 6, 6)
+    const interrupted = requireAdaptation(document, interruptContext, {
+      type: "generation.runs.interrupt-inactive",
+      liveRuns: [],
+    })
+    expect(interrupted.command.kind).toBe("generation-runs-update")
+    applyAdapted(document, interruptContext, interrupted.command)
+    const projection = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document
+    expect(projection.nodes.map((node) => getCanvasNodeGenerationRun(node)?.status)).toEqual(["failed", "failed"])
+  })
+
   test("exhaustively rejects every remaining public command whose v2 proof contract is not frozen", () => {
     const document = newCanvas()
     const item = {
@@ -515,30 +613,11 @@ describe("Canvas v2 application command adapter", () => {
       { type: "resources.relink", item, nodeId: "node" },
       { type: "resources.replace", expectedTarget: target, item, targetNodeId: "node" },
       {
-        type: "resources.replace-generated",
-        expectedTarget: target,
-        item,
-        operationId: "operation",
-        targetNodeId: "node",
-      },
-      {
         type: "nodes.materialize-connected",
         node: { id: "node", type: "file", position: { x: 0, y: 0 }, data: { kind: "image", label: "Image" } },
         sourceKind: "image",
         sourceNodeId: "source",
       },
-      {
-        type: "resources.pending-generation.create",
-        generation: { operationId: "operation", prompt: "prompt", toolId: "tool" },
-        kind: "image",
-        label: "Pending",
-        nodeId: "node",
-        placement: { anchor: { x: 0, y: 0 } },
-      },
-      { type: "generation.run.start", nodeId: "node", operationId: "operation", prompt: "prompt", toolId: "tool" },
-      { type: "generation.run.mark-running", nodeId: "node", operationId: "operation" },
-      { type: "generation.run.finish", nodeId: "node", operationId: "operation" },
-      { type: "generation.runs.interrupt-inactive", liveRuns: [] },
     ]
     for (const command of unsupported) expect(adapt(document, context(3, 1, 1), command)).toBe("rejected")
   })

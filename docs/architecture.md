@@ -1516,9 +1516,12 @@ state. The draft may be empty when direct incoming text supplies the whole promp
 Main composes the effective model prompt transiently and, for admitted recoverable
 operations, retains it only in the private digest-bound execution snapshot. Main writes
 `submitting` before the external call, updates lifecycle state through Canvas
-application services, and commits generated resource replacement plus `succeeded`
-in one guarded Canvas typed intent. The dedicated target guard omits only the host-owned run
-namespace; it continues to protect real resource content and all other metadata.
+application services and the non-undoable `canvas.generation.runs.update` intent,
+and commits generated resource replacement plus `succeeded` in that same guarded,
+current-resource-proof-backed Canvas typed intent. The dedicated target guard omits
+the Canvas-owned current run, next-run preference, and their projected
+`status`/`error` presentation; it continues to protect real resource content and
+all other metadata.
 For host-owned pending-result mode, Canvas creates the pending file node and the
 `submitting` run in one candidate transaction/typed intent. That node then follows the same
 running, task-receipt, guarded replacement, terminal and restart-reconciliation

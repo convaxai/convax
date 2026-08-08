@@ -113,9 +113,15 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.
-- Generation target guards may omit only the Canvas-owned current-run and next-run
-  preference namespaces. They must still protect real resource content and every
-  other metadata namespace. Generated
+- The collaboration application adapter must close pending creation, start,
+  running/task receipt, failure/interruption, and proof-backed generated replacement.
+  Portable run-only transitions use the non-undoable
+  `canvas.generation.runs.update` typed intent; generated replacement binds the same
+  intent to the exact current Project resource proof. These commands must never
+  fall back to a generic node patch or remain in the adapter's rejected set.
+- Generation target guards may omit only the Canvas-owned current-run, next-run
+  preference, and their projected `status`/`error` presentation. They must still
+  protect real resource content and every other metadata namespace. Generated
   replacement preserves only explicitly admitted node-local namespaces rather than
   blindly merging old metadata.
 - Model-generation text selections are prompt-context node ids, not typed model

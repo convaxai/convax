@@ -281,27 +281,29 @@ test("isolates a text card's model and tool options while switching image and vi
     )
     return label?.htmlFor ? document.getElementById(label.htmlFor) : undefined
   }
-  const chooseOption = async (trigger: HTMLElement | null | undefined, label: string) => {
+  const chooseOption = async (
+    trigger: HTMLElement | null | undefined | (() => HTMLElement | null | undefined),
+    label: string,
+  ) => {
+    const resolveTrigger = () => typeof trigger === "function" ? trigger() : trigger
+    for (let attempt = 0; attempt < 8 && !resolveTrigger(); attempt += 1) await act(settle)
     await act(async () => {
-      trigger?.click()
+      resolveTrigger()?.click()
       await settle()
     })
-    let option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
-      candidate.textContent?.includes(label),
-    )
-    for (const service of document.querySelectorAll<HTMLElement>("[data-canvas-card-generation-service]")) {
-      if (option) break
-      await act(async () => {
-        service.click()
-        await settle()
-      })
-      option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
-        candidate.textContent?.includes(label),
-      )
+    let candidates: HTMLElement[] = []
+    let option: HTMLElement | undefined
+    for (let attempt = 0; attempt < 8 && !option; attempt += 1) {
+      candidates = [
+        ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+        ...document.querySelectorAll<HTMLElement>('[data-canvas-card-generation-model-menu] [role="radio"]'),
+      ]
+      option = candidates.find((candidate) => candidate.textContent?.includes(label))
+      if (!option) await act(settle)
     }
     if (!option) {
       throw new Error(
-        `Missing option ${label}: ${[...document.querySelectorAll<HTMLElement>('[role="option"]')]
+        `Missing option ${label}: ${candidates
           .map((candidate) => candidate.textContent)
           .join(" | ")}`,
       )
@@ -323,7 +325,7 @@ test("isolates a text card's model and tool options while switching image and vi
 
     expect(modelButton()?.textContent).toContain("Image first")
     await chooseOption(modelButton(), "Image second")
-    await chooseOption(qualityButton(), "Final")
+    await chooseOption(qualityButton, "Final")
     expect(modelButton()?.textContent).toContain("Image second")
     expect(qualityButton()?.textContent).toContain("Final")
 
@@ -648,10 +650,17 @@ test("preserves edits to cached card options while their description refreshes",
     let qualitySelect = currentQualitySelect()
     expect(qualitySelect?.textContent).toContain("Quality · Draft")
 
-    await act(async () => qualitySelect?.click())
-    const finalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
-      option.textContent?.includes("Final"),
-    )
+    await act(async () => {
+      qualitySelect?.click()
+      await settle()
+    })
+    let finalOption: HTMLElement | undefined
+    for (let attempt = 0; attempt < 8 && !finalOption; attempt += 1) {
+      finalOption = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+        option.textContent?.includes("Final"),
+      )
+      if (!finalOption) await act(settle)
+    }
     await act(async () => finalOption?.click())
     expect(qualitySelect?.textContent).toContain("Quality · Final")
 
@@ -884,16 +893,16 @@ test("submits the latest card model across delayed preference acknowledgements",
     })
     expect(model?.getAttribute("aria-expanded")).toBe("true")
     expect(
-      [...document.querySelectorAll("[data-canvas-card-generation-service]")].map((button) => button.textContent),
+      [...document.querySelectorAll("[data-service-model-picker-service]")].map((button) => button.textContent),
     ).toEqual([expect.stringContaining("First Service"), expect.stringContaining("Second Service")])
-    const firstService = [...document.querySelectorAll<HTMLElement>("[data-canvas-card-generation-service]")].find(
+    const firstService = [...document.querySelectorAll<HTMLElement>("[data-service-model-picker-service]")].find(
       (service) => service.textContent?.includes("First Service"),
     )
     await act(async () => {
-      firstService?.click()
+      firstService?.querySelector("summary")?.click()
       await settle()
     })
-    const second = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+    const second = [...document.querySelectorAll<HTMLElement>('[role="radio"]')].find((option) =>
       option.textContent?.includes("Second image"),
     )
     expect(second).toBeDefined()
@@ -918,18 +927,18 @@ test("submits the latest card model across delayed preference acknowledgements",
       document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.click()
       await settle()
     })
-    const secondService = [...document.querySelectorAll<HTMLButtonElement>("[data-canvas-card-generation-service]")].find(
-      (button) => button.textContent?.includes("Second Service"),
+    const secondService = [...document.querySelectorAll<HTMLDetailsElement>("[data-service-model-picker-service]")].find(
+      (service) => service.textContent?.includes("Second Service"),
     )
     await act(async () => {
-      secondService?.click()
+      secondService?.querySelector("summary")?.click()
       await settle()
     })
-    expect(secondService?.getAttribute("aria-expanded")).toBe("true")
+    expect(secondService?.open).toBeTrue()
     expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.getAttribute("aria-expanded")).toBe(
       "true",
     )
-    const third = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
+    const third = [...document.querySelectorAll<HTMLElement>('[role="radio"]')].find((option) =>
       option.textContent?.includes("Third image"),
     )
     await act(async () => {

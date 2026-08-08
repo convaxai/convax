@@ -11,6 +11,7 @@ import type {
   Uint64,
   ValidationArtifactRef,
 } from "@convax/collaboration"
+import type { CanvasNodeGenerationRun } from "../generation-run"
 
 export type {
   ActorId,
@@ -121,6 +122,7 @@ export type NodeDataEnvelope =
         | { readonly phase: "pending" }
         | { readonly phase: "failed"; readonly failureCode: string; readonly publicMessage: string | null }
       readonly generationToolId?: string
+      readonly generationRun?: CanvasNodeGenerationRun
     }
   | {
       readonly format: "convax.canvas-node-data"
@@ -129,6 +131,7 @@ export type NodeDataEnvelope =
       readonly title: string
       readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
       readonly generationToolId?: string
+      readonly generationRun?: CanvasNodeGenerationRun
     }
   | {
       readonly format: "convax.canvas-node-data"
@@ -136,6 +139,7 @@ export type NodeDataEnvelope =
       readonly title: string
       readonly resource: CanvasResourceRef
       readonly generationToolId?: string
+      readonly generationRun?: CanvasNodeGenerationRun
     }
   /**
    * Host-neutral generic Plugin surface. The concrete Plugin lives only in the
@@ -444,6 +448,7 @@ export interface PendingNodeCreateSpec {
   readonly size: CanvasSize
   readonly title: string
   readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
+  readonly generationRun?: CanvasNodeGenerationRun
 }
 
 /**
@@ -520,6 +525,7 @@ export type CanvasIntentKind =
   | "canvas.edges.connect"
   | "canvas.metadata.update"
   | "canvas.generation.begin"
+  | "canvas.generation.runs.update"
   | "canvas.generation.complete"
   | "canvas.generation.fail"
   | "canvas.generations.fail-owned"
@@ -533,6 +539,7 @@ export type CanvasIntentKind =
 export type CanvasUndoableIntentKind = Exclude<
   CanvasIntentKind,
   | "canvas.generation.begin"
+  | "canvas.generation.runs.update"
   | "canvas.generation.complete"
   | "canvas.generation.fail"
   | "canvas.generations.fail-owned"
@@ -908,6 +915,21 @@ export type CanvasIntentContractMap = {
     "canvas.nodes.update-data",
     { readonly node: NodeDataGuard; readonly resourceProof: CanvasResourceProofRef | null },
     { readonly node: CanvasEntityRef & { readonly kind: "node" }; readonly data: NodeDataEnvelope }
+  >
+  readonly "canvas.generation.runs.update": CanvasTypedIntent<
+    "canvas.generation.runs.update",
+    {
+      readonly updates: readonly {
+        readonly node: NodeDataGuard
+        readonly resourceProof: CanvasResourceProofRef | null
+      }[]
+    },
+    {
+      readonly updates: readonly {
+        readonly node: CanvasEntityRef & { readonly kind: "node" }
+        readonly data: NodeDataEnvelope
+      }[]
+    }
   >
   readonly "canvas.nodes.set-plugin-state": CanvasTypedIntent<
     "canvas.nodes.set-plugin-state",

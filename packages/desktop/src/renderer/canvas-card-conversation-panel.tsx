@@ -24,13 +24,14 @@ import {
   validateToolInputValues,
   type ToolInputValue,
 } from "@convax/ui"
-import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Settings2, Sparkles } from "lucide-react"
+import { ArrowUp, ChevronDown, LoaderCircle, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
 import { createPortal } from "react-dom"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { AgentComposerResourceToken } from "./agent-composer-resource-token"
 import { useAgentGenerationDefault } from "./agent-generation-preference"
 import type { AgentGenerationToolSelection } from "./agent-generation-models"
+import { ServiceModelPickerList } from "./service-model-picker-list"
 
 const outputLabels: Record<CanvasGenerationOutput, string> = {
   audio: "Audio",
@@ -763,15 +764,9 @@ function ModelSelect(props: {
   const selectedIndex = props.selectedToolId ? props.tools.findIndex((tool) => tool.id === props.selectedToolId) : -1
   const selected = selectedIndex >= 0 ? props.tools[selectedIndex] : undefined
   const services = groupCanvasCardGenerationToolsByService(props.tools)
-  const selectedService = services.find((service) =>
-    service.models.some(({ tool }) => tool.id === props.selectedToolId),
-  )
   const [open, setOpen] = useState(false)
-  const [activeServiceId, setActiveServiceId] = useState<string>()
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
-  const activeService =
-    services.find((service) => service.id === activeServiceId) ?? selectedService ?? services[0]
 
   useEffect(() => {
     if (!open) return
@@ -796,7 +791,7 @@ function ModelSelect(props: {
 
   const triggerRect = open ? triggerRef.current?.getBoundingClientRect() : undefined
   const viewportWidth = open && typeof window !== "undefined" ? window.innerWidth : 304
-  const menuWidth = Math.min(560, Math.max(288, viewportWidth - 16))
+  const menuWidth = Math.min(352, Math.max(288, viewportWidth - 16))
   const menuLeft = triggerRect
     ? Math.min(Math.max(8, triggerRect.left), Math.max(8, viewportWidth - menuWidth - 8))
     : 8
@@ -810,7 +805,6 @@ function ModelSelect(props: {
         data-canvas-shortcuts="ignore"
         disabled={props.disabled}
         onClick={() => {
-          setActiveServiceId(selectedService?.id ?? services[0]?.id)
           setOpen((current) => !current)
         }}
         ref={triggerRef}
@@ -829,7 +823,7 @@ function ModelSelect(props: {
         ? createPortal(
             <div
               aria-label="Models"
-              className="fixed z-[120] grid max-h-72 grid-cols-[minmax(9rem,0.8fr)_minmax(12rem,1.2fr)] overflow-hidden rounded-xl border border-border/90 bg-popover/95 text-popover-foreground shadow-xl backdrop-blur-xl"
+              className="fixed z-[120] max-h-72 overflow-y-auto rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
               data-canvas-card-generation-model-menu
               ref={menuRef}
               role="dialog"
@@ -839,54 +833,24 @@ function ModelSelect(props: {
                 width: menuWidth,
               }}
             >
-              <div className="overflow-y-auto border-r border-border/70 p-1.5" role="menu">
-                {services.map((service) => {
-                  const active = activeService?.id === service.id
-                  return (
-                    <button
-                      aria-expanded={active}
-                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 ${active ? "bg-accent" : ""}`}
-                      data-canvas-card-generation-service={service.id}
-                      key={service.id}
-                      onClick={() => setActiveServiceId(service.id)}
-                      type="button"
-                    >
-                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
-                      <span className="min-w-0 flex-1 truncate font-medium">{service.name}</span>
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                        {service.models.length}
-                      </span>
-                    </button>
-                  )
-                })}
-              </div>
-              <div className="overflow-y-auto p-1.5" role="listbox">
-                {props.unavailable || !selected ? (
-                  <div className="px-2.5 py-2 text-sm text-muted-foreground">当前节点模型不可用</div>
-                ) : null}
-                {activeService?.models.map(({ tool }) => {
-                  const modelSelected = tool.id === props.selectedToolId
-                  return (
-                    <button
-                      aria-selected={modelSelected}
-                      className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                      key={tool.id}
-                      onClick={() => {
-                        props.onValueChange(tool.id)
-                        setOpen(false)
-                      }}
-                      role="option"
-                      type="button"
-                    >
-                      <span className="min-w-0 flex-1 truncate">
-                        {props.showOutput ? `${outputLabels[tool.output]} · ` : ""}
-                        {canvasGenerationModelDisplayTitle(tool)}
-                      </span>
-                      {modelSelected ? <Check className="size-4 shrink-0" /> : null}
-                    </button>
-                  )
-                })}
-              </div>
+              {props.unavailable || !selected ? (
+                <div className="px-2.5 py-2 text-sm text-muted-foreground">当前节点模型不可用</div>
+              ) : null}
+              <ServiceModelPickerList
+                groups={services}
+                isSelected={({ tool }) => tool.id === props.selectedToolId}
+                modelAriaLabel={({ tool }, service) =>
+                  `${canvasGenerationModelDisplayTitle(tool)} by ${service.name}`
+                }
+                modelKey={({ tool }) => tool.id}
+                modelLabel={({ tool }) =>
+                  `${props.showOutput ? `${outputLabels[tool.output]} · ` : ""}${canvasGenerationModelDisplayTitle(tool)}`
+                }
+                onSelect={({ tool }) => {
+                  props.onValueChange(tool.id)
+                  setOpen(false)
+                }}
+              />
             </div>,
             document.body,
           )

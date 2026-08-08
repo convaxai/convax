@@ -1,5 +1,6 @@
 import { comparePortableStamps, compareUtf8, encodeRestrictedJcs, ordinarySha256 } from "@convax/collaboration"
 import { canonicalize as canonicalizeUri } from "@convax/uri"
+import { canvasNodeGenerationRunKey } from "../generation-run"
 import type { CanvasDocument, CanvasNode, CanvasNodeData } from "../types"
 import type {
   BoundedOperationReceipt,
@@ -158,12 +159,15 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
       }
     case "placeholder": {
       const manualPending = node.data.owner === "manual-pending"
+      const portableRunFailed = node.data.generationRun?.status === "failed"
       const failed = manualPending
         ? node.data.state.phase === "failed"
-        : node.generationLifecycle === "failed" || node.generationLifecycle === "recovery-failed"
+        : portableRunFailed || node.generationLifecycle === "failed" || node.generationLifecycle === "recovery-failed"
       const publicMessage =
         manualPending && node.data.state.phase === "failed"
           ? (node.data.state.publicMessage ?? node.data.state.failureCode)
+          : portableRunFailed
+            ? (node.data.generationRun?.failureMessage ?? "Generation failed")
           : failed
             ? "Generation failed"
             : undefined
@@ -178,6 +182,9 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
         ...(publicMessage === undefined ? {} : { error: publicMessage }),
         metadata: {
           ...pluginMetadata,
+          ...(node.data.generationRun === undefined
+            ? {}
+            : { [canvasNodeGenerationRunKey]: structuredClone(node.data.generationRun) }),
           ...(node.data.generationToolId === undefined
             ? {}
             : {
@@ -202,6 +209,9 @@ function projectNodeData(node: CanvasProjectedNode): CanvasNodeData {
         metadata: {
           ...pluginMetadata,
           [canvasProjectionResourceMetadataKey]: resource,
+          ...(node.data.generationRun === undefined
+            ? {}
+            : { [canvasNodeGenerationRunKey]: structuredClone(node.data.generationRun) }),
           ...(node.data.generationToolId === undefined
             ? {}
             : {

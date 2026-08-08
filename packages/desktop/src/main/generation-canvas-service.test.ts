@@ -1485,11 +1485,12 @@ describe("GenerationCanvasService", () => {
     expect(harness.replacementRequests[0]).toMatchObject({
       commandId: "generation:operation-one",
       expectedTarget: expect.objectContaining({
-        data: expect.objectContaining({ kind: "image", status: "pending" }),
+        data: expect.objectContaining({ kind: "image" }),
         type: "file",
       }),
       targetNodeId: harness.pendingNodeId,
     })
+    expect(harness.replacementRequests[0]?.expectedTarget.data).not.toHaveProperty("status")
     expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.data.status).toBe("idle")
     expect(
       getCanvasNodeGenerationRun(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)!)
@@ -2578,7 +2579,8 @@ describe("GenerationCanvasService", () => {
   test("persists submitting, running, structured task receipt, and atomic generated replacement in order", async () => {
     const owner = createTextNode({ id: "owner-card", position: { x: 0, y: 0 }, text: "Before" })
     const document = createCanvasDocument({ id: "canvas-one", nodes: [owner], title: "Canvas" })
-    const { calls, replacementRequests, runRequests, service } = setup({ document, taskId: "task_safe_123" })
+    const { calls, renderer, replacementRequests, runRequests, service } = setup({ document, taskId: "task_safe_123" })
+    renderer.reloadDocument = mock(async () => true)
 
     await service.generate(request({ resultMode: replaceNodeMode(owner) }), {
       id: "renderer:1",
@@ -2604,6 +2606,8 @@ describe("GenerationCanvasService", () => {
       targetNodeId: owner.id,
     })
     expect(runRequests.finish).toEqual([])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(renderer.reloadDocument).toHaveBeenCalledTimes(2)
   })
 
   test("rechecks the replacement target after running is persisted and before the paid tool call", async () => {

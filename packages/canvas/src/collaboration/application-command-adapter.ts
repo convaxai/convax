@@ -1,11 +1,26 @@
 import type { CanvasApplicationCommandRequest } from "../application/service"
 import type { CanvasApplicationCommand } from "../application/commands"
+import { createCanvasGenerationTargetGuard } from "../application/commands"
 import { alignCanvasNodes, distributeCanvasNodes, layoutCanvasNodes } from "../commands"
 import { getCanvasNodeSize } from "../document"
+import {
+  canvasNodeGenerationRunSchema,
+  finishCanvasNodeGenerationRun,
+  getCanvasNodeGenerationRun,
+  interruptInactiveCanvasNodeGenerationRuns,
+  markCanvasNodeGenerationRunRunning,
+  startCanvasNodeGenerationRun,
+  succeedCanvasNodeGenerationRun,
+  type CanvasNodeGenerationRun,
+} from "../generation-run"
 import { getCanvasResourcePresentationSize } from "../media-sizing"
 import { applyCanvasAutoLayoutPlan, planCanvasLayout } from "../application/layout"
 import type { CanvasIntentCaller } from "./session"
-import type { CanvasEntityRef, CanvasSnapshot } from "./types"
+import type {
+  CanvasEntityRef,
+  CanvasSnapshot,
+  NodeDataEnvelope,
+} from "./types"
 import type { OwnerIntentConstructionContext } from "@convax/collaboration"
 import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
 import type { CanvasAuthoritativeCommand, CanvasCreatedResourceRelation } from "./command-construction"
@@ -395,6 +410,83 @@ export function adaptCanvasApplicationCommand(input: {
       case "resources.pending.create": {
         return adaptPendingResourceCreate(caller, command, nodeById)
       }
+      case "resources.pending-generation.create": {
+        if (command.placement.parentId !== undefined) return "rejected"
+        const relation = adaptCreatedResourceRelation(command.relation, nodeById)
+        if (relation === "rejected" || !boundedCreatedResourceSet(1, relation)) return "rejected"
+        const generationRun: CanvasNodeGenerationRun = {
+          operationId: command.generation.operationId,
+          prompt: command.generation.prompt,
+          schema: canvasNodeGenerationRunSchema,
+          status: "submitting",
+          toolId: command.generation.toolId,
+        }
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "manual-resource-placeholders-create",
+            anchor: Object.freeze({ ...command.placement.anchor }),
+            items: Object.freeze([Object.freeze({
+              title: command.label,
+              expectedClass: command.kind,
+              size: Object.freeze({ width: 240, height: 180 }),
+              generationRun,
+            })]),
+            relation,
+          }),
+        })
+      }
+      case "generation.run.start":
+      case "generation.run.mark-running":
+      case "generation.run.finish":
+      case "generation.runs.interrupt-inactive": {
+        return adaptGenerationRunUpdate(caller, command, index)
+      }
+      case "resources.replace-generated": {
+        const node = nodeById.get(command.targetNodeId)
+        if (!node || node.role !== "file") return "rejected"
+        const document = projectCanvasDocument(index.projection).document
+        const projected = document.nodes.find((candidate) => candidate.id === command.targetNodeId)
+        if (
+          !projected ||
+          !sameCanonicalValue(createCanvasGenerationTargetGuard(projected), command.expectedTarget)
+        ) return "rejected"
+        const metadata = command.item.metadata
+        if (typeof metadata !== "object" || metadata === null || Array.isArray(metadata)) return "rejected"
+        const proof = (metadata as Record<string, unknown>)[canvasResourceProofMetadataKey]
+        assertResourceProof(proof, false)
+        if (
+          proof.mode !== "current-owner-state" ||
+          command.item.kind === "folder" ||
+          proof.resource.mediaClass !== command.item.kind
+        ) return "rejected"
+        const completed = succeedCanvasNodeGenerationRun(document, projected.id, command.operationId)
+        const completedNode = completed.nodes.find((candidate) => candidate.id === projected.id)!
+        const generationRun = getCanvasNodeGenerationRun(completedNode)
+        if (!generationRun) return "rejected"
+        return Object.freeze({
+          caller,
+          command: Object.freeze({
+            kind: "generation-runs-update",
+            updates: Object.freeze([Object.freeze({
+              node: node.ref,
+              data: Object.freeze({
+                format: "convax.canvas-node-data",
+                kind: "resource",
+                title: command.item.name ?? node.data.title,
+                resource: structuredClone(proof.resource),
+                ...(node.data.kind === "resource" || node.data.kind === "placeholder"
+                  ? node.data.generationToolId === undefined
+                    ? {}
+                    : { generationToolId: node.data.generationToolId }
+                  : {}),
+                generationRun,
+              }),
+              resourceProof: proof,
+            })]),
+          }),
+        })
+      }
       case "resources.relink": {
         const node = nodeById.get(command.nodeId)
         if (!node || node.role !== "file") return "rejected"
@@ -456,13 +548,7 @@ export function adaptCanvasApplicationCommand(input: {
       }
       case "resources.pending.fail":
       case "resources.replace":
-      case "resources.replace-generated":
       case "nodes.materialize-connected":
-      case "resources.pending-generation.create":
-      case "generation.run.start":
-      case "generation.run.mark-running":
-      case "generation.run.finish":
-      case "generation.runs.interrupt-inactive":
         return "rejected"
       default:
         return assertNeverCommand(command)
@@ -470,6 +556,73 @@ export function adaptCanvasApplicationCommand(input: {
   } catch {
     return "rejected"
   }
+}
+
+function adaptGenerationRunUpdate(
+  caller: CanvasIntentCaller,
+  command: Extract<
+    CanvasApplicationCommand,
+    {
+      readonly type:
+        | "generation.run.start"
+        | "generation.run.mark-running"
+        | "generation.run.finish"
+        | "generation.runs.interrupt-inactive"
+    }
+  >,
+  index: ReturnType<typeof buildCanvasProjectionIndex>,
+): CanvasApplicationCommandAdaptation | "rejected" {
+  const document = projectCanvasDocument(index.projection).document
+  const next = command.type === "generation.run.start"
+    ? startCanvasNodeGenerationRun(document, command.nodeId, command)
+    : command.type === "generation.run.mark-running"
+      ? markCanvasNodeGenerationRunRunning(document, command.nodeId, command.operationId, command.taskId)
+      : command.type === "generation.run.finish"
+        ? finishCanvasNodeGenerationRun(document, command.nodeId, command.operationId, command.failureMessage)
+        : interruptInactiveCanvasNodeGenerationRuns(document, command.liveRuns)
+  const requestedIds = command.type === "generation.runs.interrupt-inactive"
+    ? document.nodes.flatMap((node) => {
+        const before = getCanvasNodeGenerationRun(node)
+        const after = getCanvasNodeGenerationRun(next.nodes.find((candidate) => candidate.id === node.id)!)
+        return sameCanonicalValue(before ?? null, after ?? null) ? [] : [node.id]
+      })
+    : [command.nodeId]
+  if (requestedIds.length === 0) return "rejected"
+  const updates = requestedIds.map((nodeId) => {
+    const projected = index.projection.nodes.find((node) => node.ref.id === nodeId)
+    const nextNode = next.nodes.find((node) => node.id === nodeId)
+    const generationRun = nextNode ? getCanvasNodeGenerationRun(nextNode) : undefined
+    if (
+      !projected ||
+      projected.role !== "file" ||
+      (projected.data.kind !== "resource" && projected.data.kind !== "placeholder") ||
+      !generationRun
+    ) throw new TypeError("Canvas generation run update target is invalid")
+    const baseData = projected.data.kind === "placeholder" && projected.data.owner === "manual-pending"
+      ? {
+          format: "convax.canvas-node-data" as const,
+          kind: "placeholder" as const,
+          owner: "generation" as const,
+          title: projected.data.title,
+          expectedClass: projected.data.expectedClass,
+          ...(projected.data.generationToolId === undefined
+            ? {}
+            : { generationToolId: projected.data.generationToolId }),
+        }
+      : structuredClone(projected.data)
+    const data = Object.freeze({
+      ...baseData,
+      generationRun,
+    }) as NodeDataEnvelope & {
+      readonly kind: "resource" | "placeholder"
+      readonly generationRun: CanvasNodeGenerationRun
+    }
+    return Object.freeze({ node: projected.ref, data, resourceProof: null })
+  })
+  return Object.freeze({
+    caller,
+    command: Object.freeze({ kind: "generation-runs-update", updates: Object.freeze(updates) }),
+  })
 }
 
 function hasNoCreatedResourceRelation(
