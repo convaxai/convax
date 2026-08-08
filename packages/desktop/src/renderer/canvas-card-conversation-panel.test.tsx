@@ -32,6 +32,7 @@ import {
   createCanvasCardGenerationRequest,
   executeCanvasCardGeneration,
   generationErrorMessage,
+  groupCanvasCardGenerationToolsByService,
   resolveCanvasCardGenerationTool,
   validateCanvasCardGenerationToolInput,
 } from "./canvas-card-conversation-panel"
@@ -143,6 +144,19 @@ const description: CanvasGenerationToolDescription = {
 }
 
 describe("Canvas card generation output", () => {
+  test("groups the model menu by Service before models", () => {
+    const grouped = groupCanvasCardGenerationToolsByService([
+      tool({ id: "first/image", modelName: "First", serviceId: "first", serviceName: "First Service" }),
+      tool({ id: "first/image-2", modelName: "Second", serviceId: "first", serviceName: "First Service" }),
+      tool({ id: "second/image", modelName: "Third", serviceId: "second", serviceName: "Second Service" }),
+    ])
+
+    expect(grouped.map(({ id, name, models }) => ({ id, name, models: models.map(({ tool }) => tool.id) }))).toEqual([
+      { id: "first", models: ["first/image", "first/image-2"], name: "First Service" },
+      { id: "second", models: ["second/image"], name: "Second Service" },
+    ])
+  })
+
   test("uses the request's supported direct-generation output without rendering modality tabs", () => {
     const nodes = [
       createTextNode({

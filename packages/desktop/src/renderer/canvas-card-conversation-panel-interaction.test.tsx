@@ -286,9 +286,19 @@ test("isolates a text card's model and tool options while switching image and vi
       trigger?.click()
       await settle()
     })
-    const option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
+    let option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
       candidate.textContent?.includes(label),
     )
+    for (const service of document.querySelectorAll<HTMLElement>("[data-canvas-card-generation-service]")) {
+      if (option) break
+      await act(async () => {
+        service.click()
+        await settle()
+      })
+      option = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((candidate) =>
+        candidate.textContent?.includes(label),
+      )
+    }
     if (!option) {
       throw new Error(
         `Missing option ${label}: ${[...document.querySelectorAll<HTMLElement>('[role="option"]')]
@@ -400,14 +410,20 @@ test("shows the first real compatible model without writing a node override", as
         acceptedInputs: [] as const,
         description: "First image model",
         id: "tools/first-image",
+        modelName: "First image",
         output: "image" as const,
+        serviceId: "first-service",
+        serviceName: "First Service",
         title: "First image",
       },
       {
         acceptedInputs: [] as const,
         description: "Second image model",
         id: "tools/second-image",
+        modelName: "Second image",
         output: "image" as const,
+        serviceId: "first-service",
+        serviceName: "First Service",
         title: "Second image",
       },
     ]),
@@ -812,28 +828,40 @@ test("submits the latest card model across delayed preference acknowledgements",
         acceptedInputs: [] as const,
         description: "First image model",
         id: "tools/first-image",
+        modelName: "First image",
         output: "image" as const,
+        serviceId: "first-service",
+        serviceName: "First Service",
         title: "First image",
       },
       {
         acceptedInputs: [] as const,
         description: "Second image model",
         id: "tools/second-image",
+        modelName: "Second image",
         output: "image" as const,
+        serviceId: "first-service",
+        serviceName: "First Service",
         title: "Second image",
       },
       {
         acceptedInputs: [] as const,
         description: "Third image model",
         id: "tools/third-image",
+        modelName: "Third image",
         output: "image" as const,
+        serviceId: "second-service",
+        serviceName: "Second Service",
         title: "Third image",
       },
       {
         acceptedInputs: [] as const,
         description: "External image model",
         id: "tools/external-image",
+        modelName: "External image",
         output: "image" as const,
+        serviceId: "second-service",
+        serviceName: "Second Service",
         title: "External image",
       },
     ]),
@@ -855,6 +883,16 @@ test("submits the latest card model across delayed preference acknowledgements",
       await settle()
     })
     expect(model?.getAttribute("aria-expanded")).toBe("true")
+    expect(
+      [...document.querySelectorAll("[data-canvas-card-generation-service]")].map((button) => button.textContent),
+    ).toEqual([expect.stringContaining("First Service"), expect.stringContaining("Second Service")])
+    const firstService = [...document.querySelectorAll<HTMLElement>("[data-canvas-card-generation-service]")].find(
+      (service) => service.textContent?.includes("First Service"),
+    )
+    await act(async () => {
+      firstService?.click()
+      await settle()
+    })
     const second = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
       option.textContent?.includes("Second image"),
     )
@@ -880,6 +918,17 @@ test("submits the latest card model across delayed preference acknowledgements",
       document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.click()
       await settle()
     })
+    const secondService = [...document.querySelectorAll<HTMLButtonElement>("[data-canvas-card-generation-service]")].find(
+      (button) => button.textContent?.includes("Second Service"),
+    )
+    await act(async () => {
+      secondService?.click()
+      await settle()
+    })
+    expect(secondService?.getAttribute("aria-expanded")).toBe("true")
+    expect(document.querySelector<HTMLButtonElement>('button[aria-label="Model"]')?.getAttribute("aria-expanded")).toBe(
+      "true",
+    )
     const third = [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((option) =>
       option.textContent?.includes("Third image"),
     )

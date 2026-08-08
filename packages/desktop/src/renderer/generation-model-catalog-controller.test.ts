@@ -6,6 +6,7 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import { GenerationModelCatalogController } from "./generation-model-catalog-controller"
+import { writeGenerationModelCatalogProjection } from "./model-catalog-projection-cache"
 
 const activeControllers = new Set<GenerationModelCatalogController>()
 
@@ -28,6 +29,14 @@ function deferred<T>() {
     reject = fail
   })
   return { promise, reject, resolve }
+}
+
+function memoryStorage() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  }
 }
 
 function tool(id: string, output: GenerationOutputModality = "image"): GenerationToolSummary {
@@ -66,19 +75,41 @@ function description(toolId: string, label = "Quality"): GenerationToolDescripti
 }
 
 describe("GenerationModelCatalogController", () => {
+  test("renders the persisted last-complete catalog immediately while cold-start revalidation is pending", async () => {
+    const storage = memoryStorage()
+    writeGenerationModelCatalogProjection(storage, [tool("cached-model")])
+    const pending = deferred<readonly GenerationToolSummary[]>()
+    const controller = createController(
+      {
+        describeTool: mock(async ({ toolId }) => description(toolId)),
+        listTools: mock(() => pending.promise),
+      },
+      { storage },
+    )
+
+    controller.setScope({ authorityVersion: "cold-start", scopeId: "project-a" })
+    expect(controller.getSnapshot()).toMatchObject({
+      loading: false,
+      ready: true,
+      refreshing: true,
+      tools: [tool("cached-model")],
+    })
+    expect(controller.peekTools()).toEqual([tool("cached-model")])
+
+    pending.resolve([tool("fresh-model")])
+    expect(await controller.listTools()).toEqual([tool("fresh-model")])
+    expect(controller.peekTools()).toEqual([tool("fresh-model")])
+  })
+
   test("bounds the window catalog refresh age", () => {
     const client = {
       describeTool: mock(async ({ toolId }) => description(toolId)),
       listTools: mock(async () => []),
     }
     expect(() => createController(client, { refreshAfterMs: 0 })).toThrow("refresh age is invalid")
-    expect(() => createController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
-      "refresh age is invalid",
-    )
+    expect(() => createController(client, { refreshAfterMs: 24 * 60 * 60_000 + 1 })).toThrow("refresh age is invalid")
     expect(() => createController(client, { retryAfterMs: 0 })).toThrow("retry age is invalid")
-    expect(() => createController(client, { retryAfterMs: 24 * 60 * 60_000 + 1 })).toThrow(
-      "retry age is invalid",
-    )
+    expect(() => createController(client, { retryAfterMs: 24 * 60 * 60_000 + 1 })).toThrow("retry age is invalid")
   })
 
   test("single-flights initial discovery and serves remounts from the full cached catalog", async () => {

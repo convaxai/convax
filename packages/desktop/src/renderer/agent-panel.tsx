@@ -943,6 +943,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const responseStopping = Boolean(sessionId && stoppingSessionIds.has(sessionId))
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
   const interactionDisabled = runtimeBusy || responseStopping || loading || creatingSession
+  const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession
   useEffect(() => {
     const root = composerRef.current
     if (!root) return
@@ -2547,7 +2548,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       aria-label={`Select Agent models, ${displayedModelLabel}`}
                       className="agent-composer-model flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
                       data-agent-composer-action="model"
-                      disabled={!props.projectId || interactionDisabled}
+                      disabled={!props.projectId || modelPickerDisabled}
                       onClick={() => {
                         if (generationModelPickerOpen) {
                           closeGenerationModelPicker()
@@ -2801,6 +2802,14 @@ function MessageSliceView(props: {
           <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <Bot className="size-3" />
             Agent
+            {props.slice.message.model ? (
+              <span
+                className="font-normal normal-case tracking-normal"
+                data-agent-message-model={`${props.slice.message.model.providerId}/${props.slice.message.model.modelId}`}
+              >
+                · {props.slice.message.model.providerId}/{props.slice.message.model.modelId}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {props.slice.parts.map((part) => (

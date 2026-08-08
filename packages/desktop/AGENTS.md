@@ -169,7 +169,8 @@ contract and its routed references.
   validation, bounded messages, stale-scope checks, and cancellation at every
   process crossing.
 - Browser storage is for renderer preferences, Workbench recovery choices, and
-  bounded versioned Marketplace and Plugin Service display caches only. It is never
+  bounded versioned Marketplace, Plugin Service, and model catalog display caches
+  only. It is never
   canonical domain, installation, execution, billing, or authorization state.
 - Marketplace settings seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate in the background at window startup.
@@ -181,6 +182,11 @@ contract and its routed references.
   independently in the background. Keep old values visible during refresh; reject
   unsafe cache data, clear prior usage on credential-changing actions, and never use
   the projection for service actions, Checkout, or execution.
+- Agent and generation model pickers seed from one last-complete safe Renderer
+  projection across cold windows, then revalidate in the background. Group models
+  by Service for navigation, preserve exact model ids at selection, reject unsafe
+  cache data, and revalidate every selection at the Agent/generation dispatch
+  boundary.
 - Every cancellable cross-process operation uses a sender-scoped opaque id only for
   lifecycle correlation. Authority and scope are independently derived and
   revalidated by Main.

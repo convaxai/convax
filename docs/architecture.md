@@ -224,7 +224,7 @@ flowchart TB
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service display caches"]
+    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
   end
 
   Main --> UserData
@@ -742,7 +742,8 @@ Packaged app Resources/
                                         never built-in provenance or executable-in-place
 
 browser localStorage                    per-user Workbench/renderer preferences plus bounded
-                                        disposable Marketplace and Plugin Service display projections
+                                        disposable Marketplace, Plugin Service and model catalog
+                                        display projections
 
 <project root>/
   Notes/                                user-visible Canvas-created text files
@@ -1444,14 +1445,18 @@ Renderer input cannot name or override that binding. Unmarked model tools keep t
 single static selection, and unmarked schema fields remain ordinary tool options.
 
 The Agent generation model is a user-global renderer preference. Agent and card
-pickers present concrete models in one selection layer; the contributing service is
-display metadata, not a provider choice that exposes a second model control.
+pickers first group concrete models under their contributing Service and expand that
+Service to reveal its models. The Service row is navigation only, not a committed
+provider choice or a second model control.
 One window-scoped renderer projection is shared by those pickers: remounting either
 composer reads its ready values synchronously instead of starting another discovery
 request. Project or capability changes and a bounded age timer revalidate that
 projection through Main's single-flight catalog refresh. Ready values remain visible
-while revalidation runs, and the committed result notifies both pickers; the
-renderer snapshot never authorizes execution or persists model authority.
+while revalidation runs, and the committed result notifies both pickers. Renderer
+also persists one bounded, versioned, strictly validated last-complete model display
+projection so a cold window renders synchronously before that revalidation settles.
+The projection is disposable and never authorizes execution or persists model
+authority; send-time Agent and generation boundaries revalidate the exact selection.
 Without an owning node override, an image/video replacement card inherits that
 preference only when its output matches the card's intrinsic kind and accepts the
 current media references. A text owner may instead choose image or video output; its
@@ -1608,7 +1613,9 @@ display records only. The existing OpenCode Agent runtime contributes a safe dis
 projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
-select an OpenCode provider/model pair.
+select an OpenCode provider/model pair. Agent messages may carry the exact
+provider/model identity recorded by OpenCode for that message so Renderer can show
+the dispatch result; model-authored prose is never model-selection evidence.
 
 The Services page and generation pickers may display installed model rows while a
 service is disconnected so the user can understand, select, and configure that

@@ -18,25 +18,19 @@ import { createCanvasGenerationTargetGuard } from "@convax/canvas/application"
 import {
   Button,
   SegmentedTabs,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   ToolInputForm,
   createToolInputDefaultValues,
   reconcileToolInputValues,
   validateToolInputValues,
   type ToolInputValue,
 } from "@convax/ui"
-import { ArrowUp, LoaderCircle, Settings2, Sparkles } from "lucide-react"
+import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { AgentComposerResourceToken } from "./agent-composer-resource-token"
 import { useAgentGenerationDefault } from "./agent-generation-preference"
 import type { AgentGenerationToolSelection } from "./agent-generation-models"
-
-const unavailableToolToken = "unavailable"
 
 const outputLabels: Record<CanvasGenerationOutput, string> = {
   audio: "Audio",
@@ -768,58 +762,173 @@ function ModelSelect(props: {
 }) {
   const selectedIndex = props.selectedToolId ? props.tools.findIndex((tool) => tool.id === props.selectedToolId) : -1
   const selected = selectedIndex >= 0 ? props.tools[selectedIndex] : undefined
+  const services = groupCanvasCardGenerationToolsByService(props.tools)
+  const selectedService = services.find((service) =>
+    service.models.some(({ tool }) => tool.id === props.selectedToolId),
+  )
+  const [open, setOpen] = useState(false)
+  const [activeServiceId, setActiveServiceId] = useState<string>()
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  const activeService =
+    services.find((service) => service.id === activeServiceId) ?? selectedService ?? services[0]
+
+  useEffect(() => {
+    if (!open) return
+    const dismissOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (triggerRef.current?.contains(event.target) || menuRef.current?.contains(event.target)) return
+      setOpen(false)
+    }
+    const closeForEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener("pointerdown", dismissOutside, true)
+    window.addEventListener("keydown", closeForEscape, true)
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true)
+      window.removeEventListener("keydown", closeForEscape, true)
+    }
+  }, [open])
+
+  const triggerRect = open ? triggerRef.current?.getBoundingClientRect() : undefined
+  const viewportWidth = open && typeof window !== "undefined" ? window.innerWidth : 304
+  const menuWidth = Math.min(560, Math.max(288, viewportWidth - 16))
+  const menuLeft = triggerRect
+    ? Math.min(Math.max(8, triggerRect.left), Math.max(8, viewportWidth - menuWidth - 8))
+    : 8
   return (
-    <Select
-      disabled={props.disabled}
-      onValueChange={(value) => {
-        if (value === unavailableToolToken) return
-        const tool = props.tools[toolTokenIndex(value)]
-        if (tool) props.onValueChange(tool.id)
-      }}
-      value={props.unavailable || selectedIndex < 0 ? unavailableToolToken : toolToken(selectedIndex)}
-    >
-      <SelectTrigger
+    <>
+      <button
+        aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label="Model"
-        className="h-auto w-auto min-w-0 max-w-[70%] shrink-0 justify-start gap-1 border-0 bg-transparent px-1.5 py-1 text-[11px] text-muted-foreground shadow-none hover:bg-accent hover:text-accent-foreground focus-visible:border-transparent focus-visible:ring-ring/40 [&>svg]:size-3 [&>svg]:opacity-100"
+        className="flex h-auto w-auto min-w-0 max-w-[70%] shrink-0 items-center justify-start gap-1 rounded-md border-0 bg-transparent px-1.5 py-1 text-[11px] text-muted-foreground shadow-none outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
         data-canvas-shortcuts="ignore"
+        disabled={props.disabled}
+        onClick={() => {
+          setActiveServiceId(selectedService?.id ?? services[0]?.id)
+          setOpen((current) => !current)
+        }}
+        ref={triggerRef}
+        type="button"
       >
-        <SelectValue className="flex items-center gap-1 text-muted-foreground">
-          <Sparkles className="size-3.5 shrink-0" />
-          <span className="shrink-0 font-medium text-foreground">Models</span>
-          <span className="truncate">
-            {props.unavailable || !selected
-              ? "不可用"
-              : `${props.showOutput ? `${outputLabels[selected.output]} · ` : ""}${canvasGenerationModelSelectionTitle(selected)}`}
-          </span>
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {props.unavailable || !selected ? (
-          <SelectItem disabled value={unavailableToolToken}>
-            当前节点模型不可用
-          </SelectItem>
-        ) : null}
-        {props.tools.map((tool, index) => (
-          <SelectItem key={tool.id} value={toolToken(index)}>
-            {props.showOutput ? `${outputLabels[tool.output]} · ` : ""}
-            {canvasGenerationModelSelectionTitle(tool)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <Sparkles className="size-3.5 shrink-0" />
+        <span className="shrink-0 font-medium text-foreground">Models</span>
+        <span className="truncate">
+          {props.unavailable || !selected
+            ? "不可用"
+            : `${props.showOutput ? `${outputLabels[selected.output]} · ` : ""}${canvasGenerationModelSelectionTitle(selected)}`}
+        </span>
+        <ChevronDown className={`size-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              aria-label="Models"
+              className="fixed z-[120] grid max-h-72 grid-cols-[minmax(9rem,0.8fr)_minmax(12rem,1.2fr)] overflow-hidden rounded-xl border border-border/90 bg-popover/95 text-popover-foreground shadow-xl backdrop-blur-xl"
+              data-canvas-card-generation-model-menu
+              ref={menuRef}
+              role="dialog"
+              style={{
+                bottom: triggerRect ? Math.max(8, window.innerHeight - triggerRect.top + 4) : 8,
+                left: menuLeft,
+                width: menuWidth,
+              }}
+            >
+              <div className="overflow-y-auto border-r border-border/70 p-1.5" role="menu">
+                {services.map((service) => {
+                  const active = activeService?.id === service.id
+                  return (
+                    <button
+                      aria-expanded={active}
+                      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40 ${active ? "bg-accent" : ""}`}
+                      data-canvas-card-generation-service={service.id}
+                      key={service.id}
+                      onClick={() => setActiveServiceId(service.id)}
+                      type="button"
+                    >
+                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate font-medium">{service.name}</span>
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                        {service.models.length}
+                      </span>
+                    </button>
+                  )
+                })}
+              </div>
+              <div className="overflow-y-auto p-1.5" role="listbox">
+                {props.unavailable || !selected ? (
+                  <div className="px-2.5 py-2 text-sm text-muted-foreground">当前节点模型不可用</div>
+                ) : null}
+                {activeService?.models.map(({ tool }) => {
+                  const modelSelected = tool.id === props.selectedToolId
+                  return (
+                    <button
+                      aria-selected={modelSelected}
+                      className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
+                      key={tool.id}
+                      onClick={() => {
+                        props.onValueChange(tool.id)
+                        setOpen(false)
+                      }}
+                      role="option"
+                      type="button"
+                    >
+                      <span className="min-w-0 flex-1 truncate">
+                        {props.showOutput ? `${outputLabels[tool.output]} · ` : ""}
+                        {canvasGenerationModelDisplayTitle(tool)}
+                      </span>
+                      {modelSelected ? <Check className="size-4 shrink-0" /> : null}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   )
 }
 
+export interface CanvasCardGenerationServiceGroup {
+  id: string
+  models: readonly { index: number; tool: CanvasGenerationToolSummary }[]
+  name: string
+}
+
+export function groupCanvasCardGenerationToolsByService(
+  tools: readonly CanvasGenerationToolSummary[],
+): readonly CanvasCardGenerationServiceGroup[] {
+  const services = new Map<
+    string,
+    { id: string; models: { index: number; tool: CanvasGenerationToolSummary }[]; name: string }
+  >()
+  tools.forEach((tool, index) => {
+    const serviceId = tool.serviceId?.trim() || tool.serviceName?.trim() || tool.id
+    const serviceName = tool.serviceName?.trim() || "Models"
+    const service = services.get(serviceId)
+    if (service) service.models.push({ index, tool })
+    else services.set(serviceId, { id: serviceId, models: [{ index, tool }], name: serviceName })
+  })
+  return [...services.values()]
+}
+
+function canvasGenerationModelDisplayTitle(tool: CanvasGenerationToolSummary) {
+  return tool.modelName?.trim() || tool.title
+}
+
 function canvasGenerationModelSelectionTitle(tool: CanvasGenerationToolSummary) {
-  const modelName = tool.modelName?.trim() || tool.title
+  const modelName = canvasGenerationModelDisplayTitle(tool)
   const serviceName = tool.serviceName?.trim()
   return !serviceName || modelName === serviceName || modelName.startsWith(`${serviceName} · `)
     ? modelName
     : `${serviceName} · ${modelName}`
 }
-
-const toolToken = (index: number) => `tool:${index}`
-const toolTokenIndex = (value: string) => Number.parseInt(value.slice("tool:".length), 10)
 
 export interface CanvasCardConversationPanelProps extends Omit<CanvasCardGenerationPanelProps, "generation"> {
   agent: ReactNode

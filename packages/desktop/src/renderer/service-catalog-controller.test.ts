@@ -11,6 +11,7 @@ import {
   serviceCatalogAgentModelsForScope,
   serviceGenerationAvailabilityVersion,
 } from "./service-catalog-controller"
+import { writeAgentModelCatalogProjection } from "./model-catalog-projection-cache"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -20,6 +21,14 @@ function deferred<T>() {
     reject = fail
   })
   return { promise, reject, resolve }
+}
+
+function memoryStorage() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  }
 }
 
 const connected: PluginServiceStatus = {
@@ -62,6 +71,40 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
+  test("renders the persisted Agent model catalog while cold-start revalidation is pending", async () => {
+    const cachedCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "cached-model", modelName: "Cached Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const storage = memoryStorage()
+    writeAgentModelCatalogProjection(storage, cachedCatalog)
+    const pending = deferred<typeof cachedCatalog>()
+    const controller = new ServiceCatalogController(
+      pluginClient(),
+      { listModels: mock(() => pending.promise) },
+      { storage },
+    )
+
+    controller.setScopeId("project-a")
+    controller.start()
+    expect(controller.getSnapshot().agentModels).toEqual({
+      catalog: cachedCatalog,
+      error: undefined,
+      loading: true,
+      scopeId: "project-a",
+    })
+
+    pending.resolve(cachedCatalog)
+    await controller.refreshAgentModels()
+    controller.dispose()
+  })
+
   test("does not expose the previous Project's Agent model catalog during a scope switch", () => {
     const previousCatalog = {
       providers: [

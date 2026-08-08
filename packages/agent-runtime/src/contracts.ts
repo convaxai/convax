@@ -37,6 +37,8 @@ export interface AgentMessage {
   id: string
   sessionId: string
   role: "user" | "assistant"
+  /** Exact provider/model recorded by OpenCode for this message. */
+  model?: AgentModel
   createdAt: number
   completedAt?: number
   error?: string

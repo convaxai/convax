@@ -57,6 +57,7 @@ describe("Agent conversation activity", () => {
     const streamingMessage: AgentMessage = {
       createdAt: 1,
       id: "assistant-streaming",
+      model: { modelId: "mimo-v2.5-free", providerId: "opencode" },
       parts: [streamingPart],
       role: "assistant",
       sessionId: "session-1",
@@ -102,6 +103,8 @@ describe("Agent conversation activity", () => {
     )
 
     expect(streamingMarkup).toContain("Partial response")
+    expect(streamingMarkup).toContain('data-agent-message-model="opencode/mimo-v2.5-free"')
+    expect(streamingMarkup).toContain("opencode/mimo-v2.5-free")
     expect(streamingMarkup).toContain('aria-busy="true"')
     expect(streamingMarkup).toContain('aria-live="polite"')
     expect(streamingMarkup).toContain("data-agent-response-announcer")
@@ -707,6 +710,8 @@ describe("Agent composer source contract", () => {
     expect(source).toContain('data-agent-composer-action="reference"')
     expect(source).toContain('data-agent-composer-action="skill"')
     expect(source).toContain('data-agent-composer-action="model"')
+    expect(source).toContain("const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession")
+    expect(source).toContain("disabled={!props.projectId || modelPickerDisabled}")
     expect(source).toContain("data-agent-composer-editor")
     expect(source).toContain("modelPickerRef.current")
     expect(source).toContain(

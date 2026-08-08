@@ -14,6 +14,11 @@ import {
   type PluginServicesSnapshot,
   type PluginServiceViewEntry,
 } from "./plugin-services-controller"
+import {
+  readAgentModelCatalogProjection,
+  writeAgentModelCatalogProjection,
+  type ModelCatalogProjectionStorage,
+} from "./model-catalog-projection-cache"
 
 export type ServiceBilling =
   | { kind: "credits"; remaining?: number; unit?: string }
@@ -69,6 +74,10 @@ export interface ServiceCatalogSnapshot {
   error?: string
   loading: boolean
   services: readonly ServiceCatalogEntry[]
+}
+
+export interface ServiceCatalogControllerOptions {
+  storage?: ModelCatalogProjectionStorage
 }
 
 export function serviceCatalogAgentModelsForScope(
@@ -211,6 +220,7 @@ export class ServiceCatalogController {
   readonly #listeners = new Set<() => void>()
   readonly #plugins: PluginServicesController
   #agentCatalog?: AgentModelCatalog
+  #cachedAgentCatalog?: AgentModelCatalog
   #agentError?: string
   #agentLoading = false
   #agentRefreshQueued = false
@@ -228,9 +238,12 @@ export class ServiceCatalogController {
   constructor(
     private readonly pluginClient: PluginServiceClient,
     private readonly agentClient: Pick<AgentClient, "listModels">,
+    private readonly options: ServiceCatalogControllerOptions = {},
   ) {
     this.#plugins = new PluginServicesController(this.pluginClient)
     this.#pluginSnapshot = this.#plugins.getSnapshot()
+    this.#cachedAgentCatalog = readAgentModelCatalogProjection(this.options.storage) ?? undefined
+    this.#agentCatalog = this.#cachedAgentCatalog
     this.#snapshot = this.#compose()
   }
 
@@ -259,7 +272,7 @@ export class ServiceCatalogController {
   setScopeId(scopeId?: string) {
     if (this.#disposed || scopeId === this.#scopeId) return
     this.#scopeId = scopeId
-    this.#agentCatalog = undefined
+    this.#agentCatalog = scopeId ? this.#cachedAgentCatalog : undefined
     this.#agentError = undefined
     this.#agentRefreshQueued = false
     this.#agentRequest = undefined
@@ -321,6 +334,8 @@ export class ServiceCatalogController {
       .then((catalog) => {
         if (this.#disposed || generation !== this.#modelGeneration || scopeId !== this.#scopeId) return undefined
         this.#agentCatalog = catalog
+        this.#cachedAgentCatalog = catalog
+        writeAgentModelCatalogProjection(this.options.storage, catalog)
         this.#agentLoading = false
         this.#publish()
         return catalog
