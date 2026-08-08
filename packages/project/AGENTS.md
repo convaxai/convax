@@ -39,6 +39,10 @@ This package owns the durable Project aggregate and native Project adapters.
   Canvas route/tombstone, and current `shardEpoch` authority. A service registry,
   JSON catalog, filesystem enumeration, or controller projection cannot add, remove,
   revive, hide, or replace a ProjectIndex route.
+- Root and `/canvas` are independently compiled package entrypoints. Their
+  process-local ProjectIndex owner-state projection uses one schema-digest-bound
+  stable marker and must not depend on a bundle-local constructor identity. That
+  marker is never serialized, persisted, or treated as portable authority.
 - Canvas document schema/commands remain in `@convax/canvas`; Project composes its
   public validators/resource proofs and native ports rather than duplicating the
   Canvas reducer or editing Canvas through Project-local commands.
