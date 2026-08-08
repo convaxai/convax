@@ -12,6 +12,7 @@ import {
   type DecodedCausalEditFrame,
   type Id128,
   type OwnerIntentValidationContext,
+  type OwnerValidatedState,
   type PortableStamp,
   type Uint32,
 } from "@convax/collaboration"
@@ -39,6 +40,7 @@ import {
   projectCanvasRouteProjection,
   projectIndexIntentDigest,
   projectIndexCurrentBlobReferences,
+  projectIndexSnapshotFromValidatedOwnerState,
   parseProjectIndexResourceReference,
   projectIndexRecordDigest,
   requiredProjectIndexBlobDigests,
@@ -65,6 +67,31 @@ const facts = Object.freeze({
 })
 
 describe("ProjectIndex owner schema", () => {
+  test("recognizes schema-bound validated snapshots across package entrypoint constructor identities", () => {
+    const snapshot = validateProjectIndexYDoc(genesis())
+    const crossEntrypointSnapshot = Object.freeze({
+      ...snapshot,
+      entries: new Map(snapshot.entries),
+      canvasRoutes: new Map(snapshot.canvasRoutes),
+      operations: new Map(snapshot.operations),
+    })
+    const state = Object.freeze({
+      owner: "project-index",
+      value: crossEntrypointSnapshot,
+    }) as OwnerValidatedState<"project-index">
+
+    expect(projectIndexSnapshotFromValidatedOwnerState(state)).toBe(crossEntrypointSnapshot)
+    expect(projectIndexSnapshotFromValidatedOwnerState(Object.freeze({
+      owner: "project-index",
+      value: {
+        identity: snapshot.identity,
+        entries: snapshot.entries,
+        canvasRoutes: snapshot.canvasRoutes,
+        operations: snapshot.operations,
+      },
+    }) as OwnerValidatedState<"project-index">)).toBeNull()
+  })
+
   test("constructs the closed stage, activation, rename and tombstone route intents from the exact base", () => {
     const document = genesis()
     const stageContext = draftContext(actor(2), id128(41), "2")

@@ -94,6 +94,13 @@ export const PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST: Digest = parseDigest
   "99ebca8cc048f6cf919d55a9829091e2450e59a10b87b5410d9b0243459be37c",
 )
 
+// The root and /canvas package entrypoints are compiled as independent bundles.
+// A schema-bound global symbol preserves this process-local validated-view marker
+// without treating one bundle's constructor identity as portable authority.
+const PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND = Symbol.for(
+  `@convax/project/project-index-validated-snapshot/${PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST}`,
+)
+
 const encoder = new TextEncoder()
 const RECORD_DOMAIN = encoder.encode("convax.project-index-record-digest\0")
 const INTENT_DOMAIN = encoder.encode("convax.project-index-intent-digest\0")
@@ -901,6 +908,7 @@ export function validateProjectIndexYDoc(document: Y.Doc, scope?: ProjectIndexSc
   }
   validateRelations({ identity, entries, entryLocations, entryTombstones, contentFamilies, contentConflictCopies, pathReservations, canvasRoutes, operations })
   return Object.freeze({
+    [PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND]: true,
     identity,
     entries: readonlyProjectIndexMap(entries),
     entryLocations: readonlyProjectIndexMap(entryLocations),
@@ -1610,11 +1618,12 @@ export function projectIndexSnapshotFromValidatedOwnerState(
 ): ProjectIndexSnapshot | null {
   const value = base.value
   if (
+    base.owner !== "project-index" ||
     typeof value !== "object" ||
     value === null ||
-    !((value as { entries?: unknown }).entries instanceof ProjectIndexReadonlyMapView) ||
-    !((value as { canvasRoutes?: unknown }).canvasRoutes instanceof ProjectIndexReadonlyMapView) ||
-    !((value as { operations?: unknown }).operations instanceof ProjectIndexReadonlyMapView)
+    (value as { readonly [PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND]?: unknown })[
+      PROJECT_INDEX_VALIDATED_SNAPSHOT_BRAND
+    ] !== true
   ) {
     return null
   }

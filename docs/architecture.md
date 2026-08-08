@@ -624,6 +624,12 @@ application composition root.
 The latter's declared external `yjs` dependency does not weaken its prohibition on
 Convax package dependencies or host/native ownership.
 
+Independently compiled entrypoints of one package must not require shared JavaScript
+constructor identity for private process-local values. In particular, ProjectIndex
+owner state crosses `@convax/project` and `@convax/project/canvas` through one
+schema-digest-bound in-process validated-view marker; it is not serialized, persisted,
+or treated as a portable authority.
+
 Adding a package requires an architecture use case, an ownership row and dependency
 policy, package-local `AGENTS.md`, local lifecycle scripts, public `dist` exports,
 standalone tests, and inclusion in the real-tarball/external-consumer smoke. The
