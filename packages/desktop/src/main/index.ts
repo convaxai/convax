@@ -138,6 +138,7 @@ import { ProjectFilePreviewService } from "./project-file-preview-service"
 import { projectFilePreviewPrivileges, projectFilePreviewScheme } from "../project-file-preview-contracts"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
+import { createProjectCanvasMediaInspector } from "./project-canvas-media-inspector"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
 import { registerWorkspaceSystemStatusIpc } from "./workspace-system-status-ipc"
 import {
@@ -270,10 +271,10 @@ import type { ProjectTeamCollaborationStatus } from "../project-team-collaborati
 interface ProjectTeamCollaborationRuntime {
   readonly service: ProjectTeamCollaborationMainService &
     Readonly<{
-    activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
-    activateProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
-    quiesceProject(projectId: string): Promise<void>
-  }>
+      activateLocalProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
+      activateProject(projectId: string): Promise<ProjectTeamCollaborationStatus>
+      quiesceProject(projectId: string): Promise<void>
+    }>
   dispose(): Promise<void>
 }
 
@@ -285,11 +286,11 @@ interface ProjectTeamCollaborationRuntime {
  */
 export function createProjectTeamRuntimeGate(
   input: Readonly<{
-  createRuntime(): ProjectTeamCollaborationRuntime
+    createRuntime(): ProjectTeamCollaborationRuntime
     activateProjectSharing(
       input: Readonly<{
-    projectId: string
-    service: Pick<ProjectTeamCollaborationRuntime["service"], "activateLocalProject" | "activateProject">
+        projectId: string
+        service: Pick<ProjectTeamCollaborationRuntime["service"], "activateLocalProject" | "activateProject">
       }>,
     ): Promise<ProjectTeamCollaborationStatus>
   }>,
@@ -320,13 +321,13 @@ export function createProjectTeamRuntimeGate(
     reason: ProjectTeamCollaborationStatus["reason"],
   ): ProjectTeamCollaborationStatus =>
     Object.freeze({
-    format: "convax.project-team-collaboration-status",
-    projectId,
-    state,
-    canEdit: false,
-    connectedPeerCount: 0,
-    reason,
-  })
+      format: "convax.project-team-collaboration-status",
+      projectId,
+      state,
+      canEdit: false,
+      connectedPeerCount: 0,
+      reason,
+    })
   const localOnlyStatus = (projectId: string) => status(projectId, "local-only", null)
   const unavailableStatus = (projectId: string) => status(projectId, "attention", "service-unavailable")
   const requireLive = () => {
@@ -784,30 +785,30 @@ function startApplication() {
     }
     const quiesceCollaborationProject = (projectId: string) =>
       serializeCollaborationActivation(async () => {
-      await projectTeamRuntimeGate?.quiesceProject(projectId)
-      await collaborationFacade?.quiesceProject(projectId)
-      if (activeCollaborationProjectId === projectId) {
-        activeCollaborationProjectId = null
-      }
-    })
+        await projectTeamRuntimeGate?.quiesceProject(projectId)
+        await collaborationFacade?.quiesceProject(projectId)
+        if (activeCollaborationProjectId === projectId) {
+          activeCollaborationProjectId = null
+        }
+      })
     const activateCollaborationProject = (projectId: string) =>
       serializeCollaborationActivation(async () => {
-      const previous = activeCollaborationProjectId
-      if (previous && previous !== projectId) {
-        await projectTeamRuntimeGate?.quiesceProject(previous)
-        await collaborationFacade?.quiesceProject(previous)
-      }
-      if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
-      await collaborationFacade.prepareProject(projectId)
-      activeCollaborationProjectId = projectId
-      try {
-        if (!projectTeamRuntimeGate) throw new Error("Project Team collaboration runtime gate is unavailable")
-        await projectTeamRuntimeGate.activateProject(projectId)
-      } catch (error) {
-        // A rendezvous outage never rolls back or closes the already durable local Project.
-        console.warn("Could not start Project sharing; the local Project remains open", error)
-      }
-    })
+        const previous = activeCollaborationProjectId
+        if (previous && previous !== projectId) {
+          await projectTeamRuntimeGate?.quiesceProject(previous)
+          await collaborationFacade?.quiesceProject(previous)
+        }
+        if (!collaborationFacade) throw new Error("Project collaboration facade is unavailable")
+        await collaborationFacade.prepareProject(projectId)
+        activeCollaborationProjectId = projectId
+        try {
+          if (!projectTeamRuntimeGate) throw new Error("Project Team collaboration runtime gate is unavailable")
+          await projectTeamRuntimeGate.activateProject(projectId)
+        } catch (error) {
+          // A rendezvous outage never rolls back or closes the already durable local Project.
+          console.warn("Could not start Project sharing; the local Project remains open", error)
+        }
+      })
     const durabilityDiagnostics = createPackagedDurabilityDiagnostics()
     const collaborationProjects = new NodeProjectCollaborationRuntimeCoordinator({
       ...(durabilityDiagnostics === undefined ? {} : { durabilityDiagnostics }),
@@ -816,9 +817,9 @@ function startApplication() {
       identity: {
         async resolveLocalActorId({ projectId, projectRoot }) {
           const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
-              protocolDigest: collaborationAuthority.protocolDigest,
-              schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
-              uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
+            protocolDigest: collaborationAuthority.protocolDigest,
+            schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+            uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
           })
           if (manifest.projectIndexScope.projectId !== projectId) {
             throw new Error("Project collaboration manifest crossed the bound Project")
@@ -873,7 +874,8 @@ function startApplication() {
       if (
         manifest.projectIndexScope.projectId !== identity.projectId ||
         manifest.projectIndexScope.projectEpoch !== identity.projectEpoch
-      ) return "rejected" as const
+      )
+        return "rejected" as const
       return localProjectOwnerAuthority.resolveExact({
         projectId: identity.projectId,
         projectEpoch: identity.projectEpoch,
@@ -960,8 +962,9 @@ function startApplication() {
           createDocument: createProjectIndexReconstructionYDoc,
           incomingFacts: Object.freeze({
             resolve(request: Parameters<typeof genesisFactPorts.incomingFacts.resolve>[0]) {
-              return selectFacts(request.declaredDependencies as import("@convax/collaboration").OwnerIntentDependencies<"project-index">)
-                .incomingFacts.resolve(request)
+              return selectFacts(
+                request.declaredDependencies as import("@convax/collaboration").OwnerIntentDependencies<"project-index">,
+              ).incomingFacts.resolve(request)
             },
           }),
           requiredBlobDigests: requiredProjectIndexBlobDigests,
@@ -977,15 +980,18 @@ function startApplication() {
     const pluginStateSchemaArtifactAuthority: {
       current?: Pick<PluginStateSchemaAuthorityV1, "resolveArtifact">
     } = {}
-    const canvasSubmitDiagnostics = process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
-      ? {
-          record(diagnostic: object) {
-            try {
-              console.warn("[convax:canvas-submit-latency]", JSON.stringify(diagnostic))
-            } catch { /* Benchmark diagnostics never affect a Canvas command. */ }
-          },
-        }
-      : undefined
+    const canvasSubmitDiagnostics =
+      process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
+        ? {
+            record(diagnostic: object) {
+              try {
+                console.warn("[convax:canvas-submit-latency]", JSON.stringify(diagnostic))
+              } catch {
+                /* Benchmark diagnostics never affect a Canvas command. */
+              }
+            },
+          }
+        : undefined
     collaborationCanvasComposition = createMainCanvasCollaborationComposition({
       authority: collaborationAuthority,
       canvasOwner,
@@ -1024,10 +1030,10 @@ function startApplication() {
     projectTeamRuntimeGate = createProjectTeamRuntimeGate({
       activateProjectSharing: ({ projectId, service }) =>
         activateProjectSharingFromDurableBinding({
-        projectId,
-        sharing: collaborationTeamStore,
-        service,
-      }),
+          projectId,
+          sharing: collaborationTeamStore,
+          service,
+        }),
       createRuntime: () => {
         const collaborationControlConfig = parseDesktopCollaborationControlRuntimeConfig(
           process.env.CONVAX_COLLABORATION_CONTROL_RUNTIME,
@@ -1064,9 +1070,9 @@ function startApplication() {
           format: "convax.validation-artifact-set",
           artifacts: collaborationAuthority.protocolSchemaBundle.core.artifacts
             .map((artifact, index) => ({
-            owner: (["canvas", "kernel", "control-plane", "project-index"] as const)[index],
-            format: artifact.format,
-            artifactDigest: artifact.artifactDigest,
+              owner: (["canvas", "kernel", "control-plane", "project-index"] as const)[index],
+              format: artifact.format,
+              artifactDigest: artifact.artifactDigest,
             }))
             .sort((left, right) => String(left.owner).localeCompare(String(right.owner))),
         })
@@ -1079,14 +1085,14 @@ function startApplication() {
             return Boolean(
               actor &&
                 edit &&
-              record.membershipSnapshot.core.projectEpoch === candidate.projectEpoch &&
-              record.membershipSnapshot.core.membershipSequence === candidate.membershipSequence &&
-              record.membershipSnapshot.core.protocolDigest === candidate.protocolDigest &&
-              actor.core.actorId === candidate.actorId &&
-              actor.core.replicaSigningPublicKey === candidate.replicaSigningPublicKey &&
-              actor.coreDigest === candidate.signerAuthority.replicaActorCredentialCoreDigest &&
-              edit.coreDigest === candidate.controlEvidenceDigest &&
-              edit.coreDigest === candidate.signerAuthority.replicaEditAuthorizationCoreDigest &&
+                record.membershipSnapshot.core.projectEpoch === candidate.projectEpoch &&
+                record.membershipSnapshot.core.membershipSequence === candidate.membershipSequence &&
+                record.membershipSnapshot.core.protocolDigest === candidate.protocolDigest &&
+                actor.core.actorId === candidate.actorId &&
+                actor.core.replicaSigningPublicKey === candidate.replicaSigningPublicKey &&
+                actor.coreDigest === candidate.signerAuthority.replicaActorCredentialCoreDigest &&
+                edit.coreDigest === candidate.controlEvidenceDigest &&
+                edit.coreDigest === candidate.signerAuthority.replicaEditAuthorizationCoreDigest &&
                 record.membershipSnapshot.coreDigest === candidate.signerAuthority.membershipSnapshotDigest,
             )
           },
@@ -1120,9 +1126,9 @@ function startApplication() {
             async resolve(projectId) {
               const projectRoot = await projectManager.resolveProjectRoot({ projectId })
               const manifest = await readProjectNativeStoreManifest(join(projectRoot, ".convax", "collaboration"), {
-                  protocolDigest: collaborationAuthority.protocolDigest,
-                  schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
-                  uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
+                protocolDigest: collaborationAuthority.protocolDigest,
+                schemaDigest: PROJECT_INDEX_PROTOCOL_SCHEMA_ARTIFACT_DIGEST,
+                uriProtocolDigest: collaborationAuthority.protocolSchemaBundle.core.uriProtocolDigest,
               })
               return Object.freeze({
                 projectId: manifest.projectIndexScope.projectId,
@@ -1231,16 +1237,19 @@ function startApplication() {
         projects: projectManager,
       }),
     })
-    const canvasDocuments = new ProjectCanvasDocumentService({
-      query(ref, query) {
-        if (!collaborationCanvasSessions) throw new Error("Canvas collaboration runtime is unavailable")
-        return collaborationCanvasSessions.query(ref, query)
+    const canvasDocuments = new ProjectCanvasDocumentService(
+      {
+        query(ref, query) {
+          if (!collaborationCanvasSessions) throw new Error("Canvas collaboration runtime is unavailable")
+          return collaborationCanvasSessions.query(ref, query)
+        },
+        submit(request) {
+          if (!collaborationCanvasSessions) throw new Error("Canvas collaboration runtime is unavailable")
+          return collaborationCanvasSessions.submit(request)
+        },
       },
-      submit(request) {
-        if (!collaborationCanvasSessions) throw new Error("Canvas collaboration runtime is unavailable")
-        return collaborationCanvasSessions.submit(request)
-      },
-    }, canvasSubmitDiagnostics)
+      canvasSubmitDiagnostics,
+    )
     const canvasResourceHydrator = new ProjectCanvasResourceHydrator(
       projectManager,
       projectAssets,
@@ -1261,20 +1270,25 @@ function startApplication() {
         })
       },
     })
-    const canvasResourceBusinessDiagnostics = process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
-      ? {
-          record(diagnostic: object) {
-            try {
-              console.warn("[convax:canvas-resource-latency]", JSON.stringify(diagnostic))
-            } catch { /* Benchmark diagnostics never affect a business command. */ }
-          },
-        }
-      : undefined
+    const canvasResourceBusinessDiagnostics =
+      process.env.CONVAX_CANVAS_RESOURCE_LATENCY_RECORD_ALL === "1"
+        ? {
+            record(diagnostic: object) {
+              try {
+                console.warn("[convax:canvas-resource-latency]", JSON.stringify(diagnostic))
+              } catch {
+                /* Benchmark diagnostics never affect a business command. */
+              }
+            },
+          }
+        : undefined
     const canvasResourcePreparation = new ProjectCanvasResourcePreparation(
       projectManager,
       projectFilePublisher,
       projectAssets,
-      undefined,
+      createProjectCanvasMediaInspector({
+        decoder: nativeImage,
+      }),
       collaborationFacade.projectIndexes,
       canvasResourceBusinessDiagnostics,
     )
@@ -2418,9 +2432,9 @@ function startApplication() {
       },
     })
     const disposeCanvasDocumentIpc = registerCanvasDocumentIpc(canvasApplication, canvasResourceHydrator, {
-        ...ipcSecurity,
-        prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
-        resolveActiveCanvas,
+      ...ipcSecurity,
+      prepareProjectCanvasAccess: (projectId) => projectAssetGcScheduler.prepareOpen(projectId),
+      resolveActiveCanvas,
     })
     const disposeCanvasExternalMediaDragIpc = registerCanvasExternalMediaDragIpc(canvasExternalMediaDrag, {
       isTrustedSender: ipcSecurity.isTrustedSender,
@@ -2838,19 +2852,22 @@ function createPackagedDurabilityDiagnostics(): NodeLocalCommitDurabilityDiagnos
       if (!completed) return
       attempts.delete(measurement.attemptId)
       const ownerKind = measurement.attemptId.startsWith("canvas:") ? "canvas" : "project-index"
-      console.warn("[convax:durability-latency]", JSON.stringify({
-        format: "convax.durability-latency-diagnostic",
-        version: 1,
-        ownerKind,
-        barrierCount: entries.length,
-        barriers: entries.map((entry) => ({
-          stage: entry.stage,
-          barrierKind: entry.barrierKind,
-          callCount: entry.callCount,
-          durationMs: Number(entry.durationNanoseconds) / 1_000_000,
-          outcome: entry.outcome,
-        })),
-      }))
+      console.warn(
+        "[convax:durability-latency]",
+        JSON.stringify({
+          format: "convax.durability-latency-diagnostic",
+          version: 1,
+          ownerKind,
+          barrierCount: entries.length,
+          barriers: entries.map((entry) => ({
+            stage: entry.stage,
+            barrierKind: entry.barrierKind,
+            callCount: entry.callCount,
+            durationMs: Number(entry.durationNanoseconds) / 1_000_000,
+            outcome: entry.outcome,
+          })),
+        }),
+      )
     },
   })
 }

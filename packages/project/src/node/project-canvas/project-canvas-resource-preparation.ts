@@ -11,7 +11,10 @@ import type {
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import type { ProjectContentPolicy } from "../../collaboration/project-index"
 import type { ProjectFilesClient } from "@convax/project-files/contracts"
-import { projectIndexResourceReferenceDigest, type ProjectIndexResourceReference } from "../../collaboration/project-index"
+import {
+  projectIndexResourceReferenceDigest,
+  type ProjectIndexResourceReference,
+} from "../../collaboration/project-index"
 import type {
   ProjectIndexFileApplicationPort,
   ProjectIndexFileMaterializationPlan,
@@ -51,11 +54,10 @@ export interface ProjectCanvasMediaInspection {
 
 export interface ProjectCanvasMediaInspector {
   inspect(input: {
-    kind: Exclude<CanvasMediaKind, "file">
+    bytes: Uint8Array
+    kind: "image"
     mimeType: string
     name: string
-    path: string
-    projectId: string
   }): Promise<ProjectCanvasMediaInspection>
 }
 
@@ -99,7 +101,9 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     } finally {
       try {
         this.diagnostics.record({ byteLength, callCount: 1, durationMs: performance.now() - startedAt, stage })
-      } catch { /* Diagnostics never affect resource publication. */ }
+      } catch {
+        /* Diagnostics never affect resource publication. */
+      }
     }
   }
 
@@ -234,15 +238,18 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
           const file = projectFileInfo
             ? { mediaType: projectFileInfo.mimeType, name: projectFileInfo.name }
             : selectedFile
-          const mimeType = normalizeMimeType(
-            reference.kind === "managed-asset" ? reference.mediaType : file.mediaType,
-          )
-          const kind = getCanvasTextFileFormat({ mimeType, name: file.name })
-            ? "text"
-            : mediaKindForMimeType(mimeType)
+          const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : file.mediaType)
+          const kind = getCanvasTextFileFormat({ mimeType, name: file.name }) ? "text" : mediaKindForMimeType(mimeType)
+          const inspectionBytes =
+            kind === "image" && this.mediaInspector
+              ? reference.kind === "project-file"
+                ? await this.readExactProjectFileBytes(reference.path, input.projectId, mimeType)
+                : await this.readExactManagedImageBytes(reference, input.projectId)
+              : undefined
           const proof =
             reference.kind === "project-file"
               ? await this.publishProjectFileProof({
+                  ...(inspectionBytes === undefined ? {} : { exactBytes: inspectionBytes }),
                   mediaClass: kind,
                   mime: mimeType || "application/octet-stream",
                   path: reference.path,
@@ -254,7 +261,16 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
                   projectId: input.projectId,
                   reference,
                 })
-          items.push(localPreparedItem(selectedFile.sourceId, file, reference, proof))
+          const inspection =
+            kind === "image" && this.mediaInspector && inspectionBytes
+              ? await this.mediaInspector.inspect({
+                  bytes: inspectionBytes,
+                  kind,
+                  mimeType,
+                  name: file.name,
+                })
+              : undefined
+          items.push(localPreparedItem(selectedFile.sourceId, file, reference, proof, inspection))
         }
         return commit({ items })
       },
@@ -270,13 +286,15 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (source.kind === "new-text") {
       const byteLength = new TextEncoder().encode(source.text).byteLength
       const [publication, initialPlan] = await Promise.allSettled([
-        this.trace("resource-file-publication", byteLength, () => this.publisher.publishText({
-          content: source.text,
-          directory: "Notes",
-          extension: ".md",
-          name: source.name,
-          projectId,
-        })),
+        this.trace("resource-file-publication", byteLength, () =>
+          this.publisher.publishText({
+            content: source.text,
+            directory: "Notes",
+            extension: ".md",
+            name: source.name,
+            projectId,
+          }),
+        ),
         this.trace("initial-plan", 0, () => this.prepareProjectIndexParent(projectId, "Notes/pending.md")),
       ])
       if (publication.status === "rejected") throw publication.reason
@@ -287,13 +305,15 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
       const reference = requireProjectFileReference(published.path)
       let proof: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }> | undefined
       try {
-        proof = await this.trace("post-pi-proof", byteLength, () => this.publishTextProof({
-          content: source.text,
-          ...(initialPlan.value === undefined ? {} : { initialPlan: initialPlan.value }),
-          mime: "text/markdown",
-          path: reference.path,
-          projectId,
-        }))
+        proof = await this.trace("post-pi-proof", byteLength, () =>
+          this.publishTextProof({
+            content: source.text,
+            ...(initialPlan.value === undefined ? {} : { initialPlan: initialPlan.value }),
+            mime: "text/markdown",
+            path: reference.path,
+            projectId,
+          }),
+        )
       } catch (error) {
         if (error instanceof CanvasResourcePartialFailureError) throw error
         throw new CanvasResourcePartialFailureError(error, [{ label: reference.path }])
@@ -369,20 +389,24 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     const kind = mediaKindForMimeType(mimeType)
+    const inspectionBytes =
+      kind === "image" && this.mediaInspector
+        ? await this.readExactProjectFileBytes(reference.path, projectId, mimeType)
+        : undefined
     const proof = await this.publishProjectFileProof({
+      ...(inspectionBytes === undefined ? {} : { exactBytes: inspectionBytes }),
       mediaClass: kind,
       mime: mimeType || "application/octet-stream",
       path: reference.path,
       projectId,
     })
     const inspection =
-      kind !== "file" && this.mediaInspector
+      kind === "image" && this.mediaInspector && inspectionBytes
         ? await this.mediaInspector.inspect({
+            bytes: inspectionBytes,
             kind,
             mimeType,
             name: sourceInfo.name,
-            path: reference.path,
-            projectId,
           })
         : undefined
     throwIfAborted(signal)
@@ -401,6 +425,31 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         },
         width: inspection?.width,
       },
+    }
+  }
+
+  private async readExactProjectFileBytes(path: string, projectId: string, mimeType: string) {
+    const contents = await this.project.readFile({ path, projectId })
+    if (contents.path !== path || contents.size < 0 || normalizeMimeType(contents.mimeType) !== mimeType) {
+      throw new Error("Project file identity changed during Canvas media inspection")
+    }
+    const bytes = decodeProjectFileDataUrl(contents.dataUrl)
+    if (bytes.byteLength !== contents.size) {
+      throw new Error("Project file size changed during Canvas media inspection")
+    }
+    return bytes
+  }
+
+  private async readExactManagedImageBytes(
+    reference: Extract<ProjectResourceReference, { kind: "managed-asset" }>,
+    projectId: string,
+  ) {
+    const handle = await this.assets.openForRead({ projectId, reference })
+    try {
+      if (handle.size > 64 * 1024 * 1024) return undefined
+      return await handle.readAll()
+    } finally {
+      await handle.close()
     }
   }
 
@@ -447,7 +496,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (contents && contents.size !== bytes.byteLength) {
       throw new Error("Project file size changed during Canvas resource preparation")
     }
-    let plan = input.initialPlan ?? await this.indexFiles.queryFileMaterializationPlan({ projectId })
+    let plan = input.initialPlan ?? (await this.indexFiles.queryFileMaterializationPlan({ projectId }))
     const existing = plan.entries.find((entry) => entry.path === input.path)
     if (existing?.kind === "directory") throw new Error("ProjectIndex path is a directory")
     if (
@@ -460,14 +509,16 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     }
 
     await this.ensureProjectIndexDirectories(projectId, input.path, plan)
-    const result = await this.trace("pi-submit", bytes.byteLength, () => this.indexFiles!.publishFile({
-      projectId,
-      path: input.path,
-      exactBytes: bytes,
-      mime: input.mime,
-      contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
-      provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
-    }))
+    const result = await this.trace("pi-submit", bytes.byteLength, () =>
+      this.indexFiles!.publishFile({
+        projectId,
+        path: input.path,
+        exactBytes: bytes,
+        mime: input.mime,
+        contentPolicy: contentPolicyForProjectFile(input.path, input.mediaClass),
+        provenance: input.path === "Generated" || input.path.startsWith("Generated/") ? "generated" : "user",
+      }),
+    )
     if (result.status !== "committed" || result.reference == null) {
       throw new Error("ProjectIndex did not publish the Canvas resource")
     }
@@ -506,10 +557,7 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
         byteLength: String(handle.size) as never,
         mime: input.mime,
       }),
-      async readChunks(
-        consume: Parameters<ProjectIndexManagedBlobAdmission["readChunks"]>[0],
-        signal?: AbortSignal,
-      ) {
+      async readChunks(consume: Parameters<ProjectIndexManagedBlobAdmission["readChunks"]>[0], signal?: AbortSignal) {
         if (consumed) throw new Error("Managed Canvas resource admission was already consumed")
         consumed = true
         if (handle.size === 0) {
@@ -581,6 +629,7 @@ function localPreparedItem(
   source: { mediaType?: string; name: string },
   reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>,
   proof?: Extract<CanvasResourceProofRef, { mode: "current-owner-state" }>,
+  inspection?: ProjectCanvasMediaInspection,
 ): CanvasUploadItem {
   const name = reference.kind === "managed-asset" ? reference.name : source.name
   const mimeType = normalizeMimeType(reference.kind === "managed-asset" ? reference.mediaType : source.mediaType)
@@ -596,12 +645,18 @@ function localPreparedItem(
     }
   }
   return {
+    durationMs: inspection?.durationMs,
+    height: inspection?.height,
     id: sourceId,
     kind: mediaKindForMimeType(mimeType),
     metadata: metadataFor(reference, proof),
     mimeType: mimeType || undefined,
     name,
-    state: { status: "stale" },
+    state: {
+      ...(inspection?.posterUrl === undefined ? {} : { posterUrl: inspection.posterUrl }),
+      status: "stale",
+    },
+    width: inspection?.width,
   }
 }
 

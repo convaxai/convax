@@ -1,12 +1,6 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
-import type {
-  CanvasApplicationCommandResult,
-  CanvasApplicationQueryResult,
-} from "@convax/canvas/application"
-import {
-  canvasProjectionResourceMetadataKey,
-  type BoundedOperationReceipt,
-} from "@convax/canvas/collaboration"
+import type { CanvasApplicationCommandResult, CanvasApplicationQueryResult } from "@convax/canvas/application"
+import { canvasProjectionResourceMetadataKey, type BoundedOperationReceipt } from "@convax/canvas/collaboration"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
 import {
   encodeBase64url,
@@ -21,10 +15,7 @@ import { projectResourceReferenceKey } from "@convax/project/canvas"
 import { ProjectTextFileConflictError } from "@convax/project-files"
 
 import { canvasTextResourceConflictKind } from "../canvas-resource-private-contract"
-import {
-  canvasResourceIpcChannel,
-  canvasTextResourceIpcChannel,
-} from "../desktop-protocol"
+import { canvasResourceIpcChannel, canvasTextResourceIpcChannel } from "../desktop-protocol"
 import { canvasDocumentIpcChannels } from "../canvas-document-contracts"
 import { configureElectronMock, resetElectronMock } from "./electron-test-mock"
 
@@ -48,19 +39,22 @@ const receipt: BoundedOperationReceipt = {
 }
 
 const resourceSessions = {
-  deliverApplicationCommit: mock(async () => Object.freeze({
-    status: "accepted" as const,
-    acceptedFrameDigest,
-    projection: Object.freeze({
-      format: "convax.canvas-session-projection" as const,
-      ref: { canvasId: "canvas-main", scopeId: "project-one" },
-      sessionId,
-      document,
-      nodeEntities: [],
-      canUndo: true,
-      canRedo: false,
+  deliverApplicationCommit: mock(async () =>
+    Object.freeze({
+      status: "accepted" as const,
+      acceptedFrameDigest,
+      projection: Object.freeze({
+        format: "convax.canvas-session-projection" as const,
+        ref: { canvasId: "canvas-main", scopeId: "project-one" },
+        sessionId,
+        document,
+        edgeEntities: [],
+        nodeEntities: [],
+        canUndo: true,
+        canRedo: false,
+      }),
     }),
-  })),
+  ),
 }
 
 beforeEach(() => {
@@ -85,16 +79,14 @@ describe("Canvas document IPC", () => {
   test("loads the collaboration projection and hydrates only its Main-side resource view", async () => {
     const query = mock(async (): Promise<CanvasApplicationQueryResult> => ({ nodes: [], projection: document }))
     const hydrate = mock(async ({ document: input }: { document: typeof document }) => ({
-      ...input, metadata: { ...input.metadata, title: "Hydrated" },
+      ...input,
+      metadata: { ...input.metadata, title: "Hydrated" },
     }))
-    registerCanvasDocumentIpc(
-      { execute: mock(), query },
-      { hydrate },
-      { isTrustedSender: () => true },
-    )
+    registerCanvasDocumentIpc({ execute: mock(), query }, { hydrate }, { isTrustedSender: () => true })
 
     const result = await handlers.get(canvasDocumentIpcChannels.load)!(event, {
-      canvasId: "canvas-main", scopeId: "project-one",
+      canvasId: "canvas-main",
+      scopeId: "project-one",
     })
     expect(query).toHaveBeenCalledWith({ canvasId: "canvas-main", scopeId: "project-one" })
     expect(hydrate).toHaveBeenCalledWith({ document, projectId: "project-one" })
@@ -140,12 +132,22 @@ describe("Canvas document IPC", () => {
       commandId: "legacy",
       ref: { canvasId: "canvas-main", scopeId: "project-one" },
     }
-    await expect(Promise.resolve().then(() => handlers.get(canvasDocumentIpcChannels.execute)!(event, {
-      ...base, expectedRevision: 9,
-    }))).rejects.toThrow("unsupported fields")
-    await expect(Promise.resolve().then(() => handlers.get(canvasDocumentIpcChannels.execute)!(event, {
-      ...base, ref: { ...base.ref, version: 9 },
-    }))).rejects.toThrow("reference is invalid")
+    await expect(
+      Promise.resolve().then(() =>
+        handlers.get(canvasDocumentIpcChannels.execute)!(event, {
+          ...base,
+          expectedRevision: 9,
+        }),
+      ),
+    ).rejects.toThrow("unsupported fields")
+    await expect(
+      Promise.resolve().then(() =>
+        handlers.get(canvasDocumentIpcChannels.execute)!(event, {
+          ...base,
+          ref: { ...base.ref, version: 9 },
+        }),
+      ),
+    ).rejects.toThrow("reference is invalid")
     expect(execute).not.toHaveBeenCalled()
   })
 
@@ -156,9 +158,9 @@ describe("Canvas document IPC", () => {
       { hydrate: async ({ document: input }) => input },
       { isTrustedSender: () => false },
     )
-    await expect(Promise.resolve().then(() =>
-      handlers.get(canvasDocumentIpcChannels.execute)!(event, null),
-    )).rejects.toThrow("untrusted renderer")
+    await expect(
+      Promise.resolve().then(() => handlers.get(canvasDocumentIpcChannels.execute)!(event, null)),
+    ).rejects.toThrow("untrusted renderer")
     expect(execute).not.toHaveBeenCalled()
   })
 })
@@ -226,16 +228,18 @@ describe("Canvas resource IPC", () => {
       },
     )
 
-    await expect(handlers.get(canvasResourceIpcChannel)!(event, {
-      anchor: { x: 0, y: 0 },
-      canvasId: "canvas-main",
-      commandId: "invalid-relation",
-      externalFiles: [],
-      projectId: "project-one",
-      sessionId,
-      relation: { anchorNodeIds: ["same", "same"], mode: "connect" },
-      sources: [],
-    })).rejects.toThrow("must be unique")
+    await expect(
+      handlers.get(canvasResourceIpcChannel)!(event, {
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "invalid-relation",
+        externalFiles: [],
+        projectId: "project-one",
+        sessionId,
+        relation: { anchorNodeIds: ["same", "same"], mode: "connect" },
+        sources: [],
+      }),
+    ).rejects.toThrow("must be unique")
     expect(addResources).not.toHaveBeenCalled()
   })
 
@@ -251,10 +255,17 @@ describe("Canvas resource IPC", () => {
         sessions: resourceSessions,
       },
     )
-    await expect(handlers.get(canvasResourceIpcChannel)!(event, {
-      anchor: { x: 0, y: 0 }, canvasId: "canvas-main", commandId: "stale",
-      externalFiles: [], projectId: "project-one", sessionId, sources: [],
-    })).rejects.toThrow("live Workbench scope")
+    await expect(
+      handlers.get(canvasResourceIpcChannel)!(event, {
+        anchor: { x: 0, y: 0 },
+        canvasId: "canvas-main",
+        commandId: "stale",
+        externalFiles: [],
+        projectId: "project-one",
+        sessionId,
+        sources: [],
+      }),
+    ).rejects.toThrow("live Workbench scope")
     expect(addResources).not.toHaveBeenCalled()
   })
 })
@@ -264,26 +275,30 @@ describe("Canvas text resource IPC", () => {
     const fixture = canonicalTextResource("before")
     const textDocument = createCanvasDocument({
       id: "canvas-main",
-      nodes: [createTextNode({
-        id: "text-node",
-        position: { x: 0, y: 0 },
-        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
-        name: "a.md",
-        resourceState: { status: "ready" },
-      })],
+      nodes: [
+        createTextNode({
+          id: "text-node",
+          position: { x: 0, y: 0 },
+          metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
+          name: "a.md",
+          resourceState: { status: "ready" },
+        }),
+      ],
     })
     const nextContent = "after"
     const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const compareAndReplaceTextFile = mock(async () => ({ contentRevision: nextRevision }))
     const prepared = {
-      items: [{
-        id: "text-save",
-        kind: "text" as const,
-        metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
-        mimeType: "text/markdown",
-        name: "a.md",
-        state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
-      }],
+      items: [
+        {
+          id: "text-save",
+          kind: "text" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
+          mimeType: "text/markdown",
+          name: "a.md",
+          state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
+        },
+      ],
     }
     const prepare = mock(async () => prepared)
     const relinkPreparedResource = mock(async () => commandResult())
@@ -292,11 +307,13 @@ describe("Canvas text resource IPC", () => {
       { query: async () => ({ nodes: [], projection: textDocument }) },
       {
         currentResources: {
-          queryCurrentResources: async () => [{
-            materializedPath: "Notes/a.md",
-            reference: fixture.reference,
-            storageClass: "project-file" as const,
-          }],
+          queryCurrentResources: async () => [
+            {
+              materializedPath: "Notes/a.md",
+              reference: fixture.reference,
+              storageClass: "project-file" as const,
+            },
+          ],
         },
         isTrustedSender: () => true,
         preparation: { prepare },
@@ -304,9 +321,13 @@ describe("Canvas text resource IPC", () => {
         resources: { relinkPreparedResource },
       },
     )
-    await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
-      content: nextContent, contentRevision: fixture.reference.blob.digest, nodeId: "text-node",
-    })).resolves.toEqual({ contentRevision: nextRevision })
+    await expect(
+      handlers.get(canvasTextResourceIpcChannel)!(event, {
+        content: nextContent,
+        contentRevision: fixture.reference.blob.digest,
+        nodeId: "text-node",
+      }),
+    ).resolves.toEqual({ contentRevision: nextRevision })
     expect(compareAndReplaceTextFile).toHaveBeenCalledWith({
       content: nextContent,
       expectedRevision: fixture.reference.blob.digest,
@@ -318,24 +339,32 @@ describe("Canvas text resource IPC", () => {
       scopeId: fixture.projectId,
       sources: [{ kind: "host-file", path: "Notes/a.md", sourceId: "text-save" }],
     })
-    expect(relinkPreparedResource).toHaveBeenCalledWith({
-      actor: { id: "desktop:renderer:7", kind: "renderer" },
-      canvasId: "canvas-main",
-      commandId: expect.stringMatching(/^canvas-text-save:[a-f0-9]{64}$/),
-      metadataKeysToRemove: ["convaxProjectResourceBindings"],
-      nodeId: "text-node",
-      scopeId: fixture.projectId,
-    }, prepared)
+    expect(relinkPreparedResource).toHaveBeenCalledWith(
+      {
+        actor: { id: "desktop:renderer:7", kind: "renderer" },
+        canvasId: "canvas-main",
+        commandId: expect.stringMatching(/^canvas-text-save:[a-f0-9]{64}$/),
+        metadataKeysToRemove: ["convaxProjectResourceBindings"],
+        nodeId: "text-node",
+        scopeId: fixture.projectId,
+      },
+      prepared,
+    )
   })
 
   test("returns only the typed text conflict without leaking native errors", async () => {
     const fixture = canonicalTextResource("before")
     const textDocument = createCanvasDocument({
       id: "canvas-main",
-      nodes: [createTextNode({
-        id: "text-node", position: { x: 0, y: 0 }, name: "a.md", resourceState: { status: "ready" },
-        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
-      })],
+      nodes: [
+        createTextNode({
+          id: "text-node",
+          position: { x: 0, y: 0 },
+          name: "a.md",
+          resourceState: { status: "ready" },
+          metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
+        }),
+      ],
     })
     const prepare = mock()
     const relinkPreparedResource = mock()
@@ -348,11 +377,13 @@ describe("Canvas text resource IPC", () => {
       { query: async () => ({ nodes: [], projection: textDocument }) },
       {
         currentResources: {
-          queryCurrentResources: async () => [{
-            materializedPath: "Notes/a.md",
-            reference: fixture.reference,
-            storageClass: "project-file" as const,
-          }],
+          queryCurrentResources: async () => [
+            {
+              materializedPath: "Notes/a.md",
+              reference: fixture.reference,
+              storageClass: "project-file" as const,
+            },
+          ],
         },
         isTrustedSender: () => true,
         preparation: { prepare },
@@ -360,9 +391,13 @@ describe("Canvas text resource IPC", () => {
         resources: { relinkPreparedResource },
       },
     )
-    await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
-      content: "new", contentRevision: fixture.reference.blob.digest, nodeId: "text-node",
-    })).resolves.toEqual({ actualRevision: "c".repeat(64), kind: canvasTextResourceConflictKind })
+    await expect(
+      handlers.get(canvasTextResourceIpcChannel)!(event, {
+        content: "new",
+        contentRevision: fixture.reference.blob.digest,
+        nodeId: "text-node",
+      }),
+    ).resolves.toEqual({ actualRevision: "c".repeat(64), kind: canvasTextResourceConflictKind })
     expect(prepare).not.toHaveBeenCalled()
     expect(relinkPreparedResource).not.toHaveBeenCalled()
   })
@@ -373,23 +408,27 @@ describe("Canvas text resource IPC", () => {
     const nextRevision = ordinarySha256(new TextEncoder().encode(nextContent))
     const textDocument = createCanvasDocument({
       id: "canvas-main",
-      nodes: [createTextNode({
-        id: "text-node",
-        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
-        name: "a.md",
-        position: { x: 0, y: 0 },
-        resourceState: { status: "ready" },
-      })],
+      nodes: [
+        createTextNode({
+          id: "text-node",
+          metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
+          name: "a.md",
+          position: { x: 0, y: 0 },
+          resourceState: { status: "ready" },
+        }),
+      ],
     })
     const prepared = {
-      items: [{
-        id: "text-save",
-        kind: "text" as const,
-        metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
-        mimeType: "text/markdown",
-        name: "a.md",
-        state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
-      }],
+      items: [
+        {
+          id: "text-save",
+          kind: "text" as const,
+          metadata: { [projectResourceReferenceKey]: { kind: "project-file" as const, path: "Notes/a.md" } },
+          mimeType: "text/markdown",
+          name: "a.md",
+          state: { contentRevision: nextRevision, status: "ready" as const, text: nextContent },
+        },
+      ],
     }
     const relinkPreparedResource = mock(async () => commandResult())
     registerCanvasTextResourceIpc(
@@ -401,11 +440,13 @@ describe("Canvas text resource IPC", () => {
       { query: async () => ({ nodes: [], projection: textDocument }) },
       {
         currentResources: {
-          queryCurrentResources: async () => [{
-            materializedPath: "Notes/a.md",
-            reference: fixture.reference,
-            storageClass: "project-file" as const,
-          }],
+          queryCurrentResources: async () => [
+            {
+              materializedPath: "Notes/a.md",
+              reference: fixture.reference,
+              storageClass: "project-file" as const,
+            },
+          ],
         },
         isTrustedSender: () => true,
         preparation: { prepare: async () => prepared },
@@ -414,11 +455,13 @@ describe("Canvas text resource IPC", () => {
       },
     )
 
-    await expect(handlers.get(canvasTextResourceIpcChannel)!(event, {
-      content: nextContent,
-      contentRevision: fixture.reference.blob.digest,
-      nodeId: "text-node",
-    })).resolves.toEqual({ contentRevision: nextRevision })
+    await expect(
+      handlers.get(canvasTextResourceIpcChannel)!(event, {
+        content: nextContent,
+        contentRevision: fixture.reference.blob.digest,
+        nodeId: "text-node",
+      }),
+    ).resolves.toEqual({ contentRevision: nextRevision })
     expect(relinkPreparedResource).toHaveBeenCalledTimes(1)
   })
 })

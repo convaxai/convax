@@ -32,13 +32,14 @@ export function createCanvasSessionPreloadClient(
       return requireCanvasSessionProjection(await options.invoke(canvasSessionIpcChannels.open, ref), ref)
     },
     async query(scope) {
-      return requireCanvasSessionProjection(await options.invoke(canvasSessionIpcChannels.query, scope), scope.ref, scope.sessionId)
+      return requireCanvasSessionProjection(
+        await options.invoke(canvasSessionIpcChannels.query, scope),
+        scope.ref,
+        scope.sessionId,
+      )
     },
     async executeApplication(input) {
-      return requireApplicationMutation(
-        await options.invoke(canvasSessionIpcChannels.executeApplication, input),
-        input,
-      )
+      return requireApplicationMutation(await options.invoke(canvasSessionIpcChannels.executeApplication, input), input)
     },
     async submit(input) {
       return requireMutation(await options.invoke(canvasSessionIpcChannels.submit, input), input)
@@ -67,10 +68,7 @@ export function createCanvasSessionPreloadClient(
   return Object.freeze(client)
 }
 
-function requireMutation(
-  value: unknown,
-  scope: CanvasRendererSessionScope,
-): CanvasRendererSessionMutationResult {
+function requireMutation(value: unknown, scope: CanvasRendererSessionScope): CanvasRendererSessionMutationResult {
   const valueRecord = value as Record<string, unknown> | null
   const hasHistory = Boolean(valueRecord && Object.prototype.hasOwnProperty.call(valueRecord, "historyTransition"))
   const record = exactRecord(
@@ -83,7 +81,11 @@ function requireMutation(
   assertOperationReceiptDto(record.operationReceipt)
   let historyTransition: CanvasRendererSessionMutationResult["historyTransition"]
   if (hasHistory) {
-    const transition = exactRecord(record.historyTransition, ["direction", "rootOperationId"], "Canvas history transition")
+    const transition = exactRecord(
+      record.historyTransition,
+      ["direction", "rootOperationId"],
+      "Canvas history transition",
+    )
     if (transition.direction !== "undo" && transition.direction !== "redo") {
       throw new Error("Canvas history transition direction is invalid")
     }
@@ -104,10 +106,19 @@ function requireApplicationMutation(
   value: unknown,
   scope: CanvasRendererSessionScope,
 ): CanvasRendererApplicationMutationResult {
-  const record = exactRecord(value, [
-    "acceptedFrameDigest", "affectedNodeIds", "changed", "createdNodeIds",
-    "operationReceipt", "projection", "warnings",
-  ], "Canvas application mutation result")
+  const record = exactRecord(
+    value,
+    [
+      "acceptedFrameDigest",
+      "affectedNodeIds",
+      "changed",
+      "createdNodeIds",
+      "operationReceipt",
+      "projection",
+      "warnings",
+    ],
+    "Canvas application mutation result",
+  )
   assertOperationReceiptDto(record.operationReceipt)
   if (record.changed !== true) throw new Error("Canvas application mutation changed marker is invalid")
   const affectedNodeIds = requireStringArray(record.affectedNodeIds, "Canvas affected node ids", 4_096)
@@ -131,10 +142,11 @@ export function requireCanvasSessionProjection(
 ): CanvasSessionProjectionDto {
   const record = exactRecord(
     value,
-    ["canRedo", "canUndo", "document", "format", "nodeEntities", "ref", "sessionId"],
+    ["canRedo", "canUndo", "document", "edgeEntities", "format", "nodeEntities", "ref", "sessionId"],
     "Canvas session projection",
   )
-  if (record.format !== "convax.canvas-session-projection") throw new Error("Canvas session projection format is invalid")
+  if (record.format !== "convax.canvas-session-projection")
+    throw new Error("Canvas session projection format is invalid")
   const ref = requireRef(record.ref)
   if (!sameRef(ref, expectedRef)) throw new Error("Canvas session projection crossed document scope")
   const sessionId = requireId128Dto(record.sessionId, "Canvas session id")
@@ -153,6 +165,31 @@ export function requireCanvasSessionProjection(
   }
   if (!Array.isArray(record.nodeEntities) || record.nodeEntities.length !== document.nodes.length) {
     throw new Error("Canvas session entity projection is incomplete")
+  }
+  if (!Array.isArray(record.edgeEntities) || record.edgeEntities.length !== document.edges.length) {
+    throw new Error("Canvas session edge entity projection is incomplete")
+  }
+  const seenEdges = new Set<string>()
+  const edgeEntities = record.edgeEntities.map((value) => {
+    const entry = exactRecord(value, ["edgeId", "entity"], "Canvas session edge entity entry")
+    const entity = entry.entity
+    assertEntityRefDto(entity, "edge")
+    if (
+      entity.kind !== "edge" ||
+      typeof entry.edgeId !== "string" ||
+      entry.edgeId !== entity.id ||
+      seenEdges.has(entry.edgeId)
+    ) {
+      throw new Error("Canvas session edge entity reference is invalid")
+    }
+    seenEdges.add(entry.edgeId)
+    return Object.freeze({
+      edgeId: entry.edgeId,
+      entity: Object.freeze({ kind: "edge" as const, id: entity.id, incarnation: entity.incarnation }),
+    })
+  })
+  if (document.edges.some((edge) => !seenEdges.has(edge.id))) {
+    throw new Error("Canvas session edge entity projection is incomplete")
   }
   const seen = new Set<string>()
   const nodeEntities = record.nodeEntities.map((value) => {
@@ -173,12 +210,14 @@ export function requireCanvasSessionProjection(
       entity: Object.freeze({ kind: "node" as const, id: entity.id, incarnation: entity.incarnation }),
     })
   })
-  if (document.nodes.some((node) => !seen.has(node.id))) throw new Error("Canvas session entity projection is incomplete")
+  if (document.nodes.some((node) => !seen.has(node.id)))
+    throw new Error("Canvas session entity projection is incomplete")
   return Object.freeze({
     format: "convax.canvas-session-projection",
     ref,
     sessionId,
     document,
+    edgeEntities: Object.freeze(edgeEntities),
     nodeEntities: Object.freeze(nodeEntities),
     canUndo: record.canUndo,
     canRedo: record.canRedo,
@@ -201,7 +240,12 @@ function requireInvalidation(value: unknown): CanvasSessionInvalidationDto {
 function requireStringArray(value: unknown, label: string, maximum: number): string[] {
   if (!Array.isArray(value) || value.length > maximum) throw new Error(`${label} is invalid`)
   const result = value.map((item) => {
-    if (typeof item !== "string" || item.length < 1 || item.includes("\0") || new TextEncoder().encode(item).byteLength > 1_024) {
+    if (
+      typeof item !== "string" ||
+      item.length < 1 ||
+      item.includes("\0") ||
+      new TextEncoder().encode(item).byteLength > 1_024
+    ) {
       throw new Error(`${label} is invalid`)
     }
     return item

@@ -495,30 +495,30 @@ the Desktop-owned managed-stdio profile.
 
 ## 3. Packages and dependency graph
 
-| Package                     | Responsibility                                                                                                                                                                               |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                                                                   |
-| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                              |
-| `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                                                           |
-| `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics             |
-| `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                                                             |
-| `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                                                          |
-| `@convax/collaboration`     | One current protocol descriptor/digest, one primitives/JCS and frame codec, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination      |
-| `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                       |
-| `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                              |
-| `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                    |
-| `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                                                            |
-| `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                                                                                          |
-| `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                               |
-| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                                                                  |
-| `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                 |
-| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                                                    |
-| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                                                      |
-| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                                                          |
-| `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                                                             |
-| `@convax/web`               | Public marketing site and responsive product storytelling                                                                                                                                    |
-| `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                                                                                    |
-| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                    |
+| Package                     | Responsibility                                                                                                                                                                                           |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@convax/ui`                | Product-agnostic components, styling primitives, and theme                                                                                                                                               |
+| `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                          |
+| `@convax/project-files`     | Renderer-safe scoped file contracts, controller, and drag protocol                                                                                                                                       |
+| `@convax/canvas`            | Canvas schema/reducers, typed intents, business/view operations, browser-safe application error contracts, editor/plugins, React Flow projection and transient gesture semantics                         |
+| `@convax/bounded-value`     | Closed portable bounded-value schema codec, canonical bytes, digest input and payload validation                                                                                                         |
+| `@convax/uri`               | Stateless URI components, codec, canonicalization, and closed static scheme grammar                                                                                                                      |
+| `@convax/collaboration`     | One current protocol descriptor/digest, one primitives/JCS and frame codec, causal frames/frontiers, replica/candidate kernel, checkpoint/floor primitives, journal ports, and session undo coordination |
+| `@convax/project`           | Project lifecycle/registry/private storage and ProjectIndex catalog/entry/route/`shardEpoch` authority                                                                                                   |
+| `@convax/project/canvas`    | ProjectIndex catalog/relationship projection and typed-intent adapter, controller, drag and resource references                                                                                          |
+| `@convax/project/node`      | Native Project, Project Files and private storage; sole collaboration object/journal/head/outbox/reset persistence writer                                                                                |
+| `@convax/workbench`         | Headless window Input/Selection/Surface and layout state machines                                                                                                                                        |
+| `@convax/agent-runtime`     | Host-agnostic OpenCode integration and protected execution boundary                                                                                                                                      |
+| `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                                           |
+| `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                                                                              |
+| `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                             |
+| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                                                                |
+| `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                                                                  |
+| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                                                                      |
+| `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                                                                         |
+| `@convax/web`               | Public marketing site and responsive product storytelling                                                                                                                                                |
+| `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                                                                                                |
+| `@convax/docs`              | Independently deployed public documentation site and agent-readable documentation outputs                                                                                                                |
 
 Allowed internal runtime dependencies:
 
@@ -637,38 +637,38 @@ boundary checker fails closed until those admissions are complete.
 
 ## 4. Canonical state
 
-| State                                                                 | Canonical owner                                          | Notes                                                                                              |
+| State                                                                 | Canonical owner                                          | Notes                                                                                                            |
 | --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                             |
-| Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                     |
-| Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                 |
-| Active Canvas/file                                                    | `WorkbenchController.activeInput/surface`                | Sole source for the displayed primary content                                                      |
-| Canvas node selection                                                 | Workbench selection plus mounted Canvas view             | Always scoped to the corresponding Input/view                                                      |
-| Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option     |
-| Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                      |
-| In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                |
-| Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                |
-| Final offline/online edit object                                      | Actor-signed causal frame                                | Signed only after candidate validation; identical bytes are durably committed and later replicated |
-| Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                       |
-| Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                             |
-| Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                              |
-| Project sharing activation                                             | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                 |
-| React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                             |
-| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                          |
-| Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                               |
-| Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                     | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids        |
-| Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                           |
-| Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                         |
-| Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                               |
-| OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                 |
-| Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                          |
-| Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                              |
+| Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                                           |
+| Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                                   |
+| Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                               |
+| Active Canvas/file                                                    | `WorkbenchController.activeInput/surface`                | Sole source for the displayed primary content                                                                    |
+| Canvas node selection                                                 | Workbench selection plus mounted Canvas view             | Always scoped to the corresponding Input/view                                                                    |
+| Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option                  |
+| Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                                    |
+| In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                              |
+| Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                              |
+| Final offline/online edit object                                      | Actor-signed causal frame                                | Signed only after candidate validation; identical bytes are durably committed and later replicated               |
+| Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                                     |
+| Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                                           |
+| Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                                            |
+| Project sharing activation                                            | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                              |
+| React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                                           |
+| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                                        |
+| Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                                             |
+| Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                     |
+| Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                         |
+| Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                       |
+| Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                             |
+| OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                               |
+| Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                                        |
+| Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                                            |
 | Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source |
-| MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                               |
-| Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                      |
-| Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                       |
-| Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                 |
-| Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                |
+| MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                                             |
+| Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                                    |
+| Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                     |
+| Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                               |
+| Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                              |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -1677,10 +1677,21 @@ non-serializable view state. They enter only the React Flow adapter; selection,
 entity resolution, clipboard, Agent/Plugin queries, commands, IPC, Y.Doc and durable
 storage always observe the authoritative projection. Ghosts are non-interactive and
 bounded to 32 operations/512 entities. A visual history cursor derives guarded
-presentation deltas from consecutive authoritative local roots; Main still chooses
-and materializes undo/redo intent, and the renderer accepts only the returned actual
-`historyTransition`. Authority installation and overlay settlement are microtask
-coalesced into one combined presentation snapshot.
+presentation deltas from consecutive local semantic roots. Every local mutation may
+reserve an opaque provisional root before entering the serialized durable lane, so
+Undo/Redo ordering changes synchronously without Renderer executing the business
+command or constructing a candidate document. A typed renderer geometry command may
+add its already-known presentation result; every other root receives its exact
+before/after presentation only from Main's accepted projection. Commands that require
+owner-derived node or edge identities never guess them; their operation-specific
+ghost remains the only pre-commit forward presentation.
+The provisional root contains a complete node presentation snapshot plus exact node
+and edge incarnation guards, never a Canvas document or command payload. Main still
+chooses and materializes undo/redo intent; the renderer binds the provisional entry
+to the returned durable operation id and accepts only the actual
+`historyTransition`. A failed/canceled root clears its speculative suffix and any
+queued inverse is suppressed before Main. Authority installation and overlay
+settlement are microtask coalesced into one combined presentation snapshot.
 
 Node duplication submits only the selected live node ids and a bounded offset. The
 Canvas owner resolves the latest source identities and content, derives all clone
@@ -1731,7 +1742,16 @@ Resource insertion is a business operation, not a series reimplemented by each
 caller. Host resource preparation, media inspection, card sizing, placement,
 relationship creation, semantic guards, persistence, and optional view refresh are
 composed once. The UI and Agent call that same operation. A primitive remains
-available for precise low-level edits, but it is not the default product path.
+available for precise low-level edits, but it is not the default product path. For
+an admitted image, Project owns a stable read of the exact Project file or managed
+blob, Desktop Main decodes those bytes through the platform image adapter, and
+Canvas applies its bounded intrinsic-size policy before constructing the one
+`canvas.resources.add` intent. The renderer may independently decode the dropped
+`File` only to size its non-authoritative ghost with that same Canvas policy; it
+waits for this presentation probe before showing a full card. The first durable node
+therefore already has its final fitted geometry, and ordinary media load does not
+issue a second geometry mutation. Inspection failure or an oversized/unsupported
+format falls back to the Canvas default size without trusting renderer dimensions.
 
 ### Creating a generic Plugin Canvas surface
 
@@ -2175,7 +2195,9 @@ invalidations; same-frame responses suppress a query while unknown frames preser
 one trailing refresh. Resource IPC carries the current session id: durable commit
 success is retained when delivery becomes unavailable, and a live Renderer performs
 one explicit refresh fallback. The incompatible bridge change is identified by
-`convax.desktop-ipc/37`.
+`convax.desktop-ipc/37`; its Canvas session projection carries complete exact
+node- and edge-incarnation tables so guarded visual history cannot hide a reused
+React Flow id.
 
 ## 11. Portable paths and trust boundaries
 

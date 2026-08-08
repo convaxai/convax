@@ -2,6 +2,19 @@ import type { CanvasDocument, CanvasMediaNodeData, CanvasSize } from "./types"
 
 export const defaultCanvasMediaBounds = { height: 320, width: 320 } as const
 
+export function getCanvasResourcePresentationSize(
+  kind: "audio" | "file" | "folder" | "image" | "text" | "video",
+  intrinsic?: Readonly<{ height?: number; width?: number }>,
+): CanvasSize {
+  if ((kind === "image" || kind === "video") && intrinsic) {
+    const fitted = fitCanvasMediaSizeWithinBounds(intrinsic.width, intrinsic.height)
+    if (fitted) return fitted
+  }
+  if (kind === "text") return { height: 180, width: 320 }
+  if (kind === "audio") return { height: 132, width: 360 }
+  return { height: 180, width: 240 }
+}
+
 function positiveDimension(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0
 }

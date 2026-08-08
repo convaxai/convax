@@ -1,11 +1,6 @@
 import { describe, expect, mock, test } from "bun:test"
 import { createCanvasDocument, createTextNode } from "@convax/canvas/core"
-import {
-  encodeBase64url,
-  parseActorId,
-  parseDigest,
-  parseId128,
-} from "@convax/collaboration"
+import { encodeBase64url, parseActorId, parseDigest, parseId128 } from "@convax/collaboration"
 
 import { canvasSessionIpcChannels } from "../canvas-session-contracts"
 import { createCanvasSessionPreloadClient } from "./canvas-session-client"
@@ -34,6 +29,7 @@ const projection = Object.freeze({
   ref,
   sessionId,
   document,
+  edgeEntities: Object.freeze([]),
   nodeEntities: Object.freeze([Object.freeze({ nodeId: entity.id, entity })]),
   canUndo: true,
   canRedo: false,
@@ -110,16 +106,20 @@ describe("preload Canvas session client", () => {
 
     await expect(bridge.client.open(ref)).resolves.toMatchObject({ document: { id: ref.canvasId }, sessionId })
     await expect(bridge.client.query(scope)).resolves.toMatchObject({ canUndo: true, sessionId })
-    await expect(bridge.client.executeApplication({
-      ...scope,
-      command: { type: "nodes.setTitle", nodeId: entity.id, title: "Title" },
-      commandId: "title-one",
-    })).resolves.toMatchObject({ acceptedFrameDigest, projection: { sessionId } })
     await expect(
-      bridge.client.submit({ ...scope, command, commandId: "move-one" }),
-    ).resolves.toMatchObject({ operationReceipt: { operationId: operationReceipt.operationId } })
+      bridge.client.executeApplication({
+        ...scope,
+        command: { type: "nodes.setTitle", nodeId: entity.id, title: "Title" },
+        commandId: "title-one",
+      }),
+    ).resolves.toMatchObject({ acceptedFrameDigest, projection: { sessionId } })
+    await expect(bridge.client.submit({ ...scope, command, commandId: "move-one" })).resolves.toMatchObject({
+      operationReceipt: { operationId: operationReceipt.operationId },
+    })
     await expect(bridge.client.undo({ ...scope, commandId: "undo-one" })).resolves.toBeNull()
-    await expect(bridge.client.redo({ ...scope, commandId: "redo-one" })).resolves.toMatchObject({ projection: { sessionId } })
+    await expect(bridge.client.redo({ ...scope, commandId: "redo-one" })).resolves.toMatchObject({
+      projection: { sessionId },
+    })
     await expect(bridge.client.flush(scope)).resolves.toBeUndefined()
     await expect(bridge.client.close(scope)).resolves.toBeUndefined()
     expect(bridge.invoke.mock.calls.map(([channel]) => channel)).toEqual([
@@ -161,9 +161,9 @@ describe("preload Canvas session client", () => {
       operationReceipt: { ...operationReceipt, revision: 7 },
       projection,
     }))
-    await expect(
-      malformedReceipt.client.redo({ ref, sessionId, commandId: "redo-one" }),
-    ).rejects.toThrow("BoundedOperationReceipt")
+    await expect(malformedReceipt.client.redo({ ref, sessionId, commandId: "redo-one" })).rejects.toThrow(
+      "BoundedOperationReceipt",
+    )
   })
 
   test("does not deliver an invalid Main invalidation to renderer listeners", () => {
@@ -171,13 +171,15 @@ describe("preload Canvas session client", () => {
     const listener = mock(() => undefined)
     const unsubscribe = bridge.client.subscribe(listener)
 
-    expect(() => bridge.emit({
-      format: "convax.canvas-session-invalidation",
-      ref,
-      sessionId,
-      frameDigest: acceptedFrameDigest,
-      revision: 7,
-    })).toThrow("field set")
+    expect(() =>
+      bridge.emit({
+        format: "convax.canvas-session-invalidation",
+        ref,
+        sessionId,
+        frameDigest: acceptedFrameDigest,
+        revision: 7,
+      }),
+    ).toThrow("field set")
     expect(listener).not.toHaveBeenCalled()
 
     bridge.emit({ format: "convax.canvas-session-invalidation", ref, sessionId, frameDigest: acceptedFrameDigest })

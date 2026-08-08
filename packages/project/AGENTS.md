@@ -66,6 +66,11 @@ This package owns the durable Project aggregate and native Project adapters.
   `managed-blob` identity with `managed-admission` provenance. Do not replace this
   path with a renderer-provided digest, a whole-file memory buffer, or a generic
   caller-selectable provenance.
+- Project Canvas media inspection addresses the admitted portable resource
+  reference, not the original external path. Project/node opens the exact stable
+  Project file or verified managed blob; a Desktop-supplied decoder may inspect
+  those bytes before the Canvas resource command is constructed. Never persist the
+  decoder result as Project authority or accept renderer dimensions as proof.
 - Managed-asset admission, reference admission and GC use one Desktop-composed
   `ProjectManagedAssetStore` and its Project-scoped in-process asset mutex. GC derives
   liveness from the validated ProjectIndex current-resource projection, waits

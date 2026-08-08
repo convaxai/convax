@@ -3,20 +3,17 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
-import {
-  encodeBase64url,
-  ordinarySha256,
-  parseId128,
-  parseProjectId,
-  type Digest,
-} from "@convax/collaboration"
+import { encodeBase64url, ordinarySha256, parseId128, parseProjectId, type Digest } from "@convax/collaboration"
 import { CanvasResourcePartialFailureError } from "@convax/canvas/application"
 import type { ProjectIndexResourceReference } from "../../collaboration/project-index"
 import type {
   ProjectIndexFileApplicationPort,
   ProjectIndexFileMaterializationProjectionPort,
 } from "../../canvas/project-index-file-application"
-import { getProjectResourceReference, type ProjectResourceReference as CanvasProjectResourceReference } from "../../canvas/project-resources"
+import {
+  getProjectResourceReference,
+  type ProjectResourceReference as CanvasProjectResourceReference,
+} from "../../canvas/project-resources"
 import {
   ProjectCanvasResourcePreparation,
   type ProjectCanvasFilePublisher,
@@ -227,12 +224,21 @@ describe("project canvas resource preparation", () => {
     expect(result.items[0]).not.toHaveProperty("text")
   })
 
-  test("keeps Project media inspection URLs only in transient resource state", async () => {
+  test("inspects the exact Project image bytes while keeping decoder URLs transient", async () => {
     const inspections: unknown[] = []
     const preparation = new ProjectCanvasResourcePreparation(
       host({
         async readFileInfo(input) {
-          return { mimeType: "video/mp4", name: "clip.mp4", path: input.path, size: 42 }
+          return { mimeType: "image/png", name: "hero.png", path: input.path, size: 1 }
+        },
+        async readFile(input) {
+          return {
+            dataUrl: "data:image/png;base64,AA==",
+            mimeType: "image/png",
+            name: "hero.png",
+            path: input.path,
+            size: 1,
+          }
         },
       }),
       unusedPublisher(),
@@ -247,23 +253,22 @@ describe("project canvas resource preparation", () => {
 
     const result = await preparation.prepare({
       ...requestRef,
-      sources: [{ kind: "host-file", path: "media/clip.mp4", sourceId: "clip" }],
+      sources: [{ kind: "host-file", path: "media/hero.png", sourceId: "hero" }],
     })
 
     expect(inspections).toEqual([
       {
-        kind: "video",
-        mimeType: "video/mp4",
-        name: "clip.mp4",
-        path: "media/clip.mp4",
-        projectId: "project_one",
+        bytes: Uint8Array.from([0]),
+        kind: "image",
+        mimeType: "image/png",
+        name: "hero.png",
       },
     ])
     expect(result.items[0]).toMatchObject({
       durationMs: 1_500,
       height: 720,
-      id: "clip",
-      kind: "video",
+      id: "hero",
+      kind: "image",
       state: { posterUrl: "blob:poster", status: "stale" },
       width: 1_280,
     })
@@ -345,9 +350,15 @@ describe("project canvas resource preparation", () => {
           reference,
         }
       },
-      async admitManagedBlob() { throw new Error("not used") },
-      async relocateEntry() { throw new Error("not used") },
-      async tombstoneEntry() { throw new Error("not used") },
+      async admitManagedBlob() {
+        throw new Error("not used")
+      },
+      async relocateEntry() {
+        throw new Error("not used")
+      },
+      async tombstoneEntry() {
+        throw new Error("not used")
+      },
     } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
     const preparation = new ProjectCanvasResourcePreparation(
       host(),
@@ -376,9 +387,11 @@ describe("project canvas resource preparation", () => {
     expect(publicationObservedPlanQuery).toBeTrue()
     expect(planQueries).toBe(1)
     expect(directories).toEqual(["Notes"])
-    expect(diagnostics
-      .map(({ byteLength, callCount, stage }) => ({ byteLength, callCount, stage }))
-      .sort((left, right) => left.stage.localeCompare(right.stage))).toEqual([
+    expect(
+      diagnostics
+        .map(({ byteLength, callCount, stage }) => ({ byteLength, callCount, stage }))
+        .sort((left, right) => left.stage.localeCompare(right.stage)),
+    ).toEqual([
       { byteLength: 0, callCount: 1, stage: "initial-plan" },
       { byteLength: bytes.byteLength, callCount: 1, stage: "pi-submit" },
       { byteLength: bytes.byteLength, callCount: 1, stage: "post-pi-proof" },
@@ -404,21 +417,25 @@ describe("project canvas resource preparation", () => {
         async queryFileMaterializationPlan() {
           return { projectId: parseProjectId("project_one"), entries: [] }
         },
-        async createDirectory() { throw ownerFailure },
-        async publishFile() { throw new Error("not used") },
+        async createDirectory() {
+          throw ownerFailure
+        },
+        async publishFile() {
+          throw new Error("not used")
+        },
       } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort,
     )
 
-    const error = await preparation.prepare({
-      ...requestRef,
-      sources: [{ kind: "new-text", sourceId: "new", text: "" }],
-    }).catch((reason: unknown) => reason)
+    const error = await preparation
+      .prepare({
+        ...requestRef,
+        sources: [{ kind: "new-text", sourceId: "new", text: "" }],
+      })
+      .catch((reason: unknown) => reason)
 
     expect(error).toBeInstanceOf(CanvasResourcePartialFailureError)
     expect((error as CanvasResourcePartialFailureError).cause).toBe(ownerFailure)
-    expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([
-      { label: "Notes/retained-a1.md" },
-    ])
+    expect((error as CanvasResourcePartialFailureError).retainedOnFailure).toEqual([{ label: "Notes/retained-a1.md" }])
   })
 
   test("reports only successfully published new text when later preparation fails", async () => {
@@ -501,15 +518,26 @@ describe("project canvas resource preparation", () => {
 
   test("maps external admissions inside the managed-store callback without exposing source paths", async () => {
     const events: string[] = []
-    const references: CanvasProjectResourceReference[] = [
-      {
-        kind: "managed-asset",
-        mediaType: "image/png",
-        name: "outside.png",
-        sha256: "a".repeat(64),
-      },
-    ]
+    const managedReference = {
+      kind: "managed-asset" as const,
+      mediaType: "image/png",
+      name: "outside.png",
+      sha256: "a".repeat(64),
+    }
+    const references: CanvasProjectResourceReference[] = [managedReference]
     const assets = {
+      async openForRead() {
+        events.push("read")
+        return {
+          close: async () => undefined,
+          createReadStream: () => {
+            throw new Error("unused")
+          },
+          digest: async () => managedReference.sha256,
+          readAll: async () => Uint8Array.from([1]),
+          size: 1,
+        }
+      },
       async withAdmittedLocalFiles(
         _input: unknown,
         commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
@@ -520,7 +548,13 @@ describe("project canvas resource preparation", () => {
         return result
       },
     } as unknown as ProjectManagedAssetStore
-    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets)
+    const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets, {
+      async inspect(input) {
+        events.push("inspect")
+        expect(input.bytes).toEqual(Uint8Array.from([1]))
+        return { height: 600, width: 1_200 }
+      },
+    })
 
     const result = await preparation.withAdmittedLocalFiles(
       {
@@ -539,16 +573,18 @@ describe("project canvas resource preparation", () => {
         expect(JSON.stringify(prepared)).not.toContain("/native/outside.png")
         expect(getProjectResourceReference(prepared.items[0]!.metadata)).toEqual(references[0])
         expect(prepared.items[0]).toMatchObject({
+          height: 600,
           id: "outside",
           kind: "image",
           state: { status: "stale" },
+          width: 1_200,
         })
         return "committed"
       },
     )
 
     expect(result).toBe("committed")
-    expect(events).toEqual(["store:enter", "commit", "store:leave"])
+    expect(events).toEqual(["store:enter", "read", "inspect", "commit", "store:leave"])
   })
 
   test("maps a Project-local File token to a direct project-file item without a managed copy", async () => {
@@ -707,7 +743,11 @@ describe("project canvas resource preparation", () => {
     await fs.mkdir(path.join(projectRoot, ".convax"), { recursive: true })
     await fs.writeFile(outside, bytes)
     const assets = new ProjectManagedAssetStore(
-      { async resolveProjectRoot() { return projectRoot } },
+      {
+        async resolveProjectRoot() {
+          return projectRoot
+        },
+      },
       { maximumBytes: 1024 },
     )
     const reference = projectIndexReference(bytes, "image/png")
@@ -715,7 +755,9 @@ describe("project canvas resource preparation", () => {
     const indexFiles = {
       async admitManagedBlob(input: Parameters<ProjectIndexFileApplicationPort["admitManagedBlob"]>[0]) {
         const chunks: number[] = []
-        await input.admission.readChunks(async (chunk) => { chunks.push(...chunk) })
+        await input.admission.readChunks(async (chunk) => {
+          chunks.push(...chunk)
+        })
         admitted = Uint8Array.from(chunks)
         return {
           status: "committed" as const,
@@ -727,10 +769,18 @@ describe("project canvas resource preparation", () => {
       async queryFileMaterializationPlan() {
         return { projectId: parseProjectId("project_one"), entries: [] }
       },
-      async createDirectory() { throw new Error("not used") },
-      async publishFile() { throw new Error("not used") },
-      async relocateEntry() { throw new Error("not used") },
-      async tombstoneEntry() { throw new Error("not used") },
+      async createDirectory() {
+        throw new Error("not used")
+      },
+      async publishFile() {
+        throw new Error("not used")
+      },
+      async relocateEntry() {
+        throw new Error("not used")
+      },
+      async tombstoneEntry() {
+        throw new Error("not used")
+      },
     } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
     const preparation = new ProjectCanvasResourcePreparation(host(), unusedPublisher(), assets, undefined, indexFiles)
 

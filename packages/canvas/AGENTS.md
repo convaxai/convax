@@ -52,10 +52,16 @@ Canvas owns document and editor semantics independently of Project and Agent.
   live incarnation; a mismatch retains authority. Keep each session bounded to 32
   pending operations and 512 ghost entities and coalesce authority/overlay changes
   into one presentation snapshot.
-- Visual undo/redo history stores only bounded guarded presentation deltas between
-  authoritative local semantic roots. It does not select Main's root, cache Y.Doc,
-  run the reducer, or send its operation id as a command. Reconcile only against the
-  actual Main `historyTransition`; mismatch/failure clears the speculative suffix.
+- Visual undo/redo history stores only bounded complete presentation snapshots with
+  exact node/edge incarnation guards. Every local mutation may reserve an opaque
+  provisional root before Main's durable lane; Renderer must not execute the business
+  command or construct a candidate document to predict it. Typed geometry may attach
+  its already-known presentation result, while every other root is filled only from
+  Main's accepted before/after projection. Owner-derived creations retain only their
+  operation-specific forward ghost and never guess identities. The visual cursor does
+  not select Main's root, cache Y.Doc, or send its provisional id as a command.
+  Reconcile only against the actual Main `historyTransition`; mismatch/failure clears
+  the speculative suffix and suppresses any inverse queued only for a rejected root.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including
   parent coordinates. Do not wait for or trust stale mounted renderer geometry.
 - Hosts may provide only edge-inset geometry for unavailable viewport space. Canvas
@@ -80,6 +86,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   duplicate commits only after its transient preview ends. Title, Group appearance,
   generation-tool preference, mention edge, and intrinsic-media geometry edits use
   closed application commands; Renderer code must not submit a general node patch.
+- Canvas owns one resource presentation-size policy. A prepared image's trusted
+  intrinsic dimensions must determine the first `canvas.resources.add` geometry;
+  renderer ghosts may use independently decoded hints through that same policy but
+  those hints never enter an intent. Normal media load must not create a second
+  geometry write when the committed size already matches the intrinsic fit.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply

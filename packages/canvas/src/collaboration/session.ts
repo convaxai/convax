@@ -12,19 +12,18 @@ import type {
   SelectedDocumentOwnerArtifactDefinition,
   CurrentProtocolAuthority,
 } from "@convax/collaboration"
-import { createSelectedDocumentOwnerArtifactFactory, currentProtocolDescriptor, ownerCanonicalizerDescriptorDigest, parseDigest } from "@convax/collaboration"
+import {
+  createSelectedDocumentOwnerArtifactFactory,
+  currentProtocolDescriptor,
+  ownerCanonicalizerDescriptorDigest,
+  parseDigest,
+} from "@convax/collaboration"
 import type * as Y from "yjs"
 import type { CanvasNodeGeometryUpdate } from "../commands"
 import { parseCanvasDocument } from "../document"
 import type { CanvasDocument } from "../types"
-import {
-  createCanvasExternalFactContext,
-  discoverCanvasIntentDependencies,
-} from "./external-facts"
-import {
-  constructCanvasHistoryIntent,
-  discoverCanvasHistoryIntentDependencies,
-} from "./command-construction"
+import { createCanvasExternalFactContext, discoverCanvasIntentDependencies } from "./external-facts"
+import { constructCanvasHistoryIntent, discoverCanvasHistoryIntentDependencies } from "./command-construction"
 import { assertCanvasTypedIntent, decodeCanvasTypedIntent } from "./intent-validation"
 import { projectCanvas } from "./projection"
 import {
@@ -77,29 +76,42 @@ function canvasProtocolSchemaArtifactDigest(): Digest {
 }
 
 export type CanvasOwnerRuntimeDiagnostic = "full-validation" | "canonical-state"
-export interface CanvasOwnerRuntimeDiagnosticsPort { record(event: CanvasOwnerRuntimeDiagnostic): void }
+export interface CanvasOwnerRuntimeDiagnosticsPort {
+  record(event: CanvasOwnerRuntimeDiagnostic): void
+}
 
 function canvasDocumentOwnerArtifactDefinition(
   diagnostics?: CanvasOwnerRuntimeDiagnosticsPort,
 ): SelectedDocumentOwnerArtifactDefinition<"canvas"> {
   return Object.freeze({
     owner: "canvas",
-    armCandidateTransactionCapture(input: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["armCandidateTransactionCapture"]>>[0]) {
+    armCandidateTransactionCapture(
+      input: Parameters<
+        NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["armCandidateTransactionCapture"]>
+      >[0],
+    ) {
       const base = canvasSnapshotFromValidatedOwnerState(input.base)
       if (base === null) throw new TypeError("Canvas candidate capture requires its branded validated base")
       armCanvasDuplicateCandidateCapture(input.candidate, base, input.context)
     },
-    installValidatedPostCache(input: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["installValidatedPostCache"]>>[0]) {
+    installValidatedPostCache(
+      input: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["installValidatedPostCache"]>>[0],
+    ) {
       const snapshot = canvasSnapshotFromValidatedOwnerState(input.state)
-      if (snapshot !== null) canvasOwnerStateCache.transferValidatedSnapshot(
-        input.source,
-        input.target,
-        snapshot,
-        input.canonicalStateDigest,
-        input.durableHeadDigest,
-      )
+      if (snapshot !== null)
+        canvasOwnerStateCache.transferValidatedSnapshot(
+          input.source,
+          input.target,
+          snapshot,
+          input.canonicalStateDigest,
+          input.durableHeadDigest,
+        )
     },
-    readCertifiedCanonicalDigest(input: Parameters<NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["readCertifiedCanonicalDigest"]>>[0]) {
+    readCertifiedCanonicalDigest(
+      input: Parameters<
+        NonNullable<SelectedDocumentOwnerArtifactDefinition<"canvas">["readCertifiedCanonicalDigest"]>
+      >[0],
+    ) {
       return canvasOwnerStateCache.readCertifiedCanonicalDigest(
         input.document,
         input.scope,
@@ -119,8 +131,9 @@ export function createCanvasDocumentOwnerRuntime(
   authority: CurrentProtocolAuthority,
   diagnostics?: CanvasOwnerRuntimeDiagnosticsPort,
 ): DocumentOwnerRuntime<"canvas"> {
-  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "canvas")
-    .createRuntime(canvasDocumentOwnerArtifactDefinition(diagnostics))
+  const selected = createSelectedDocumentOwnerArtifactFactory(authority, "canvas").createRuntime(
+    canvasDocumentOwnerArtifactDefinition(diagnostics),
+  )
   if ("status" in selected) throw new Error(`Canvas owner runtime is ${selected.code}`)
   return selected
 }
@@ -149,7 +162,8 @@ function createCanvasProtocolDefinition(
       try {
         const before = stateCache.traversalCounts().fullValidation
         const state = stateCache.validate(document)
-        if (stateCache.traversalCounts().fullValidation !== before) recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
+        if (stateCache.traversalCounts().fullValidation !== before)
+          recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
         return processValues.wrapValidatedState(state)
       } catch {
         return "rejected"
@@ -173,11 +187,13 @@ function createCanvasProtocolDefinition(
       if (base === null) return "rejected"
       const result = applyCanvasOwnerCandidateIntent(candidate, base, outerContext, intent, factContext)
       if (result === "pending" || result === "rejected") return result
-      return processValues.wrapApplyResult(Object.freeze({
-        ownerOpaqueResult: result,
-        semanticRootOperationId: result.semanticHistoryRoot?.rootOperationId ?? null,
-        scope: outerContext.scope,
-      } satisfies CanvasOwnerResultValue))
+      return processValues.wrapApplyResult(
+        Object.freeze({
+          ownerOpaqueResult: result,
+          semanticRootOperationId: result.semanticHistoryRoot?.rootOperationId ?? null,
+          scope: outerContext.scope,
+        } satisfies CanvasOwnerResultValue),
+      )
     },
     validatePost(
       _base: import("@convax/collaboration").OwnerValidatedState<"canvas">,
@@ -192,12 +208,19 @@ function createCanvasProtocolDefinition(
         const fast = consumeCanvasDuplicateValidatedPost(candidate, baseSnapshot, value.ownerOpaqueResult)
         const before = stateCache.traversalCounts().fullValidation
         const snapshot = fast?.snapshot ?? stateCache.validate(candidate)
-        if (stateCache.traversalCounts().fullValidation !== before) recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
-        stateCache.installValidatedSnapshot(candidate, snapshot, fast ? {
-          base: baseSnapshot,
-          changed: fast.changed,
-          issuer: processValues.canonicalJcs,
-        } : undefined)
+        if (stateCache.traversalCounts().fullValidation !== before)
+          recordCanvasOwnerDiagnostic(diagnostics, "full-validation")
+        stateCache.installValidatedSnapshot(
+          candidate,
+          snapshot,
+          fast
+            ? {
+                base: baseSnapshot,
+                changed: fast.changed,
+                issuer: processValues.canonicalJcs,
+              }
+            : undefined,
+        )
         const state = processValues.wrapValidatedState(snapshot)
         const evidence = stateCache.canonicalEvidence(candidate)
         return evidence ? processValues.bindCanonicalJcsEvidence(candidate, state, evidence) : state
@@ -209,7 +232,8 @@ function createCanvasProtocolDefinition(
       try {
         const before = stateCache.traversalCounts().canonical
         const bytes = stateCache.canonicalStateBytes(document, processValues.canonicalJcs)
-        if (stateCache.traversalCounts().canonical !== before) recordCanvasOwnerDiagnostic(diagnostics, "canonical-state")
+        if (stateCache.traversalCounts().canonical !== before)
+          recordCanvasOwnerDiagnostic(diagnostics, "canonical-state")
         return bytes
       } catch {
         return "rejected"
@@ -232,8 +256,13 @@ function createCanvasProtocolDefinition(
   })
 }
 
-function recordCanvasOwnerDiagnostic(port: CanvasOwnerRuntimeDiagnosticsPort | undefined, event: CanvasOwnerRuntimeDiagnostic): void {
-  try { port?.record(event) } catch {}
+function recordCanvasOwnerDiagnostic(
+  port: CanvasOwnerRuntimeDiagnosticsPort | undefined,
+  event: CanvasOwnerRuntimeDiagnostic,
+): void {
+  try {
+    port?.record(event)
+  } catch {}
 }
 
 function createCanvasClosureDefinition(): OwnerIntentClosureDefinition<"canvas"> {
@@ -259,7 +288,9 @@ function createCanvasClosureDefinition(): OwnerIntentClosureDefinition<"canvas">
       }
     },
     history: Object.freeze({
-      discoverDependencies(input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["discoverDependencies"]>[0]) {
+      discoverDependencies(
+        input: Parameters<OwnerHistoryMaterializationDefinition<"canvas">["discoverDependencies"]>[0],
+      ) {
         const base = canvasSnapshotFromValidatedOwnerState(input.base)
         if (base === null) return "rejected"
         return discoverCanvasHistoryIntentDependencies({
@@ -297,7 +328,8 @@ export function canvasSnapshotFromValidatedOwnerState(
     !((value as { edges?: unknown }).edges instanceof Map) ||
     !((value as { semanticHistory?: unknown }).semanticHistory instanceof Map) ||
     !((value as { operations?: unknown }).operations instanceof Map)
-  ) return null
+  )
+    return null
   return value as CanvasSnapshot
 }
 
@@ -312,16 +344,17 @@ export function canvasOperationReceipt(
 
 function canvasOwnerResultValue(result: OwnerApplyResult<"canvas">): CanvasOwnerResultValue | null {
   const value = result.value
-  return (
-    typeof value === "object" &&
+  return typeof value === "object" &&
     value !== null &&
     typeof (value as { ownerOpaqueResult?: unknown }).ownerOpaqueResult === "object" &&
     (value as { ownerOpaqueResult: { format?: unknown } }).ownerOpaqueResult.format === "convax.canvas-intent-result"
-  ) ? value as CanvasOwnerResultValue : null
+    ? (value as CanvasOwnerResultValue)
+    : null
 }
 
 export interface CanvasRendererProjectionStore {
   getProjection(): CanvasDocument
+  resolveEdgeEntity?(edgeId: string): (CanvasEntityRef & { readonly kind: "edge" }) | undefined
   resolveNodeEntity(nodeId: string): (CanvasEntityRef & { readonly kind: "node" }) | undefined
   subscribe(listener: () => void): () => void
 }
@@ -381,7 +414,8 @@ export function canvasGeometryCommand(
 ): CanvasRendererCommand {
   const bodyUpdates = updates.map((update) => {
     const node = resolveNodeEntity(update.nodeId)
-    if (!node || node.kind !== "node") throw new Error(`Canvas geometry command cannot resolve live node ${update.nodeId}`)
+    if (!node || node.kind !== "node")
+      throw new Error(`Canvas geometry command cannot resolve live node ${update.nodeId}`)
     return Object.freeze({
       node: Object.freeze({ kind: "node" as const, id: node.id, incarnation: node.incarnation }),
       position: Object.freeze({ ...update.position }),

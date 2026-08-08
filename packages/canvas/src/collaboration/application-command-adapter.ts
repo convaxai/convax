@@ -2,12 +2,10 @@ import type { CanvasApplicationCommandRequest } from "../application/service"
 import type { CanvasApplicationCommand } from "../application/commands"
 import { alignCanvasNodes, distributeCanvasNodes, layoutCanvasNodes } from "../commands"
 import { getCanvasNodeSize } from "../document"
+import { getCanvasResourcePresentationSize } from "../media-sizing"
 import { applyCanvasAutoLayoutPlan, planCanvasLayout } from "../application/layout"
 import type { CanvasIntentCaller } from "./session"
-import type {
-  CanvasEntityRef,
-  CanvasSnapshot,
-} from "./types"
+import type { CanvasEntityRef, CanvasSnapshot } from "./types"
 import type { OwnerIntentConstructionContext } from "@convax/collaboration"
 import { buildCanvasProjectionIndex, projectCanvasDocument } from "./projection"
 import type { CanvasAuthoritativeCommand, CanvasCreatedResourceRelation } from "./command-construction"
@@ -58,7 +56,8 @@ export function adaptCanvasApplicationCommand(input: {
         while (changed) {
           changed = false
           for (const node of index.projection.nodes) {
-            const selected = requestedNodes.has(node.ref.id) ||
+            const selected =
+              requestedNodes.has(node.ref.id) ||
               (node.parent !== null && selectedNodes.has(canvasEntityKey(node.parent)))
             if (!selected || selectedNodes.has(canvasEntityKey(node.ref))) continue
             selectedNodes.set(canvasEntityKey(node.ref), node.ref)
@@ -71,10 +70,7 @@ export function adaptCanvasApplicationCommand(input: {
           if (edge) selectedEdges.set(canvasEntityKey(edge.ref), edge.ref)
         }
         for (const edge of index.projection.edges) {
-          if (
-            selectedNodes.has(canvasEntityKey(edge.source)) ||
-            selectedNodes.has(canvasEntityKey(edge.target))
-          ) {
+          if (selectedNodes.has(canvasEntityKey(edge.source)) || selectedNodes.has(canvasEntityKey(edge.target))) {
             selectedEdges.set(canvasEntityKey(edge.ref), edge.ref)
           }
         }
@@ -89,14 +85,20 @@ export function adaptCanvasApplicationCommand(input: {
         })
       }
       case "nodes.connect": {
-        if (!hasOnlyKeys(command.connection, ["source", "target", "data"]) ||
-          (command.connection.data !== undefined && !hasOnlyKeys(command.connection.data, ["label"]))) return "rejected"
+        if (
+          !hasOnlyKeys(command.connection, ["source", "target", "data"]) ||
+          (command.connection.data !== undefined && !hasOnlyKeys(command.connection.data, ["label"]))
+        )
+          return "rejected"
         const source = nodeById.get(command.connection.source)
         const target = nodeById.get(command.connection.target)
         if (!source || !target || sameCanonicalValue(source.ref, target.ref)) return "rejected"
-        if (index.projection.edges.some((edge) =>
-          sameCanonicalValue(edge.source, source.ref) && sameCanonicalValue(edge.target, target.ref)
-        )) return "rejected"
+        if (
+          index.projection.edges.some(
+            (edge) => sameCanonicalValue(edge.source, source.ref) && sameCanonicalValue(edge.target, target.ref),
+          )
+        )
+          return "rejected"
         const label = command.connection.data?.label
         if (label !== undefined && typeof label !== "string") return "rejected"
         return Object.freeze({
@@ -110,7 +112,11 @@ export function adaptCanvasApplicationCommand(input: {
         })
       }
       case "nodes.move": {
-        if (!finitePoint(command.delta) || (command.delta.x === 0 && command.delta.y === 0) || command.nodeIds.length === 0) {
+        if (
+          !finitePoint(command.delta) ||
+          (command.delta.x === 0 && command.delta.y === 0) ||
+          command.nodeIds.length === 0
+        ) {
           return "rejected"
         }
         const requested = new Set(command.nodeIds)
@@ -133,11 +139,18 @@ export function adaptCanvasApplicationCommand(input: {
           caller,
           command: Object.freeze({
             kind: "geometry-set",
-            updates: Object.freeze(selected.map((node) => Object.freeze({
-              node: node.ref,
-              position: Object.freeze({ x: node.position.x + command.delta.x, y: node.position.y + command.delta.y }),
-              size: null,
-            }))),
+            updates: Object.freeze(
+              selected.map((node) =>
+                Object.freeze({
+                  node: node.ref,
+                  position: Object.freeze({
+                    x: node.position.x + command.delta.x,
+                    y: node.position.y + command.delta.y,
+                  }),
+                  size: null,
+                }),
+              ),
+            ),
           }),
         })
       }
@@ -155,7 +168,12 @@ export function adaptCanvasApplicationCommand(input: {
         while (changed) {
           changed = false
           for (const node of index.projection.nodes) {
-            if (node.parent === null || !included.has(canvasEntityKey(node.parent)) || included.has(canvasEntityKey(node.ref))) continue
+            if (
+              node.parent === null ||
+              !included.has(canvasEntityKey(node.parent)) ||
+              included.has(canvasEntityKey(node.ref))
+            )
+              continue
             included.set(canvasEntityKey(node.ref), node.ref)
             changed = true
           }
@@ -205,21 +223,32 @@ export function adaptCanvasApplicationCommand(input: {
         const seen = new Set<string>()
         const updates = command.updates.flatMap((update) => {
           const node = nodeById.get(update.nodeId)
-          if (!node || seen.has(node.ref.id) || !finitePoint(update.position) ||
-            (update.size !== undefined && !finiteSize(update.size))) throw new TypeError("Invalid Canvas geometry update")
+          if (
+            !node ||
+            seen.has(node.ref.id) ||
+            !finitePoint(update.position) ||
+            (update.size !== undefined && !finiteSize(update.size))
+          )
+            throw new TypeError("Invalid Canvas geometry update")
           seen.add(node.ref.id)
           const samePosition = node.position.x === update.position.x && node.position.y === update.position.y
-          const sameSize = update.size === undefined ||
+          const sameSize =
+            update.size === undefined ||
             (node.size.width === update.size.width && node.size.height === update.size.height)
           if (samePosition && sameSize) return []
-          return [Object.freeze({
-            node: node.ref,
-            position: Object.freeze({ ...update.position }),
-            size: update.size === undefined ? null : Object.freeze({ ...update.size }),
-          })]
+          return [
+            Object.freeze({
+              node: node.ref,
+              position: Object.freeze({ ...update.position }),
+              size: update.size === undefined ? null : Object.freeze({ ...update.size }),
+            }),
+          ]
         })
         if (updates.length === 0) return "rejected"
-        return Object.freeze({ caller, command: Object.freeze({ kind: "geometry-set", updates: Object.freeze(updates) }) })
+        return Object.freeze({
+          caller,
+          command: Object.freeze({ kind: "geometry-set", updates: Object.freeze(updates) }),
+        })
       }
       case "nodes.group": {
         if (command.nodeIds.length < 2 || command.nodeIds.length > 256) return "rejected"
@@ -261,17 +290,24 @@ export function adaptCanvasApplicationCommand(input: {
       case "nodes.setGenerationToolId": {
         const node = nodeById.get(command.nodeId)
         if (!node || (node.data.kind !== "resource" && node.data.kind !== "placeholder")) return "rejected"
-        if (command.toolId !== undefined && (
-          command.toolId.length === 0 || command.toolId.length > 512 || command.toolId !== command.toolId.trim() ||
-          /[\u0000-\u001f\u007f]/.test(command.toolId)
-        )) return "rejected"
+        if (
+          command.toolId !== undefined &&
+          (command.toolId.length === 0 ||
+            command.toolId.length > 512 ||
+            command.toolId !== command.toolId.trim() ||
+            /[\u0000-\u001f\u007f]/.test(command.toolId))
+        )
+          return "rejected"
         const { generationToolId: _generationToolId, ...data } = node.data
         return Object.freeze({
           caller,
           command: Object.freeze({
             kind: "node-data-set",
             node: node.ref,
-            data: Object.freeze({ ...data, ...(command.toolId === undefined ? {} : { generationToolId: command.toolId }) }),
+            data: Object.freeze({
+              ...data,
+              ...(command.toolId === undefined ? {} : { generationToolId: command.toolId }),
+            }),
           }),
         })
       }
@@ -313,27 +349,45 @@ export function adaptCanvasApplicationCommand(input: {
       }
       case "canvas.auto-layout": {
         const document = projectCanvasDocument(index.projection).document
-        const next = applyCanvasAutoLayoutPlan(document, planCanvasLayout(document, {
-          ...(command.nodeIds === undefined ? {} : { nodeIds: command.nodeIds }),
-          ...(command.options === undefined ? {} : { options: command.options }),
-        }))
+        const next = applyCanvasAutoLayoutPlan(
+          document,
+          planCanvasLayout(document, {
+            ...(command.nodeIds === undefined ? {} : { nodeIds: command.nodeIds }),
+            ...(command.options === undefined ? {} : { options: command.options }),
+          }),
+        )
         return geometryAdaptation(caller, index, document, next)
       }
       case "nodes.align": {
         const document = projectCanvasDocument(index.projection).document
-        return geometryAdaptation(caller, index, document, alignCanvasNodes(document, command.nodeIds, command.direction))
+        return geometryAdaptation(
+          caller,
+          index,
+          document,
+          alignCanvasNodes(document, command.nodeIds, command.direction),
+        )
       }
       case "nodes.distribute": {
         const document = projectCanvasDocument(index.projection).document
-        return geometryAdaptation(caller, index, document, distributeCanvasNodes(document, command.nodeIds, command.axis))
+        return geometryAdaptation(
+          caller,
+          index,
+          document,
+          distributeCanvasNodes(document, command.nodeIds, command.axis),
+        )
       }
       case "nodes.layout": {
         const document = projectCanvasDocument(index.projection).document
-        return geometryAdaptation(caller, index, document, layoutCanvasNodes(document, {
-          nodeIds: command.nodeIds,
-          ...(command.layout === undefined ? {} : { layout: command.layout }),
-          ...(command.gap === undefined ? {} : { gap: command.gap }),
-        }))
+        return geometryAdaptation(
+          caller,
+          index,
+          document,
+          layoutCanvasNodes(document, {
+            nodeIds: command.nodeIds,
+            ...(command.layout === undefined ? {} : { layout: command.layout }),
+            ...(command.gap === undefined ? {} : { gap: command.gap }),
+          }),
+        )
       }
       case "resources.add": {
         return adaptResourcesAdd(caller, command, nodeById)
@@ -365,9 +419,7 @@ export function adaptCanvasApplicationCommand(input: {
           return "rejected"
         }
         const generationToolId =
-          node.data.kind === "resource" || node.data.kind === "placeholder"
-            ? node.data.generationToolId
-            : undefined
+          node.data.kind === "resource" || node.data.kind === "placeholder" ? node.data.generationToolId : undefined
         return Object.freeze({
           caller,
           command: Object.freeze({
@@ -447,7 +499,12 @@ function adaptResourcesAdd(
     return Object.freeze({
       title: item.name ?? (item.kind === "text" ? "Text" : item.kind === "folder" ? "Folder" : "Resource"),
       proof,
-      size: Object.freeze(item.kind === "text" ? { width: 320, height: 180 } : { width: 240, height: 180 }),
+      size: Object.freeze(
+        getCanvasResourcePresentationSize(item.kind, {
+          height: "height" in item ? item.height : undefined,
+          width: "width" in item ? item.width : undefined,
+        }),
+      ),
     })
   })
   return Object.freeze({
@@ -474,11 +531,13 @@ function adaptPendingResourceCreate(
     command: Object.freeze({
       kind: "manual-resource-placeholders-create",
       anchor: Object.freeze({ ...command.placement.anchor }),
-      items: Object.freeze([Object.freeze({
-        title: command.label,
-        expectedClass: command.kind,
-        size: Object.freeze({ width: 240, height: 180 }),
-      })]),
+      items: Object.freeze([
+        Object.freeze({
+          title: command.label,
+          expectedClass: command.kind,
+          size: Object.freeze({ width: 240, height: 180 }),
+        }),
+      ]),
       relation,
     }),
   })
@@ -531,14 +590,20 @@ function geometryAdaptation(
     const positionChanged = prior.position.x !== node.position.x || prior.position.y !== node.position.y
     const sizeChanged = priorSize.width !== nextSize.width || priorSize.height !== nextSize.height
     return positionChanged || sizeChanged
-      ? [Object.freeze({
-          node: projected.ref,
-          position: Object.freeze({ ...node.position }),
-          size: sizeChanged ? Object.freeze({ ...nextSize }) : null,
-        })]
+      ? [
+          Object.freeze({
+            node: projected.ref,
+            position: Object.freeze({ ...node.position }),
+            size: sizeChanged ? Object.freeze({ ...nextSize }) : null,
+          }),
+        ]
       : []
   })
-  if (updates.length === 0 || updates.length > 256 || updates.length + updates.filter((entry) => entry.size !== null).length + 2 > 512) {
+  if (
+    updates.length === 0 ||
+    updates.length > 256 ||
+    updates.length + updates.filter((entry) => entry.size !== null).length + 2 > 512
+  ) {
     return "rejected"
   }
   return Object.freeze({
@@ -567,8 +632,19 @@ function finiteSize(value: { readonly width: number; readonly height: number }):
 }
 
 function projectedWorldPosition(
-  node: { readonly ref: CanvasEntityRef & { readonly kind: "node" }; readonly position: { readonly x: number; readonly y: number }; readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null },
-  nodes: ReadonlyMap<string, { readonly ref: CanvasEntityRef & { readonly kind: "node" }; readonly position: { readonly x: number; readonly y: number }; readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null }>,
+  node: {
+    readonly ref: CanvasEntityRef & { readonly kind: "node" }
+    readonly position: { readonly x: number; readonly y: number }
+    readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
+  },
+  nodes: ReadonlyMap<
+    string,
+    {
+      readonly ref: CanvasEntityRef & { readonly kind: "node" }
+      readonly position: { readonly x: number; readonly y: number }
+      readonly parent: (CanvasEntityRef & { readonly kind: "node" }) | null
+    }
+  >,
 ): { x: number; y: number } {
   let x = node.position.x
   let y = node.position.y
