@@ -44,6 +44,11 @@ This package owns the durable Project aggregate and native Project adapters.
   Canvas reducer or editing Canvas through Project-local commands.
 - `ProjectSidebar` composes injected controllers and owns only Project-specific UI,
   including its internal Canvases/Files vertical split.
+- `ProjectSidebar` requests bounded row covers independently from full previews.
+  Mounted video rows use a bounded-concurrency thumbnail-purpose lease, capture one
+  small Chromium frame, and immediately release it; they never wait for hover. A
+  delayed hover owns its own disposable full-preview handle. Unmount cancels queued
+  cover work, and rows never retain complete-media data URLs.
 - Browser-safe entry points never import Node modules. Native I/O stays under
   `src/node/**` and performs real-path/containment validation.
 - Browser creation requests carry only a Project name. The host injects a trusted

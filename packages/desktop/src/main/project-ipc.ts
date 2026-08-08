@@ -33,6 +33,7 @@ export const projectRecoveryIpcChannels = {
 
 export const projectFilesIpcChannels = {
   changed: "project-files:changed",
+  closeFilePreview: "project-files:close-file-preview",
   copyEntries: "project-files:copy-entries",
   createEntry: "project-files:create-entry",
   deleteEntries: "project-files:delete-entries",
@@ -40,8 +41,10 @@ export const projectFilesIpcChannels = {
   listDirectory: "project-files:list-directory",
   moveEntries: "project-files:move-entries",
   openEntry: "project-files:open-entry",
+  openFilePreview: "project-files:open-file-preview",
   readFile: "project-files:read-file",
   readFileInfo: "project-files:read-file-info",
+  readFileThumbnail: "project-files:read-file-thumbnail",
   readTextPreview: "project-files:read-text-preview",
   readTextFile: "project-files:read-text-file",
   renameEntry: "project-files:rename-entry",
@@ -50,6 +53,10 @@ export const projectFilesIpcChannels = {
 } as const
 
 interface ProjectIpcContract {
+  "project-files:close-file-preview": {
+    input: FilesInput<"closeFilePreview">
+    result: FilesResult<"closeFilePreview">
+  }
   "project:recovery-confirm-reset": {
     input: Parameters<ProjectCollaborationRecoveryClient["confirmReset"]>[0]
     result: Awaited<ReturnType<ProjectCollaborationRecoveryClient["confirmReset"]>>
@@ -102,6 +109,10 @@ interface ProjectIpcContract {
     input: FilesInput<"openEntry">
     result: FilesResult<"openEntry">
   }
+  "project-files:open-file-preview": {
+    input: FilesInput<"openFilePreview">
+    result: FilesResult<"openFilePreview">
+  }
   "project:open": {
     input: undefined
     result: LifecycleResult<"openProject">
@@ -113,6 +124,10 @@ interface ProjectIpcContract {
   "project-files:read-file-info": {
     input: FilesInput<"readFileInfo">
     result: FilesResult<"readFileInfo">
+  }
+  "project-files:read-file-thumbnail": {
+    input: FilesInput<"readFileThumbnail">
+    result: FilesResult<"readFileThumbnail">
   }
   "project-files:read-text-preview": {
     input: FilesInput<"readTextPreview">
@@ -242,6 +257,11 @@ export async function registerProjectIpc(
      * Main's active Project before the renderer has completed its leave guard.
      */
     onActivated?(project: ProjectRecord): Promise<void> | void
+    filePreviews?: {
+      close(input: FilesInput<"closeFilePreview">, ownerId: number): FilesResult<"closeFilePreview">
+      open(input: FilesInput<"openFilePreview">, ownerId: number): Promise<FilesResult<"openFilePreview">>
+      thumbnail(input: FilesInput<"readFileThumbnail">): Promise<FilesResult<"readFileThumbnail">>
+    }
     /** Main-owned ProjectIndex bridge. Production supplies it; unit adapters may omit it. */
     projectIndexFiles?: ProjectIndexFileApplicationPort
   },
@@ -368,6 +388,10 @@ export async function registerProjectIpc(
   })
 
   handlerDisposers.push(
+    registerHandler(projectFilesIpcChannels.closeFilePreview, options.isTrustedSender, (event, input) => {
+      if (!options.filePreviews) throw new Error("Project file previews are unavailable")
+      return options.filePreviews.close(input, event.sender.id)
+    }),
     registerHandler(projectIpcChannels.listProjects, options.isTrustedSender, async () => ({
       projects: await listProjects(),
     })),
@@ -486,6 +510,14 @@ export async function registerProjectIpc(
         await withProjectWatcher(input.projectId, () => manager.resolveEntryPath(input)),
       )
       return error ? { error } : {}
+    }),
+    registerHandler(projectFilesIpcChannels.openFilePreview, options.isTrustedSender, (event, input) => {
+      if (!options.filePreviews) throw new Error("Project file previews are unavailable")
+      return options.filePreviews.open(input, event.sender.id)
+    }),
+    registerHandler(projectFilesIpcChannels.readFileThumbnail, options.isTrustedSender, (_event, input) => {
+      if (!options.filePreviews) throw new Error("Project file previews are unavailable")
+      return options.filePreviews.thumbnail(input)
     }),
   )
 

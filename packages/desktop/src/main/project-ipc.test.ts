@@ -142,6 +142,59 @@ test("watches projects lazily when their files are first used", async () => {
   dispose()
 })
 
+test("binds project preview leases to the trusted renderer sender", async () => {
+  const unsupported = async (): Promise<never> => {
+    throw new Error("Unexpected Project manager call")
+  }
+  const manager = {
+    add: unsupported,
+    copyEntries: unsupported,
+    create: unsupported,
+    createEntry: unsupported,
+    deleteEntries: unsupported,
+    forget: unsupported,
+    importEntries: unsupported,
+    list: async () => [],
+    listDirectory: unsupported,
+    moveEntries: unsupported,
+    readFile: unsupported,
+    readFileInfo: unsupported,
+    readTextFile: unsupported,
+    readTextPreview: unsupported,
+    rename: unsupported,
+    renameEntry: unsupported,
+    resolveEntryPath: unsupported,
+    touch: unsupported,
+    watchProject: () => () => undefined,
+    writeTextFile: unsupported,
+  } satisfies DesktopProjectManager
+  const filePreviews = {
+    close: mock(() => true),
+    open: mock(async () => ({ leaseId: "lease-one", url: "convax-project-preview://lease-one/stream" })),
+    thumbnail: mock(async () => ({ dataUrl: "data:image/png;base64,small" })),
+  }
+  const { projectFilesIpcChannels, registerProjectIpc } = await import("./project-ipc")
+  const dispose = await registerProjectIpc(manager, {
+    filePreviews,
+    isTrustedSender: () => true,
+    projectCreationDirectory,
+  })
+
+  const scope = { path: "Media/clip.mp4", projectId: "project-one" }
+  const previewScope = { ...scope, purpose: "thumbnail" as const }
+  await expect(invoke(projectFilesIpcChannels.openFilePreview, previewScope)).resolves.toEqual({
+    leaseId: "lease-one",
+    url: "convax-project-preview://lease-one/stream",
+  })
+  await expect(invoke(projectFilesIpcChannels.readFileThumbnail, scope)).resolves.toEqual({
+    dataUrl: "data:image/png;base64,small",
+  })
+  expect(await invoke(projectFilesIpcChannels.closeFilePreview, { leaseId: "lease-one" })).toBeTrue()
+  expect(filePreviews.open).toHaveBeenCalledWith(previewScope, 1)
+  expect(filePreviews.close).toHaveBeenCalledWith({ leaseId: "lease-one" }, 1)
+  dispose()
+})
+
 test("publishes Project files before ProjectIndex and reports collaboration failure as partial success", async () => {
   const projectId = "project_0123456789abcdef0123456789abcdef"
   const order: string[] = []

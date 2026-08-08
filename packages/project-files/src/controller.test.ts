@@ -41,6 +41,7 @@ function mutation(
 function createClient(overrides: Partial<ProjectFilesClient> = {}) {
   let changeListener: ((event: ProjectChangeEvent) => void) | undefined
   const client: ProjectFilesClient = {
+    closeFilePreview: mock(async () => true),
     copyEntries: mock(async (input: Parameters<ProjectFilesClient["copyEntries"]>[0]) =>
       mutation("copy", input.projectId, input.paths),
     ),
@@ -74,6 +75,7 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       }
     },
     openEntry: mock(async () => ({})),
+    openFilePreview: mock(async () => ({ leaseId: "preview-lease", url: "convax-project-preview://lease/stream" })),
     readFile: mock(async (input: Parameters<ProjectFilesClient["readFile"]>[0]) => ({
       dataUrl: "data:text/plain;base64,",
       mimeType: "text/plain",
@@ -87,6 +89,7 @@ function createClient(overrides: Partial<ProjectFilesClient> = {}) {
       path: input.path,
       size: 0,
     })),
+    readFileThumbnail: mock(async () => ({ dataUrl: null })),
     readTextFile: mock(async (input: Parameters<ProjectFilesClient["readTextFile"]>[0]) => ({
       content: "",
       contentRevision: "",

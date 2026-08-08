@@ -161,7 +161,7 @@ flowchart TB
       PluginRuntime["Plugin iframe, sidecar, Skill, Hook"]
       Main["Main authority<br/>I/O, execution, persistence"]
       Composition["Desktop composition<br/>adapters and package wiring"]
-      Renderer --> Preload --> Main
+      Renderer -->|typed IPC · opaque preview leases| Preload --> Main
       Agent --> Main
       PluginRuntime --> Main
       Composition --> Renderer
@@ -221,7 +221,7 @@ flowchart TB
   end
 
   Main --> UserData
-  Main --> ProjectRoot
+  Main -->|validated native I/O · range streams| ProjectRoot
   Renderer -. non-authoritative UI state only .-> LocalStorage
 
   subgraph DataPlane["P2P collaboration data plane"]
@@ -270,7 +270,15 @@ one content-family version, and SHA-256 names exact bytes. These values are neve
 collapsed into one path or hash identity. The native adapter currently lives in
 `@convax/project/node` because that adapter resolves Project bindings and real paths;
 it implements the `ProjectFilesClient` contract without moving file semantics back
-into `ProjectController`.
+into `ProjectController`. Sidebar media presentation keeps bounded row covers and
+full hover previews separate. Image covers return directly as small data URLs. Each
+mounted video row may request a purpose-tagged, sender-scoped thumbnail lease;
+Chromium captures one bounded first-frame data URL and immediately releases that
+lease without waiting for hover. The independently delayed hover opens one full
+preview lease. Both lease kinds stream the native file through Main with HTTP
+byte-range support and are revoked on explicit close, navigation, renderer loss, or
+owner disposal; replacing a hover revokes only the prior hover lease. Full media
+bytes never cross Project Files IPC and preview eligibility has no file-size cutoff.
 
 ### Canvas
 
@@ -803,6 +811,20 @@ bounded response body and metadata; it never receives a native path or reopens t
 resource through `file:`. Failure and cancellation close the handle. This
 Project-specific authority remains separate from session-bearing resource
 protocols and does not introduce a global URI broker.
+
+`convax-project-preview:` is the short-lived trusted-renderer presentation path for
+the Project file tree. Main mints a high-entropy bearer URL only after resolving the
+scoped Project-relative file as a stable regular file. GET/HEAD reopens that exact
+identity, supports one HTTP byte range, and aborts every active stream when its
+sender-owned lease closes. It carries no durable Project resource identity, is never
+persisted, and is not a replacement for `convax-asset:`. Renderer CSP admits it only
+as an `img-src` and `media-src` presentation source, never as `connect-src`. Image
+cover art is obtained independently through a bounded thumbnail IPC method. Mounted
+video rows use at most two concurrent purpose-tagged thumbnail leases per renderer;
+Chromium decodes one 40-pixel cover and immediately clears the media element and
+closes the lease. This never calls the potentially blocking operating-system
+video-thumbnail generator and never depends on hover. The full preview lease remains
+independent and replaces only another hover preview.
 
 Marketplace caches are Desktop-owned, user-global, source-qualified, and
 non-authoritative. Builtin and Official are
@@ -2120,6 +2142,13 @@ id through fixed actions; Checkout additionally accepts one validated Plan key a
 never returns its external URL. Plugin surface creation is one narrow Canvas-namespace
 method that accepts only Project, Canvas, and Plugin ids and returns a receipt plus
 the Canvas-created node id.
+Project Files exposes separate bounded-thumbnail and media-lease behavior. Thumbnail
+IPC returns only a bounded image cover data URL. Video rows open a purpose-tagged
+ephemeral lease on mount, capture a bounded cover in Renderer, and close it
+immediately; a delayed hover uses an independent full-preview purpose. Lease open
+returns only an opaque URL and id, close accepts only that id, and Main binds both
+purposes to the trusted sender with a two-thumbnail concurrency cap. Neither method
+exposes a native path or full media bytes through IPC.
 The Canvas native-drag bridge is a two-phase exception required by Electron: an
 async prepare call returns only an opaque sender-scoped ticket, then a synchronous
 `dragstart` message consumes it. Main rechecks the active Canvas selection before
@@ -2140,7 +2169,7 @@ invalidations; same-frame responses suppress a query while unknown frames preser
 one trailing refresh. Resource IPC carries the current session id: durable commit
 success is retained when delivery becomes unavailable, and a live Renderer performs
 one explicit refresh fallback. The incompatible bridge change is identified by
-`convax.desktop-ipc/36`.
+`convax.desktop-ipc/37`.
 
 ## 11. Portable paths and trust boundaries
 

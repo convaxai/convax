@@ -14,7 +14,11 @@ import {
   type CanvasSelectionDragSource,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
-import { ProjectFilesController, type ProjectEntry } from "@convax/project-files"
+import {
+  ProjectFilesController,
+  type ProjectEntry,
+  type ProjectFilePreviewPurpose,
+} from "@convax/project-files"
 import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
@@ -1916,9 +1920,32 @@ function App() {
     workbenchLayoutSnapshot.resize,
   ])
 
-  const resolveProjectFilePreviewUrl = useCallback(
+  const resolveProjectFileThumbnailUrl = useCallback(
     async ({ path, projectId }: { path: string; projectId: string }) =>
-      (await window.convax.projectFiles.readFile({ path, projectId })).dataUrl,
+      (await window.convax.projectFiles.readFileThumbnail({ path, projectId })).dataUrl,
+    [],
+  )
+  const openProjectFilePreview = useCallback(
+    async ({
+      path,
+      projectId,
+      purpose,
+    }: {
+      path: string
+      projectId: string
+      purpose: ProjectFilePreviewPurpose
+    }) => {
+      const lease = await window.convax.projectFiles.openFilePreview({ path, projectId, purpose })
+      let released = false
+      return {
+        async release() {
+          if (released) return
+          released = true
+          await window.convax.projectFiles.closeFilePreview({ leaseId: lease.leaseId })
+        },
+        url: lease.url,
+      }
+    },
     [],
   )
   const handleProjectFileActivate = useCallback(
@@ -2044,8 +2071,9 @@ function App() {
       }
       hideWhenNoProject
       onFileActivate={handleProjectFileActivate}
+      openFilePreview={openProjectFilePreview}
       presentation="workspace"
-      resolveFileUrl={resolveProjectFilePreviewUrl}
+      resolveFileThumbnailUrl={resolveProjectFileThumbnailUrl}
       searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project"}
     />
   ) : null

@@ -73,6 +73,13 @@ or durable domain authority.
 - Project-directory browsing is a transient read-only projection over the existing
   Project Files capability. Projected entries are not persisted, selected,
   connected, moved, or added to Canvas history.
+- Project file rows render only bounded thumbnail data. Mounted video rows schedule
+  bounded-concurrency thumbnail-purpose leases, capture one small Chromium frame,
+  and immediately clear the media element and close the lease without waiting for
+  hover. Open the independent full-preview lease only after the hover delay and
+  close it while clearing the media source on preview exit or unmount. Admit the
+  preview protocol in Renderer CSP only for `img-src` and `media-src`, never
+  `connect-src`.
 - Selection actions render only host-projected actions for an immutable selection
   snapshot. Abort their live Canvas signal when the snapshot or surface is replaced
   and forward cancellation through the explicit Preload protocol.
