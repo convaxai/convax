@@ -106,6 +106,13 @@ historical inputs to the same current decoder; sharing never rewrites or re-sign
 them. A Team handoff must close the local head set before remote admission, and no
 Team enrollment record may be used as a fallback for an absent local owner.
 
+When a registry-bound unshared local Project still has its canonical root but no
+collaboration authority bytes, Project/node may restore a missing `project.json`
+and replay the exact durable local-owner genesis into a new current private store.
+This is empty-store recovery, not a decoder fallback: unsupported, Team-bound, or
+unknown private bytes still fail closed. Native document inventory may ignore a
+regular macOS `.DS_Store` file, but no other unexpected entry is treated as noise.
+
 When Desktop enters an editable local Project whose current ProjectIndex has no
 live Canvas route, its Workbench coordinator invokes the same Project-owned typed
 Canvas-create command used by the visible New Canvas action and opens the committed

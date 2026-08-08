@@ -85,6 +85,13 @@ export interface NodeProjectManagerOptions {
   watchDebounceMs?: number
 }
 
+export interface RegisteredProjectPrivateStorageRecoveryPort {
+  ensureRegisteredProjectPrivateStorage(input: {
+    projectId: string
+    projectRoot: string
+  }): Promise<void>
+}
+
 function privateTextFileRelativePath(namespace: string, value: string) {
   if (!/^[a-z][a-z0-9-]{0,63}$/.test(namespace)) {
     throw new Error(`Invalid project private namespace: ${namespace}`)
@@ -113,10 +120,15 @@ function privateTextVersion(content: string) {
 }
 
 export class NodeProjectManager
-  implements ProjectPrivatePathResolver, ProjectPrivateStorage, ProjectTextFileCompareAndReplacePort
+  implements
+    ProjectPrivatePathResolver,
+    ProjectPrivateStorage,
+    ProjectTextFileCompareAndReplacePort,
+    RegisteredProjectPrivateStorageRecoveryPort
 {
   private readonly now: () => number
   private projectCreationQueue: Promise<void> = Promise.resolve()
+  private readonly projectPrivateStorageQueues = new Map<string, Promise<void>>()
   private registryQueue: Promise<unknown> = Promise.resolve()
   private readonly projectMutationQueues = new Map<string, Promise<void>>()
   private readonly textWriteQueues = new Map<string, Promise<void>>()
@@ -158,6 +170,7 @@ export class NodeProjectManager
       const registry = this.registryQueue
       const results = await Promise.allSettled([
         projectCreation,
+        ...this.projectPrivateStorageQueues.values(),
         ...this.textWriteQueues.values(),
         ...this.projectMutationQueues.values(),
       ])
@@ -165,6 +178,7 @@ export class NodeProjectManager
       await registry
       if (
         this.textWriteQueues.size === 0 &&
+        this.projectPrivateStorageQueues.size === 0 &&
         this.projectMutationQueues.size === 0 &&
         projectCreation === this.projectCreationQueue &&
         registry === this.registryQueue
@@ -263,7 +277,10 @@ export class NodeProjectManager
       if (!(await isSafeProjectRoot(current.rootPath))) {
         throw new Error(`Project folder is unavailable: ${current.rootPath}`)
       }
-      await assertPortableProjectOpenable(current.rootPath)
+      await this.queueProjectPrivateStorage(current.id, async () => {
+        await assertPortableProjectOpenable(current.rootPath)
+        await this.ensureProjectManifest(current.rootPath, current.id, projects)
+      })
       const latestTimestamp = projects.reduce(
         (latest, project) => Math.max(latest, project.lastOpenedAt),
         0,
@@ -280,6 +297,21 @@ export class NodeProjectManager
     })
   }
 
+  async ensureRegisteredProjectPrivateStorage(input: {
+    projectId: string
+    projectRoot: string
+  }): Promise<void> {
+    const project = await this.getProject(input.projectId)
+    const realRoot = await fs.realpath(path.resolve(input.projectRoot))
+    if (!sameNativePath(project.rootPath, realRoot)) {
+      throw new Error(`Project root differs from its durable registry binding: ${input.projectId}`)
+    }
+    return this.queueProjectPrivateStorage(input.projectId, async () => {
+      await assertPortableProjectOpenable(realRoot)
+      await this.ensureProjectManifest(realRoot, project.id, [project])
+    })
+  }
+
   async addProject(rootPath: string) {
     const realRoot = await fs.realpath(path.resolve(rootPath))
     const stat = await fs.stat(realRoot)
@@ -287,7 +319,10 @@ export class NodeProjectManager
     const registeredProjects = await this.readStableRegistry()
     const existingByRoot = registeredProjects.find((project) => sameNativePath(project.rootPath, realRoot))
     const recovery = await projectRecoveryProjection(realRoot)
-    const manifest = await this.ensureProjectManifest(realRoot, existingByRoot?.id ?? projectIdForPath(realRoot))
+    const preferredProjectId = existingByRoot?.id ?? projectIdForPath(realRoot)
+    const manifest = await this.queueProjectPrivateStorage(preferredProjectId, () =>
+      this.ensureProjectManifest(realRoot, preferredProjectId, registeredProjects),
+    )
     const id = manifest.projectId
     const existingById = registeredProjects.find((project) => project.id === id)
     let rebindFromRoot: string | undefined
@@ -937,7 +972,11 @@ export class NodeProjectManager
     return this.options.caseInsensitivePaths ?? true
   }
 
-  private async ensureProjectManifest(rootPath: string, preferredProjectId: string): Promise<ProjectManifest> {
+  private async ensureProjectManifest(
+    rootPath: string,
+    preferredProjectId: string,
+    registeredProjects?: readonly Pick<ProjectRegistryRecord, "id">[],
+  ): Promise<ProjectManifest> {
     const privateRoot = path.join(rootPath, ".convax")
     const manifestFile = path.join(rootPath, ...projectManifestPath.split("/"))
     await ensureSafeDirectory(privateRoot, "Project private storage")
@@ -954,8 +993,13 @@ export class NodeProjectManager
       }
       manifestChanged = true
     }
-    if (manifest.projectId !== preferredProjectId && (await this.registryContainsProject(preferredProjectId))) {
-      throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
+    if (manifest.projectId !== preferredProjectId) {
+      const preferredProjectIsRegistered = registeredProjects
+        ? registeredProjects.some((project) => project.id === preferredProjectId)
+        : await this.registryContainsProject(preferredProjectId)
+      if (preferredProjectIsRegistered) {
+        throw new Error(`Project manifest belongs to a different project: ${manifest.projectId}`)
+      }
     }
 
     await ensureSafeDirectory(path.join(privateRoot, "assets"), "Project asset storage")
@@ -1041,6 +1085,23 @@ export class NodeProjectManager
       return await result
     } finally {
       if (this.projectMutationQueues.get(projectId) === settled) this.projectMutationQueues.delete(projectId)
+    }
+  }
+
+  private async queueProjectPrivateStorage<T>(projectId: string, mutate: () => Promise<T>) {
+    const previous = this.projectPrivateStorageQueues.get(projectId) ?? Promise.resolve()
+    const result = previous.catch(() => undefined).then(mutate)
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    this.projectPrivateStorageQueues.set(projectId, settled)
+    try {
+      return await result
+    } finally {
+      if (this.projectPrivateStorageQueues.get(projectId) === settled) {
+        this.projectPrivateStorageQueues.delete(projectId)
+      }
     }
   }
 

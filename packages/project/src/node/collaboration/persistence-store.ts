@@ -1611,7 +1611,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     const documents = path.join(this.collaborationDirectory, "documents")
     let reachable = false
     try {
-      for (const documentName of await readDirectoryNames(documents)) {
+      for (const documentName of await readDocumentDirectoryNames(documents)) {
         const layout = this.layoutFromDirectory(path.join(documents, documentName))
         for (const name of await readDirectoryNames(layout.journalSegments)) {
           const loaded = await readJournalRecord(path.join(layout.journalSegments, name))
@@ -1637,7 +1637,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
     validateDigest(frameDigest, "Frame digest")
     const documents = path.join(this.collaborationDirectory, "documents")
     let found = false
-    for (const documentName of await readDirectoryNames(documents)) {
+    for (const documentName of await readDocumentDirectoryNames(documents)) {
       const layout = this.layoutFromDirectory(path.join(documents, documentName))
       const framePath = path.join(layout.frames, `${deriveObjectNativeKey("frame", frameDigest)}.bin`)
       if (!(await fileExists(framePath))) continue
@@ -2203,7 +2203,7 @@ export class NodeCollaborationPersistence implements CollaborationPersistencePor
   private async buildOperationRecoveryIndex(): Promise<void> {
     const index = new Map<string, Map<Digest, IndexedOperationFrame>>()
     const documents = path.join(this.collaborationDirectory, "documents")
-    for (const documentName of await readDirectoryNames(documents)) {
+    for (const documentName of await readDocumentDirectoryNames(documents)) {
       const layout = this.layoutFromDirectory(path.join(documents, documentName))
       for (const operationDirectoryName of await readDirectoryNames(layout.operationRefs)) {
         const operationDirectory = path.join(layout.operationRefs, operationDirectoryName)
@@ -3286,6 +3286,23 @@ async function assertMissing(target: string): Promise<void> {
 async function readDirectoryNames(directory: string): Promise<readonly string[]> {
   try {
     return (await fs.readdir(directory)).sort()
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return []
+    throw error
+  }
+}
+
+async function readDocumentDirectoryNames(documentsDirectory: string): Promise<readonly string[]> {
+  try {
+    const names: string[] = []
+    for (const entry of await fs.readdir(documentsDirectory, { withFileTypes: true })) {
+      if (entry.name === ".DS_Store" && entry.isFile()) continue
+      if (!entry.isDirectory() || !/^[0-9a-f]{64}$/.test(entry.name)) {
+        corrupt("Private collaboration document inventory contains an invalid entry")
+      }
+      names.push(entry.name)
+    }
+    return names.sort()
   } catch (error) {
     if (isNodeError(error) && error.code === "ENOENT") return []
     throw error

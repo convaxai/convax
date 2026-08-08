@@ -39,6 +39,45 @@ describe("NodeProjectManager registry", () => {
     expect(registry.projects[0]).not.toHaveProperty("activeCanvasId")
   })
 
+  test("restores missing private storage for the same registered Project without touching ordinary files", async () => {
+    await fs.writeFile(path.join(projectRoot, "keep.md"), "ordinary project data")
+    await fs.rm(path.join(projectRoot, ".convax"), { force: true, recursive: true })
+
+    const touched = await manager.touchProject(projectId)
+
+    expect(touched.id).toBe(projectId)
+    expect(JSON.parse(await fs.readFile(path.join(projectRoot, ".convax", "project.json"), "utf8"))).toEqual({
+      projectId,
+      schemaVersion: "convax.project/1",
+    })
+    expect(await fs.stat(path.join(projectRoot, ".convax", "assets")).then((stat) => stat.isDirectory())).toBe(true)
+    expect(await fs.readFile(path.join(projectRoot, "keep.md"), "utf8")).toBe("ordinary project data")
+  })
+
+  test("repairs private storage only for the canonical durable registry binding", async () => {
+    const otherRoot = path.join(temporaryRoot, "other-workspace")
+    await fs.mkdir(otherRoot)
+    await fs.rm(path.join(projectRoot, ".convax"), { force: true, recursive: true })
+
+    await expect(
+      manager.ensureRegisteredProjectPrivateStorage({ projectId, projectRoot: otherRoot }),
+    ).rejects.toThrow("differs from its durable registry binding")
+    await expect(fs.access(path.join(projectRoot, ".convax"))).rejects.toThrow()
+    await expect(fs.access(path.join(otherRoot, ".convax"))).rejects.toThrow()
+  })
+
+  test("rejects a replaced manifest while touching a registered Project", async () => {
+    const registryFile = path.join(temporaryRoot, "state", "projects.json")
+    const registryBefore = await fs.readFile(registryFile)
+    await fs.writeFile(
+      path.join(projectRoot, ".convax", "project.json"),
+      JSON.stringify({ projectId: "project_replaced", schemaVersion: "convax.project/1" }),
+    )
+
+    await expect(manager.touchProject(projectId)).rejects.toThrow("belongs to a different project")
+    expect(await fs.readFile(registryFile)).toEqual(registryBefore)
+  })
+
   test("rejects a symlinked private storage root without writing outside the project", async () => {
     const unsafeRoot = path.join(temporaryRoot, "unsafe-project")
     const outsideRoot = path.join(temporaryRoot, "outside-private-storage")
