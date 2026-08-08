@@ -1,0 +1,67 @@
+name: Feature request
+description: Propose an improvement to Convax
+title: "[Feature]: "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem before proposing an implementation. This helps us evaluate alternatives without locking the issue to one solution too early.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      description: Select the area most closely related to the request.
+      options:
+        - Desktop application
+        - Canvas
+        - Projects and files
+        - Plugins and Marketplace
+        - Collaboration and sync
+        - Agent
+        - Web and documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to accomplish, and what prevents you from doing it today?
+      placeholder: Describe the user need, context, and impact.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result you want, without requiring a specific implementation.
+      placeholder: Convax should allow users to ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or other approaches you considered.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add mockups, examples, related issues, or other supporting material.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues for similar requests.
+          required: true
+        - label: This request describes a user problem, not only a preferred implementation.
+          required: true
