@@ -5,7 +5,9 @@ import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
 import type { ProjectController, ProjectControllerSnapshot } from "./controller"
+import { fitProjectFilename } from "./project-filename"
 import { ProjectSidebar } from "./project-sidebar"
+import { captureProjectVideoThumbnail, type ProjectFilePreviewHandle } from "./project-sidebar-items"
 
 const emptySnapshot: ProjectControllerSnapshot = {
   activeProjectId: null,
@@ -193,6 +195,89 @@ describe("ProjectSidebar", () => {
     expect(markup).not.toContain('data-project-header-path="/project"')
     expect(markup).not.toContain("Application settings")
     expect(markup).not.toContain("Should not be embedded")
+  })
+
+  test("renders a single contiguous filename label that can be measured for middle ellipsis", async () => {
+    const filename = "generated-84ad9857-8490-4faf-891f-f9bda25a8551.jpg"
+    const directoryName = "a-very-long-directory-name-that-keeps-end-ellipsis"
+    const snapshot: ProjectFilesControllerSnapshot = {
+      ...activeFilesSnapshot,
+      listings: {
+        "": {
+          entries: [
+            {
+              kind: "directory",
+              modifiedAt: 1,
+              name: directoryName,
+              parentPath: "",
+              path: directoryName,
+              size: 0,
+            },
+            {
+              kind: "file",
+              modifiedAt: 2,
+              name: filename,
+              parentPath: "",
+              path: filename,
+              size: 128,
+            },
+          ],
+          path: "",
+          projectId: "project-1",
+        },
+      },
+    }
+    const markup = renderToStaticMarkup(
+      <ProjectSidebar
+        controller={
+          {
+            getSnapshot: () => activeSnapshot,
+            subscribe: () => () => undefined,
+          } as unknown as ProjectController
+        }
+        filesController={
+          {
+            getSnapshot: () => snapshot,
+            subscribe: () => () => undefined,
+          } as unknown as ProjectFilesController
+        }
+        presentation="workspace"
+      />,
+    )
+    const testWindow = new Window({ url: "https://convax.test/" })
+    try {
+      testWindow.document.body.innerHTML = markup
+      const fileRow = testWindow.document.querySelector(`[data-project-entry-path="${filename}"]`)
+      const displayName = fileRow?.querySelector("[data-project-filename]") as HTMLElement | null | undefined
+      const visibleName = displayName?.querySelector("[data-project-filename-visible]") as
+        | HTMLElement
+        | null
+        | undefined
+
+      expect(displayName?.getAttribute("aria-label")).toBe(filename)
+      expect(displayName?.getAttribute("title")).toBe(filename)
+      expect(visibleName?.textContent).toBe(filename)
+      expect(displayName?.querySelectorAll("[data-project-filename-visible]")).toHaveLength(1)
+      expect(
+        testWindow.document
+          .querySelector(`[data-project-entry-path="${directoryName}"]`)
+          ?.querySelector("[data-project-filename]"),
+      ).toBeNull()
+    } finally {
+      await testWindow.happyDOM.close()
+    }
+  })
+
+  test("keeps the complete filename when it fits and otherwise removes only the middle", () => {
+    const filename = "generated-84ad9857-8490-4faf-891f-f9bda25a8551.jpg"
+    const measureText = (value: string) => value.length * 10
+
+    expect(fitProjectFilename(filename, measureText(filename), measureText)).toBe(filename)
+    const compactName = fitProjectFilename(filename, 240, measureText)
+    expect(compactName.startsWith("gene")).toBe(true)
+    expect(compactName).toContain("…")
+    expect(compactName.endsWith("5a8551.jpg")).toBe(true)
+    expect(measureText(compactName)).toBeLessThanOrEqual(240)
   })
 
   test("does not expose a stale file projection after the active Project changes", () => {
@@ -397,7 +482,41 @@ describe("ProjectSidebar", () => {
     const selectEntry = mock(() => undefined)
     const openEntry = mock(async () => undefined)
     const onFileActivate = mock(() => undefined)
-    const resolveFileUrl = mock(async () => "data:image/png;base64,cHJldmlldw==")
+    const resolveFileThumbnailUrl = mock(async ({ path }: { path: string }) =>
+      path.endsWith(".png") ? "data:image/png;base64,cHJldmlldw==" : null,
+    )
+    const releasePreview = mock(async () => undefined)
+    const openFilePreview = mock(async ({ path }: { path: string; projectId: string; purpose: string }) => ({
+      release: releasePreview,
+      url: `convax-project-preview://lease/stream?path=${encodeURIComponent(path)}`,
+    }))
+    const originalCreateElement = document.createElement.bind(document)
+    const drawImage = mock(() => undefined)
+    Object.defineProperty(document, "createElement", {
+      configurable: true,
+      value: (name: string, options?: ElementCreationOptions) => {
+        if (name === "canvas") {
+          return {
+            getContext: () => ({ drawImage }),
+            height: 0,
+            toDataURL: () => "data:image/jpeg;base64,bW91bnQtY292ZXI=",
+            width: 0,
+          } as unknown as HTMLCanvasElement
+        }
+        const element = originalCreateElement(name, options)
+        if (name === "video") {
+          Object.defineProperties(element, {
+            load: {
+              configurable: true,
+              value: () => queueMicrotask(() => element.dispatchEvent(new Event("loadeddata"))),
+            },
+            videoHeight: { configurable: true, value: 720 },
+            videoWidth: { configurable: true, value: 1_280 },
+          })
+        }
+        return element
+      },
+    })
     const filesSnapshot: ProjectFilesControllerSnapshot = {
       ...activeFilesSnapshot,
       listings: {
@@ -429,8 +548,9 @@ describe("ProjectSidebar", () => {
               } as unknown as ProjectFilesController
             }
             onFileActivate={onFileActivate}
+            openFilePreview={openFilePreview}
             presentation="workspace"
-            resolveFileUrl={resolveFileUrl}
+            resolveFileThumbnailUrl={resolveFileThumbnailUrl}
           />,
         ),
       )
@@ -447,24 +567,75 @@ describe("ProjectSidebar", () => {
       const row = container.querySelector<HTMLElement>('[data-project-entry-path="Media/reference.png"]')!
       const thumbnail = row.querySelector<HTMLImageElement>("img")
       expect(thumbnail?.src).toBe("data:image/png;base64,cHJldmlldw==")
-      expect(resolveFileUrl).toHaveBeenCalledTimes(1)
+      expect(resolveFileThumbnailUrl).toHaveBeenCalledTimes(1)
       expect(
-        container.querySelector<HTMLElement>('[data-project-entry-path="Media/source.mp4"]')?.querySelector("video"),
-      ).toBeNull()
+        container.querySelector<HTMLElement>('[data-project-entry-path="Media/source.mp4"]')?.querySelector("img")?.src,
+      ).toBe("data:image/jpeg;base64,bW91bnQtY292ZXI=")
+      expect(drawImage).toHaveBeenCalledTimes(1)
+      expect(openFilePreview).toHaveBeenCalledWith({
+        path: "Media/source.mp4",
+        projectId: "project-1",
+        purpose: "thumbnail",
+      })
+      expect(releasePreview).toHaveBeenCalledTimes(1)
 
       await act(async () => row.click())
       expect(selectEntry).toHaveBeenCalledWith("Media/reference.png", { range: false, toggle: false })
       expect(onFileActivate).toHaveBeenCalledWith({ entry: imageEntry, projectId: "project-1" })
 
+      const videoRow = container.querySelector<HTMLElement>('[data-project-entry-path="Media/source.mp4"]')!
       await act(async () => {
-        row.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))
+        videoRow.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))
         await Bun.sleep(140)
+        await Promise.resolve()
       })
-      expect(document.querySelector('[data-project-file-preview="Media/reference.png"]')).not.toBeNull()
+      const videoPreview = document.querySelector<HTMLElement>('[data-project-file-preview="Media/source.mp4"]')
+      const video = videoPreview?.querySelector("video")
+      expect(video?.src).toContain("convax-project-preview://lease/stream")
+      expect(video?.crossOrigin).toBe("anonymous")
+      expect(openFilePreview).toHaveBeenCalledWith({
+        path: "Media/source.mp4",
+        projectId: "project-1",
+        purpose: "preview",
+      })
+
+      await act(async () => {
+        videoRow.dispatchEvent(new MouseEvent("mouseout", { bubbles: true }))
+        await Bun.sleep(110)
+      })
+      expect(document.querySelector('[data-project-file-preview="Media/source.mp4"]')).toBeNull()
+      expect(releasePreview).toHaveBeenCalledTimes(2)
     } finally {
+      Object.defineProperty(document, "createElement", { configurable: true, value: originalCreateElement })
       if (root) await act(async () => root?.unmount())
       container.remove()
       await restoreWindow()
     }
+  })
+
+  test("releases a video-thumbnail lease when its row is canceled during open", async () => {
+    let resolveOpen!: (handle: ProjectFilePreviewHandle) => void
+    const opened = new Promise<ProjectFilePreviewHandle>((resolve) => {
+      resolveOpen = resolve
+    })
+    const release = mock(async () => undefined)
+    const openPreview = mock(() => opened)
+    const abortController = new AbortController()
+    const thumbnail = captureProjectVideoThumbnail(
+      { path: "Media/canceled.mp4", projectId: "project-1" },
+      openPreview,
+      abortController.signal,
+    )
+
+    abortController.abort()
+    resolveOpen({ release, url: "convax-project-preview://lease/stream" })
+
+    await expect(thumbnail).rejects.toMatchObject({ name: "AbortError" })
+    expect(openPreview).toHaveBeenCalledWith({
+      path: "Media/canceled.mp4",
+      projectId: "project-1",
+      purpose: "thumbnail",
+    })
+    expect(release).toHaveBeenCalledTimes(1)
   })
 })

@@ -40,10 +40,27 @@ import {
   Trash2,
   X,
 } from "lucide-react"
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type ReactNode } from "react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type DragEvent,
+  type ReactNode,
+} from "react"
 import type { ProjectRecord } from "./contracts"
 import type { ProjectController } from "./controller"
-import { EntryIcon, FilePreviewPortal, InlineInput, getFilePreviewKind } from "./project-sidebar-items"
+import { fitProjectFilename } from "./project-filename"
+import {
+  EntryIcon,
+  FilePreviewPortal,
+  InlineInput,
+  captureProjectVideoThumbnail,
+  getFilePreviewKind,
+  type ProjectFilePreviewOpener,
+} from "./project-sidebar-items"
 import { bindProjectSwitcherDismissal } from "./project-switcher-dismissal"
 
 export interface ProjectSidebarProps {
@@ -63,9 +80,10 @@ export interface ProjectSidebarProps {
   footerActions?: ReactNode
   headerActions?: ReactNode
   hideWhenNoProject?: boolean
+  openFilePreview?: ProjectFilePreviewOpener
   onFileActivate?: (input: { entry: ProjectEntry; projectId: string }) => void
   presentation?: "sidebar" | "embedded-files" | "workspace" | "workspace-tabs"
-  resolveFileUrl?: (input: { path: string; projectId: string }) => Promise<string> | string
+  resolveFileThumbnailUrl?: (input: { path: string; projectId: string }) => Promise<string | null> | string | null
   searchLabel?: string
 }
 
@@ -79,10 +97,9 @@ const defaultSectionSplitRatio = 0.5
 const minimumSectionSplitRatio = 0.1
 const minimumExpandedSectionSize = 112
 const sectionSplitterSize = 6
-const maximumInlineFilePreviewBytes = 8 * 1024 * 1024
-const maximumFilePreviewCacheCharacters = 24 * 1024 * 1024
+const maximumFileThumbnailCacheCharacters = 4 * 1024 * 1024
 const maximumFilePreviewCacheEntries = 64
-const filePreviewUrlCache = new Map<string, string>()
+const fileThumbnailUrlCache = new Map<string, string>()
 const emptyProjectFilesSnapshot: ProjectFilesControllerSnapshot = {
   error: null,
   expandedPaths: [],
@@ -100,9 +117,10 @@ export function ProjectSidebar({
   footerActions,
   headerActions,
   hideWhenNoProject = false,
+  openFilePreview,
   onFileActivate,
   presentation = "sidebar",
-  resolveFileUrl,
+  resolveFileThumbnailUrl,
   searchLabel = "Search project",
 }: ProjectSidebarProps) {
   const projectSnapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
@@ -605,7 +623,8 @@ export function ProjectSidebar({
                             setEditor({ kind: "rename", name: target.name, path: target.path })
                           }
                           previewDisabled={Boolean(editor) || treeDragActive}
-                          resolveFileUrl={resolveFileUrl}
+                          openFilePreview={openFilePreview}
+                          resolveFileThumbnailUrl={resolveFileThumbnailUrl}
                           shouldSuppressClick={() => suppressClickAfterDragRef.current}
                           snapshot={filesSnapshot}
                           workspaceStyle={workspaceTabs}
@@ -1052,6 +1071,64 @@ function ProjectEntryAddMenu({ onAddFile, onAddFolder }: { onAddFile: () => void
   )
 }
 
+function ProjectTreeEntryName(props: { directory: boolean; name: string }) {
+  if (props.directory) return <span className="min-w-0 flex-1 truncate px-1.5">{props.name}</span>
+  return <ProjectFileEntryName name={props.name} />
+}
+
+function ProjectFileEntryName(props: { name: string }) {
+  const containerRef = useRef<HTMLSpanElement | null>(null)
+  const measureRef = useRef<HTMLSpanElement | null>(null)
+  const [displayName, setDisplayName] = useState(props.name)
+
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const measurer = measureRef.current
+    if (!container || !measurer) return
+
+    const updateDisplayName = () => {
+      const style = window.getComputedStyle(container)
+      const horizontalPadding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight)
+      const availableWidth = Math.max(0, container.clientWidth - horizontalPadding)
+      const measureText = (value: string) => {
+        measurer.textContent = value
+        return measurer.getBoundingClientRect().width
+      }
+      const nextDisplayName = fitProjectFilename(props.name, availableWidth, measureText)
+      setDisplayName((current) => (current === nextDisplayName ? current : nextDisplayName))
+    }
+
+    updateDisplayName()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateDisplayName)
+      return () => window.removeEventListener("resize", updateDisplayName)
+    }
+    const observer = new ResizeObserver(updateDisplayName)
+    observer.observe(container)
+    return () => observer.disconnect()
+  }, [props.name])
+
+  return (
+    <span
+      aria-label={props.name}
+      className="relative min-w-0 flex-1 overflow-hidden px-1.5"
+      data-project-filename
+      ref={containerRef}
+      title={props.name}
+    >
+      <span aria-hidden="true" className="block truncate" data-project-filename-visible>
+        {displayName}
+      </span>
+      <span
+        aria-hidden="true"
+        className="invisible absolute left-0 top-0 whitespace-nowrap"
+        data-project-filename-measurer
+        ref={measureRef}
+      />
+    </span>
+  )
+}
+
 function ProjectTreeNode(props: {
   controller: ProjectFilesController
   dropTargetPath: string | null
@@ -1070,10 +1147,11 @@ function ProjectTreeNode(props: {
   onDragStart: () => void
   onDrop: (event: DragEvent<HTMLElement>, destinationPath: string) => Promise<void>
   onFileActivate?: (input: { entry: ProjectEntry; projectId: string }) => void
+  openFilePreview?: ProjectFilePreviewOpener
   onRequestDelete: (path: string) => void
   onStartRename: (entry: ProjectEntry) => void
   previewDisabled: boolean
-  resolveFileUrl?: (input: { path: string; projectId: string }) => Promise<string> | string
+  resolveFileThumbnailUrl?: (input: { path: string; projectId: string }) => Promise<string | null> | string | null
   shouldSuppressClick: () => boolean
   snapshot: ProjectFilesControllerSnapshot
   workspaceStyle: boolean
@@ -1093,9 +1171,9 @@ function ProjectTreeNode(props: {
   const previewCacheKey = snapshot.projectId
     ? `${snapshot.projectId}\u0000${entry.path}\u0000${entry.modifiedAt}`
     : null
-  const [previewUrl, setPreviewUrl] = useState<string | null>(() => {
+  const [thumbnailUrl, setThumbnailUrl] = useState<string | null>(() => {
     if (previewKind === "markdown" || previewKind === "text") return ""
-    return previewCacheKey ? (filePreviewUrlCache.get(previewCacheKey) ?? null) : null
+    return previewCacheKey ? (fileThumbnailUrlCache.get(previewCacheKey) ?? null) : null
   })
   const rowRef = useRef<HTMLDivElement | null>(null)
   const previewOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1105,50 +1183,57 @@ function ProjectTreeNode(props: {
 
   useEffect(() => {
     if (!previewKind || !snapshot.projectId || !previewCacheKey) {
-      setPreviewUrl(null)
+      setThumbnailUrl(null)
       return
     }
     if (previewKind === "markdown" || previewKind === "text") {
-      setPreviewUrl("")
+      setThumbnailUrl("")
       return
     }
-    if (entry.size === undefined || entry.size > maximumInlineFilePreviewBytes) {
-      setPreviewUrl(null)
-      return
-    }
-    const cached = filePreviewUrlCache.get(previewCacheKey)
+    const cached = fileThumbnailUrlCache.get(previewCacheKey)
     if (cached) {
-      setPreviewUrl(cached)
+      setThumbnailUrl(cached)
       return
     }
-    if (!props.resolveFileUrl) {
-      setPreviewUrl(null)
+    if (previewKind !== "video" && !props.resolveFileThumbnailUrl) {
+      setThumbnailUrl(null)
       return
     }
-    let stale = false
-    setPreviewUrl(null)
+    if (previewKind === "video" && !props.openFilePreview) {
+      setThumbnailUrl(null)
+      return
+    }
+    const abortController = new AbortController()
+    setThumbnailUrl(null)
     void Promise.resolve()
-      .then(() => props.resolveFileUrl?.({ path: entry.path, projectId: snapshot.projectId! }))
+      .then(() =>
+        previewKind === "video"
+          ? captureProjectVideoThumbnail(
+              { path: entry.path, projectId: snapshot.projectId! },
+              props.openFilePreview!,
+              abortController.signal,
+            )
+          : props.resolveFileThumbnailUrl?.({ path: entry.path, projectId: snapshot.projectId! }),
+      )
       .then((url) => {
-        if (stale || !url) return
-        filePreviewUrlCache.set(previewCacheKey, url)
-        while (
-          filePreviewUrlCache.size > maximumFilePreviewCacheEntries ||
-          filePreviewUrlCacheCharacters() > maximumFilePreviewCacheCharacters
-        ) {
-          const oldestKey = filePreviewUrlCache.keys().next().value
-          if (typeof oldestKey !== "string") break
-          filePreviewUrlCache.delete(oldestKey)
-        }
-        setPreviewUrl(url)
+        if (abortController.signal.aborted || !url) return
+        cacheFileThumbnail(previewCacheKey, url)
+        setThumbnailUrl(url)
       })
       .catch(() => {
-        if (!stale) setPreviewUrl(null)
+        if (!abortController.signal.aborted) setThumbnailUrl(null)
       })
     return () => {
-      stale = true
+      abortController.abort()
     }
-  }, [entry.path, entry.size, previewCacheKey, previewKind, props.resolveFileUrl, snapshot.projectId])
+  }, [
+    entry.path,
+    previewCacheKey,
+    previewKind,
+    props.openFilePreview,
+    props.resolveFileThumbnailUrl,
+    snapshot.projectId,
+  ])
 
   const clearPreviewTimer = (timerRef: typeof previewOpenTimerRef) => {
     if (!timerRef.current) return
@@ -1158,7 +1243,12 @@ function ProjectTreeNode(props: {
   const cancelPreviewClose = () => clearPreviewTimer(previewCloseTimerRef)
   const schedulePreviewOpen = () => {
     cancelPreviewClose()
-    if (!previewKind || previewUrl === null || props.previewDisabled) return
+    if (
+      !previewKind ||
+      props.previewDisabled ||
+      ((previewKind === "image" || previewKind === "video" || previewKind === "audio") && !props.openFilePreview)
+    )
+      return
     clearPreviewTimer(previewOpenTimerRef)
     previewOpenTimerRef.current = setTimeout(() => {
       previewOpenTimerRef.current = null
@@ -1292,7 +1382,7 @@ function ProjectTreeNode(props: {
       ) : (
         <span className="size-6 shrink-0" />
       )}
-      <EntryIcon entry={entry} expanded={expanded} previewKind={previewKind} previewUrl={previewUrl} />
+      <EntryIcon entry={entry} expanded={expanded} previewKind={previewKind} previewUrl={thumbnailUrl} />
       {editing ? (
         <InlineInput
           label={`Rename ${entry.name}`}
@@ -1302,7 +1392,7 @@ function ProjectTreeNode(props: {
           value={props.editor?.name ?? ""}
         />
       ) : (
-        <span className="min-w-0 flex-1 truncate px-1.5">{entry.name}</span>
+        <ProjectTreeEntryName directory={directory} name={entry.name} />
       )}
       {!editing ? (
         props.workspaceStyle ? (
@@ -1402,16 +1492,16 @@ function ProjectTreeNode(props: {
           </div>
         ) : null}
       </ContextMenu>
-      {previewOpen && previewKind && previewUrl !== null && snapshot.projectId ? (
+      {previewOpen && previewKind && snapshot.projectId ? (
         <FilePreviewPortal
           controller={props.controller}
           entry={entry}
           kind={previewKind}
           onMouseEnter={cancelPreviewClose}
           onMouseLeave={schedulePreviewClose}
+          openPreview={props.openFilePreview}
           position={previewPosition}
           projectId={snapshot.projectId}
-          url={previewUrl}
         />
       ) : null}
     </>
@@ -1473,10 +1563,23 @@ function TreeStateRow({
   )
 }
 
-function filePreviewUrlCacheCharacters() {
+function fileThumbnailUrlCacheCharacters() {
   let characters = 0
-  for (const url of filePreviewUrlCache.values()) characters += url.length
+  for (const url of fileThumbnailUrlCache.values()) characters += url.length
   return characters
+}
+
+function cacheFileThumbnail(key: string, url: string) {
+  if (!url.startsWith("data:image/") || url.length > 256 * 1024) return
+  fileThumbnailUrlCache.set(key, url)
+  while (
+    fileThumbnailUrlCache.size > maximumFilePreviewCacheEntries ||
+    fileThumbnailUrlCacheCharacters() > maximumFileThumbnailCacheCharacters
+  ) {
+    const oldestKey = fileThumbnailUrlCache.keys().next().value
+    if (typeof oldestKey !== "string") break
+    fileThumbnailUrlCache.delete(oldestKey)
+  }
 }
 
 function ProjectNameInput(props: {

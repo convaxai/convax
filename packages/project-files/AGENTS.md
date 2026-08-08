@@ -14,6 +14,11 @@ This package owns the renderer-safe, Project-scoped file capability.
   infer correspondence from a basename or array search.
 - Directory listings, expansion/loading state, preview/selection state, file CRUD,
   import/copy/move/open/reveal clients and controller behavior.
+- Separate renderer-safe media presentation contracts: bounded thumbnail results
+  and purpose-tagged opaque sender-scoped media leases. A video-cover lease is
+  short-lived and independent from the delayed full-preview lease. Full media bytes
+  and native paths never cross this contract; Desktop Main owns range streaming,
+  caps, and lease revocation.
 - Serializable drag payloads that retain Project scope.
 - Stale-request and filesystem-change reconciliation in the controller.
 

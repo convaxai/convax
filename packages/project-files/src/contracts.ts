@@ -60,6 +60,17 @@ export interface ProjectTextPreviewContents {
   truncated: boolean
 }
 
+export interface ProjectFilePreviewLease {
+  leaseId: string
+  url: string
+}
+
+export type ProjectFilePreviewPurpose = "preview" | "thumbnail"
+
+export interface ProjectFileThumbnail {
+  dataUrl: string | null
+}
+
 export interface ProjectTextFileCompareAndReplaceInput {
   content: string
   expectedRevision: string
@@ -94,6 +105,7 @@ export interface ProjectChangeEvent {
 }
 
 export interface ProjectFilesClient {
+  closeFilePreview(input: { leaseId: string }): Promise<boolean>
   copyEntries(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult>
   createEntry(input: {
     content?: string
@@ -113,8 +125,14 @@ export interface ProjectFilesClient {
   moveEntries(input: { destinationPath?: string; paths: string[]; projectId: string }): Promise<ProjectMutationResult>
   onDidChange(listener: (event: ProjectChangeEvent) => void): () => void
   openEntry(input: { path: string; projectId: string }): Promise<{ error?: string }>
+  openFilePreview(input: {
+    path: string
+    projectId: string
+    purpose?: ProjectFilePreviewPurpose
+  }): Promise<ProjectFilePreviewLease>
   readFile(input: { path: string; projectId: string }): Promise<ProjectFileContents>
   readFileInfo(input: { path: string; projectId: string }): Promise<ProjectFileInfo>
+  readFileThumbnail(input: { path: string; projectId: string }): Promise<ProjectFileThumbnail>
   readTextPreview(input: { path: string; projectId: string }): Promise<ProjectTextPreviewContents>
   readTextFile(input: { path: string; projectId: string }): Promise<ProjectTextFileContents>
   renameEntry(input: { name: string; path: string; projectId: string }): Promise<ProjectMutationResult>

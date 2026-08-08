@@ -24,6 +24,10 @@ between trusted Main and untrusted Renderer code. It owns no business state.
   renderer-safe projection, not authority. Main revalidates the real request.
 - Keep Project and Canvas references portable and scoped. Never translate them into
   native paths in Preload.
+- Keep bounded Project file thumbnail results separate from purpose-tagged opaque
+  media leases. Video-cover leases and full-preview leases carry only Project scope,
+  purpose, or an opaque lease id; media bytes remain on Main's range protocol rather
+  than crossing IPC.
 - Translate cancellable operations into explicit cloneable start/cancel messages.
   Do not treat the opaque operation id as authority or expose a Main `AbortSignal`.
 - Keep adapters stateless apart from listener registration and deterministic

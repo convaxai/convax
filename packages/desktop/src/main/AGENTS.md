@@ -221,6 +221,12 @@ For any matching change, read the full routed reference before planning or editi
   sessions, and staged state deterministically.
 - For incompatible bridge changes, update Main, Preload, Renderer,
   `desktopProtocolVersion`, and compatibility tests together.
+- Project file-tree previews use their own sender-scoped opaque lease protocol.
+  Resolve a Project-relative path to one stable regular-file identity before minting
+  the URL, serve GET/HEAD byte ranges only, and abort open streams on close,
+  replacement, navigation, renderer loss, or disposal. Keep thumbnail-purpose
+  leases bounded and independent from the one replaceable hover-preview lease.
+  Thumbnail IPC is bounded and never substitutes a complete media data URL.
 
 ## Validation
 

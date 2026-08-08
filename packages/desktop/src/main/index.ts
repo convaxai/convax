@@ -134,6 +134,8 @@ import {
 } from "./canvas-external-media-drag-ipc"
 import { createCanvasExternalMediaDragIconFactory } from "./canvas-external-media-drag-icon"
 import { CanvasExternalMediaDragService } from "./canvas-external-media-drag-service"
+import { ProjectFilePreviewService } from "./project-file-preview-service"
+import { projectFilePreviewPrivileges, projectFilePreviewScheme } from "../project-file-preview-contracts"
 import { createCanvasRendererBridge } from "./canvas-renderer-bridge"
 import { CanvasDocumentChangeBus } from "./canvas-document-change-bus"
 import { registerDesktopProtocolIpc } from "./desktop-protocol-ipc"
@@ -550,6 +552,7 @@ function activateMainWindow() {
 function createWindow(
   projectManager: NodeProjectManager,
   projectAssetGcScheduler: Pick<ProjectAssetGcScheduler, "closeAll">,
+  projectFilePreviews: Pick<ProjectFilePreviewService, "revokeOwner">,
 ) {
   const window = new BrowserWindow({
     title: applicationName,
@@ -587,6 +590,7 @@ function createWindow(
   window.once("closed", () => {
     disposePluginFrameBindings()
     trustedWebContents.delete(webContentsId)
+    projectFilePreviews.revokeOwner(webContentsId)
     if (mainWindow === window) mainWindow = null
     projectAssetGcScheduler.closeAll()
   })
@@ -599,13 +603,17 @@ function createWindow(
   window.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
     if (isMainFrame) {
       restoreNativeMainWindowControls()
-      if (!isInPlace) pluginFrameBindings.clear(window.webContents)
+      if (!isInPlace) {
+        pluginFrameBindings.clear(window.webContents)
+        projectFilePreviews.revokeOwner(webContentsId)
+      }
       return
     }
     pluginFrameBindings.retireUnavailable(window.webContents)
   })
   window.webContents.on("render-process-gone", () => {
     restoreNativeMainWindowControls()
+    projectFilePreviews.revokeOwner(webContentsId)
     pluginFrameBindings.clear(window.webContents)
   })
   window.webContents.on("will-navigate", (event, url) => {
@@ -699,6 +707,7 @@ function startApplication() {
     },
     { scheme: webPluginAssetScheme, privileges: webPluginAssetPrivileges },
     { scheme: pluginConnectedMediaScheme, privileges: pluginConnectedMediaPrivileges },
+    { scheme: projectFilePreviewScheme, privileges: projectFilePreviewPrivileges },
     { scheme: petAssetScheme, privileges: petAssetPrivileges },
   ])
   app.on("second-instance", activateMainWindow)
@@ -718,6 +727,13 @@ function startApplication() {
     const projectManager = new NodeProjectManager({
       registryFile: join(userDataDirectory, "projects.json"),
       trash: (targetPath: string) => shell.trashItem(targetPath),
+    })
+    const projectFilePreviews = new ProjectFilePreviewService({
+      images: {
+        createFromPath: (file) => nativeImage.createFromPath(file),
+      },
+      projects: projectManager,
+      trustedRendererUrl,
     })
     const collaborationProtocolRoot = app.isPackaged
       ? join(process.resourcesPath, "collaboration-protocol")
@@ -1642,7 +1658,7 @@ function startApplication() {
       async openMainWindow() {
         return mainWindow && !mainWindow.isDestroyed()
           ? mainWindow
-          : createWindow(projectManager, projectAssetGcScheduler)
+          : createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
       },
       async pickCustomPetSource() {
         const options: OpenDialogOptions = {
@@ -2322,6 +2338,11 @@ function startApplication() {
     const disposeWorkspaceSystemStatusIpc = registerWorkspaceSystemStatusIpc(ipcSecurity.isTrustedSender)
     const disposeProjectIpc = await registerProjectIpc(projectManager, {
       ...ipcSecurity,
+      filePreviews: {
+        close: (input, ownerId) => projectFilePreviews.close(input, ownerId),
+        open: (input, ownerId) => projectFilePreviews.open(input, ownerId),
+        thumbnail: (input) => projectFilePreviews.thumbnail(input),
+      },
       projectCreationDirectory,
       projectIndexFiles: collaborationFacade.projectIndexes,
       async onForgot(projectId) {
@@ -2635,6 +2656,7 @@ function startApplication() {
       }),
     )
     protocol.handle(pluginConnectedMediaScheme, (request) => pluginConnectedMedia.handle(request))
+    protocol.handle(projectFilePreviewScheme, (request) => projectFilePreviews.handle(request))
     protocol.handle(petAssetScheme, createPetAssetHandler(customPets, fetchPetAsset))
     protocol.handle("convax-asset", async (request) => {
       try {
@@ -2667,6 +2689,7 @@ function startApplication() {
         () => protocol.unhandle(petAssetScheme),
         () => protocol.unhandle(webPluginAssetScheme),
         () => protocol.unhandle(pluginConnectedMediaScheme),
+        () => protocol.unhandle(projectFilePreviewScheme),
         disposeMainWindowControlsIpc,
         disposeDesktopProtocolIpc,
         disposeMarketplaceIpc,
@@ -2700,6 +2723,7 @@ function startApplication() {
         () => agentPluginConfigurations.dispose(),
         () => managedMcpRuntimes.close(),
         () => pluginConnectedMedia.dispose(),
+        () => projectFilePreviews.dispose(),
         () => pluginRuntimeSession.dispose(),
         () => canvasProjectionSubscription.close(),
         () => canvasRenderer.dispose(),
@@ -2769,7 +2793,7 @@ function startApplication() {
         })
     })
 
-    createWindow(projectManager, projectAssetGcScheduler)
+    createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
     await recordPackagedSmokeStartup("window-created")
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
@@ -2783,7 +2807,7 @@ function startApplication() {
       app,
       () => mainWindow,
       () => {
-        createWindow(projectManager, projectAssetGcScheduler)
+        createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
       },
     )
   })

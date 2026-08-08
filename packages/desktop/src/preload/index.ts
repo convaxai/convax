@@ -53,6 +53,7 @@ const projectRecoveryChannels = {
 
 const projectFilesChannels = {
   changed: "project-files:changed",
+  closeFilePreview: "project-files:close-file-preview",
   copyEntries: "project-files:copy-entries",
   createEntry: "project-files:create-entry",
   deleteEntries: "project-files:delete-entries",
@@ -60,8 +61,10 @@ const projectFilesChannels = {
   listDirectory: "project-files:list-directory",
   moveEntries: "project-files:move-entries",
   openEntry: "project-files:open-entry",
+  openFilePreview: "project-files:open-file-preview",
   readFile: "project-files:read-file",
   readFileInfo: "project-files:read-file-info",
+  readFileThumbnail: "project-files:read-file-thumbnail",
   readTextPreview: "project-files:read-text-preview",
   readTextFile: "project-files:read-text-file",
   renameEntry: "project-files:rename-entry",
@@ -324,6 +327,7 @@ const projectRecoveryClient = {
 } satisfies ProjectCollaborationRecoveryClient
 
 const projectFilesClient = {
+  closeFilePreview: (input) => ipcRenderer.invoke(projectFilesChannels.closeFilePreview, input),
   copyEntries: (input) => ipcRenderer.invoke(projectFilesChannels.copyEntries, input),
   createEntry: (input) => ipcRenderer.invoke(projectFilesChannels.createEntry, input),
   createImportToken,
@@ -342,8 +346,10 @@ const projectFilesClient = {
     return () => ipcRenderer.removeListener(projectFilesChannels.changed, handleChange)
   },
   openEntry: (input) => ipcRenderer.invoke(projectFilesChannels.openEntry, input),
+  openFilePreview: (input) => ipcRenderer.invoke(projectFilesChannels.openFilePreview, input),
   readFile: (input) => ipcRenderer.invoke(projectFilesChannels.readFile, input),
   readFileInfo: (input) => ipcRenderer.invoke(projectFilesChannels.readFileInfo, input),
+  readFileThumbnail: (input) => ipcRenderer.invoke(projectFilesChannels.readFileThumbnail, input),
   readTextPreview: (input) => ipcRenderer.invoke(projectFilesChannels.readTextPreview, input),
   readTextFile: (input) => ipcRenderer.invoke(projectFilesChannels.readTextFile, input),
   renameEntry: (input) => ipcRenderer.invoke(projectFilesChannels.renameEntry, input),
