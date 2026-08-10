@@ -178,6 +178,7 @@ test("selects the first real media model when a media tab is opened", async () =
 test("opens a service before selecting one of its concrete media models", async () => {
   const restoreWindow = installTestWindow()
   const onSelect = mock(() => undefined)
+  const onClose = mock(() => undefined)
   let root: Root | undefined
   try {
     const container = document.createElement("div")
@@ -188,7 +189,7 @@ test("opens a service before selecting one of its concrete media models", async 
         <AgentGenerationModelPicker
           activeTab="image"
           loading={false}
-          onClose={mock(() => undefined)}
+          onClose={onClose}
           onLlmSelect={mock(() => undefined)}
           onOpenServices={mock(() => undefined)}
           onSelect={onSelect}
@@ -240,6 +241,54 @@ test("opens a service before selecting one of its concrete media models", async 
       id: "second/image.generate#model-selection-sha256:abc",
       output: "image",
     })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("closes after selecting a concrete LLM model", async () => {
+  const restoreWindow = installTestWindow()
+  const onClose = mock(() => undefined)
+  const onLlmSelect = mock(() => undefined)
+  let root: Root | undefined
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <AgentGenerationModelPicker
+          activeTab="llm"
+          llmCatalog={{
+            providers: [
+              {
+                connected: true,
+                models: [{ default: true, modelId: "main", modelName: "Main model" }],
+                providerId: "example",
+                providerName: "Example service",
+              },
+            ],
+          }}
+          loading={false}
+          onClose={onClose}
+          onLlmSelect={onLlmSelect}
+          onOpenServices={mock(() => undefined)}
+          onSelect={mock(() => undefined)}
+          onTabChange={mock(() => undefined)}
+          onToolInputChange={mock(() => undefined)}
+          toolInput={{}}
+          tools={[]}
+        />,
+      )
+    })
+
+    const model = document.querySelector<HTMLButtonElement>('button[aria-label="Main model by Example service"]')
+    expect(model).not.toBeNull()
+    await act(async () => model?.click())
+    expect(onLlmSelect).toHaveBeenCalledWith({ modelId: "main", providerId: "example" })
+    expect(onClose).toHaveBeenCalledTimes(1)
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()

@@ -7,7 +7,7 @@ import type {
 } from "../generation-contracts"
 import { Button, SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
 import { LoaderCircle, Settings2 } from "lucide-react"
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useId, useRef } from "react"
 import { createPortal } from "react-dom"
 import {
   agentGenerationOutputs,
@@ -60,6 +60,8 @@ const tabLabels: Record<AgentModelPickerTab, string> = {
   llm: "LLM",
 }
 
+const modelPickerHeight = 448
+
 function OpenServicesPrompt(props: { error?: boolean; message: string; onOpenServices(): void }) {
   return (
     <div className="px-2.5 py-3">
@@ -76,7 +78,6 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
   const instanceId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const pickerSurfaceRef = useRef<HTMLDivElement>(null)
-  const [pickerHeight, setPickerHeight] = useState(0)
   const modelPickerTabs: readonly AgentModelPickerTab[] = ["llm", ...agentGenerationOutputs]
   const tabs = modelPickerTabs.map((tab) => ({
     id: `${instanceId}-agent-generation-model-tab-${tab}`,
@@ -102,7 +103,10 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
         { height: window.innerHeight, width: window.innerWidth },
       )
     : undefined
-  const position = anchor ? positionAgentComposerPicker(anchor, pickerHeight) : undefined
+  const fixedHeight = anchor
+    ? Math.min(modelPickerHeight, Math.max(anchor.aboveSpace, anchor.belowSpace))
+    : modelPickerHeight
+  const position = anchor ? positionAgentComposerPicker(anchor, fixedHeight) : undefined
   const setPickerSurfaceRef = useCallback(
     (element: HTMLDivElement | null) => {
       pickerSurfaceRef.current = element
@@ -111,17 +115,6 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     },
     [props.onElementChange],
   )
-
-  useLayoutEffect(() => {
-    if (!position) return
-    const picker = pickerSurfaceRef.current
-    if (!picker) return
-    const updateHeight = () => setPickerHeight(picker.getBoundingClientRect().height)
-    updateHeight()
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(picker)
-    return () => observer.disconnect()
-  }, [position])
 
   useEffect(() => {
     if (!activeOutput || props.loading || props.error || selectedGenerationModel || !defaultGenerationModel) {
@@ -146,7 +139,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
   const picker = (
     <div
       aria-label="Agent models"
-      className="fixed z-50 overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
+      className="fixed z-50 flex w-[min(22rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
       data-agent-generation-model-picker
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -156,33 +149,35 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       }}
       ref={setPickerSurfaceRef}
       role="dialog"
-      style={
-        position
+      style={{
+        height: fixedHeight,
+        ...(position
           ? {
               left: position.left,
-              maxWidth: "min(22rem, calc(100vw - 1rem))",
               top: position.top,
               transform: position.placement === "above" ? "translateY(-100%)" : undefined,
             }
-          : undefined
-      }
+          : {}),
+      }}
       tabIndex={-1}
     >
-      <div className="mb-2 flex items-center justify-between px-1">
+      <div className="mb-2 flex shrink-0 items-center justify-between px-1">
         <span className="text-sm font-semibold">Agent models</span>
         <span className="text-[10px] text-muted-foreground">
           {props.activeTab === "llm" ? "Agent runtime" : "Generation services"}
         </span>
       </div>
-      <SegmentedTabs
-        aria-label="Model type"
-        items={tabs}
-        onValueChange={(tab) => props.onTabChange(tab)}
-        value={props.activeTab}
-      />
+      <div className="shrink-0">
+        <SegmentedTabs
+          aria-label="Model type"
+          items={tabs}
+          onValueChange={(tab) => props.onTabChange(tab)}
+          value={props.activeTab}
+        />
+      </div>
       <div
         aria-labelledby={activeTab.id}
-        className="mt-2 max-h-64 space-y-0.5 overflow-y-auto"
+        className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto"
         id={activeTab.panelId}
         role="tabpanel"
       >
@@ -214,9 +209,10 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
                 modelAriaLabel={({ model, provider }) => `${model.modelName} by ${provider.providerName}`}
                 modelKey={({ model, provider }) => `${provider.providerId}:${model.modelId}`}
                 modelLabel={({ model }) => model.modelName}
-                onSelect={({ model, provider }) =>
+                onSelect={({ model, provider }) => {
                   props.onLlmSelect({ modelId: model.modelId, providerId: provider.providerId })
-                }
+                  props.onClose()
+                }}
               />
             )}
           </div>
@@ -241,7 +237,10 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
                 modelAriaLabel={(tool) => `${agentGenerationModelDisplayTitle(tool)} by ${tool.pluginName}`}
                 modelKey={(tool) => tool.id}
                 modelLabel={agentGenerationModelDisplayTitle}
-                onSelect={(tool) => props.onSelect({ id: tool.id, output: activeOutput! })}
+                onSelect={(tool) => {
+                  props.onSelect({ id: tool.id, output: activeOutput! })
+                  props.onClose()
+                }}
               />
             )}
           </div>
@@ -251,7 +250,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       props.selected?.output === activeOutput &&
       (props.descriptionError ||
         (props.description?.toolId === props.selected.id && props.description.fields.length > 0)) ? (
-        <div className="mt-2 max-h-52 overflow-y-auto border-t border-border/60 px-1 pt-2">
+        <div className="mt-2 max-h-52 shrink-0 overflow-y-auto border-t border-border/60 px-1 pt-2">
           {props.descriptionError ? (
             <div className="py-2 text-xs text-destructive">{props.descriptionError}</div>
           ) : props.description?.toolId === props.selected.id ? (

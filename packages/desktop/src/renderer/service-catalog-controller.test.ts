@@ -6,6 +6,7 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
+import type { GenerationToolSummary } from "../generation-contracts"
 import {
   ServiceCatalogController,
   serviceCatalogAgentModelsForScope,
@@ -71,6 +72,63 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
+  test("projects the shared dynamic generation catalog into its owning Service", async () => {
+    const listeners = new Set<() => void>()
+    const imageModel = (id: string, name: string): GenerationToolSummary => ({
+      acceptedInputs: ["text"],
+      description: name,
+      id,
+      kind: "model",
+      modelName: name,
+      output: "image",
+      pluginId: "creative-service",
+      pluginName: "Creative Service",
+      title: name,
+      toolId: "generate.image",
+    })
+    let generationSnapshot = {
+      loading: false,
+      ready: true,
+      refreshing: false,
+      scopeId: "project-a",
+      tools: [imageModel("dynamic-image-one", "Dynamic Image One")],
+    }
+    const generationCatalog = {
+      getSnapshot: () => generationSnapshot,
+      refresh: mock(async () => generationSnapshot.tools),
+      subscribe: mock((listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+    }
+    const controller = new ServiceCatalogController(
+      pluginClient(),
+      { listModels: mock(async () => ({ providers: [] })) },
+      { generationCatalog },
+    )
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+
+    expect(controller.getSnapshot().services[1]?.models).toEqual([
+      { capability: "video", id: "seedance", name: "Seedance" },
+      { capability: "image", id: "dynamic-image-one", name: "Dynamic Image One" },
+    ])
+
+    generationSnapshot = {
+      ...generationSnapshot,
+      tools: [imageModel("dynamic-image-two", "Dynamic Image Two")],
+    }
+    for (const listener of listeners) listener()
+    expect(controller.getSnapshot().services[1]?.models).toEqual([
+      { capability: "video", id: "seedance", name: "Seedance" },
+      { capability: "image", id: "dynamic-image-two", name: "Dynamic Image Two" },
+    ])
+
+    controller.dispose()
+    expect(listeners.size).toBe(0)
+  })
+
   test("renders the persisted Agent model catalog while cold-start revalidation is pending", async () => {
     const cachedCatalog = {
       providers: [

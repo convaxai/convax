@@ -298,13 +298,17 @@ function App() {
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
-  const serviceCatalogController = useMemo(
-    () => new ServiceCatalogController(window.convax.pluginServices, window.convax.agent, { storage: localStorage }),
-    [],
-  )
   const generationModelCatalogController = useMemo(
     () => new GenerationModelCatalogController(window.convax.generation, { storage: localStorage }),
     [],
+  )
+  const serviceCatalogController = useMemo(
+    () =>
+      new ServiceCatalogController(window.convax.pluginServices, window.convax.agent, {
+        generationCatalog: generationModelCatalogController,
+        storage: localStorage,
+      }),
+    [generationModelCatalogController],
   )
   const [initialLayoutPreferences] = useState(() =>
     readWorkbenchLayoutPreferences(localStorage, {

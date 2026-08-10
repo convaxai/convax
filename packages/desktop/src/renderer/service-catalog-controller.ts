@@ -1,5 +1,6 @@
 import type { AgentClient, AgentModelCatalog } from "@convax/agent-runtime"
 
+import type { GenerationToolSummary } from "../generation-contracts"
 import type {
   PluginServiceClient,
   PluginServiceState,
@@ -19,6 +20,7 @@ import {
   writeAgentModelCatalogProjection,
   type ModelCatalogProjectionStorage,
 } from "./model-catalog-projection-cache"
+import type { GenerationModelCatalogSnapshot } from "./generation-model-catalog-controller"
 
 export type ServiceBilling =
   | { kind: "credits"; remaining?: number; unit?: string }
@@ -77,6 +79,11 @@ export interface ServiceCatalogSnapshot {
 }
 
 export interface ServiceCatalogControllerOptions {
+  generationCatalog?: {
+    getSnapshot(): GenerationModelCatalogSnapshot
+    refresh(): Promise<readonly GenerationToolSummary[]>
+    subscribe(listener: () => void): () => void
+  }
   storage?: ModelCatalogProjectionStorage
 }
 
@@ -112,7 +119,8 @@ export function serviceGenerationAvailabilityVersion(
 
 function pluginAuthentication(service: PluginServiceViewEntry): ServiceAuthentication {
   if (!service.status) return "unknown"
-  if (service.status.credential.configured) return "authenticated"
+  if (service.status.credential.verification === "verified") return "authenticated"
+  if (service.status.credential.verification === "failed") return "required"
   return service.actions.includes("authorize") || service.actions.includes("reauthorize") ? "required" : "unknown"
 }
 
@@ -134,17 +142,31 @@ function pluginProviderPrefix(pluginId: string) {
 function pluginEntry(
   service: PluginServiceViewEntry,
   catalog?: AgentModelCatalog,
+  generationTools: readonly GenerationToolSummary[] = [],
   stableState?: PluginServiceState,
 ): PluginServiceCatalogEntry {
   const connectedLlmProviders =
     catalog?.providers.filter(
       (provider) => provider.connected && provider.providerId.startsWith(pluginProviderPrefix(service.pluginId)),
     ) ?? []
+  const dynamicGenerationModels = generationTools
+    .filter((tool) => tool.kind === "model" && tool.pluginId === service.pluginId)
+    .map((tool) => ({
+      capability: tool.output,
+      id: tool.id,
+      name: tool.modelName ?? tool.title,
+    }))
+  const dynamicGenerationCapabilities = new Set(dynamicGenerationModels.map((model) => model.capability))
+  const nonLlmModels = [
+    ...service.models.filter(
+      (model) => model.capability !== "llm" && !dynamicGenerationCapabilities.has(model.capability),
+    ),
+    ...dynamicGenerationModels,
+  ]
   const models =
     connectedLlmProviders.length === 0
-      ? service.models
+      ? [...service.models.filter((model) => model.capability === "llm"), ...nonLlmModels]
       : [
-          ...service.models.filter((model) => model.capability !== "llm"),
           ...connectedLlmProviders.flatMap((provider) =>
             provider.models.map((model) => ({
               capability: "llm" as const,
@@ -153,6 +175,7 @@ function pluginEntry(
               name: model.modelName,
             })),
           ),
+          ...nonLlmModels,
         ]
   return {
     actions: service.actions,
@@ -226,6 +249,7 @@ export class ServiceCatalogController {
   #agentRefreshQueued = false
   #agentRequest?: { promise: Promise<AgentModelCatalog | undefined>; scopeId: string }
   #disposed = false
+  #generationSnapshot?: GenerationModelCatalogSnapshot
   #modelGeneration = 0
   #pluginSnapshot: PluginServicesSnapshot
   #scopeId?: string
@@ -233,6 +257,7 @@ export class ServiceCatalogController {
   readonly #stablePluginStates = new Map<string, PluginServiceState>()
   #started = false
   #unsubscribeModelChanges?: () => void
+  #unsubscribeGeneration?: () => void
   #unsubscribePlugins?: () => void
 
   constructor(
@@ -244,6 +269,7 @@ export class ServiceCatalogController {
     this.#pluginSnapshot = this.#plugins.getSnapshot()
     this.#cachedAgentCatalog = readAgentModelCatalogProjection(this.options.storage) ?? undefined
     this.#agentCatalog = this.#cachedAgentCatalog
+    this.#generationSnapshot = this.options.generationCatalog?.getSnapshot()
     this.#snapshot = this.#compose()
   }
 
@@ -265,6 +291,10 @@ export class ServiceCatalogController {
     this.#unsubscribeModelChanges = this.pluginClient.onDidChange(() => {
       this.#refreshModelsAfterInFlight()
     })
+    this.#unsubscribeGeneration = this.options.generationCatalog?.subscribe(() => {
+      this.#generationSnapshot = this.options.generationCatalog?.getSnapshot()
+      this.#publish()
+    })
     this.#plugins.start()
     void this.#refreshModels().catch(() => undefined)
   }
@@ -283,7 +313,11 @@ export class ServiceCatalogController {
 
   async refresh() {
     if (this.#disposed) return
-    await Promise.all([this.#plugins.refresh(), this.#refreshModelsIncludingQueued().catch(() => undefined)])
+    await Promise.all([
+      this.#plugins.refresh(),
+      this.#refreshModelsIncludingQueued().catch(() => undefined),
+      this.options.generationCatalog?.refresh().catch(() => undefined),
+    ])
   }
 
   readonly refreshAgentModels = () => this.#refreshModelsIncludingQueued()
@@ -307,6 +341,8 @@ export class ServiceCatalogController {
     this.#unsubscribePlugins = undefined
     this.#unsubscribeModelChanges?.()
     this.#unsubscribeModelChanges = undefined
+    this.#unsubscribeGeneration?.()
+    this.#unsubscribeGeneration = undefined
     this.#plugins.dispose()
     this.#listeners.clear()
   }
@@ -409,7 +445,12 @@ export class ServiceCatalogController {
       services: [
         openCodeEntry({ catalog: this.#agentCatalog, error: this.#agentError, loading: this.#agentLoading }),
         ...this.#pluginSnapshot.services.map((service) =>
-          pluginEntry(service, this.#agentCatalog, this.#stablePluginStates.get(service.pluginId)),
+          pluginEntry(
+            service,
+            this.#agentCatalog,
+            this.#generationSnapshot?.tools,
+            this.#stablePluginStates.get(service.pluginId),
+          ),
         ),
       ],
     }

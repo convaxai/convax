@@ -38,6 +38,9 @@ describe("Agent generation model picker", () => {
     )
 
     expect(markup).toContain("Agent models")
+    expect(markup).toContain("w-[min(22rem,calc(100vw-1rem))]")
+    expect(markup).toContain("height:448px")
+    expect(markup).toContain("min-h-0 flex-1")
     expect(markup).toContain("Image")
     expect(markup).toContain("Video")
     expect(markup).toContain("Audio")
@@ -157,7 +160,7 @@ describe("Agent generation model picker", () => {
 
     expect(imageIds).toHaveLength(4)
     expect(new Set(imageIds).size).toBe(4)
-    expect(markup.match(/role="dialog" tabindex="-1"/g)).toHaveLength(2)
+    expect(markup.match(/role="dialog"[^>]*tabindex="-1"/g)).toHaveLength(2)
   })
 
   test("reuses the shared host-rendered form for the selected model description", () => {

@@ -49,6 +49,8 @@ export class PluginServicesController {
   #actionEpoch = 0
   #disposed = false
   #generation = 0
+  #refreshQueued = false
+  #refreshRequest?: Promise<void>
   #snapshot: PluginServicesSnapshot
   #unsubscribe?: () => void
 
@@ -88,8 +90,21 @@ export class PluginServicesController {
 
   async refresh() {
     if (this.#disposed) return
+    if (this.#refreshRequest || this.#snapshot.action) {
+      this.#refreshQueued = true
+    } else {
+      this.#startRefresh()
+    }
+    while (this.#refreshRequest) {
+      const request = this.#refreshRequest
+      await request
+      if (request === this.#refreshRequest) await Promise.resolve()
+    }
+  }
+
+  async #runRefresh() {
     const generation = ++this.#generation
-    this.#actionEpoch += 1
+    const actionEpoch = ++this.#actionEpoch
     this.#setSnapshot({ loading: true, services: this.#snapshot.services })
     let services: readonly PluginServiceSummary[]
     try {
@@ -116,7 +131,7 @@ export class PluginServicesController {
     })
     this.#setSnapshot({ loading: false, services: entries })
     this.#writeProjection()
-    await Promise.all(entries.map((entry) => this.#loadStatus(entry, generation)))
+    await Promise.all(entries.map((entry) => this.#loadStatus(entry, generation, actionEpoch)))
   }
 
   async perform(pluginId: string, action: WebPluginServiceAction) {
@@ -166,6 +181,7 @@ export class PluginServicesController {
       if (!this.#disposed && actionEpoch === this.#actionEpoch) {
         const { action: _action, ...snapshot } = this.#snapshot
         this.#setSnapshot(snapshot)
+        this.#startQueuedRefresh()
       }
     }
   }
@@ -200,6 +216,7 @@ export class PluginServicesController {
       if (!this.#disposed && actionEpoch === this.#actionEpoch) {
         const { action: _action, ...snapshot } = this.#snapshot
         this.#setSnapshot(snapshot)
+        this.#startQueuedRefresh()
       }
     }
   }
@@ -209,17 +226,19 @@ export class PluginServicesController {
     this.#disposed = true
     this.#generation += 1
     this.#actionEpoch += 1
+    this.#refreshQueued = false
+    this.#refreshRequest = undefined
     this.#unsubscribe?.()
     this.#unsubscribe = undefined
     this.#listeners.clear()
   }
 
-  async #loadStatus(entry: PluginServiceViewEntry, generation: number) {
+  async #loadStatus(entry: PluginServiceViewEntry, generation: number, actionEpoch: number) {
     const fingerprint = summaryFingerprint(entry)
     const status = this.client
       .getStatus({ pluginId: entry.pluginId })
       .then((nextStatus) => {
-        if (!this.#isCurrent(entry, fingerprint, generation)) return
+        if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
         this.#replace(entry.pluginId, (current) => ({
           ...current,
           error: undefined,
@@ -229,11 +248,28 @@ export class PluginServicesController {
         this.#writeProjection()
       })
       .catch((error: unknown) => {
-        if (!this.#isCurrent(entry, fingerprint, generation)) return
+        if (!this.#isCurrent(entry, fingerprint, generation, actionEpoch)) return
         this.#replace(entry.pluginId, (current) => ({ ...current, error: errorMessage(error), loading: false }))
       })
-    const usage = this.#refreshUsageHistory(entry, fingerprint, generation)
+    const usage = this.#refreshUsageHistory(entry, fingerprint, generation, actionEpoch)
     await Promise.all([status, usage])
+  }
+
+  #startRefresh() {
+    if (this.#disposed || this.#refreshRequest || this.#snapshot.action) return
+    const request = this.#runRefresh()
+    this.#refreshRequest = request
+    void request.finally(() => {
+      if (this.#refreshRequest !== request) return
+      this.#refreshRequest = undefined
+      this.#startQueuedRefresh()
+    })
+  }
+
+  #startQueuedRefresh() {
+    if (!this.#refreshQueued || this.#disposed || this.#refreshRequest || this.#snapshot.action) return
+    this.#refreshQueued = false
+    this.#startRefresh()
   }
 
   async #usageHistory(pluginId: string): Promise<PluginServiceUsageHistory> {

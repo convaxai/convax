@@ -1170,7 +1170,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     const dismiss = (event: PointerEvent) => {
       if (
         !(event.target instanceof Node) ||
-        shouldDismissAgentResourcePicker(composerSurfaceRef.current, event.target, modelPickerRef.current)
+        shouldDismissAgentResourcePicker(modelPickerAnchorRef.current, event.target, modelPickerRef.current)
       ) {
         closeGenerationModelPicker()
       }
@@ -2564,7 +2564,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       ref={modelPickerAnchorRef}
                       type="button"
                     >
-                      <Sparkles className="size-3.5 shrink-0" />
+                      <Bot className="size-3.5 shrink-0" />
                       <span className="shrink-0 font-medium text-foreground">Agent models</span>
                       <span className="truncate">{displayedModelLabel}</span>
                       <ChevronDown className="size-3 shrink-0" />

@@ -710,12 +710,13 @@ describe("Agent composer source contract", () => {
     expect(source).toContain('data-agent-composer-action="reference"')
     expect(source).toContain('data-agent-composer-action="skill"')
     expect(source).toContain('data-agent-composer-action="model"')
+    expect(source).toContain('<Bot className="size-3.5 shrink-0" />')
     expect(source).toContain("const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession")
     expect(source).toContain("disabled={!props.projectId || modelPickerDisabled}")
     expect(source).toContain("data-agent-composer-editor")
     expect(source).toContain("modelPickerRef.current")
     expect(source).toContain(
-      "shouldDismissAgentResourcePicker(composerSurfaceRef.current, event.target, modelPickerRef.current)",
+      "shouldDismissAgentResourcePicker(modelPickerAnchorRef.current, event.target, modelPickerRef.current)",
     )
     expect(source).toContain("onElementChange={setModelPickerElement}")
     expect(source).toContain("data-agent-runtime-state")
