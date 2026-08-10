@@ -242,6 +242,66 @@ describe("PluginInstallationRuntime", () => {
     await expect(handle.resolveAsset("index.html")).rejects.toThrow("lease has been released")
   })
 
+  test("keeps image and video tools available beside immutable early-v8 LLM snapshots", async () => {
+    const { root, runtime } = await fixture()
+    const executableCandidate = (id: string, contributions: Record<string, unknown>) => {
+      const base = candidate(id, { companion: true, companionAuthorized: true })
+      const document = manifest(id, { executable: true })
+      return {
+        ...base,
+        files: {
+          ...base.files,
+          "manifest.json": JSON.stringify({
+            ...document,
+            contributes: { ...document.contributes, ...contributions },
+          }),
+        },
+      }
+    }
+    const legacyGateway = executableCandidate("legacy-gateway", {
+      llm: {
+        modelCatalog: "runtime",
+        models: [{ id: "model-1", name: "Model 1" }],
+        provider: { id: "legacy-provider", name: "Legacy Provider" },
+      },
+    })
+    await runtime.publish(0, legacyGateway)
+
+    const mediaTools = executableCandidate("media-tools", {
+      generation: {
+        models: [],
+        tools: [
+          {
+            acceptedInputs: ["reference_image"],
+            description: "Create an image output.",
+            id: "image.transform",
+            output: "image",
+            title: "Transform image",
+          },
+          {
+            acceptedInputs: ["reference_video"],
+            description: "Create a video output.",
+            id: "video.transform",
+            output: "video",
+            title: "Transform video",
+          },
+        ],
+      },
+    })
+    await runtime.publish(1, mediaTools)
+
+    const active = await new PluginInstallationRuntime(root).readActive()
+    expect(active.plugins.map(({ plugin }) => plugin.id)).toEqual(["legacy-gateway", "media-tools"])
+    expect(
+      active.plugins
+        .find(({ plugin }) => plugin.id === "media-tools")!
+        .plugin.contributes.generation?.tools.map(({ id, output }) => ({ id, output })),
+    ).toEqual([
+      { id: "image.transform", output: "image" },
+      { id: "video.transform", output: "video" },
+    ])
+  })
+
   test("keeps verified companion bytes inert until the snapshot carries an exact setup binding", async () => {
     const { runtime } = await fixture()
     await runtime.publish(0, candidate("alpha", { companion: true }))

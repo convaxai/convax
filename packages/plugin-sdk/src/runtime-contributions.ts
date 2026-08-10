@@ -26,13 +26,38 @@ export interface PortablePluginLlmModelContribution {
   readonly name: string
 }
 
-export interface PortablePluginLlmContribution {
+interface PortablePluginLlmContributionBase {
   readonly models: readonly PortablePluginLlmModelContribution[]
+}
+
+export interface PortablePluginCurrentLlmContribution
+  extends PortablePluginLlmContributionBase {
+  readonly modelCatalog?: never
   readonly provider: {
     readonly id: string
     readonly name: string
     readonly protocol: "openai" | "openrouter"
   }
+}
+
+/** Runtime-only representation of immutable early-v8 snapshots. New authoring cannot declare it. */
+export interface PortablePluginImmutableV8LlmContribution
+  extends PortablePluginLlmContributionBase {
+  readonly modelCatalog?: "runtime"
+  readonly provider: {
+    readonly id: string
+    readonly name: string
+    readonly protocol?: never
+  }
+}
+
+export type PortablePluginLlmContribution =
+  | PortablePluginCurrentLlmContribution
+  | PortablePluginImmutableV8LlmContribution
+
+export interface ParsePortablePluginLlmContributionOptions {
+  /** Admit the two bounded LLM shapes published before protocol became mandatory within v8. */
+  readonly immutableV8Compatibility?: boolean
 }
 
 export interface PortablePluginPetContribution {
@@ -73,17 +98,30 @@ export function parsePortablePluginServiceContribution(
 
 export function parsePortablePluginLlmContribution(
   value: unknown,
+  options: ParsePortablePluginLlmContributionOptions = {},
 ): PortablePluginLlmContribution {
   const input = portableRecord(value, "LLM contribution")
-  assertPortableKeys(input, ["models", "provider"], "LLM contribution")
+  assertPortableKeys(
+    input,
+    options.immutableV8Compatibility ? ["modelCatalog", "models", "provider"] : ["models", "provider"],
+    "LLM contribution",
+  )
   const provider = portableRecord(input.provider, "LLM provider")
   assertPortableKeys(provider, ["id", "name", "protocol"], "LLM provider")
   const providerId = portableText(provider.id, "LLM provider id", 80)
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(providerId)) {
     throw new TypeError("LLM provider id must use kebab-case")
   }
-  if (provider.protocol !== "openai" && provider.protocol !== "openrouter") {
+  const protocol = provider.protocol
+  const legacy = options.immutableV8Compatibility && protocol === undefined
+  if (!legacy && protocol !== "openai" && protocol !== "openrouter") {
     throw new TypeError("LLM provider protocol must be openai or openrouter")
+  }
+  if (legacy && input.modelCatalog !== undefined && input.modelCatalog !== "runtime") {
+    throw new TypeError("LLM model catalog must be runtime")
+  }
+  if (!legacy && input.modelCatalog !== undefined) {
+    throw new TypeError("LLM contribution contains an unsupported field: modelCatalog")
   }
   const models = portableArray(input.models, "LLM models", 32, true).map(
     (value, index) => {
@@ -100,12 +138,23 @@ export function parsePortablePluginLlmContribution(
   if (new Set(models.map((model) => model.id)).size !== models.length) {
     throw new TypeError("LLM models contain duplicate ids")
   }
+  const providerName = portableText(provider.name, "LLM provider name", 120)
+  if (legacy) {
+    return {
+      ...(input.modelCatalog === "runtime" ? { modelCatalog: "runtime" as const } : {}),
+      models,
+      provider: { id: providerId, name: providerName },
+    }
+  }
+  if (protocol !== "openai" && protocol !== "openrouter") {
+    throw new TypeError("LLM provider protocol must be openai or openrouter")
+  }
   return {
     models,
     provider: {
       id: providerId,
-      name: portableText(provider.name, "LLM provider name", 120),
-      protocol: provider.protocol,
+      name: providerName,
+      protocol,
     },
   }
 }

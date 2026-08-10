@@ -439,6 +439,18 @@ class FakeMcpClient implements GenerationPluginMcpClient {
         },
       }
     }
+    if (name === "llm.models.list") {
+      return {
+        content: [{ text: "listed", type: "text" }],
+        structuredContent: {
+          models: [
+            { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+            { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+          ],
+          schema: "convax.llm-model-catalog/1",
+        },
+      }
+    }
     return this.result
   }
 
@@ -566,6 +578,44 @@ describe("GenerationPluginRuntime", () => {
       },
     ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
+  })
+
+  test("keeps immutable early-v8 static and runtime-catalog gateways executable", async () => {
+    const staticLegacy = mutablePlugin(llmPlugin())
+    delete staticLegacy.contributes.llm!.provider.protocol
+    const staticSetup = setup([staticLegacy], ["llm.gateway.start"])
+
+    expect(await staticSetup.runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
+    expect(staticSetup.clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.gateway.start"])
+
+    const catalogLegacy = mutablePlugin(llmPlugin())
+    delete catalogLegacy.contributes.llm!.provider.protocol
+    catalogLegacy.contributes.llm!.modelCatalog = "runtime"
+    const catalogSetup = setup([catalogLegacy], ["llm.models.list", "llm.gateway.start"])
+
+    expect(await catalogSetup.runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [
+          { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+          { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+        ],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
+    expect(catalogSetup.clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.models.list", "llm.gateway.start"])
   })
 
   test("actively discovers a declared OpenAI provider through its Main-only loopback gateway", async () => {

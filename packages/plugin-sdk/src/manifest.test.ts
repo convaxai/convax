@@ -180,6 +180,30 @@ describe("complete convax.plugin/8 portable ABI", () => {
     ).toThrow("invalid Plugin API id")
   })
 
+  test("keeps immutable early-v8 LLM compatibility out of new authoring", () => {
+    const current = toolManifest()
+    const legacy = {
+      ...current,
+      contributes: {
+        ...current.contributes,
+        llm: {
+          modelCatalog: "runtime",
+          models: [{ id: "model-1", name: "Model 1" }],
+          provider: { id: "example-provider", name: "Example Provider" },
+        },
+      },
+    }
+
+    expect(parsePortablePluginManifestV8(legacy).contributes.llm).toEqual({
+      modelCatalog: "runtime",
+      models: [{ id: "model-1", name: "Model 1" }],
+      provider: { id: "example-provider", name: "Example Provider" },
+    })
+    expect(() => parsePortablePluginManifestV8(legacy, { hostApiMode: "authoring" })).toThrow(
+      "unsupported field: modelCatalog",
+    )
+  })
+
   test("rejects the retired Host API major in both authoring and runtime modes", () => {
     const legacy = webManifest({
       hostApi: { major: 1, optional: [], required: ["host.context.get"] },

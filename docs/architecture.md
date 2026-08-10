@@ -1607,8 +1607,8 @@ entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
 settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. Every LLM contribution declares exactly one `openai` or
-`openrouter` Provider protocol. After starting its Main-only loopback gateway,
+installed manifest. Newly authored LLM contributions declare exactly one `openai`
+or `openrouter` Provider protocol. After starting its Main-only loopback gateway,
 Desktop actively requests that protocol's `/models` catalog, validates it in Main,
 and projects the resulting connected Plugin provider back into its owning Service card.
 Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
@@ -1633,10 +1633,17 @@ The v8 manifest may add one generic LLM contribution without introducing a built
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
 Plugin contribution, verifies and starts the same leased immutable companion lifecycle, and
 calls only the fixed `llm.gateway.start`. The manifest must declare `protocol: "openai"`
-or `protocol: "openrouter"`; missing and unknown protocols fail closed. Main then
-requests `/models` through that loopback gateway, bounds the bytes and entries, and
+or `protocol: "openrouter"`; authoring fails closed when the protocol is missing or
+unknown. Main then requests `/models` through that loopback gateway, bounds the bytes and entries, and
 keeps model ids opaque. OpenRouter discovery additionally admits only text-output
-models for Agent LLM use. The sidecar returns a Main-only, ephemeral
+models for Agent LLM use. The runtime parser also retains the two bounded LLM
+shapes published earlier under the same `convax.plugin/8` identity: a missing
+protocol with the static manifest catalog, or a missing protocol plus the exact
+`modelCatalog: "runtime"` marker and fixed `llm.models.list` tool. Those immutable
+snapshots keep the original OpenAI-compatible adapter; Host never infers a protocol
+from a Plugin id, provider id, vendor, URL, or model name. This compatibility mode
+cannot admit new authoring, additional fields, unknown catalog markers, or an
+unknown explicit protocol. The sidecar returns a Main-only, ephemeral
 `127.0.0.1` protocol base URL and random bearer key. OpenCode receives that
 connection material only in its in-memory host configuration; renderer, service
 status, manifests, and durable config never receive it. Renderer receives only the
