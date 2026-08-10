@@ -171,7 +171,7 @@ function llmPlugin(): InstalledWebPluginSummary {
     contributes: {
       llm: {
         models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
-        provider: { id: "pippit-glm", name: "Pippit GLM" },
+        provider: { id: "pippit-glm", name: "Pippit GLM", protocol: "openai" },
       },
     },
     description: "External LLM provider",
@@ -439,18 +439,6 @@ class FakeMcpClient implements GenerationPluginMcpClient {
         },
       }
     }
-    if (name === "llm.models.list") {
-      return {
-        content: [{ text: "listed", type: "text" }],
-        structuredContent: {
-          models: [
-            { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
-            { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
-          ],
-          schema: "convax.llm-model-catalog/1",
-        },
-      }
-    }
     return this.result
   }
 
@@ -505,7 +493,7 @@ function setup(
   }),
   runtimeOptions: Pick<
     GenerationPluginRuntimeOptions,
-    "bunRuntime" | "canvasCapabilities" | "platform" | "recoveryRuntimeDirectory" | "recoveryStateDirectory"
+    "bunRuntime" | "canvasCapabilities" | "fetch" | "platform" | "recoveryRuntimeDirectory" | "recoveryStateDirectory"
   > = {},
 ) {
   const plugins = new FakePluginSource()
@@ -531,6 +519,8 @@ function setup(
     },
     platform: "linux",
     plugins,
+    fetch: mock(async () =>
+      Response.json({ data: [{ created: 0, id: "pippit-glm-main", object: "model", owned_by: "test" }] })),
     ...runtimeOptions,
   })
   runtimes.add(runtime)
@@ -571,16 +561,33 @@ describe("GenerationPluginRuntime", () => {
         models: [{ id: "pippit-glm-main", name: "Pippit GLM Main" }],
         name: "Pippit GLM",
         pluginId: "xiaoyunque-generation",
+        protocol: "openai",
         providerId: "plugin-xiaoyunque-generation-pippit-glm",
       },
     ])
     expect(clients[0]!.calls[0]).toMatchObject({ input: {}, name: "llm.gateway.start" })
   })
 
-  test("loads a bounded runtime LLM model catalog before starting the provider gateway", async () => {
+  test("actively discovers a declared OpenAI provider through its Main-only loopback gateway", async () => {
     const dynamic = mutablePlugin(llmPlugin())
-    dynamic.contributes.llm!.modelCatalog = "runtime"
-    const { clients, runtime } = setup([dynamic], ["llm.models.list", "llm.gateway.start"])
+    const requests: string[] = []
+    const { clients, runtime } = setup(
+      [dynamic],
+      ["llm.gateway.start"],
+      undefined,
+      undefined,
+      {
+        fetch: mock(async (input) => {
+          requests.push(String(input))
+          return Response.json({
+            data: [
+              { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+              { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+            ],
+          })
+        }),
+      },
+    )
 
     expect(await runtime.connectLlmProviders()).toEqual([
       {
@@ -592,28 +599,79 @@ describe("GenerationPluginRuntime", () => {
         ],
         name: "Pippit GLM",
         pluginId: "xiaoyunque-generation",
+        protocol: "openai",
         providerId: "plugin-xiaoyunque-generation-pippit-glm",
       },
     ])
-    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.models.list", "llm.gateway.start"])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.gateway.start"])
+    expect(requests).toEqual(["http://127.0.0.1:43123/v1/models"])
   })
 
-  test("keeps a shared service authorization runtime alive when its LLM catalog reports an error", async () => {
+  test("actively discovers a declared OpenRouter provider through its Main-only loopback gateway", async () => {
+    const dynamic = mutablePlugin(llmPlugin())
+    dynamic.contributes.llm!.provider.protocol = "openrouter"
+    const requests: Array<{ authorization: string | null; url: string }> = []
+    const { clients, runtime } = setup(
+      [dynamic],
+      ["llm.gateway.start"],
+      undefined,
+      undefined,
+      {
+        fetch: mock(async (input, init) => {
+          const url = input instanceof URL ? input : new URL(String(input))
+          requests.push({ authorization: new Headers(init?.headers).get("authorization"), url: url.toString() })
+          return Response.json({
+            data: [
+              {
+                architecture: { output_modalities: ["text"] },
+                id: "openai/gpt-latest",
+                name: "OpenAI GPT Latest",
+              },
+              {
+                architecture: { output_modalities: ["video"] },
+                id: "vendor/video-model",
+                name: "Video Model",
+              },
+            ],
+          })
+        }),
+      },
+    )
+
+    expect(await runtime.connectLlmProviders()).toEqual([
+      {
+        apiKey: "a".repeat(43),
+        baseUrl: "http://127.0.0.1:43123/v1",
+        models: [{ id: "openai/gpt-latest", name: "OpenAI GPT Latest" }],
+        name: "Pippit GLM",
+        pluginId: "xiaoyunque-generation",
+        protocol: "openrouter",
+        providerId: "plugin-xiaoyunque-generation-pippit-glm",
+      },
+    ])
+    expect(clients[0]!.calls.map(({ name }) => name)).toEqual(["llm.gateway.start"])
+    expect(requests).toEqual([
+      {
+        authorization: `Bearer ${"a".repeat(43)}`,
+        url: "http://127.0.0.1:43123/v1/models?output_modalities=text",
+      },
+    ])
+  })
+
+  test("keeps service authorization alive when the Provider catalog reports an HTTP error", async () => {
     const combined = mutablePlugin(llmPlugin())
-    combined.contributes.llm!.modelCatalog = "runtime"
     combined.contributes.service = { actions: ["authorize"] }
     const { clients, runtime } = setup(
       [combined],
-      ["llm.models.list", "llm.gateway.start", "service.authorize", "service.authorization.complete"],
+      ["llm.gateway.start", "service.authorize", "service.authorization.complete"],
+      undefined,
+      undefined,
+      { fetch: mock(async () => new Response(null, { status: 502 })) },
     )
     const authorization = await runtime.callService(combined.id, "authorize")
-    clients[0]!.toolResults.set("llm.models.list", {
-      content: [{ text: "Sign in before loading models", type: "text" }],
-      isError: true,
-    })
 
     await expect(runtime.connectLlmProviders()).rejects.toThrow(
-      `Plugin LLM model catalog failed to load: ${combined.id}`,
+      "OpenAI model catalog failed with HTTP 502",
     )
     expect(clients[0]!.closed).toBe(0)
 
@@ -623,7 +681,7 @@ describe("GenerationPluginRuntime", () => {
     })
     expect(clients[0]!.calls.map(({ name }) => name)).toEqual([
       "service.authorize",
-      "llm.models.list",
+      "llm.gateway.start",
       "service.authorization.complete",
     ])
     expect(clients[0]!.closed).toBe(0)

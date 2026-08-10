@@ -40,7 +40,7 @@ const generationTools: readonly GenerationToolSummary[] = [
     modelName: "Nano Banana",
     output: "image",
     pluginId: "convax-account",
-    pluginName: "Convax Account",
+    pluginName: "Convax",
     title: "Nano Banana",
     toolId: "generate",
   },

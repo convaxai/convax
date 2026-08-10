@@ -13,7 +13,7 @@ Convax 的内置依赖。
 
 ## 1. 核心决策
 
-Convax 把 Nexus 展示为一个与内置 OpenCode Service 并列的已安装 **Service**。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
+Convax 把该集成以 **Convax** 的名称展示为一个与内置 OpenCode Service 并列的已安装 Service；Nexus 只保留为后端和代码所有权名称。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
 
 Nexus Service 负责：
 
@@ -22,7 +22,7 @@ Nexus Service 负责：
 - 展示已连接账号、凭据状态、剩余额度和用量；
 - 展示 Nexus 返回的当前 Plan、订阅状态和允许购买的 Plan；
 - 通过宿主管理的固定 Checkout 操作在系统浏览器完成升级；
-- 运行一个仅 Main 进程可见的本地 OpenAI-compatible Gateway；
+- 运行一个仅 Main 进程可见的本地 OpenRouter 协议 Gateway；
 - 获取短期 Nexus Data Token，并将其附加到 Gateway 请求；
 - 确保 Nexus 凭据和上游 Provider 凭据不会暴露给 Renderer、OpenCode、Canvas 文档、Project 文件或日志。
 
@@ -30,13 +30,13 @@ Nexus 始终是可选的已安装 Service。内置 OpenCode Service 继续独立
 
 ## 2. 产品体验
 
-现有的 Settings > Services 页面是该能力的唯一产品入口。安装 Nexus Plugin 后，Service 列表中新增一张 Nexus 卡片。
+现有的 Settings > Services 页面是该能力的唯一产品入口。安装 Plugin 后，Service 列表中新增一张 Convax 卡片。
 
 连接成功后的布局沿用现有卡片结构：
 
 ```text
-Nexus · OpenRouter               Connected        Free
-通过 Nexus 安全访问 OpenRouter 模型。
+Convax                            Connected        Free
+通过 Convax 安全访问 OpenRouter 模型。
 
 ACCOUNT                         CREDENTIAL
 Convax                          Configured · verified
@@ -48,7 +48,7 @@ CREDITS                         USAGE
 剩余 0.9988 USD                 已用 0.0012 USD
 
 Capabilities
-LLM
+LLM · Image · Video
 
 Models
 OpenRouter 当前可用模型…
@@ -67,7 +67,7 @@ Plan、订阅和可升级目录全部来自 Nexus 的权威 User API。Convax �
 - `Disconnected` 或“需要登录”状态；
 - `LLM` 能力；
 - 一份有界的模型目录；未登录时可以禁用；
-- 一个 `Sign in with Nexus` 操作。
+- 一个 `Sign in with Convax` 操作。
 
 用户选择登录后，系统浏览器打开：
 
@@ -383,16 +383,18 @@ service:
   actions: authorize, reauthorize, authorization.cancel, checkout, sign_out
 
 llm:
-  provider: Nexus · OpenRouter
-  modelCatalog: runtime
+  provider:
+    name: Convax
+    protocol: openrouter
   models:
     - id: deepseek/deepseek-v4-flash
       name: DeepSeek V4 Flash
 ```
 
-`models` 保留一个静态回退项。`modelCatalog: runtime` 明确要求 Host 通过通用
-固定 Tool 获取运行时目录；这不是 Nexus Plugin ID 特判。模型 ID 仍保持不透明，
-Host 只做数量、长度、字符和重复项边界校验，不做映射、价格解析、路由或 fallback。
+`models` 只提供安装期的有界展示元数据。Host 根据显式 `openrouter` 协议启动
+Main-only Loopback Gateway，并主动请求 `/models?output_modalities=text`；这不是
+Nexus Plugin ID 特判。模型 ID 仍保持不透明，Host 只做数量、长度、字符、输出模态
+和重复项边界校验，不做价格解析、路由或 fallback。
 
 ### 8.2 固定 MCP Tool
 
@@ -406,7 +408,6 @@ service.authorization.complete
 service.authorization.cancel
 service.checkout
 service.sign_out
-llm.models.list
 llm.gateway.start
 ```
 
@@ -426,33 +427,28 @@ llm.gateway.start
 结果只由 Main 校验和消费。Main 打开系统浏览器后立即刷新 Status；应用重新获得焦点时再次刷新，
 从而观察 Webhook 投影后的当前 Plan。
 
-`llm.models.list` 无输入，返回：
-
-```json
-{
-  "schema": "convax.llm-model-catalog/1",
-  "models": [{ "id": "anthropic/claude-sonnet-4", "name": "Claude Sonnet 4" }]
-}
-```
-
-Companion 使用当前短期 Data Token 访问
-`{gatewayBaseUrl}/models`。Nexus 继续按普通 Provider Path 代理到 OpenRouter，
-目录响应不携带 Provider Key。Convax Main 将目录限制为最多 2048 个模型，并把
+Companion 的 Loopback Gateway 使用当前短期 Data Token 原样代理
+`{gatewayBaseUrl}/{providerPath...}`。Nexus 继续按普通 Provider Path 代理到 OpenRouter，
+目录响应不携带 Provider Key。Convax Main 主动拉取目录、限制为最多 2048 个模型，并把
 验证后的结果同时提供给 OpenCode 内存配置和 Nexus Service 卡片；Renderer 不接收
 Gateway URL、Data Token 或上游凭据。
 
-### 8.3 本地 OpenAI-compatible Gateway
+图片和视频目录不从通用模型列表推导。Companion 分别请求 OpenRouter 官方
+`/images/models` 与 `/videos/models`，并分别通过 `/images` 与异步 `/videos`
+提交、轮询和下载协议执行。任一专用端点不可用时只隐藏对应能力，不尝试旧协议或其他端点兜底。
+
+### 8.3 本地 OpenRouter Gateway
 
 `llm.gateway.start` 返回一个仅 Main 可见的 Descriptor，其中包含：
 
 - 随进程生成的随机 Bearer Key；
-- 一个 `127.0.0.1` OpenAI-compatible Base URL。
+- 一个 `127.0.0.1` OpenRouter 协议 Base URL。
 
 本地 Server 必须：
 
 - 只绑定 Loopback；
 - 使用 Constant-time Comparison 校验随机本地 Key；
-- 接受 Agent Runtime 所需的 OpenAI-compatible Path；
+- 接受 Host 声明并绑定的 OpenRouter Path；
 - 将不透明的 Method、Query 和 Request Body 转发到：
 
   ```text
@@ -629,7 +625,7 @@ OS Credential Vault、跨平台构建，以及 Webhook 延迟/乱序、多用户
 3. 通过标准输入运行本地 Bootstrap，创建 `convax` Workspace、Free/Pro Plan、Hosted Auth 配置、
    Hosted BillingConnection、Plan Mapping 和 OpenRouter ProviderConnection。
 4. 构建、校验并打包 `nexus-service` Plugin 与 `nexus-mcp` Companion。
-5. 启动 Convax，安装 `Convax Account` Plugin，在 Settings > Services 选择 `Nexus · OpenRouter`。
+5. 启动 Convax，安装 `Convax` Plugin，在 Settings > Services 选择 `Convax`。
 6. 使用系统浏览器完成一个全新用户注册和 PKCE Loopback 回调。
 7. 确认 Service 为 Connected，显示当前 Free Plan、可升级 Pro Plan，并列出 OpenRouter 运行时模型。
 8. 选择该模型发起对话，确认请求路径为
@@ -645,7 +641,7 @@ OS Credential Vault、跨平台构建，以及 Webhook 延迟/乱序、多用户
 
 - 打包后的 Convax 可以安装 Nexus Service，并在重启后恢复登录状态；
 - 全新用户可以通过系统浏览器完成注册、PKCE 回调和 Token Exchange；
-- Services 页面显示 `Nexus · OpenRouter` 为 Connected；此前真实验收使用
+- Services 页面显示 `Convax` 为 Connected；此前真实验收使用
   `DeepSeek V4 Flash`，当前实现会优先列出 OpenRouter 运行时目录；
 - Agent 模型选择器可以明确选择该 Nexus 模型；
 - 一次真实 Agent 对话通过 Nexus Gateway 调用

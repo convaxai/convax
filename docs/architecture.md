@@ -1607,9 +1607,10 @@ entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
 settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. An LLM contribution may additionally opt into the fixed
-`llm.models.list` runtime catalog; Desktop validates that bounded catalog in Main and
-projects the resulting connected Plugin provider back into its owning Service card.
+installed manifest. Every LLM contribution declares exactly one `openai` or
+`openrouter` Provider protocol. After starting its Main-only loopback gateway,
+Desktop actively requests that protocol's `/models` catalog, validates it in Main,
+and projects the resulting connected Plugin provider back into its owning Service card.
 Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
 from the bounded service status; the optional bounded usage-history tool supplies
 display records only. The existing OpenCode Agent runtime contributes a safe display-only
@@ -1631,10 +1632,12 @@ connected.
 The v8 manifest may add one generic LLM contribution without introducing a built-in
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
 Plugin contribution, verifies and starts the same leased immutable companion lifecycle, and
-calls only the fixed `llm.models.list` opt-in plus `llm.gateway.start`. The model
-catalog tool accepts no input and returns only bounded opaque model ids and display
-names; manifests retain a small static fallback catalog. The sidecar returns a Main-only, ephemeral
-`127.0.0.1` OpenAI-compatible base URL and random bearer key. OpenCode receives that
+calls only the fixed `llm.gateway.start`. The manifest must declare `protocol: "openai"`
+or `protocol: "openrouter"`; missing and unknown protocols fail closed. Main then
+requests `/models` through that loopback gateway, bounds the bytes and entries, and
+keeps model ids opaque. OpenRouter discovery additionally admits only text-output
+models for Agent LLM use. The sidecar returns a Main-only, ephemeral
+`127.0.0.1` protocol base URL and random bearer key. OpenCode receives that
 connection material only in its in-memory host configuration; renderer, service
 status, manifests, and durable config never receive it. Renderer receives only the
 validated display catalog. The sidecar retains upstream
