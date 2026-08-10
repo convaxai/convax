@@ -153,6 +153,12 @@ import {
 import { getAgentToolPresentation } from "./agent-tool-presentation"
 import { AgentActivitySummary } from "./agent-activity-summary"
 import { AgentDrawerHeader, AgentDrawerTrigger } from "./agent-drawer-header"
+import {
+  AgentSendSubmissionTracker,
+  beginAgentSendSubmission,
+  endAgentSendSubmission,
+  revalidateAgentSendCatalogs,
+} from "./agent-send-submission"
 import "./agent-panel.css"
 
 const resourceDragType = "application/x-convax-agent-resource"
@@ -361,6 +367,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const [stoppingSessionIds, setStoppingSessionIds] = useState<Set<string>>(() => new Set())
   const [failedSubmissions, setFailedSubmissions] = useState<FailedAgentSubmission[]>([])
   const [creatingSession, setCreatingSession] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [followingLatest, setFollowingLatest] = useState(true)
   const [error, setError] = useState<string>()
   const [composerFocusRequest, setComposerFocusRequest] = useState(0)
@@ -404,6 +411,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const generationRef = useRef(0)
   const mountedRef = useRef(false)
   const creatingSessionRef = useRef(false)
+  const submissionTrackerRef = useRef(new AgentSendSubmissionTracker())
   const restoredSessionRef = useRef<string | undefined>(undefined)
   const sessionProjectRef = useRef<string | undefined>(undefined)
   const sessionScopeRef = useRef<string | undefined>(undefined)
@@ -521,6 +529,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       sessionListRequestRef.current += 1
       requestTrackerRef.current.invalidate()
       compositionControllerRef.current.dispose()
+      submissionTrackerRef.current.invalidate()
     }
   }, [])
 
@@ -826,6 +835,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     stoppingSessionIdsRef.current = new Set()
     setStoppingSessionIds(new Set())
     setFailedSubmissions([])
+    submissionTrackerRef.current.invalidate()
+    setSubmitting(false)
     stickToBottomRef.current = true
     setFollowingLatest(true)
     setError(undefined)
@@ -942,8 +953,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     sessionState?.status.type === "retry"
   const responseStopping = Boolean(sessionId && stoppingSessionIds.has(sessionId))
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
-  const interactionDisabled = runtimeBusy || responseStopping || loading || creatingSession
-  const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession
+  const interactionDisabled = runtimeBusy || responseStopping || loading || creatingSession || submitting
+  const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession || submitting
   useEffect(() => {
     const root = composerRef.current
     if (!root) return
@@ -1712,6 +1723,8 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       setGenerationModelPickerOpen(true)
       return
     }
+    const submissionToken = beginAgentSendSubmission(submissionTrackerRef.current, setSubmitting)
+    if (!submissionToken) return
     closeComposerSuggestion()
     closeGenerationModelPicker()
     const scopeId = props.projectId
@@ -1736,11 +1749,23 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     let verifiedLlmSelection = submittedLlmSelection
     setError(undefined)
     try {
+      const catalogs = await revalidateAgentSendCatalogs({
+        loadGeneration: submittedGenerationSelection
+          ? () =>
+              sharedGenerationController
+                ? sharedGenerationController.refresh()
+                : window.convax.generation.listTools({ scopeId })
+          : undefined,
+        loadLlm: () =>
+          loadLlmModels({
+            reconcileReady: false,
+            refreshShared: true,
+            throwOnError: true,
+          }),
+      })
+      if (!isCurrentScope()) return
       if (submittedGenerationSelection) {
-        const listed = sharedGenerationController
-          ? await sharedGenerationController.refresh()
-          : await window.convax.generation.listTools({ scopeId })
-        if (!isCurrentScope()) return
+        const listed = catalogs.generation ?? []
         if (generationCatalogVersionRef.current !== submittedCatalogVersion) {
           throw new Error("Installed generation models changed. Review the model selection and send again.")
         }
@@ -1765,13 +1790,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       if (!submittedLlmSelection) {
         throw new Error("No LLM service provides an available model. Open Services to install or configure one.")
       }
-      const catalog = await loadLlmModels({
-        reconcileReady: false,
-        refreshShared: true,
-        throwOnError: true,
-      })
-      if (!isCurrentScope()) return
-      const verifiedLlmModel = findAgentLlmModel(submittedLlmSelection, catalog)
+      const verifiedLlmModel = findAgentLlmModel(submittedLlmSelection, catalogs.llm)
       verifiedLlmSelection = verifiedLlmModel
         ? { modelId: verifiedLlmModel.model.modelId, providerId: verifiedLlmModel.provider.providerId }
         : undefined
@@ -1861,6 +1880,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
       if (targetSessionId && activeTarget) await refreshSessionState(targetSessionId).catch(() => undefined)
     } finally {
       if (targetSessionId && isCurrentScope()) setSessionPrompting(targetSessionId, false)
+      if (mountedRef.current) endAgentSendSubmission(submissionTrackerRef.current, submissionToken, setSubmitting)
     }
   }, [
     contextResources,
@@ -1992,7 +2012,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
           props.className,
         )}
         data-agent-panel-hosted={hosted || undefined}
-        data-agent-runtime-state={responseStopping ? "stopping" : runtimeBusy ? "running" : "idle"}
+        data-agent-runtime-state={
+          responseStopping ? "stopping" : runtimeBusy ? "running" : submitting ? "submitting" : "idle"
+        }
         style={embedded || hosted ? undefined : { maxWidth: props.layout?.maxWidthStyle, width: props.layout?.width }}
       >
         {!embedded && !hosted && props.layout?.resizable !== false ? (
@@ -2152,21 +2174,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
               ) : null}
             </div>
 
-            <div
-              aria-live="polite"
-              className="agent-runtime-status flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground"
-              data-agent-runtime-status={responseStopping ? "stopping" : runtimeBusy ? "running" : "idle"}
-            >
-              <span
-                className={cn(
-                  "flex items-center gap-2 transition-opacity",
-                  runtimeBusy || responseStopping ? "opacity-100" : "pointer-events-none opacity-0",
-                )}
-              >
-                <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                {responseStopping ? "Stopping OpenCode…" : "OpenCode is working…"}
-              </span>
-            </div>
+            <AgentRuntimeStatus runtimeBusy={runtimeBusy} stopping={responseStopping} submitting={submitting} />
 
             <div
               className={cn(
@@ -2302,7 +2310,15 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                   )}
                   data-agent-composer-surface={compactEmbeddedChrome ? "flat" : "framed"}
                   data-agent-composer-state={
-                    responseStopping ? "stopping" : runtimeBusy ? "running" : dropActive ? "drop" : "idle"
+                    responseStopping
+                      ? "stopping"
+                      : runtimeBusy
+                        ? "running"
+                        : submitting
+                          ? "submitting"
+                          : dropActive
+                            ? "drop"
+                            : "idle"
                   }
                   onDragEnter={(event) => {
                     if (!supportsResourceDrop(event.dataTransfer)) return
@@ -2614,7 +2630,11 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                           onClick={() => void send()}
                           size="icon-sm"
                         >
-                          <Send />
+                          {submitting ? (
+                            <LoaderCircle className="animate-spin motion-reduce:animate-none" />
+                          ) : (
+                            <Send />
+                          )}
                         </Button>
                       </Tooltip>
                     )}
@@ -2628,6 +2648,32 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
     </TooltipProvider>
   )
 })
+
+export function AgentRuntimeStatus(props: { runtimeBusy: boolean; stopping: boolean; submitting: boolean }) {
+  const active = props.runtimeBusy || props.stopping || props.submitting
+  return (
+    <div
+      aria-live="polite"
+      className="agent-runtime-status flex h-7 shrink-0 items-center px-3 text-[11px] text-muted-foreground"
+      data-agent-runtime-status={
+        props.stopping ? "stopping" : props.runtimeBusy ? "running" : props.submitting ? "submitting" : "idle"
+      }
+    >
+      {active ? (
+        <span className="flex items-center">
+          <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin motion-reduce:animate-none" />
+          <span className="sr-only">
+            {props.stopping
+              ? "Stopping response"
+              : props.runtimeBusy
+                ? "Response in progress"
+                : "Submitting message"}
+          </span>
+        </span>
+      ) : null}
+    </div>
+  )
+}
 
 function ConversationHistory(props: {
   busySessionIds: ReadonlySet<string>

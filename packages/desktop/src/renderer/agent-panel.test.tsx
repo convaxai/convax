@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { act } from "react"
 import { createRoot, type Root } from "react-dom/client"
 import { renderToStaticMarkup } from "react-dom/server"
-import { ConversationTurnView, MessagePartView, routeAgentSkillOpen } from "./agent-panel"
+import { AgentRuntimeStatus, ConversationTurnView, MessagePartView, routeAgentSkillOpen } from "./agent-panel"
 import type { AgentConversationTurn } from "./agent-conversation-presentation"
 
 function installTestWindow() {
@@ -52,6 +52,35 @@ function deferred<T>() {
 }
 
 describe("Agent conversation activity", () => {
+  test("keeps an accessible activity status without visible OpenCode loading copy", () => {
+    const idle = renderToStaticMarkup(
+      <AgentRuntimeStatus runtimeBusy={false} stopping={false} submitting={false} />,
+    )
+    const running = renderToStaticMarkup(<AgentRuntimeStatus runtimeBusy stopping={false} submitting={false} />)
+    const submitting = renderToStaticMarkup(
+      <AgentRuntimeStatus runtimeBusy={false} stopping={false} submitting />,
+    )
+    const stopping = renderToStaticMarkup(
+      <AgentRuntimeStatus runtimeBusy={false} stopping submitting={false} />,
+    )
+
+    expect(idle).toContain('data-agent-runtime-status="idle"')
+    expect(idle).not.toContain("Submitting message")
+    expect(idle).not.toContain("Response in progress")
+    expect(idle).not.toContain("Stopping response")
+    expect(idle).not.toContain("<svg")
+    expect(running).toContain('aria-live="polite"')
+    expect(running).toContain('data-agent-runtime-status="running"')
+    expect(running).toContain('class="sr-only"')
+    expect(running).toContain("Response in progress")
+    expect(submitting).toContain('data-agent-runtime-status="submitting"')
+    expect(submitting).toContain("Submitting message")
+    expect(stopping).toContain('data-agent-runtime-status="stopping"')
+    expect(stopping).toContain("Stopping response")
+    expect(running).not.toContain("OpenCode is working")
+    expect(submitting).not.toContain("OpenCode")
+  })
+
   test("keeps streaming delivery visible without making the busy response its own live region", () => {
     const streamingPart: AgentMessagePart = { id: "text-1", text: "Partial response", type: "text" }
     const streamingMessage: AgentMessage = {
@@ -711,7 +740,7 @@ describe("Agent composer source contract", () => {
     expect(source).toContain('data-agent-composer-action="skill"')
     expect(source).toContain('data-agent-composer-action="model"')
     expect(source).toContain('<Bot className="size-3.5 shrink-0" />')
-    expect(source).toContain("const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession")
+    expect(source).toContain("const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession || submitting")
     expect(source).toContain("disabled={!props.projectId || modelPickerDisabled}")
     expect(source).toContain("data-agent-composer-editor")
     expect(source).toContain("modelPickerRef.current")
@@ -720,7 +749,8 @@ describe("Agent composer source contract", () => {
     )
     expect(source).toContain("onElementChange={setModelPickerElement}")
     expect(source).toContain("data-agent-runtime-state")
-    expect(source).toContain("await sharedGenerationController.refresh()")
+    expect(source).toContain("revalidateAgentSendCatalogs")
+    expect(source).toContain("sharedGenerationController.refresh()")
     expect(source).toContain("reconcileReady: false")
     expect(source).toContain("refreshShared: true")
     expect(source).toContain("throwOnError: true")
