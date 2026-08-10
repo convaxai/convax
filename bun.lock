@@ -248,7 +248,7 @@
     },
     "packages/plugin-api": {
       "name": "@convax/plugin-api",
-      "version": "3.0.0",
+      "version": "3.1.0",
       "bin": {
         "convax-plugin-api": "./dist/cli.js",
       },
@@ -261,7 +261,7 @@
     },
     "packages/plugin-sdk": {
       "name": "@convax/plugin-sdk",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "dependencies": {
         "@convax/bounded-value": "workspace:^",
         "@convax/plugin-api": "workspace:^",

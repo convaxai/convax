@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test"
-import { parsePortablePluginCanvasUiContribution } from "@convax/plugin-sdk"
+import { parsePortablePluginCanvasUiContribution, parsePortablePluginI18n } from "@convax/plugin-sdk"
 import { desktopPluginHostProtocolV8 } from "../plugin-host-protocol"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { DesktopPluginNodeCommandRegistry } from "./plugin-node-command-registry"
@@ -71,6 +71,27 @@ describe("DesktopPluginNodeCommandRegistry", () => {
         placementId: "settings-menu",
       },
     ])
+  })
+
+  test("resolves command keys through the Plugin resource before the inline fallback", () => {
+    const frames = new DesktopPluginFrameRegistry()
+    const keyed = parsePortablePluginCanvasUiContribution({
+      commands: [
+        {
+          id: "preview.play",
+          target: { message: "renderer.preview.play", type: "renderer-message" },
+          title: { default: "Play preview", key: "command.preview.play", "zh-CN": "旧播放文案" },
+        },
+      ],
+      toolbar: [{ command: "preview.play", id: "play-toolbar" }],
+    })
+    const i18n = parsePortablePluginI18n({
+      defaultLocale: "en",
+      messages: { en: {}, "zh-CN": { "command.preview.play": "播放新预览" } },
+    })
+    const registry = new DesktopPluginNodeCommandRegistry(frame.pluginId, keyed, frames, i18n)
+
+    expect(registry.project(frame, "zh-CN").toolbar[0]?.label).toBe("播放新预览")
   })
 
   test("sends only the command-owned renderer message to the exact captured frame", () => {

@@ -14,10 +14,7 @@ import type {
   ResolvedPluginPrincipal,
 } from "../plugin-capability-contracts"
 import type { PluginCapabilityConnectInput } from "../plugin-capability-ipc"
-import {
-  PluginHostApiError,
-  PluginHostApiResourceUnavailableError,
-} from "../plugin-host-errors"
+import { PluginHostApiError, PluginHostApiResourceUnavailableError } from "../plugin-host-errors"
 import { pluginCapabilityProtocolV3 } from "../plugin-host-protocol"
 import type { PluginCanvasCapabilityService } from "./plugin-canvas-capability-service"
 import { PluginCapabilityBrokerError } from "./plugin-capability-broker"
@@ -97,6 +94,7 @@ const connectInput: PluginCapabilityConnectInput = {
   activeRevision: principal.activeRevision,
   activeSetDigest: principal.activeSetDigest,
   canvasId: "canvas-one",
+  locale: "en",
   nodeId: "node-one",
   pluginId: principal.pluginId,
   pluginVersion: principal.pluginVersion,
@@ -232,6 +230,7 @@ function createAuthority(
       onCanvasEvent?(input: { event: PluginCanvasChangeEvent; subscriptionId: string }): void
     }) => {
       const subscriptions = new Map<string, PluginCanvasEventSubscription>()
+      let locale = "en"
       return {
         close() {
           for (const subscription of subscriptions.values()) subscription.close()
@@ -257,9 +256,15 @@ function createAuthority(
             return { subscriptionId }
           }
           if (call.method === "canvas.node.state.replace") return { updated: true }
+          if (call.method === "host.locale.get") return { locale }
           throw new Error(`Unexpected test Host API method: ${call.method}`)
         },
         supports() {
+          return true
+        },
+        updateLocale(nextLocale: string) {
+          if (nextLocale === locale) return false
+          locale = nextLocale
           return true
         },
       }
@@ -484,6 +489,39 @@ describe("registerPluginCapabilityIpc", () => {
       principal,
       scope: { kind: "project", projectId: connectInput.projectId },
     })
+  })
+
+  test("updates locale on the exact sender connection and publishes one bounded event per change", async () => {
+    const client = createClient()
+    const authority = createAuthority(client.client)
+    const { pluginCapabilityIpcChannels } = await register(authority)
+    const owner = new TestSender(1)
+    const other = new TestSender(2)
+    const { connectionId } = await connect(pluginCapabilityIpcChannels.connect, owner)
+
+    await expect(
+      Promise.resolve(invoke(pluginCapabilityIpcChannels.updateLocale, { connectionId, locale: "zh-CN" }, owner)),
+    ).resolves.toBe(true)
+    expect(owner.send).toHaveBeenCalledWith(pluginCapabilityIpcChannels.changed, {
+      command: {
+        command: "host.locale.changed",
+        params: { locale: "zh-CN" },
+        protocol: pluginCapabilityProtocolV3,
+        type: "command",
+      },
+      connectionId,
+    })
+
+    await expect(
+      Promise.resolve(invoke(pluginCapabilityIpcChannels.updateLocale, { connectionId, locale: "zh-CN" }, owner)),
+    ).resolves.toBe(false)
+    await expect(
+      Promise.resolve(invoke(pluginCapabilityIpcChannels.updateLocale, { connectionId, locale: "en" }, other)),
+    ).resolves.toBe(false)
+    expect(owner.send).toHaveBeenCalledTimes(1)
+    await expect(
+      Promise.resolve(invoke(pluginCapabilityIpcChannels.updateLocale, { connectionId, locale: "zh_CN" }, owner)),
+    ).rejects.toThrow("BCP-47")
   })
 
   test("projects typed Host API authorization, stale and resource failures without leaking diagnostics", async () => {
@@ -747,18 +785,16 @@ describe("registerPluginCapabilityIpc", () => {
     const authority = createAuthority(client.client)
     const started = deferred<void>()
     let observedSignal: AbortSignal | undefined
-    authority.getPluginAvailability.mockImplementation(
-      async (_principal, _capabilityId, signal) => {
-        observedSignal = signal
-        started.resolve()
-        await new Promise<void>((_resolve, reject) => {
-          const abort = () => reject(signal?.reason ?? new Error("aborted"))
-          if (signal?.aborted) abort()
-          else signal?.addEventListener("abort", abort, { once: true })
-        })
-        return { available: true }
-      },
-    )
+    authority.getPluginAvailability.mockImplementation(async (_principal, _capabilityId, signal) => {
+      observedSignal = signal
+      started.resolve()
+      await new Promise<void>((_resolve, reject) => {
+        const abort = () => reject(signal?.reason ?? new Error("aborted"))
+        if (signal?.aborted) abort()
+        else signal?.addEventListener("abort", abort, { once: true })
+      })
+      return { available: true }
+    })
     const { pluginCapabilityIpcChannels } = await register(authority)
     const sender = new TestSender(1)
     const { connectionId } = await connect(pluginCapabilityIpcChannels.connect, sender)
@@ -767,29 +803,19 @@ describe("registerPluginCapabilityIpc", () => {
       connectionId,
       operationId: "operation-availability",
     }
-    const pending = Promise.resolve(
-      invoke(pluginCapabilityIpcChannels.getPluginAvailability, input, sender),
-    )
+    const pending = Promise.resolve(invoke(pluginCapabilityIpcChannels.getPluginAvailability, input, sender))
     await started.promise
 
     await expect(
       Promise.resolve(
-        invoke(
-          pluginCapabilityIpcChannels.cancel,
-          { connectionId, operationId: input.operationId },
-          sender,
-        ),
+        invoke(pluginCapabilityIpcChannels.cancel, { connectionId, operationId: input.operationId }, sender),
       ),
     ).resolves.toBe(true)
     await expect(pending).rejects.toThrow("canceled")
     expect(observedSignal?.aborted).toBeTrue()
     await expect(
       Promise.resolve(
-        invoke(
-          pluginCapabilityIpcChannels.cancel,
-          { connectionId, operationId: input.operationId },
-          sender,
-        ),
+        invoke(pluginCapabilityIpcChannels.cancel, { connectionId, operationId: input.operationId }, sender),
       ),
     ).resolves.toBe(false)
   })
@@ -953,6 +979,7 @@ describe("registerPluginCapabilityIpc", () => {
       pluginCapabilityIpcChannels.disconnect,
       pluginCapabilityIpcChannels.getPluginAvailability,
       pluginCapabilityIpcChannels.invokePlugin,
+      pluginCapabilityIpcChannels.updateLocale,
     ])
     senders.forEach((sender) => expect(sender.listenerCount("destroyed")).toBe(0))
     senders.forEach((sender) => sender.destroy())

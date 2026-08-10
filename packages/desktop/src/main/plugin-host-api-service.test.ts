@@ -263,6 +263,7 @@ async function connection(input?: {
   })
   const connected = await service.connect({
     canvas: canvasClient(log),
+    locale: "en",
     ...(input?.invocationLease ? { invocationLease: input.invocationLease } : {}),
     node: { canvasId: "canvas-1", nodeId: "node-1", projectId: "project-1" },
     onCanvasEvent: (event) => events.push(event),
@@ -274,6 +275,20 @@ async function connection(input?: {
 }
 
 describe("PluginHostApiService", () => {
+  test("keeps locale as connection-scoped presentation state and rejects updates after close", async () => {
+    const { connected } = await connection()
+    await expect(connected.execute({ method: "host.locale.get" }, { operationId: "locale-initial" })).resolves.toEqual({
+      locale: "en",
+    })
+    expect(connected.updateLocale("zh-CN")).toBe(true)
+    expect(connected.updateLocale("zh-CN")).toBe(false)
+    await expect(connected.execute({ method: "host.locale.get" }, { operationId: "locale-updated" })).resolves.toEqual({
+      locale: "zh-CN",
+    })
+    connected.close()
+    expect(connected.updateLocale("en")).toBe(false)
+  })
+
   test("rejects projects.list with a typed non-recoverable permission error when its grant is absent", async () => {
     const denied = {
       ...resolvedPrincipal(),
@@ -349,6 +364,7 @@ describe("PluginHostApiService", () => {
       { method: "canvas.events.unsubscribe", params: { subscriptionId: "subscription-1" } },
       { method: "canvas.inputs.image.open", params: { inputKey: "source-1" } },
       { method: "canvas.inputs.image.close", params: { sessionId: "image-session-1" } },
+      { method: "host.locale.get" },
     ] as const
 
     expect(calls.map(({ method }) => method)).toEqual(allApiIds)
@@ -361,13 +377,13 @@ describe("PluginHostApiService", () => {
             availability: expect.arrayContaining([
               {
                 available: true,
-                catalogVersion: "3.0.0",
+                catalogVersion: "3.1.0",
                 contractSince: "3.0.0",
                 id: "generation.execute",
                 since: "1.0.0",
               },
             ]),
-            catalogVersion: "3.0.0",
+            catalogVersion: "3.1.0",
           },
         })
       }

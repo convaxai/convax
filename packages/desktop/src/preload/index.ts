@@ -16,10 +16,7 @@ import {
   pluginMaterializationIpcChannels,
   type PluginMaterializationRendererClient,
 } from "../plugin-materialization-contracts"
-import {
-  pluginSurfaceIpcChannels,
-  type PluginSurfaceRendererClient,
-} from "../plugin-surface-contracts"
+import { pluginSurfaceIpcChannels, type PluginSurfaceRendererClient } from "../plugin-surface-contracts"
 import { pluginServiceIpcChannels, type PluginServiceClient } from "../plugin-service-contracts"
 import type { DesktopSkillClient } from "../skill-management-contracts"
 import type { WebPluginClient } from "../plugin-contracts"
@@ -508,6 +505,7 @@ const pluginCapabilityClient = {
   disconnect: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.disconnect, input),
   getPluginAvailability: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.getPluginAvailability, input),
   invokePlugin: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.invokePlugin, input),
+  updateLocale: (input) => ipcRenderer.invoke(pluginCapabilityIpcChannels.updateLocale, input),
   onEvent(listener) {
     const handleEvent = (_event: Electron.IpcRendererEvent, input: Parameters<typeof listener>[0]) => listener(input)
     ipcRenderer.on(pluginCapabilityIpcChannels.changed, handleEvent)

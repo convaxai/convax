@@ -10,6 +10,7 @@ import {
   type PluginApiId,
   type ApiAvailability,
   type PluginApiHostContextResult,
+  type PluginApiHostLocaleResult,
   type PluginApiParams,
   type PluginApiResult,
 } from "@convax/plugin-api"
@@ -23,6 +24,7 @@ import {
 import {
   assertPluginHostMessageByteLength,
   isPluginHostCommand,
+  isPluginHostLocaleChangedCommand,
   isPluginHostRequestId,
   isPluginHostResponse,
   maximumPluginHostControlBytes,
@@ -33,6 +35,7 @@ import {
   parsePluginCapabilityRemoteFailure,
   parsePluginHostCapabilityAvailability,
   parsePluginHostProtocolRemoteFailure,
+  pluginHostLocaleChangedCommand,
   pluginHostProtocolV8,
   type PluginHostCancel,
   type PluginHostCapabilityAvailability,
@@ -43,6 +46,7 @@ import {
   type PluginHostRequest,
   type PluginHostRemoteFailure,
 } from "./host-protocol"
+import { parsePortablePluginLocale, type PortablePluginLocale } from "./localization"
 import { parsePluginManifestV8, type PortablePluginManifestV8 } from "./manifest"
 
 export * from "./host-protocol"
@@ -231,6 +235,7 @@ export interface PluginHostClient<Manifest extends PortablePluginManifestV8> {
     options?: PluginHostAvailabilityOptions,
   ): Promise<ApiAvailability<Id>>
   refreshHostApiContext(options?: PluginHostCallOptions): Promise<PluginApiHostContextResult>
+  getLocale(options?: PluginHostCallOptions): Promise<PortablePluginLocale>
   requireHostApi<Id extends PluginHostDeclaredApiId<Manifest>>(
     id: Id,
     options?: PluginHostAvailabilityOptions,
@@ -245,6 +250,7 @@ export interface PluginHostClient<Manifest extends PortablePluginManifestV8> {
     options?: PluginHostCallOptions,
   ): Promise<PluginHostCapabilityOutput<Manifest, Id>>
   onCommand(listener: (command: PluginHostCommand) => void): () => void
+  onLocaleChange(listener: (locale: PortablePluginLocale) => void): () => void
   close(): void
 }
 
@@ -306,7 +312,10 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
 
   const pending = new Map<string, PendingRequest>()
   const commandListeners = new Set<(command: PluginHostCommand) => void>()
+  const localeListeners = new Set<(locale: PortablePluginLocale) => void>()
   let cachedHostContext: PluginApiHostContextResult | undefined
+  let cachedLocale: PortablePluginLocale | undefined
+  let localeGeneration = 0
   let pendingHostContextRefresh: Promise<PluginApiHostContextResult> | undefined
   let sequence = 0
   let closed = false
@@ -324,7 +333,9 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
     closed = true
     options.port.removeEventListener("message", onMessage)
     commandListeners.clear()
+    localeListeners.clear()
     cachedHostContext = undefined
+    cachedLocale = undefined
     pendingHostContextRefresh = undefined
     rejectPending(error)
 
@@ -465,6 +476,20 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
     }
     if (isPluginHostCommand(event.data)) {
       try {
+        if (event.data.command === pluginHostLocaleChangedCommand) {
+          if (!isPluginApiDeclared(manifest.hostApi, "host.locale.get")) {
+            closeWith(new PluginHostProtocolError("invalid-envelope", "Plugin Host sent an undeclared locale event"))
+            return
+          }
+          if (!isPluginHostLocaleChangedCommand(event.data)) {
+            closeWith(new PluginHostProtocolError("invalid-envelope", "Plugin Host sent an invalid locale event"))
+            return
+          }
+          localeGeneration += 1
+          cachedLocale = event.data.params.locale
+          for (const listener of localeListeners) listener(cachedLocale)
+          return
+        }
         for (const listener of commandListeners) listener(event.data)
       } catch {
         closeWith(new PluginHostProtocolError("invalid-envelope", "Plugin Host command listener failed"))
@@ -600,6 +625,13 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
         since: definition.since,
       }) as ApiAvailability<typeof apiId>
     },
+    async getLocale(callOptions) {
+      const generation = localeGeneration
+      const result = (await callHostApiRuntime("host.locale.get", [callOptions])) as PluginApiHostLocaleResult
+      if (generation !== localeGeneration && cachedLocale !== undefined) return cachedLocale
+      cachedLocale = parsePortablePluginLocale(result.locale, "Plugin Host locale result")
+      return cachedLocale
+    },
     refreshHostApiContext(callOptions) {
       cachedHostContext = undefined
       if (pendingHostContextRefresh) return pendingHostContextRefresh
@@ -682,6 +714,17 @@ export function createPluginHostClient<const Manifest extends PortablePluginMani
       commandListeners.add(listener)
       return () => {
         commandListeners.delete(listener)
+      }
+    },
+    onLocaleChange(listener) {
+      if (closed) throw new PluginHostProtocolError("closed", "Plugin Host client is closed")
+      if (!isPluginApiDeclared(manifest.hostApi, "host.locale.get")) {
+        throw new TypeError("Plugin Host API is not declared: host.locale.get")
+      }
+      if (localeListeners.size >= 64) throw new RangeError("Plugin Host locale listener limit exceeded")
+      localeListeners.add(listener)
+      return () => {
+        localeListeners.delete(listener)
       }
     },
     close() {

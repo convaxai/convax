@@ -4,8 +4,8 @@ import {
   parsePortableStringArray,
   portableArray,
   portableRecord,
-  portableText,
 } from "./primitives"
+import { parsePortablePluginLocalizedText, type PortablePluginLocalizedText } from "./localization"
 import {
   parsePortablePluginCanvasUiContribution,
   type PortablePluginUiCommand,
@@ -24,10 +24,7 @@ export interface PortablePluginCanvasRendererContribution {
   readonly width?: number
 }
 
-export interface PortablePluginLocalizedText {
-  readonly default: string
-  readonly "zh-CN"?: string
-}
+export type { PortablePluginLocalizedText } from "./localization"
 
 export type PortablePluginCanvasSelectionActionEditor =
   | "time-point"
@@ -147,15 +144,6 @@ function parseRenderer(value: unknown): PortablePluginCanvasRendererContribution
   }
 }
 
-function localizedText(value: unknown, label: string, maximum: number): PortablePluginLocalizedText {
-  const input = portableRecord(value, label)
-  assertPortableKeys(input, ["default", "zh-CN"], label)
-  return {
-    default: portableText(input.default, `${label} default`, maximum),
-    ...(input["zh-CN"] === undefined ? {} : { "zh-CN": portableText(input["zh-CN"], `${label} zh-CN`, maximum) }),
-  }
-}
-
 function parseSelectionActions(value: unknown): readonly PortablePluginCanvasSelectionActionContribution[] {
   const actions = portableArray(value, "Canvas selection actions", 32, true).map((item, index) => {
     const label = `Canvas selection action ${index}`
@@ -174,10 +162,10 @@ function parseSelectionActions(value: unknown): readonly PortablePluginCanvasSel
           connect: "selection-to-created" as const,
           type: "materialize-own-plugin-node" as const,
         },
-        description: localizedText(input.description, `${label} description`, 2_000),
+        description: parsePortablePluginLocalizedText(input.description, `${label} description`, 2_000),
         id,
         target: "video" as const,
-        title: localizedText(input.title, `${label} title`, 120),
+        title: parsePortablePluginLocalizedText(input.title, `${label} title`, 120),
       }
     }
     assertPortableKeys(input, ["description", "editor", "id", "presentation", "steps", "target", "title"], label)
@@ -203,13 +191,13 @@ function parseSelectionActions(value: unknown): readonly PortablePluginCanvasSel
       throw new TypeError(`${label} editor requires exactly one step`)
     }
     return {
-      description: localizedText(input.description, `${label} description`, 2_000),
+      description: parsePortablePluginLocalizedText(input.description, `${label} description`, 2_000),
       editor,
       id,
       ...(input.presentation === undefined ? {} : { presentation: "cutout-scan" as const }),
       steps,
       target,
-      title: localizedText(input.title, `${label} title`, 120),
+      title: parsePortablePluginLocalizedText(input.title, `${label} title`, 120),
     }
   })
   if (new Set(actions.map((action) => action.id)).size !== actions.length) {

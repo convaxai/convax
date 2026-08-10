@@ -1,3 +1,5 @@
+import { parsePortablePluginLocalizedText, type PortablePluginLocalizedText } from "./localization"
+
 /**
  * Host-rendered icon names. Plugins never contribute React components, SVG,
  * HTML, URLs, or platform-native icon names.
@@ -15,10 +17,7 @@ export const portablePluginUiIconTokens = [
 
 export type PortablePluginUiIconToken = (typeof portablePluginUiIconTokens)[number]
 
-export interface PortablePluginUiLocalizedText {
-  readonly default: string
-  readonly "zh-CN"?: string
-}
+export type PortablePluginUiLocalizedText = PortablePluginLocalizedText
 
 /**
  * A command can only deliver one bounded opaque message to its owning
@@ -121,15 +120,6 @@ function order(value: unknown, label: string) {
   return Number(value)
 }
 
-function localizedText(value: unknown, label: string): PortablePluginUiLocalizedText {
-  const input = record(value, label)
-  exactKeys(input, ["default"], ["zh-CN"], label)
-  return Object.freeze({
-    default: text(input.default, `${label}.default`, 120),
-    ...(input["zh-CN"] === undefined ? {} : { "zh-CN": text(input["zh-CN"], `${label}.zh-CN`, 120) }),
-  })
-}
-
 function isPortablePluginUiIconToken(value: unknown): value is PortablePluginUiIconToken {
   return portablePluginUiIconTokens.some((token) => token === value)
 }
@@ -149,7 +139,7 @@ function command(value: unknown, index: number): PortablePluginUiCommand {
   }
   return Object.freeze({
     id: stableId(input.id, `${label}.id`, commandIdPattern, 128),
-    title: localizedText(input.title, `${label}.title`),
+    title: parsePortablePluginLocalizedText(input.title, `${label}.title`, 120),
     target: Object.freeze({
       type: "renderer-message",
       message: text(target.message, `${label}.target.message`, 128),
@@ -234,11 +224,9 @@ export function parsePortablePluginCanvasUiContribution(value: unknown): Portabl
     ),
   )
   const menus = Object.freeze(
-    boundedArray(
-      input.menus === undefined ? [] : input.menus,
-      "Plugin UI menus",
-      maximumPlacementsPerSurface,
-    ).map(menuItem),
+    boundedArray(input.menus === undefined ? [] : input.menus, "Plugin UI menus", maximumPlacementsPerSurface).map(
+      menuItem,
+    ),
   )
   const toolbar = Object.freeze(
     boundedArray(

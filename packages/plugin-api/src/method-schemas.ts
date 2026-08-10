@@ -508,6 +508,8 @@ const hostContextResult = object(
   ["canvas", "hostApi", "node", "plugin", "project"],
 )
 
+const hostLocaleResult = object({ locale: string(35, { refinement: "trimmed" }) }, ["locale"])
+
 const contract = <const Request extends PluginApiWireSchema, const Result extends PluginApiWireSchema>(
   request: Request,
   result: Result,
@@ -530,6 +532,7 @@ const contract = <const Request extends PluginApiWireSchema, const Result extend
  */
 export const pluginApiWireContracts = Object.freeze({
   "host.context.get": contract(none, hostContextResult, { result: MiB }),
+  "host.locale.get": contract(none, hostLocaleResult),
   "canvas.inputs.list": contract(none, object({ inputs: array(connectedInput, 256) }, ["inputs"]), {
     result: MiB,
   }),

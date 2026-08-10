@@ -1,6 +1,7 @@
 export * from "./canvas"
 export * from "./capabilities"
 export * from "./generation"
+export * from "./localization"
 export * from "./manifest"
 export * from "./primitives"
 export * from "./runtime-contributions"

@@ -189,34 +189,34 @@ function deferred<T>() {
 
 function canvas(): CanvasDocument {
   return createCanvasDocument({
-      edges: [{ id: "edge-1", source: "video-1", target: "plugin-1" }],
-      id: "canvas-1",
-      nodes: [
-        {
-          data: {
-            durationMs: 2_000,
-            height: 1080,
-            kind: "video",
-            label: "Source",
-            mimeType: "video/mp4",
-            width: 1920,
-          },
-          id: "video-1",
-          position: { x: 0, y: 0 },
-          type: "file",
+    edges: [{ id: "edge-1", source: "video-1", target: "plugin-1" }],
+    id: "canvas-1",
+    nodes: [
+      {
+        data: {
+          durationMs: 2_000,
+          height: 1080,
+          kind: "video",
+          label: "Source",
+          mimeType: "video/mp4",
+          width: 1920,
         },
-        {
-          data: {
-            kind: "plugin.media-surface",
-            label: "Media Surface",
-            metadata: { convaxPlugin: { entry: "index.html", id: "media-surface", version: "1.0.0" } },
-          },
-          id: "plugin-1",
-          position: { x: 500, y: 0 },
-          type: "file",
+        id: "video-1",
+        position: { x: 0, y: 0 },
+        type: "file",
+      },
+      {
+        data: {
+          kind: "plugin.media-surface",
+          label: "Media Surface",
+          metadata: { convaxPlugin: { entry: "index.html", id: "media-surface", version: "1.0.0" } },
         },
-        { data: { kind: "video", label: "Other" }, id: "other", position: { x: 0, y: 300 }, type: "file" },
-      ],
+        id: "plugin-1",
+        position: { x: 500, y: 0 },
+        type: "file",
+      },
+      { data: { kind: "video", label: "Other" }, id: "other", position: { x: 0, y: 300 }, type: "file" },
+    ],
   })
 }
 
@@ -1298,6 +1298,7 @@ describe("PluginConnectedMediaService", () => {
     const connect = (frameId: string) =>
       host.connect({
         canvas: {} as never,
+        locale: "en",
         node: { canvasId: "canvas-1", nodeId: "plugin-1", projectId: "project-1" },
         principal,
         scope: { kind: "project", projectId: "project-1" },
@@ -1342,6 +1343,9 @@ describe("PluginConnectedMediaService", () => {
       async invokePlugin() {
         throw new Error("unused")
       },
+      async updateLocale() {
+        return true
+      },
       onEvent() {
         return () => undefined
       },
@@ -1352,6 +1356,7 @@ describe("PluginConnectedMediaService", () => {
         activeRevision: principal.activeRevision,
         activeSetDigest: principal.activeSetDigest,
         canvasId: "canvas-1",
+        locale: "en",
         nodeId: "plugin-1",
         pluginId: principal.pluginId,
         pluginVersion: principal.pluginVersion,

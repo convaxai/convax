@@ -19,9 +19,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "text"
-            ],
+            "required": ["text"],
             "type": "object"
           }
         },
@@ -37,9 +35,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "text"
-            ],
+            "required": ["text"],
             "type": "object"
           }
         }
@@ -87,9 +83,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "projectId"
-            ],
+            "required": ["projectId"],
             "type": "object"
           }
         },
@@ -115,10 +109,7 @@
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "id",
-                    "name"
-                  ],
+                  "required": ["id", "name"],
                   "type": "object"
                 },
                 "maxItems": 10000,
@@ -132,10 +123,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "canvases",
-              "projectId"
-            ],
+            "required": ["canvases", "projectId"],
             "type": "object"
           }
         }
@@ -178,10 +166,7 @@
             "properties": {
               "projection": {
                 "controlCharacters": false,
-                "enum": [
-                  "geometry",
-                  "structure"
-                ],
+                "enum": ["geometry", "structure"],
                 "maxLength": 9,
                 "minLength": 1,
                 "type": "string"
@@ -202,16 +187,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "canvasId",
-                  "projectId"
-                ],
+                "required": ["canvasId", "projectId"],
                 "type": "object"
               }
             },
-            "required": [
-              "ref"
-            ],
+            "required": ["ref"],
             "type": "object"
           }
         },
@@ -248,11 +228,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "source",
-                            "target"
-                          ],
+                          "required": ["id", "source", "target"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -305,10 +281,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "x",
-                                "y"
-                              ],
+                              "required": ["x", "y"],
                               "type": "object"
                             },
                             "size": {
@@ -323,10 +296,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "height",
-                                "width"
-                              ],
+                              "required": ["height", "width"],
                               "type": "object"
                             },
                             "type": {
@@ -336,13 +306,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "kind",
-                            "label",
-                            "position",
-                            "size"
-                          ],
+                          "required": ["id", "kind", "label", "position", "size"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -356,12 +320,7 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "edges",
-                      "id",
-                      "nodes",
-                      "title"
-                    ],
+                    "required": ["edges", "id", "nodes", "title"],
                     "type": "object"
                   },
                   "projection": {
@@ -383,18 +342,11 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "canvasId",
-                      "projectId"
-                    ],
+                    "required": ["canvasId", "projectId"],
                     "type": "object"
                   }
                 },
-                "required": [
-                  "document",
-                  "projection",
-                  "ref"
-                ],
+                "required": ["document", "projection", "ref"],
                 "type": "object"
               },
               {
@@ -432,11 +384,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "source",
-                            "target"
-                          ],
+                          "required": ["id", "source", "target"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -511,10 +459,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "x",
-                                "y"
-                              ],
+                              "required": ["x", "y"],
                               "type": "object"
                             },
                             "resource": {
@@ -530,10 +475,7 @@
                                   "type": "string"
                                 }
                               },
-                              "required": [
-                                "kind",
-                                "path"
-                              ],
+                              "required": ["kind", "path"],
                               "type": "object"
                             },
                             "size": {
@@ -548,10 +490,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "height",
-                                "width"
-                              ],
+                              "required": ["height", "width"],
                               "type": "object"
                             },
                             "status": {
@@ -573,13 +512,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "kind",
-                            "label",
-                            "position",
-                            "size"
-                          ],
+                          "required": ["id", "kind", "label", "position", "size"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -604,12 +537,7 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "edges",
-                      "id",
-                      "nodes",
-                      "title"
-                    ],
+                    "required": ["edges", "id", "nodes", "title"],
                     "type": "object"
                   },
                   "projection": {
@@ -631,18 +559,11 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "canvasId",
-                      "projectId"
-                    ],
+                    "required": ["canvasId", "projectId"],
                     "type": "object"
                   }
                 },
-                "required": [
-                  "document",
-                  "projection",
-                  "ref"
-                ],
+                "required": ["document", "projection", "ref"],
                 "type": "object"
               }
             ]
@@ -701,15 +622,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "projectId"
-                ],
+                "required": ["projectId"],
                 "type": "object"
               }
             },
-            "required": [
-              "ref"
-            ],
+            "required": ["ref"],
             "type": "object"
           }
         },
@@ -725,9 +642,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "subscriptionId"
-            ],
+            "required": ["subscriptionId"],
             "type": "object"
           }
         }
@@ -775,9 +690,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "subscriptionId"
-            ],
+            "required": ["subscriptionId"],
             "type": "object"
           }
         },
@@ -790,9 +703,7 @@
                 "type": "boolean"
               }
             },
-            "required": [
-              "removed"
-            ],
+            "required": ["removed"],
             "type": "object"
           }
         }
@@ -840,9 +751,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "sessionId"
-            ],
+            "required": ["sessionId"],
             "type": "object"
           }
         },
@@ -855,9 +764,7 @@
                 "type": "boolean"
               }
             },
-            "required": [
-              "closed"
-            ],
+            "required": ["closed"],
             "type": "object"
           }
         }
@@ -905,9 +812,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "sessionId"
-            ],
+            "required": ["sessionId"],
             "type": "object"
           }
         },
@@ -920,9 +825,7 @@
                 "type": "boolean"
               }
             },
-            "required": [
-              "closed"
-            ],
+            "required": ["closed"],
             "type": "object"
           }
         }
@@ -970,9 +873,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "inputKey"
-            ],
+            "required": ["inputKey"],
             "type": "object"
           }
         },
@@ -985,10 +886,7 @@
                 "additionalProperties": false,
                 "products": [
                   {
-                    "fields": [
-                      "width",
-                      "height"
-                    ],
+                    "fields": ["width", "height"],
                     "maximum": 33554432
                   }
                 ],
@@ -1011,11 +909,7 @@
                   },
                   "mimeType": {
                     "controlCharacters": false,
-                    "enum": [
-                      "image/jpeg",
-                      "image/png",
-                      "image/webp"
-                    ],
+                    "enum": ["image/jpeg", "image/png", "image/webp"],
                     "maxLength": 10,
                     "minLength": 1,
                     "type": "string"
@@ -1033,14 +927,7 @@
                     "type": "integer"
                   }
                 },
-                "required": [
-                  "contentRevision",
-                  "height",
-                  "kind",
-                  "mimeType",
-                  "size",
-                  "width"
-                ],
+                "required": ["contentRevision", "height", "kind", "mimeType", "size", "width"],
                 "type": "object"
               },
               "sessionId": {
@@ -1057,11 +944,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "probe",
-              "sessionId",
-              "url"
-            ],
+            "required": ["probe", "sessionId", "url"],
             "type": "object"
           }
         }
@@ -1164,11 +1047,7 @@
                     },
                     "status": {
                       "controlCharacters": false,
-                      "enum": [
-                        "error",
-                        "idle",
-                        "pending"
-                      ],
+                      "enum": ["error", "idle", "pending"],
                       "maxLength": 7,
                       "minLength": 1,
                       "type": "string"
@@ -1178,11 +1057,7 @@
                       "type": "number"
                     }
                   },
-                  "required": [
-                    "inputKey",
-                    "kind",
-                    "label"
-                  ],
+                  "required": ["inputKey", "kind", "label"],
                   "type": "object"
                 },
                 "maxItems": 256,
@@ -1190,9 +1065,7 @@
                 "type": "array"
               }
             },
-            "required": [
-              "inputs"
-            ],
+            "required": ["inputs"],
             "type": "object"
           }
         }
@@ -1240,9 +1113,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "inputKey"
-            ],
+            "required": ["inputKey"],
             "type": "object"
           }
         },
@@ -1265,10 +1136,7 @@
                         "type": "number"
                       }
                     },
-                    "required": [
-                      "estimated",
-                      "milliseconds"
-                    ],
+                    "required": ["estimated", "milliseconds"],
                     "type": "object"
                   },
                   "height": {
@@ -1277,10 +1145,7 @@
                   },
                   "kind": {
                     "controlCharacters": false,
-                    "enum": [
-                      "audio",
-                      "video"
-                    ],
+                    "enum": ["audio", "video"],
                     "maxLength": 5,
                     "minLength": 1,
                     "type": "string"
@@ -1306,13 +1171,7 @@
                     "type": "number"
                   }
                 },
-                "required": [
-                  "duration",
-                  "kind",
-                  "mediaRevision",
-                  "mimeType",
-                  "size"
-                ],
+                "required": ["duration", "kind", "mediaRevision", "mimeType", "size"],
                 "type": "object"
               },
               "sessionId": {
@@ -1329,11 +1188,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "probe",
-              "sessionId",
-              "url"
-            ],
+            "required": ["probe", "sessionId", "url"],
             "type": "object"
           }
         }
@@ -1416,10 +1271,7 @@
                     "type": "number"
                   }
                 },
-                "required": [
-                  "x",
-                  "y"
-                ],
+                "required": ["x", "y"],
                 "type": "object"
               },
               "style": {
@@ -1435,12 +1287,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "data",
-              "id",
-              "position",
-              "type"
-            ],
+            "required": ["data", "id", "position", "type"],
             "type": "object"
           }
         }
@@ -1488,9 +1335,7 @@
                 "type": "json-object"
               }
             },
-            "required": [
-              "state"
-            ],
+            "required": ["state"],
             "type": "object"
           }
         },
@@ -1569,20 +1414,13 @@
                         },
                         "kind": {
                           "controlCharacters": false,
-                          "enum": [
-                            "node",
-                            "edge"
-                          ],
+                          "enum": ["node", "edge"],
                           "maxLength": 4,
                           "minLength": 1,
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "incarnation",
-                        "kind"
-                      ],
+                      "required": ["id", "incarnation", "kind"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -1639,10 +1477,7 @@
                         "type": "number"
                       }
                     },
-                    "required": [
-                      "x",
-                      "y"
-                    ],
+                    "required": ["x", "y"],
                     "type": "object"
                   },
                   "style": {
@@ -1658,23 +1493,14 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "data",
-                  "id",
-                  "position",
-                  "type"
-                ],
+                "required": ["data", "id", "position", "type"],
                 "type": "object"
               },
               "updated": {
                 "const": true
               }
             },
-            "required": [
-              "operationReceipt",
-              "projection",
-              "updated"
-            ],
+            "required": ["operationReceipt", "projection", "updated"],
             "type": "object"
           }
         }
@@ -1787,16 +1613,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "canvasId",
-                  "projectId"
-                ],
+                "required": ["canvasId", "projectId"],
                 "type": "object"
               }
             },
-            "required": [
-              "ref"
-            ],
+            "required": ["ref"],
             "type": "object"
           }
         },
@@ -1867,10 +1688,7 @@
                           "type": "number"
                         }
                       },
-                      "required": [
-                        "x",
-                        "y"
-                      ],
+                      "required": ["x", "y"],
                       "type": "object"
                     },
                     "text": {
@@ -1886,14 +1704,7 @@
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "id",
-                    "incomingNodeIds",
-                    "kind",
-                    "label",
-                    "outgoingNodeIds",
-                    "position"
-                  ],
+                  "required": ["id", "incomingNodeIds", "kind", "label", "outgoingNodeIds", "position"],
                   "type": "object"
                 },
                 "maxItems": 1000,
@@ -1932,11 +1743,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "source",
-                        "target"
-                      ],
+                      "required": ["id", "source", "target"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -2011,10 +1818,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "x",
-                            "y"
-                          ],
+                          "required": ["x", "y"],
                           "type": "object"
                         },
                         "resource": {
@@ -2030,10 +1834,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "kind",
-                            "path"
-                          ],
+                          "required": ["kind", "path"],
                           "type": "object"
                         },
                         "size": {
@@ -2048,10 +1849,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "height",
-                            "width"
-                          ],
+                          "required": ["height", "width"],
                           "type": "object"
                         },
                         "status": {
@@ -2073,13 +1871,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "kind",
-                        "label",
-                        "position",
-                        "size"
-                      ],
+                      "required": ["id", "kind", "label", "position", "size"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -2104,12 +1896,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "edges",
-                  "id",
-                  "nodes",
-                  "title"
-                ],
+                "required": ["edges", "id", "nodes", "title"],
                 "type": "object"
               },
               "ref": {
@@ -2128,18 +1915,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "canvasId",
-                  "projectId"
-                ],
+                "required": ["canvasId", "projectId"],
                 "type": "object"
               }
             },
-            "required": [
-              "nodes",
-              "projection",
-              "ref"
-            ],
+            "required": ["nodes", "projection", "ref"],
             "type": "object"
           }
         }
@@ -2195,10 +1975,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "dataUrl",
-              "name"
-            ],
+            "required": ["dataUrl", "name"],
             "type": "object"
           }
         },
@@ -2283,20 +2060,13 @@
                         },
                         "kind": {
                           "controlCharacters": false,
-                          "enum": [
-                            "node",
-                            "edge"
-                          ],
+                          "enum": ["node", "edge"],
                           "maxLength": 4,
                           "minLength": 1,
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "incarnation",
-                        "kind"
-                      ],
+                      "required": ["id", "incarnation", "kind"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -2352,11 +2122,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "source",
-                        "target"
-                      ],
+                      "required": ["id", "source", "target"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -2431,10 +2197,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "x",
-                            "y"
-                          ],
+                          "required": ["x", "y"],
                           "type": "object"
                         },
                         "resource": {
@@ -2450,10 +2213,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "kind",
-                            "path"
-                          ],
+                          "required": ["kind", "path"],
                           "type": "object"
                         },
                         "size": {
@@ -2468,10 +2228,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "height",
-                            "width"
-                          ],
+                          "required": ["height", "width"],
                           "type": "object"
                         },
                         "status": {
@@ -2493,13 +2250,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "kind",
-                        "label",
-                        "position",
-                        "size"
-                      ],
+                      "required": ["id", "kind", "label", "position", "size"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -2524,20 +2275,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "edges",
-                  "id",
-                  "nodes",
-                  "title"
-                ],
+                "required": ["edges", "id", "nodes", "title"],
                 "type": "object"
               }
             },
-            "required": [
-              "createdNodeId",
-              "operationReceipt",
-              "projection"
-            ],
+            "required": ["createdNodeId", "operationReceipt", "projection"],
             "type": "object"
           }
         }
@@ -2614,9 +2356,7 @@
                         "const": "elements.remove"
                       }
                     },
-                    "required": [
-                      "type"
-                    ],
+                    "required": ["type"],
                     "type": "object"
                   },
                   {
@@ -2624,14 +2364,7 @@
                     "properties": {
                       "direction": {
                         "controlCharacters": false,
-                        "enum": [
-                          "left",
-                          "center",
-                          "right",
-                          "top",
-                          "middle",
-                          "bottom"
-                        ],
+                        "enum": ["left", "center", "right", "top", "middle", "bottom"],
                         "maxLength": 6,
                         "minLength": 1,
                         "type": "string"
@@ -2651,11 +2384,7 @@
                         "const": "nodes.align"
                       }
                     },
-                    "required": [
-                      "direction",
-                      "nodeIds",
-                      "type"
-                    ],
+                    "required": ["direction", "nodeIds", "type"],
                     "type": "object"
                   },
                   {
@@ -2692,20 +2421,14 @@
                             "type": "string"
                           }
                         },
-                        "required": [
-                          "source",
-                          "target"
-                        ],
+                        "required": ["source", "target"],
                         "type": "object"
                       },
                       "type": {
                         "const": "nodes.connect"
                       }
                     },
-                    "required": [
-                      "connection",
-                      "type"
-                    ],
+                    "required": ["connection", "type"],
                     "type": "object"
                   },
                   {
@@ -2713,10 +2436,7 @@
                     "properties": {
                       "axis": {
                         "controlCharacters": false,
-                        "enum": [
-                          "horizontal",
-                          "vertical"
-                        ],
+                        "enum": ["horizontal", "vertical"],
                         "maxLength": 10,
                         "minLength": 1,
                         "type": "string"
@@ -2736,11 +2456,7 @@
                         "const": "nodes.distribute"
                       }
                     },
-                    "required": [
-                      "axis",
-                      "nodeIds",
-                      "type"
-                    ],
+                    "required": ["axis", "nodeIds", "type"],
                     "type": "object"
                   },
                   {
@@ -2767,10 +2483,7 @@
                         "const": "nodes.group"
                       }
                     },
-                    "required": [
-                      "nodeIds",
-                      "type"
-                    ],
+                    "required": ["nodeIds", "type"],
                     "type": "object"
                   },
                   {
@@ -2782,11 +2495,7 @@
                       },
                       "layout": {
                         "controlCharacters": false,
-                        "enum": [
-                          "grid",
-                          "horizontal",
-                          "vertical"
-                        ],
+                        "enum": ["grid", "horizontal", "vertical"],
                         "maxLength": 10,
                         "minLength": 1,
                         "type": "string"
@@ -2806,10 +2515,7 @@
                         "const": "nodes.layout"
                       }
                     },
-                    "required": [
-                      "nodeIds",
-                      "type"
-                    ],
+                    "required": ["nodeIds", "type"],
                     "type": "object"
                   },
                   {
@@ -2827,10 +2533,7 @@
                             "type": "number"
                           }
                         },
-                        "required": [
-                          "x",
-                          "y"
-                        ],
+                        "required": ["x", "y"],
                         "type": "object"
                       },
                       "nodeIds": {
@@ -2848,11 +2551,7 @@
                         "const": "nodes.move"
                       }
                     },
-                    "required": [
-                      "delta",
-                      "nodeIds",
-                      "type"
-                    ],
+                    "required": ["delta", "nodeIds", "type"],
                     "type": "object"
                   },
                   {
@@ -2883,10 +2582,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "x",
-                                "y"
-                              ],
+                              "required": ["x", "y"],
                               "type": "object"
                             },
                             "size": {
@@ -2901,17 +2597,11 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "height",
-                                "width"
-                              ],
+                              "required": ["height", "width"],
                               "type": "object"
                             }
                           },
-                          "required": [
-                            "nodeId",
-                            "position"
-                          ],
+                          "required": ["nodeId", "position"],
                           "type": "object"
                         },
                         "maxItems": 1000,
@@ -2919,10 +2609,7 @@
                         "type": "array"
                       }
                     },
-                    "required": [
-                      "type",
-                      "updates"
-                    ],
+                    "required": ["type", "updates"],
                     "type": "object"
                   },
                   {
@@ -2938,10 +2625,7 @@
                         "const": "nodes.ungroup"
                       }
                     },
-                    "required": [
-                      "nodeId",
-                      "type"
-                    ],
+                    "required": ["nodeId", "type"],
                     "type": "object"
                   },
                   {
@@ -2975,10 +2659,7 @@
                           },
                           "isolatedPlacement": {
                             "controlCharacters": false,
-                            "enum": [
-                              "left",
-                              "preserve"
-                            ],
+                            "enum": ["left", "preserve"],
                             "maxLength": 8,
                             "minLength": 1,
                             "type": "string"
@@ -2997,11 +2678,7 @@
                           },
                           "strategy": {
                             "controlCharacters": false,
-                            "enum": [
-                              "component-packing",
-                              "horizontal-directed-cluster",
-                              "vertical-directed-cluster"
-                            ],
+                            "enum": ["component-packing", "horizontal-directed-cluster", "vertical-directed-cluster"],
                             "maxLength": 27,
                             "minLength": 1,
                             "type": "string"
@@ -3014,9 +2691,7 @@
                         "const": "canvas.auto-layout"
                       }
                     },
-                    "required": [
-                      "type"
-                    ],
+                    "required": ["type"],
                     "type": "object"
                   }
                 ]
@@ -3043,18 +2718,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "canvasId",
-                  "projectId"
-                ],
+                "required": ["canvasId", "projectId"],
                 "type": "object"
               }
             },
-            "required": [
-              "command",
-              "commandId",
-              "ref"
-            ],
+            "required": ["command", "commandId", "ref"],
             "type": "object"
           }
         },
@@ -3158,20 +2826,13 @@
                         },
                         "kind": {
                           "controlCharacters": false,
-                          "enum": [
-                            "node",
-                            "edge"
-                          ],
+                          "enum": ["node", "edge"],
                           "maxLength": 4,
                           "minLength": 1,
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "incarnation",
-                        "kind"
-                      ],
+                      "required": ["id", "incarnation", "kind"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -3227,11 +2888,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "source",
-                        "target"
-                      ],
+                      "required": ["id", "source", "target"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -3306,10 +2963,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "x",
-                            "y"
-                          ],
+                          "required": ["x", "y"],
                           "type": "object"
                         },
                         "resource": {
@@ -3325,10 +2979,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "kind",
-                            "path"
-                          ],
+                          "required": ["kind", "path"],
                           "type": "object"
                         },
                         "size": {
@@ -3343,10 +2994,7 @@
                               "type": "number"
                             }
                           },
-                          "required": [
-                            "height",
-                            "width"
-                          ],
+                          "required": ["height", "width"],
                           "type": "object"
                         },
                         "status": {
@@ -3368,13 +3016,7 @@
                           "type": "string"
                         }
                       },
-                      "required": [
-                        "id",
-                        "kind",
-                        "label",
-                        "position",
-                        "size"
-                      ],
+                      "required": ["id", "kind", "label", "position", "size"],
                       "type": "object"
                     },
                     "maxItems": 10000,
@@ -3399,12 +3041,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "edges",
-                  "id",
-                  "nodes",
-                  "title"
-                ],
+                "required": ["edges", "id", "nodes", "title"],
                 "type": "object"
               },
               "ref": {
@@ -3423,10 +3060,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "canvasId",
-                  "projectId"
-                ],
+                "required": ["canvasId", "projectId"],
                 "type": "object"
               },
               "summaryTruncated": {
@@ -3495,12 +3129,7 @@
             "properties": {
               "output": {
                 "controlCharacters": false,
-                "enum": [
-                  "text",
-                  "image",
-                  "video",
-                  "audio"
-                ],
+                "enum": ["text", "image", "video", "audio"],
                 "maxLength": 5,
                 "minLength": 1,
                 "type": "string"
@@ -3524,23 +3153,13 @@
                     },
                     "role": {
                       "controlCharacters": false,
-                      "enum": [
-                        "text",
-                        "reference_image",
-                        "reference_video",
-                        "first_frame",
-                        "last_frame",
-                        "audio"
-                      ],
+                      "enum": ["text", "reference_image", "reference_video", "first_frame", "last_frame", "audio"],
                       "maxLength": 15,
                       "minLength": 1,
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "inputKey",
-                    "role"
-                  ],
+                  "required": ["inputKey", "role"],
                   "type": "object"
                 },
                 "maxItems": 32,
@@ -3549,10 +3168,7 @@
               },
               "resultMode": {
                 "controlCharacters": false,
-                "enum": [
-                  "create-pending-node",
-                  "return"
-                ],
+                "enum": ["create-pending-node", "return"],
                 "maxLength": 19,
                 "minLength": 1,
                 "type": "string"
@@ -3564,9 +3180,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "prompt"
-            ],
+            "required": ["prompt"],
             "type": "object"
           }
         },
@@ -3661,20 +3275,13 @@
                             },
                             "kind": {
                               "controlCharacters": false,
-                              "enum": [
-                                "node",
-                                "edge"
-                              ],
+                              "enum": ["node", "edge"],
                               "maxLength": 4,
                               "minLength": 1,
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "incarnation",
-                            "kind"
-                          ],
+                          "required": ["id", "incarnation", "kind"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -3743,11 +3350,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "source",
-                            "target"
-                          ],
+                          "required": ["id", "source", "target"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -3822,10 +3425,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "x",
-                                "y"
-                              ],
+                              "required": ["x", "y"],
                               "type": "object"
                             },
                             "resource": {
@@ -3841,10 +3441,7 @@
                                   "type": "string"
                                 }
                               },
-                              "required": [
-                                "kind",
-                                "path"
-                              ],
+                              "required": ["kind", "path"],
                               "type": "object"
                             },
                             "size": {
@@ -3859,10 +3456,7 @@
                                   "type": "number"
                                 }
                               },
-                              "required": [
-                                "height",
-                                "width"
-                              ],
+                              "required": ["height", "width"],
                               "type": "object"
                             },
                             "status": {
@@ -3884,13 +3478,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "id",
-                            "kind",
-                            "label",
-                            "position",
-                            "size"
-                          ],
+                          "required": ["id", "kind", "label", "position", "size"],
                           "type": "object"
                         },
                         "maxItems": 10000,
@@ -3915,12 +3503,7 @@
                         "type": "string"
                       }
                     },
-                    "required": [
-                      "edges",
-                      "id",
-                      "nodes",
-                      "title"
-                    ],
+                    "required": ["edges", "id", "nodes", "title"],
                     "type": "object"
                   }
                 ]
@@ -3943,13 +3526,7 @@
                 "type": "array"
               }
             },
-            "required": [
-              "createdNodeIds",
-              "operationReceipt",
-              "projection",
-              "toolId",
-              "warnings"
-            ],
+            "required": ["createdNodeIds", "operationReceipt", "projection", "toolId", "warnings"],
             "type": "object"
           }
         }
@@ -4007,12 +3584,7 @@
                 "properties": {
                   "output": {
                     "controlCharacters": false,
-                    "enum": [
-                      "text",
-                      "image",
-                      "video",
-                      "audio"
-                    ],
+                    "enum": ["text", "image", "video", "audio"],
                     "maxLength": 5,
                     "minLength": 1,
                     "type": "string"
@@ -4036,14 +3608,7 @@
                     "acceptedInputs": {
                       "items": {
                         "controlCharacters": false,
-                        "enum": [
-                          "text",
-                          "reference_image",
-                          "reference_video",
-                          "first_frame",
-                          "last_frame",
-                          "audio"
-                        ],
+                        "enum": ["text", "reference_image", "reference_video", "first_frame", "last_frame", "audio"],
                         "maxLength": 15,
                         "minLength": 1,
                         "type": "string"
@@ -4066,22 +3631,14 @@
                     },
                     "kind": {
                       "controlCharacters": false,
-                      "enum": [
-                        "model",
-                        "operation"
-                      ],
+                      "enum": ["model", "operation"],
                       "maxLength": 9,
                       "minLength": 1,
                       "type": "string"
                     },
                     "output": {
                       "controlCharacters": false,
-                      "enum": [
-                        "text",
-                        "image",
-                        "video",
-                        "audio"
-                      ],
+                      "enum": ["text", "image", "video", "audio"],
                       "maxLength": 5,
                       "minLength": 1,
                       "type": "string"
@@ -4093,14 +3650,7 @@
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "acceptedInputs",
-                    "description",
-                    "id",
-                    "kind",
-                    "output",
-                    "title"
-                  ],
+                  "required": ["acceptedInputs", "description", "id", "kind", "output", "title"],
                   "type": "object"
                 },
                 "maxItems": 256,
@@ -4108,9 +3658,7 @@
                 "type": "array"
               }
             },
-            "required": [
-              "tools"
-            ],
+            "required": ["tools"],
             "type": "object"
           }
         }
@@ -4168,9 +3716,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "id"
-                ],
+                "required": ["id"],
                 "type": "object"
               },
               "hostApi": {
@@ -4210,13 +3756,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "available",
-                            "catalogVersion",
-                            "contractSince",
-                            "id",
-                            "since"
-                          ],
+                          "required": ["available", "catalogVersion", "contractSince", "id", "since"],
                           "type": "object"
                         },
                         {
@@ -4263,12 +3803,7 @@
                               "type": "string"
                             }
                           },
-                          "required": [
-                            "available",
-                            "id",
-                            "reason",
-                            "recoverable"
-                          ],
+                          "required": ["available", "id", "reason", "recoverable"],
                           "type": "object"
                         }
                       ]
@@ -4285,10 +3820,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "availability",
-                  "catalogVersion"
-                ],
+                "required": ["availability", "catalogVersion"],
                 "type": "object"
               },
               "node": {
@@ -4324,10 +3856,7 @@
                         "type": "number"
                       }
                     },
-                    "required": [
-                      "x",
-                      "y"
-                    ],
+                    "required": ["x", "y"],
                     "type": "object"
                   },
                   "style": {
@@ -4343,12 +3872,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "data",
-                  "id",
-                  "position",
-                  "type"
-                ],
+                "required": ["data", "id", "position", "type"],
                 "type": "object"
               },
               "plugin": {
@@ -4373,11 +3897,7 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "id",
-                  "name",
-                  "version"
-                ],
+                "required": ["id", "name", "version"],
                 "type": "object"
               },
               "project": {
@@ -4396,19 +3916,11 @@
                     "type": "string"
                   }
                 },
-                "required": [
-                  "id"
-                ],
+                "required": ["id"],
                 "type": "object"
               }
             },
-            "required": [
-              "canvas",
-              "hostApi",
-              "node",
-              "plugin",
-              "project"
-            ],
+            "required": ["canvas", "hostApi", "node", "plugin", "project"],
             "type": "object"
           }
         }
@@ -4458,9 +3970,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "locale"
-            ],
+            "required": ["locale"],
             "type": "object"
           }
         }
@@ -4505,9 +4015,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "path"
-            ],
+            "required": ["path"],
             "type": "object"
           }
         },
@@ -4533,11 +4041,7 @@
                 "type": "string"
               }
             },
-            "required": [
-              "content",
-              "exists",
-              "path"
-            ],
+            "required": ["content", "exists", "path"],
             "type": "object"
           }
         }
@@ -4604,11 +4108,7 @@
                       "type": "string"
                     }
                   },
-                  "required": [
-                    "available",
-                    "id",
-                    "name"
-                  ],
+                  "required": ["available", "id", "name"],
                   "type": "object"
                 },
                 "maxItems": 1000,
@@ -4616,9 +4116,7 @@
                 "type": "array"
               }
             },
-            "required": [
-              "projects"
-            ],
+            "required": ["projects"],
             "type": "object"
           }
         }

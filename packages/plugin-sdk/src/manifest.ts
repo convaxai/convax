@@ -4,14 +4,9 @@ import {
   type PluginApiDeclaration,
 } from "@convax/plugin-api"
 
-import {
-  parsePortablePluginCanvasContribution,
-  type PortablePluginCanvasContribution,
-} from "./canvas"
-import {
-  parsePluginCapabilityDeclaration,
-  type PluginCapabilityDeclaration,
-} from "./capabilities"
+import { parsePortablePluginCanvasContribution, type PortablePluginCanvasContribution } from "./canvas"
+import { parsePortablePluginI18n, type PortablePluginI18n } from "./localization"
+import { parsePluginCapabilityDeclaration, type PluginCapabilityDeclaration } from "./capabilities"
 import {
   parsePortablePluginAgentContribution,
   parsePortablePluginGenerationContribution,
@@ -112,6 +107,7 @@ export interface PortablePluginManifestV8 {
   readonly hooks?: string
   readonly hostApi: PluginApiDeclaration<string>
   readonly id: string
+  readonly i18n?: PortablePluginI18n
   readonly name: string
   readonly runtime?: PortablePluginMcpStdioRuntime
   readonly schema: typeof portablePluginManifestV8Schema
@@ -130,18 +126,14 @@ const allowedCapabilities = new Set<string>(portablePluginCapabilities)
 const allowedPetCapabilities: ReadonlySet<string> = new Set(portablePluginPetCapabilities)
 
 function parseCapabilities(value: unknown): readonly PortablePluginCapability[] {
-  const capabilities = portableArray(
-    value ?? [],
-    "Plugin capabilities",
-    portablePluginCapabilities.length,
-  ).map((capability) => {
-    if (typeof capability !== "string" || !allowedCapabilities.has(capability)) {
-      throw new TypeError(
-        "Plugin capabilities contain an unsupported or duplicate capability",
-      )
-    }
-    return capability as PortablePluginCapability
-  })
+  const capabilities = portableArray(value ?? [], "Plugin capabilities", portablePluginCapabilities.length).map(
+    (capability) => {
+      if (typeof capability !== "string" || !allowedCapabilities.has(capability)) {
+        throw new TypeError("Plugin capabilities contain an unsupported or duplicate capability")
+      }
+      return capability as PortablePluginCapability
+    },
+  )
   if (new Set(capabilities).size !== capabilities.length) {
     throw new TypeError("Plugin capabilities contain an unsupported or duplicate capability")
   }
@@ -149,17 +141,11 @@ function parseCapabilities(value: unknown): readonly PortablePluginCapability[] 
 }
 
 function parseEntryAndHooks(input: Record<string, unknown>) {
-  const entry =
-    input.entry === undefined
-      ? undefined
-      : parsePortablePluginRelativePath(input.entry, "Plugin entry")
+  const entry = input.entry === undefined ? undefined : parsePortablePluginRelativePath(input.entry, "Plugin entry")
   if (entry !== undefined && !entry.toLowerCase().endsWith(".html")) {
     throw new TypeError("Plugin entry must be an HTML file")
   }
-  const hooks =
-    input.hooks === undefined
-      ? undefined
-      : parsePortablePluginRelativePath(input.hooks, "Plugin hooks")
+  const hooks = input.hooks === undefined ? undefined : parsePortablePluginRelativePath(input.hooks, "Plugin hooks")
   if (hooks !== undefined && !/\.(?:js|mjs)$/u.test(hooks)) {
     throw new TypeError("Plugin hooks must be a JavaScript ESM module")
   }
@@ -180,9 +166,7 @@ function validateCanvasEnvelope(input: {
     throw new TypeError("convax.plugin/8 Web Plugins must require host.context.get")
   }
   if (
-    (canvas?.commands !== undefined ||
-      canvas?.menus !== undefined ||
-      canvas?.toolbar !== undefined) &&
+    (canvas?.commands !== undefined || canvas?.menus !== undefined || canvas?.toolbar !== undefined) &&
     canvas.renderer === undefined
   ) {
     throw new TypeError("Canvas UI commands require a sandboxed Canvas renderer")
@@ -198,20 +182,15 @@ function validateCanvasEnvelope(input: {
     !canvas.menus?.length &&
     !canvas.toolbar?.length
   ) {
-    throw new TypeError(
-      "Canvas contributions must declare a renderer, selection actions, or UI commands",
-    )
+    throw new TypeError("Canvas contributions must declare a renderer, selection actions, or UI commands")
   }
   if (
     canvas?.selectionActions?.some(
-      (action) =>
-        "action" in action && action.action.type === "materialize-own-plugin-node",
+      (action) => "action" in action && action.action.type === "materialize-own-plugin-node",
     ) &&
     canvas.renderer === undefined
   ) {
-    throw new TypeError(
-      "materialize-own-plugin-node requires the contributing Plugin renderer",
-    )
+    throw new TypeError("materialize-own-plugin-node requires the contributing Plugin renderer")
   }
 }
 
@@ -224,9 +203,7 @@ function validatePetEnvelope(
   if (
     capabilities.length < requiredPortablePluginPetCapabilities.length ||
     capabilities.length > portablePluginPetCapabilities.length ||
-    requiredPortablePluginPetCapabilities.some(
-      (capability) => !capabilities.includes(capability),
-    ) ||
+    requiredPortablePluginPetCapabilities.some((capability) => !capabilities.includes(capability)) ||
     capabilities.some((capability) => !allowedPetCapabilities.has(capability))
   ) {
     throw new TypeError(
@@ -256,6 +233,7 @@ export function parsePortablePluginManifestV8(
       "hooks",
       "hostApi",
       "id",
+      "i18n",
       "name",
       "runtime",
       "schema",
@@ -273,6 +251,10 @@ export function parsePortablePluginManifestV8(
     options.hostApiMode === "authoring"
       ? parsePluginApiDeclaration(input.hostApi)
       : parseRuntimePluginApiDeclaration(input.hostApi)
+  const i18n = input.i18n === undefined ? undefined : parsePortablePluginI18n(input.i18n)
+  if (i18n !== undefined && !hostApi.required.includes("host.locale.get")) {
+    throw new TypeError("Plugins that declare i18n must require host.locale.get")
+  }
   const capabilities = parseCapabilities(input.capabilities)
   const rawContributions = portableRecord(input.contributes, "Plugin contributions")
   assertPortableKeys(
@@ -282,15 +264,11 @@ export function parsePortablePluginManifestV8(
   )
   const { entry, hooks } = parseEntryAndHooks(input)
   const canvas =
-    rawContributions.canvas === undefined
-      ? undefined
-      : parsePortablePluginCanvasContribution(rawContributions.canvas)
+    rawContributions.canvas === undefined ? undefined : parsePortablePluginCanvasContribution(rawContributions.canvas)
   validateCanvasEnvelope({ capabilities, canvas, entry, hostApi })
 
   const agent =
-    rawContributions.agent === undefined
-      ? undefined
-      : parsePortablePluginAgentContribution(rawContributions.agent)
+    rawContributions.agent === undefined ? undefined : parsePortablePluginAgentContribution(rawContributions.agent)
   const interPluginCapabilities =
     rawContributions.capabilities === undefined
       ? undefined
@@ -305,17 +283,13 @@ export function parsePortablePluginManifestV8(
       : parsePortablePluginLlmContribution(rawContributions.llm, {
           immutableV8Compatibility: options.hostApiMode !== "authoring",
         })
-  const pet =
-    rawContributions.pet === undefined
-      ? undefined
-      : parsePortablePluginPetContribution(rawContributions.pet)
+  const pet = rawContributions.pet === undefined ? undefined : parsePortablePluginPetContribution(rawContributions.pet)
   const service =
     rawContributions.service === undefined
       ? undefined
       : parsePortablePluginServiceContribution(rawContributions.service)
   const skills = parsePortablePluginSkills(rawContributions.skills, hostApi)
-  const runtime =
-    input.runtime === undefined ? undefined : parsePortablePluginRuntime(input.runtime)
+  const runtime = input.runtime === undefined ? undefined : parsePortablePluginRuntime(input.runtime)
   const hasExecutableContribution =
     generation !== undefined ||
     service !== undefined ||
@@ -324,13 +298,9 @@ export function parsePortablePluginManifestV8(
 
   if ((runtime !== undefined) !== hasExecutableContribution) {
     if (interPluginCapabilities?.exports.length && runtime === undefined) {
-      throw new TypeError(
-        "Plugin capability exports require a verified mcp-stdio runtime",
-      )
+      throw new TypeError("Plugin capability exports require a verified mcp-stdio runtime")
     }
-    throw new TypeError(
-      "convax.plugin/8 runtime and executable contribution must appear together",
-    )
+    throw new TypeError("convax.plugin/8 runtime and executable contribution must appear together")
   }
   if (interPluginCapabilities?.exports.length && runtime === undefined) {
     throw new TypeError("Plugin capability exports require a verified mcp-stdio runtime")
@@ -343,12 +313,8 @@ export function parsePortablePluginManifestV8(
   })
   validatePortableSkillToolReferences(skills, agent)
 
-  const projectCanvasCapabilities = new Set<PortablePluginCapability>(
-    portablePluginProjectCanvasCapabilities,
-  )
-  const hasProjectCanvasCapability = capabilities.some((capability) =>
-    projectCanvasCapabilities.has(capability),
-  )
+  const projectCanvasCapabilities = new Set<PortablePluginCapability>(portablePluginProjectCanvasCapabilities)
+  const hasProjectCanvasCapability = capabilities.some((capability) => projectCanvasCapabilities.has(capability))
   if (
     canvas?.renderer === undefined &&
     !canvas?.selectionActions?.length &&
@@ -360,18 +326,14 @@ export function parsePortablePluginManifestV8(
     (interPluginCapabilities?.exports.length ?? 0) === 0 &&
     agent?.mcp === undefined
   ) {
-    throw new TypeError(
-      "convax.plugin/8 must declare a Plugin capability beyond owned Skills",
-    )
+    throw new TypeError("convax.plugin/8 must declare a Plugin capability beyond owned Skills")
   }
 
   return deepFreezePortable({
     capabilities,
     contributes: {
       ...(agent === undefined ? {} : { agent }),
-      ...(interPluginCapabilities === undefined
-        ? {}
-        : { capabilities: interPluginCapabilities }),
+      ...(interPluginCapabilities === undefined ? {} : { capabilities: interPluginCapabilities }),
       ...(canvas === undefined ? {} : { canvas }),
       ...(generation === undefined ? {} : { generation }),
       ...(llm === undefined ? {} : { llm }),
@@ -384,6 +346,7 @@ export function parsePortablePluginManifestV8(
     ...(hooks === undefined ? {} : { hooks }),
     hostApi,
     id: parsePortablePluginId(input.id),
+    ...(i18n === undefined ? {} : { i18n }),
     name: portableText(input.name, "Plugin name", 120),
     ...(runtime === undefined ? {} : { runtime }),
     schema: portablePluginManifestV8Schema,

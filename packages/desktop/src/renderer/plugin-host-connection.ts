@@ -9,6 +9,7 @@ import {
   maximumPluginHostInFlightRequests,
   maximumPluginHostRequestBytes,
 } from "@convax/plugin-sdk/client"
+import { parsePortablePluginLocale, type PortablePluginLocale } from "@convax/plugin-sdk"
 import type { PluginCapabilityConnectInput, PluginCapabilityRendererClient } from "../plugin-capability-ipc"
 import { PluginHostProtocolError } from "../plugin-host-errors"
 import {
@@ -40,6 +41,9 @@ export class RendererPluginHostConnection {
   private connectionId: string | undefined
   private readonly connectPromise: Promise<string>
   private readonly requestOperationIds = new Map<string, string>()
+  private acknowledgedLocale: PortablePluginLocale
+  private desiredLocale: PortablePluginLocale
+  private localeUpdateTail: Promise<void> = Promise.resolve()
   private unsubscribe: () => void = () => undefined
 
   constructor(
@@ -47,6 +51,8 @@ export class RendererPluginHostConnection {
     input: PluginCapabilityConnectInput,
     private readonly onCommand: (command: DesktopPluginHostCommand) => void,
   ) {
+    this.acknowledgedLocale = parsePortablePluginLocale(input.locale)
+    this.desiredLocale = this.acknowledgedLocale
     this.connectPromise = client.connect(input).then(({ connectionId, protocol }) => {
       if (protocol !== pluginCapabilityProtocolV3) {
         void client.disconnect({ connectionId }).catch(() => undefined)
@@ -67,6 +73,31 @@ export class RendererPluginHostConnection {
         protocol: desktopPluginHostProtocolV8,
       })
     })
+  }
+
+  updateLocale(nextLocale: PortablePluginLocale): Promise<boolean> {
+    if (this.closed) return Promise.resolve(false)
+    const locale = parsePortablePluginLocale(nextLocale)
+    if (locale === this.desiredLocale) return Promise.resolve(false)
+    this.desiredLocale = locale
+    const update = this.localeUpdateTail.then(async () => {
+      const connectionId = await this.connectPromise
+      if (this.closed) return false
+      try {
+        const changed = await this.client.updateLocale({ connectionId, locale })
+        if (changed) this.acknowledgedLocale = locale
+        else if (this.desiredLocale === locale) this.desiredLocale = this.acknowledgedLocale
+        return changed
+      } catch (error) {
+        if (this.desiredLocale === locale) this.desiredLocale = this.acknowledgedLocale
+        throw error
+      }
+    })
+    this.localeUpdateTail = update.then(
+      () => undefined,
+      () => undefined,
+    )
+    return update
   }
 
   async dispatch(request: unknown, signal?: AbortSignal): Promise<DesktopPluginHostResponse | null> {

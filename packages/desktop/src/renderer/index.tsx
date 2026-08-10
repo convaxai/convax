@@ -135,6 +135,7 @@ import {
 } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
+import { DesktopPluginLocaleStore } from "./plugin-locale-store"
 import {
   ProjectCollaborationPendingState,
   ProjectLocalAuthorityRecoveryState,
@@ -243,6 +244,10 @@ function App() {
   const settingsSkillName = settingsSurface?.initialSkillName
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
+  const pluginLocaleStore = useMemo(() => new DesktopPluginLocaleStore(locale), [])
+  useEffect(() => {
+    pluginLocaleStore.set(locale)
+  }, [locale, pluginLocaleStore])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
   const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
@@ -816,7 +821,7 @@ function App() {
             createWebPluginCanvasContribution(plugin, {
               frameRegistry: pluginFrameRegistry,
               getActiveProjectId: () => activeProjectIdRef.current,
-              locale,
+              locale: pluginLocaleStore,
             }),
           ),
         )
@@ -825,7 +830,7 @@ function App() {
       }
     }
     return () => disposers.reverse().forEach((dispose) => dispose())
-  }, [canvasFileRendererRegistry, installedPlugins, locale, pluginFrameRegistry])
+  }, [canvasFileRendererRegistry, installedPlugins, pluginFrameRegistry, pluginLocaleStore])
   useEffect(() => {
     if (
       effectivePrimaryDesktopSurface !== "workspace" ||
@@ -1371,8 +1376,8 @@ function App() {
         kind: progress.warnings.length > 0 ? "warning" : "success",
         title:
           locale === "zh-CN"
-            ? `${localizedMediaOperationText(request.action.title, locale)}完成`
-            : `${localizedMediaOperationText(request.action.title, locale)} complete`,
+            ? `${localizedMediaOperationText(request.action.title, locale, request.action.i18n)}完成`
+            : `${localizedMediaOperationText(request.action.title, locale, request.action.i18n)} complete`,
       })
     },
     [flushCanvasForAgent, locale, services],
@@ -1392,7 +1397,7 @@ function App() {
       }),
       ...mediaOperationActions.map((action) => ({
         id: `plugin-selection-action:${action.pluginId}/${action.id}`,
-        label: localizedMediaOperationText(action.title, locale),
+        label: localizedMediaOperationText(action.title, locale, action.i18n),
         icon: <MediaOperationActionIcon editor={action.editor} />,
         visible(context: CanvasSelectionActionContext) {
           return canRunMediaOperation(context, action)
@@ -1441,7 +1446,7 @@ function App() {
                     ? "已完成操作。"
                     : "The operation completed.",
               kind: result.warnings.length > 0 ? "warning" : "success",
-              title: localizedMediaOperationText(action.title, locale),
+              title: localizedMediaOperationText(action.title, locale, action.i18n),
             })
             return
           }
@@ -1455,7 +1460,7 @@ function App() {
       })),
       ...pluginMaterializationActions.map((action) => ({
         id: `plugin-materialization-action:${action.pluginId}/${action.id}`,
-        label: localizedMediaOperationText(action.title, locale),
+        label: localizedMediaOperationText(action.title, locale, action.i18n),
         icon: <Layers3 />,
         visible(context: CanvasSelectionActionContext) {
           return canRunPluginMaterialization(context, action)
@@ -1492,7 +1497,7 @@ function App() {
                 ? "已保留源视频，并创建了相连的可编辑 Plugin 节点。"
                 : "The source video was preserved and connected to a new editable Plugin node.",
             kind: "success",
-            title: localizedMediaOperationText(action.title, locale),
+            title: localizedMediaOperationText(action.title, locale, action.i18n),
           })
         },
       })),

@@ -11,6 +11,7 @@ import {
   isPluginHostCommand,
   isPluginHostConnect,
   isPluginHostDisconnect,
+  isPluginHostLocaleChangedCommand,
   isPluginHostRequest,
   isPluginHostResponse,
   maximumPluginHostInFlightRequests,
@@ -70,7 +71,7 @@ const manifest = parsePluginManifestV8({
   hostApi: {
     major: 3,
     optional: ["canvas.resource.image.create"],
-    required: ["host.context.get"],
+    required: ["host.context.get", "host.locale.get"],
   },
   id: "client-test",
   name: "Client Test",
@@ -216,6 +217,22 @@ describe("@convax/plugin-sdk/client envelopes", () => {
       }),
     ).toBeTrue()
     expect(
+      isPluginHostLocaleChangedCommand({
+        command: "host.locale.changed",
+        params: { locale: "zh-CN" },
+        protocol: pluginHostProtocolV8,
+        type: "command",
+      }),
+    ).toBeTrue()
+    expect(
+      isPluginHostLocaleChangedCommand({
+        command: "host.locale.changed",
+        params: { locale: "zh_CN" },
+        protocol: pluginHostProtocolV8,
+        type: "command",
+      }),
+    ).toBeFalse()
+    expect(
       isPluginHostCapabilityAvailabilityRequest({
         capabilityId: "media.inspect",
         id: "availability-1",
@@ -268,6 +285,61 @@ describe("@convax/plugin-sdk/client envelopes", () => {
 })
 
 describe("createPluginHostClient", () => {
+  test("keeps a newer locale event authoritative over an older in-flight read", async () => {
+    const port = new FakePort()
+    const client = createPluginHostClient({ manifest, port, requestIdPrefix: "locale" })
+    const observed: string[] = []
+    const genericCommands: string[] = []
+    client.onLocaleChange((locale) => observed.push(locale))
+    client.onCommand((command) => genericCommands.push(command.command))
+
+    const initial = client.getLocale()
+    expect(port.sent[0]).toMatchObject({ method: "host.locale.get", type: "request" })
+    port.emit({
+      command: "host.locale.changed",
+      params: { locale: "zh-CN" },
+      protocol: pluginHostProtocolV8,
+      type: "command",
+    })
+    port.emit(response("locale-1", { locale: "en" }))
+
+    await expect(initial).resolves.toBe("zh-CN")
+    expect(observed).toEqual(["zh-CN"])
+    expect(genericCommands).toEqual([])
+  })
+
+  test("fails closed when the reserved locale event shape is invalid", () => {
+    const port = new FakePort()
+    const client = createPluginHostClient({ manifest, port, requestIdPrefix: "locale-invalid" })
+    port.emit({
+      command: "host.locale.changed",
+      params: { locale: "zh_CN" },
+      protocol: pluginHostProtocolV8,
+      type: "command",
+    })
+    expect(client.closed).toBeTrue()
+  })
+
+  test("rejects a locale event when the Plugin did not declare locale access", () => {
+    const port = new FakePort()
+    const client = createPluginHostClient({
+      manifest: {
+        ...manifest,
+        hostApi: { ...manifest.hostApi, required: ["host.context.get"] },
+      },
+      port,
+      requestIdPrefix: "locale-undeclared",
+    })
+    expect(() => client.onLocaleChange(() => undefined)).toThrow("Plugin Host API is not declared")
+    port.emit({
+      command: "host.locale.changed",
+      params: { locale: "zh-CN" },
+      protocol: pluginHostProtocolV8,
+      type: "command",
+    })
+    expect(client.closed).toBeTrue()
+  })
+
   test("disconnects synchronously, rejects in-flight work, closes the port, and remains idempotent", async () => {
     const port = new FakePort()
     const fatal = mock(() => undefined)
@@ -715,7 +787,15 @@ describe("createPluginHostClient", () => {
       projection: {
         edges: [],
         id: "canvas-1",
-        nodes: [{ id: "node-1", kind: "file", label: "large.png", position: { x: 0, y: 0 }, size: { height: 100, width: 100 } }],
+        nodes: [
+          {
+            id: "node-1",
+            kind: "file",
+            label: "large.png",
+            position: { x: 0, y: 0 },
+            size: { height: 100, width: 100 },
+          },
+        ],
         title: "Canvas",
       },
     } as const

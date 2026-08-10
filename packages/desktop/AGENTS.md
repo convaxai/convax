@@ -154,6 +154,10 @@ contract and its routed references.
 - Bind `convax.plugin/8` contributions and `hostApi` declarations independently.
   Plugin-to-Plugin imports/exports resolve through the typed Host broker and exact
   leased caller/provider snapshots, never direct calls or a service locator.
+- Renderer owns the application-language preference. Mirror only its validated
+  locale into each exact Web Plugin connection; Main keeps no durable locale and a
+  language switch must not replace the iframe, ActiveSet lease, or Plugin principal.
+  Resource parsing and fallback remain `@convax/plugin-sdk` behavior.
 - Explicit Plugin install/update/import consent publishes exact execution
   authorization with the immutable snapshot. Integrity or byte mismatch routes to
   exact-source reinstall/update, never a second Plugin setup action. Static Web

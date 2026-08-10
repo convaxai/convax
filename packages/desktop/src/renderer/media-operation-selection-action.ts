@@ -7,21 +7,20 @@ import {
   type CanvasPoint,
   type CanvasSelectionActionContext,
 } from "@convax/canvas"
-import {
-  assertResourceRef,
-  canvasProjectionResourceMetadataKey,
-} from "@convax/canvas/collaboration"
+import { assertResourceRef, canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboration"
 import { getProjectResourceReference } from "@convax/project/canvas"
 import { parseProjectUri } from "@convax/uri"
+import {
+  resolvePortablePluginLocalizedText,
+  type PortablePluginI18n,
+  type PortablePluginLocalizedText,
+} from "@convax/plugin-sdk"
 import type { GenerationCanvasRequest } from "../generation-contracts"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 
 export type MediaOperationEditor = "confirmation" | "crop-region" | "immediate" | "time-point" | "time-range"
 
-export interface MediaOperationLocalizedText {
-  default: string
-  "zh-CN"?: string
-}
+export type MediaOperationLocalizedText = PortablePluginLocalizedText
 
 export interface MediaOperationStep {
   output: CanvasGenerationOutput
@@ -33,6 +32,7 @@ export interface MediaOperationAction {
   description: MediaOperationLocalizedText
   editor: MediaOperationEditor
   id: string
+  i18n?: PortablePluginI18n
   pluginId: string
   presentation?: "cutout-scan"
   steps: readonly MediaOperationStep[]
@@ -77,8 +77,12 @@ export interface MediaOperationDialogRequest {
   projectId: string
 }
 
-export function localizedMediaOperationText(text: MediaOperationLocalizedText, locale: "en" | "zh-CN") {
-  return locale === "zh-CN" ? (text["zh-CN"] ?? text.default) : text.default
+export function localizedMediaOperationText(
+  text: MediaOperationLocalizedText,
+  locale: "en" | "zh-CN",
+  i18n?: PortablePluginI18n,
+) {
+  return resolvePortablePluginLocalizedText(text, locale, i18n)
 }
 
 export function listInstalledMediaOperationActions(
@@ -125,6 +129,7 @@ export function listInstalledMediaOperationActions(
           description: action.description,
           editor: action.editor,
           id: action.id,
+          ...(plugin.i18n === undefined ? {} : { i18n: plugin.i18n }),
           pluginId: plugin.id,
           ...("presentation" in action && action.presentation ? { presentation: action.presentation } : {}),
           steps,

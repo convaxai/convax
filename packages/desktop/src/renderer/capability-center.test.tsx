@@ -88,9 +88,19 @@ const pluginInventory: WebPluginInventory = {
       },
       description: "Compose shots in a sandboxed director surface.",
       entry: "index.html",
-      hostApi: { major: 2, optional: [], required: ["host.context.get"] },
+      hostApi: { major: 3, optional: [], required: ["host.context.get", "host.locale.get"] },
       id: "director-stage",
       installed: true,
+      i18n: {
+        defaultLocale: "en",
+        messages: {
+          en: {},
+          "zh-CN": {
+            "plugin.description": "在沙盒导演界面中编排镜头。",
+            "plugin.name": "三维导演台",
+          },
+        },
+      },
       name: "3D Director Stage",
       schema: "convax.plugin/8",
       version: "1.0.0",
@@ -561,7 +571,7 @@ describe("CapabilityCenter", () => {
     expect(markup).toContain("v1.0.0")
   })
 
-  test("localizes host copy without changing Plugin-owned metadata", () => {
+  test("localizes both Host copy and declared Plugin metadata", () => {
     const markup = renderToStaticMarkup(
       <CapabilityCenterDialog {...baseDialogProps} locale="zh-CN" plugins={pluginInventory} tab="plugins" />,
     )
@@ -570,9 +580,10 @@ describe("CapabilityCenter", () => {
     expect(markup).not.toContain(appMessage("zh-CN", "capabilities.installCompanionSkill"))
     expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginInstalled"))
     expect(markup).toContain(appMessage("zh-CN", "capabilities.globalThisDevice"))
-    expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginReady", { name: "3D Director Stage" }))
-    expect(markup).toContain("3D Director Stage")
-    expect(markup).toContain("Compose shots in a sandboxed director surface.")
+    expect(markup).toContain(appMessage("zh-CN", "capabilities.pluginReady", { name: "三维导演台" }))
+    expect(markup).toContain("三维导演台")
+    expect(markup).toContain("在沙盒导演界面中编排镜头。")
+    expect(markup).not.toContain("Compose shots in a sandboxed director surface.")
   })
 
   test("renders loading and error states without inventing catalog content", () => {

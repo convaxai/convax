@@ -56,6 +56,7 @@ Plugins declare required and optional ids in `hostApi`, call
 `host.context.get` to negotiate availability, and still pass Main authorization on
 every call. Notable Canvas families are:
 
+- `host.locale.get` for the exact Web connection's current application locale;
 - `canvas.node.*` for the owning node;
 - `canvas.inputs.*` for direct-incoming metadata and admitted media sessions;
 - `canvas.catalog.*`, `canvas.document.*`, `canvas.nodes.*` and
@@ -92,6 +93,11 @@ Plugin nodes reuse the Canvas `file` renderer registry. A command owns its local
 title, Host icon token and bounded `renderer-message` target. Toolbar and node
 overflow-menu placements only reference command ids. Plugins cannot contribute
 arbitrary callbacks, SVG/HTML icon bytes, global menus or new node roles.
+Host-rendered titles and Plugin metadata resolve SDK-owned message keys through the
+manifest resource. Mounted Web surfaces receive locale changes on their existing
+MessagePort and are not re-created merely because the application language changed.
+The fallback and authoring rules live in
+[`plugin-internationalization.md`](plugin-internationalization.md).
 
 ## Plugin-to-Plugin calls
 

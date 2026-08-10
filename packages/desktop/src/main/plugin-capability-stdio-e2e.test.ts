@@ -187,6 +187,9 @@ async function fixture(
           supports(method) {
             return method === "projects.list"
           },
+          updateLocale() {
+            return false
+          },
         }
       },
       principals,

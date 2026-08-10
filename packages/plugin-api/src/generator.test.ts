@@ -165,6 +165,7 @@ describe("Plugin API generation", () => {
     expect(markdown).toContain("`canvas.inputs.image.open` | 2.0.0 | 2.0.0")
     expect(markdown).toContain("`canvas.inputs.image.close` | 2.0.0 | 2.0.0")
     expect(markdown).toContain("`generation.execute` | 1.0.0 | 3.0.0")
+    expect(markdown).toContain("`host.locale.get` | 3.1.0 | 3.1.0")
     expect(markdown).toContain("- Introduced: 1.0.0")
     expect(markdown).toContain("- Current contract since: 3.0.0")
     expect(markdown).toContain("The response contains no image bytes, native path, or unrestricted URL.")
@@ -207,7 +208,7 @@ describe("Plugin API generation", () => {
     expect(() => parsePluginApiCatalogArtifact(preIntroductionContract)).toThrow("contractSince precedes since")
 
     const futureContract = JSON.parse(json)
-    futureContract.apis[0].contractSince = "3.0.1"
+    futureContract.apis[0].contractSince = "3.1.1"
     expect(() => parsePluginApiCatalogArtifact(futureContract)).toThrow("has a future contractSince version")
 
     const futureDialect = JSON.parse(json)
@@ -280,9 +281,9 @@ describe("Plugin API generation", () => {
     expect(() => parsePluginApiCatalogArtifact(initial)).toThrow("is not a Plugin API catalog snapshot")
 
     const current = snapshotPluginApiCatalog(pluginApiCatalog)
-    expect(current.version).toBe("3.0.0")
+    expect(current.version).toBe("3.1.0")
     expect(current.apis.every(({ contract }) => contract.dialect === pluginApiWireSchemaDialect)).toBe(true)
-    expect(JSON.parse(readFileSync(join(import.meta.dir, "../history/3.0.0.json"), "utf8"))).toEqual(current)
+    expect(JSON.parse(readFileSync(join(import.meta.dir, "../history/3.1.0.json"), "utf8"))).toEqual(current)
     await checkPluginApiHistory(join(import.meta.dir, "../history"))
   })
 
@@ -295,6 +296,10 @@ describe("Plugin API generation", () => {
       writeFileSync(
         join(historyDirectory, "2.0.0.json"),
         readFileSync(join(import.meta.dir, "../history/2.0.0.json"), "utf8"),
+      )
+      writeFileSync(
+        join(historyDirectory, "3.0.0.json"),
+        readFileSync(join(import.meta.dir, "../history/3.0.0.json"), "utf8"),
       )
       await appendPluginApiHistory(historyDirectory)
       const missing = await generatePluginApiArtifacts({ historyDirectory, outputDirectory, check: true })
@@ -321,6 +326,10 @@ describe("Plugin API generation", () => {
       writeFileSync(
         join(historyDirectory, "2.0.0.json"),
         readFileSync(join(import.meta.dir, "../history/2.0.0.json"), "utf8"),
+      )
+      writeFileSync(
+        join(historyDirectory, "3.0.0.json"),
+        readFileSync(join(import.meta.dir, "../history/3.0.0.json"), "utf8"),
       )
       const path = await appendPluginApiHistory(historyDirectory)
       const history = JSON.parse(readFileSync(path, "utf8"))

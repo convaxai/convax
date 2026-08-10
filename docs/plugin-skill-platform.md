@@ -29,6 +29,9 @@ processing, external editors, generation vendors, and companion tools live in th
   availability checks succeed.
 - Plugins call other Plugins only through the typed, Host-mediated capability
   broker.
+- Plugins declare bounded localization resources in `manifest.i18n`; Web Plugins
+  read and observe the Host locale through the SDK rather than inspecting browser
+  globals or inventing another language bridge.
 
 Runtime behavior derives from validated contributions, grants, and exact immutable
 snapshot identity. A concrete Plugin id, vendor, model, field name, or catalog
@@ -60,7 +63,10 @@ The Host API catalog evolves independently of the manifest and transport. A Plug
 declares required and optional APIs. Required APIs block activation when the Host
 cannot satisfy them; optional APIs remain inspectable through structured
 availability. `host.context.get` exposes the connection-scoped availability
-projection.
+projection. `host.locale.get` and the SDK-owned `host.locale.changed` event expose
+only the Renderer language preference for the exact Web connection; they carry no
+grant or domain authority. See
+[`plugin-internationalization.md`](plugin-internationalization.md).
 
 The generated Host API reference is
 [`../packages/plugin-api/generated/plugin-api.md`](../packages/plugin-api/generated/plugin-api.md).
@@ -74,6 +80,9 @@ Registration and authority are orthogonal.
 
 ```text
 convax.plugin/8
+  ├─ i18n
+  │   ├─ defaultLocale
+  │   └─ messages[locale][key]
   ├─ contributes
   │   ├─ skills
   │   ├─ agent.mcp / agent.tools

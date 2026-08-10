@@ -6,6 +6,7 @@ export type PluginApiOperationReceipt = Omit<BoundedOperationReceipt, "format"> 
 }
 import type { CanvasNodeData, CanvasPoint } from "@convax/canvas/core"
 import type { PluginApiCall, PluginApiGenerationReference, PluginApiId } from "@convax/plugin-api"
+import type { PortablePluginLocale } from "@convax/plugin-sdk"
 
 import type {
   PluginCanvasCapabilityClient,
@@ -215,6 +216,8 @@ export interface PluginHostApiConnectionRequest {
   canvas: PluginCanvasCapabilityClient
   /** Main-only historical authority; renderer and IPC contracts cannot supply it. */
   invocationLease?: PluginHostInvocationLease
+  /** Renderer-owned presentation preference mirrored into this exact Web connection. */
+  locale?: PortablePluginLocale
   node?: PluginHostNodeBinding
   onCanvasEvent?(input: { event: PluginCanvasChangeEvent; subscriptionId: string }): void
   principal: PluginPrincipal
@@ -228,4 +231,5 @@ export interface PluginHostApiMainConnection {
   close(): void
   execute(call: PluginHostApiMainCall, context: { operationId: string; signal?: AbortSignal }): Promise<unknown>
   supports(method: PluginApiId): boolean
+  updateLocale(locale: PortablePluginLocale): boolean
 }

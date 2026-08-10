@@ -1,4 +1,5 @@
 import { Button, cn } from "@convax/ui"
+import { resolvePortablePluginDescription, resolvePortablePluginName } from "@convax/plugin-sdk"
 import {
   Bot,
   ChevronRight,
@@ -184,6 +185,7 @@ function PluginActions({
   updateAvailable?: boolean
 }) {
   const disabled = busy !== null
+  const pluginName = resolvePortablePluginName(plugin, locale)
   if (!installed) {
     return (
       <Button disabled={disabled} onClick={onInstall} size="sm" variant="outline">
@@ -241,7 +243,7 @@ function PluginActions({
         )
       ) : null}
       <Button
-        aria-label={`${appMessage(locale, "capabilities.uninstall")} ${plugin.name}`}
+        aria-label={`${appMessage(locale, "capabilities.uninstall")} ${pluginName}`}
         disabled={disabled}
         onClick={onUninstall}
         size="icon-sm"
@@ -289,6 +291,8 @@ function PluginCard({
   updateAvailable?: boolean
 }) {
   const runtimePlugin = installedPlugin ?? plugin
+  const pluginName = resolvePortablePluginName(plugin, locale)
+  const pluginDescription = resolvePortablePluginDescription(plugin, locale)
   const agentMcpMessage = (() => {
     if (!installed || !runtimePlugin.contributes.agent?.mcp) return null
     if (agentMcpStatus === "connected") {
@@ -311,7 +315,7 @@ function PluginCard({
         </div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h4 className="truncate text-sm font-semibold">{plugin.name}</h4>
+            <h4 className="truncate text-sm font-semibold">{pluginName}</h4>
             <StatusPill>{`v${plugin.version}`}</StatusPill>
             {installed ? (
               <StatusPill>
@@ -326,7 +330,7 @@ function PluginCard({
           <p className="mt-0.5 truncate text-xs text-muted-foreground">{plugin.id}</p>
         </div>
       </div>
-      <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">{plugin.description}</p>
+      <p className="mt-3 line-clamp-3 text-xs leading-5 text-muted-foreground">{pluginDescription}</p>
       {plugin.download || plugin.releaseAvailable ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           {plugin.download ? (
@@ -371,7 +375,7 @@ function PluginCard({
           className="mt-3 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs font-medium text-primary"
           role="status"
         >
-          {appMessage(locale, "capabilities.pluginReady", { name: plugin.name })}
+          {appMessage(locale, "capabilities.pluginReady", { name: pluginName })}
         </p>
       ) : null}
       {agentMcpMessage ? (
