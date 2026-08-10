@@ -21,6 +21,7 @@ import {
   uint32ToNumber,
 } from "@convax/collaboration"
 import { canonicalize as canonicalizeUri } from "@convax/uri"
+import { parseCanvasNodeGenerationRun } from "../generation-run"
 import type {
   ActorId,
   BoundedOperationReceipt,
@@ -449,23 +450,26 @@ export function assertNodeData(value: unknown, label = "NodeDataEnvelope"): asse
       }
     }
   } else if (candidate.kind === "resource") {
-    assertExactKeys(value, ["format", "kind", "title", "resource", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
+    assertExactKeys(value, ["format", "kind", "title", "resource", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"]), ...(candidate.generationRun === undefined ? [] : ["generationRun"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertResourceRef(value.resource)
     assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
+    assertGenerationRun(candidate.generationRun, `${label}.generationRun`)
   } else if (candidate.kind === "plugin-surface") {
     assertExactKeys(value, ["format", "kind", "title"], label)
     assertText(value.title, 0, 4096, `${label}.title`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "generation") {
-    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"]), ...(candidate.generationRun === undefined ? [] : ["generationRun"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
     assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
+    assertGenerationRun(candidate.generationRun, `${label}.generationRun`)
   } else if (candidate.kind === "placeholder" && candidate.owner === "manual-pending") {
-    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", "state", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"])], label)
+    assertExactKeys(value, ["format", "kind", "owner", "title", "expectedClass", "state", ...(candidate.generationToolId === undefined ? [] : ["generationToolId"]), ...(candidate.generationRun === undefined ? [] : ["generationRun"])], label)
     assertText(value.title, 0, 4096, `${label}.title`)
     assertMediaClass(value.expectedClass, `${label}.expectedClass`)
     assertGenerationToolId(candidate.generationToolId, `${label}.generationToolId`)
+    assertGenerationRun(candidate.generationRun, `${label}.generationRun`)
     if (typeof value.state !== "object" || value.state === null) fail("invalid-node-data", `${label}.state is invalid`)
     if ((value.state as { phase?: unknown }).phase === "pending")
       assertExactKeys(value.state, ["phase"], `${label}.state`)
@@ -477,6 +481,12 @@ export function assertNodeData(value: unknown, label = "NodeDataEnvelope"): asse
     }
   } else fail("invalid-node-data", `${label}.kind/owner is invalid`)
   if (encodeRestrictedJcs(value).byteLength > 64 * 1024) fail("value-too-large", `${label} exceeds 64 KiB`)
+}
+
+function assertGenerationRun(value: unknown, label: string): void {
+  if (value !== undefined && parseCanvasNodeGenerationRun(value) === undefined) {
+    fail("invalid-node-data", `${label} is invalid`)
+  }
 }
 
 export function assertEdgeData(value: unknown): asserts value is CanvasEdgeData {

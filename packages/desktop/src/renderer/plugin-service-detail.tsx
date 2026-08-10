@@ -46,14 +46,22 @@ function serviceStateDot(state: PluginServiceStatus["state"]) {
   return state === "connected" ? "bg-status-success" : state === "attention" ? "bg-status-warning" : "bg-text-disabled"
 }
 
-function ServiceState({ locale, state }: { locale: AppLocale; state: PluginServiceStatus["state"] }) {
+function ServiceState({
+  label,
+  locale,
+  state,
+}: {
+  label?: string
+  locale: AppLocale
+  state: PluginServiceStatus["state"]
+}) {
   return (
     <span
       className={cn("inline-flex items-center gap-1.5 font-medium", serviceStateTone(state))}
       data-service-state={state}
     >
       <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", serviceStateDot(state))} />
-      {serviceStateLabel(locale, state)}
+      {label ?? serviceStateLabel(locale, state)}
     </span>
   )
 }
@@ -169,7 +177,14 @@ function ServiceActions({
           variant={hasCheckout ? "outline" : "default"}
         >
           {authorizationPending ? <LoaderCircle className="animate-spin motion-reduce:animate-none" /> : <Settings2 />}
-          {appMessage(locale, canAuthorize ? "services.configure" : "services.reconfigure")}
+          {appMessage(
+            locale,
+            canAuthorize
+              ? "services.configure"
+              : status?.credential.verification === "failed"
+                ? "services.reauthorize"
+                : "services.reconfigure",
+          )}
         </Button>
       ) : null}
       {canCancel ? (
@@ -578,7 +593,15 @@ export function ServiceDetail({
                 {service.name}
               </h3>
               <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-text-tertiary">
-                <ServiceState locale={locale} state={service.state} />
+                <ServiceState
+                  label={
+                    service.kind === "plugin" && service.status?.credential.verification === "failed"
+                      ? appMessage(locale, "services.authenticationExpired")
+                      : undefined
+                  }
+                  locale={locale}
+                  state={service.state}
+                />
                 {service.kind === "plugin" ? (
                   <>
                     <span aria-hidden="true">·</span>

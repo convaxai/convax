@@ -90,7 +90,11 @@ function ServiceDirectoryItem({
         </span>
         <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-text-tertiary">
           <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", serviceStateDot(service.state))} />
-          <span>{serviceStateLabel(locale, service.state)}</span>
+          <span>
+            {service.kind === "plugin" && service.status?.credential.verification === "failed"
+              ? appMessage(locale, "services.authenticationExpired")
+              : serviceStateLabel(locale, service.state)}
+          </span>
           <span aria-hidden="true">·</span>
           <span className="truncate tabular-nums">
             {appMessage(locale, "services.modelCount", { count: service.models.length })}

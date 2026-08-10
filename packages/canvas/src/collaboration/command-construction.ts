@@ -65,6 +65,7 @@ export type CanvasAuthoritativeCommand =
         readonly title: string
         readonly expectedClass: "text" | "image" | "video" | "audio" | "file"
         readonly size: Readonly<{ width: number; height: number }>
+        readonly generationRun?: import("../generation-run").CanvasNodeGenerationRun
       }>[]
     }>
   | Readonly<{
@@ -120,6 +121,17 @@ export type CanvasAuthoritativeCommand =
       readonly title: string
       readonly proof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }>
       readonly generationToolId?: string
+    }>
+  | Readonly<{
+      readonly kind: "generation-runs-update"
+      readonly updates: readonly Readonly<{
+        readonly node: CanvasEntityRef & { readonly kind: "node" }
+        readonly data: import("./types").NodeDataEnvelope & {
+          readonly kind: "resource" | "placeholder"
+          readonly generationRun: import("../generation-run").CanvasNodeGenerationRun
+        }
+        readonly resourceProof: Extract<CanvasResourceProofRef, { readonly mode: "current-owner-state" }> | null
+      }>[]
     }>
   | Readonly<{
       /** Host-owned validated envelope; never accepted from a Plugin renderer. */
@@ -404,6 +416,7 @@ function constructIntent(
           size: Object.freeze({ ...item.size }),
           title: item.title,
           expectedClass: item.expectedClass,
+          ...(item.generationRun === undefined ? {} : { generationRun: structuredClone(item.generationRun) }),
         }))),
         edges: Object.freeze(edges),
       }),
@@ -490,6 +503,36 @@ function constructIntent(
           resource: structuredClone(command.proof.resource),
           ...(command.generationToolId === undefined ? {} : { generationToolId: command.generationToolId }),
         }),
+      }),
+    })
+  }
+  if (command.kind === "generation-runs-update") {
+    if (command.updates.length < 1 || command.updates.length > 256) {
+      throw new RangeError("Canvas generation run update count is invalid")
+    }
+    const seen = new Set<string>()
+    const updates = command.updates.map((update) => {
+      const key = canvasEntityKey(update.node)
+      if (seen.has(key)) throw new TypeError("Canvas generation run update contains a duplicate node")
+      seen.add(key)
+      const node = requireLiveNode(snapshot, update.node)
+      if (node.identity.role !== "file") throw new TypeError("Canvas generation run owner is not a file node")
+      return Object.freeze({ node, update })
+    })
+    return Object.freeze({
+      format: "convax.typed-intent",
+      kind: "canvas.generation.runs.update",
+      guard: Object.freeze({
+        updates: Object.freeze(updates.map(({ node, update }) => Object.freeze({
+          node: nodeDataGuard(snapshot, node),
+          resourceProof: update.resourceProof === null ? null : structuredClone(update.resourceProof),
+        }))),
+      }),
+      body: Object.freeze({
+        updates: Object.freeze(updates.map(({ update }) => Object.freeze({
+          node: Object.freeze({ ...update.node }),
+          data: structuredClone(update.data),
+        }))),
       }),
     })
   }

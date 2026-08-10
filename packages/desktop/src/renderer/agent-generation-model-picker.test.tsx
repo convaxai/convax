@@ -38,6 +38,9 @@ describe("Agent generation model picker", () => {
     )
 
     expect(markup).toContain("Agent models")
+    expect(markup).toContain("w-[min(22rem,calc(100vw-1rem))]")
+    expect(markup).toContain("height:448px")
+    expect(markup).toContain("min-h-0 flex-1")
     expect(markup).toContain("Image")
     expect(markup).toContain("Video")
     expect(markup).toContain("Audio")
@@ -93,7 +96,7 @@ describe("Agent generation model picker", () => {
     expect(empty).toContain("Open Services")
   })
 
-  test("renders generation models as one flat choice list with service metadata", () => {
+  test("renders generation services at the first level and their models underneath", () => {
     const markup = renderToStaticMarkup(
       <AgentGenerationModelPicker
         activeTab="image"
@@ -118,7 +121,8 @@ describe("Agent generation model picker", () => {
       />,
     )
 
-    expect(markup).not.toContain("<details")
+    expect(markup.match(/<details/g)).toHaveLength(2)
+    expect(markup.match(/<summary/g)).toHaveLength(2)
     expect(markup.match(/role="radio"/g)).toHaveLength(3)
     expect(markup).toContain("小云雀生成")
     expect(markup).toContain("即梦")
@@ -156,7 +160,7 @@ describe("Agent generation model picker", () => {
 
     expect(imageIds).toHaveLength(4)
     expect(new Set(imageIds).size).toBe(4)
-    expect(markup.match(/role="dialog" tabindex="-1"/g)).toHaveLength(2)
+    expect(markup.match(/role="dialog"[^>]*tabindex="-1"/g)).toHaveLength(2)
   })
 
   test("reuses the shared host-rendered form for the selected model description", () => {
@@ -199,10 +203,7 @@ describe("Agent generation model picker", () => {
 
   test("does not create a second model-selection row while description metadata loads or is empty", () => {
     const installed = tool()
-    const render = (description?: {
-      fields: []
-      toolId: string
-    }) =>
+    const render = (description?: { fields: []; toolId: string }) =>
       renderToStaticMarkup(
         <AgentGenerationModelPicker
           activeTab="image"
@@ -261,7 +262,8 @@ describe("Agent generation model picker", () => {
 
     expect(markup).toContain("Agent runtime")
     expect(markup).not.toContain("Auto")
-    expect(markup).not.toContain("<details")
+    expect(markup.match(/<details/g)).toHaveLength(1)
+    expect(markup).toContain("<summary")
     expect(markup).toContain("小云雀生成")
     expect(markup).toMatch(/aria-checked="true" aria-label="Pippit GLM Main by 小云雀生成"/)
     expect(markup).not.toContain("Offline model")

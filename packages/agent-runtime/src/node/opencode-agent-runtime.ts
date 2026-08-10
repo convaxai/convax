@@ -703,11 +703,21 @@ function messageError(info: Message): string | undefined {
   return detail === "{}" ? info.error.name : detail
 }
 
+function messageModel(info: Message) {
+  const providerId = info.role === "user" ? info.model.providerID : info.providerID
+  const modelId = info.role === "user" ? info.model.modelID : info.modelID
+  return typeof providerId === "string" && providerId && typeof modelId === "string" && modelId
+    ? { providerId, modelId }
+    : undefined
+}
+
 function mapMessage(message: { info: Message; parts: Part[] }): AgentMessage {
+  const model = messageModel(message.info)
   return {
     id: message.info.id,
     sessionId: message.info.sessionID,
     role: message.info.role,
+    ...(model ? { model } : {}),
     createdAt: message.info.time.created,
     completedAt: message.info.role === "assistant" ? message.info.time.completed : undefined,
     error: messageError(message.info),

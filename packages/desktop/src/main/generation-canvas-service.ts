@@ -2373,6 +2373,7 @@ export class GenerationCanvasService {
         retainOperation()
         runStarted = true
         workingDocument = started.document
+        this.#refreshRendererProjection(request.ref, [])
       }
 
       if (tool.recovery && this.#operations && this.#inputSnapshots) {

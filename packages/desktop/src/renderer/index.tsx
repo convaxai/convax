@@ -96,10 +96,7 @@ import {
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
 import { createWorkspaceCanvasHistoryShortcutHandler } from "./canvas-history-shortcuts"
 import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
-import {
-  mountCanvasSessionWithBackgroundReconcile,
-  type CanvasSessionReconcileDiagnostic,
-} from "./canvas-session-mount"
+import { mountCanvasSessionWithBackgroundReconcile } from "./canvas-session-mount"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
 import { resolveWorkspaceCanvasViewportInsets } from "./canvas-viewport-occlusion"
 import { publishCanvasSelectionToWorkbench } from "./canvas-workbench-selection"
@@ -246,8 +243,6 @@ function App() {
   const settingsSkillName = settingsSurface?.initialSkillName
   const primaryDesktopSurface = settingsSurface?.returnTo ?? desktopSurface.kind
   const locale = useMemo(() => resolveAppLocale(languagePreference), [languagePreference])
-  const localeRef = useRef(locale)
-  localeRef.current = locale
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
   const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
@@ -303,13 +298,17 @@ function App() {
   )
   const projectFilesController = useMemo(() => new ProjectFilesController(window.convax.projectFiles), [])
   const projectCanvasController = useMemo(() => new ProjectCanvasController(window.convax.projects.canvases), [])
-  const serviceCatalogController = useMemo(
-    () => new ServiceCatalogController(window.convax.pluginServices, window.convax.agent),
+  const generationModelCatalogController = useMemo(
+    () => new GenerationModelCatalogController(window.convax.generation, { storage: localStorage }),
     [],
   )
-  const generationModelCatalogController = useMemo(
-    () => new GenerationModelCatalogController(window.convax.generation),
-    [],
+  const serviceCatalogController = useMemo(
+    () =>
+      new ServiceCatalogController(window.convax.pluginServices, window.convax.agent, {
+        generationCatalog: generationModelCatalogController,
+        storage: localStorage,
+      }),
+    [generationModelCatalogController],
   )
   const [initialLayoutPreferences] = useState(() =>
     readWorkbenchLayoutPreferences(localStorage, {
@@ -683,7 +682,6 @@ function App() {
     return mountCanvasSessionWithBackgroundReconcile({
       onDiagnostic: (diagnostic) => {
         console.warn("[convax] Background Canvas generation reconciliation did not complete", diagnostic)
-        setNotification(generationReconcileNotification(localeRef.current, diagnostic))
       },
       onMountFailure: (error) => {
         setCanvasSessionFailure({ key, message: error instanceof Error ? error.message : String(error) })
@@ -2590,26 +2588,6 @@ function Toast({ notification }: { notification: CanvasNotification }) {
       </div>
     </div>
   )
-}
-
-function generationReconcileNotification(
-  locale: "en" | "zh-CN",
-  diagnostic: CanvasSessionReconcileDiagnostic,
-): CanvasNotification {
-  const timedOut = diagnostic.code === "generation-reconcile-timed-out"
-  return locale === "zh-CN"
-    ? {
-        description: timedOut ? "画布已打开；后台生成任务恢复仍在继续。" : "画布已打开；后台生成任务恢复稍后可重试。",
-        kind: "warning",
-        title: timedOut ? "生成任务恢复耗时较长" : "生成任务恢复失败",
-      }
-    : {
-        description: timedOut
-          ? "The Canvas is open while generation recovery continues in the background."
-          : "The Canvas is open. Generation recovery can retry later.",
-        kind: "warning",
-        title: timedOut ? "Generation recovery is taking longer" : "Generation recovery failed",
-      }
 }
 
 const root = document.getElementById("app")

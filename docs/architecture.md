@@ -224,7 +224,7 @@ flowchart TB
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
-    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service display caches"]
+    LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
   end
 
   Main --> UserData
@@ -742,7 +742,8 @@ Packaged app Resources/
                                         never built-in provenance or executable-in-place
 
 browser localStorage                    per-user Workbench/renderer preferences plus bounded
-                                        disposable Marketplace and Plugin Service display projections
+                                        disposable Marketplace, Plugin Service and model catalog
+                                        display projections
 
 <project root>/
   Notes/                                user-visible Canvas-created text files
@@ -1328,10 +1329,11 @@ specific controls come only from the selected MCP tool's current
 `tools/list.inputSchema`; Main projects bounded scalar fields across preload and
 validates them again immediately before execution. A manifest-declared model tool
 may explicitly mark one required bounded string select with
-`x-convax-role: generation-model-id`. Once the owning service is connected, Main
-projects those choices into concrete opaque model selections instead of a second
-renderer control. The marker field is absent from ordinary tool options; Main
-reloads the live schema, rejects a removed choice and binds the exact value before
+`x-convax-role: generation-model-id`. Main may inspect the installed sidecar's
+current schema without first waiting for `service.status` and projects those choices
+into concrete opaque model selections instead of a second renderer control. The
+marker field is absent from ordinary tool options; Main reloads the live schema,
+rejects a removed choice, checks service readiness, and binds the exact value before
 the external call. No Plugin id, provider name, field name or choice value changes
 this behavior without that explicit role.
 
@@ -1433,23 +1435,28 @@ service status.
 
 Dynamic model identity is the one semantic projection on that schema. A declared
 model tool may mark exactly one required bounded string select with
-`x-convax-role: generation-model-id`. Service availability is established before
-Main starts or expands the family. Each choice receives a stable host-opaque
-selection id while retaining the same manifest tool id for service authorization.
-The selector is removed from `describeTool`; preparation enumerates it again and
-merges the Main-owned value only if the exact choice remains live. Renderer input
-cannot name or override that binding. Unmarked model tools keep their single static
-selection, and unmarked schema fields remain ordinary tool options.
+`x-convax-role: generation-model-id`. Exact installed manifest/service membership
+is established before Main starts or expands the family; discovery never waits for
+`service.status`. Each choice receives a stable host-opaque selection id while
+retaining the same manifest tool id for service authorization. The selector is
+removed from `describeTool`; preparation enumerates it again, checks live service
+readiness, and merges the Main-owned value only if the exact choice remains live.
+Renderer input cannot name or override that binding. Unmarked model tools keep their
+single static selection, and unmarked schema fields remain ordinary tool options.
 
 The Agent generation model is a user-global renderer preference. Agent and card
-pickers present concrete models in one selection layer; the contributing service is
-display metadata, not a provider choice that exposes a second model control.
+pickers first group concrete models under their contributing Service and expand that
+Service to reveal its models. The Service row is navigation only, not a committed
+provider choice or a second model control.
 One window-scoped renderer projection is shared by those pickers: remounting either
 composer reads its ready values synchronously instead of starting another discovery
 request. Project or capability changes and a bounded age timer revalidate that
 projection through Main's single-flight catalog refresh. Ready values remain visible
-while revalidation runs, and the committed result notifies both pickers; the
-renderer snapshot never authorizes execution or persists model authority.
+while revalidation runs, and the committed result notifies both pickers. Renderer
+also persists one bounded, versioned, strictly validated last-complete model display
+projection so a cold window renders synchronously before that revalidation settles.
+The projection is disposable and never authorizes execution or persists model
+authority; send-time Agent and generation boundaries revalidate the exact selection.
 Without an owning node override, an image/video replacement card inherits that
 preference only when its output matches the card's intrinsic kind and accepts the
 current media references. A text owner may instead choose image or video output; its
@@ -1457,14 +1464,15 @@ mounted composer keeps model and tool-option state isolated by output and never
 persists one owner override across those result kinds.
 If that preference is absent, mismatched, or temporarily incompatible, the card prefers
 the first compatible concrete model. A model enters the output-scoped available
-catalog only when the owning Plugin contributes the same model through a service and
-Main's bounded status checks admit that service into the current display snapshot.
-Missing, disconnected, attention, unknown, timed-out, or invalid service status
-hides that service's models; service-independent operations remain manifest-driven.
+catalog when the exact installed Plugin contributes the same model through its
+service projection and Main validates the current bounded tool schema. Missing,
+disconnected, attention, unknown, timed-out, or invalid service status does not erase
+an installed model from this display-only catalog and never blocks discovery.
 Preparation and dispatch recheck live service status and the exact tool schema, so a
-stale display snapshot cannot authorize a call. When no model is available, Agent
-and card composers offer the Services route instead of synthesizing an `auto`
-choice. The available catalog is never pruned by current `@` inputs: when no model
+stale display snapshot cannot authorize a call. When no installed schema-valid model
+is available, Agent and card composers offer the Services route instead of
+synthesizing an `auto` choice. The available catalog is never pruned by current `@`
+inputs: when no model
 accepts all inputs, the card still shows a concrete matching Agent default or first
 available model and blocks execution until the user removes incompatible inputs or
 chooses a compatible model. A manual image/video replacement-card choice stores only
@@ -1508,9 +1516,12 @@ state. The draft may be empty when direct incoming text supplies the whole promp
 Main composes the effective model prompt transiently and, for admitted recoverable
 operations, retains it only in the private digest-bound execution snapshot. Main writes
 `submitting` before the external call, updates lifecycle state through Canvas
-application services, and commits generated resource replacement plus `succeeded`
-in one guarded Canvas typed intent. The dedicated target guard omits only the host-owned run
-namespace; it continues to protect real resource content and all other metadata.
+application services and the non-undoable `canvas.generation.runs.update` intent,
+and commits generated resource replacement plus `succeeded` in that same guarded,
+current-resource-proof-backed Canvas typed intent. The dedicated target guard omits
+the Canvas-owned current run, next-run preference, and their projected
+`status`/`error` presentation; it continues to protect real resource content and
+all other metadata.
 For host-owned pending-result mode, Canvas creates the pending file node and the
 `submitting` run in one candidate transaction/typed intent. That node then follows the same
 running, task-receipt, guarded replacement, terminal and restart-reconciliation
@@ -1596,30 +1607,37 @@ entitlement locally.
 
 Desktop exposes one read-only service catalog to the application menu and Services
 settings. Plugin generation capabilities and model rows are derived from the
-installed manifest. An LLM contribution may additionally opt into the fixed
-`llm.models.list` runtime catalog; Desktop validates that bounded catalog in Main and
-projects the resulting connected Plugin provider back into its owning Service card.
+installed manifest. Every LLM contribution declares exactly one `openai` or
+`openrouter` Provider protocol. After starting its Main-only loopback gateway,
+Desktop actively requests that protocol's `/models` catalog, validates it in Main,
+and projects the resulting connected Plugin provider back into its owning Service card.
 Dynamic account, Plan, Billing, credit and aggregate usage data still comes only
 from the bounded service status; the optional bounded usage-history tool supplies
 display records only. The existing OpenCode Agent runtime contributes a safe display-only
 projection of its connected non-Plugin LLM model catalog through
 `@convax/agent-runtime`. This composition has no execute or provider-resolution API:
 generation continues to select a generation tool id and Agent prompts continue to
-select an OpenCode provider/model pair.
+select an OpenCode provider/model pair. Agent messages may carry the exact
+provider/model identity recorded by OpenCode for that message so Renderer can show
+the dispatch result; model-authored prose is never model-selection evidence.
 
-The Services page may display installed model rows while a service is disconnected so
-the user can understand and configure that installation. Executable model catalogs are
-stricter: Main joins each model back to the exact service projection, performs a
-bounded live status check, and exposes it to Agent, card, Plugin and IPC callers only
-while that service is connected.
+The Services page and generation pickers may display installed model rows while a
+service is disconnected so the user can understand, select, and configure that
+installation. Main joins each model back to the exact installed service projection
+and validates its bounded current tool schema without using `service.status` as a
+discovery gate. Execution is stricter: preparation and dispatch perform bounded live
+status checks and cross the external-call boundary only while the service is
+connected.
 
 The v8 manifest may add one generic LLM contribution without introducing a built-in
 vendor registry. Desktop derives a namespaced OpenCode provider id from the validated
 Plugin contribution, verifies and starts the same leased immutable companion lifecycle, and
-calls only the fixed `llm.models.list` opt-in plus `llm.gateway.start`. The model
-catalog tool accepts no input and returns only bounded opaque model ids and display
-names; manifests retain a small static fallback catalog. The sidecar returns a Main-only, ephemeral
-`127.0.0.1` OpenAI-compatible base URL and random bearer key. OpenCode receives that
+calls only the fixed `llm.gateway.start`. The manifest must declare `protocol: "openai"`
+or `protocol: "openrouter"`; missing and unknown protocols fail closed. Main then
+requests `/models` through that loopback gateway, bounds the bytes and entries, and
+keeps model ids opaque. OpenRouter discovery additionally admits only text-output
+models for Agent LLM use. The sidecar returns a Main-only, ephemeral
+`127.0.0.1` protocol base URL and random bearer key. OpenCode receives that
 connection material only in its in-memory host configuration; renderer, service
 status, manifests, and durable config never receive it. Renderer receives only the
 validated display catalog. The sidecar retains upstream

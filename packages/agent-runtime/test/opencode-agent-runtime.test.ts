@@ -1505,6 +1505,42 @@ describe("OpenCode agent runtime boundaries", () => {
     }
   })
 
+  test("sends the exact selected model and projects OpenCode's recorded response model", async () => {
+    const runtime = new OpenCodeAgentRuntime()
+    const now = Date.now()
+    const prompt = mock(async () => ({
+      data: {
+        info: {
+          id: "assistant-message",
+          modelID: "mimo-v2.5-free",
+          providerID: "opencode",
+          role: "assistant" as const,
+          sessionID: "model-session",
+          time: { completed: now, created: now },
+        },
+        parts: [],
+      },
+    }))
+    ;(runtime as unknown as { client: unknown }).client = { session: { prompt } }
+
+    try {
+      const response = await runtime.prompt({
+        directory: "/workspace",
+        model: { modelId: "mimo-v2.5-free", providerId: "opencode" },
+        sessionId: "model-session",
+        text: "Hello",
+      })
+
+      expect(prompt).toHaveBeenCalledTimes(1)
+      expect(prompt.mock.calls[0]?.[0]).toMatchObject({
+        model: { modelID: "mimo-v2.5-free", providerID: "opencode" },
+      })
+      expect(response.model).toEqual({ modelId: "mimo-v2.5-free", providerId: "opencode" })
+    } finally {
+      await runtime.dispose()
+    }
+  })
+
   test("deduplicates multiple Skills while keeping one semantic instruction for each", async () => {
     const runtime = new OpenCodeAgentRuntime()
     const prompt = mock(async () => completedAssistantMessage("multi-skill-session"))

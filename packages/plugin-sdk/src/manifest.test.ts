@@ -104,9 +104,8 @@ function toolManifest(overrides: Record<string, unknown> = {}) {
         ],
       },
       llm: {
-        modelCatalog: "runtime",
         models: [{ id: "fallback-model", name: "Fallback Model" }],
-        provider: { id: "example-provider", name: "Example Provider" },
+        provider: { id: "example-provider", name: "Example Provider", protocol: "openai" },
       },
       service: { actions: ["authorize", "checkout", "sign_out"] },
       skills: [

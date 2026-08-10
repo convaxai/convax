@@ -39,7 +39,8 @@ or durable domain authority.
   open Team creation/join UI, load sharing runtime, or imply that sharing is required.
   Team collaboration UI is reached only through an explicit sharing action.
 - Browser storage contains renderer preferences, Workbench recovery choices, and
-  bounded versioned Marketplace and Plugin Service display caches only. Loading a
+  bounded versioned Marketplace, Plugin Service, and model catalog display caches
+  only. Loading a
   preference may choose an initial Input; Workbench is canonical afterward. Both
   caches remain disposable projections and Main remains authoritative.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
@@ -63,6 +64,10 @@ or durable domain authority.
   windows, preserve those values while inventory, status, and usage refresh in the
   background, clear prior usage on credential-changing actions, and discard an entry
   when its Plugin contribution fingerprint changes.
+- Seed Agent and generation model pickers from one last-complete strictly validated
+  projection across cold windows, retain it while the current catalogs refresh, and
+  group models under expandable Service rows. Cache entries are display-only; exact
+  provider/model and tool ids must still cross the normal send-time revalidation.
 - Marketplace UI may render its last complete strictly validated projection
   immediately across remounts and cold windows while revalidating it through Main
   at Renderer startup. Persist only bounded renderer-safe fields; never let the

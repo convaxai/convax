@@ -1165,15 +1165,20 @@ function sameGenerationTargetContent(node: CanvasNode, expected: CanvasGeneratio
 function omitCanvasOwnedGenerationMetadataFromData(data: CanvasNode["data"]): CanvasNode["data"] {
   const durableData = normalizePendingGenerationData(structuredClone(data))
   const withoutRun = omitCanvasNodeGenerationRunFromData(durableData as CanvasNode["data"])
-  const metadata = withoutRun.metadata
-  if (!isRecord(metadata)) return withoutRun
+  const {
+    error: _generationPresentationError,
+    status: _generationPresentationStatus,
+    ...withoutGenerationPresentation
+  } = withoutRun
+  const metadata = withoutGenerationPresentation.metadata
+  if (!isRecord(metadata)) return withoutGenerationPresentation as CanvasNode["data"]
   const nextMetadata = { ...structuredClone(metadata) }
   delete nextMetadata[canvasNodeGenerationPreferenceKey]
   if (Object.keys(nextMetadata).length === 0) {
-    const { metadata: _metadata, ...withoutMetadata } = withoutRun
+    const { metadata: _metadata, ...withoutMetadata } = withoutGenerationPresentation
     return withoutMetadata as CanvasNode["data"]
   }
-  return { ...withoutRun, metadata: nextMetadata }
+  return { ...withoutGenerationPresentation, metadata: nextMetadata } as CanvasNode["data"]
 }
 
 function normalizePendingGenerationData(data: CanvasNode["data"]): CanvasNode["data"] {

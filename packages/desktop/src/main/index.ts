@@ -1553,7 +1553,10 @@ function startApplication() {
                 {
                   models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
                   name: provider.name,
-                  npm: "@ai-sdk/openai-compatible",
+                  npm:
+                    provider.protocol === "openrouter"
+                      ? "@openrouter/ai-sdk-provider"
+                      : "@ai-sdk/openai",
                   options: {
                     apiKey: provider.apiKey,
                     baseURL: provider.baseUrl,

@@ -226,6 +226,14 @@ metadata.convaxGenerationRun = {
 }
 ```
 
+In the current collaboration owner, the parsed run is retained on the canonical
+file-node data envelope and projected to the renderer namespace above. Run-only
+start/running/task/failure/interruption changes use the closed, non-undoable
+`canvas.generation.runs.update` intent. A host-created pending node carries its
+initial `submitting` run in the same creation intent, while generated replacement
+uses the run-update intent with the exact current Project resource proof so the new
+resource and `succeeded` remain one candidate transaction and one durable frame.
+
 Only the most recent run is retained. Canvas has one terminal failure state. Main
 and recovery-capable sidecars may keep more detailed technical phases in their
 private ledgers, but those phases never become portable Canvas state or retry UI.

@@ -368,6 +368,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const pendingComposerFocusRef = useRef(false)
   const composerSurfaceRef = useRef<HTMLDivElement>(null)
   const composerPickerRef = useRef<HTMLDivElement>(null)
+  const modelPickerRef = useRef<HTMLDivElement>(null)
   const modelPickerAnchorRef = useRef<HTMLButtonElement>(null)
   const composerDraftRef = useRef(composerDraft)
   const composerQueryRangeRef = useRef<AgentComposerQueryRange | undefined>(undefined)
@@ -385,6 +386,9 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const activeScopeRef = useRef(conversationScope)
   const setComposerPickerElement = useCallback((element: HTMLDivElement | null) => {
     composerPickerRef.current = element
+  }, [])
+  const setModelPickerElement = useCallback((element: HTMLDivElement | null) => {
+    modelPickerRef.current = element
   }, [])
   const capabilitiesRequestRef = useRef<Promise<AgentCapabilities> | undefined>(undefined)
   const compositionControllerRef = useRef(new AgentComposerCompositionController())
@@ -939,6 +943,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   const responseStopping = Boolean(sessionId && stoppingSessionIds.has(sessionId))
   const awaitingInteraction = Boolean(sessionState?.pendingPermissions.length || sessionState?.pendingQuestions.length)
   const interactionDisabled = runtimeBusy || responseStopping || loading || creatingSession
+  const modelPickerDisabled = runtimeBusy || responseStopping || creatingSession
   useEffect(() => {
     const root = composerRef.current
     if (!root) return
@@ -1163,7 +1168,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
   useEffect(() => {
     if (!generationModelPickerOpen) return
     const dismiss = (event: PointerEvent) => {
-      if (!(event.target instanceof Node) || !composerSurfaceRef.current?.contains(event.target)) {
+      if (
+        !(event.target instanceof Node) ||
+        shouldDismissAgentResourcePicker(modelPickerAnchorRef.current, event.target, modelPickerRef.current)
+      ) {
         closeGenerationModelPicker()
       }
     }
@@ -2236,6 +2244,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                     loading={generationToolsLoading}
                     onClose={closeGenerationModelPicker}
                     onLlmSelect={setLlmSelection}
+                    onElementChange={setModelPickerElement}
                     onOpenServices={() => {
                       closeGenerationModelPicker()
                       props.onOpenServices?.()
@@ -2539,7 +2548,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       aria-label={`Select Agent models, ${displayedModelLabel}`}
                       className="agent-composer-model flex min-w-0 max-w-[70%] items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
                       data-agent-composer-action="model"
-                      disabled={!props.projectId || interactionDisabled}
+                      disabled={!props.projectId || modelPickerDisabled}
                       onClick={() => {
                         if (generationModelPickerOpen) {
                           closeGenerationModelPicker()
@@ -2555,7 +2564,7 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       ref={modelPickerAnchorRef}
                       type="button"
                     >
-                      <Sparkles className="size-3.5 shrink-0" />
+                      <Bot className="size-3.5 shrink-0" />
                       <span className="shrink-0 font-medium text-foreground">Agent models</span>
                       <span className="truncate">{displayedModelLabel}</span>
                       <ChevronDown className="size-3 shrink-0" />
@@ -2793,6 +2802,14 @@ function MessageSliceView(props: {
           <div className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <Bot className="size-3" />
             Agent
+            {props.slice.message.model ? (
+              <span
+                className="font-normal normal-case tracking-normal"
+                data-agent-message-model={`${props.slice.message.model.providerId}/${props.slice.message.model.modelId}`}
+              >
+                · {props.slice.message.model.providerId}/{props.slice.message.model.modelId}
+              </span>
+            ) : null}
           </div>
         ) : null}
         {props.slice.parts.map((part) => (

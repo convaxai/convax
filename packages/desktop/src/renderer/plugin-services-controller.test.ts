@@ -240,13 +240,50 @@ describe("PluginServicesController", () => {
     })
     const controller = new PluginServicesController(serviceClient)
     const first = controller.refresh()
-    await Promise.resolve()
+    while ((serviceClient.getStatus as ReturnType<typeof mock>).mock.calls.length === 0) await Promise.resolve()
     installed = []
-    await controller.refresh()
+    const afterUninstall = controller.refresh()
+    expect(serviceClient.getStatus).toHaveBeenCalledTimes(1)
     pendingStatus.resolve(connected)
-    await first
+    await Promise.all([first, afterUninstall])
 
     expect(controller.getSnapshot()).toMatchObject({ loading: false, services: [] })
+    controller.dispose()
+  })
+
+  test("coalesces concurrent status refreshes and runs one trailing revalidation", async () => {
+    const firstStatus = deferred<PluginServiceStatus>()
+    const trailingStatus = deferred<PluginServiceStatus>()
+    let activeStatuses = 0
+    let maximumActiveStatuses = 0
+    let requestCount = 0
+    const serviceClient = client({
+      getStatus: mock(async () => {
+        activeStatuses += 1
+        maximumActiveStatuses = Math.max(maximumActiveStatuses, activeStatuses)
+        try {
+          return await (requestCount++ === 0 ? firstStatus.promise : trailingStatus.promise)
+        } finally {
+          activeStatuses -= 1
+        }
+      }),
+    })
+    const controller = new PluginServicesController(serviceClient)
+
+    const first = controller.refresh()
+    while ((serviceClient.getStatus as ReturnType<typeof mock>).mock.calls.length === 0) await Promise.resolve()
+    const second = controller.refresh()
+    const third = controller.refresh()
+    expect(serviceClient.getStatus).toHaveBeenCalledTimes(1)
+
+    firstStatus.resolve(disconnected)
+    while ((serviceClient.getStatus as ReturnType<typeof mock>).mock.calls.length < 2) await Promise.resolve()
+    expect(serviceClient.getStatus).toHaveBeenCalledTimes(2)
+    trailingStatus.resolve(connected)
+    await Promise.all([first, second, third])
+
+    expect(maximumActiveStatuses).toBe(1)
+    expect(controller.getSnapshot().services[0]?.status).toEqual(connected)
     controller.dispose()
   })
 
@@ -273,6 +310,7 @@ describe("PluginServicesController", () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     signOutResult.resolve(disconnected)
     await action
+    while (controller.getSnapshot().services[0]?.loading) await Promise.resolve()
 
     expect(controller.getSnapshot().services[0]).toMatchObject({ version: "2.0.0", status: connected })
     controller.dispose()

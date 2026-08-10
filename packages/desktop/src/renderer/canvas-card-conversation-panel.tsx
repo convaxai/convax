@@ -18,25 +18,20 @@ import { createCanvasGenerationTargetGuard } from "@convax/canvas/application"
 import {
   Button,
   SegmentedTabs,
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
   ToolInputForm,
   createToolInputDefaultValues,
   reconcileToolInputValues,
   validateToolInputValues,
   type ToolInputValue,
 } from "@convax/ui"
-import { ArrowUp, LoaderCircle, Settings2, Sparkles } from "lucide-react"
+import { ArrowUp, ChevronDown, LoaderCircle, Settings2, Sparkles } from "lucide-react"
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import { createAgentCanvasNodeResource } from "../agent-canvas-context"
 import { AgentComposerResourceToken } from "./agent-composer-resource-token"
 import { useAgentGenerationDefault } from "./agent-generation-preference"
 import type { AgentGenerationToolSelection } from "./agent-generation-models"
-
-const unavailableToolToken = "unavailable"
+import { ServiceModelPickerList } from "./service-model-picker-list"
 
 const outputLabels: Record<CanvasGenerationOutput, string> = {
   audio: "Audio",
@@ -606,13 +601,11 @@ export function CanvasCardGenerationPanel(props: CanvasCardGenerationPanelProps)
                 ? generationInputError
                 : unsupportedMentionedNodes.length > 0
                   ? `当前模型不支持以下 @ 输入：${unsupportedMentionedNodes.map((node) => node.data.label).join("、")}。请移除这些输入或选择支持它们的模型。`
-                  : currentDescription?.status === "loading" || !currentDescription
-                    ? "正在加载模型选项…"
-                    : currentDescription.status === "error"
-                      ? currentDescription.error
-                      : inputValidation && !inputValidation.valid
-                        ? "请完成必填的模型选项。"
-                        : undefined
+                  : currentDescription?.status === "error"
+                    ? currentDescription.error
+                    : currentDescription?.status === "ready" && inputValidation && !inputValidation.valid
+                      ? "请完成必填的模型选项。"
+                      : undefined
   const modelHintIsError = currentCatalog?.status === "error" || currentDescription?.status === "error"
   const modelHintIsWarning = Boolean(resolvedTool && (generationInputError || unsupportedMentionedNodes.length > 0))
   const shouldOpenServices =
@@ -770,58 +763,136 @@ function ModelSelect(props: {
 }) {
   const selectedIndex = props.selectedToolId ? props.tools.findIndex((tool) => tool.id === props.selectedToolId) : -1
   const selected = selectedIndex >= 0 ? props.tools[selectedIndex] : undefined
+  const services = groupCanvasCardGenerationToolsByService(props.tools)
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const dismissOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return
+      if (triggerRef.current?.contains(event.target) || menuRef.current?.contains(event.target)) return
+      setOpen(false)
+    }
+    const closeForEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    document.addEventListener("pointerdown", dismissOutside, true)
+    window.addEventListener("keydown", closeForEscape, true)
+    return () => {
+      document.removeEventListener("pointerdown", dismissOutside, true)
+      window.removeEventListener("keydown", closeForEscape, true)
+    }
+  }, [open])
+
+  const triggerRect = open ? triggerRef.current?.getBoundingClientRect() : undefined
+  const viewportWidth = open && typeof window !== "undefined" ? window.innerWidth : 304
+  const menuWidth = Math.min(352, Math.max(288, viewportWidth - 16))
+  const menuLeft = triggerRect
+    ? Math.min(Math.max(8, triggerRect.left), Math.max(8, viewportWidth - menuWidth - 8))
+    : 8
   return (
-    <Select
-      disabled={props.disabled}
-      onValueChange={(value) => {
-        if (value === unavailableToolToken) return
-        const tool = props.tools[toolTokenIndex(value)]
-        if (tool) props.onValueChange(tool.id)
-      }}
-      value={props.unavailable || selectedIndex < 0 ? unavailableToolToken : toolToken(selectedIndex)}
-    >
-      <SelectTrigger
+    <>
+      <button
+        aria-expanded={open}
+        aria-haspopup="dialog"
         aria-label="Model"
-        className="h-auto w-auto min-w-0 max-w-[70%] shrink-0 justify-start gap-1 border-0 bg-transparent px-1.5 py-1 text-[11px] text-muted-foreground shadow-none hover:bg-accent hover:text-accent-foreground focus-visible:border-transparent focus-visible:ring-ring/40 [&>svg]:size-3 [&>svg]:opacity-100"
+        className="flex h-auto w-auto min-w-0 max-w-[70%] shrink-0 items-center justify-start gap-1 rounded-md border-0 bg-transparent px-1.5 py-1 text-[11px] text-muted-foreground shadow-none outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-50"
         data-canvas-shortcuts="ignore"
+        disabled={props.disabled}
+        onClick={() => {
+          setOpen((current) => !current)
+        }}
+        ref={triggerRef}
+        type="button"
       >
-        <SelectValue className="flex items-center gap-1 text-muted-foreground">
-          <Sparkles className="size-3.5 shrink-0" />
-          <span className="shrink-0 font-medium text-foreground">Models</span>
-          <span className="truncate">
-            {props.unavailable || !selected
-              ? "不可用"
-              : `${props.showOutput ? `${outputLabels[selected.output]} · ` : ""}${canvasGenerationModelSelectionTitle(selected)}`}
-          </span>
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {props.unavailable || !selected ? (
-          <SelectItem disabled value={unavailableToolToken}>
-            当前节点模型不可用
-          </SelectItem>
-        ) : null}
-        {props.tools.map((tool, index) => (
-          <SelectItem key={tool.id} value={toolToken(index)}>
-            {props.showOutput ? `${outputLabels[tool.output]} · ` : ""}
-            {canvasGenerationModelSelectionTitle(tool)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+        <Sparkles className="size-3.5 shrink-0" />
+        <span className="shrink-0 font-medium text-foreground">Models</span>
+        <span className="truncate">
+          {props.unavailable || !selected
+            ? "不可用"
+            : `${props.showOutput ? `${outputLabels[selected.output]} · ` : ""}${canvasGenerationModelSelectionTitle(selected)}`}
+        </span>
+        <ChevronDown className={`size-3 shrink-0 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              aria-label="Models"
+              className="fixed z-[120] max-h-72 overflow-y-auto rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
+              data-canvas-card-generation-model-menu
+              ref={menuRef}
+              role="dialog"
+              style={{
+                bottom: triggerRect ? Math.max(8, window.innerHeight - triggerRect.top + 4) : 8,
+                left: menuLeft,
+                width: menuWidth,
+              }}
+            >
+              {props.unavailable || !selected ? (
+                <div className="px-2.5 py-2 text-sm text-muted-foreground">当前节点模型不可用</div>
+              ) : null}
+              <ServiceModelPickerList
+                groups={services}
+                isSelected={({ tool }) => tool.id === props.selectedToolId}
+                modelAriaLabel={({ tool }, service) =>
+                  `${canvasGenerationModelDisplayTitle(tool)} by ${service.name}`
+                }
+                modelKey={({ tool }) => tool.id}
+                modelLabel={({ tool }) =>
+                  `${props.showOutput ? `${outputLabels[tool.output]} · ` : ""}${canvasGenerationModelDisplayTitle(tool)}`
+                }
+                onSelect={({ tool }) => {
+                  props.onValueChange(tool.id)
+                  setOpen(false)
+                }}
+              />
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   )
 }
 
+export interface CanvasCardGenerationServiceGroup {
+  id: string
+  models: readonly { index: number; tool: CanvasGenerationToolSummary }[]
+  name: string
+}
+
+export function groupCanvasCardGenerationToolsByService(
+  tools: readonly CanvasGenerationToolSummary[],
+): readonly CanvasCardGenerationServiceGroup[] {
+  const services = new Map<
+    string,
+    { id: string; models: { index: number; tool: CanvasGenerationToolSummary }[]; name: string }
+  >()
+  tools.forEach((tool, index) => {
+    const serviceId = tool.serviceId?.trim() || tool.serviceName?.trim() || tool.id
+    const serviceName = tool.serviceName?.trim() || "Models"
+    const service = services.get(serviceId)
+    if (service) service.models.push({ index, tool })
+    else services.set(serviceId, { id: serviceId, models: [{ index, tool }], name: serviceName })
+  })
+  return [...services.values()]
+}
+
+function canvasGenerationModelDisplayTitle(tool: CanvasGenerationToolSummary) {
+  return tool.modelName?.trim() || tool.title
+}
+
 function canvasGenerationModelSelectionTitle(tool: CanvasGenerationToolSummary) {
-  const modelName = tool.modelName?.trim() || tool.title
+  const modelName = canvasGenerationModelDisplayTitle(tool)
   const serviceName = tool.serviceName?.trim()
   return !serviceName || modelName === serviceName || modelName.startsWith(`${serviceName} · `)
     ? modelName
     : `${serviceName} · ${modelName}`
 }
-
-const toolToken = (index: number) => `tool:${index}`
-const toolTokenIndex = (value: string) => Number.parseInt(value.slice("tool:".length), 10)
 
 export interface CanvasCardConversationPanelProps extends Omit<CanvasCardGenerationPanelProps, "generation"> {
   agent: ReactNode

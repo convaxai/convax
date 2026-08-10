@@ -170,9 +170,11 @@ For any matching change, read the full routed reference before planning or editi
   concrete Plugin id. A failed renderer refresh never rolls back a durable creation,
   and uninstalling the Plugin leaves the node and its portable state intact.
 - Generation has one Main-owned executor shared by Agent, UI, and Plugin callers.
-  OpenCode is an Agent-side client, not the execution owner. Model/control display
-  snapshots never authorize execution; reload and validate the live tool/service
-  contract immediately before dispatch.
+  OpenCode is an Agent-side client, not the execution owner. Admit installed models
+  to the display snapshot from exact manifest/service membership and the bounded
+  current tool schema without waiting for or filtering on `service.status`.
+  Model/control display snapshots never authorize execution; reload and validate
+  the live tool/service contract immediately before dispatch.
 - Generated files publish without clobbering under the Project before Canvas commit.
   Preserve files on partial success. Pending nodes, node run state, target guards,
   and legal transitions go through Canvas business services.

@@ -199,10 +199,12 @@ export interface PluginLlmProviderConnection {
   models: Array<{ id: string; name: string }>
   name: string
   pluginId: string
+  protocol: "openai" | "openrouter"
   providerId: string
 }
 
 export type GenerationPluginMcpClientFactory = (options: StdioMcpClientOptions) => GenerationPluginMcpClient
+export type GenerationPluginProviderFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 
 export interface GenerationPluginExecutableBinding extends GenerationRecoveryExecutableBinding {
   path: string
@@ -227,6 +229,8 @@ export interface GenerationPluginRuntimeOptions {
   createClient?: GenerationPluginMcpClientFactory
   /** Source environment. Only the explicit host allowlist is inherited. */
   environment?: Readonly<Record<string, string | undefined>>
+  /** Main-owned transport for protocol-declared loopback Provider discovery. */
+  fetch?: GenerationPluginProviderFetch
   plugins: GenerationPluginSource
   /** Main-owned activation gate for source-bound Marketplace runtime capabilities. */
   isPluginEnabled?: (this: void, pluginId: string) => Promise<boolean>
@@ -387,6 +391,7 @@ const generationModelSelectionDigestPattern = /^[a-f0-9]{64}$/
 const llmModelIdPattern = /^~?[A-Za-z0-9]+(?:[._/:-][A-Za-z0-9]+)*$/
 const bareCommandPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
 const maximumRuntimeLlmModels = 2_048
+const maximumProviderModelCatalogBytes = 4 * 1_024 * 1_024
 
 function abortError(reason?: unknown) {
   const message =
@@ -826,41 +831,73 @@ function llmGatewayDescriptor(value: unknown) {
   return { apiKey: input.api_key, baseUrl: url.toString().replace(/\/$/, "") }
 }
 
-function llmModelCatalog(value: unknown) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Plugin LLM model catalog returned an invalid descriptor")
+function openRouterLlmModelCatalog(value: unknown) {
+  if (!isUnknownRecord(value) || !Array.isArray(value.data) || value.data.length > maximumRuntimeLlmModels) {
+    throw new Error("OpenRouter model catalog returned an invalid descriptor")
   }
-  const input = value as Record<string, unknown>
-  if (
-    Object.keys(input).length !== 2 ||
-    input.schema !== "convax.llm-model-catalog/1" ||
-    !Array.isArray(input.models) ||
-    input.models.length === 0 ||
-    input.models.length > maximumRuntimeLlmModels
-  ) {
-    throw new Error("Plugin LLM model catalog returned an invalid descriptor")
-  }
-  const models = input.models.map((value, index) => {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      throw new Error(`Plugin LLM model catalog entry ${index} is invalid`)
+  const models = value.data.flatMap((value, index) => {
+    if (!isUnknownRecord(value) || !isUnknownRecord(value.architecture)) {
+      throw new Error(`OpenRouter model catalog entry ${index} is invalid`)
     }
-    const model = value as Record<string, unknown>
+    const outputModalities = value.architecture.output_modalities
     if (
-      Object.keys(model).length !== 2 ||
-      typeof model.id !== "string" ||
-      model.id.length > 191 ||
-      !llmModelIdPattern.test(model.id) ||
-      typeof model.name !== "string" ||
-      model.name.length === 0 ||
-      model.name.length > 160 ||
-      model.name.includes("\0")
+      !Array.isArray(outputModalities) ||
+      outputModalities.length === 0 ||
+      outputModalities.length > 16 ||
+      outputModalities.some((modality) => typeof modality !== "string" || modality.length > 32)
     ) {
-      throw new Error(`Plugin LLM model catalog entry ${index} is invalid`)
+      throw new Error(`OpenRouter model catalog entry ${index} is invalid`)
     }
-    return { id: model.id, name: model.name }
+    if (!outputModalities.includes("text")) return []
+    if (
+      typeof value.id !== "string" ||
+      value.id.length > 191 ||
+      !llmModelIdPattern.test(value.id) ||
+      typeof value.name !== "string" ||
+      value.name.length === 0 ||
+      value.name.length > 160 ||
+      value.name.includes("\0")
+    ) {
+      throw new Error(`OpenRouter model catalog entry ${index} is invalid`)
+    }
+    return [{ id: value.id, name: value.name }]
+  })
+  if (models.length === 0) throw new Error("OpenRouter model catalog contains no text-output models")
+  if (new Set(models.map(({ id }) => id)).size !== models.length) {
+    throw new Error("OpenRouter model catalog contains duplicate ids")
+  }
+  return models
+}
+
+function openAiLlmModelCatalog(
+  value: unknown,
+  fallback: ReadonlyMap<string, string>,
+) {
+  if (
+    !isUnknownRecord(value) ||
+    !Array.isArray(value.data) ||
+    value.data.length === 0 ||
+    value.data.length > maximumRuntimeLlmModels
+  ) {
+    throw new Error("OpenAI model catalog returned an invalid descriptor")
+  }
+  const models = value.data.map((value, index) => {
+    if (
+      !isUnknownRecord(value) ||
+      typeof value.id !== "string" ||
+      value.id.length > 191 ||
+      !llmModelIdPattern.test(value.id)
+    ) {
+      throw new Error(`OpenAI model catalog entry ${index} is invalid`)
+    }
+    const name = typeof value.name === "string" ? value.name : fallback.get(value.id) ?? value.id
+    if (name.length === 0 || name.length > 160 || name.includes("\0")) {
+      throw new Error(`OpenAI model catalog entry ${index} is invalid`)
+    }
+    return { id: value.id, name }
   })
   if (new Set(models.map(({ id }) => id)).size !== models.length) {
-    throw new Error("Plugin LLM model catalog contains duplicate ids")
+    throw new Error("OpenAI model catalog contains duplicate ids")
   }
   return models
 }
@@ -877,6 +914,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   readonly #canvasCapabilities?: ToolPluginHostApiCapabilityHost
   readonly #createClient: GenerationPluginMcpClientFactory
   readonly #environment: Record<string, string>
+  readonly #fetch: GenerationPluginProviderFetch
   readonly #platform: NodeJS.Platform
   readonly #plugins: GenerationPluginSource
   readonly #isPluginEnabled: (pluginId: string) => Promise<boolean>
@@ -913,6 +951,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       (async (pluginId) => ((await this.#isPluginEnabled(pluginId)) ? "enabled" : "disabled"))
     this.#canvasCapabilities = options.canvasCapabilities
     this.#createClient = options.createClient ?? ((clientOptions) => new StdioMcpClient(clientOptions))
+    this.#fetch = options.fetch ?? globalThis.fetch
     this.#environment = generationPluginEnvironment(options.environment ?? process.env)
     if (options.recoveryStateDirectory && !path.isAbsolute(options.recoveryStateDirectory)) {
       throw new Error("Generation recovery state directory must be absolute")
@@ -967,8 +1006,9 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   }
 
   /**
-   * Expands one manifest-declared model only after its owning service has been
-   * admitted by Main. Unmarked tools preserve their static manifest summary.
+   * Expands one installed manifest-declared model from the current sidecar
+   * schema. Service status is checked at preparation and dispatch, not discovery.
+   * Unmarked tools preserve their static manifest summary.
    */
   async expandModelTool(
     expected: GenerationToolSummary,
@@ -1078,17 +1118,6 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         if (!availableTools.has("llm.gateway.start")) {
           throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.gateway.start`)
         }
-        let models = contribution.models.map((model) => ({ ...model }))
-        if (contribution.modelCatalog === "runtime") {
-          if (!availableTools.has("llm.models.list")) {
-            throw new Error(`Plugin LLM provider ${selected.manifest.id} did not expose llm.models.list`)
-          }
-          const catalogResult = await runtime.client.callTool("llm.models.list", {}, signal)
-          if (catalogResult.isError) {
-            throw new PluginRuntimeReportedError(`Plugin LLM model catalog failed to load: ${selected.manifest.id}`)
-          }
-          models = llmModelCatalog(catalogResult.structuredContent)
-        }
         const current = (await this.#discover()).get(selected.manifest.id)
         if (
           !current ||
@@ -1102,11 +1131,56 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           throw new PluginRuntimeReportedError(`Plugin LLM gateway failed to start: ${selected.manifest.id}`)
         }
         const descriptor = llmGatewayDescriptor(result.structuredContent)
+        const url = new URL(`${descriptor.baseUrl}/models`)
+        if (contribution.provider.protocol === "openrouter") {
+          url.searchParams.set("output_modalities", "text")
+        }
+        const requestSignal = signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(15_000)])
+          : AbortSignal.timeout(15_000)
+        const response = await this.#fetch(url, {
+          headers: { authorization: `Bearer ${descriptor.apiKey}` },
+          signal: requestSignal,
+        })
+        if (!response.ok) {
+          const protocolName = contribution.provider.protocol === "openrouter" ? "OpenRouter" : "OpenAI"
+          throw new PluginRuntimeReportedError(`${protocolName} model catalog failed with HTTP ${response.status}`)
+        }
+        const declared = Number(response.headers.get("content-length") ?? 0)
+        if (Number.isFinite(declared) && declared > maximumProviderModelCatalogBytes) {
+          throw new Error("Provider model catalog response is too large")
+        }
+        const serialized = await response.text()
+        if (new TextEncoder().encode(serialized).byteLength > maximumProviderModelCatalogBytes) {
+          throw new Error("Provider model catalog response is too large")
+        }
+        let catalog: unknown
+        try {
+          catalog = JSON.parse(serialized) as unknown
+        } catch {
+          throw new Error("Provider model catalog response is invalid")
+        }
+        const models =
+          contribution.provider.protocol === "openrouter"
+            ? openRouterLlmModelCatalog(catalog)
+            : openAiLlmModelCatalog(
+                catalog,
+                new Map(contribution.models.map((model) => [model.id, model.name])),
+              )
+        const latest = (await this.#discover()).get(selected.manifest.id)
+        if (
+          !latest ||
+          latest.fingerprint !== selected.fingerprint ||
+          this.#cache.get(selected.manifest.id) !== runtime
+        ) {
+          throw new Error(`Plugin LLM provider changed while its model catalog was listed: ${selected.manifest.id}`)
+        }
         connections.push({
           ...descriptor,
           models,
           name: contribution.provider.name,
           pluginId: selected.manifest.id,
+          protocol: contribution.provider.protocol,
           providerId: pluginLlmProviderHostId(selected.manifest.id, contribution.provider.id),
         })
       } catch (error) {

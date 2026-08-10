@@ -6,6 +6,10 @@ The runtime remains host-agnostic. Callers inject scope ids, directories, struct
 resources, prompt instructions, protected paths, tool providers, and server names.
 Do not import other Convax packages or add Canvas/Project/Workbench tool schemas,
 product prompts, UI, or storage knowledge here; those belong in Desktop adapters.
+Prompt model selection maps the caller's exact provider/model pair to OpenCode, and
+message projection may return only the exact provider/model identity recorded by
+OpenCode for that message. Do not infer model identity from generated prose or expose
+provider configuration through message metadata.
 
 OpenCode Skills remain native runtime capabilities. The Node entry may own a bounded
 host-managed Skill directory adapter, discovery isolation and cache refresh, but it

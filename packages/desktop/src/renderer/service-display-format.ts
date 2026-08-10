@@ -22,7 +22,7 @@ export function credentialLabel(locale: AppLocale, status: PluginServiceStatus) 
     status.credential.verification === "verified"
       ? "services.verified"
       : status.credential.verification === "failed"
-        ? "services.failed"
+        ? "services.authenticationExpired"
         : status.credential.verification === "unverified"
           ? "services.unverified"
           : "services.unknown",

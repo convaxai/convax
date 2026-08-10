@@ -6,13 +6,13 @@ import type {
   GenerationToolSummary,
 } from "../generation-contracts"
 import { Button, SegmentedTabs, ToolInputForm, type SegmentedTabItem } from "@convax/ui"
-import { Check, LoaderCircle, Settings2 } from "lucide-react"
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react"
+import { LoaderCircle, Settings2 } from "lucide-react"
+import { useCallback, useEffect, useId, useRef } from "react"
 import { createPortal } from "react-dom"
 import {
   agentGenerationOutputs,
   agentGenerationModelDisplayTitle,
-  agentGenerationToolsForOutput,
+  groupAgentGenerationToolsByService,
   type AgentGenerationOutput,
   type AgentGenerationToolSelection,
 } from "./agent-generation-models"
@@ -21,6 +21,7 @@ import {
   positionAgentComposerPicker,
 } from "./agent-composer-picker"
 import { availableAgentLlmProviders, type AgentLlmModelSelection } from "./agent-llm-models"
+import { ServiceModelPickerList } from "./service-model-picker-list"
 
 export type AgentModelPickerTab = AgentGenerationOutput | "llm"
 
@@ -37,6 +38,7 @@ export interface AgentGenerationModelPickerProps {
   descriptionError?: string
   descriptionLoading?: boolean
   onClose(): void
+  onElementChange?(element: HTMLDivElement | null): void
   onLlmSelect(selection: AgentLlmModelSelection): void
   onOpenServices(): void
   onSelect(selection: AgentGenerationToolSelection): void
@@ -58,6 +60,8 @@ const tabLabels: Record<AgentModelPickerTab, string> = {
   llm: "LLM",
 }
 
+const modelPickerHeight = 448
+
 function OpenServicesPrompt(props: { error?: boolean; message: string; onOpenServices(): void }) {
   return (
     <div className="px-2.5 py-3">
@@ -74,7 +78,6 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
   const instanceId = useId()
   const dialogRef = useRef<HTMLDivElement>(null)
   const pickerSurfaceRef = useRef<HTMLDivElement>(null)
-  const [pickerHeight, setPickerHeight] = useState(0)
   const modelPickerTabs: readonly AgentModelPickerTab[] = ["llm", ...agentGenerationOutputs]
   const tabs = modelPickerTabs.map((tab) => ({
     id: `${instanceId}-agent-generation-model-tab-${tab}`,
@@ -83,16 +86,13 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
     value: tab,
   })) satisfies readonly SegmentedTabItem<AgentModelPickerTab>[]
   const activeOutput = props.activeTab === "llm" ? undefined : props.activeTab
-  const generationModels = activeOutput ? agentGenerationToolsForOutput(props.tools, activeOutput) : []
-  const defaultGenerationModel = generationModels[0]
+  const services = activeOutput ? groupAgentGenerationToolsByService(props.tools, activeOutput) : []
+  const defaultGenerationModel = services[0]?.models[0]
   const selectedGenerationModel =
     activeOutput && props.selected?.output === activeOutput
-      ? generationModels.find((model) => model.id === props.selected?.id)
+      ? services.flatMap((service) => service.models).find((model) => model.id === props.selected?.id)
       : undefined
   const llmProviders = availableAgentLlmProviders(props.llmCatalog)
-  const llmModels = llmProviders.flatMap((provider) =>
-    provider.models.map((model) => ({ model, providerId: provider.providerId, providerName: provider.providerName })),
-  )
   const activeTab = tabs.find((tab) => tab.value === props.activeTab)!
 
   const anchor = props.anchorElement
@@ -103,25 +103,18 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
         { height: window.innerHeight, width: window.innerWidth },
       )
     : undefined
-  const position = anchor ? positionAgentComposerPicker(anchor, pickerHeight) : undefined
+  const fixedHeight = anchor
+    ? Math.min(modelPickerHeight, Math.max(anchor.aboveSpace, anchor.belowSpace))
+    : modelPickerHeight
+  const position = anchor ? positionAgentComposerPicker(anchor, fixedHeight) : undefined
   const setPickerSurfaceRef = useCallback(
     (element: HTMLDivElement | null) => {
       pickerSurfaceRef.current = element
       dialogRef.current = element
+      props.onElementChange?.(element)
     },
-    [],
+    [props.onElementChange],
   )
-
-  useLayoutEffect(() => {
-    if (!position) return
-    const picker = pickerSurfaceRef.current
-    if (!picker) return
-    const updateHeight = () => setPickerHeight(picker.getBoundingClientRect().height)
-    updateHeight()
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(picker)
-    return () => observer.disconnect()
-  }, [position])
 
   useEffect(() => {
     if (!activeOutput || props.loading || props.error || selectedGenerationModel || !defaultGenerationModel) {
@@ -146,7 +139,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
   const picker = (
     <div
       aria-label="Agent models"
-      className="fixed z-50 overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
+      className="fixed z-50 flex w-[min(22rem,calc(100vw-1rem))] flex-col overflow-hidden rounded-2xl border border-border/70 bg-popover p-3 text-popover-foreground shadow-xl"
       data-agent-generation-model-picker
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -156,38 +149,40 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       }}
       ref={setPickerSurfaceRef}
       role="dialog"
-      style={
-        position
+      style={{
+        height: fixedHeight,
+        ...(position
           ? {
               left: position.left,
-              maxWidth: "min(22rem, calc(100vw - 1rem))",
               top: position.top,
               transform: position.placement === "above" ? "translateY(-100%)" : undefined,
             }
-          : undefined
-      }
+          : {}),
+      }}
       tabIndex={-1}
     >
-      <div className="mb-2 flex items-center justify-between px-1">
+      <div className="mb-2 flex shrink-0 items-center justify-between px-1">
         <span className="text-sm font-semibold">Agent models</span>
         <span className="text-[10px] text-muted-foreground">
           {props.activeTab === "llm" ? "Agent runtime" : "Generation services"}
         </span>
       </div>
-      <SegmentedTabs
-        aria-label="Model type"
-        items={tabs}
-        onValueChange={(tab) => props.onTabChange(tab)}
-        value={props.activeTab}
-      />
+      <div className="shrink-0">
+        <SegmentedTabs
+          aria-label="Model type"
+          items={tabs}
+          onValueChange={(tab) => props.onTabChange(tab)}
+          value={props.activeTab}
+        />
+      </div>
       <div
         aria-labelledby={activeTab.id}
-        className="mt-2 max-h-64 space-y-0.5 overflow-y-auto"
+        className="mt-2 min-h-0 flex-1 space-y-0.5 overflow-y-auto"
         id={activeTab.panelId}
         role="tabpanel"
       >
         {props.activeTab === "llm" ? (
-          <div role="radiogroup">
+          <div>
             {props.llmLoading ? (
               <div className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
                 <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
@@ -201,31 +196,28 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
                 onOpenServices={props.onOpenServices}
               />
             ) : (
-              llmModels.map(({ model, providerId, providerName }) => {
-                const selected =
-                  props.llmSelected?.providerId === providerId && props.llmSelected.modelId === model.modelId
-                return (
-                  <button
-                    aria-checked={selected}
-                    aria-label={`${model.modelName} by ${providerName}`}
-                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                    key={`${providerId}/${model.modelId}`}
-                    onClick={() => props.onLlmSelect({ modelId: model.modelId, providerId })}
-                    role="radio"
-                    type="button"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{model.modelName}</span>
-                      <span className="block truncate text-[10px] text-muted-foreground">{providerName}</span>
-                    </span>
-                    {selected ? <Check className="size-4 shrink-0" /> : null}
-                  </button>
-                )
-              })
+              <ServiceModelPickerList
+                groups={llmProviders.map((provider) => ({
+                  id: provider.providerId,
+                  models: provider.models.map((model) => ({ model, provider })),
+                  name: provider.providerName,
+                }))}
+                isSelected={({ model, provider }) =>
+                  props.llmSelected?.providerId === provider.providerId &&
+                  props.llmSelected.modelId === model.modelId
+                }
+                modelAriaLabel={({ model, provider }) => `${model.modelName} by ${provider.providerName}`}
+                modelKey={({ model, provider }) => `${provider.providerId}:${model.modelId}`}
+                modelLabel={({ model }) => model.modelName}
+                onSelect={({ model, provider }) => {
+                  props.onLlmSelect({ modelId: model.modelId, providerId: provider.providerId })
+                  props.onClose()
+                }}
+              />
             )}
           </div>
         ) : (
-          <div role="radiogroup">
+          <div>
             {props.loading ? (
               <div className="flex items-center gap-2 px-2.5 py-3 text-xs text-muted-foreground">
                 <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
@@ -233,33 +225,23 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
               </div>
             ) : props.error ? (
               <OpenServicesPrompt error message={props.error} onOpenServices={props.onOpenServices} />
-            ) : generationModels.length === 0 ? (
+            ) : services.length === 0 ? (
               <OpenServicesPrompt
                 message={`No available ${outputLabels[activeOutput!].toLocaleLowerCase()} generation service provides a model.`}
                 onOpenServices={props.onOpenServices}
               />
             ) : (
-              generationModels.map((tool) => {
-                const selected = props.selected?.id === tool.id && props.selected.output === tool.output
-                const modelName = agentGenerationModelDisplayTitle(tool)
-                return (
-                  <button
-                    aria-checked={selected}
-                    aria-label={`${modelName} by ${tool.pluginName}`}
-                    className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/40"
-                    key={tool.id}
-                    onClick={() => props.onSelect({ id: tool.id, output: activeOutput! })}
-                    role="radio"
-                    type="button"
-                  >
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm">{modelName}</span>
-                      <span className="block truncate text-[10px] text-muted-foreground">{tool.pluginName}</span>
-                    </span>
-                    {selected ? <Check className="size-4 shrink-0" /> : null}
-                  </button>
-                )
-              })
+              <ServiceModelPickerList
+                groups={services}
+                isSelected={(tool) => props.selected?.id === tool.id && props.selected.output === tool.output}
+                modelAriaLabel={(tool) => `${agentGenerationModelDisplayTitle(tool)} by ${tool.pluginName}`}
+                modelKey={(tool) => tool.id}
+                modelLabel={agentGenerationModelDisplayTitle}
+                onSelect={(tool) => {
+                  props.onSelect({ id: tool.id, output: activeOutput! })
+                  props.onClose()
+                }}
+              />
             )}
           </div>
         )}
@@ -268,7 +250,7 @@ export function AgentGenerationModelPicker(props: AgentGenerationModelPickerProp
       props.selected?.output === activeOutput &&
       (props.descriptionError ||
         (props.description?.toolId === props.selected.id && props.description.fields.length > 0)) ? (
-        <div className="mt-2 max-h-52 overflow-y-auto border-t border-border/60 px-1 pt-2">
+        <div className="mt-2 max-h-52 shrink-0 overflow-y-auto border-t border-border/60 px-1 pt-2">
           {props.descriptionError ? (
             <div className="py-2 text-xs text-destructive">{props.descriptionError}</div>
           ) : props.description?.toolId === props.selected.id ? (

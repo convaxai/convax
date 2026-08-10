@@ -19,9 +19,9 @@ describe("portable runtime, service, LLM, and Pet contributions", () => {
     expect(
       parsePortablePluginLlmContribution({
         models: [{ id: "model-1", name: "Model 1" }],
-        provider: { id: "provider-one", name: "Provider One" },
-      }).provider.id,
-    ).toBe("provider-one")
+        provider: { id: "provider-one", name: "Provider One", protocol: "openrouter" },
+      }).provider,
+    ).toEqual({ id: "provider-one", name: "Provider One", protocol: "openrouter" })
     expect(
       parsePortablePluginPetContribution({
         library: "pet/library.json",
@@ -45,5 +45,14 @@ describe("portable runtime, service, LLM, and Pet contributions", () => {
         type: "mcp-stdio",
       }),
     ).toThrow("without code, native paths, or traversal")
+  })
+
+  test("rejects undeclared provider protocols", () => {
+    expect(() =>
+      parsePortablePluginLlmContribution({
+        models: [],
+        provider: { id: "provider-one", name: "Provider One", protocol: "vendor-private" },
+      }),
+    ).toThrow("LLM provider protocol must be openai or openrouter")
   })
 })

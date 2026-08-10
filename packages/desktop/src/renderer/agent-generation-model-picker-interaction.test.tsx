@@ -11,6 +11,7 @@ function installTestWindow() {
     Event: testWindow.Event,
     HTMLElement: testWindow.HTMLElement,
     Node: testWindow.Node,
+    ResizeObserver: testWindow.ResizeObserver,
     document: testWindow.document,
     window: testWindow,
   }
@@ -174,9 +175,10 @@ test("selects the first real media model when a media tab is opened", async () =
   }
 })
 
-test("selects a concrete media model in one click without opening a service level", async () => {
+test("opens a service before selecting one of its concrete media models", async () => {
   const restoreWindow = installTestWindow()
   const onSelect = mock(() => undefined)
+  const onClose = mock(() => undefined)
   let root: Root | undefined
   try {
     const container = document.createElement("div")
@@ -187,7 +189,7 @@ test("selects a concrete media model in one click without opening a service leve
         <AgentGenerationModelPicker
           activeTab="image"
           loading={false}
-          onClose={mock(() => undefined)}
+          onClose={onClose}
           onLlmSelect={mock(() => undefined)}
           onOpenServices={mock(() => undefined)}
           onSelect={onSelect}
@@ -225,7 +227,13 @@ test("selects a concrete media model in one click without opening a service leve
       )
     })
 
-    expect(document.querySelector("details")).toBeNull()
+    const secondService = [...document.querySelectorAll<HTMLDetailsElement>("details")].find((details) =>
+      details.querySelector("summary")?.textContent?.includes("Second service"),
+    )
+    expect(secondService).not.toBeNull()
+    expect(secondService?.open).toBeFalse()
+    await act(async () => secondService?.querySelector<HTMLElement>("summary")?.click())
+    expect(secondService?.open).toBeTrue()
     const second = document.querySelector<HTMLButtonElement>('button[aria-label="Second image by Second service"]')
     expect(second).not.toBeNull()
     await act(async () => second?.click())
@@ -233,8 +241,104 @@ test("selects a concrete media model in one click without opening a service leve
       id: "second/image.generate#model-selection-sha256:abc",
       output: "image",
     })
+    expect(onClose).toHaveBeenCalledTimes(1)
   } finally {
     if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("closes after selecting a concrete LLM model", async () => {
+  const restoreWindow = installTestWindow()
+  const onClose = mock(() => undefined)
+  const onLlmSelect = mock(() => undefined)
+  let root: Root | undefined
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <AgentGenerationModelPicker
+          activeTab="llm"
+          llmCatalog={{
+            providers: [
+              {
+                connected: true,
+                models: [{ default: true, modelId: "main", modelName: "Main model" }],
+                providerId: "example",
+                providerName: "Example service",
+              },
+            ],
+          }}
+          loading={false}
+          onClose={onClose}
+          onLlmSelect={onLlmSelect}
+          onOpenServices={mock(() => undefined)}
+          onSelect={mock(() => undefined)}
+          onTabChange={mock(() => undefined)}
+          onToolInputChange={mock(() => undefined)}
+          toolInput={{}}
+          tools={[]}
+        />,
+      )
+    })
+
+    const model = document.querySelector<HTMLButtonElement>('button[aria-label="Main model by Example service"]')
+    expect(model).not.toBeNull()
+    await act(async () => model?.click())
+    expect(onLlmSelect).toHaveBeenCalledWith({ modelId: "main", providerId: "example" })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("reports its portaled surface so tab pointer events stay inside the shared picker", async () => {
+  const restoreWindow = installTestWindow()
+  const onElementChange = mock((_element: HTMLDivElement | null) => undefined)
+  const onTabChange = mock((_tab: "audio" | "image" | "llm" | "video") => undefined)
+  let root: Root | undefined
+  try {
+    const container = document.createElement("div")
+    const anchor = document.createElement("button")
+    document.body.append(container, anchor)
+    root = createRoot(container)
+    await act(async () => {
+      root?.render(
+        <AgentGenerationModelPicker
+          activeTab="llm"
+          anchorElement={anchor}
+          llmCatalog={{ providers: [] }}
+          loading={false}
+          onClose={mock(() => undefined)}
+          onElementChange={onElementChange}
+          onLlmSelect={mock(() => undefined)}
+          onOpenServices={mock(() => undefined)}
+          onSelect={mock(() => undefined)}
+          onTabChange={onTabChange}
+          onToolInputChange={mock(() => undefined)}
+          toolInput={{}}
+          tools={[]}
+        />,
+      )
+    })
+
+    const picker = document.querySelector<HTMLDivElement>("[data-agent-generation-model-picker]")
+    const imageTab = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].find(
+      (button) => button.textContent === "Image",
+    )
+    expect(picker?.parentElement).toBe(document.body)
+    expect(onElementChange).toHaveBeenCalledWith(picker)
+    await act(async () => {
+      imageTab?.dispatchEvent(new window.PointerEvent("pointerdown", { bubbles: true }))
+      imageTab?.click()
+    })
+    expect(onTabChange).toHaveBeenCalledWith("image")
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    expect(onElementChange).toHaveBeenLastCalledWith(null)
     await restoreWindow()
   }
 })

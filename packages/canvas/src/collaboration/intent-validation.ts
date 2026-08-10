@@ -46,6 +46,7 @@ import {
   canvasDigest,
   CanvasSchemaError,
 } from "./validation"
+import { parseCanvasNodeGenerationRun } from "../generation-run"
 
 export const CANVAS_INTENT_KINDS = Object.freeze([
   "canvas.agent.create",
@@ -63,6 +64,7 @@ export const CANVAS_INTENT_KINDS = Object.freeze([
   "canvas.edges.connect",
   "canvas.metadata.update",
   "canvas.generation.begin",
+  "canvas.generation.runs.update",
   "canvas.generation.complete",
   "canvas.generation.fail",
   "canvas.generations.fail-owned",
@@ -168,6 +170,24 @@ export function assertCanvasTypedIntent(value: unknown): asserts value is Canvas
       assertExactKeys(value.body, ["node", "data"], "update-data body")
       assertEntityRef(value.body.node, "node")
       assertNodeData(value.body.data)
+      return
+    case "canvas.generation.runs.update":
+      assertExactKeys(value.guard, ["updates"], "generation run update guard")
+      assertArray(value.guard.updates, (item) => {
+        assertExactKeys(item, ["node", "resourceProof"], "generation run update guard item")
+        assertNodeDataGuard(item.node)
+        if (item.resourceProof !== null) assertResourceProof(item.resourceProof, false)
+      })
+      assertExactKeys(value.body, ["updates"], "generation run update body")
+      assertArray(value.body.updates, (item) => {
+        assertExactKeys(item, ["node", "data"], "generation run update body item")
+        assertEntityRef(item.node, "node")
+        assertNodeData(item.data)
+        if (
+          (item.data.kind !== "resource" && item.data.kind !== "placeholder") ||
+          item.data.generationRun === undefined
+        ) invalid("generation run update body must carry a portable run")
+      })
       return
     case "canvas.nodes.set-plugin-state":
       assertExactKeys(value.guard, ["node"], "plugin guard wrapper")
@@ -432,9 +452,18 @@ function assertResourceNode(value: unknown): void {
 }
 
 function assertPendingNode(value: unknown): void {
+  const hasGenerationRun = typeof value === "object" && value !== null && "generationRun" in value
   assertExactKeys(
     value,
-    ["ordinal", "nodeId", "incarnation", "size", "title", "expectedClass"],
+    [
+      "ordinal",
+      "nodeId",
+      "incarnation",
+      "size",
+      "title",
+      "expectedClass",
+      ...(hasGenerationRun ? ["generationRun"] : []),
+    ],
     "PendingNodeCreateSpec",
   )
   parseUint32(value.ordinal)
@@ -444,6 +473,8 @@ function assertPendingNode(value: unknown): void {
   assertString(value.title)
   if (!new Set(["text", "image", "video", "audio", "file"]).has(value.expectedClass as string))
     invalid("expectedClass is invalid")
+  if (value.generationRun !== undefined && parseCanvasNodeGenerationRun(value.generationRun) === undefined)
+    invalid("generationRun is invalid")
 }
 
 function assertPluginSurfaceNode(value: unknown): void {

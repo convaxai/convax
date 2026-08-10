@@ -4,6 +4,11 @@ import type {
   GenerationToolDescription,
   GenerationToolSummary,
 } from "../generation-contracts"
+import {
+  readGenerationModelCatalogProjection,
+  writeGenerationModelCatalogProjection,
+  type ModelCatalogProjectionStorage,
+} from "./model-catalog-projection-cache"
 
 export type GenerationCatalogAuthorityVersion = string | number
 
@@ -49,6 +54,7 @@ export interface GenerationModelCatalogControllerOptions {
   refreshAfterMs?: number
   retryAfterMs?: number
   scheduleRefresh?: (callback: () => void, delayMs: number) => () => void
+  storage?: ModelCatalogProjectionStorage
 }
 
 const emptyTools: readonly GenerationToolSummary[] = Object.freeze([])
@@ -91,12 +97,14 @@ export class GenerationModelCatalogController {
   readonly #refreshAfterMs: number
   readonly #retryAfterMs: number
   readonly #scheduleRefresh: (callback: () => void, delayMs: number) => () => void
+  readonly #storage?: ModelCatalogProjectionStorage
   #authorityVersion?: GenerationCatalogAuthorityVersion
   #cancelScheduledRefresh?: () => void
   #catalogError?: string
   #catalogRequest?: CatalogRequest
   #disposed = false
   #epoch = 0
+  #lastCompleteTools?: readonly GenerationToolSummary[]
   #ready = false
   #retryAttempt = 0
   #scopeId?: string
@@ -130,6 +138,8 @@ export class GenerationModelCatalogController {
       throw new Error("Generation model catalog retry age is invalid")
     }
     this.#scheduleRefresh = options.scheduleRefresh ?? scheduleRefresh
+    this.#storage = options.storage
+    this.#lastCompleteTools = readGenerationModelCatalogProjection(this.#storage) ?? undefined
   }
 
   readonly getSnapshot = () => this.#snapshot
@@ -160,8 +170,13 @@ export class GenerationModelCatalogController {
     this.#retryAttempt = 0
 
     if (scopeChanged) {
-      this.#ready = false
-      this.#replaceTools(emptyTools)
+      if (this.#scopeId && this.#lastCompleteTools) {
+        this.#ready = true
+        this.#replaceTools(this.#lastCompleteTools)
+      } else {
+        this.#ready = false
+        this.#replaceTools(emptyTools)
+      }
       this.#descriptions.clear()
     } else {
       for (const entry of this.#descriptions.values()) {
@@ -308,6 +323,8 @@ export class GenerationModelCatalogController {
         const readyTools = Object.freeze([...tools])
         if (this.#isCurrent(epoch, scopeId)) {
           this.#replaceTools(readyTools)
+          this.#lastCompleteTools = readyTools
+          writeGenerationModelCatalogProjection(this.#storage, readyTools)
           this.#ready = true
           this.#catalogError = undefined
           const availableToolIds = new Set(readyTools.map((tool) => tool.id))

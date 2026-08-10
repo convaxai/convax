@@ -6,11 +6,13 @@ import {
   type PluginServiceStatus,
   type PluginServiceSummary,
 } from "../plugin-service-contracts"
+import type { GenerationToolSummary } from "../generation-contracts"
 import {
   ServiceCatalogController,
   serviceCatalogAgentModelsForScope,
   serviceGenerationAvailabilityVersion,
 } from "./service-catalog-controller"
+import { writeAgentModelCatalogProjection } from "./model-catalog-projection-cache"
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -20,6 +22,14 @@ function deferred<T>() {
     reject = fail
   })
   return { promise, reject, resolve }
+}
+
+function memoryStorage() {
+  const values = new Map<string, string>()
+  return {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => values.set(key, value),
+  }
 }
 
 const connected: PluginServiceStatus = {
@@ -62,6 +72,97 @@ function pluginClient(): PluginServiceClient {
 }
 
 describe("ServiceCatalogController", () => {
+  test("projects the shared dynamic generation catalog into its owning Service", async () => {
+    const listeners = new Set<() => void>()
+    const imageModel = (id: string, name: string): GenerationToolSummary => ({
+      acceptedInputs: ["text"],
+      description: name,
+      id,
+      kind: "model",
+      modelName: name,
+      output: "image",
+      pluginId: "creative-service",
+      pluginName: "Creative Service",
+      title: name,
+      toolId: "generate.image",
+    })
+    let generationSnapshot = {
+      loading: false,
+      ready: true,
+      refreshing: false,
+      scopeId: "project-a",
+      tools: [imageModel("dynamic-image-one", "Dynamic Image One")],
+    }
+    const generationCatalog = {
+      getSnapshot: () => generationSnapshot,
+      refresh: mock(async () => generationSnapshot.tools),
+      subscribe: mock((listener: () => void) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      }),
+    }
+    const controller = new ServiceCatalogController(
+      pluginClient(),
+      { listModels: mock(async () => ({ providers: [] })) },
+      { generationCatalog },
+    )
+    controller.setScopeId("project-a")
+    controller.start()
+    await controller.refresh()
+
+    expect(controller.getSnapshot().services[1]?.models).toEqual([
+      { capability: "video", id: "seedance", name: "Seedance" },
+      { capability: "image", id: "dynamic-image-one", name: "Dynamic Image One" },
+    ])
+
+    generationSnapshot = {
+      ...generationSnapshot,
+      tools: [imageModel("dynamic-image-two", "Dynamic Image Two")],
+    }
+    for (const listener of listeners) listener()
+    expect(controller.getSnapshot().services[1]?.models).toEqual([
+      { capability: "video", id: "seedance", name: "Seedance" },
+      { capability: "image", id: "dynamic-image-two", name: "Dynamic Image Two" },
+    ])
+
+    controller.dispose()
+    expect(listeners.size).toBe(0)
+  })
+
+  test("renders the persisted Agent model catalog while cold-start revalidation is pending", async () => {
+    const cachedCatalog = {
+      providers: [
+        {
+          connected: true,
+          models: [{ default: true, modelId: "cached-model", modelName: "Cached Model" }],
+          providerId: "opencode",
+          providerName: "OpenCode",
+        },
+      ],
+    }
+    const storage = memoryStorage()
+    writeAgentModelCatalogProjection(storage, cachedCatalog)
+    const pending = deferred<typeof cachedCatalog>()
+    const controller = new ServiceCatalogController(
+      pluginClient(),
+      { listModels: mock(() => pending.promise) },
+      { storage },
+    )
+
+    controller.setScopeId("project-a")
+    controller.start()
+    expect(controller.getSnapshot().agentModels).toEqual({
+      catalog: cachedCatalog,
+      error: undefined,
+      loading: true,
+      scopeId: "project-a",
+    })
+
+    pending.resolve(cachedCatalog)
+    await controller.refreshAgentModels()
+    controller.dispose()
+  })
+
   test("does not expose the previous Project's Agent model catalog during a scope switch", () => {
     const previousCatalog = {
       providers: [
@@ -488,10 +589,10 @@ describe("ServiceCatalogController", () => {
           {
             actions: ["reauthorize", "sign_out"],
             capabilities: ["llm"],
-            description: "Nexus OpenRouter",
+            description: "OpenRouter through Convax",
             models: [{ capability: "llm", id: "fallback", name: "Fallback" }],
             pluginId: "nexus-service",
-            pluginName: "Convax Account",
+            pluginName: "Convax",
             version: "0.2.0",
           },
         ],
@@ -518,7 +619,7 @@ describe("ServiceCatalogController", () => {
               },
             ],
             providerId: "plugin-nexus-service-openrouter",
-            providerName: "Nexus · OpenRouter",
+            providerName: "Convax",
           },
         ],
       })),
@@ -541,7 +642,7 @@ describe("ServiceCatalogController", () => {
           name: "DeepSeek V4 Flash Free",
         },
       ],
-      name: "Convax Account",
+      name: "Convax",
     })
     controller.dispose()
   })

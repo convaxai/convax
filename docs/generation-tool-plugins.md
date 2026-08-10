@@ -76,9 +76,12 @@ service lifecycle changes invalidate and asynchronously warm a new epoch.
 Concurrent refreshes for one epoch are single-flight and commit atomically. An
 age-triggered refresh serves the prior same-epoch snapshot until replacement
 succeeds. Empty model results and transient failures remain retryable with bounded
-backoff so a still-starting service is not cached as permanently ready. The
-snapshot is never persisted or treated as execution authority: Main reloads the
-selected tool schema and service status immediately before execution.
+backoff so a still-starting service is not cached as permanently ready. That Main
+session snapshot is never persisted or treated as execution authority. Installed
+manifest/service membership and the current bounded tool schema admit display;
+`service.status` is neither awaited nor used to remove installed models during
+discovery. Main reloads the selected tool schema and service status immediately
+before execution.
 
 An optional fixed `service.usage.list` call is a Services display projection only.
 Its bounded history never participates in generation availability, preparation,
@@ -90,6 +93,14 @@ immediately. Installed inventory, status, and usage revalidate independently in 
 background while prior values remain visible. The cache is bounded, versioned, and
 display-only. Credential-changing actions clear prior usage before reloading it;
 every action and generation dispatch still uses live Main/sidecar checks.
+
+Renderer may likewise persist one last-complete generation/Agent model display
+projection. A cold window renders that strictly validated, bounded, versioned cache
+immediately and revalidates it in the background. Service rows group their models
+for navigation but are not a separately committed provider choice. Cached ids never
+authorize a call: Agent prompts recheck the exact OpenCode provider/model pair and
+generation preparation rechecks the exact tool, schema, lease, and live Service
+status before dispatch.
 
 Plugin-to-Plugin exports name the exact MCP tool operation. Availability and
 execution must use the same lease-derived sidecar session; echoing identity strings

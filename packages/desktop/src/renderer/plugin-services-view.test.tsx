@@ -176,6 +176,42 @@ describe("Plugin Services host UI", () => {
     expect(markup).not.toContain("Reconfigure")
   })
 
+  test("labels failed credential verification as expired authorization and asks for reauthorization", () => {
+    const markup = renderToStaticMarkup(
+      <PluginServicesSurface
+        locale="zh-CN"
+        onAction={noop}
+        onRefresh={noop}
+        snapshot={{
+          loading: false,
+          services: [
+            {
+              ...baseService,
+              actions: ["reauthorize", "sign_out"],
+              authentication: "required",
+              state: "attention",
+              status: {
+                account: { availability: "unavailable" },
+                billing: { availability: "unavailable" },
+                credential: { configured: true, verification: "failed" },
+                credits: { availability: "unavailable" },
+                plan: { availability: "unavailable" },
+                schema: pluginServiceStatusSchema,
+                state: "attention",
+                usage: { availability: "unavailable" },
+              },
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(markup).toContain("鉴权已失效")
+    expect(markup).toContain("重新鉴权")
+    expect(markup).toContain('data-service-action="reauthorize"')
+    expect(markup).not.toContain("验证失败")
+  })
+
   test("renders only bounded structured account, credit, and usage values", () => {
     const markup = renderToStaticMarkup(
       <PluginServicesSurface
