@@ -340,6 +340,10 @@ user directory.
   `.convax/staging` retains an unchanged positive hard-link count. Executable
   snapshots, sidecar outputs, and every other native copy remain single-link; any
   identity, count, size, timestamp, or real-path drift fails closed.
+- Canvas projects every terminal generation failure as the same read-only
+  modality-icon plus `生成失败` surface. Selecting that card preserves ordinary
+  selection and dragging but never restores its prompt or exposes upload, retry, or
+  failure-detail actions; portable failure metadata remains non-UI state.
 - `convax.plugin/8`, `convax.package/2`, and `convax.plugin-capability/3` are the only
   admitted runtime formats. Additive Host APIs evolve through the independent
   `@convax/plugin-api` SemVer Catalog, not another manifest or transport version.

@@ -34,7 +34,7 @@
           "version": "0.2.1"
         },
         "targets": ["darwin-arm64"],
-        "version": "0.3.1"
+        "version": "0.3.2"
       },
       {
         "id": "nexus-service",
@@ -51,7 +51,7 @@
           "version": "0.3.14"
         },
         "targets": ["darwin-arm64"],
-        "version": "0.4.1"
+        "version": "0.5.1"
       },
       {
         "id": "storyai-3d-director-desk",
@@ -68,7 +68,7 @@
           "version": "0.1.3"
         },
         "targets": [],
-        "version": "0.3.2"
+        "version": "0.3.3"
       },
       {
         "id": "storyboard-studio",
@@ -85,7 +85,7 @@
           "version": "0.1.1"
         },
         "targets": [],
-        "version": "0.2.2"
+        "version": "0.2.3"
       },
       {
         "id": "video-timeline",
@@ -102,10 +102,10 @@
           "version": "0.1.5"
         },
         "targets": [],
-        "version": "0.2.1"
+        "version": "0.2.2"
       }
     ],
-    "revision": 5
+    "revision": 6
   },
   "resolved": {
     "builtinBundle": {
@@ -125,20 +125,20 @@
         "name": "marketplace.json",
         "sha256": "371a7ca2fc29a492a599878d53ca62a36ac98ca160d6d3b880aec8d72c48f001",
         "size": 563,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/marketplace.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/marketplace.json"
       },
       "registry": {
         "name": "registry-v2.json",
-        "sha256": "64d47cc038bc03973653bea76fa92edb5bba6ace8dda27613187fe936b811366",
-        "size": 30157,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/registry-v2.json"
+        "sha256": "6d91b02d1925ca15403baf37298eeac92b055d1027562fc141d7142febf982b1",
+        "size": 26831,
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/registry-v2.json"
       },
-      "revision": "cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0",
+      "revision": "ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d",
       "showcase": {
         "name": "showcase-v2.json",
-        "sha256": "039dc516887f2626b486679a156a1ca5ec31340373da6f3bf0d552b3aad85f1b",
+        "sha256": "d6a356480bbbf6ce491eef6be3f9f3beed4ed9180489c7219ed19b75429b721f",
         "size": 15031,
-        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-cfbd079f5cfecb8e3477c420029950b7be01cb84c43f4971a794e2c5ad80f7c0/showcase-v2.json"
+        "url": "https://github.com/convaxai/convax-plugins/releases/download/registry-v2-ba2f8fb9a6bdf5dc6aff9730ebdc006c78fcafa14907ab03de7a3a5a4ed0c38d/showcase-v2.json"
       }
     },
     "packages": [
@@ -174,21 +174,21 @@
         "version": "0.4.1"
       }
     ],
-    "policyDigest": "07573bb124760461c00c2bf24f081de2194ce79d0f6982182cf325ad4013a7bb",
+    "policyDigest": "eca25adba53c1a51dffa5dcd06a2e0778c4a92c9ec10c71d32342c812ef39953",
     "recoveryArtifacts": [
       {
         "artifact": {
-          "name": "plugin-cutout-studio-0.3.1.zip",
-          "sha256": "982c3dbd702f61ea8244f0c9a233a859041d4f0047a73b47864dbef468489b3e",
+          "name": "plugin-cutout-studio-0.3.2.zip",
+          "sha256": "74cdfb8c08a065bad64023d94be461d6e85f2a2ecde452b6b55c2292c323d104",
           "size": 3238,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-cutout-studio-v0.3.1/plugin-cutout-studio-0.3.1.zip"
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-cutout-studio-v0.3.2/plugin-cutout-studio-0.3.2.zip"
         },
         "companions": [
           {
-            "name": "cutout-studio-0.1.2-darwin-arm64-convax-cutout-mcp",
-            "sha256": "5ba327970fc3f009ff2bcb3a05d078895fa42ae807b8afacb2ecee5deddf9951",
-            "size": 14320624,
-            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-cutout-studio-v0.3.1/cutout-studio-0.1.2-darwin-arm64-convax-cutout-mcp",
+            "name": "cutout-studio-0.1.3-darwin-arm64-convax-cutout-mcp",
+            "sha256": "80e8cd938c18e545bdd4156b14c39558ce9f6ad93fecfba27eea0a64889555ce",
+            "size": 14346272,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-cutout-studio-v0.3.2/cutout-studio-0.1.3-darwin-arm64-convax-cutout-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -198,7 +198,7 @@
         "marketplaceId": "convax-official",
         "ownedSkills": [],
         "setup": "explicit",
-        "version": "0.3.1",
+        "version": "0.3.2",
         "retired": {
           "artifact": {
             "sha256": "1167cc5541a05e755135c354ab8f6bee04c343d3d5c7b8300ae3ff3562a088a0",
@@ -212,17 +212,17 @@
       },
       {
         "artifact": {
-          "name": "plugin-nexus-service-0.4.1.zip",
-          "sha256": "c7fc63085aef23577df12ea5c0df13f38704d57a07479519e7c071211f186825",
-          "size": 2629,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.4.1/plugin-nexus-service-0.4.1.zip"
+          "name": "plugin-nexus-service-0.5.1.zip",
+          "sha256": "c50211dbde1c163988c4dfd0d8e8753a1305972debe0b02e3f7338ed60a0ee1e",
+          "size": 2880,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.5.1/plugin-nexus-service-0.5.1.zip"
         },
         "companions": [
           {
-            "name": "nexus-service-0.3.13-darwin-arm64-convax-nexus-mcp",
-            "sha256": "94ce2210ffcf4e21a8cb712a36f787b6c5c8fc4316556d2203242bd8e5015486",
-            "size": 63479138,
-            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.4.1/nexus-service-0.3.13-darwin-arm64-convax-nexus-mcp",
+            "name": "nexus-service-0.4.1-darwin-arm64-convax-nexus-mcp",
+            "sha256": "0a15afdbedacb4f98f8dd65d59a263cc7e7b5ee99bac874f320a5ed501476c2f",
+            "size": 63495650,
+            "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-nexus-service-v0.5.1/nexus-service-0.4.1-darwin-arm64-convax-nexus-mcp",
             "arch": "arm64",
             "platform": "darwin"
           }
@@ -232,7 +232,7 @@
         "marketplaceId": "convax-official",
         "ownedSkills": [],
         "setup": "explicit",
-        "version": "0.4.1",
+        "version": "0.5.1",
         "retired": {
           "artifact": {
             "sha256": "32899a84630de5d41fbc5011d1271b9d1309a21056b17c8d7afe70107fc01f65",
@@ -246,10 +246,10 @@
       },
       {
         "artifact": {
-          "name": "plugin-storyai-3d-director-desk-0.3.2.zip",
-          "sha256": "3d0f0e4a6fa89df2af2874f2b0f23547775f4d1bc31ea26047557c2e7c8b812f",
-          "size": 1559813,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyai-3d-director-desk-v0.3.2/plugin-storyai-3d-director-desk-0.3.2.zip"
+          "name": "plugin-storyai-3d-director-desk-0.3.3.zip",
+          "sha256": "e5031bcd339d5ba6a147f7ac61ac6e14d77fcdaf30d498a100ebef6805641a96",
+          "size": 1559788,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyai-3d-director-desk-v0.3.3/plugin-storyai-3d-director-desk-0.3.3.zip"
         },
         "companions": [],
         "id": "storyai-3d-director-desk",
@@ -264,7 +264,7 @@
           }
         ],
         "setup": "explicit",
-        "version": "0.3.2",
+        "version": "0.3.3",
         "retired": {
           "artifact": {
             "sha256": "a910abb3091ea973afaab8885ff77a1d69ac3fb2605f6bbf86079f33ce1af8f9",
@@ -278,10 +278,10 @@
       },
       {
         "artifact": {
-          "name": "plugin-storyboard-studio-0.2.2.zip",
-          "sha256": "3ac27ef7525d2eba9d0120a140d0551333af59e5e740e97ebbd9d71a76c752d9",
-          "size": 731697,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyboard-studio-v0.2.2/plugin-storyboard-studio-0.2.2.zip"
+          "name": "plugin-storyboard-studio-0.2.3.zip",
+          "sha256": "174f243e5d00cee67fa6f1b478900da7341e8274a1bd614380809ba5a2b0c649",
+          "size": 731672,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-storyboard-studio-v0.2.3/plugin-storyboard-studio-0.2.3.zip"
         },
         "companions": [],
         "id": "storyboard-studio",
@@ -296,7 +296,7 @@
           }
         ],
         "setup": "explicit",
-        "version": "0.2.2",
+        "version": "0.2.3",
         "retired": {
           "artifact": {
             "sha256": "b1b07d89093c7fb4d68431581266321c74e4e6717c012561edc56dd5bcf6634b",
@@ -310,10 +310,10 @@
       },
       {
         "artifact": {
-          "name": "plugin-video-timeline-0.2.1.zip",
-          "sha256": "22868ce897eaaea8bfc3eed928628a116f787e5eced9864e08d02585c1d9ad83",
-          "size": 197557,
-          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-video-timeline-v0.2.1/plugin-video-timeline-0.2.1.zip"
+          "name": "plugin-video-timeline-0.2.2.zip",
+          "sha256": "fc8b0e70d927d0cd6bb4bb7035023eefac852f05d64a22c0fe49ff9808c1a82c",
+          "size": 197532,
+          "url": "https://github.com/convaxai/convax-plugins/releases/download/plugin-video-timeline-v0.2.2/plugin-video-timeline-0.2.2.zip"
         },
         "companions": [],
         "id": "video-timeline",
@@ -321,7 +321,7 @@
         "marketplaceId": "convax-official",
         "ownedSkills": [],
         "setup": "explicit",
-        "version": "0.2.1",
+        "version": "0.2.2",
         "retired": {
           "artifact": {
             "sha256": "71c64f025a29a9c55ed156aa33172b9a016a4ac24df54d8274bd4422d7fc7a9f",

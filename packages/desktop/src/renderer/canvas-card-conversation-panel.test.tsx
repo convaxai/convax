@@ -341,13 +341,13 @@ describe("Canvas card generation request", () => {
     })
   })
 
-  test("creates a fresh host operation id for every retry request", () => {
+  test("creates a fresh host operation id for every generation submission", () => {
     const node = imageNode()
     const request = assistantRequest(node, [node])
     const create = () =>
       createCanvasCardGenerationRequest({
         description,
-        prompt: "Retry this prompt",
+        prompt: "Generate this prompt",
         request,
         signal: new AbortController().signal,
         tool: tool(),
@@ -360,11 +360,11 @@ describe("Canvas card generation request", () => {
     expect(second.operationId).not.toBe(first.operationId)
   })
 
-  test("manually retries a failed card as a fresh pending task without replacing its prompt history", () => {
+  test("creates a fresh pending task without replacing the owning card", () => {
     const owner = imageNode()
     const incoming = imageNode({ id: "incoming-reference" })
     const request = assistantRequest(owner, [owner, incoming], [incoming.id])
-    const continuation = {
+    const pendingRequest = {
       ...request,
       generation: {
         ...request.generation!,
@@ -375,8 +375,8 @@ describe("Canvas card generation request", () => {
     const create = () =>
       createCanvasCardGenerationRequest({
         description,
-        prompt: continuation.generation.initialPrompt,
-        request: continuation,
+        prompt: pendingRequest.generation.initialPrompt,
+        request: pendingRequest,
         signal: new AbortController().signal,
         tool: tool(),
         toolInput: { aspect_ratio: "16:9", steps: 24 },
@@ -929,7 +929,7 @@ describe("Canvas card generation lifecycle", () => {
     expect(markup).not.toContain("@ reference.png")
   })
 
-  test("restores the failed generation prompt into the explicit retry composer", () => {
+  test("hydrates an explicitly provided generation draft into the composer", () => {
     const owner = imageNode()
     const request = assistantRequest(owner)
     const markup = renderToStaticMarkup(

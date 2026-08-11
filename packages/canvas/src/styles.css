@@ -837,34 +837,20 @@
   }
 }
 
-.convax-canvas .convax-node:hover .convax-node__surface {
+.convax-canvas .convax-node:hover .convax-node__surface:not(.convax-node__surface--media),
+.convax-canvas .convax-node.is-selected .convax-node__surface:not(.convax-node__surface--media),
+.convax-canvas .react-flow__node.selected .convax-node__surface:not(.convax-node__surface--media) {
   border-color: var(--canvas-edge-active);
   box-shadow: 0 13px 30px -13px color-mix(in srgb, var(--canvas-accent) 28%, transparent);
 }
 
-.convax-canvas .convax-node.is-selected .convax-node__surface,
-.convax-canvas .react-flow__node.selected .convax-node__surface {
-  border-color: var(--canvas-accent);
-  box-shadow: 0 14px 32px -14px color-mix(in srgb, var(--canvas-accent) 34%, transparent);
-}
-
-.convax-canvas .convax-node:hover .convax-node__surface--media {
-  box-shadow:
-    0 0 0 1px var(--canvas-edge-active),
-    0 13px 30px -13px color-mix(in srgb, var(--canvas-accent) 28%, transparent);
-}
-
+.convax-canvas .convax-node:hover .convax-node__surface--media,
 .convax-canvas .convax-node.is-selected .convax-node__surface--media,
 .convax-canvas .react-flow__node.selected .convax-node__surface--media {
   box-shadow:
-    0 0 0 5px var(--canvas-background),
-    0 0 0 8px var(--canvas-accent),
-    0 14px 32px -14px color-mix(in srgb, var(--canvas-accent) 34%, transparent);
-}
-
-.convax-canvas .convax-node.is-selected .convax-node__surface--video,
-.convax-canvas .react-flow__node.selected .convax-node__surface--video {
-  border-color: var(--canvas-node-border);
+    0 0 0 2px var(--canvas-background),
+    0 0 0 4px var(--canvas-edge-active),
+    0 13px 30px -13px color-mix(in srgb, var(--canvas-accent) 28%, transparent);
 }
 
 .convax-canvas .react-flow__node.dragging .convax-node__surface {

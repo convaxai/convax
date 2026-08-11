@@ -645,7 +645,7 @@ test("uses localized product states and exposes an available update", async () =
   await act(async () => button("Installed").click())
   expect(document.body.textContent).toContain("Needs attention")
   expect(document.body.textContent).not.toContain("· attention")
-  await act(async () => button("Update").click())
+  await act(async () => button("Update Example").click())
   expect(marketplace.beginUpdate).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
   await act(async () => button("Confirm and update").click())
   expect(marketplace.update).toHaveBeenCalledWith({ selectionToken: "u".repeat(24) })
@@ -676,7 +676,7 @@ test("routes Plugin integrity failures to reinstall instead of offering setup as
 
   expect(document.body.textContent).toContain("Reinstall required")
   expect(document.body.textContent).not.toContain("Complete setup")
-  expect(button("Update")).toBeDefined()
+  expect(button("Update Example")).toBeDefined()
   expect(marketplace.setup).not.toHaveBeenCalled()
 })
 
@@ -701,7 +701,7 @@ test("keeps setup available only for a capability that actually lacks setup", as
   })
   await render(marketplace)
   await act(async () => button("Installed").click())
-  await act(async () => button("Complete setup").click())
+  await act(async () => button("Complete setup Example").click())
 
   expect(marketplace.setup).toHaveBeenCalledWith({ id: "example", kind: "mcp-server" })
 })
@@ -826,7 +826,7 @@ test("keeps the installed card busy during update execution and rejects duplicat
   expect(update).toHaveBeenCalledTimes(1)
   expect(button("Update Example").disabled).toBe(true)
   expect(button("Update Example").getAttribute("aria-busy")).toBe("true")
-  expect(button("Update Example").textContent).toContain("Updating…")
+  expect(button("Update Example").querySelector('[data-ui-loading-spinner=""]')).not.toBeNull()
   expect(document.querySelector('[data-capability-progress="mcp-server:example"]')?.textContent).toBe("Updating…")
 
   await act(async () => {
@@ -932,8 +932,8 @@ test("shows a session-wide Plugin outage and does not offer unusable Plugin setu
   await act(async () => button("Installed").click())
   expect(document.body.textContent).toContain("Unavailable for this session")
   expect(document.body.textContent).not.toContain("Complete setup")
-  expect(button("Update").disabled).toBe(true)
-  expect(button("Disable").disabled).toBe(true)
+  expect(button("Update Example").disabled).toBe(true)
+  expect(button("Disable Example").disabled).toBe(true)
   expect(button("Uninstall Example").disabled).toBe(true)
   expect(marketplace.setup).not.toHaveBeenCalled()
 })
@@ -964,9 +964,9 @@ test("keeps Update available only for a byte-verified retired Host API recovery"
   expect(document.body.textContent).toContain("retired Host API")
   await act(async () => button("Installed").click())
   expect(document.body.textContent).toContain("Protocol update available")
-  expect(button("Update").disabled).toBe(false)
-  expect(button("Disable").disabled).toBe(true)
-  await act(async () => button("Update").click())
+  expect(button("Update Example").disabled).toBe(false)
+  expect(button("Disable Example").disabled).toBe(true)
+  await act(async () => button("Update Example").click())
   expect(marketplace.beginUpdate).toHaveBeenCalledWith({ id: "example", kind: "plugin" })
 })
 
