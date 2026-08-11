@@ -4947,6 +4947,7 @@ function CanvasEditorContent(
   const handleNodeDragStart = useCallback<OnNodeDrag<CanvasNode>>(
     (event, node, draggedNodes) => {
       if (!canvasPointerMutationEnabled) return
+      rootRef.current?.focus({ preventScroll: true })
       dispatch({ type: "begin-gesture" })
       altDragRef.current = null
       updateGroupDropTarget(null)
@@ -4991,6 +4992,7 @@ function CanvasEditorContent(
     [canvasPointerMutationEnabled, updateGroupDropTarget],
   )
   const handleNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(() => {
+    rootRef.current?.focus({ preventScroll: true })
     const targetGroupId = groupDropTargetIdRef.current
     if (canvasPointerMutationEnabled && targetGroupId) {
       const movedNodeIds = [...gestureGeometryRef.current.keys()]
