@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, createMediaNode } from "./document"
+import { createCanvasDocument, createMediaNode, createTextNode } from "./document"
+import { applyCanvasReplacePresentation } from "./optimistic-overlay-react-flow"
 import { CanvasVisualHistoryCoordinator, type CanvasVisualHistoryAuthority } from "./visual-history"
 
 function authority(ids: readonly string[]): CanvasVisualHistoryAuthority {
@@ -169,5 +170,67 @@ describe("Canvas visual history", () => {
       expect.arrayContaining([expect.objectContaining({ kind: "ghost-edge", label: "input" })]),
     )
     expect(redo).not.toBeNull()
+  })
+
+  test("keeps live text and media data mounted while predicting a geometry-only undo", () => {
+    const history = new CanvasVisualHistoryCoordinator()
+    const beforeText = createTextNode({
+      id: "text",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "loading" },
+    })
+    const beforeImage = createMediaNode({
+      id: "image",
+      position: { x: 400, y: 0 },
+      resource: {
+        id: "image-resource",
+        kind: "image",
+        metadata: {},
+        name: "Image",
+        state: { status: "loading" },
+      },
+    })
+    const beforeNodes = [beforeText, beforeImage]
+    const afterNodes = beforeNodes.map((node) => ({
+      ...node,
+      position: { x: node.position.x + 240, y: node.position.y + 160 },
+    }))
+    const nodeEntities = beforeNodes.map((node) => ({
+      nodeId: node.id,
+      entity: { id: node.id, incarnation: `${node.id}-incarnation`, kind: "node" as const },
+    }))
+    const before: CanvasVisualHistoryAuthority = {
+      document: createCanvasDocument({ id: "canvas-a", nodes: beforeNodes }),
+      edgeEntities: [],
+      nodeEntities,
+    }
+    const after: CanvasVisualHistoryAuthority = {
+      document: createCanvasDocument({ id: "canvas-a", nodes: afterNodes }),
+      edgeEntities: [],
+      nodeEntities,
+    }
+    history.record("root-move", before, after)
+
+    history.begin("undo", "session-a")
+    const replacements = history.overlay
+      .getSnapshot()
+      .operations[0]?.items.filter((item) => item.kind === "replace-presentation")
+    expect(replacements).toHaveLength(2)
+    for (const [index, afterNode] of afterNodes.entries()) {
+      const replacement = replacements?.find((item) => item.entity.entityId === afterNode.id)
+      expect(replacement?.snapshot).toBeUndefined()
+      if (!replacement) throw new Error(`missing ${afterNode.id} replacement`)
+      const liveData = {
+        ...afterNode.data,
+        resourceState:
+          afterNode.data.kind === "text"
+            ? { status: "ready" as const, text: "live text" }
+            : { status: "ready" as const, url: "blob:live-image" },
+      }
+      const projected = applyCanvasReplacePresentation({ ...afterNode, data: liveData }, replacement)
+      expect(projected.position).toEqual(beforeNodes[index]?.position)
+      expect(projected.data).toBe(liveData)
+    }
   })
 })

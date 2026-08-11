@@ -1750,7 +1750,9 @@ scheduling APIs are invoked with their required receiver so the coalescing latch
 cannot become permanently scheduled without publishing. After each accepted
 transition, the visual cursor replaces the reached endpoint with Main's exact
 projection, including recreated ids and incarnations, before predicting another
-inverse.
+inverse. A geometry-only prediction overlays only position and size on the mounted
+node. It preserves current node-data identity so transient text and media runtime
+state cannot be replaced by a historical durable snapshot and visibly reload.
 
 Node duplication submits only the selected live node ids and a bounded offset. The
 Canvas owner resolves the latest source identities and content, derives all clone

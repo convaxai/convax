@@ -64,6 +64,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   the speculative suffix and suppresses any inverse queued only for a rejected root.
   A successful transition replaces that direction's saved endpoint with Main's exact
   accepted projection so a recreated id/incarnation guards the next immediate inverse.
+  A geometry-only history prediction overlays only position and size; it must preserve
+  the mounted node data identity so live text and media runtime state cannot reload.
   Combined presentation scheduling must invoke browser scheduling APIs with their
   required receiver and must never strand its coalescing latch after a scheduling error.
 - Fit and reveal derive world bounds from the authoritative Canvas document, including

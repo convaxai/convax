@@ -262,13 +262,21 @@ function createPresentationDelta(
     if (!sameNodePresentation(currentNode, targetNode)) {
       const entity = currentEntities.get(nodeId)
       if (!entity) continue
+      const geometryOnly = sameNodeNonGeometryPresentation(currentNode, targetNode)
       items.push(
         createCanvasReplacePresentationOverlay({
           entity: { entityId: nodeId, incarnation: entity.incarnation, kind: "node" },
-          snapshot: canvasNodePresentationSnapshot(
-            targetNode,
-            targetNode.parentId ? (ghostKeys.get(targetNode.parentId) ?? targetNode.parentId) : undefined,
-          ),
+          ...(geometryOnly
+            ? {
+                position: Object.freeze({ ...targetNode.position }),
+                size: Object.freeze(getCanvasNodePresentationSize(targetNode)),
+              }
+            : {
+                snapshot: canvasNodePresentationSnapshot(
+                  targetNode,
+                  targetNode.parentId ? (ghostKeys.get(targetNode.parentId) ?? targetNode.parentId) : undefined,
+                ),
+              }),
         }),
       )
     }
@@ -375,6 +383,15 @@ function hasPresentationDifference(left: CanvasDocument, right: CanvasDocument):
 
 function sameNodePresentation(left: CanvasNode, right: CanvasNode): boolean {
   return JSON.stringify(canvasNodePresentationSnapshot(left)) === JSON.stringify(canvasNodePresentationSnapshot(right))
+}
+
+function sameNodeNonGeometryPresentation(left: CanvasNode, right: CanvasNode): boolean {
+  return (
+    (left.type ?? "file") === (right.type ?? "file") &&
+    left.parentId === right.parentId &&
+    left.zIndex === right.zIndex &&
+    JSON.stringify(left.data) === JSON.stringify(right.data)
+  )
 }
 
 function applyRendererGeometryPresentation(
