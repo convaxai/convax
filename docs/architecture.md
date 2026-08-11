@@ -1561,10 +1561,12 @@ state machine as an existing card; a restart cannot leave a placeholder permanen
 pending.
 
 A failed run remains attached to its original card and retains its normalized
-prompt. The card renders one simple icon-and-message error surface. Selecting the
-card opens the normal composer with that prompt; pressing Send creates a fresh
-`operationId` and may reuse the guarded card through the ordinary replacement
-boundary. No recovery phase automatically submits a new operation.
+prompt as portable history. Every file-card modality renders the same read-only
+terminal surface: its modality icon and the fixed `生成失败` title. The stored
+failure message, technical recovery phase, and old prompt are not projected as
+card actions. Selecting the card still permits ordinary Canvas selection and
+dragging, but never opens a composer or exposes upload, retry, details, or a new
+`operationId` path. No recovery phase or failed-card UI submits another operation.
 
 The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
 Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is

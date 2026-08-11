@@ -1065,17 +1065,16 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain("nodrag")
 
-    const failed = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinCanvasNode
-        {...props}
-        data={{ ...props.data, error: "Generation could not be completed", status: "error" }}
-      />
+    const failed = renderWithEditor(selection([node.id]), false, (props) => (
+      <BuiltinCanvasNode {...props} data={{ ...props.data, error: "Creative Tools 服务不可用", status: "error" }} />
     ))
     expect(failed).toContain('data-canvas-persisted-resource-status="error"')
     expect(failed).toContain('role="alert"')
     expect(failed).toContain(">生成失败<")
-    expect(failed).not.toContain("Generation could not be completed")
+    expect(failed).not.toContain("Creative Tools 服务不可用")
     expect(failed).not.toContain("修改并重试")
+    expect(failed).not.toContain('aria-label="Upload image"')
+    expect(failed).not.toContain('aria-label="Generate image"')
     expect(failed).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
   })
@@ -1807,11 +1806,14 @@ describe("built-in node toolbar visibility", () => {
       node: failed.nodes[0],
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
-    expect(failedMarkup).toContain("Creative Tools 服务不可用")
+    expect(failedMarkup).toContain(">生成失败<")
+    expect(failedMarkup).not.toContain("Creative Tools 服务不可用")
     expect(failedMarkup).toContain("lucide-image")
     expect(failedMarkup).toContain("convax-generation-status-overlay--media")
     expect(failedMarkup).not.toContain("修改并重试")
     expect(failedMarkup).not.toContain("使用原提示词新建任务")
+    expect(failedMarkup).not.toContain('aria-label="Upload image"')
+    expect(failedMarkup).not.toContain('aria-label="Generate image"')
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).toContain(
       "pointer-events-none",
     )

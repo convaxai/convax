@@ -37,16 +37,15 @@ describe("Canvas file-card assistant sizing", () => {
     expect(assistantRule).not.toContain("height: min(380px")
   })
 
-  test("aligns media chrome, gives video a dashed frame, and keeps focus outside the card", async () => {
+  test("aligns media chrome and gives hover and focus the same two-pixel ring and gap", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const mediaSurfaceRule = styles.match(/\.convax-canvas \.convax-node__surface--media \{[^}]+\}/s)?.[0] ?? ""
     const imageSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface--image")
     const videoSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface--video")
     const mediaOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--media")
     const videoOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--video")
-    const selectedMediaRule =
-      styles.match(/\.convax-canvas \.convax-node\.is-selected \.convax-node__surface--media,[\s\S]*?\{[^}]+\}/)?.[0] ??
-      ""
+    const interactiveMediaRule =
+      styles.match(/\.convax-canvas \.convax-node:hover \.convax-node__surface--media,[\s\S]*?\{[^}]+\}/)?.[0] ?? ""
 
     expect(styles).toContain("--canvas-media-radius: 24px")
     expect(mediaSurfaceRule).toContain("border-width: 0")
@@ -62,8 +61,12 @@ describe("Canvas file-card assistant sizing", () => {
     expect(mediaOverlayRule).toContain("border-radius: var(--canvas-media-radius)")
     expect(videoOverlayRule).toContain("inset: 2px")
     expect(videoOverlayRule).toContain("border-radius: calc(var(--canvas-media-radius) - 2px)")
-    expect(selectedMediaRule).toContain("0 0 0 5px var(--canvas-background)")
-    expect(selectedMediaRule).toContain("0 0 0 8px var(--canvas-accent)")
+    expect(interactiveMediaRule).toContain(".convax-node.is-selected .convax-node__surface--media")
+    expect(interactiveMediaRule).toContain(".react-flow__node.selected .convax-node__surface--media")
+    expect(interactiveMediaRule).toContain("0 0 0 2px var(--canvas-background)")
+    expect(interactiveMediaRule).toContain("0 0 0 4px var(--canvas-edge-active)")
+    expect(interactiveMediaRule).not.toContain("0 0 0 5px")
+    expect(interactiveMediaRule).not.toContain("0 0 0 8px")
   })
 
   test("gives the expanded editor a calm global paper surface without fixed toolbar chrome", async () => {

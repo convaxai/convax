@@ -116,7 +116,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
   parser and legal transitions. Keep the next-run preference separate from the
   resolved historical tool, admit only bounded host-authored terminal failure text,
   never persist raw diagnostics or vendor state, and mark generated resource
-  replacement plus `succeeded` in one guarded Canvas command.
+  replacement plus `succeeded` in one guarded Canvas command. Every terminal
+  failure projects as the same read-only modality icon plus `生成失败`; selecting a
+  failed card must not restore its prompt or expose upload, retry, or detail actions.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.

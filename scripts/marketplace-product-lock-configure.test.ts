@@ -17,8 +17,8 @@ describe("Marketplace product policy configuration", () => {
     expect(new TextDecoder().decode(result.stderr)).toContain("--revision=<positive integer>")
   })
 
-  test("creates the approved v5 source, preinstall policy, and exact retired-major recovery set", () => {
-    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(5)
+  test("creates the approved v6 source, preinstall policy, and exact retired-major recovery set", () => {
+    expect(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION).toBe(6)
     expect(configureMarketplaceProductPolicy(CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION)).toEqual({
       builtin: { marketplaceId: "convax-builtin", repository: "convaxai/convax-plugins" },
       official: {
@@ -51,7 +51,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.2.1",
           },
           targets: ["darwin-arm64"],
-          version: "0.3.1",
+          version: "0.3.2",
         },
         {
           id: "nexus-service",
@@ -68,7 +68,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.3.14",
           },
           targets: ["darwin-arm64"],
-          version: "0.4.1",
+          version: "0.5.1",
         },
         {
           id: "storyai-3d-director-desk",
@@ -85,7 +85,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.1.3",
           },
           targets: [],
-          version: "0.3.2",
+          version: "0.3.3",
         },
         {
           id: "storyboard-studio",
@@ -102,7 +102,7 @@ describe("Marketplace product policy configuration", () => {
             version: "0.1.1",
           },
           targets: [],
-          version: "0.2.2",
+          version: "0.2.3",
         },
         {
           id: "video-timeline",
@@ -119,10 +119,10 @@ describe("Marketplace product policy configuration", () => {
             version: "0.1.5",
           },
           targets: [],
-          version: "0.2.1",
+          version: "0.2.2",
         },
       ],
-      revision: 5,
+      revision: 6,
     })
   })
 
