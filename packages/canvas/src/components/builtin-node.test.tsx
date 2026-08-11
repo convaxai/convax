@@ -741,9 +741,12 @@ describe("built-in node toolbar visibility", () => {
     ))
 
     expect(imageMarkup).toContain("convax-node__surface--media")
+    expect(imageMarkup).toContain("convax-node__surface--image")
+    expect(imageMarkup).toContain("convax-cutout-media__ambient")
     expect(imageMarkup).not.toContain("convax-node__surface--video")
     expect(imageMarkup).toContain('src="asset://portrait"')
     expect(videoMarkup).toContain("convax-node__surface--media")
+    expect(videoMarkup).not.toContain("convax-node__surface--image")
     expect(videoMarkup).toContain("convax-node__surface--video")
     expect(videoMarkup).toContain('src="asset://clip"')
   })
@@ -824,6 +827,30 @@ describe("built-in node toolbar visibility", () => {
     expect(runningMarkup).toContain('data-canvas-cutout-presentation="scanning"')
     expect(runningMarkup).toContain('src="convax-asset://cutout-source"')
     expect(runningMarkup).toContain("convax-cutout-media__scan-beam")
+
+    const awaitingHydration = succeedCanvasNodeGenerationRun(
+      {
+        ...running,
+        nodes: running.nodes.map((candidate) =>
+          candidate.id === pending.id
+            ? { ...candidate, data: { ...candidate.data, status: "idle" as const } }
+            : candidate,
+        ),
+      },
+      pending.id,
+      "cutout-operation",
+    )
+    const awaitingHydrationNode = awaitingHydration.nodes.find((candidate) => candidate.id === pending.id)!
+    const awaitingHydrationMarkup = renderWithEditor(
+      selection([pending.id]),
+      false,
+      (props) => <BuiltinMediaFileNode {...props} />,
+      false,
+      { document: awaitingHydration, node: awaitingHydrationNode },
+    )
+    expect(awaitingHydrationMarkup).toContain('data-canvas-cutout-presentation="result"')
+    expect(awaitingHydrationMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(awaitingHydrationMarkup).not.toContain("image unavailable")
 
     const withResult = {
       ...running,

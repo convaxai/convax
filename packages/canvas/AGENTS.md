@@ -100,7 +100,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply
-  only bounded user-safe failure text.
+  only bounded user-safe failure text. A host may supply one authoritative initial
+  presentation size derived from a same-modality visual reference; Canvas commits
+  that frame with the pending node and preserves it through generated replacement.
 - A file-card generation model override belongs to its owning Canvas node as a
   versioned namespaced metadata value containing only an opaque host tool id. Missing
   means inherit the host preference; Canvas never owns the concrete model catalog.

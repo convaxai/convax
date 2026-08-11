@@ -88,6 +88,39 @@ describe("Canvas resource collaboration orchestration", () => {
     })
   })
 
+  test("forwards and fingerprints an explicit pending generation presentation size", async () => {
+    const execute = mock(async () => result())
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [image] }) },
+      { execute, query: mock() },
+    )
+    const request = {
+      actor: baseRequest.actor,
+      anchor: baseRequest.anchor,
+      canvasId: baseRequest.canvasId,
+      commandId: "pending-sized",
+      kind: "image" as const,
+      operationId: "operation-sized",
+      prompt: "Remove the background",
+      scopeId: baseRequest.scopeId,
+      size: { height: 206, width: 480 },
+      toolId: "image-tools/remove",
+    }
+
+    await service.createPendingGenerationResource(request)
+    expect(execute.mock.calls[0]?.[0]).toMatchObject({
+      envelope: {
+        command: {
+          size: { height: 206, width: 480 },
+          type: "resources.pending-generation.create",
+        },
+      },
+    })
+    await expect(
+      service.createPendingGenerationResource({ ...request, size: { height: 207, width: 480 } }),
+    ).rejects.toThrow("reused with a different payload")
+  })
+
   test("retains a prepared file when the Canvas collaboration commit fails", async () => {
     const service = new CanvasResourceBusinessService(
       { prepare: async () => ({ items: [image], retainedOnFailure: [{ label: "image.png" }] }) },

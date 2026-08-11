@@ -504,6 +504,7 @@ async function setupPendingGeneration(
     prepareTool?: (tool: GenerationToolSummary, signal?: AbortSignal) => Promise<void>
     dispatchGuard?: () => Promise<void> | void
     recovery?: PreparedGenerationRecovery
+    referenceImageSize?: { height: number; width: number }
     roundTripPending?: boolean
     taskId?: string
   } = {},
@@ -513,7 +514,28 @@ async function setupPendingGeneration(
     brief: "Stable brief",
     "plugin-owner": "Plugin card",
   })
-  const reference = createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
+  const referenceImageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+  if (options.referenceImageSize) {
+    await fs.mkdir(path.join(projectRoot, "Media"), { recursive: true })
+    await fs.writeFile(path.join(projectRoot, "Media", "reference.png"), referenceImageBytes)
+  }
+  const reference = options.referenceImageSize
+    ? {
+        ...createMediaNode({
+          id: "brief",
+          position: { x: 0, y: 0 },
+          resource: {
+            id: "brief-resource",
+            kind: "image",
+            metadata: { [projectResourceReferenceKey]: projectFileReference("Media/reference.png") },
+            mimeType: "image/png",
+            name: "reference.png",
+            state: { status: "ready", url: "" },
+          },
+        }),
+        style: { ...options.referenceImageSize },
+      }
+    : createTextNode({ id: "brief", position: { x: 0, y: 0 }, text: "Stable brief" })
   const owner = createTextNode({ id: "plugin-owner", position: { x: 360, y: 0 }, text: "Plugin card" })
   let currentDocument = createCanvasDocument({
     edges: [{ id: "reference-to-owner", source: reference.id, target: owner.id }],
@@ -561,6 +583,7 @@ async function setupPendingGeneration(
                   state: { status: "ready", url: "" },
                 },
               })
+        if (input.size) node.style = { ...input.size }
         node.data.status = "pending"
         const withPending = {
           ...currentDocument,
@@ -641,7 +664,7 @@ async function setupPendingGeneration(
       },
     },
     selectedTool: tool({
-      acceptedInputs: ["text"],
+      acceptedInputs: [options.referenceImageSize ? "reference_image" : "text"],
       id: "creative-tools/draw",
       output: "image",
       ...(options.recovery ? { recovery: "long-running-operation" as const } : {}),
@@ -1537,6 +1560,30 @@ describe("GenerationCanvasService", () => {
         ?.status,
     ).toBe("succeeded")
     expect(harness.reloadRevisions).toEqual([1, 2])
+  })
+
+  test("derives a same-modality pending result frame from the authoritative visual reference", async () => {
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    const harness = await setupPendingGeneration(
+      { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] },
+      { referenceImageSize: { height: 206, width: 480 } },
+    )
+
+    await harness.service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: harness.reference.id, role: "reference_image" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "creative-tools/draw",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(harness.createRequests[0]?.size).toEqual({ height: 206, width: 480 })
+    expect(harness.getDocument().nodes.find((node) => node.id === harness.pendingNodeId)?.style).toEqual({
+      height: 206,
+      width: 480,
+    })
   })
 
   test("keeps pending replacement valid when persistence removes its empty runtime resource placeholder", async () => {

@@ -1442,6 +1442,14 @@ cancellation keeps the node and marks it with a bounded host-authored error. If 
 node is removed, edited or otherwise no longer matches its exact content guard,
 Desktop fails closed and never recreates or writes through it.
 
+When pending-result creation has exactly one same-modality visual reference, Main
+derives the reference node's authoritative presentation size and supplies it to the
+Canvas owner. Canvas commits that frame in the pending creation intent and retains
+it during generated replacement; renderer image loading and later resource
+hydration do not issue a second geometry write. Until the succeeded result URL is
+hydrated, the cutout transition continues to present its connected source rather
+than rendering a missing-resource state.
+
 Tool-custom generation controls come only from the selected sidecar's current MCP
 `tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
 registry. Main owns one bounded, display-only session snapshot of concrete model

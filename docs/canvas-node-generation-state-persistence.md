@@ -578,7 +578,10 @@ For a node-owning recovery-capable generation:
 For host-created pending output, pending node creation and `submitting` remain one
 Canvas CAS. Toolbar, Canvas-generating Agent tools, and Canvas-generating Plugin
 operations all use this owner-creating path; they do not add an ownerless generated
-node after the external call. For existing-node replacement, failure or cancellation
+node after the external call. Main may attach an authoritative presentation size
+only when exactly one same-modality visual reference supplies it; the pending
+creation intent persists that size and generated replacement retains it. For
+existing-node replacement, failure or cancellation
 never alters the prior resource. A declarative text operation with `delivery:
 "return"` creates no Canvas node and therefore has no node run namespace; it retains
 the same live at-most-once executor and explicit Agent cancellation boundary, but is

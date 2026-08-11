@@ -5,6 +5,7 @@ import type { CanvasAddResourcesCommand } from "./commands"
 import {
   applyCanvasBusinessCommand,
   CanvasCommandValidationError,
+  createCanvasGenerationTargetGuard,
   createCanvasNodeContentGuard,
   executeCanvasBusinessCommand,
   findOpenCanvasPoint,
@@ -537,6 +538,41 @@ describe("canvas application commands", () => {
     expect(finalNode.style).toEqual({ height: 320, width: 160 })
     expect(finalNode.data).not.toHaveProperty("status")
     expect(finalNode.data).not.toHaveProperty("error")
+  })
+
+  test("keeps a pending generation's requested visual frame through generated replacement", () => {
+    const created = applyCanvasBusinessCommand(createCanvasDocument(), {
+      type: "resources.pending-generation.create",
+      generation: { operationId: "cutout-one", prompt: "Remove the background", toolId: "image-tools/remove" },
+      kind: "image",
+      label: "Cutout",
+      nodeId: "pending-cutout",
+      placement: { anchor: { x: 20, y: 30 } },
+      size: { height: 206, width: 480 },
+    })
+    const pending = created.document.nodes[0]!
+    expect(pending.style).toEqual({ height: 206, width: 480 })
+
+    const replaced = applyCanvasBusinessCommand(created.document, {
+      expectedTarget: createCanvasGenerationTargetGuard(pending),
+      item: {
+        height: 821,
+        id: "cutout-result",
+        kind: "image",
+        metadata: {},
+        state: { status: "ready", url: "asset://cutout-result" },
+        width: 1_915,
+      },
+      operationId: "cutout-one",
+      targetNodeId: pending.id,
+      type: "resources.replace-generated",
+    })
+
+    expect(replaced.document.nodes[0]).toMatchObject({
+      data: { kind: "image", resourceState: { status: "ready", url: "asset://cutout-result" } },
+      position: pending.position,
+      style: { height: 206, width: 480 },
+    })
   })
 
   test("rejects pending failure after deletion or any content change", () => {

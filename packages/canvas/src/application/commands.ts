@@ -182,6 +182,7 @@ export interface CanvasCreatePendingGenerationResourceCommand {
   nodeId: string
   placement: CanvasAddResourcesCommand["placement"]
   relation?: CanvasAddResourcesCommand["relation"]
+  size?: CanvasSize
 }
 
 export interface CanvasFailPendingResourceCommand {
@@ -353,6 +354,7 @@ export function createCanvasPendingGenerationResourceCommand(input: {
   label: string
   parentId?: string
   relation?: CanvasAddResourcesCommand["relation"]
+  size?: CanvasSize
 }): CanvasCreatePendingGenerationResourceCommand {
   return {
     type: "resources.pending-generation.create",
@@ -366,6 +368,7 @@ export function createCanvasPendingGenerationResourceCommand(input: {
       strategy: "avoid-overlap-cascade",
     },
     relation: input.relation,
+    ...(input.size === undefined ? {} : { size: { ...input.size } }),
   }
 }
 
@@ -974,6 +977,9 @@ function createPendingResource(
   requirePendingResourceKind(command.kind)
   requireNonEmptyBoundedString(command.nodeId, "Pending resource node id", 256)
   requireNonEmptyBoundedString(command.label, "Pending resource label", 200)
+  if (command.type === "resources.pending-generation.create" && command.size !== undefined) {
+    requireFinitePositiveSize(command.size, "Pending generation resource size")
+  }
   if (document.nodes.some((node) => node.id === command.nodeId)) {
     throw new CanvasCommandValidationError(`Canvas node already exists: ${command.nodeId}`)
   }
@@ -1079,7 +1085,13 @@ function createPendingResourceNode(
       state: { status: "ready", url: "" },
     },
   })
-  return { ...node, data: { ...node.data, status: "pending" } }
+  return {
+    ...node,
+    data: { ...node.data, status: "pending" },
+    ...(command.type === "resources.pending-generation.create" && command.size !== undefined
+      ? { style: { height: command.size.height, width: command.size.width } }
+      : {}),
+  }
 }
 
 function isPendingResourceNode(node: CanvasNode) {
@@ -1250,6 +1262,12 @@ function requireNodeIds(document: CanvasDocument, nodeIds: readonly string[]) {
 function requireFinitePoint(point: CanvasPoint, label: string) {
   if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
     throw new CanvasCommandValidationError(`${label} must contain finite coordinates`)
+  }
+}
+
+function requireFinitePositiveSize(size: CanvasSize, label: string) {
+  if (!Number.isFinite(size.width) || size.width <= 0 || !Number.isFinite(size.height) || size.height <= 0) {
+    throw new CanvasCommandValidationError(`${label} must contain finite positive dimensions`)
   }
 }
 

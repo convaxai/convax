@@ -2490,6 +2490,16 @@ function CutoutImageBody(props: {
   const imageClassName = "convax-cutout-media__image relative z-[1] size-full object-contain"
   return (
     <div className="convax-cutout-media relative size-full" data-canvas-cutout-presentation={props.cutoutPresentation}>
+      <img
+        alt=""
+        aria-hidden
+        className="convax-cutout-media__ambient"
+        crossOrigin="anonymous"
+        decoding="async"
+        draggable={false}
+        loading="lazy"
+        src={url}
+      />
       {activeTransition && activeTransition.phase !== "done" ? (
         <canvas aria-hidden className="convax-cutout-media__dissolve-canvas" ref={canvasRef} />
       ) : null}
@@ -2551,7 +2561,7 @@ function MediaBody(props: {
 }) {
   const url =
     props.data.resourceState?.url ||
-    (props.data.kind === "image" && props.cutoutPresentation === "scanning" ? props.cutoutSourceUrl : "") ||
+    (props.data.kind === "image" && props.cutoutPresentation !== "idle" ? props.cutoutSourceUrl : "") ||
     ""
   if (!url.trim()) {
     return (
@@ -2674,6 +2684,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
       <NodeChrome
         className={cn(
           supportsViewer && "convax-node__surface--media",
+          data.kind === "image" && url && "convax-node__surface--image",
           data.kind === "video" && "convax-node__surface--video",
         )}
         icon={mediaIcon(data.kind)}

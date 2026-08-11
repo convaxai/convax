@@ -28,6 +28,7 @@ import {
   type CanvasResourceRef,
 } from "@convax/canvas/collaboration"
 import {
+  getCanvasNodeSize,
   getCanvasNodeGenerationRun,
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasNodeGenerationRunActive,
@@ -1247,6 +1248,21 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
   }
 }
 
+function matchingVisualReferenceSize(
+  document: CanvasDocument,
+  request: GenerationCanvasRequest,
+  output: GenerationOutputModality,
+) {
+  const role = output === "image" ? "reference_image" : output === "video" ? "reference_video" : undefined
+  if (role === undefined) return undefined
+  const matches = request.references.flatMap((reference) => {
+    if (reference.role !== role) return []
+    const node = document.nodes.find((candidate) => candidate.id === reference.nodeId)
+    return node?.type === "file" && node.data.kind === output ? [node] : []
+  })
+  return matches.length === 1 ? getCanvasNodeSize(matches[0]!) : undefined
+}
+
 /**
  * Shared application service used by toolbar, Agent tools, and narrow Plugin
  * calls. It stages inputs, executes an installed Tool Plugin, publishes outputs
@@ -2319,6 +2335,7 @@ export class GenerationCanvasService {
 
     try {
       if (resultMode.type === "create-pending-node") {
+        const pendingSize = matchingVisualReferenceSize(workingDocument, workingRequest, tool.output)
         const pendingResult = await this.#resources.createPendingGenerationResource({
           actor,
           anchor: request.anchor,
@@ -2331,6 +2348,7 @@ export class GenerationCanvasService {
           relation: generationResultRelation(request),
           scopeId: request.ref.scopeId,
           signal,
+          ...(pendingSize === undefined ? {} : { size: pendingSize }),
           toolId: tool.id,
         })
         retainOperation()

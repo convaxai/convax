@@ -727,6 +727,14 @@
   background: var(--canvas-node-background);
 }
 
+.convax-canvas .convax-node__surface--image {
+  border: 1px solid color-mix(in srgb, var(--canvas-text) 4%, transparent);
+  background: color-mix(in srgb, var(--canvas-surface) 70%, transparent);
+  -webkit-backdrop-filter: blur(40px);
+  backdrop-filter: blur(40px);
+  contain: paint;
+}
+
 .convax-canvas .convax-node__surface--video {
   border: 2px dashed var(--canvas-node-border);
 }
@@ -747,6 +755,19 @@
 .convax-canvas .convax-cutout-media {
   isolation: isolate;
   overflow: hidden;
+}
+
+.convax-canvas .convax-cutout-media__ambient {
+  position: absolute;
+  z-index: 0;
+  inset: -15%;
+  width: 130%;
+  height: 130%;
+  object-fit: cover;
+  opacity: 0.3;
+  filter: blur(40px) saturate(120%);
+  pointer-events: none;
+  user-select: none;
 }
 
 .convax-canvas .convax-cutout-media__dissolve-canvas,
