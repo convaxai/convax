@@ -23,7 +23,6 @@ import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
   ProjectCanvasSidebarTools,
-  ProjectCanvasSwitcher,
   ProjectCanvasController,
   type ProjectCanvasSidebarNodeProjection,
 } from "@convax/project/canvas"
@@ -2034,26 +2033,26 @@ function App() {
             }
             navigationBusy={workbenchSnapshot.changingInput}
             navigationError={workbenchSnapshot.error}
+            onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
             onClearNavigationError={() => workbenchController.clearError()}
+            onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
             onNodeActivate={activateProjectCanvasNode}
             onNodesResolved={publishResolvedCanvasSidebarNodes}
             query={query}
           />
         ),
+        count: projectCanvasSnapshot.canvases.length,
         createLabel: canvasCreationUnavailable ? "Local recovery required" : "New canvas",
-        header: (
-          <ProjectCanvasSwitcher
-            activeCanvasId={activeCanvasId ?? null}
-            controller={projectCanvasController}
-            disabled={workbenchSnapshot.changingInput}
-            onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}
-            onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}
-          />
-        ),
         label: "Canvases",
-        onCreate: canvasCreationUnavailable ? undefined : () => void projectCanvasWorkbench.createCanvas(activeProject.id),
+        onCreate: canvasCreationUnavailable
+          ? undefined
+          : () => void projectCanvasWorkbench.createCanvas(activeProject.id),
       }}
+      filesCanvasResizeLabel={
+        locale === "zh-CN" ? "调整项目文件和画布区域大小" : "Resize Project files and Canvas sections"
+      }
       filesController={projectFilesController}
+      filesLabel={locale === "zh-CN" ? "项目文件" : "Project files"}
       footerActions={
         <ApplicationMenu locale={locale} onOpenSettings={openSettings} services={serviceCatalogSnapshot} />
       }
@@ -2086,7 +2085,7 @@ function App() {
       openFilePreview={openProjectFilePreview}
       presentation="workspace"
       resolveFileThumbnailUrl={resolveProjectFileThumbnailUrl}
-      searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project"}
+      searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project files"}
     />
   ) : null
   const agentPanelWidth = workspaceLayout.utilityPresentation === "sheet" ? viewportWidth : secondarySidebar.size

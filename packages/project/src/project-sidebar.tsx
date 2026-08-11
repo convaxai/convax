@@ -76,7 +76,9 @@ export interface ProjectSidebarProps {
     label: string
     onCreate?: () => void
   }
+  filesCanvasResizeLabel?: string
   filesController: ProjectFilesController
+  filesLabel?: string
   footerActions?: ReactNode
   headerActions?: ReactNode
   hideWhenNoProject?: boolean
@@ -113,7 +115,9 @@ export function ProjectSidebar({
   className,
   controller,
   extension,
+  filesCanvasResizeLabel = "Resize Project files and Canvas sections",
   filesController,
+  filesLabel = "Project files",
   footerActions,
   headerActions,
   hideWhenNoProject = false,
@@ -133,7 +137,7 @@ export function ProjectSidebar({
     latestFilesSnapshot.projectId === projectSnapshot.activeProjectId ? latestFilesSnapshot : emptyProjectFilesSnapshot
   const activeProject = projectSnapshot.projects.find((project) => project.id === projectSnapshot.activeProjectId)
   const embeddedFiles = presentation === "embedded-files"
-  // Keep the Project-over-Canvas hierarchy explicit instead of presenting both as tabs.
+  // Keep the Project-files-over-Canvas hierarchy explicit instead of presenting both as tabs.
   const workspaceTabs = presentation === "workspace" || presentation === "workspace-tabs"
   const displayedExtension = embeddedFiles ? undefined : extension
   const [switcherOpen, setSwitcherOpen] = useState(false)
@@ -502,7 +506,7 @@ export function ProjectSidebar({
                           filesExpanded && "rotate-90",
                         )}
                       />
-                      <span className="truncate text-xs font-semibold text-text-secondary">Project</span>
+                      <span className="truncate text-xs font-semibold text-text-secondary">{filesLabel}</span>
                       <span className="shrink-0 text-[10px] tabular-nums text-text-tertiary">
                         {visibleEntries.length}
                       </span>
@@ -656,12 +660,12 @@ export function ProjectSidebar({
 
               {workspaceTabs && displayedExtension ? (
                 <div
-                  aria-label="Resize Project and Canvas sections"
+                  aria-label={filesCanvasResizeLabel}
                   aria-orientation="horizontal"
                   aria-valuemax={Math.round(sectionSplitBounds.maximum * 100)}
                   aria-valuemin={Math.round(sectionSplitBounds.minimum * 100)}
                   aria-valuenow={Math.round(sectionSplitRatio * 100)}
-                  aria-valuetext={`${Math.round(sectionSplitRatio * 100)}% for Project`}
+                  aria-valuetext={`${Math.round(sectionSplitRatio * 100)}% — ${filesLabel}`}
                   className="group relative h-1.5 shrink-0 cursor-row-resize touch-none outline-none"
                   data-project-sidebar-splitter=""
                   onKeyDown={(event) => {

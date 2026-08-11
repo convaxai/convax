@@ -319,7 +319,7 @@ describe("Desktop Project sidebar Shell", () => {
     expect(styles).toContain("transition-duration: 0ms")
   })
 
-  test("keeps the Project-over-Canvas hierarchy while Canvas search focuses and returns on Escape", async () => {
+  test("keeps the localized Project-files-over-Canvas hierarchy while Canvas search focuses and returns on Escape", async () => {
     const testEnvironment = installTestWindow()
     const filesSnapshot: ProjectFilesControllerSnapshot = {
       error: null,
@@ -369,7 +369,9 @@ describe("Desktop Project sidebar Shell", () => {
               content: ({ query }) => <div data-canvas-query={query}>Canvas region</div>,
               label: "Canvases",
             }}
+            filesCanvasResizeLabel="调整项目文件和画布区域大小"
             filesController={filesController}
+            filesLabel="项目文件"
             presentation="workspace"
             searchLabel="Search sidebar"
           />,
@@ -377,8 +379,11 @@ describe("Desktop Project sidebar Shell", () => {
       )
 
       const canvasLabel = [...container.querySelectorAll("span")].find((element) => element.textContent === "Canvas")!
-      const projectLabel = [...container.querySelectorAll("span")].find((element) => element.textContent === "Project")!
+      const projectLabel = [...container.querySelectorAll("span")].find(
+        (element) => element.textContent === "项目文件",
+      )!
       expect(projectLabel.compareDocumentPosition(canvasLabel) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+      expect(container.querySelector('[aria-label="调整项目文件和画布区域大小"]')).not.toBeNull()
       expect(container.querySelector('[data-project-entry-path="brief.md"]')).not.toBeNull()
       const searchTrigger = container.querySelector<HTMLButtonElement>('button[aria-label="Search sidebar"]')!
       await act(async () => searchTrigger.click())

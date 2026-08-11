@@ -147,6 +147,20 @@ describe("WorkspaceShell", () => {
     expect(indexSource).toContain('productLabel={effectivePrimaryDesktopSurface === "workspace" ? "" : "Convax"}')
     expect(indexSource).toContain("onDocumentChange={publishActiveCanvasNodes}")
     expect(indexSource).toContain("onNodeActivate={activateProjectCanvasNode}")
+    expect(indexSource).not.toContain("<ProjectCanvasSwitcher")
+    expect(indexSource).toContain('filesLabel={locale === "zh-CN" ? "项目文件" : "Project files"}')
+    expect(indexSource).toContain(
+      'locale === "zh-CN" ? "调整项目文件和画布区域大小" : "Resize Project files and Canvas sections"',
+    )
+    expect(indexSource).toContain(
+      'searchLabel={locale === "zh-CN" ? "搜索画布或项目文件" : "Search Canvas or Project files"}',
+    )
+    expect(indexSource).toContain(
+      "onActivate={(canvasId) => projectCanvasWorkbench.openCanvas(activeProject.id, canvasId)}",
+    )
+    expect(indexSource).toContain(
+      "onDelete={(canvasId) => projectCanvasWorkbench.deleteCanvas(activeProject.id, canvasId)}",
+    )
     expect(indexSource).toContain("projectCanvasSidebarNodes(document)")
     expect(sidebarProjectionSource).toContain("projectCanvasSidebarNodePreview(node)")
     expect(sidebarProjectionSource).toContain('node.data.kind === "image"')
