@@ -14,10 +14,10 @@ import {
   hydrateStaleProjectCanvasResources,
   projectResourceReferenceKey,
   requireProjectResourceReference,
+  resolveCurrentProjectResource,
   type ProjectResourceReference,
   type ProjectResourceSnapshot,
 } from "../../canvas/project-resources"
-import { projectIndexResourceReferenceDigest } from "../../collaboration/project-index"
 import { mimeTypeForPath } from "../project-manager-helpers"
 import { readStableProjectFile, readStableProjectUtf8File } from "../stable-project-file"
 import type { ProjectManagedAssetStore } from "./project-managed-asset-store"
@@ -133,36 +133,18 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
 
     const projectId = parseProjectId(input.projectId)
     const currentResources = await this.#currentResources.queryCurrentResources({ projectId })
-    const currentByUri = new Map(
-      currentResources.map((entry) => [entry.reference.canonicalUri, entry] as const),
-    )
     let changed = false
     const unavailableNodeIds = new Set<string>()
     const nodes = input.document.nodes.map((node, index) => {
       const resource = resources.get(index)
       if (!resource) return node
-      const current = currentByUri.get(resource.uri)
-      if (
-        !current ||
-        current.reference.blob.mime !== resource.mime ||
-        current.reference.blob.byteLength !== resource.byteLength ||
-        current.reference.blob.digest !== resource.contentDigest ||
-        projectIndexResourceReferenceDigest(current.reference) !== resource.ownerProofDigest
-      ) {
-        return node
-      }
-      const runtimeReference: ProjectResourceReference | undefined =
-        current.storageClass === "managed-blob"
-          ? {
-              kind: "managed-asset",
-              mediaType: resource.mime,
-              name: node.data.label || resource.contentDigest,
-              sha256: resource.contentDigest,
-            }
-          : current.materializedPath === null
-            ? undefined
-            : { kind: "project-file", path: current.materializedPath }
-      if (runtimeReference === undefined) {
+      const resolution = resolveCurrentProjectResource({
+        currentResources,
+        name: node.data.label || resource.contentDigest,
+        resource,
+      })
+      if (resolution.status === "unavailable") return node
+      if (resolution.status === "missing") {
         unavailableNodeIds.add(node.id)
         changed = true
         return { ...node, data: { ...node.data, resourceState: { status: "missing" as const } } }
@@ -174,7 +156,7 @@ export class ProjectCanvasResourceHydrator implements ProjectCanvasImageReadPort
           ...node.data,
           metadata: {
             ...(node.data.metadata as Record<string, unknown>),
-            [projectResourceReferenceKey]: runtimeReference,
+            [projectResourceReferenceKey]: resolution.reference,
           },
         },
       }

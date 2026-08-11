@@ -5,10 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 
-import {
-  createCanvasGenerationTargetGuard,
-  type CanvasApplicationCommandResult,
-} from "@convax/canvas/application"
+import { createCanvasGenerationTargetGuard, type CanvasApplicationCommandResult } from "@convax/canvas/application"
 import {
   createAgentNode,
   createCanvasDocument,
@@ -22,6 +19,9 @@ import {
   succeedCanvasNodeGenerationRun,
   type CanvasDocument,
 } from "@convax/canvas/core"
+import { canvasProjectionResourceMetadataKey, type CanvasResourceRef } from "@convax/canvas/collaboration"
+import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
+import { parseProjectIndexResourceReference, projectIndexResourceReferenceDigest } from "@convax/project"
 import {
   dehydrateProjectCanvasDocument,
   projectResourceReferenceKey,
@@ -62,6 +62,40 @@ function managedReference(
 
 function projectFileReference(path: string): Extract<ProjectResourceReference, { kind: "project-file" }> {
   return { kind: "project-file", path }
+}
+
+function canonicalVideoResource(bytes: Uint8Array) {
+  const projectId = parseProjectId("project-one")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const digest = ordinarySha256(bytes)
+  const fileId = `pf_${"a".repeat(64)}`
+  const reference = parseProjectIndexResourceReference({
+    format: "convax.project-resource-reference",
+    projectId,
+    projectEpoch,
+    entryFileId: fileId,
+    familyPrimaryFileId: fileId,
+    versionId: `pv_${"b".repeat(64)}`,
+    canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
+    blob: {
+      format: "convax.blob-ref",
+      algorithm: "sha256",
+      digest,
+      byteLength: String(bytes.byteLength) as never,
+      mime: "video/mp4",
+    },
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
+  })
+  const resource: CanvasResourceRef = {
+    format: "convax.canvas-resource-ref",
+    uri: reference.canonicalUri,
+    mediaClass: "video",
+    mime: reference.blob.mime,
+    byteLength: reference.blob.byteLength,
+    contentDigest: reference.blob.digest,
+    ownerProofDigest: projectIndexResourceReferenceDigest(reference),
+  }
+  return { projectId, reference, resource }
 }
 
 function stableJsonForTest(value: unknown): string {
@@ -237,6 +271,7 @@ function setup(
   options: {
     assets?: GenerationCanvasManagedAssetPort
     beforeExternalStarted?: () => Promise<void> | void
+    currentResources?: GenerationCanvasServiceOptions["currentResources"]
     dispatchGuard?: () => Promise<void> | void
     document?: CanvasDocument
     loadDocument?: () => Promise<{ document: CanvasDocument }> | { document: CanvasDocument }
@@ -431,6 +466,11 @@ function setup(
         async query() {
           const loaded = options.loadDocument ? await options.loadDocument() : { document }
           return { nodes: [], projection: structuredClone(loaded.document) }
+        },
+      },
+      currentResources: options.currentResources ?? {
+        async queryCurrentResources() {
+          throw new Error("Unexpected queryCurrentResources")
         },
       },
       ...(options.inputSnapshots === undefined ? {} : { inputSnapshots: options.inputSnapshots }),
@@ -2321,9 +2361,7 @@ describe("GenerationCanvasService", () => {
 
     expect(calls).toEqual([])
     expect(runRequests.markRunning).toEqual([])
-    expect(runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one" }),
-    ])
+    expect(runRequests.finish).toEqual([expect.objectContaining({ operationId: "operation-one" })])
   })
 
   test("cleans a prepared recovery ledger when the final dispatch guard rejects", async () => {
@@ -2380,9 +2418,7 @@ describe("GenerationCanvasService", () => {
     expect(observedPhase).toBe("prepared")
     expect(harness.calls).toEqual([])
     expect(harness.runRequests.markRunning).toEqual([])
-    expect(harness.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one" }),
-    ])
+    expect(harness.runRequests.finish).toEqual([expect.objectContaining({ operationId: "operation-one" })])
     expect(await operations.list()).toEqual([])
     expect(await fs.readdir(path.join(privateRoot, "inputs"))).toEqual([])
   })
@@ -2741,9 +2777,7 @@ describe("GenerationCanvasService", () => {
     expect(legacy.runRequests.markRunning.map(({ operationId, taskId }) => ({ operationId, taskId }))).toEqual([
       { operationId: "operation-one", taskId: undefined },
     ])
-    expect(legacy.runRequests.finish).toEqual([
-      expect.objectContaining({ operationId: "operation-one" }),
-    ])
+    expect(legacy.runRequests.finish).toEqual([expect.objectContaining({ operationId: "operation-one" })])
     expect(legacy.replacementRequests).toEqual([])
   })
 
@@ -2800,10 +2834,7 @@ describe("GenerationCanvasService", () => {
         }),
     })
     const actor = { id: "renderer:1", kind: "ui" as const }
-    const pending = canceled.service.generate(
-      request({ resultMode: replaceNodeMode(owner) }),
-      actor,
-    )
+    const pending = canceled.service.generate(request({ resultMode: replaceNodeMode(owner) }), actor)
     await started
     await canceled.service.cancel("operation-one", actor)
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
@@ -3886,10 +3917,10 @@ describe("GenerationCanvasService", () => {
       run: {
         async start(input) {
           currentDocument = startCanvasNodeGenerationRun(currentDocument, input.nodeId, {
-              operationId: input.operationId,
-              prompt: input.prompt,
-              toolId: input.toolId,
-            })
+            operationId: input.operationId,
+            prompt: input.prompt,
+            toolId: input.toolId,
+          })
           return persistedCommandResult(currentDocument, [], [input.nodeId])
         },
         async interruptInactive(input) {
@@ -4033,10 +4064,10 @@ describe("GenerationCanvasService", () => {
     changed.renderer.getViewSnapshot = unrelated.renderer.getViewSnapshot
 
     await expect(
-      changed.service.generate(
-        request({ operationId: "changed-owner", resultMode: replaceNodeMode(owner) }),
-        { id: "renderer:1", kind: "ui" },
-      ),
+      changed.service.generate(request({ operationId: "changed-owner", resultMode: replaceNodeMode(owner) }), {
+        id: "renderer:1",
+        kind: "ui",
+      }),
     ).rejects.toThrow("replacement target changed")
     expect(changed.replacementRequests).toEqual([])
     expect(changed.published).toEqual([])
@@ -4452,6 +4483,81 @@ describe("GenerationCanvasService", () => {
       relation: { anchorNodeIds: [owner.id], direction: "from-anchor", mode: "connect" },
       sources: [{ kind: "host-file", path: "Generated/generated-1.png" }],
     })
+  })
+
+  test("stages a pathless canonical Canvas video through the current Project resource projection", async () => {
+    const root = await temporaryDirectory()
+    const mediaDirectory = path.join(root, "Media")
+    const sourcePath = path.join(mediaDirectory, "source.mp4")
+    const video = Buffer.from([0, 0, 0, 16, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6f, 0x6d])
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4])
+    await fs.mkdir(mediaDirectory)
+    await fs.writeFile(sourcePath, video)
+    const fixture = canonicalVideoResource(video)
+    const source = createMediaNode({
+      id: "canonical-video",
+      position: { x: 0, y: 0 },
+      resource: {
+        id: "canonical-video-resource",
+        kind: "video",
+        metadata: { [canvasProjectionResourceMetadataKey]: fixture.resource },
+        mimeType: "video/mp4",
+        name: "source.mp4",
+        state: { status: "stale" },
+      },
+    })
+    const document = createCanvasDocument({ id: "canvas-one", nodes: [source], title: "Canvas" })
+    const queriedProjects: string[] = []
+    let stagedPath = ""
+    const { calls, service } = setup({
+      currentResources: {
+        async queryCurrentResources({ projectId }) {
+          queriedProjects.push(projectId)
+          return [
+            {
+              materializedPath: "Media/source.mp4",
+              reference: fixture.reference,
+              storageClass: "project-file",
+            },
+          ]
+        },
+      },
+      document,
+      project: {
+        async readFileInfo(input) {
+          return { mimeType: "video/mp4", name: "source.mp4", path: input.path, size: video.byteLength }
+        },
+        async resolveEntryPath(input) {
+          expect(input).toEqual({ path: "Media/source.mp4", projectId: fixture.projectId })
+          return sourcePath
+        },
+      },
+      async result(input) {
+        stagedPath = (input.references as Array<{ path: string }>)[0]!.path
+        expect(stagedPath).not.toBe(sourcePath)
+        expect(await fs.readFile(stagedPath)).toEqual(video)
+        return { content: [{ data: png.toString("base64"), mimeType: "image/png", type: "image" }] }
+      },
+      selectedTool: tool({
+        acceptedInputs: ["reference_video"],
+        id: "media-tools/transform",
+        output: "image",
+        toolId: "transform",
+      }),
+    })
+
+    await service.generate(
+      request({
+        output: "image",
+        references: [{ nodeId: source.id, role: "reference_video" }],
+        toolId: "media-tools/transform",
+      }),
+      { id: "renderer:1", kind: "ui" },
+    )
+
+    expect(queriedProjects).toEqual([fixture.projectId])
+    expect(calls).toHaveLength(1)
+    await expect(fs.stat(stagedPath)).rejects.toThrow()
   })
 
   test("enforces one total byte budget across every staged reference", async () => {

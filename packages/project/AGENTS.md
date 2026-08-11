@@ -84,7 +84,9 @@ This package owns the durable Project aggregate and native Project adapters.
   delegate that query to the live ProjectIndex owner session and must not infer
   managed-vs-project-file identity by subtracting the file materialization plan.
   Project Canvas hydration may attach a concrete Project reference transiently, but
-  must restore canonical Canvas metadata before returning. `ProjectBlobReplicationStoreV2`
+  must restore canonical Canvas metadata before returning. External-tool staging uses
+  the same Project-owned exact-proof resolver and never infers a path or managed-blob
+  class outside this owner boundary. `ProjectBlobReplicationStoreV2`
   may cache exact bytes and rebuild a
   local presence index, but it cannot choose a version. Receive is one resumable
   contiguous transfer prefix; full length/SHA-256, create-new publication, file and

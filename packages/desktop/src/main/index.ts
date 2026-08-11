@@ -1471,6 +1471,7 @@ function startApplication() {
     const generation = new GenerationCanvasService({
       assets: projectAssets,
       application: canvasApplication,
+      currentResources: collaborationFacade.projectIndexes,
       inputSnapshots: generationInputSnapshots,
       operations: generationOperations,
       publisher: projectFilePublisher,

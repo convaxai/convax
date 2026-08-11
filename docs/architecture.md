@@ -989,10 +989,11 @@ Canvas owns generic resource-slot and application semantics. Project Canvas owns
 concrete `project-file`, `project-directory` and `managed-asset` runtime union, plus
 Project validation, traversal and hydration. Durable Canvas resource nodes store only
 the pathless canonical `CanvasResourceRefV2` and its Project owner-proof digest. Main
-may reconstruct a concrete Project reference only as transient hydration metadata;
-it restores the canonical metadata before returning the hydrated document. The
-persistence boundary rejects legacy path-only references, inline text and remote URLs
-instead of migrating them.
+may reconstruct a concrete Project reference only through the exact ProjectIndex
+current-resource projection and only as a transient hydration or external-tool staging
+adapter; hydration restores the canonical metadata before returning the document, and
+staging never writes the concrete reference into Canvas state. The persistence boundary
+rejects legacy path-only references, inline text and remote URLs instead of migrating them.
 
 Canvas-created text is a normal UTF-8 Markdown file below `Notes/`; generated output
 is a normal user-visible Project file below `Generated/`. Both flows publish the file
@@ -1332,7 +1333,8 @@ it. A Registry install that declares a managed companion cannot fall back to a
 same-named PATH command. Missing and changed bindings fail installation without
 replacing a working version. Listing, installing, and automatic setup never start
 the command.
-Desktop stages bounded typed Canvas references, rechecks live scope plus exact
+Desktop stages bounded typed Canvas references by resolving their canonical owner proof
+through the ProjectIndex current-resource projection, rechecks live scope plus exact
 resource/semantic guards before the external call, admits only bounded
 signature-checked results, and commits
 generated content through `CanvasResourceBusinessService` after publishing it without
