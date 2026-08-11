@@ -173,6 +173,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   inverse/forward intent against the latest `replicaDoc`. Remote/bootstrap/recovery
   frames and projection rebuilds never enter or reorder the stack, and raw
   Y.UndoManager updates never cross the authoritative boundary.
+- Semantic-history retained resources are sorted and unique by their complete
+  canonical resource reference, not by content digest alone. Different Project
+  resource identities may legitimately name the same exact bytes and must remain
+  separately restorable; equal content digests still require equal byte lengths,
+  and every restored reference requires its own exact retained-material proof.
 - React Flow selection, hover, measured size, camera, drag preview, menus and
   Awareness are transient Canvas-owned view state. `onNodesChange`/`onEdgesChange`
   must not mutate the canonical projection. Drag stop resolves entity incarnations

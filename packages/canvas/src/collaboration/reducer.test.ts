@@ -17,6 +17,7 @@ import { discoverCanvasValueDependencies } from "./external-facts"
 import type {
   CanvasExternalFactContext,
   CanvasHistoryBinding,
+  CanvasResourceRef,
   CanvasSemanticOperation,
   CanvasTypedIntentUnion,
   PluginRequirement,
@@ -199,6 +200,92 @@ describe("Canvas v2 reducer and merge invariants", () => {
       expect(projection.nodes).toHaveLength(2)
       expect(projection.edges).toHaveLength(1)
     }
+  })
+
+  test("batch delete retains same-content resource aliases, deduplicates exact refs, and restores every node", () => {
+    const document = newCanvas()
+    const sharedContentDigest = digest(180)
+    const firstResource = projectResource("4", sharedContentDigest, digest(181))
+    const secondResource = projectResource("5", sharedContentDigest, digest(182))
+    const first = createResourceNode(document, context(90, 180, 1), firstResource, "first alias")
+    const duplicate = createResourceNode(document, context(91, 181, 2), firstResource, "duplicate ref")
+    const second = createResourceNode(document, context(92, 182, 3), secondResource, "second alias")
+
+    const removeContext = context(93, 183, 4)
+    const root = applyOk(
+      document,
+      removeContext,
+      removeNodes(document, [first, duplicate, second]),
+    ).semanticHistoryRoot!
+    expect(root.retainedResources).toEqual([firstResource, secondResource])
+    expect(buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes).toEqual([])
+
+    const undoContext = context(94, 184, 5)
+    const materialized = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
+      undoContext,
+      "undo",
+      root.rootOperationId,
+    )
+    if (materialized === "rejected") throw new Error("resource alias history undo did not materialize")
+    const dependencies = discoverCanvasValueDependencies(undoContext, materialized)
+    if (dependencies === "rejected") throw new Error("resource alias history dependencies were rejected")
+    expect(dependencies.externalFacts).toHaveLength(1)
+    const constructed = constructCanvasHistoryIntent({
+      snapshot: validateCanvasYDoc(document),
+      context: undoContext,
+      direction: "undo",
+      rootOperationId: root.rootOperationId,
+      externalFacts: {
+        resolveArtifact: (artifact) => ({ status: "rejected", code: "artifact-not-declared", ref: artifact } as never),
+        resolveFact: (requirement) => ({
+          status: "resolved",
+          requirement,
+          value: {
+            format: "convax.canvas-external-fact-result",
+            kind: requirement.kind,
+            requestSha256: requirement.request.sha256,
+            factDigest: requirement.factDigest,
+            decision: "verified",
+          },
+        }),
+        consumedDependencies: () => dependencies,
+      },
+    })
+    if (typeof constructed === "string") throw new Error(`resource alias history construction ${constructed}`)
+    applyOk(document, undoContext, constructed.intent)
+
+    const restoredResources = buildCanvasProjectionIndex(validateCanvasYDoc(document)).projection.nodes
+      .map((node) => node.data.kind === "resource" ? node.data.resource : null)
+      .filter((resource): resource is CanvasResourceRef => resource !== null)
+    expect(restoredResources).toHaveLength(3)
+    expect(restoredResources.filter((resource) => resource.uri === firstResource.uri)).toHaveLength(2)
+    expect(restoredResources.filter((resource) => resource.uri === secondResource.uri)).toHaveLength(1)
+  })
+
+  test("batch delete still rejects one content digest with inconsistent byte lengths", () => {
+    const document = newCanvas()
+    const sharedContentDigest = digest(185)
+    const first = createResourceNode(
+      document,
+      context(95, 185, 1),
+      projectResource("6", sharedContentDigest, digest(186), "12"),
+      "first length",
+    )
+    const second = createResourceNode(
+      document,
+      context(96, 186, 2),
+      projectResource("7", sharedContentDigest, digest(187), "13"),
+      "second length",
+    )
+    const before = encodeCanvasCanonicalState(document)
+    const candidate = fork(document)
+    const removeContext = context(97, 187, 3)
+
+    expect(
+      applyCanvasCandidateIntent(candidate, removeContext, removeNodes(document, [first, second]), VALID_FACTS),
+    ).toBe("rejected")
+    expect(encodeCanvasCanonicalState(document)).toEqual(before)
   })
 
   test("owner history materializer closes the remaining non-generation history families", () => {
@@ -1013,12 +1100,61 @@ function removeNode(
   document: ReturnType<typeof newCanvas>,
   node: ReturnType<typeof derivedNodeRef>,
 ): Extract<CanvasTypedIntentUnion, { kind: "canvas.elements.remove" }> {
+  return removeNodes(document, [node])
+}
+
+function removeNodes(
+  document: ReturnType<typeof newCanvas>,
+  nodes: readonly ReturnType<typeof derivedNodeRef>[],
+): Extract<CanvasTypedIntentUnion, { kind: "canvas.elements.remove" }> {
   return {
     format: "convax.typed-intent",
     kind: "canvas.elements.remove",
-    guard: { nodes: [nodeLiveGuard(document, node)], edges: [], requireObservedIncidentEdgeClosure: true },
-    body: { nodes: [node], edges: [] },
+    guard: { nodes: nodes.map((node) => nodeLiveGuard(document, node)), edges: [], requireObservedIncidentEdgeClosure: true },
+    body: { nodes, edges: [] },
   }
+}
+
+function projectResource(
+  entryCharacter: string,
+  contentDigest: CanvasResourceRef["contentDigest"],
+  ownerProofDigest: CanvasResourceRef["ownerProofDigest"],
+  byteLength = "12",
+): CanvasResourceRef {
+  return {
+    format: "convax.canvas-resource-ref",
+    uri: `convax-project://project/epochs/${context(1, 1, 1).operationId}/entries/pf_${entryCharacter.repeat(64)}`,
+    mediaClass: "image",
+    mime: "image/png",
+    byteLength: parseUint64(byteLength),
+    contentDigest,
+    ownerProofDigest,
+  }
+}
+
+function createResourceNode(
+  document: ReturnType<typeof newCanvas>,
+  operationContext: ReturnType<typeof context>,
+  resource: CanvasResourceRef,
+  title: string,
+) {
+  const node = derivedNodeRef(operationContext, U0)
+  applyOk(document, operationContext, {
+    format: "convax.typed-intent",
+    kind: "canvas.resources.add",
+    guard: {
+      existingEndpoints: [],
+      derivedNodes: [{ ordinal: U0, node, expectedAbsent: true }],
+      derivedEdges: [],
+      resourceProofs: [{ createdNodeOrdinal: U0, proof: { format: "convax.canvas-resource-proof-ref", mode: "current-owner-state", resource, ownerProofDigest: resource.ownerProofDigest, requireCurrentLiveVersion: true } }],
+    },
+    body: {
+      placement: { anchor: { x: 0, y: 0 }, gap: 24, obstacleProjectionDigest: obstacleProjectionDigest(validateCanvasYDoc(document)) },
+      nodes: [{ ordinal: U0, nodeId: node.id, incarnation: node.incarnation, size: { width: 240, height: 120 }, title, resource }],
+      edges: [],
+    },
+  })
+  return node
 }
 
 function creationGroupIntent(
