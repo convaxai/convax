@@ -825,6 +825,7 @@ describe("built-in node toolbar visibility", () => {
     )
     expect(runningMarkup).toContain('data-canvas-cutout-presentation="scanning"')
     expect(runningMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(runningMarkup).toContain("convax-cutout-media__dissolve-source")
     expect(runningMarkup).toContain("convax-cutout-media__scan-beam")
     expect(runningMarkup).not.toContain('data-slot="loading-spinner"')
 
@@ -880,6 +881,7 @@ describe("built-in node toolbar visibility", () => {
     expect(succeededMarkup).toContain('src="convax-asset://cutout-result"')
     expect(succeededMarkup).toContain('src="convax-asset://cutout-source"')
     expect(succeededMarkup).toContain('crossorigin="anonymous"')
+    expect(succeededMarkup).toContain('loading="eager"')
   })
 
   test("does not resize the pending cutout node from its source-image scan preview", () => {

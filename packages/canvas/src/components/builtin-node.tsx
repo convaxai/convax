@@ -77,6 +77,7 @@ import {
 } from "../commands"
 import { isCanvasEmptyImageNodeData } from "../document"
 import { useCanvasOverlayPresence } from "./use-overlay-presence"
+import { scheduleCutoutTransitionAfterPaint } from "./cutout-transition"
 import {
   CANVAS_NODE_INPUT_HANDLE_ID,
   CANVAS_NODE_OUTPUT_HANDLE_ID,
@@ -2296,6 +2297,8 @@ function CutoutImageBody(props: {
   const sourceImageRef = useRef<HTMLImageElement>(null)
   const resultImageRef = useRef<HTMLImageElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const candidateSignatureRef = useRef<string | undefined>(undefined)
+  const [mediaLoadEpoch, setMediaLoadEpoch] = useState(0)
   const onMediaLoadRef = useRef(props.onMediaLoad)
   onMediaLoadRef.current = props.onMediaLoad
   const previousUrl = props.sourceUrl || cutoutSourceUrlByNodeId.get(props.nodeId)
@@ -2304,6 +2307,7 @@ function CutoutImageBody(props: {
     props.cutoutPresentation === "result" && previousUrl && previousUrl !== url
       ? { fromUrl: previousUrl, signature: `${previousUrl}\u0000${url}` }
       : undefined
+  candidateSignatureRef.current = candidate?.signature
   const [transition, setTransition] = useState<{
     fromUrl: string
     phase: "dissolving" | "done" | "waiting"
@@ -2327,12 +2331,26 @@ function CutoutImageBody(props: {
     }
   }, [candidate?.signature, props.nodeId, transition, url])
 
-  const beginDissolve = useCallback(() => {
-    if (!candidate || transition?.phase === "dissolving" || transition?.phase === "done") return
-    if (!sourceImageRef.current?.complete || !resultImageRef.current?.complete) return
-    if (!sourceImageRef.current.naturalWidth || !resultImageRef.current.naturalWidth) return
-    setTransition({ ...candidate, phase: "dissolving" })
-  }, [candidate, transition?.phase])
+  useEffect(() => {
+    if (!candidate || activeTransition?.phase !== "waiting") return undefined
+    const sourceImage = sourceImageRef.current
+    const resultImage = resultImageRef.current
+    if (!sourceImage?.complete || !sourceImage.naturalWidth || !resultImage?.complete || !resultImage.naturalWidth) {
+      return undefined
+    }
+    const signature = candidate.signature
+    return scheduleCutoutTransitionAfterPaint({
+      onReady: () => {
+        if (candidateSignatureRef.current !== signature) return
+        setTransition((current) => {
+          if (current?.signature === signature && current.phase !== "waiting") return current
+          return { ...candidate, phase: "dissolving" }
+        })
+      },
+      resultImage,
+      sourceImage,
+    })
+  }, [activeTransition?.phase, candidate?.signature, mediaLoadEpoch])
 
   useLayoutEffect(() => {
     if (!hasResultMedia) return
@@ -2485,10 +2503,13 @@ function CutoutImageBody(props: {
   }, [activeTransition?.phase, activeTransition?.signature, props.nodeId, url])
 
   const imageClassName = "convax-cutout-media__image relative z-[1] size-full object-contain"
+  const showSourceLayer =
+    props.cutoutPresentation === "scanning" || Boolean(activeTransition && activeTransition.phase !== "done")
+  const sourceLayerUrl = activeTransition?.fromUrl || props.sourceUrl || url
   return (
     <div className="convax-cutout-media relative size-full" data-canvas-cutout-presentation={props.cutoutPresentation}>
       {activeTransition && activeTransition.phase !== "done" ? (
-        <canvas aria-hidden className="convax-cutout-media__dissolve-canvas" ref={canvasRef} />
+        <canvas aria-hidden className="convax-cutout-media__dissolve-canvas" key="dissolve-canvas" ref={canvasRef} />
       ) : null}
       <img
         alt={props.data.label}
@@ -2496,7 +2517,8 @@ function CutoutImageBody(props: {
         crossOrigin="anonymous"
         decoding="async"
         draggable={false}
-        loading="lazy"
+        key="result-image"
+        loading={candidate ? "eager" : "lazy"}
         onLoad={(event) => {
           if (hasResultMedia) {
             onMediaLoadRef.current?.({
@@ -2504,12 +2526,12 @@ function CutoutImageBody(props: {
               width: event.currentTarget.naturalWidth,
             })
           }
-          beginDissolve()
+          setMediaLoadEpoch((epoch) => epoch + 1)
         }}
         ref={resultImageRef}
         src={url}
       />
-      {activeTransition && activeTransition.phase !== "done" ? (
+      {showSourceLayer ? (
         <img
           alt=""
           aria-hidden
@@ -2517,9 +2539,10 @@ function CutoutImageBody(props: {
           crossOrigin="anonymous"
           decoding="async"
           draggable={false}
-          onLoad={beginDissolve}
+          key="source-image"
+          onLoad={() => setMediaLoadEpoch((epoch) => epoch + 1)}
           ref={sourceImageRef}
-          src={activeTransition.fromUrl}
+          src={sourceLayerUrl}
         />
       ) : null}
       {props.cutoutPresentation === "scanning" ? (
