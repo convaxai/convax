@@ -282,7 +282,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     expect(client.canUndo()).toBeTrue()
     const pendingUndo = client.undo()
     expect(client.visualOverlay?.getSnapshot().operations[0]?.items).toMatchObject([
-      { kind: "replace-presentation", snapshot: { position: { x: 0, y: 0 } } },
+      { kind: "replace-presentation", position: { x: 0, y: 0 }, size: { height: 160, width: 280 } },
     ])
     expect(bridge.undo).not.toHaveBeenCalled()
 
@@ -498,7 +498,7 @@ describe("Desktop Canvas renderer collaboration client", () => {
     expect(client.canRedo()).toBeTrue()
     const pendingRedo = client.redo()
     expect(client.visualOverlay?.getSnapshot().operations.at(-1)?.items).toMatchObject([
-      { kind: "replace-presentation", snapshot: { position: { x: 6, y: 0 } } },
+      { kind: "replace-presentation", position: { x: 6, y: 0 }, size: { height: 160, width: 280 } },
     ])
     await Promise.resolve()
     releaseUndo()
