@@ -741,9 +741,11 @@ describe("built-in node toolbar visibility", () => {
     ))
 
     expect(imageMarkup).toContain("convax-node__surface--media")
+    expect(imageMarkup).toContain("convax-node__surface--image")
     expect(imageMarkup).not.toContain("convax-node__surface--video")
     expect(imageMarkup).toContain('src="asset://portrait"')
     expect(videoMarkup).toContain("convax-node__surface--media")
+    expect(videoMarkup).not.toContain("convax-node__surface--image")
     expect(videoMarkup).toContain("convax-node__surface--video")
     expect(videoMarkup).toContain('src="asset://clip"')
   })
@@ -824,6 +826,31 @@ describe("built-in node toolbar visibility", () => {
     expect(runningMarkup).toContain('data-canvas-cutout-presentation="scanning"')
     expect(runningMarkup).toContain('src="convax-asset://cutout-source"')
     expect(runningMarkup).toContain("convax-cutout-media__scan-beam")
+    expect(runningMarkup).not.toContain('data-slot="loading-spinner"')
+
+    const awaitingHydration = succeedCanvasNodeGenerationRun(
+      {
+        ...running,
+        nodes: running.nodes.map((candidate) =>
+          candidate.id === pending.id
+            ? { ...candidate, data: { ...candidate.data, status: "idle" as const } }
+            : candidate,
+        ),
+      },
+      pending.id,
+      "cutout-operation",
+    )
+    const awaitingHydrationNode = awaitingHydration.nodes.find((candidate) => candidate.id === pending.id)!
+    const awaitingHydrationMarkup = renderWithEditor(
+      selection([pending.id]),
+      false,
+      (props) => <BuiltinMediaFileNode {...props} />,
+      false,
+      { document: awaitingHydration, node: awaitingHydrationNode },
+    )
+    expect(awaitingHydrationMarkup).toContain('data-canvas-cutout-presentation="result"')
+    expect(awaitingHydrationMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(awaitingHydrationMarkup).not.toContain("image unavailable")
 
     const withResult = {
       ...running,
@@ -1031,6 +1058,7 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).toContain('aria-busy="true"')
     expect(pending).toContain("正在生成…")
     expect(pending).toContain('data-slot="loading-spinner"')
+    expect(pending.match(/data-slot="loading-spinner"/g)).toHaveLength(1)
     expect(pending).toContain('aria-hidden="true"')
     expect(pending).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain("nodrag")
@@ -1834,7 +1862,8 @@ describe("built-in node toolbar visibility", () => {
         node: succeeded.nodes[0],
       },
     )
-    expect(succeededMarkup).toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(succeededMarkup).not.toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(succeededMarkup).not.toContain("已生成")
     expect(succeededMarkup).not.toContain("Generated with")
     expect(request?.generation?.initialPrompt).toBe("Persisted prompt")
     expect(request?.generation?.ownerToolId).toBeUndefined()

@@ -28,6 +28,7 @@ import {
   type CanvasResourceRef,
 } from "@convax/canvas/collaboration"
 import {
+  getCanvasNodeSize,
   getCanvasNodeGenerationRun,
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasNodeGenerationRunActive,
@@ -1247,6 +1248,21 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
   }
 }
 
+function matchingVisualReferenceSize(
+  document: CanvasDocument,
+  request: GenerationCanvasRequest,
+  output: GenerationOutputModality,
+) {
+  const role = output === "image" ? "reference_image" : output === "video" ? "reference_video" : undefined
+  if (role === undefined) return undefined
+  const matches = request.references.flatMap((reference) => {
+    if (reference.role !== role) return []
+    const node = document.nodes.find((candidate) => candidate.id === reference.nodeId)
+    return node?.type === "file" && node.data.kind === output ? [node] : []
+  })
+  return matches.length === 1 ? getCanvasNodeSize(matches[0]!) : undefined
+}
+
 /**
  * Shared application service used by toolbar, Agent tools, and narrow Plugin
  * calls. It stages inputs, executes an installed Tool Plugin, publishes outputs
@@ -2319,6 +2335,7 @@ export class GenerationCanvasService {
 
     try {
       if (resultMode.type === "create-pending-node") {
+        const pendingSize = matchingVisualReferenceSize(workingDocument, workingRequest, tool.output)
         const pendingResult = await this.#resources.createPendingGenerationResource({
           actor,
           anchor: request.anchor,
@@ -2331,6 +2348,7 @@ export class GenerationCanvasService {
           relation: generationResultRelation(request),
           scopeId: request.ref.scopeId,
           signal,
+          ...(pendingSize === undefined ? {} : { size: pendingSize }),
           toolId: tool.id,
         })
         retainOperation()
@@ -2371,7 +2389,7 @@ export class GenerationCanvasService {
           ? generationReferenceSnapshot(workingDocument, workingRequest, promptContexts)
           : undefined
 
-        this.#refreshRendererProjection(request.ref, [nodeId])
+        this.#refreshRendererProjection(request.ref, [nodeId], { focus: true })
       } else if (replacementTarget && resultMode.type === "replace-node") {
         onRunStarted({
           canvasId: request.ref.canvasId,
@@ -2926,17 +2944,29 @@ export class GenerationCanvasService {
     }
   }
 
-  #refreshRendererProjection(ref: GenerationCanvasRequest["ref"], nodeIds: readonly string[]) {
+  #refreshRendererProjection(
+    ref: GenerationCanvasRequest["ref"],
+    nodeIds: readonly string[],
+    options: { focus?: boolean } = {},
+  ) {
     void (async () => {
       const reloaded = await this.#renderer.reloadDocument(ref)
       if (!reloaded || nodeIds.length === 0) return
       await this.#renderer.executeView({
-        command: {
-          fit: "none",
-          nodeIds: [...nodeIds],
-          select: false,
-          type: "nodes.reveal",
-        },
+        command: options.focus
+          ? {
+              animation: "smooth",
+              fit: "center",
+              nodeIds: [...nodeIds],
+              select: true,
+              type: "nodes.reveal",
+            }
+          : {
+              fit: "none",
+              nodeIds: [...nodeIds],
+              select: false,
+              type: "nodes.reveal",
+            },
         expectedDocumentId: ref.canvasId,
         expectedScopeId: ref.scopeId,
         viewId: "desktop-main",

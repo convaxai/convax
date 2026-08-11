@@ -544,9 +544,6 @@ function NodeChrome(props: {
           <div className="convax-node__title flex items-center gap-1.5" data-canvas-node-drag-handle="true">
             <span className="flex size-4 items-center justify-center [&>svg]:size-3.5">{props.icon}</span>
             <span className="truncate">{props.label}</span>
-            {props.node.data.status === "pending" ? (
-              <LoadingSpinner className="ml-auto" reducedMotion={editor.reducedMotion} size="sm" />
-            ) : null}
           </div>
         ) : null}
         <div
@@ -2551,7 +2548,7 @@ function MediaBody(props: {
 }) {
   const url =
     props.data.resourceState?.url ||
-    (props.data.kind === "image" && props.cutoutPresentation === "scanning" ? props.cutoutSourceUrl : "") ||
+    (props.data.kind === "image" && props.cutoutPresentation !== "idle" ? props.cutoutSourceUrl : "") ||
     ""
   if (!url.trim()) {
     return (
@@ -2674,6 +2671,7 @@ export function BuiltinMediaFileNode(props: NodeProps<CanvasNode>) {
       <NodeChrome
         className={cn(
           supportsViewer && "convax-node__surface--media",
+          data.kind === "image" && url && "convax-node__surface--image",
           data.kind === "video" && "convax-node__surface--video",
         )}
         icon={mediaIcon(data.kind)}
@@ -3454,15 +3452,6 @@ function RegisteredFileNode(props: NodeProps<CanvasNode>) {
           onCancel={() => generation?.cancel?.(generationRun.operationId)}
           run={generationRun}
         />
-      ) : null}
-      {generationRun?.status === "succeeded" ? (
-        <div
-          className="pointer-events-none absolute right-2 top-2 z-10 rounded-full border bg-card/90 px-2 py-0.5 text-[10px] text-muted-foreground shadow-sm"
-          data-canvas-file-generation-activity="succeeded"
-          data-canvas-generation-run-tool-id={generationRun.toolId}
-        >
-          已生成
-        </div>
       ) : null}
     </>
   )

@@ -1,4 +1,4 @@
-import type { CanvasPendingResourceKind, CanvasPoint, CanvasUploadItem } from "../types"
+import type { CanvasPendingResourceKind, CanvasPoint, CanvasSize, CanvasUploadItem } from "../types"
 import {
   CanvasCommandValidationError,
   createAddCanvasResourcesCommand,
@@ -129,6 +129,7 @@ export interface CanvasCreatePendingGenerationResourceRequest extends CanvasDocu
   prompt: string
   relation?: CanvasAddResourcesCommand["relation"]
   signal?: AbortSignal
+  size?: CanvasSize
   toolId: string
 }
 
@@ -214,6 +215,7 @@ export class CanvasResourceBusinessService {
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       prompt: request.prompt,
       relation: request.relation,
+      size: request.size,
       toolId: request.toolId,
     })
     const existing = this.executions.get(key)
@@ -431,6 +433,7 @@ export class CanvasResourceBusinessService {
     }
     validatePendingResourceKind(request.kind)
     if (request.label !== undefined) requireBoundedString(request.label, "Pending resource label", 200)
+    if (request.size !== undefined) validatePositiveSize(request.size, "Pending generation resource size")
 
     const command = createCanvasPendingGenerationResourceCommand({
       anchor: request.anchor,
@@ -443,6 +446,7 @@ export class CanvasResourceBusinessService {
       label: request.label ?? pendingResourceLabel(request.kind),
       ...(request.parentId === undefined ? {} : { parentId: request.parentId }),
       relation: request.relation,
+      ...(request.size === undefined ? {} : { size: request.size }),
     })
     return this.executeGuarded(request, command, [])
   }
@@ -846,6 +850,11 @@ function requirePositiveNumberIfPresent(value: unknown, label: string) {
   if (value !== undefined && (typeof value !== "number" || !Number.isFinite(value) || value <= 0)) {
     throw new CanvasCommandValidationError(`${label} must be positive when provided`)
   }
+}
+
+function validatePositiveSize(size: CanvasSize, label: string) {
+  requirePositiveNumberIfPresent(size.width, `${label} width`)
+  requirePositiveNumberIfPresent(size.height, `${label} height`)
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
