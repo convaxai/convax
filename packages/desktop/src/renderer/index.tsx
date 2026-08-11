@@ -108,6 +108,11 @@ import {
   openDesktopWorkspace,
 } from "./desktop-surface-state"
 import { DesktopProtocolGate } from "./desktop-protocol-gate"
+import {
+  DevelopmentEnvironmentBadge,
+  developmentApplicationTitle,
+  rendererDevelopmentIdentity,
+} from "./development-environment"
 import { MediaOperationActionIcon } from "./media-operation-action-icon"
 import {
   canResumeMediaOperation,
@@ -199,6 +204,7 @@ function ensureWorkbenchPartVisible(controller: WorkbenchLayoutController, partI
 }
 
 function App() {
+  const developmentIdentity = useMemo(() => rendererDevelopmentIdentity(window.location.href), [])
   const [notification, setNotification] = useState<CanvasNotification | null>(null)
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth)
   const [languagePreference, setLanguagePreference] = useState<AppLanguagePreference>(() =>
@@ -248,6 +254,9 @@ function App() {
   useEffect(() => {
     pluginLocaleStore.set(locale)
   }, [locale, pluginLocaleStore])
+  useEffect(() => {
+    document.title = developmentApplicationTitle(developmentIdentity)
+  }, [developmentIdentity])
   const canvasEditorRef = useRef<CanvasEditorHandle>(null)
   const agentTitlebarTriggerRef = useRef<HTMLButtonElement>(null)
   const utilityReturnFocusTargetRef = useRef<HTMLElement | null>(null)
@@ -2179,6 +2188,7 @@ function App() {
                   ? ""
                   : (activeCanvas?.name ?? activeProject?.name ?? "")
             }
+            environmentLabel={developmentIdentity?.label}
             homeLabel={
               desktopSurface.kind === "settings"
                 ? locale === "zh-CN"
@@ -2218,6 +2228,7 @@ function App() {
                 : undefined
             }
           />
+          <DevelopmentEnvironmentBadge identity={developmentIdentity} />
           <ApplicationCommandPalette
             commands={applicationCommands}
             emptyText={locale === "zh-CN" ? "没有匹配的命令" : "No matching commands"}

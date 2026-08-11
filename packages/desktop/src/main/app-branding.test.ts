@@ -4,9 +4,11 @@ import { inflateSync } from "node:zlib"
 import desktopManifest from "../../package.json"
 import {
   desktopApplicationName,
+  desktopDevelopmentIdentity,
   desktopProductName,
   desktopProjectWorkspaceDirectory,
   desktopRendererUrl,
+  desktopRendererUrlWithDevelopmentIdentity,
   desktopUserDataDirectory,
 } from "./app-branding"
 
@@ -15,6 +17,72 @@ describe("desktop branding", () => {
     expect(desktopManifest.productName).toBe(desktopProductName)
     expect(desktopApplicationName({ isPackaged: false, packagedName: "@convax/desktop" })).toBe("Convax")
     expect(desktopApplicationName({ isPackaged: true, packagedName: "Convax Beta" })).toBe("Convax Beta")
+    expect(
+      desktopApplicationName({
+        developmentIdentity: { id: "abc123", label: "must-be-ignored" },
+        isPackaged: true,
+        packagedName: "Convax Beta",
+      }),
+    ).toBe("Convax Beta")
+    expect(
+      desktopApplicationName({
+        developmentIdentity: { id: "abc123", label: "text-drag" },
+        isPackaged: false,
+      }),
+    ).toBe("Convax [text-drag]")
+  })
+
+  test("admits a bounded development identity and ignores it in packaged applications", () => {
+    expect(
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "abc123",
+        requestedLabel: "text-drag",
+      }),
+    ).toEqual({ id: "abc123", label: "text-drag" })
+    expect(
+      desktopDevelopmentIdentity({
+        isPackaged: true,
+        requestedId: "INVALID",
+        requestedLabel: "ignored",
+      }),
+    ).toBeUndefined()
+    expect(
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "abc123",
+        requestedLabel: "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+      }),
+    ).toEqual({ id: "abc123", label: "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀" })
+    expect(
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "abc123",
+        requestedLabel: "开发任务",
+      }),
+    ).toEqual({ id: "abc123", label: "开发任务" })
+    expect(() =>
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "abc123",
+        requestedLabel: "\u00a0text-drag",
+      }),
+    ).toThrow("normalized")
+    expect(() => desktopDevelopmentIdentity({ isPackaged: false, requestedId: "abc123" })).toThrow("label")
+    expect(() =>
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "ABC",
+        requestedLabel: "text-drag",
+      }),
+    ).toThrow("id")
+    expect(() =>
+      desktopDevelopmentIdentity({
+        isPackaged: false,
+        requestedId: "abc123",
+        requestedLabel: "line\nbreak",
+      }),
+    ).toThrow("label")
   })
 
   test("never trusts a dev-server URL in a packaged application", () => {
@@ -22,6 +90,20 @@ describe("desktop branding", () => {
       "http://localhost:5173",
     )
     expect(desktopRendererUrl({ isPackaged: true, requestedUrl: "http://localhost:5173" })).toBeUndefined()
+  })
+
+  test("projects the development identity through a bounded renderer URL", () => {
+    expect(
+      desktopRendererUrlWithDevelopmentIdentity({
+        developmentIdentity: { id: "abc123", label: "text drag" },
+        url: "http://localhost:5173/?existing=1",
+      }),
+    ).toBe("http://localhost:5173/?existing=1&convax-solo-task-id=abc123&convax-solo-task-label=text+drag")
+    expect(
+      desktopRendererUrlWithDevelopmentIdentity({
+        url: "file:///Applications/Convax/index.html",
+      }),
+    ).toBe("file:///Applications/Convax/index.html")
   })
 
   test("places newly created projects in a user-visible Documents workspace", () => {
@@ -97,6 +179,41 @@ describe("desktop branding", () => {
       desktopUserDataDirectory({
         appDataDirectory: "/Library/Application Support",
         isPackaged: true,
+      }),
+    ).toBeUndefined()
+  })
+
+  test("requires a task-bound absolute userData profile for an identified development runtime", () => {
+    const developmentIdentity = { id: "abc123", label: "text-drag" }
+    expect(
+      desktopUserDataDirectory({
+        appDataDirectory: "/Library/Application Support",
+        developmentIdentity,
+        isPackaged: false,
+        requestedDirectory: "/tmp/runtime/abc123/user-data",
+      }),
+    ).toBe("/tmp/runtime/abc123/user-data")
+    expect(() =>
+      desktopUserDataDirectory({
+        appDataDirectory: "/Library/Application Support",
+        developmentIdentity,
+        isPackaged: false,
+      }),
+    ).toThrow("required")
+    expect(() =>
+      desktopUserDataDirectory({
+        appDataDirectory: "/Library/Application Support",
+        developmentIdentity,
+        isPackaged: false,
+        requestedDirectory: "/tmp/runtime/shared/user-data",
+      }),
+    ).toThrow("task id")
+    expect(
+      desktopUserDataDirectory({
+        appDataDirectory: "/Library/Application Support",
+        developmentIdentity,
+        isPackaged: true,
+        requestedDirectory: "/tmp/runtime/abc123/user-data",
       }),
     ).toBeUndefined()
   })

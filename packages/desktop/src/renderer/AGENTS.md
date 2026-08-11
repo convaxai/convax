@@ -43,6 +43,9 @@ or durable domain authority.
   only. Loading a
   preference may choose an initial Input; Workbench is canonical afterward. Both
   caches remain disposable projections and Main remains authoritative.
+- Development task identity is a Main-authored, bounded URL projection used only
+  for the window title and visible environment badges. Do not persist it, derive a
+  native path from it, accept it through Plugin/UI input, or use it as authority.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
   concrete viewport budgets, CSS animation, and persistence of user preferences.
 
@@ -135,6 +138,9 @@ or durable domain authority.
 - Plugin readiness and setup UI is a display projection. Integrity, authorization,
   source, version, or artifact mismatch routes to exact-source reinstall/update;
   never invent a `Complete setup` action for a Plugin.
+- Keep the development task label visible in both the titlebar and a fixed
+  bottom-right badge whenever Main supplies it; product branding alone is not
+  sufficient environment identification.
 
 ## Mandatory references
 

@@ -79,6 +79,10 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Host-authored portable failures may use only bounded validated display data. Raw
   sidecar, native, filesystem, network, credential, and recovery diagnostics never
   enter Canvas state or renderer-safe projections.
+- Admit development task identity only from the bounded Main environment contract.
+  Bind it to an absolute task-id userData child before startup, own platform-native
+  and window branding here, and ignore the entire mode when packaged. Renderer may
+  receive the label and id only as non-authoritative presentation data.
 
 ## Mandatory module routes
 

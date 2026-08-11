@@ -222,7 +222,7 @@ flowchart TB
   Release --> Main
 
   subgraph State["State and persistence"]
-    UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures"]
+    UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
     LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
   end
@@ -749,6 +749,9 @@ Electron userData/
   plugin-service-authorization-checkpoints/<plugin-id>.json
                                         private crash-recovery Cookie handoff; never a browser profile
   canvas-external-drags/                short-lived host-owned native drag copies
+
+Identified development task userData    the same schema under a task-private absolute
+                                        profile; never the ordinary development or packaged profile
 
 Packaged app Resources/
   marketplaces/                         product-lock-verified Builtin, Official and retired-major recovery bytes
@@ -2218,6 +2221,16 @@ window coordination; keep the product's visual implementation in the host.
 - Preload: the narrow typed `window.convax` bridge; no business state.
 - Renderer: React shell, controllers, coordinators, view adapters, and preferences;
   no Node/Electron imports.
+
+An identified solo-task launch is a development-only Desktop composition mode.
+Main accepts only one bounded `CONVAX_SOLO_TASK_ID` and `CONVAX_SOLO_TASK_LABEL`
+pair, requires `CONVAX_USER_DATA_DIR` to name that id's absolute `user-data` child,
+and owns the application/window title plus platform-native Dock or taskbar badge.
+Main projects the same non-authoritative display identity in the exact trusted
+Renderer URL; Renderer may render it in application chrome and a fixed corner badge
+but receives no native path and cannot select the profile. Packaged Main ignores the
+solo-task identity and the ordinary development profile override before validation,
+so release builds cannot enable this mode through ambient environment variables.
 
 Packaged Main and preload outputs are complete JavaScript dependency bundles. The
 build disables package dependency externalization and admits only Electron and Node

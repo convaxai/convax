@@ -8,6 +8,7 @@ describe("ApplicationTitlebar", () => {
       <ApplicationTitlebar
         centerAction={<div data-canvas-title>Canvas 1</div>}
         contextLabel="Canvas 1"
+        environmentLabel="text-drag"
         homeLabel="Back to Projects"
         leadingActionHostRef={() => undefined}
         onBackToProjects={() => undefined}
@@ -40,6 +41,8 @@ describe("ApplicationTitlebar", () => {
     expect(markup).toContain('data-application-titlebar-leading=""')
     expect(markup).toContain('data-application-titlebar-center=""')
     expect(markup).toContain('data-application-titlebar-right=""')
+    expect(markup).toContain('data-development-environment-title=""')
+    expect(markup).toContain('title="text-drag"')
     expect(markup).toContain('aria-label="Open agent"')
     expect(markup).toContain('data-canvas-title="true"')
     expect(markup).not.toContain('aria-label="Open commands"')
