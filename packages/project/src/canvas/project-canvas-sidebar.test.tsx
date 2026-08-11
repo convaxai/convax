@@ -86,7 +86,7 @@ const nestedNodes = [
 ]
 
 describe("ProjectCanvasSidebar", () => {
-  test("moves Canvas selection into one compact header switcher", () => {
+  test("keeps the standalone compact switcher available for embedded callers", () => {
     const markup = renderToStaticMarkup(
       <ProjectCanvasSwitcher
         activeCanvasId="canvas-1"
@@ -103,7 +103,7 @@ describe("ProjectCanvasSidebar", () => {
     expect(markup).not.toContain('data-project-canvas-row=""')
   })
 
-  test("opens Canvas switching from the header", async () => {
+  test("opens the standalone Canvas switcher", async () => {
     const restoreWindow = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
@@ -157,7 +157,7 @@ describe("ProjectCanvasSidebar", () => {
 
     expect(markup).not.toContain("data-project-canvas-leaf-count")
     expect(markup).not.toContain("leaf nodes")
-    expect(markup).toContain('aria-label="Filter canvas nodes by type"')
+    expect(markup).toContain('aria-label="Filter active Canvas nodes by type"')
     expect(markup).toContain('aria-pressed="true"')
   })
 
@@ -177,7 +177,7 @@ describe("ProjectCanvasSidebar", () => {
           />,
         ),
       )
-      const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Filter canvas nodes by type"]')!
+      const trigger = container.querySelector<HTMLButtonElement>('[aria-label="Filter active Canvas nodes by type"]')!
       await act(async () => trigger.click())
       expect(trigger.getAttribute("aria-expanded")).toBe("true")
       await act(async () =>
@@ -195,7 +195,7 @@ describe("ProjectCanvasSidebar", () => {
     }
   })
 
-  test("renders the active Canvas nodes directly without a duplicated Canvas tree level", () => {
+  test("renders Canvas rows at the first level and their nodes at the second level", () => {
     const markup = renderToStaticMarkup(
       <ProjectCanvasSidebar
         activeCanvasId="canvas-1"
@@ -211,13 +211,209 @@ describe("ProjectCanvasSidebar", () => {
       />,
     )
 
+    expect(markup).toContain('aria-label="Project canvases"')
+    expect(markup).toContain('data-project-canvas-id="canvas-1"')
+    expect(markup).toContain('data-project-canvas-id="canvas-2"')
+    expect(markup).toContain('aria-selected="true"')
+    expect(markup).toContain('aria-label="Collapse Canvas 1 nodes"')
     expect(markup).toContain('aria-label="Canvas 1 nodes"')
+    expect(markup).toContain('role="group"')
     expect(markup).toContain('data-project-canvas-view="tree"')
     expect(markup).toContain('data-project-canvas-node-id="node-image"')
     expect(markup).toContain('data-project-canvas-node-preview="image"')
     expect(markup).toContain('data-project-canvas-node-icon="text"')
-    expect(markup).not.toContain('data-project-canvas-id="canvas-1"')
-    expect(markup).not.toContain("Collapse Canvas 1 nodes")
+    expect(markup.indexOf('data-project-canvas-id="canvas-1"')).toBeLessThan(
+      markup.indexOf('data-project-canvas-node-id="node-image"'),
+    )
+    expect(markup.indexOf('data-project-canvas-node-id="node-image"')).toBeLessThan(
+      markup.indexOf('data-project-canvas-id="canvas-2"'),
+    )
+    expect(markup).not.toContain('data-project-canvas-switcher=""')
+  })
+
+  test("collapses one Canvas without hiding the first-level list and reopens it when reactivated", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const activeNodes = {
+      canvasId: "canvas-1",
+      nodes: [{ id: "node-notes", kind: "text", label: "Notes" }],
+      projectId: "project-1",
+    }
+    let root: Root | undefined
+    const renderSidebar = (activeCanvasId: string) =>
+      root?.render(
+        <ProjectCanvasSidebar activeCanvasId={activeCanvasId} activeNodes={activeNodes} controller={controller} />,
+      )
+    try {
+      root = createRoot(container)
+      await act(async () => renderSidebar("canvas-1"))
+
+      const tree = container.querySelector<HTMLElement>('[role="tree"][aria-label="Project canvases"]')!
+      const canvas1 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-1"]')!
+      const canvas2 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-2"]')!
+      const group = canvas1.querySelector<HTMLElement>(':scope > [role="group"]')!
+      const node = container.querySelector<HTMLElement>('[data-project-canvas-node-id="node-notes"]')!
+      expect(canvas1.parentElement).toBe(tree)
+      expect(canvas2.parentElement).toBe(tree)
+      expect(canvas1.querySelector("[data-project-canvas-indent]")).not.toBeNull()
+      expect(group.className).toContain("ml-7")
+      expect(group.className).toContain("border-l")
+      expect(group.className).toContain("pl-2")
+      expect(node.closest("[data-project-canvas-id]")).toBe(canvas1)
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Collapse Canvas 1 nodes"]')?.click(),
+      )
+
+      expect(container.querySelector('[data-project-canvas-node-id="node-notes"]')).toBeNull()
+      expect(canvas1.parentElement).toBe(tree)
+      expect(canvas2.parentElement).toBe(tree)
+      expect(container.querySelector('button[aria-label="Expand Canvas 1 nodes"]')).not.toBeNull()
+
+      await act(async () => renderSidebar("canvas-2"))
+      await act(async () => renderSidebar("canvas-1"))
+      expect(container.querySelector('button[aria-label="Collapse Canvas 1 nodes"]')).not.toBeNull()
+      expect(container.querySelector('[data-project-canvas-node-id="node-notes"]')).not.toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("navigates the first-level Canvas tree and activates an inactive Canvas from the keyboard", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const onActivate = mock(() => undefined)
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectCanvasSidebar activeCanvasId="canvas-1" controller={controller} onActivate={onActivate} />,
+        ),
+      )
+
+      const canvas1 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-1"]')!
+      const canvas2 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-2"]')!
+      await act(async () => canvas1.focus())
+      await act(async () => canvas1.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "ArrowDown" })))
+      expect(document.activeElement).toBe(canvas2)
+      expect(canvas2.tabIndex).toBe(0)
+      await act(async () => canvas2.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" })))
+      expect(onActivate).toHaveBeenCalledWith("canvas-2")
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("loads an inactive Canvas, activates it, and republishes its cached nodes", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const loadNodes = mock(async ({ canvasId }: { canvasId: string }) =>
+      canvasId === "canvas-2" ? [{ id: "node-video", kind: "video", label: "Final cut" }] : [],
+    )
+    const onActivate = mock(() => undefined)
+    const onNodeActivate = mock(() => undefined)
+    const onNodesResolved = mock(() => undefined)
+    let root: Root | undefined
+    const renderSidebar = (activeCanvasId: string) =>
+      root?.render(
+        <ProjectCanvasSidebar
+          activeCanvasId={activeCanvasId}
+          controller={controller}
+          loadNodes={loadNodes}
+          onActivate={onActivate}
+          onNodeActivate={onNodeActivate}
+          onNodesResolved={onNodesResolved}
+        />,
+      )
+    try {
+      root = createRoot(container)
+      await act(async () => renderSidebar("canvas-1"))
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Expand Canvas 2 nodes"]')?.click()
+        await Promise.resolve()
+      })
+
+      const canvas = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-2"]')!
+      const node = canvas.querySelector<HTMLButtonElement>('[data-project-canvas-node-id="node-video"]')!
+      expect(loadNodes).toHaveBeenCalledWith({ canvasId: "canvas-2", projectId: "project-1" })
+      expect(canvas.querySelector(':scope > [role="group"]')).not.toBeNull()
+      expect(node.closest("[data-project-canvas-id]")).toBe(canvas)
+      await act(async () => node.click())
+      expect(onNodeActivate).toHaveBeenCalledWith({ canvasId: "canvas-2", nodeId: "node-video" })
+      await act(async () => canvas.querySelector<HTMLElement>("[data-project-canvas-row]")?.click())
+      expect(onActivate).toHaveBeenCalledWith("canvas-2")
+
+      onNodesResolved.mockClear()
+      await act(async () => renderSidebar("canvas-2"))
+      expect(onNodesResolved).toHaveBeenCalledWith({
+        canvasId: "canvas-2",
+        nodes: [{ id: "node-video", kind: "video", label: "Final cut" }],
+        projectId: "project-1",
+      })
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
+  })
+
+  test("keeps an active Canvas collapsed across catalog refreshes", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const listeners = new Set<() => void>()
+    let currentSnapshot = snapshot
+    const scopedController = {
+      getSnapshot: () => currentSnapshot,
+      subscribe(listener: () => void) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    } as unknown as ProjectCanvasController
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectCanvasSidebar
+            activeCanvasId="canvas-1"
+            activeNodes={{
+              canvasId: "canvas-1",
+              nodes: [{ id: "node-notes", kind: "text", label: "Notes" }],
+              projectId: "project-1",
+            }}
+            controller={scopedController}
+          />,
+        ),
+      )
+      await act(async () =>
+        container.querySelector<HTMLButtonElement>('button[aria-label="Collapse Canvas 1 nodes"]')?.click(),
+      )
+
+      currentSnapshot = {
+        ...snapshot,
+        canvases: snapshot.canvases.map((canvas) =>
+          canvas.id === "canvas-1" ? { ...canvas, name: "Renamed Canvas", updatedAt: 3 } : canvas,
+        ),
+      }
+      await act(async () => {
+        for (const listener of listeners) listener()
+      })
+
+      expect(container.querySelector('[data-project-canvas-node-id="node-notes"]')).toBeNull()
+      expect(container.querySelector('button[aria-label="Expand Renamed Canvas nodes"]')).not.toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
   })
 
   test("keeps the previous standalone controls as a compatibility header", () => {
@@ -253,6 +449,46 @@ describe("ProjectCanvasSidebar", () => {
     expect(markup).toContain('data-project-canvas-node-depth="0"')
     expect(markup).not.toContain('data-project-canvas-node-id="research"')
     expect(markup).not.toContain('data-project-canvas-node-id="question"')
+  })
+
+  test("keeps the type filter scoped to the active Canvas", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const loadNodes = mock(async ({ canvasId }: { canvasId: string }) =>
+      canvasId === "canvas-1"
+        ? [{ id: "active-image", kind: "image", label: "Active image" }]
+        : [{ id: "inactive-audio", kind: "audio", label: "Inactive audio" }],
+    )
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectCanvasSidebar
+            activeCanvasId="canvas-1"
+            controller={controller}
+            filteredKinds={new Set(["image"])}
+            loadNodes={loadNodes}
+          />,
+        ),
+      )
+      await act(async () => {
+        container.querySelector<HTMLButtonElement>('button[aria-label="Expand Canvas 2 nodes"]')?.click()
+        await Promise.resolve()
+      })
+
+      const canvas1 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-1"]')!
+      const canvas2 = container.querySelector<HTMLElement>('[data-project-canvas-id="canvas-2"]')!
+      expect(canvas1.querySelector('[data-project-canvas-view="flat"]')).not.toBeNull()
+      expect(canvas1.querySelector('[data-project-canvas-node-id="active-image"]')).not.toBeNull()
+      expect(canvas2.querySelector('[data-project-canvas-view="tree"]')).not.toBeNull()
+      expect(canvas2.querySelector('[data-project-canvas-node-id="inactive-audio"]')).not.toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
   })
 
   test("expands nested Group rows without activating the Group node", async () => {
@@ -313,7 +549,7 @@ describe("ProjectCanvasSidebar", () => {
     }
   })
 
-  test("searches only the active Canvas and keeps the matching ancestor path", () => {
+  test("keeps the matching Canvas row and nested ancestor path during search", () => {
     const markup = renderToStaticMarkup(
       <ProjectCanvasSidebar
         activeCanvasId="canvas-1"
@@ -327,10 +563,71 @@ describe("ProjectCanvasSidebar", () => {
       />,
     )
 
+    expect(markup).toContain('data-project-canvas-id="canvas-1"')
     expect(markup).toContain('data-project-canvas-node-id="research"')
     expect(markup).toContain('data-project-canvas-node-id="references"')
     expect(markup).toContain('data-project-canvas-node-id="source"')
     expect(markup).not.toContain('data-project-canvas-node-id="unrelated"')
+    expect(markup).not.toContain('data-project-canvas-id="canvas-2"')
+  })
+
+  test("filters the first-level Canvas catalog by Canvas name", () => {
+    const markup = renderToStaticMarkup(
+      <ProjectCanvasSidebar activeCanvasId="canvas-1" controller={controller} query="canvas 2" />,
+    )
+
+    expect(markup).not.toContain('data-project-canvas-id="canvas-1"')
+    expect(markup).toContain('data-project-canvas-id="canvas-2"')
+    expect(markup).not.toContain('data-project-canvas-switcher=""')
+  })
+
+  test("loads a Canvas added while a node search is active", async () => {
+    const restoreWindow = installTestWindow()
+    const container = document.createElement("div")
+    document.body.append(container)
+    const listeners = new Set<() => void>()
+    let currentSnapshot: ProjectCanvasControllerSnapshot = {
+      ...snapshot,
+      canvases: [snapshot.canvases[0]],
+    }
+    const scopedController = {
+      getSnapshot: () => currentSnapshot,
+      subscribe(listener: () => void) {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+    } as unknown as ProjectCanvasController
+    const loadNodes = mock(async ({ canvasId }: { canvasId: string }) =>
+      canvasId === "canvas-2" ? [{ id: "needle", kind: "text", label: "Search needle" }] : [],
+    )
+    let root: Root | undefined
+    try {
+      root = createRoot(container)
+      await act(async () =>
+        root?.render(
+          <ProjectCanvasSidebar
+            activeCanvasId="canvas-1"
+            controller={scopedController}
+            loadNodes={loadNodes}
+            query="needle"
+          />,
+        ),
+      )
+
+      currentSnapshot = { ...snapshot, canvases: [...snapshot.canvases] }
+      await act(async () => {
+        for (const listener of listeners) listener()
+        await Promise.resolve()
+      })
+
+      expect(loadNodes).toHaveBeenCalledWith({ canvasId: "canvas-2", projectId: "project-1" })
+      expect(container.querySelector('[data-project-canvas-id="canvas-2"]')).not.toBeNull()
+      expect(container.querySelector('[data-project-canvas-node-id="needle"]')).not.toBeNull()
+    } finally {
+      if (root) await act(async () => root?.unmount())
+      container.remove()
+      await restoreWindow()
+    }
   })
 
   test("ignores a late active-node outline after the Project scope changes", async () => {

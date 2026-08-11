@@ -6,6 +6,11 @@ import {
 } from "@convax/canvas/core"
 import {
   Button,
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -28,6 +33,7 @@ import {
   Image as ImageIcon,
   ListFilter,
   LoaderCircle,
+  MoreHorizontal,
   PanelsTopLeft,
   Pencil,
   Plus,
@@ -60,12 +66,10 @@ export interface ProjectCanvasSidebarProps {
   creationUnavailableReason?: string
   navigationBusy?: boolean
   navigationError?: string | null
-  /** @deprecated Compose ProjectCanvasSwitcher in the ProjectSidebar header instead. */
   onActivate?(canvasId: string): Promise<unknown> | unknown
   onClearNavigationError?(): void
   /** @deprecated Compose the Canvas create action in the ProjectSidebar header instead. */
   onCreate?(): Promise<unknown> | unknown
-  /** @deprecated Compose ProjectCanvasSwitcher in the ProjectSidebar header instead. */
   onDelete?(canvasId: string): Promise<unknown> | unknown
   onNodeActivate?(input: { canvasId: string; nodeId: string }): Promise<unknown> | unknown
   onNodesResolved?(projection: ProjectCanvasSidebarNodeProjection): void
@@ -342,9 +346,9 @@ export function ProjectCanvasSidebarTools(props: ProjectCanvasSidebarToolsProps)
   return (
     <div className="flex shrink-0 items-center gap-0.5" data-project-canvas-tools="">
       <DropdownMenu disabled={options.length === 0} onOpenChange={setFilterOpen} open={filterOpen}>
-        <Tooltip content="Filter leaf nodes" side="bottom">
+        <Tooltip content="Filter active Canvas leaf nodes" side="bottom">
           <DropdownMenuTrigger
-            aria-label="Filter canvas nodes by type"
+            aria-label="Filter active Canvas nodes by type"
             aria-pressed={props.filteredKinds.size > 0}
             className="relative"
             ref={filterTriggerRef}
@@ -419,14 +423,24 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
     props.controller.getSnapshot,
     props.controller.getSnapshot,
   )
+  const [editor, setEditor] = useState<{ canvasId: string; name: string; projectId: string } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<{ canvas: ProjectCanvas; projectId: string } | null>(null)
+  const [expandedCanvasIds, setExpandedCanvasIds] = useState<ReadonlySet<string>>(
+    () => new Set(props.activeCanvasId ? [props.activeCanvasId] : []),
+  )
+  const [focusedCanvasId, setFocusedCanvasId] = useState(props.activeCanvasId)
   const [expandedNodeKeys, setExpandedNodeKeys] = useState<ReadonlySet<string>>(() => new Set())
   const [nodeLoadState, setNodeLoadState] = useState<Readonly<Record<string, CanvasNodeLoadState>>>({})
   const nodeLoadRequestsRef = useRef(new Map<string, number>())
   const nextNodeLoadRequestRef = useRef(0)
-  const activeCanvas = snapshot.canvases.find((canvas) => canvas.id === props.activeCanvasId)
   const busy = snapshot.busy || Boolean(props.navigationBusy)
   const error = snapshot.error ?? props.navigationError
   const normalizedQuery = props.query?.trim().toLocaleLowerCase() ?? ""
+  const filteredKinds = props.filteredKinds ?? new Set<string>()
+  const activeCanvasExists = Boolean(
+    props.activeCanvasId && snapshot.canvases.some((canvas) => canvas.id === props.activeCanvasId),
+  )
+  const canvasCatalogKey = snapshot.canvases.map((canvas) => canvas.id).join("\u001f")
 
   const loadCanvasNodes = async (canvasId: string, force = false) => {
     const projectId = snapshot.projectId
@@ -477,116 +491,127 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
   }
 
   useEffect(() => {
+    setEditor(null)
+    setPendingDelete(null)
     nodeLoadRequestsRef.current.clear()
     setNodeLoadState({})
+    setExpandedCanvasIds(new Set(props.activeCanvasId ? [props.activeCanvasId] : []))
+    setFocusedCanvasId(props.activeCanvasId)
     setExpandedNodeKeys(new Set())
   }, [snapshot.projectId])
 
   useEffect(() => {
-    if (!activeCanvas) return
-    void loadCanvasNodes(activeCanvas.id)
-  }, [activeCanvas?.id, snapshot.projectId])
+    const canvasId = props.activeCanvasId
+    if (!canvasId || !activeCanvasExists) return
+    setFocusedCanvasId(canvasId)
+    setExpandedCanvasIds((current) => (current.has(canvasId) ? current : new Set([...current, canvasId])))
+    const cached = nodeLoadState[canvasId]
+    if (cached?.projectId === snapshot.projectId && cached.status === "ready") {
+      props.onNodesResolved?.({ canvasId, nodes: cached.nodes, projectId: cached.projectId })
+    }
+    void loadCanvasNodes(canvasId)
+  }, [activeCanvasExists, props.activeCanvasId, snapshot.projectId])
 
-  const hasActiveNodeProjection = Boolean(
-    activeCanvas &&
-      props.activeNodes?.projectId === snapshot.projectId &&
-      props.activeNodes.canvasId === activeCanvas.id,
-  )
-  const nodes = activeCanvas
-    ? resolveCanvasNodes(activeCanvas.id, snapshot.projectId, props.activeNodes, nodeLoadState)
-    : undefined
-  const loadState = activeCanvas ? nodeLoadState[activeCanvas.id] : undefined
-  const filteredKinds = props.filteredKinds ?? new Set<string>()
-  const flatNodes = filteredKinds.size
-    ? listProjectCanvasLeafNodes(nodes ?? []).filter(
-        (node) =>
-          filteredKinds.has(normalizeCanvasLeafKind(node.kind)) &&
-          (!normalizedQuery || projectCanvasNodeMatchesOwnQuery(node, normalizedQuery)),
-      )
-    : null
-  const treeNodes =
-    !filteredKinds.size && normalizedQuery ? filterProjectCanvasNodeTree(nodes ?? [], normalizedQuery) : nodes
+  useEffect(() => {
+    if (!normalizedQuery) return
+    for (const canvas of snapshot.canvases) {
+      if (canvas.id !== props.activeCanvasId) void loadCanvasNodes(canvas.id)
+    }
+  }, [canvasCatalogKey, normalizedQuery, props.activeCanvasId, snapshot.projectId])
+
+  useEffect(() => {
+    if (editor && !snapshot.canvases.some((canvas) => canvas.id === editor.canvasId)) setEditor(null)
+    if (pendingDelete && !snapshot.canvases.some((canvas) => canvas.id === pendingDelete.canvas.id)) {
+      setPendingDelete(null)
+    }
+  }, [editor, pendingDelete, snapshot.canvases])
+
+  useEffect(() => {
+    if (!pendingDelete) return
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return
+      event.preventDefault()
+      setPendingDelete(null)
+    }
+    document.addEventListener("keydown", dismissOnEscape)
+    return () => document.removeEventListener("keydown", dismissOnEscape)
+  }, [pendingDelete])
+
+  const commitEditor = async () => {
+    const current = editor
+    setEditor(null)
+    if (
+      current?.name.trim() &&
+      current.projectId === snapshot.projectId &&
+      snapshot.canvases.some((canvas) => canvas.id === current.canvasId)
+    ) {
+      await props.controller.renameCanvas(current.canvasId, current.name)
+    }
+  }
+  const beginRename = (canvas: ProjectCanvas) => {
+    if (!snapshot.projectId) return
+    setEditor({ canvasId: canvas.id, name: canvas.name, projectId: snapshot.projectId })
+  }
+  const beginDelete = (canvas: ProjectCanvas) => {
+    if (!snapshot.projectId || !props.onDelete) return
+    setPendingDelete({ canvas, projectId: snapshot.projectId })
+  }
+  const writeCanvasDrag = (event: DragEvent<HTMLElement>, canvas: ProjectCanvas) => {
+    if (!snapshot.projectId) return
+    event.dataTransfer.effectAllowed = "copy"
+    event.dataTransfer.setData(
+      PROJECT_CANVAS_DRAG_TYPE,
+      serializeProjectCanvasDrag({
+        canvas: { id: canvas.id, name: canvas.name },
+        projectId: snapshot.projectId,
+        version: 1,
+      }),
+    )
+    event.dataTransfer.setData("text/plain", canvas.name)
+  }
+
+  const resolveVisibleNodes = (canvas: ProjectCanvas) => {
+    const nodes = resolveCanvasNodes(canvas.id, snapshot.projectId, props.activeNodes, nodeLoadState)
+    const canvasNameMatches = Boolean(normalizedQuery && canvas.name.toLocaleLowerCase().includes(normalizedQuery))
+    if (filteredKinds.size && canvas.id === props.activeCanvasId) {
+      return {
+        canvasNameMatches,
+        nodes,
+        visibleNodes: listProjectCanvasLeafNodes(nodes ?? []).filter(
+          (node) =>
+            filteredKinds.has(normalizeCanvasLeafKind(node.kind)) &&
+            (!normalizedQuery || canvasNameMatches || projectCanvasNodeMatchesOwnQuery(node, normalizedQuery)),
+        ),
+        view: "flat" as const,
+      }
+    }
+    return {
+      canvasNameMatches,
+      nodes,
+      visibleNodes:
+        normalizedQuery && !canvasNameMatches ? filterProjectCanvasNodeTree(nodes ?? [], normalizedQuery) : nodes,
+      view: "tree" as const,
+    }
+  }
+
+  const visibleCanvases = normalizedQuery
+    ? snapshot.canvases.filter((canvas) => {
+        const view = resolveVisibleNodes(canvas)
+        if (view.canvasNameMatches || view.visibleNodes?.length) return true
+        const hasActiveNodeProjection =
+          props.activeNodes?.projectId === snapshot.projectId && props.activeNodes.canvasId === canvas.id
+        return view.nodes === undefined && Boolean(props.loadNodes || hasActiveNodeProjection)
+      })
+    : snapshot.canvases
+  const tabbableCanvasId = visibleCanvases.some((canvas) => canvas.id === focusedCanvasId)
+    ? focusedCanvasId
+    : visibleCanvases.some((canvas) => canvas.id === props.activeCanvasId)
+      ? props.activeCanvasId
+      : (visibleCanvases[0]?.id ?? null)
   const legacyHeader =
     props.onActivate && props.onCreate && props.onDelete
       ? { onActivate: props.onActivate, onCreate: props.onCreate, onDelete: props.onDelete }
       : null
-
-  let content
-  if (snapshot.canvases.length === 0) {
-    content = (
-      <div className="grid min-h-0 flex-1 place-items-center px-5 text-center text-xs text-muted-foreground">
-        <div className="space-y-2">
-          <PanelsTopLeft className="mx-auto size-6 opacity-60" />
-          <div>{busy ? "Loading canvases…" : "No canvases yet."}</div>
-        </div>
-      </div>
-    )
-  } else if (!activeCanvas) {
-    content = (
-      <div
-        className="grid min-h-0 flex-1 place-items-center px-5 text-center text-xs text-muted-foreground"
-        role="status"
-      >
-        Select a canvas to browse its nodes.
-      </div>
-    )
-  } else if (
-    !hasActiveNodeProjection &&
-    loadState?.projectId === snapshot.projectId &&
-    loadState.status === "loading" &&
-    !nodes?.length
-  ) {
-    content = (
-      <div className="flex min-h-0 flex-1 items-center justify-center gap-2 text-xs text-text-tertiary" role="status">
-        <LoaderCircle className="size-3.5 animate-spin" />
-        Loading nodes…
-      </div>
-    )
-  } else if (
-    !hasActiveNodeProjection &&
-    loadState?.projectId === snapshot.projectId &&
-    loadState.status === "error" &&
-    !nodes?.length
-  ) {
-    content = (
-      <button
-        className="m-2 flex min-h-9 items-center justify-center gap-2 rounded-md px-3 text-xs text-status-danger hover:bg-interactive-hover"
-        onClick={() => void loadCanvasNodes(activeCanvas.id, true)}
-        title={loadState.error}
-        type="button"
-      >
-        <RotateCw className="size-3.5 shrink-0" />
-        Could not load nodes. Retry
-      </button>
-    )
-  } else {
-    const visibleNodes = flatNodes ?? treeNodes ?? []
-    content = visibleNodes.length ? (
-      <div
-        aria-label={`${activeCanvas.name} nodes`}
-        className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
-        data-project-canvas-view={flatNodes ? "flat" : "tree"}
-        role="tree"
-      >
-        <ProjectCanvasNodeRows
-          canvasId={activeCanvas.id}
-          expandedNodeKeys={expandedNodeKeys}
-          nodes={visibleNodes}
-          onActivate={props.onNodeActivate}
-          query={flatNodes ? "" : normalizedQuery}
-          setExpandedNodeKeys={setExpandedNodeKeys}
-        />
-      </div>
-    ) : (
-      <div className="grid min-h-0 flex-1 place-items-center px-5 text-center text-xs text-text-tertiary" role="status">
-        {filteredKinds.size
-          ? "No leaf nodes match these filters."
-          : normalizedQuery
-            ? "No matching nodes."
-            : "No nodes"}
-      </div>
-    )
-  }
 
   return (
     <>
@@ -612,7 +637,249 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
           </Tooltip>
         </div>
       ) : null}
-      {content}
+      {snapshot.canvases.length === 0 ? (
+        <div className="grid min-h-0 flex-1 place-items-center px-5 text-center text-xs text-muted-foreground">
+          <div className="space-y-2">
+            <PanelsTopLeft className="mx-auto size-6 opacity-60" />
+            <div>{busy ? "Loading canvases…" : (props.creationUnavailableReason ?? "No canvases yet.")}</div>
+          </div>
+        </div>
+      ) : visibleCanvases.length === 0 ? (
+        <div
+          className="grid min-h-0 flex-1 place-items-center px-5 text-center text-xs text-muted-foreground"
+          role="status"
+        >
+          No matching canvases.
+        </div>
+      ) : (
+        <div
+          aria-label="Project canvases"
+          className="min-h-0 flex-1 overflow-auto overscroll-contain px-2 pb-2"
+          role="tree"
+        >
+          {visibleCanvases.map((canvas) => {
+            const active = canvas.id === props.activeCanvasId
+            const canDelete = snapshot.canvases.length > 1 && Boolean(props.onDelete)
+            const editing = editor?.canvasId === canvas.id
+            const hasActiveNodeProjection =
+              props.activeNodes?.projectId === snapshot.projectId && props.activeNodes.canvasId === canvas.id
+            const showsNodeOutline = Boolean(props.loadNodes || hasActiveNodeProjection)
+            const view = resolveVisibleNodes(canvas)
+            const nodes = view.nodes
+            const visibleNodes = view.visibleNodes ?? []
+            const hasMatchingNode = Boolean(normalizedQuery && visibleNodes.length)
+            const expanded =
+              showsNodeOutline && (expandedCanvasIds.has(canvas.id) || view.canvasNameMatches || hasMatchingNode)
+            const loadState = nodeLoadState[canvas.id]
+            const toggleCanvasOutline = () => {
+              if (!showsNodeOutline) return
+              setExpandedCanvasIds((current) => {
+                const next = new Set(current)
+                if (expanded) next.delete(canvas.id)
+                else next.add(canvas.id)
+                return next
+              })
+              if (!expanded) void loadCanvasNodes(canvas.id)
+            }
+            const activateOrToggleCanvas = () => {
+              if (busy) return
+              if (active && showsNodeOutline) toggleCanvasOutline()
+              else void props.onActivate?.(canvas.id)
+            }
+            const row = (
+              <div
+                className={cn(
+                  "group my-0.5 flex h-7 items-center rounded-md pr-1 text-[13px] outline-none transition-transform duration-100 active:scale-[0.99] group-focus-visible/canvas:ring-2 group-focus-visible/canvas:ring-focus-ring/40 motion-reduce:transition-none",
+                  active
+                    ? "bg-interactive-selected font-medium text-text-primary"
+                    : "text-text-secondary hover:bg-interactive-hover hover:text-text-primary active:bg-interactive-pressed",
+                )}
+                data-project-canvas-row=""
+                draggable={!editing}
+                onClick={(event) => {
+                  if (editing || busy) return
+                  event.currentTarget.closest<HTMLElement>("[data-project-canvas-id]")?.focus()
+                  activateOrToggleCanvas()
+                }}
+                onDoubleClick={(event) => {
+                  event.stopPropagation()
+                  if (!editing) beginRename(canvas)
+                }}
+                onDragStart={(event) => writeCanvasDrag(event, canvas)}
+              >
+                <span aria-hidden className="w-4 shrink-0" data-project-canvas-indent="" />
+                {showsNodeOutline ? (
+                  <button
+                    aria-label={`${expanded ? "Collapse" : "Expand"} ${canvas.name} nodes`}
+                    className="grid size-6 shrink-0 place-items-center rounded text-text-tertiary outline-none hover:bg-interactive-hover hover:text-text-primary focus-visible:ring-2 focus-visible:ring-focus-ring/40"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      toggleCanvasOutline()
+                    }}
+                    type="button"
+                  >
+                    <ChevronRight
+                      className={cn(
+                        "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                        expanded && "rotate-90",
+                      )}
+                    />
+                  </button>
+                ) : (
+                  <span className="size-6 shrink-0" />
+                )}
+                <PanelsTopLeft className={cn("size-4 shrink-0", active ? "text-brand" : "text-text-tertiary")} />
+                {editing ? (
+                  <InlineInput
+                    label={`Rename ${canvas.name}`}
+                    onCancel={() => setEditor(null)}
+                    onChange={(name) => setEditor((current) => (current ? { ...current, name } : null))}
+                    onCommit={commitEditor}
+                    value={editor?.name ?? ""}
+                  />
+                ) : (
+                  <span className="min-w-0 flex-1 truncate px-1.5">{canvas.name}</span>
+                )}
+                {!editing ? (
+                  <span className="ml-auto flex shrink-0 items-center opacity-0 transition-opacity duration-100 group-hover:opacity-100 group-focus-within:opacity-100 motion-reduce:transition-none">
+                    <button
+                      aria-label={`More actions for ${canvas.name}`}
+                      className="grid size-6 place-items-center rounded-md text-text-tertiary outline-none transition-transform duration-100 hover:bg-interactive-hover hover:text-text-primary active:scale-95 active:bg-interactive-pressed focus-visible:ring-2 focus-visible:ring-focus-ring/40 motion-reduce:transition-none"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        const row = event.currentTarget.closest<HTMLElement>("[data-project-canvas-row]")
+                        const bounds = event.currentTarget.getBoundingClientRect()
+                        row?.dispatchEvent(
+                          new MouseEvent("contextmenu", {
+                            bubbles: true,
+                            button: 2,
+                            clientX: bounds.right,
+                            clientY: bounds.bottom + 4,
+                          }),
+                        )
+                      }}
+                      type="button"
+                    >
+                      <MoreHorizontal className="size-3.5" />
+                    </button>
+                  </span>
+                ) : null}
+              </div>
+            )
+            return (
+              <div
+                aria-label={canvas.name}
+                aria-expanded={showsNodeOutline ? expanded : undefined}
+                aria-selected={active}
+                className="group/canvas outline-none"
+                data-project-canvas-id={canvas.id}
+                key={canvas.id}
+                onFocus={(event) => {
+                  if (event.target === event.currentTarget) setFocusedCanvasId(canvas.id)
+                }}
+                onKeyDown={(event) => {
+                  if (editing || event.target !== event.currentTarget) return
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    activateOrToggleCanvas()
+                  } else if (event.key === "ArrowRight" && showsNodeOutline && !expanded) {
+                    event.preventDefault()
+                    toggleCanvasOutline()
+                  } else if (event.key === "ArrowLeft" && showsNodeOutline && expanded) {
+                    event.preventDefault()
+                    toggleCanvasOutline()
+                  } else if (
+                    event.key === "ArrowDown" ||
+                    event.key === "ArrowUp" ||
+                    event.key === "Home" ||
+                    event.key === "End"
+                  ) {
+                    event.preventDefault()
+                    focusProjectCanvasTreeItem(event.currentTarget, event.key)
+                  } else if (event.key === "F2") {
+                    event.preventDefault()
+                    beginRename(canvas)
+                  } else if ((event.key === "Delete" || event.key === "Backspace") && canDelete) {
+                    event.preventDefault()
+                    beginDelete(canvas)
+                  }
+                }}
+                role="treeitem"
+                tabIndex={tabbableCanvasId === canvas.id ? 0 : -1}
+              >
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+                  <ContextMenuContent className="min-w-40">
+                    <ContextMenuItem onSelect={() => beginRename(canvas)}>
+                      <Pencil />
+                      Rename
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      className="text-destructive"
+                      disabled={!canDelete}
+                      onSelect={() => beginDelete(canvas)}
+                    >
+                      <Trash2 />
+                      Delete canvas
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
+                {expanded ? (
+                  <div
+                    aria-label={`${canvas.name} nodes`}
+                    className="relative mb-1 ml-7 border-l border-border-subtle pl-2"
+                    data-project-canvas-view={view.view}
+                    role="group"
+                  >
+                    {!hasActiveNodeProjection &&
+                    loadState?.projectId === snapshot.projectId &&
+                    loadState.status === "loading" &&
+                    !nodes?.length ? (
+                      <div className="flex h-8 items-center gap-2 px-2 text-[11px] text-text-tertiary" role="status">
+                        <LoaderCircle className="size-3 animate-spin" />
+                        Loading nodes…
+                      </div>
+                    ) : !hasActiveNodeProjection &&
+                      loadState?.projectId === snapshot.projectId &&
+                      loadState.status === "error" &&
+                      !nodes?.length ? (
+                      <button
+                        className="flex min-h-8 w-full items-center gap-2 rounded px-2 text-left text-[11px] text-status-danger hover:bg-interactive-hover"
+                        onClick={() => void loadCanvasNodes(canvas.id, true)}
+                        title={loadState.error}
+                        type="button"
+                      >
+                        <RotateCw className="size-3 shrink-0" />
+                        Could not load nodes. Retry
+                      </button>
+                    ) : visibleNodes.length ? (
+                      <ProjectCanvasNodeRows
+                        canvasId={canvas.id}
+                        expandedNodeKeys={expandedNodeKeys}
+                        nodes={visibleNodes}
+                        onActivate={props.onNodeActivate}
+                        query={view.view === "flat" ? "" : normalizedQuery}
+                        setExpandedNodeKeys={setExpandedNodeKeys}
+                      />
+                    ) : (
+                      <div className="flex min-h-8 items-center px-2 text-[11px] text-text-tertiary" role="status">
+                        {filteredKinds.size && canvas.id === props.activeCanvasId
+                          ? "No leaf nodes match these filters."
+                          : normalizedQuery
+                            ? "No matching nodes."
+                            : "No nodes"}
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+        </div>
+      )}
       {error ? (
         <div className="absolute inset-x-3 bottom-11 z-30 flex items-start gap-2 rounded-lg border border-destructive/25 bg-popover p-2.5 text-xs shadow-lg">
           <span className="min-w-0 flex-1">{error}</span>
@@ -626,6 +893,43 @@ export function ProjectCanvasSidebar(props: ProjectCanvasSidebarProps) {
           >
             <X className="size-3.5" />
           </button>
+        </div>
+      ) : null}
+      {pendingDelete ? (
+        <div
+          className="fixed inset-0 z-[100] grid place-items-center bg-foreground/20 p-5 backdrop-blur-[2px]"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) setPendingDelete(null)
+          }}
+        >
+          <div
+            aria-modal="true"
+            className="w-full max-w-sm rounded-xl border border-border bg-popover p-5 shadow-2xl"
+            role="dialog"
+          >
+            <h2 className="text-sm font-semibold">Delete canvas?</h2>
+            <p className="mt-3 text-xs leading-5 text-muted-foreground">
+              “{pendingDelete.canvas.name}” and its canvas document will be deleted. Project files are not affected.
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <Button onClick={() => setPendingDelete(null)} size="sm" variant="ghost">
+                Cancel
+              </Button>
+              <Button
+                disabled={busy}
+                onClick={() => {
+                  if (pendingDelete.projectId !== snapshot.projectId || !props.onDelete) {
+                    return setPendingDelete(null)
+                  }
+                  void Promise.resolve(props.onDelete(pendingDelete.canvas.id)).then(() => setPendingDelete(null))
+                }}
+                size="sm"
+                variant="destructive"
+              >
+                Delete canvas
+              </Button>
+            </div>
+          </div>
         </div>
       ) : null}
     </>
@@ -692,6 +996,28 @@ function filterProjectCanvasNodeTree(
     if (children.length) matches.push({ ...node, children })
   }
   return matches
+}
+
+function focusProjectCanvasTreeItem(current: HTMLElement, key: "ArrowDown" | "ArrowUp" | "End" | "Home") {
+  const tree = current.parentElement
+  if (tree?.getAttribute("role") !== "tree") return
+  const items = Array.from(tree.children).filter(
+    (element): element is HTMLElement =>
+      element instanceof HTMLElement &&
+      element.getAttribute("role") === "treeitem" &&
+      element.hasAttribute("data-project-canvas-id"),
+  )
+  const index = items.indexOf(current)
+  if (index < 0) return
+  const nextIndex =
+    key === "Home"
+      ? 0
+      : key === "End"
+        ? items.length - 1
+        : key === "ArrowDown"
+          ? Math.min(index + 1, items.length - 1)
+          : Math.max(index - 1, 0)
+  items[nextIndex]?.focus()
 }
 
 function ProjectCanvasNodeRows({

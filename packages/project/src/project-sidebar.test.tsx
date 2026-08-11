@@ -321,7 +321,7 @@ describe("ProjectSidebar", () => {
     expect(markup).not.toContain("stale.md")
   })
 
-  test("offers the compact Project-over-Canvas hierarchy without a redundant Canvas collapse control", () => {
+  test("offers the compact Project-files-over-Canvas hierarchy without a redundant Canvas collapse control", () => {
     const markup = renderToStaticMarkup(
       <ProjectSidebar
         controller={
@@ -352,9 +352,10 @@ describe("ProjectSidebar", () => {
     expect(markup).toContain("bg-surface-panel")
     expect(markup).toContain("border-b border-border-subtle")
     expect(markup).toContain("Canvas region")
-    expect(markup.indexOf(">Project<")).toBeLessThan(markup.indexOf(">Canvas<"))
+    expect(markup.indexOf(">Project files<")).toBeLessThan(markup.indexOf(">Canvas<"))
     expect(markup).toContain('aria-expanded="true"')
-    expect(markup).toContain('aria-label="Resize Project and Canvas sections"')
+    expect(markup).toContain('aria-label="Resize Project files and Canvas sections"')
+    expect(markup).toContain('aria-valuetext="50% — Project files"')
     expect(markup).not.toContain('aria-label="Collapse Canvases"')
     expect(markup).not.toContain('aria-label="Expand Canvases"')
     expect(markup).toContain('aria-valuenow="50"')
@@ -367,7 +368,7 @@ describe("ProjectSidebar", () => {
     expect(markup).toContain('data-canvas-query=""')
   })
 
-  test("keeps the splitter allocation when the Project section is collapsed", async () => {
+  test("keeps the splitter allocation when the Project files section is collapsed", async () => {
     const restoreWindow = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
@@ -442,7 +443,7 @@ describe("ProjectSidebar", () => {
       )
 
       const splitter = container.querySelector<HTMLElement>("[data-project-sidebar-splitter]")
-      expect(splitter?.getAttribute("aria-label")).toBe("Resize Project and Canvas sections")
+      expect(splitter?.getAttribute("aria-label")).toBe("Resize Project files and Canvas sections")
       expect(splitter?.getAttribute("aria-disabled")).toBeNull()
       expect(splitter?.getAttribute("aria-valuenow")).toBe("55")
       expect(splitter?.tabIndex).toBe(0)
