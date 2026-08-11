@@ -1442,6 +1442,14 @@ cancellation keeps the node and marks it with a bounded host-authored error. If 
 node is removed, edited or otherwise no longer matches its exact content guard,
 Desktop fails closed and never recreates or writes through it.
 
+When pending-result creation has exactly one same-modality visual reference, Main
+derives the reference node's authoritative presentation size and supplies it to the
+Canvas owner. Canvas commits that frame in the pending creation intent and retains
+it during generated replacement; renderer image loading and later resource
+hydration do not issue a second geometry write. Until the succeeded result URL is
+hydrated, the cutout transition continues to present its connected source rather
+than rendering a missing-resource state.
+
 Tool-custom generation controls come only from the selected sidecar's current MCP
 `tools/list.inputSchema`, never the Plugin manifest or a parallel provider/model
 registry. Main owns one bounded, display-only session snapshot of concrete model
@@ -1710,12 +1718,15 @@ remain explicitly scoped to the mounted view and cannot rewrite domain history.
 Canvas may apply one post-mutation safe reveal after an eligible foreground mutation
 when the newly affected nodes are outside the host-provided safe viewport. The
 current eligible flows are batch picker import and creation of a pending generation;
-the effect runs only for the current mounted document/scope/view and is canceled by
-stale results, remount, background refresh/restore, or intervening user navigation.
-Its failure cannot reverse a successful domain commit. Reduced motion sets its
-duration to zero but retains necessary positioning. Pointer drops, ordinary paste,
-duplicate, and duplicate-drag preserve the camera by default; broader Fit, Reveal,
-and Zoom remain explicit view operations.
+the user-launched pending-generation path may additionally request the existing
+scoped `nodes.reveal` operation with selection and centered fit so its new result
+card becomes the active focus. Both effects run only for the current mounted
+document/scope/view and are canceled by stale results, remount, background
+refresh/restore, or intervening user navigation. Their failure cannot reverse a
+successful domain commit. Reduced motion sets their duration to zero but retains
+necessary positioning. Pointer drops, ordinary paste, duplicate, and duplicate-drag
+preserve the camera by default; broader Fit, Reveal, and Zoom remain explicit view
+operations.
 
 Mounted Desktop Canvas UI commands use one session lease for application execute,
 undo, redo, resource delivery and projection query. A local mutation response

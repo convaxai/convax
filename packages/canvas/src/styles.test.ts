@@ -40,6 +40,7 @@ describe("Canvas file-card assistant sizing", () => {
   test("aligns media chrome, gives video a dashed frame, and keeps focus outside the card", async () => {
     const styles = await Bun.file(new URL("./styles.css", import.meta.url)).text()
     const mediaSurfaceRule = styles.match(/\.convax-canvas \.convax-node__surface--media \{[^}]+\}/s)?.[0] ?? ""
+    const imageSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface--image")
     const videoSurfaceRule = cssRule(styles, ".convax-canvas .convax-node__surface--video")
     const mediaOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--media")
     const videoOverlayRule = cssRule(styles, ".convax-canvas .convax-generation-status-overlay--video")
@@ -51,6 +52,12 @@ describe("Canvas file-card assistant sizing", () => {
     expect(mediaSurfaceRule).toContain("border-width: 0")
     expect(mediaSurfaceRule).toContain("border-radius: var(--canvas-media-radius)")
     expect(mediaSurfaceRule).toContain("background: var(--canvas-node-background)")
+    expect(imageSurfaceRule).toContain("background: transparent")
+    expect(imageSurfaceRule).toContain("box-shadow: none")
+    expect(imageSurfaceRule).not.toContain("border:")
+    expect(imageSurfaceRule).not.toContain("backdrop-filter")
+    expect(imageSurfaceRule).toContain("contain: paint")
+    expect(imageSurfaceRule).not.toContain("conic-gradient")
     expect(videoSurfaceRule).toContain("border: 2px dashed var(--canvas-node-border)")
     expect(mediaOverlayRule).toContain("border-radius: var(--canvas-media-radius)")
     expect(videoOverlayRule).toContain("inset: 2px")

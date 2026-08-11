@@ -509,8 +509,10 @@ describe("Canvas v2 application command adapter", () => {
       label: "Pending image",
       nodeId: "caller-node-id",
       placement: { anchor: { x: 0, y: 0 } },
+      size: { height: 206, width: 480 },
     })
     expect(created.command.kind).toBe("manual-resource-placeholders-create")
+    expect(created.command.items[0]?.size).toEqual({ height: 206, width: 480 })
     applyAdapted(document, createContext, created.command)
     const node = derivedNodeRef(createContext, parseUint32("0"))
     let projected = projectCanvasDocument(projectCanvas(validateCanvasYDoc(document))).document

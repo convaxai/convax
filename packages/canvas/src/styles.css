@@ -727,6 +727,12 @@
   background: var(--canvas-node-background);
 }
 
+.convax-canvas .convax-node__surface--image {
+  background: transparent;
+  box-shadow: none;
+  contain: paint;
+}
+
 .convax-canvas .convax-node__surface--video {
   border: 2px dashed var(--canvas-node-border);
 }

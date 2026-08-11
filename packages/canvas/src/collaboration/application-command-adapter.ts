@@ -412,6 +412,7 @@ export function adaptCanvasApplicationCommand(input: {
       }
       case "resources.pending-generation.create": {
         if (command.placement.parentId !== undefined) return "rejected"
+        if (command.size !== undefined && !finiteSize(command.size)) return "rejected"
         const relation = adaptCreatedResourceRelation(command.relation, nodeById)
         if (relation === "rejected" || !boundedCreatedResourceSet(1, relation)) return "rejected"
         const generationRun: CanvasNodeGenerationRun = {
@@ -429,7 +430,7 @@ export function adaptCanvasApplicationCommand(input: {
             items: Object.freeze([Object.freeze({
               title: command.label,
               expectedClass: command.kind,
-              size: Object.freeze({ width: 240, height: 180 }),
+              size: Object.freeze(command.size === undefined ? { width: 240, height: 180 } : { ...command.size }),
               generationRun,
             })]),
             relation,
