@@ -16,6 +16,7 @@ export interface ApplicationTitlebarWindowControls {
 export interface ApplicationTitlebarProps {
   centerAction?: ReactNode
   contextLabel: string
+  environmentLabel?: string
   homeLabel: string
   leadingActionHostRef?: Ref<HTMLDivElement>
   onBackToProjects: () => void
@@ -29,6 +30,7 @@ export interface ApplicationTitlebarProps {
 export function ApplicationTitlebar({
   centerAction,
   contextLabel,
+  environmentLabel,
   homeLabel,
   leadingActionHostRef,
   onBackToProjects,
@@ -107,6 +109,15 @@ export function ApplicationTitlebar({
             title={productLabel}
           >
             {productLabel}
+          </span>
+        ) : null}
+        {environmentLabel ? (
+          <span
+            className="max-w-[min(12rem,22vw)] truncate rounded-full border border-amber-600/25 bg-amber-100 px-2 py-0.5 text-[10px] font-semibold text-amber-900 dark:border-amber-300/25 dark:bg-amber-950 dark:text-amber-100"
+            data-development-environment-title=""
+            title={environmentLabel}
+          >
+            {environmentLabel}
           </span>
         ) : null}
         {surface === "settings" ? (

@@ -70,9 +70,23 @@ describe("Desktop workspace dependency build", () => {
     })
     expect(turbo).toMatchObject({
       tasks: {
+        "@convax/desktop#dev": {
+          env: expect.arrayContaining([
+            "CONVAX_ALLOW_MULTIPLE_INSTANCES",
+            "CONVAX_SOLO_TASK_ID",
+            "CONVAX_SOLO_TASK_LABEL",
+            "CONVAX_USER_DATA_DIR",
+          ]),
+        },
         build: { dependsOn: expect.arrayContaining(["^build"]) },
         dev: { dependsOn: expect.arrayContaining(["^build"]) },
       },
     })
+    const desktopBuildEnvironment = (turbo as { tasks: { "@convax/desktop#build": { env: readonly string[] } } }).tasks[
+      "@convax/desktop#build"
+    ].env
+    expect(desktopBuildEnvironment).not.toContain("CONVAX_SOLO_TASK_ID")
+    expect(desktopBuildEnvironment).not.toContain("CONVAX_SOLO_TASK_LABEL")
+    expect(desktopBuildEnvironment).not.toContain("CONVAX_USER_DATA_DIR")
   })
 })

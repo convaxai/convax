@@ -11,9 +11,13 @@
       "persistent": true,
       "dependsOn": ["^build"],
       "env": [
+        "CONVAX_ALLOW_MULTIPLE_INSTANCES",
         "CONVAX_FEATURE_SERVICES",
         "CONVAX_FEATURE_SKILLS_AND_PLUGINS",
-        "CONVAX_OFFICIAL_MARKETPLACE_ARTIFACT_ROOT"
+        "CONVAX_OFFICIAL_MARKETPLACE_ARTIFACT_ROOT",
+        "CONVAX_SOLO_TASK_ID",
+        "CONVAX_SOLO_TASK_LABEL",
+        "CONVAX_USER_DATA_DIR"
       ]
     },
     "build": {

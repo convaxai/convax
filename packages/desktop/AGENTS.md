@@ -63,6 +63,10 @@ contract and its routed references.
   OS-vault identity keys, Project-scoped writer coordination, and typed ports to
   collaboration, Project, Canvas, and control-plane owners. Peer or service arrival
   order never becomes edit order.
+- Development runtime identity is Main-owned composition state. A bounded task id
+  and label require a task-private userData profile; Main owns native/window
+  branding and may project only the display identity to Renderer. Packaged runtime
+  ignores the mode, and Renderer never chooses or receives the native profile path.
 
 ## Shared composition rules
 

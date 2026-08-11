@@ -21,12 +21,20 @@ their own scope.
 - `packages/ui`: product-agnostic visual primitives and theme.
 - `apps/api`, `apps/web`, `apps/deploy-cloudflare`, and `apps/docs`: independent
   control-plane API, product Web, deployment, and documentation surfaces.
+- `.agents/skills`: repository-local contributor workflow instructions and bounded
+  automation; these are not product-installed standalone or Plugin-owned Skills.
 
 This repository owns the Convax Host and platform. Concrete Plugins, Plugin-owned
 Skills, standalone Skills, MCP servers, and companion tools belong in the sibling
 `../convax-plugins` repository. Existing packages under
 `packages/desktop/resources/plugins` are legacy or mechanically generated bootstrap
 inputs, not an authoring precedent.
+
+The repository-local `solo-task` contributor workflow may create an isolated Git
+worktree, copy only local `.env*` regular files, use the repository package-manager
+cache through a frozen install, and deliver a reviewed branch and pull request. It
+must never symlink another checkout's dependency tree, merge, release, force-push,
+or treat a contributor workflow Skill as a shipped Convax capability.
 
 ## Instruction routing
 

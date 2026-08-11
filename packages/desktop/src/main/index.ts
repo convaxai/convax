@@ -83,10 +83,13 @@ import {
 } from "./application-lifecycle"
 import {
   desktopApplicationName,
+  desktopDevelopmentIdentity,
   desktopProjectWorkspaceDirectory,
   desktopRendererUrl,
+  desktopRendererUrlWithDevelopmentIdentity,
   desktopUserDataDirectory,
 } from "./app-branding"
+import { createDevelopmentEnvironmentNativeBadge } from "./development-environment-native-badge"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCanvasTextResourceWriter } from "./canvas-text-resource-service"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
@@ -498,11 +501,19 @@ type CloseGate = "approved" | "flushing" | "idle"
 let quitGate: CloseGate = "idle"
 let mainWindow: BrowserWindow | null = null
 let pendingMainWindowActivation = false
+const developmentIdentity = desktopDevelopmentIdentity({
+  isPackaged: app.isPackaged,
+  requestedId: process.env.CONVAX_SOLO_TASK_ID,
+  requestedLabel: process.env.CONVAX_SOLO_TASK_LABEL,
+})
 const rendererUrl = desktopRendererUrl({
   isPackaged: app.isPackaged,
   requestedUrl: process.env.ELECTRON_RENDERER_URL,
 })
-const trustedRendererUrl = rendererUrl ?? pathToFileURL(join(import.meta.dirname, "../renderer/index.html")).href
+const trustedRendererUrl = desktopRendererUrlWithDevelopmentIdentity({
+  developmentIdentity,
+  url: rendererUrl ?? pathToFileURL(join(import.meta.dirname, "../renderer/index.html")).href,
+})
 const developmentCachePolicy = desktopDevelopmentCachePolicy({
   isPackaged: app.isPackaged,
   rendererUrl,
@@ -512,7 +523,11 @@ for (const commandLineSwitch of developmentCachePolicy.switches) {
   app.commandLine.appendSwitch(commandLineSwitch.name, commandLineSwitch.value)
 }
 
-const applicationName = desktopApplicationName({ isPackaged: app.isPackaged, packagedName: app.getName() })
+const applicationName = desktopApplicationName({
+  developmentIdentity,
+  isPackaged: app.isPackaged,
+  packagedName: app.getName(),
+})
 app.setName(applicationName)
 
 const packagedSmoke = app.isPackaged && process.env.CONVAX_PACKAGED_SMOKE === "1"
@@ -523,6 +538,7 @@ const userDataDirectoryOverride = desktopUserDataDirectory({
   packagedSmokeDirectory: process.env.CONVAX_PACKAGED_SMOKE_USER_DATA_DIR,
   requestedDirectory: process.env.CONVAX_USER_DATA_DIR,
   temporaryDirectory: tmpdir(),
+  developmentIdentity,
 })
 if (userDataDirectoryOverride) app.setPath("userData", resolve(userDataDirectoryOverride))
 
@@ -531,7 +547,10 @@ function isTrustedRendererUrl(value: string) {
     const actual = new URL(value)
     const expected = new URL(trustedRendererUrl)
     return (
-      actual.protocol === expected.protocol && actual.host === expected.host && actual.pathname === expected.pathname
+      actual.protocol === expected.protocol &&
+      actual.host === expected.host &&
+      actual.pathname === expected.pathname &&
+      actual.search === expected.search
     )
   } catch {
     return false
@@ -572,6 +591,13 @@ function createWindow(
       v8CacheOptions: developmentCachePolicy.v8CacheOptions,
     },
   })
+  if (process.platform === "win32" && developmentIdentity) {
+    const badge = createDevelopmentEnvironmentNativeBadge(developmentIdentity)
+    window.setOverlayIcon(
+      nativeImage.createFromBitmap(badge.bitmap, { height: badge.height, width: badge.width }),
+      `Convax solo task ${developmentIdentity.label}`,
+    )
+  }
   mainWindow = window
   if (pendingMainWindowActivation) activateMainWindow()
   const webContentsId = window.webContents.id
@@ -670,11 +696,6 @@ function createWindow(
     )
   })
 
-  if (rendererUrl) {
-    void window.loadURL(rendererUrl)
-    return window
-  }
-
   void window.loadURL(trustedRendererUrl)
   return window
 }
@@ -715,7 +736,10 @@ function startApplication() {
 
   void app.whenReady().then(async () => {
     await recordPackagedSmokeStartup("electron-ready")
-    if (process.platform === "darwin" && app.dock) app.dock.setIcon(appIcon)
+    if (process.platform === "darwin" && app.dock) {
+      app.dock.setIcon(appIcon)
+      if (developmentIdentity) app.dock.setBadge(developmentIdentity.label)
+    }
 
     const ipcSecurity = {
       isTrustedSender: (event: IpcMainEvent | IpcMainInvokeEvent) =>
