@@ -1,4 +1,5 @@
 import type { CanvasSelectionActionContext } from "@convax/canvas"
+import type { PortablePluginI18n } from "@convax/plugin-sdk"
 
 import { hasWebPluginCanvasSurface, type ActiveInstalledWebPluginSummary } from "../plugin-contracts"
 import { isManagedProjectVideoSelection, type MediaOperationLocalizedText } from "./media-operation-selection-action"
@@ -6,6 +7,7 @@ import { isManagedProjectVideoSelection, type MediaOperationLocalizedText } from
 export interface PluginMaterializationAction {
   description: MediaOperationLocalizedText
   id: string
+  i18n?: PortablePluginI18n
   pluginId: string
   pluginVersion: string
   title: MediaOperationLocalizedText
@@ -25,6 +27,7 @@ export function listInstalledPluginMaterializationActions(
             {
               description: contribution.description,
               id: contribution.id,
+              ...(plugin.i18n === undefined ? {} : { i18n: plugin.i18n }),
               pluginId: plugin.id,
               pluginVersion: plugin.version,
               title: contribution.title,

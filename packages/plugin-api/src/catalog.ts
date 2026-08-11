@@ -55,6 +55,14 @@ const defineV3Contract = <const Definition extends Omit<PluginApiDefinitionInput
     contractSince: "3.0.0",
   })
 
+const defineV31Contract = <const Definition extends Omit<PluginApiDefinitionInput, "contractSince">>(
+  definition: Definition,
+) =>
+  definePluginApi({
+    ...definition,
+    contractSince: "3.1.0",
+  })
+
 export const pluginApiCatalog = definePluginApiCatalog(
   definePluginApiRelease("1.0.0", [
     defineV3Contract({
@@ -369,6 +377,25 @@ export const pluginApiCatalog = definePluginApiCatalog(
     }),
   ]),
   definePluginApiRelease("3.0.0", []),
+  definePluginApiRelease("3.1.0", [
+    defineV31Contract({
+      id: "host.locale.get",
+      completion: "cancelable",
+      grant: null,
+      scope: "connection",
+      sideEffect: "read",
+      errors: contextErrors,
+      docs: {
+        summary: "Read the application locale bound to the current Web Plugin connection.",
+        description:
+          "Returns one canonical BCP-47 locale mirrored from the Host renderer. A declaring Web Plugin also receives bounded host.locale.changed commands on the same exact connection when that preference changes.",
+        request: "No parameters.",
+        response: "`{ locale }`, containing the current canonical BCP-47 application locale.",
+        remarks:
+          "Use @convax/plugin-sdk/client getLocale and onLocaleChange so a racing read cannot overwrite a newer locale event.",
+      },
+    }),
+  ]),
 )
 
 type CatalogPluginApiId = (typeof pluginApiCatalog.apis)[number]["id"]

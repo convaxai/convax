@@ -106,6 +106,9 @@ or durable domain authority.
 - Web Plugin MessagePorts, Host API calls, capability imports, commands, and
   node-scoped calls remain bound to their exact frame lease and scope.
   Renderer-provided ids and state do not create Project/Canvas authority.
+- Application locale is a Renderer preference projected through one stable store.
+  Update the exact live Plugin connection and Host-rendered labels in place; never
+  unregister the contribution or reload the iframe solely for a language change.
 - Closing a Web Plugin client may send only the payload-free lifecycle disconnect
   for its existing MessagePort. It must not select a Main connection or frame
   identity, and teardown must not depend on asynchronous `beforeunload` work.

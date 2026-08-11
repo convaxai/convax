@@ -6,7 +6,7 @@ import {
   type CanvasFileRendererDefinition,
   type CanvasFileRendererPlugin,
 } from "@convax/canvas"
-import type { PortablePluginUiToolbarItem } from "@convax/plugin-sdk"
+import { resolvePortablePluginName, type PortablePluginUiToolbarItem } from "@convax/plugin-sdk"
 import { Copy, Puzzle, Trash2 } from "lucide-react"
 import { type ComponentProps, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import {
@@ -26,9 +26,9 @@ import { desktopPluginHostProtocolV8, type DesktopPluginHostConnect } from "../p
 import { DesktopPluginFrameRegistry, type DesktopPluginFrameRef } from "./plugin-frame-registry"
 import { RendererPluginHostConnection } from "./plugin-host-connection"
 import { HostPointerReleaseGate } from "./host-pointer-gesture"
-import type { AppLocale } from "./app-language"
 import { DesktopPluginNodeCommandRegistry } from "./plugin-node-command-registry"
 import { PluginNodeCommandSurfaces } from "./plugin-node-command-surfaces"
+import type { DesktopPluginLocaleStore } from "./plugin-locale-store"
 
 export const webPluginIframeSandbox = "allow-scripts" as const
 export const webPluginIframePermissions = [
@@ -145,7 +145,7 @@ type WebPluginNodeProps = ComponentProps<CanvasFileRendererDefinition["component
 export interface WebPluginCanvasContributionOptions {
   frameRegistry: DesktopPluginFrameRegistry
   getActiveProjectId(): string | null
-  locale: AppLocale
+  locale: DesktopPluginLocaleStore
 }
 export function webPluginEntryUrl(
   plugin: Pick<
@@ -182,7 +182,14 @@ function WebPluginCanvasNode(
   },
 ) {
   const editor = useCanvasEditor()
+  const locale = useSyncExternalStore(
+    props.options.locale.subscribe,
+    props.options.locale.getSnapshot,
+    props.options.locale.getSnapshot,
+  )
+  const pluginName = resolvePortablePluginName(props.plugin, locale)
   const iframeRef = useRef<HTMLIFrameElement>(null)
+  const capabilityConnectionRef = useRef<RendererPluginHostConnection | null>(null)
   const cleanupRef = useRef<(() => void) | null>(null)
   const pendingConnectCleanupRef = useRef<(() => void) | null>(null)
   const pointerGateRef = useRef(new HostPointerReleaseGate())
@@ -200,6 +207,7 @@ function WebPluginCanvasNode(
     () => () => {
       pendingConnectCleanupRef.current?.()
       cleanupRef.current?.()
+      capabilityConnectionRef.current = null
     },
     [],
   )
@@ -321,6 +329,7 @@ function WebPluginCanvasNode(
         pluginId: props.plugin.id,
         pluginVersion: props.plugin.version,
         projectId,
+        locale,
         runtime: "web",
         snapshotDigest: props.plugin.snapshotDigest,
       },
@@ -333,6 +342,7 @@ function WebPluginCanvasNode(
         }
       },
     )
+    capabilityConnectionRef.current = capabilityConnection
     cleanupRef.current = cleanup
     channel.port1.onmessage = (event) => {
       const response = capabilityConnection?.dispatch(event.data, controller.signal) ?? Promise.resolve(null)
@@ -358,6 +368,10 @@ function WebPluginCanvasNode(
       cleanup()
     }
   }
+
+  useEffect(() => {
+    void capabilityConnectionRef.current?.updateLocale(locale).catch(() => undefined)
+  }, [locale])
 
   const scheduleConnectFrame = () => {
     pendingConnectCleanupRef.current?.()
@@ -393,7 +407,7 @@ function WebPluginCanvasNode(
   )
   return (
     <div className="size-full" onPointerDownCapture={(event) => beginHostPointerGesture(event.pointerId)}>
-      <CanvasNodeChrome icon={<Puzzle />} label={props.plugin.name} node={props} toolbar={toolbar}>
+      <CanvasNodeChrome icon={<Puzzle />} label={pluginName} node={props} toolbar={toolbar}>
         <div className="relative size-full">
           <iframe
             allow={webPluginIframeAllow(props.plugin)}
@@ -404,7 +418,7 @@ function WebPluginCanvasNode(
             referrerPolicy="no-referrer"
             sandbox={webPluginIframeSandbox}
             src={webPluginEntryUrl(props.plugin)}
-            title={`${props.plugin.name} plugin`}
+            title={`${pluginName} plugin`}
           />
           {props.dragging ? <WebPluginDragShield /> : null}
         </div>
@@ -420,6 +434,11 @@ function WebPluginCanvasCommandSurfaces(
   },
 ) {
   const editor = useCanvasEditor()
+  const locale = useSyncExternalStore(
+    props.options.locale.subscribe,
+    props.options.locale.getSnapshot,
+    props.options.locale.getSnapshot,
+  )
   useSyncExternalStore(
     props.options.frameRegistry.subscribe,
     props.options.frameRegistry.getVersion,
@@ -437,8 +456,14 @@ function WebPluginCanvasCommandSurfaces(
     }
   }, [props.plugin])
   const commandRegistry = useMemo(
-    () => new DesktopPluginNodeCommandRegistry(props.plugin.id, commandContribution, props.options.frameRegistry),
-    [commandContribution, props.options.frameRegistry, props.plugin.id],
+    () =>
+      new DesktopPluginNodeCommandRegistry(
+        props.plugin.id,
+        commandContribution,
+        props.options.frameRegistry,
+        props.plugin.i18n,
+      ),
+    [commandContribution, props.options.frameRegistry, props.plugin.i18n, props.plugin.id],
   )
   const activeProjectId = props.options.getActiveProjectId()
   const frame = activeProjectId
@@ -453,14 +478,14 @@ function WebPluginCanvasCommandSurfaces(
         snapshotDigest: props.plugin.snapshotDigest,
       }
     : null
-  const projection = commandRegistry.project(frame, props.options.locale)
+  const projection = commandRegistry.project(frame, locale)
   return (
     <PluginNodeCommandSurfaces
       canExecute={() => {
         if (!frame) return false
         return props.options.getActiveProjectId() === frame.projectId && editor.document.id === frame.canvasId
       }}
-      moreLabel={props.options.locale === "zh-CN" ? "更多插件操作" : "More Plugin actions"}
+      moreLabel={locale === "zh-CN" ? "更多插件操作" : "More Plugin actions"}
       projection={projection}
       registry={commandRegistry}
     />
@@ -478,7 +503,7 @@ export function createWebPluginCanvasContribution(
       {
         component: Component,
         id: webPluginCanvasRendererId(plugin.id),
-        label: plugin.name,
+        label: resolvePortablePluginName(plugin, options.locale.getSnapshot()),
         matches: (data) => matchesWebPluginCanvasNode(plugin, data),
         priority: 1_000,
       },

@@ -225,7 +225,7 @@ selector or runtime fallback.
 | `@convax/collaboration`     | One current protocol descriptor/digest, one envelope+JCS codec, one causal frame/frontier model, one `replicaDoc`/isolated `candidateDoc` kernel, checkpoint/floor primitives, journal ports, and session undo coordination | Project/Canvas schema, PeerJS, membership/auth policy, Electron, filesystem, native I/O, or a second decoder/kernel |
 | `@convax/workbench`         | Window-scoped serializable Input, Selection, Surface and layout-part state; guarded open/close/reveal/resize transitions                                                                               | Domain data, catalogs, filesystem, React/DOM, Electron, localStorage                                   |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, API SemVer/history, availability contracts, generated validators/types/client metadata, and deterministic human/Skill reference generation inputs                    | Desktop state, Plugin identity policy, concrete handlers, filesystem/network adapters                  |
-| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest and contribution ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins            |
+| `@convax/plugin-sdk`        | Headless `convax.plugin/8` manifest/contribution and localization ABI, Plugin-to-Plugin export/import contracts, bounded-value schema integration, SemVer matching, and deterministic Plugin/Skill reference inputs | ActiveSet selection, runtime binding, leases, grants, execution, IPC, I/O, concrete Plugins            |
 | `@convax/plugin-ui`         | Browser-safe semantic tokens and minimal interaction foundations for sandboxed Plugin documents                                                                                                        | React, Desktop appearance state, Host transport, or concrete Plugin composition                        |
 | `@convax/agent-runtime`     | Generic OpenCode adapter, sessions, resources, tool-provider bridge, protected-path enforcement                                                                                                        | Convax Project/Canvas/UI policy or imports from other Convax packages                                  |
 | `@convax/marketplace`       | Marketplace refs, public schemas, canonical source identity, strict validation, Catalog aggregation and source-conflict rules                                                                          | Filesystem/network adapters, Electron/UI, concrete packages, installation or execution                 |
@@ -347,6 +347,10 @@ user directory.
   authority to each other. Plugin-to-Plugin calls use only the typed Host broker;
   never expose direct objects, direct MessageChannels, service locators, or
   first-provider-wins lookup.
+- Plugin localization resources, keys, and fallback belong to `@convax/plugin-sdk`;
+  `host.locale.get` belongs to the API Catalog; Renderer owns the user preference.
+  Main may mirror it only per exact Web connection, and language switching must not
+  reload the iframe or change Plugin authority.
 - Plugin identity is routing/namespacing data only. Runtime semantics derive from
   validated contributions and never branch on a concrete Plugin id, vendor, model,
   provider, or credential.

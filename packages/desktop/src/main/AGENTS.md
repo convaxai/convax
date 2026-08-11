@@ -39,6 +39,9 @@ authority and lifecycle coordination, not reusable domain semantics.
   sender/principal and current Project/Canvas scope. Recheck permissions, identity,
   catalog membership, revision, target, and cancellation after awaited preparation
   and immediately before persistence or an external side effect.
+- Treat the Web Plugin locale as bounded ephemeral connection presentation state.
+  Accept it only from the trusted owning Renderer sender, emit changes only to that
+  exact connection, and never persist it or use it for authorization/routing.
 - Bound requests, queues, subscriptions, messages, staged bytes, retained receipts,
   diagnostics, and recovery state. Serialize mutations that share an identity or
   filesystem namespace.

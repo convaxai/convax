@@ -6,10 +6,14 @@ the current Convax Plugin package contract.
 ## Owns
 
 - The current Plugin manifest schema and every portable contribution declaration.
+- Bounded `i18n` resources, canonical locale/message-key validation, reserved
+  metadata keys, localized contribution text, and the one deterministic fallback
+  algorithm. Desktop may project a locale but must not fork this resolution logic.
 - Plugin-to-Plugin capability export/import ABI, bounded value schemas, SemVer
   compatibility helpers, and deterministic authoring/Skill reference inputs.
 - The portable `convax.plugin-host/8` Web MessagePort envelopes and author client,
   including the required `host.context.get` Web negotiation baseline,
+  `host.locale.changed` validation and race-safe `getLocale`/`onLocaleChange`,
   cached/refreshable Host API availability helpers, declaration checks, schema
   validation, discriminated API/capability/protocol failures, per-contract byte
   limits, cancellation, and bounded request correlation.

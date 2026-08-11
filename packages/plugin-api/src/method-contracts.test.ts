@@ -42,7 +42,7 @@ void [typedPromptParams, typedPromptResult, typedImageOpenResult, typedNoParamsC
 describe("portable Plugin Host API method contracts", () => {
   test("binds every Catalog id to one request/result contract", () => {
     expect(pluginApiContractIds).toEqual(pluginApiCatalog.apis.map(({ id }) => id).sort())
-    expect(Object.keys(pluginApiMethodContracts)).toHaveLength(20)
+    expect(Object.keys(pluginApiMethodContracts)).toHaveLength(21)
   })
 
   test("assigns the current wire-schema dialect to every contract", () => {
@@ -56,6 +56,7 @@ describe("portable Plugin Host API method contracts", () => {
     expect(parsePluginApiParams("host.context.get", undefined)).toBeUndefined()
     expect(() => parsePluginApiParams("host.context.get", {})).toThrow("does not accept a value")
     expect(parsePluginApiCall({ method: "host.context.get" })).toEqual({ method: "host.context.get" })
+    expect(parsePluginApiParams("host.locale.get", undefined)).toBeUndefined()
   })
 
   test("strictly parses method-correlated request and result shapes", () => {
@@ -63,6 +64,11 @@ describe("portable Plugin Host API method contracts", () => {
     expect(() => parsePluginApiParams("agent.prompt", { text: "hello", toolId: "escape" })).toThrow("unsupported")
     expect(parsePluginApiResult("agent.prompt", { text: "accepted" })).toEqual({ text: "accepted" })
     expect(() => parsePluginApiResult("agent.prompt", { text: 42 })).toThrow("bounded string")
+    expect(parsePluginApiResult("host.locale.get", { locale: "zh-CN" })).toEqual({ locale: "zh-CN" })
+    expect(() => parsePluginApiResult("host.locale.get", { locale: " zh-CN " })).toThrow("bounded string contract")
+    expect(() => parsePluginApiResult("host.locale.get", { locale: "zh-CN", source: "renderer" })).toThrow(
+      "unsupported",
+    )
   })
 
   test("validates bounded Host-owned connected-image sessions with dialect 3", () => {

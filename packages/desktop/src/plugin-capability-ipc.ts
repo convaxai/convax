@@ -12,6 +12,7 @@ export const pluginCapabilityIpcChannels = {
   disconnect: "plugin:capability-disconnect",
   getPluginAvailability: "plugin:capability-plugin-availability",
   invokePlugin: "plugin:capability-invoke-plugin",
+  updateLocale: "plugin:capability-update-locale",
 } as const
 
 export interface PluginCapabilityConnectInput {
@@ -23,6 +24,7 @@ export interface PluginCapabilityConnectInput {
   pluginVersion: string
   /** Owning Project; a projects.read grant may widen only Catalog APIs. */
   projectId: string
+  locale: string
   runtime: "web"
   snapshotDigest: string
 }
@@ -67,6 +69,11 @@ export interface PluginCapabilityDisconnectInput {
   connectionId: string
 }
 
+export interface PluginCapabilityUpdateLocaleInput {
+  connectionId: string
+  locale: string
+}
+
 export interface PluginCapabilityEvent {
   command: PluginCapabilityCommand
   connectionId: string
@@ -79,5 +86,6 @@ export interface PluginCapabilityRendererClient {
   disconnect(input: PluginCapabilityDisconnectInput): Promise<boolean>
   getPluginAvailability(input: PluginCapabilityGetPluginAvailabilityInput): Promise<unknown>
   invokePlugin(input: PluginCapabilityInvokePluginInput): Promise<PluginCapabilityResponse>
+  updateLocale(input: PluginCapabilityUpdateLocaleInput): Promise<boolean>
   onEvent(listener: (event: PluginCapabilityEvent) => void): () => void
 }

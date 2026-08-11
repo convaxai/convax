@@ -33,6 +33,8 @@ between trusted Main and untrusted Renderer code. It owns no business state.
 - Keep adapters stateless apart from listener registration and deterministic
   disposal. Remove IPC listeners when the owning subscription or window is
   disposed.
+- The Plugin locale method is a fixed typed connection update, not a generic event
+  bridge. Forward only the opaque connection id and bounded locale string.
 - Preserve `contextIsolation`, sandboxing, disabled Node integration, and the
   smallest possible exposed surface.
 

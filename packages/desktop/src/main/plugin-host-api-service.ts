@@ -16,6 +16,7 @@ import {
   type PluginApiId,
 } from "@convax/plugin-api"
 import { parse as parseConvaxUri } from "@convax/uri"
+import { parsePortablePluginLocale, type PortablePluginLocale } from "@convax/plugin-sdk"
 
 import type { PluginCanvasEventSubscription, PluginPrincipal } from "../plugin-capability-contracts"
 import { PluginHostApiError } from "../plugin-host-errors"
@@ -137,6 +138,10 @@ export class PluginHostApiService {
     if (principal.runtime === "web" && !request.transport) {
       throw new PluginHostApiScopeError("A Web Plugin Host API connection requires a transport context")
     }
+    if (principal.runtime === "web" && request.locale === undefined) {
+      throw new PluginHostApiScopeError("A Web Plugin Host API connection requires an application locale")
+    }
+    let locale = parsePortablePluginLocale(request.locale ?? "en")
     if (node) await this.#requireNode(principal, node, undefined, initial.resolved)
     const declared = new Set([...initial.resolved.hostApi.required, ...initial.resolved.hostApi.optional])
     const connectionId = boundedString(this.#createId(), "Plugin Host API connection id", 128)
@@ -223,6 +228,9 @@ export class PluginHostApiService {
               authorized.resolved,
             )
             result = hostContext(authorized, context)
+          } else if (call.method === "host.locale.get") {
+            requireNoParams(call.params)
+            result = { locale }
           } else if (call.method === "canvas.inputs.list") {
             requireNoParams(call.params)
             const binding = requireNode(node, call.method)
@@ -492,6 +500,13 @@ export class PluginHostApiService {
         }
       },
       supports: (method: PluginApiId) => declared.has(method) && hostApiIds.has(method),
+      updateLocale: (nextLocale: PortablePluginLocale) => {
+        if (closed || principal.runtime !== "web") return false
+        const parsed = parsePortablePluginLocale(nextLocale)
+        if (parsed === locale) return false
+        locale = parsed
+        return true
+      },
     })
   }
 

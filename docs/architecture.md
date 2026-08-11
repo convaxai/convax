@@ -362,6 +362,20 @@ ABI; `convax.plugin-capability/3` is restricted to Host-internal renderer/Main a
 verified-sidecar transport. Host API evolution is independent and follows the SemVer
 Catalog in `@convax/plugin-api`.
 
+Plugin internationalization is split along the same boundary. `@convax/plugin-sdk`
+owns bounded manifest `i18n` resources, stable message keys, locale validation, and
+the deterministic exact-locale → parent-locale → declared-default → source fallback.
+`@convax/plugin-api` owns the additive `host.locale.get` Catalog contract, while
+Desktop Renderer owns the application-language preference and mirrors its canonical
+BCP-47 value into each exact Web Plugin connection. Main keeps only that ephemeral
+connection mirror and emits `host.locale.changed` on the existing Host command lane;
+it does not persist or select language. A language change updates mounted Host
+projections and the live iframe connection without changing Plugin identity,
+ActiveSet leases, or remounting the iframe. A manifest that declares `i18n` must
+require `host.locale.get`; manifests without `i18n` retain their source strings and
+remain valid. The authoring contract and examples are in
+[`plugin-internationalization.md`](plugin-internationalization.md).
+
 A Plugin has two orthogonal surfaces:
 
 1. **Contributions registered into the Host:** owned Skills, remote MCP/Agent tools,
@@ -519,7 +533,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/marketplace`       | Marketplace refs, schemas, source identity, validation and Catalog aggregation                                                                                                                           |
 | `@convax/marketplace-kit`   | Authoring-time deterministic Registry, Showcase, bundle and artifact generation, including exact-baseline selective removal                                                                              |
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                             |
-| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                                                                |
+| `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, bounded localization resources/fallback, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                       |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                                                                  |
 | `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                                                                      |
 | `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                                                                         |
@@ -2211,6 +2225,11 @@ id through fixed actions; Checkout additionally accepts one validated Plan key a
 never returns its external URL. Plugin surface creation is one narrow Canvas-namespace
 method that accepts only Project, Canvas, and Plugin ids and returns a receipt plus
 the Canvas-created node id.
+The Plugin-capability bridge also carries one narrow sender-scoped locale update.
+Renderer sends only the current canonical locale and opaque connection id; Main
+updates the matching connection and emits a bounded command only when the value
+changed. Locale never grants a capability, widens scope, selects a Plugin snapshot,
+or becomes durable Main state.
 Project Files exposes separate bounded-thumbnail and media-lease behavior. Thumbnail
 IPC returns only a bounded image cover data URL. Video rows open a purpose-tagged
 ephemeral lease on mount, capture a bounded cover in Renderer, and close it
@@ -2238,7 +2257,7 @@ invalidations; same-frame responses suppress a query while unknown frames preser
 one trailing refresh. Resource IPC carries the current session id: durable commit
 success is retained when delivery becomes unavailable, and a live Renderer performs
 one explicit refresh fallback. The incompatible bridge change is identified by
-`convax.desktop-ipc/37`; its Canvas session projection carries complete exact
+`convax.desktop-ipc/38`; its Canvas session projection carries complete exact
 node- and edge-incarnation tables so guarded visual history cannot hide a reused
 React Flow id.
 

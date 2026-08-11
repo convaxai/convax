@@ -202,8 +202,12 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
     }
   }
 
-  const title = localizedMediaOperationText(props.request.action.title, props.locale)
-  const description = localizedMediaOperationText(props.request.action.description, props.locale)
+  const title = localizedMediaOperationText(props.request.action.title, props.locale, props.request.action.i18n)
+  const description = localizedMediaOperationText(
+    props.request.action.description,
+    props.locale,
+    props.request.action.i18n,
+  )
   return (
     <div
       className="fixed inset-0 z-[120] grid place-items-center bg-foreground/25 p-4 backdrop-blur-[2px]"

@@ -8,6 +8,7 @@ import {
   isPluginHostRequest,
   isPluginHostResponse,
   pluginHostFailure as sdkPluginHostFailure,
+  pluginHostLocaleChangedCommand,
   pluginHostProtocolV8,
   pluginHostSuccess as sdkPluginHostSuccess,
   type PluginHostCapabilityAvailabilityRequest,
@@ -44,6 +45,7 @@ export const desktopPluginConnectedImagesChangedCommand = "canvas.connectedImage
 export const desktopPluginConnectedInputsChangedCommand = "canvas.connectedInputs.changed"
 export const pluginCanvasInputsChangedCommand = "canvas.inputs.changed"
 export const pluginCanvasDocumentChangedCommand = "canvas.document.changed"
+export { pluginHostLocaleChangedCommand }
 
 export type DesktopPluginHostMethod = PluginApiId
 

@@ -15,6 +15,7 @@ import {
   type PluginCapabilityVersion,
 } from "./capabilities"
 import { parsePortablePluginId } from "./primitives"
+import { parsePortablePluginLocale, type PortablePluginLocale } from "./localization"
 
 /**
  * The only author-facing sandboxed Web Plugin MessagePort ABI.
@@ -150,6 +151,13 @@ export interface PluginHostCommand {
   readonly params?: unknown
   readonly protocol: PluginHostProtocol
   readonly type: "command"
+}
+
+export const pluginHostLocaleChangedCommand = "host.locale.changed" as const
+
+export interface PluginHostLocaleChangedCommand extends PluginHostCommand {
+  readonly command: typeof pluginHostLocaleChangedCommand
+  readonly params: { readonly locale: PortablePluginLocale }
 }
 
 /**
@@ -500,6 +508,18 @@ export function isPluginHostCommand(value: unknown): value is PluginHostCommand 
       input.type === "command" &&
       isBoundedName(input.command),
   )
+}
+
+export function isPluginHostLocaleChangedCommand(value: unknown): value is PluginHostLocaleChangedCommand {
+  if (!isPluginHostCommand(value) || value.command !== pluginHostLocaleChangedCommand) return false
+  const params = record(value.params)
+  if (!params || !exactKeys(params, ["locale"])) return false
+  try {
+    parsePortablePluginLocale(params.locale)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function parsePluginHostCapabilityAvailability(value: unknown): PluginHostCapabilityAvailability {

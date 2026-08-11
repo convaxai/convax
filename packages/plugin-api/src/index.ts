@@ -93,6 +93,7 @@ export type {
   PluginApiGenerationResultMode,
   PluginApiGenerationToolSummary,
   PluginApiHostContextResult,
+  PluginApiHostLocaleResult,
   PluginApiHostNode,
   PluginApiJsonValue,
   PluginApiMethodMap,

@@ -12,6 +12,7 @@ import type {
  * No wire shape is independently declared in this module.
  */
 export type PluginApiHostContextResult = PluginApiResult<"host.context.get">
+export type PluginApiHostLocaleResult = PluginApiResult<"host.locale.get">
 export type PluginApiHostNode = PluginApiResult<"canvas.node.get">
 export type PluginApiConnectedInput = PluginApiResult<"canvas.inputs.list">["inputs"][number]
 /**

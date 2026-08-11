@@ -6,6 +6,8 @@ the Convax Host API catalog.
 ## Owns
 
 - Stable Host API ids and their structured contract/documentation metadata.
+- Runtime-neutral connection presentation APIs such as `host.locale.get`; the
+  Catalog owns their portable shape, not the Desktop preference or event delivery.
 - The schema-first `src/method-schemas.ts` descriptor: stable method ids, complete
   nested request/result schemas, semantic refinements, per-direction byte budgets,
   and the versioned schema dialect.

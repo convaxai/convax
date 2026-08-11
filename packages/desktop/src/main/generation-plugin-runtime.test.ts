@@ -532,7 +532,8 @@ function setup(
     platform: "linux",
     plugins,
     fetch: mock(async () =>
-      Response.json({ data: [{ created: 0, id: "pippit-glm-main", object: "model", owned_by: "test" }] })),
+      Response.json({ data: [{ created: 0, id: "pippit-glm-main", object: "model", owned_by: "test" }] }),
+    ),
     ...runtimeOptions,
   })
   runtimes.add(runtime)
@@ -621,23 +622,17 @@ describe("GenerationPluginRuntime", () => {
   test("actively discovers a declared OpenAI provider through its Main-only loopback gateway", async () => {
     const dynamic = mutablePlugin(llmPlugin())
     const requests: string[] = []
-    const { clients, runtime } = setup(
-      [dynamic],
-      ["llm.gateway.start"],
-      undefined,
-      undefined,
-      {
-        fetch: mock(async (input) => {
-          requests.push(String(input))
-          return Response.json({
-            data: [
-              { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
-              { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
-            ],
-          })
-        }),
-      },
-    )
+    const { clients, runtime } = setup([dynamic], ["llm.gateway.start"], undefined, undefined, {
+      fetch: mock(async (input) => {
+        requests.push(String(input))
+        return Response.json({
+          data: [
+            { id: "~openai/gpt-latest", name: "OpenAI GPT Latest" },
+            { id: "deepseek/deepseek-v4-flash:free", name: "DeepSeek V4 Flash Free" },
+          ],
+        })
+      }),
+    })
 
     expect(await runtime.connectLlmProviders()).toEqual([
       {
@@ -661,32 +656,26 @@ describe("GenerationPluginRuntime", () => {
     const dynamic = mutablePlugin(llmPlugin())
     dynamic.contributes.llm!.provider.protocol = "openrouter"
     const requests: Array<{ authorization: string | null; url: string }> = []
-    const { clients, runtime } = setup(
-      [dynamic],
-      ["llm.gateway.start"],
-      undefined,
-      undefined,
-      {
-        fetch: mock(async (input, init) => {
-          const url = input instanceof URL ? input : new URL(String(input))
-          requests.push({ authorization: new Headers(init?.headers).get("authorization"), url: url.toString() })
-          return Response.json({
-            data: [
-              {
-                architecture: { output_modalities: ["text"] },
-                id: "openai/gpt-latest",
-                name: "OpenAI GPT Latest",
-              },
-              {
-                architecture: { output_modalities: ["video"] },
-                id: "vendor/video-model",
-                name: "Video Model",
-              },
-            ],
-          })
-        }),
-      },
-    )
+    const { clients, runtime } = setup([dynamic], ["llm.gateway.start"], undefined, undefined, {
+      fetch: mock(async (input, init) => {
+        const url = input instanceof URL ? input : new URL(String(input))
+        requests.push({ authorization: new Headers(init?.headers).get("authorization"), url: url.toString() })
+        return Response.json({
+          data: [
+            {
+              architecture: { output_modalities: ["text"] },
+              id: "openai/gpt-latest",
+              name: "OpenAI GPT Latest",
+            },
+            {
+              architecture: { output_modalities: ["video"] },
+              id: "vendor/video-model",
+              name: "Video Model",
+            },
+          ],
+        })
+      }),
+    })
 
     expect(await runtime.connectLlmProviders()).toEqual([
       {
@@ -720,9 +709,7 @@ describe("GenerationPluginRuntime", () => {
     )
     const authorization = await runtime.callService(combined.id, "authorize")
 
-    await expect(runtime.connectLlmProviders()).rejects.toThrow(
-      "OpenAI model catalog failed with HTTP 502",
-    )
+    await expect(runtime.connectLlmProviders()).rejects.toThrow("OpenAI model catalog failed with HTTP 502")
     expect(clients[0]!.closed).toBe(0)
 
     await authorization.completeAuthorization!({
@@ -1429,6 +1416,9 @@ describe("GenerationPluginRuntime", () => {
             return Boolean(
               installed.hostApi && [...installed.hostApi.required, ...installed.hostApi.optional].includes(method),
             )
+          },
+          updateLocale() {
+            return false
           },
         }
       },

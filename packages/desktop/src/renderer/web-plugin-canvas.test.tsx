@@ -11,6 +11,7 @@ import {
   webPluginIframeSandbox,
 } from "./web-plugin-node-renderer"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
+import { DesktopPluginLocaleStore } from "./plugin-locale-store"
 
 const plugin = {
   activeRevision: 2,
@@ -85,13 +86,17 @@ describe("Web Plugin Canvas transport shell", () => {
     expect(connected).not.toHaveBeenCalled()
   })
 
-  test("contribution accepts only a Project routing hint, not a renderer Host implementation", () => {
+  test("keeps one registered contribution while the Renderer locale changes", () => {
+    const locale = new DesktopPluginLocaleStore("en")
     const contribution = createWebPluginCanvasContribution(plugin, {
       frameRegistry: new DesktopPluginFrameRegistry(),
       getActiveProjectId: () => "project-1",
-      locale: "en",
+      locale,
     })
+    const renderer = contribution.renderers[0]
+    locale.set("zh-CN")
     expect(contribution.id).toBe("desktop.fixture")
     expect(contribution.renderers).toHaveLength(1)
+    expect(contribution.renderers[0]).toBe(renderer)
   })
 })

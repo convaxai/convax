@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto"
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from "electron"
 import { isPluginApiCommitPreserving } from "@convax/plugin-api"
+import { parsePortablePluginLocale } from "@convax/plugin-sdk"
 
 import {
   pluginCapabilityIpcChannels,
@@ -10,6 +11,7 @@ import {
   type PluginCapabilityDisconnectInput,
   type PluginCapabilityGetPluginAvailabilityInput,
   type PluginCapabilityInvokePluginInput,
+  type PluginCapabilityUpdateLocaleInput,
 } from "../plugin-capability-ipc"
 import type { PluginPrincipal } from "../plugin-capability-contracts"
 import type { PluginHostApiMainCall, PluginHostApiMainConnection } from "../plugin-host-api-main-contracts"
@@ -17,6 +19,7 @@ import { PluginHostProtocolError } from "../plugin-host-errors"
 import {
   isPluginCapabilityRequest,
   pluginCanvasDocumentChangedCommand,
+  pluginHostLocaleChangedCommand,
   pluginCapabilityApiFailure,
   pluginCapabilityFailure,
   pluginCapabilityProtocolFailure,
@@ -112,6 +115,7 @@ export function registerPluginCapabilityIpc(options: {
       !isBoundedIdentifier(input.pluginId, 128) ||
       !isBoundedIdentifier(input.pluginVersion, 128) ||
       !isBoundedIdentifier(input.projectId, 256) ||
+      typeof input.locale !== "string" ||
       !isSha256Digest(input.snapshotDigest)
     ) {
       throw new Error("Plugin capability connection request is invalid")
@@ -124,6 +128,7 @@ export function registerPluginCapabilityIpc(options: {
     pendingConnectionsBySender.set(event.sender.id, pendingConnections + 1)
     try {
       const principal = await options.principals.issue(input.pluginId, "web")
+      const locale = parsePortablePluginLocale(input.locale)
       assertConnectionCanPublish(event)
       if (
         principal.pluginVersion !== input.pluginVersion ||
@@ -149,6 +154,7 @@ export function registerPluginCapabilityIpc(options: {
           nodeId: input.nodeId,
           projectId: input.projectId,
         },
+        locale,
         onCanvasEvent({ event: canvasEvent, subscriptionId }) {
           if (!connections.has(connectionId) || event.sender.isDestroyed()) return
           event.sender.send(pluginCapabilityIpcChannels.changed, {
@@ -251,10 +257,7 @@ export function registerPluginCapabilityIpc(options: {
           const result = await options.pluginBroker.invoke(live.principal, input.request, controller.signal)
           return pluginCapabilitySuccess(input.request.requestId, result)
         } catch (error) {
-          return pluginCapabilityFailure(
-            input.request.requestId,
-            pluginCapabilityBrokerRemoteFailure(error),
-          )
+          return pluginCapabilityFailure(input.request.requestId, pluginCapabilityBrokerRemoteFailure(error))
         } finally {
           finishOperation(live, input.operationId, controller)
         }
@@ -280,6 +283,28 @@ export function registerPluginCapabilityIpc(options: {
     if (!input || !isBoundedIdentifier(input.connectionId, 128)) return false
     return disconnect(input.connectionId, event.sender.id)
   })
+  ipcMain.handle(pluginCapabilityIpcChannels.updateLocale, async (event, input: PluginCapabilityUpdateLocaleInput) => {
+    trusted(event)
+    if (!input || !isBoundedIdentifier(input.connectionId, 128) || typeof input.locale !== "string") {
+      return false
+    }
+    const live = connections.get(input.connectionId)
+    if (!live || live.senderId !== event.sender.id) return false
+    const locale = parsePortablePluginLocale(input.locale)
+    const changed = live.connection.updateLocale(locale)
+    if (changed && live.connection.supports("host.locale.get") && !event.sender.isDestroyed()) {
+      event.sender.send(pluginCapabilityIpcChannels.changed, {
+        command: {
+          command: pluginHostLocaleChangedCommand,
+          params: { locale },
+          protocol: pluginCapabilityProtocolV3,
+          type: "command",
+        },
+        connectionId: input.connectionId,
+      })
+    }
+    return changed
+  })
 
   return () => {
     disposed = true
@@ -289,6 +314,7 @@ export function registerPluginCapabilityIpc(options: {
     ipcMain.removeHandler(pluginCapabilityIpcChannels.disconnect)
     ipcMain.removeHandler(pluginCapabilityIpcChannels.getPluginAvailability)
     ipcMain.removeHandler(pluginCapabilityIpcChannels.invokePlugin)
+    ipcMain.removeHandler(pluginCapabilityIpcChannels.updateLocale)
     for (const connectionId of connections.keys()) disconnect(connectionId)
     for (const { listener, sender } of observedSenders.values()) {
       sender.removeListener("destroyed", listener)
@@ -299,10 +325,7 @@ export function registerPluginCapabilityIpc(options: {
 
 function beginOperation(live: LiveConnection, operationId: string) {
   if (live.operations.has(operationId)) {
-    throw new PluginHostProtocolError(
-      "invalid-request",
-      "Plugin capability operation id is already in flight",
-    )
+    throw new PluginHostProtocolError("invalid-request", "Plugin capability operation id is already in flight")
   }
   const controller = new AbortController()
   live.operations.set(operationId, controller)

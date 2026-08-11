@@ -1,20 +1,10 @@
 /* oxlint-disable typescript-eslint/await-thenable -- Bun's async matchers are thenable at runtime. */
 import { describe, expect, mock, test } from "bun:test"
-import {
-  pluginApiCatalog,
-  type PluginApiDefinition,
-  type PluginApiId,
-} from "@convax/plugin-api"
+import { pluginApiCatalog, type PluginApiDefinition, type PluginApiId } from "@convax/plugin-api"
 
 import type { InstalledPlugin } from "../plugin-api"
-import type {
-  PluginCanvasChangeEvent,
-  PluginPrincipal,
-} from "../plugin-capability-contracts"
-import type {
-  PluginHostApiMainConnection,
-  PluginHostInvocationLease,
-} from "../plugin-host-api-main-contracts"
+import type { PluginCanvasChangeEvent, PluginPrincipal } from "../plugin-capability-contracts"
+import type { PluginHostApiMainConnection, PluginHostInvocationLease } from "../plugin-host-api-main-contracts"
 import {
   createToolPluginCanvasMcpBridge,
   deriveToolPluginCompanionApiRoutes,
@@ -24,10 +14,7 @@ import {
   type ToolPluginHostApiCapabilityHost,
 } from "./tool-plugin-canvas-capabilities"
 
-function plugin(
-  capabilities: InstalledPlugin["capabilities"],
-  hostApis: readonly PluginApiId[],
-): InstalledPlugin {
+function plugin(capabilities: InstalledPlugin["capabilities"], hostApis: readonly PluginApiId[]): InstalledPlugin {
   return {
     capabilities,
     contributes: { service: { actions: [] } },
@@ -65,6 +52,7 @@ function fixture(supported: readonly PluginApiId[]) {
     close,
     execute,
     supports: (method) => supported.includes(method),
+    updateLocale: () => false,
   }
   const issue = mock(async () => principal())
   const connect: ToolPluginHostApiCapabilityHost["connect"] = mock(async (input) => {
@@ -91,11 +79,7 @@ describe("Tool Plugin reverse Host API MCP adapter", () => {
       ["projects.read", "canvas.document.read"],
       ["projects.list", "canvas.document.get", "canvas.nodes.query"],
     )
-    const { connect, execute, host, issue } = fixture([
-      "projects.list",
-      "canvas.document.get",
-      "canvas.nodes.query",
-    ])
+    const { connect, execute, host, issue } = fixture(["projects.list", "canvas.document.get", "canvas.nodes.query"])
     const bridge = await createToolPluginCanvasMcpBridge(installed, host)
 
     expect(issue).toHaveBeenCalledWith("host-api-sidecar", "tool", installed)
@@ -141,10 +125,7 @@ describe("Tool Plugin reverse Host API MCP adapter", () => {
   })
 
   test("filters APIs omitted by the manifest or by their Catalog grant", async () => {
-    const installed = plugin(
-      ["projects.read"],
-      ["projects.list", "canvas.document.get", "canvas.transaction.execute"],
-    )
+    const installed = plugin(["projects.read"], ["projects.list", "canvas.document.get", "canvas.transaction.execute"])
     const { host } = fixture([
       "projects.list",
       "canvas.document.get",
@@ -204,10 +185,7 @@ describe("Tool Plugin reverse Host API MCP adapter", () => {
     const bridge = await createToolPluginCanvasMcpBridge(installed, host, invocationLease)
     const requestContext = context()
 
-    await bridge!.handler.handle(
-      { method: toolPluginCompanionMcpMethod("projects.list") },
-      requestContext,
-    )
+    await bridge!.handler.handle({ method: toolPluginCompanionMcpMethod("projects.list") }, requestContext)
     expect(issue).not.toHaveBeenCalled()
     expect(connect).toHaveBeenCalledWith(expect.objectContaining({ invocationLease }))
     expect(execute).toHaveBeenCalledWith(

@@ -39,12 +39,12 @@ const minimalDefinition = {
 } as const
 
 describe("Plugin API catalog", () => {
-  test("publishes the collaboration command cutover as API 3.0.0 without rewriting API lineage", () => {
-    expect(PLUGIN_API_CATALOG_VERSION).toBe("3.0.0")
+  test("publishes locale access as additive API 3.1.0 without rewriting existing API lineage", () => {
+    expect(PLUGIN_API_CATALOG_VERSION).toBe("3.1.0")
     expect(PLUGIN_API_CATALOG_MAJOR).toBe(3)
     expect(Object.keys(pluginApiCatalog).sort()).toEqual(["apis", "version"])
-    expect(pluginApiCatalog.apis).toHaveLength(20)
-    expect(new Set(pluginApiCatalog.apis.map((definition) => definition.id)).size).toBe(20)
+    expect(pluginApiCatalog.apis).toHaveLength(21)
+    expect(new Set(pluginApiCatalog.apis.map((definition) => definition.id)).size).toBe(21)
     expect(pluginApiCatalog.apis.filter((definition) => definition.since === "1.0.0")).toHaveLength(18)
     expect<string[]>(
       pluginApiCatalog.apis
@@ -72,6 +72,12 @@ describe("Plugin API catalog", () => {
     })
     expect(getPluginApiDefinition("canvas.inputs.image.open").since).toBe("2.0.0")
     expect(getPluginApiDefinition("canvas.inputs.image.close").since).toBe("2.0.0")
+    expect(getPluginApiDefinition("host.locale.get")).toMatchObject({
+      contractSince: "3.1.0",
+      grant: null,
+      scope: "connection",
+      since: "3.1.0",
+    })
     expect(pluginApiCatalog.apis.every((definition) => definition.audience.includes("web-plugin"))).toBe(true)
     expect(
       pluginApiCatalog.apis
@@ -96,6 +102,7 @@ describe("Plugin API catalog", () => {
     expect(isPluginApiId("canvas.inputs.open")).toBe(true)
     expect(isPluginApiId("canvas.inputs.image.open")).toBe(true)
     expect(isPluginApiId("canvas.inputs.image.close")).toBe(true)
+    expect(isPluginApiId("host.locale.get")).toBe(true)
     expect(isPluginApiId("unknown.api")).toBe(false)
     expect(getPluginApiDefinition("canvas.inputs.open").grant).toBe("canvas.connectedMedia.stream")
     expect(getPluginApiDefinition("canvas.inputs.image.open").grant).toBe("canvas.connectedImages.read")

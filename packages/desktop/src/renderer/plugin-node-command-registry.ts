@@ -1,8 +1,10 @@
 import type {
   PortablePluginCanvasUiContribution,
+  PortablePluginI18n,
   PortablePluginUiCommand,
   PortablePluginUiIconToken,
 } from "@convax/plugin-sdk"
+import { resolvePortablePluginLocalizedText } from "@convax/plugin-sdk"
 import { desktopPluginHostProtocolV8 } from "../plugin-host-protocol"
 import type { AppLocale } from "./app-language"
 import {
@@ -48,8 +50,8 @@ function comparePlacement(
   return left.order - right.order || left.placementId.localeCompare(right.placementId)
 }
 
-function commandLabel(command: PortablePluginUiCommand, locale: AppLocale) {
-  return locale === "zh-CN" ? (command.title["zh-CN"] ?? command.title.default) : command.title.default
+function commandLabel(command: PortablePluginUiCommand, locale: AppLocale, i18n?: PortablePluginI18n) {
+  return resolvePortablePluginLocalizedText(command.title, locale, i18n)
 }
 
 /**
@@ -63,17 +65,20 @@ export class DesktopPluginNodeCommandRegistry {
   readonly #commands: ReadonlyMap<string, PortablePluginUiCommand>
   readonly #contribution: PortablePluginCanvasUiContribution
   readonly #frames: DesktopPluginFrameRegistry
+  readonly #i18n?: PortablePluginI18n
   readonly #pluginId: string
 
   constructor(
     pluginId: string,
     contribution: PortablePluginCanvasUiContribution,
     frames: DesktopPluginFrameRegistry,
+    i18n?: PortablePluginI18n,
   ) {
     this.#pluginId = pluginId
     this.#contribution = contribution
     this.#commands = new Map(contribution.commands.map((command) => [command.id, command]))
     this.#frames = frames
+    this.#i18n = i18n
   }
 
   project(frame: DesktopPluginFrameRef | null, locale: AppLocale): DesktopPluginNodeCommandProjection {
@@ -92,7 +97,7 @@ export class DesktopPluginNodeCommandRegistry {
         commandId: command.id,
         enabled: frameLease !== undefined,
         ...(command.icon === undefined ? {} : { icon: command.icon }),
-        label: commandLabel(command, locale),
+        label: commandLabel(command, locale, this.#i18n),
         order: placement.order ?? 0,
         placementId: placement.id,
       })

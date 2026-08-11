@@ -13,6 +13,7 @@ const connectInput = {
   activeRevision: 7,
   activeSetDigest: "a".repeat(64),
   canvasId: "canvas",
+  locale: "en",
   nodeId: "node",
   pluginId: "one",
   pluginVersion: "1.0.0",
@@ -22,6 +23,38 @@ const connectInput = {
 }
 
 describe("RendererPluginHostConnection", () => {
+  test("serializes rapid locale changes so an older IPC update cannot win", async () => {
+    const first = deferred<boolean>()
+    const updateLocale = mock((input: { connectionId: string; locale: string }) =>
+      input.locale === "zh-CN" ? first.promise : Promise.resolve(true),
+    )
+    const connection = new RendererPluginHostConnection(rendererClient({ updateLocale }), connectInput, () => undefined)
+
+    await expect(connection.updateLocale("en")).resolves.toBe(false)
+    const chinese = connection.updateLocale("zh-CN")
+    const english = connection.updateLocale("en")
+    await waitForCall(updateLocale)
+    expect(updateLocale).toHaveBeenCalledTimes(1)
+    expect(updateLocale).toHaveBeenNthCalledWith(1, { connectionId: "opaque-1", locale: "zh-CN" })
+    first.resolve(true)
+    await expect(chinese).resolves.toBe(true)
+    await expect(english).resolves.toBe(true)
+    expect(updateLocale).toHaveBeenNthCalledWith(2, { connectionId: "opaque-1", locale: "en" })
+    connection.close()
+  })
+
+  test("retries a locale that Main did not acknowledge", async () => {
+    const updateLocale = mock()
+      .mockRejectedValueOnce(new Error("IPC unavailable"))
+      .mockResolvedValueOnce(true)
+    const connection = new RendererPluginHostConnection(rendererClient({ updateLocale }), connectInput, () => undefined)
+
+    await expect(connection.updateLocale("zh-CN")).rejects.toThrow("IPC unavailable")
+    await expect(connection.updateLocale("zh-CN")).resolves.toBe(true)
+    expect(updateLocale).toHaveBeenCalledTimes(2)
+    connection.close()
+  })
+
   test("disconnects only the exact live frame, cancels its in-flight work, and ignores replay", async () => {
     const firstResult = deferred<Awaited<ReturnType<PluginCapabilityRendererClient["call"]>>>()
     const firstCall = mock(() => firstResult.promise)
@@ -147,6 +180,9 @@ describe("RendererPluginHostConnection", () => {
       async invokePlugin(input) {
         return pluginCapabilitySuccess(input.request.requestId, undefined)
       },
+      async updateLocale() {
+        return true
+      },
       onEvent(next) {
         listener = next
         return () => {
@@ -228,6 +264,9 @@ describe("RendererPluginHostConnection", () => {
         },
         async invokePlugin(input) {
           return pluginCapabilitySuccess(input.request.requestId, undefined)
+        },
+        async updateLocale() {
+          return true
         },
         onEvent() {
           return () => undefined
@@ -328,6 +367,9 @@ describe("RendererPluginHostConnection", () => {
         async invokePlugin(input) {
           return pluginCapabilitySuccess(input.request.requestId, undefined)
         },
+        async updateLocale() {
+          return true
+        },
         onEvent() {
           return () => undefined
         },
@@ -427,6 +469,9 @@ describe("RendererPluginHostConnection", () => {
         },
         getPluginAvailability,
         invokePlugin,
+        async updateLocale() {
+          return true
+        },
         onEvent() {
           return () => undefined
         },
@@ -752,6 +797,9 @@ function rendererClient(overrides: Partial<PluginCapabilityRendererClient> = {})
     },
     async invokePlugin(input) {
       return pluginCapabilitySuccess(input.request.requestId, undefined)
+    },
+    async updateLocale() {
+      return true
     },
     onEvent() {
       return () => undefined
