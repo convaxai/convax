@@ -728,8 +728,11 @@
 }
 
 .convax-canvas .convax-node__surface--image {
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(38, 38, 38, 0.7);
   box-shadow: none;
+  -webkit-backdrop-filter: blur(40px);
+  backdrop-filter: blur(40px);
   contain: paint;
 }
 
