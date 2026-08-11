@@ -130,12 +130,12 @@ New calls resolve only the current ActiveSet. Work already in flight retains a
 lease on its exact immutable snapshots. Durable long-running Host owners may hold
 a bounded persistent pin; a pin preserves bytes but grants no execution authority.
 Unsupported legacy state is rejected without silently rewriting or deleting it.
-Because the Provider-protocol field was added after immutable packages had already
-been published under the unchanged `convax.plugin/8` identity, runtime validation
-retains only those two exact earlier LLM shapes: static models with no protocol, or
-the fixed `modelCatalog: "runtime"` plus `llm.models.list` form. Authoring validation
-still requires `openai` or `openrouter`; compatibility never rewrites snapshot
-bytes, guesses a vendor protocol, or relaxes any other manifest field.
+LLM contributions are validated identically at authoring, installation, startup,
+and execution: `provider.protocol` must explicitly be `openai` or `openrouter`.
+The Host does not retain an older LLM manifest parser, infer a protocol, or adapt a
+retired model-catalog tool. An installed snapshot that does not satisfy the current
+manifest remains invalid and non-executable; Host never parses it as migration or
+in-place update input.
 
 The packaged product lock may retain a bounded replacement closure for offline
 recovery of one exact retired-Host-API Plugin binding. This is not a preinstall or

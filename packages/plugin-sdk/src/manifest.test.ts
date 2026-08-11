@@ -180,7 +180,7 @@ describe("complete convax.plugin/8 portable ABI", () => {
     ).toThrow("invalid Plugin API id")
   })
 
-  test("keeps immutable early-v8 LLM compatibility out of new authoring", () => {
+  test("rejects LLM contributions without the current explicit provider protocol", () => {
     const current = toolManifest()
     const legacy = {
       ...current,
@@ -194,13 +194,21 @@ describe("complete convax.plugin/8 portable ABI", () => {
       },
     }
 
-    expect(parsePortablePluginManifestV8(legacy).contributes.llm).toEqual({
-      modelCatalog: "runtime",
-      models: [{ id: "model-1", name: "Model 1" }],
-      provider: { id: "example-provider", name: "Example Provider" },
-    })
+    expect(() => parsePortablePluginManifestV8(legacy)).toThrow("unsupported field: modelCatalog")
     expect(() => parsePortablePluginManifestV8(legacy, { hostApiMode: "authoring" })).toThrow(
       "unsupported field: modelCatalog",
+    )
+
+    const { modelCatalog: _retiredModelCatalog, ...missingProtocolLlm } = legacy.contributes.llm
+    const missingProtocol = {
+      ...legacy,
+      contributes: { ...legacy.contributes, llm: missingProtocolLlm },
+    }
+    expect(() => parsePortablePluginManifestV8(missingProtocol)).toThrow(
+      "LLM provider protocol must be openai or openrouter",
+    )
+    expect(() => parsePortablePluginManifestV8(missingProtocol, { hostApiMode: "authoring" })).toThrow(
+      "LLM provider protocol must be openai or openrouter",
     )
   })
 

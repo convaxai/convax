@@ -242,7 +242,7 @@ describe("PluginInstallationRuntime", () => {
     await expect(handle.resolveAsset("index.html")).rejects.toThrow("lease has been released")
   })
 
-  test("keeps image and video tools available beside immutable early-v8 LLM snapshots", async () => {
+  test("rejects an LLM snapshot without the current explicit provider protocol", async () => {
     const { root, runtime } = await fixture()
     const executableCandidate = (id: string, contributions: Record<string, unknown>) => {
       const base = candidate(id, { companion: true, companionAuthorized: true })
@@ -258,15 +258,6 @@ describe("PluginInstallationRuntime", () => {
         },
       }
     }
-    const legacyGateway = executableCandidate("legacy-gateway", {
-      llm: {
-        modelCatalog: "runtime",
-        models: [{ id: "model-1", name: "Model 1" }],
-        provider: { id: "legacy-provider", name: "Legacy Provider" },
-      },
-    })
-    await runtime.publish(0, legacyGateway)
-
     const mediaTools = executableCandidate("media-tools", {
       generation: {
         models: [],
@@ -288,10 +279,19 @@ describe("PluginInstallationRuntime", () => {
         ],
       },
     })
-    await runtime.publish(1, mediaTools)
+    await runtime.publish(0, mediaTools)
+
+    const legacyGateway = executableCandidate("legacy-gateway", {
+      llm: {
+        modelCatalog: "runtime",
+        models: [{ id: "model-1", name: "Model 1" }],
+        provider: { id: "legacy-provider", name: "Legacy Provider" },
+      },
+    })
+    await expect(runtime.publish(1, legacyGateway)).rejects.toThrow("Plugin package manifest is invalid")
 
     const active = await new PluginInstallationRuntime(root).readActive()
-    expect(active.plugins.map(({ plugin }) => plugin.id)).toEqual(["legacy-gateway", "media-tools"])
+    expect(active.plugins.map(({ plugin }) => plugin.id)).toEqual(["media-tools"])
     expect(
       active.plugins
         .find(({ plugin }) => plugin.id === "media-tools")!

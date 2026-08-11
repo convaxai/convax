@@ -54,36 +54,6 @@ describe("portable runtime, service, LLM, and Pet contributions", () => {
         provider: { id: "provider-one", name: "Provider One", protocol: "vendor-private" },
       }),
     ).toThrow("LLM provider protocol must be openai or openrouter")
-  })
-
-  test("admits only the bounded immutable early-v8 LLM shapes in compatibility mode", () => {
-    expect(
-      parsePortablePluginLlmContribution(
-        {
-          models: [{ id: "model-1", name: "Model 1" }],
-          provider: { id: "provider-one", name: "Provider One" },
-        },
-        { immutableV8Compatibility: true },
-      ),
-    ).toEqual({
-      models: [{ id: "model-1", name: "Model 1" }],
-      provider: { id: "provider-one", name: "Provider One" },
-    })
-    expect(
-      parsePortablePluginLlmContribution(
-        {
-          modelCatalog: "runtime",
-          models: [{ id: "model-1", name: "Model 1" }],
-          provider: { id: "provider-one", name: "Provider One" },
-        },
-        { immutableV8Compatibility: true },
-      ),
-    ).toEqual({
-      modelCatalog: "runtime",
-      models: [{ id: "model-1", name: "Model 1" }],
-      provider: { id: "provider-one", name: "Provider One" },
-    })
-
     expect(() =>
       parsePortablePluginLlmContribution({
         models: [],
@@ -93,21 +63,10 @@ describe("portable runtime, service, LLM, and Pet contributions", () => {
     expect(() =>
       parsePortablePluginLlmContribution(
         {
-          modelCatalog: "remote",
-          models: [],
-          provider: { id: "provider-one", name: "Provider One" },
-        },
-        { immutableV8Compatibility: true },
-      ),
-    ).toThrow("LLM model catalog must be runtime")
-    expect(() =>
-      parsePortablePluginLlmContribution(
-        {
           modelCatalog: "runtime",
           models: [],
           provider: { id: "provider-one", name: "Provider One", protocol: "openrouter" },
         },
-        { immutableV8Compatibility: true },
       ),
     ).toThrow("unsupported field: modelCatalog")
   })

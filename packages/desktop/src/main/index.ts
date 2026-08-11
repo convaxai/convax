@@ -1581,9 +1581,7 @@ function startApplication() {
                   npm:
                     provider.protocol === "openrouter"
                       ? "@openrouter/ai-sdk-provider"
-                      : provider.protocol === "openai"
-                        ? "@ai-sdk/openai"
-                        : "@ai-sdk/openai-compatible",
+                      : "@ai-sdk/openai",
                   options: {
                     apiKey: provider.apiKey,
                     baseURL: provider.baseUrl,

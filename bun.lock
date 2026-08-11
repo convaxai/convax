@@ -261,7 +261,7 @@
     },
     "packages/plugin-sdk": {
       "name": "@convax/plugin-sdk",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "dependencies": {
         "@convax/bounded-value": "workspace:^",
         "@convax/plugin-api": "workspace:^",

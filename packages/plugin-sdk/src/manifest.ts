@@ -280,9 +280,7 @@ export function parsePortablePluginManifestV8(
   const llm =
     rawContributions.llm === undefined
       ? undefined
-      : parsePortablePluginLlmContribution(rawContributions.llm, {
-          immutableV8Compatibility: options.hostApiMode !== "authoring",
-        })
+      : parsePortablePluginLlmContribution(rawContributions.llm)
   const pet = rawContributions.pet === undefined ? undefined : parsePortablePluginPetContribution(rawContributions.pet)
   const service =
     rawContributions.service === undefined
