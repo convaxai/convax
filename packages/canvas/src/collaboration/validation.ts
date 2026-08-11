@@ -954,8 +954,8 @@ function assertSortedRetainedResources(resources: readonly unknown[]): void {
           new TextDecoder().decode(encodeRestrictedJcs(resource)),
         )
       if (order >= 0) fail("invalid-history", "Retained resources must be sorted and complete-value unique")
-      if (prior.contentDigest === resource.contentDigest && !sameCanonicalValue(prior, resource))
-        fail("invalid-history", "Retained resource digest collision has unequal refs")
+      if (prior.contentDigest === resource.contentDigest && prior.byteLength !== resource.byteLength)
+        fail("invalid-history", "Retained resources with one content digest must agree on byte length")
     }
     prior = resource
   }

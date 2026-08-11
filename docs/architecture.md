@@ -1034,6 +1034,11 @@ by SHA-256 and byte length. Canvas retained-history verification may consume tha
 material-presence answer, but it does not select a ProjectIndex version, establish
 resource currentness, or authorize a history transition; Canvas recomputes the exact
 retained proof set from the semantic root and rejects substituted proofs.
+Semantic-history retained resources are sorted and unique by their complete
+canonical resource reference. A content digest identifies exact bytes rather than a
+Project resource identity, so different canonical Project references may share that
+digest and remain separately restorable. Such references must agree on byte length,
+and every restored reference still requires its exact retained-material proof.
 Main implements current-reference queries from the live ProjectIndex owner session's
 validated state and exact availability queries from that Project runtime's blob
 store. Neither Desktop nor native GC receives the Y.Doc or infers currentness from
