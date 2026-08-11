@@ -14,6 +14,9 @@ import {
   succeedCanvasNodeGenerationRun,
 } from "@convax/canvas/core"
 import type { CanvasNode } from "@convax/canvas/core"
+import type { CanvasResourceRef } from "@convax/canvas/collaboration"
+import { encodeBase64url, ordinarySha256, parseId128, parseProjectId } from "@convax/collaboration"
+import { parseProjectIndexResourceReference, projectIndexResourceReferenceDigest } from "../collaboration/project-index"
 import {
   collectProjectManagedAssetReferences,
   dehydrateProjectCanvasDocument,
@@ -24,6 +27,7 @@ import {
   markProjectCanvasResourcesStale,
   projectResourceBindingsKey,
   projectResourceReferenceKey,
+  resolveCurrentProjectResource,
   requireProjectResourceBindings,
   requireProjectResourceReference,
   type ProjectResourceBindings,
@@ -174,6 +178,86 @@ describe("Project resource references", () => {
     expect(managedAssetPath("b".repeat(64))).toBe(`.convax/assets/blobs/${"b".repeat(64)}`)
     expect(() => managedAssetPath("B".repeat(64))).toThrow()
     expect(() => managedAssetPath("b".repeat(63))).toThrow()
+  })
+})
+
+describe("Current Project resource resolution", () => {
+  const bytes = new TextEncoder().encode("current media")
+  const digest = ordinarySha256(bytes)
+  const projectId = parseProjectId("project_0123456789abcdef0123456789abcdef")
+  const projectEpoch = parseId128(encodeBase64url(new Uint8Array(16).fill(1)))
+  const fileId = `pf_${"a".repeat(64)}`
+  const currentReference = parseProjectIndexResourceReference({
+    format: "convax.project-resource-reference",
+    projectId,
+    projectEpoch,
+    entryFileId: fileId,
+    familyPrimaryFileId: fileId,
+    versionId: `pv_${"b".repeat(64)}`,
+    canonicalUri: `convax-project://${projectId}/epochs/${projectEpoch}/entries/${fileId}?blob=sha256%3A${digest}`,
+    blob: {
+      format: "convax.blob-ref",
+      algorithm: "sha256",
+      digest,
+      byteLength: String(bytes.byteLength) as never,
+      mime: "video/mp4",
+    },
+    versionRecordDigest: ordinarySha256(new TextEncoder().encode(`version:${digest}`)),
+  })
+  const resource: CanvasResourceRef = {
+    format: "convax.canvas-resource-ref",
+    uri: currentReference.canonicalUri,
+    mediaClass: "video",
+    mime: currentReference.blob.mime,
+    byteLength: currentReference.blob.byteLength,
+    contentDigest: currentReference.blob.digest,
+    ownerProofDigest: projectIndexResourceReferenceDigest(currentReference),
+  }
+
+  test("returns the exact current Project file selected by the Canvas proof", () => {
+    expect(
+      resolveCurrentProjectResource({
+        currentResources: [
+          { materializedPath: "Media/source.mp4", reference: currentReference, storageClass: "project-file" },
+        ],
+        name: "source.mp4",
+        resource,
+      }),
+    ).toEqual({ reference: { kind: "project-file", path: "Media/source.mp4" }, status: "ready" })
+  })
+
+  test("derives a managed asset only from an exact current owner proof", () => {
+    expect(
+      resolveCurrentProjectResource({
+        currentResources: [{ materializedPath: null, reference: currentReference, storageClass: "managed-blob" }],
+        name: "source.mp4",
+        resource,
+      }),
+    ).toEqual({
+      reference: { kind: "managed-asset", mediaType: "video/mp4", name: "source.mp4", sha256: digest },
+      status: "ready",
+    })
+  })
+
+  test("distinguishes an unmaterialized current file from an invalid or ambiguous proof", () => {
+    const currentFile = { materializedPath: null, reference: currentReference, storageClass: "project-file" as const }
+    expect(resolveCurrentProjectResource({ currentResources: [currentFile], name: "source.mp4", resource })).toEqual({
+      status: "missing",
+    })
+    expect(
+      resolveCurrentProjectResource({
+        currentResources: [currentFile],
+        name: "source.mp4",
+        resource: { ...resource, ownerProofDigest: "0".repeat(64) as never },
+      }),
+    ).toEqual({ status: "unavailable" })
+    expect(
+      resolveCurrentProjectResource({
+        currentResources: [currentFile, currentFile],
+        name: "source.mp4",
+        resource,
+      }),
+    ).toEqual({ status: "unavailable" })
   })
 })
 

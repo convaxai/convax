@@ -117,7 +117,9 @@ For any matching change, read the full routed reference before planning or editi
   directory entries or add a second native listing surface.
 - Connected inputs are direct incoming Canvas edges only. Return pathless bounded
   metadata until explicit user intent reaches the verified Main-owned staging
-  boundary; invalidation alone never triggers upload, prompting, or execution.
+  boundary; that boundary resolves the canonical Canvas owner proof through the live
+  ProjectIndex current-resource projection before opening native bytes. Invalidation
+  alone never triggers upload, prompting, or execution.
 - Skills remain native OpenCode instruction bundles. Desktop owns installation
   policy and ActiveSet selection; Agent Runtime receives generic leased Skill
   directories, immutable Hook URLs, MCP configuration, and typed tool providers

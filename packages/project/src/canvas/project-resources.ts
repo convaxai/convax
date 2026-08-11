@@ -5,6 +5,9 @@ import {
   type CanvasDocument,
   type CanvasResourceStatus,
 } from "@convax/canvas/core"
+import { assertResourceRef, type CanvasResourceRef } from "@convax/canvas/collaboration"
+import type { ProjectIndexCurrentResourceProjectionEntry } from "../collaboration/blob-replication"
+import { projectIndexResourceReferenceDigest } from "../collaboration/project-index"
 
 export const projectResourceReferenceKey = "convaxProjectResource"
 export const projectResourceBindingsKey = "convaxProjectResourceBindings"
@@ -29,6 +32,14 @@ export interface ProjectResourceSnapshot {
   text?: string
   url?: string
 }
+
+export type CurrentProjectResourceResolution =
+  | {
+      reference: Exclude<ProjectResourceReference, { kind: "project-directory" }>
+      status: "ready"
+    }
+  | { status: "missing" }
+  | { status: "unavailable" }
 
 const projectResourceKinds = new Set(["project-file", "managed-asset", "project-directory"])
 const resourceNodeKinds = new Set(["text", "image", "video", "audio", "file", "folder"])
@@ -136,6 +147,52 @@ export function getProjectResourceReference(metadata: unknown): ProjectResourceR
     return requireProjectResourceReference(metadata[projectResourceReferenceKey])
   } catch {
     return null
+  }
+}
+
+/**
+ * Resolves one pathless Canvas resource through the ProjectIndex owner's current
+ * resource projection. The Canvas proof remains the authority; a native path or
+ * managed-blob location is only a transient adapter result.
+ */
+export function resolveCurrentProjectResource(input: {
+  currentResources: readonly ProjectIndexCurrentResourceProjectionEntry[]
+  name: string
+  resource: CanvasResourceRef
+}): CurrentProjectResourceResolution {
+  assertResourceRef(input.resource)
+  const matches = input.currentResources.filter(({ reference }) => reference.canonicalUri === input.resource.uri)
+  if (matches.length !== 1) return { status: "unavailable" }
+
+  const current = matches[0]!
+  if (
+    current.reference.blob.mime !== input.resource.mime ||
+    current.reference.blob.byteLength !== input.resource.byteLength ||
+    current.reference.blob.digest !== input.resource.contentDigest ||
+    projectIndexResourceReferenceDigest(current.reference) !== input.resource.ownerProofDigest
+  ) {
+    return { status: "unavailable" }
+  }
+
+  if (current.storageClass === "project-file" && current.materializedPath === null) {
+    return { status: "missing" }
+  }
+
+  try {
+    const reference = requireProjectResourceReference(
+      current.storageClass === "managed-blob"
+        ? {
+            kind: "managed-asset",
+            mediaType: input.resource.mime,
+            name: input.name,
+            sha256: input.resource.contentDigest,
+          }
+        : { kind: "project-file", path: current.materializedPath },
+    )
+    if (reference.kind === "project-directory") return { status: "unavailable" }
+    return { reference, status: "ready" }
+  } catch {
+    return { status: "unavailable" }
   }
 }
 

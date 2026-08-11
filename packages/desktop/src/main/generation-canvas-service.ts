@@ -23,15 +23,23 @@ import {
   type CanvasApplicationService,
 } from "@convax/canvas/application"
 import {
+  assertResourceRef,
+  canvasProjectionResourceMetadataKey,
+  type CanvasResourceRef,
+} from "@convax/canvas/collaboration"
+import {
   getCanvasNodeGenerationRun,
   getIncomingConnectedCanvasFileNodeIds,
   isCanvasNodeGenerationRunActive,
   type CanvasDocument,
   type CanvasNode,
 } from "@convax/canvas/core"
+import { parseProjectId } from "@convax/collaboration"
+import type { ProjectIndexCurrentBlobReferencePort } from "@convax/project"
 import {
   getProjectResourceReference,
   requireProjectResourceReference,
+  resolveCurrentProjectResource,
   type ProjectResourceReference,
 } from "@convax/project/canvas"
 import {
@@ -159,6 +167,7 @@ export interface GenerationToolExecutionPort {
 export interface GenerationCanvasServiceOptions {
   assets: GenerationCanvasManagedAssetPort
   application: GenerationCanvasApplicationPort
+  currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
   maxInputFileBytes?: number
   maxInputBytes?: number
   maxInlineOutputFileBytes?: number
@@ -1100,13 +1109,22 @@ function relativeArtifactPath(value: string) {
 }
 
 function generationReferenceSource(node: CanvasNode) {
-  const reference = getProjectResourceReference(nodeMetadata(node))
+  const reference = getCanonicalCanvasResource(node) ?? getProjectResourceReference(nodeMetadata(node))
   return {
     kind: node.data.kind,
     mimeType: "mimeType" in node.data && typeof node.data.mimeType === "string" ? node.data.mimeType : null,
     reference,
     type: node.type,
   }
+}
+
+function getCanonicalCanvasResource(node: CanvasNode): CanvasResourceRef | null {
+  const metadata = nodeMetadata(node)
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
+  if (!Object.hasOwn(metadata, canvasProjectionResourceMetadataKey)) return null
+  const value = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
+  assertResourceRef(value)
+  return value
 }
 
 function generationReferenceConstraint(document: CanvasDocument, request: GenerationCanvasRequest) {
@@ -1239,6 +1257,7 @@ function generationResultRelation(request: GenerationCanvasRequest): CanvasAddRe
 export class GenerationCanvasService {
   readonly #assets: GenerationCanvasManagedAssetPort
   readonly #application: GenerationCanvasApplicationPort
+  readonly #currentResources: Pick<ProjectIndexCurrentBlobReferencePort, "queryCurrentResources">
   readonly #executions = new Map<string, GenerationExecution>()
   readonly #maxInputFileBytes: number
   readonly #maxInputBytes: number
@@ -1266,6 +1285,7 @@ export class GenerationCanvasService {
   constructor(options: GenerationCanvasServiceOptions) {
     this.#assets = options.assets
     this.#application = options.application
+    this.#currentResources = options.currentResources
     this.#maxInputFileBytes = requireGenerationMaximum(
       options.maxInputFileBytes,
       defaultMaxInputFileBytes,
@@ -3075,7 +3095,7 @@ export class GenerationCanvasService {
     const contexts: StagedPromptContext[] = []
     for (const node of nodes) {
       assertNotAborted(signal)
-      const resolved = await this.#resolveProjectResourceReference(request.ref.scopeId, node)
+      const resolved = await this.#resolveProjectResourceReference(request.ref.scopeId, node, signal)
       assertNotAborted(signal)
       if (resolved.sourceSnapshot.stat.size < 1n) {
         throw new Error(`Generation prompt context is empty: ${node.id}`)
@@ -3121,7 +3141,7 @@ export class GenerationCanvasService {
       if (node.data.kind !== expectedKind) {
         throw new Error(`Generation role ${reference.role} requires a ${expectedKind} node: ${reference.nodeId}`)
       }
-      const resolved = await this.#resolveProjectResourceReference(request.ref.scopeId, node)
+      const resolved = await this.#resolveProjectResourceReference(request.ref.scopeId, node, signal)
       if (reference.role === "text") {
         const text = await readStableUtf8Resource(resolved.sourceSnapshot, maxTextReferenceLength)
         const textBytes = Buffer.byteLength(text, "utf8")
@@ -3191,8 +3211,24 @@ export class GenerationCanvasService {
     return references
   }
 
-  async #resolveProjectResourceReference(projectId: string, node: CanvasNode) {
-    const reference = getProjectResourceReference(nodeMetadata(node))
+  async #resolveProjectResourceReference(projectId: string, node: CanvasNode, signal?: AbortSignal) {
+    assertNotAborted(signal)
+    const canonicalResource = getCanonicalCanvasResource(node)
+    let reference: ProjectResourceReference | null
+    if (canonicalResource) {
+      const currentResources = await this.#currentResources.queryCurrentResources({
+        projectId: parseProjectId(projectId),
+      })
+      assertNotAborted(signal)
+      const resolution = resolveCurrentProjectResource({
+        currentResources,
+        name: node.data.label || canonicalResource.contentDigest,
+        resource: canonicalResource,
+      })
+      reference = resolution.status === "ready" ? resolution.reference : null
+    } else {
+      reference = getProjectResourceReference(nodeMetadata(node))
+    }
     if (!reference) throw new Error(`Generation reference requires a typed Project resource: ${node.id}`)
     if (reference.kind === "project-directory") {
       throw new Error(`Generation reference cannot use a Project directory: ${node.id}`)
@@ -3204,14 +3240,18 @@ export class GenerationCanvasService {
     let sourcePath: string
     if (reference.kind === "managed-asset") {
       sourcePath = await this.#assets.resolve({ projectId, reference })
+      assertNotAborted(signal)
     } else {
       const info = await this.#projects.readFileInfo({ path: reference.path, projectId })
+      assertNotAborted(signal)
       expectedSize = info.size
       mimeType = normalizeMimeType(info.mimeType)
       name = info.name
       sourcePath = await this.#projects.resolveEntryPath({ path: reference.path, projectId })
+      assertNotAborted(signal)
     }
     const realPath = await fs.realpath(sourcePath)
+    assertNotAborted(signal)
     const sourceSnapshot = await captureProjectResourceSnapshot({
       expectedRealPath: realPath,
       expectedSize,
