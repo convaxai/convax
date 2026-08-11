@@ -75,6 +75,7 @@ export async function addCanvasUploadResources(
   throwIfAborted(request.signal)
   return host.add({
     anchor: request.anchor,
+    ...(request.anchorOrigin === undefined ? {} : { anchorOrigin: request.anchorOrigin }),
     canvasId: request.canvasId,
     commandId: host.createCommandId(),
     localFiles,

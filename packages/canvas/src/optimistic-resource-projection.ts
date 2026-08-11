@@ -1,4 +1,5 @@
 import { findOpenCanvasPoint } from "./application"
+import type { CanvasResourceAnchorOrigin } from "./application"
 import { getCanvasTextFileFormat } from "./file-import"
 import { getCanvasResourcePresentationSize } from "./media-sizing"
 import type { CanvasGhostNode } from "./optimistic-overlay"
@@ -10,6 +11,7 @@ const ghostGap = 32
 /** Creates presentation-only resource ghosts from an authoritative snapshot. */
 export function createOptimisticResourceGhosts(input: {
   anchor: CanvasPoint
+  anchorOrigin?: CanvasResourceAnchorOrigin
   document: CanvasDocument
   files: readonly File[]
   intrinsicSizes?: readonly ({ readonly height: number; readonly width: number } | null)[]
@@ -29,7 +31,10 @@ export function createOptimisticResourceGhosts(input: {
       nodeType === "text" ? "text" : (mediaKind ?? "file"),
       intrinsic ?? undefined,
     )
-    let preferred = { x: input.anchor.x + index * (size.width + ghostGap), y: input.anchor.y }
+    let preferred = {
+      x: input.anchor.x + index * (size.width + ghostGap) - (input.anchorOrigin === "center" ? size.width / 2 : 0),
+      y: input.anchor.y - (input.anchorOrigin === "center" ? size.height / 2 : 0),
+    }
     let position = findOpenCanvasPoint(input.document, preferred, size, undefined, input.parentPresentationKey)
     while (ghosts.some((ghost) => intersects(position, size, ghost.position, ghost.size))) {
       preferred = { x: position.x + size.width + ghostGap, y: position.y }

@@ -90,6 +90,9 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       const sessionId = requireId128Dto(input.sessionId, "Canvas session id")
       const localFiles = Array.isArray(input.localFiles) ? input.localFiles : []
       const sources = Array.isArray(input.sources) ? input.sources : []
+      if (input.anchorOrigin !== undefined && input.anchorOrigin !== "center" && input.anchorOrigin !== "top-left") {
+        throw new Error("Canvas resource anchor origin is invalid")
+      }
       if (localFiles.length === 0 && sources.length === 0 && input.pending === undefined) {
         throw new Error("At least one Canvas resource source is required")
       }
@@ -134,6 +137,7 @@ export function createCanvasResourcePreloadClient(options: CanvasResourcePreload
       try {
         result = await options.invoke(canvasResourceIpcChannel, {
           anchor: input.anchor,
+          ...(input.anchorOrigin === undefined ? {} : { anchorOrigin: input.anchorOrigin }),
           canvasId: input.canvasId,
           commandId: input.commandId,
           externalFiles: resolved,

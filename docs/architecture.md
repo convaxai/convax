@@ -1827,6 +1827,13 @@ waits for this presentation probe before showing a full card. The first durable 
 therefore already has its final fitted geometry, and ordinary media load does not
 issue a second geometry mutation. Inspection failure or an oversized/unsupported
 format falls back to the Canvas default size without trusting renderer dimensions.
+For a pointer drop, Renderer projects the screen point into Canvas coordinates once
+and labels that anchor with the closed `center` origin. After Main preparation,
+Canvas uses the first resource's final presentation size to normalize the point to
+the durable top-left placement. Toolbar, Agent, and other non-pointer insertion
+paths retain the top-left default. The optimistic ghost follows the same origin
+semantics using only its non-authoritative size hint, so the committed card does not
+jump away from the pointer when the authoritative projection arrives.
 
 ### Creating a generic Plugin Canvas surface
 

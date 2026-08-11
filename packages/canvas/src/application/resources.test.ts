@@ -88,6 +88,30 @@ describe("Canvas resource collaboration orchestration", () => {
     })
   })
 
+  test("centers the first prepared resource on an explicit pointer anchor using its final size", async () => {
+    const execute = mock(async () => result())
+    const service = new CanvasResourceBusinessService(
+      { prepare: async () => ({ items: [{ ...image, height: 900, width: 1_600 }] }) },
+      { execute, query: mock() },
+    )
+
+    await service.addResources({
+      ...baseRequest,
+      anchor: { x: 400, y: 260 },
+      anchorOrigin: "center",
+      commandId: "drop-centered",
+    })
+
+    expect(execute.mock.calls[0]?.[0]).toMatchObject({
+      envelope: {
+        command: {
+          placement: { anchor: { x: 240, y: 170 } },
+          type: "resources.add",
+        },
+      },
+    })
+  })
+
   test("forwards and fingerprints an explicit pending generation presentation size", async () => {
     const execute = mock(async () => result())
     const service = new CanvasResourceBusinessService(
@@ -147,6 +171,9 @@ describe("Canvas resource collaboration orchestration", () => {
     expect(duplicate).toBe(first)
     await first
     await expect(service.addResources({ ...baseRequest, anchor: { x: 99, y: 20 } })).rejects.toThrow(
+      "reused with a different payload",
+    )
+    await expect(service.addResources({ ...baseRequest, anchorOrigin: "center" })).rejects.toThrow(
       "reused with a different payload",
     )
     expect(execute).toHaveBeenCalledTimes(1)

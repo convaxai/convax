@@ -284,6 +284,7 @@ type CanvasLocalFilePreparationPort = Pick<ProjectCanvasResourcePreparation, "wi
 
 interface CanvasResourceMainRequest {
   anchor: CanvasPoint
+  anchorOrigin?: "center" | "top-left"
   canvasId: string
   commandId: string
   externalFiles: readonly {
@@ -383,6 +384,7 @@ export function registerCanvasResourceIpc(
       const request = {
         actor: { id: "desktop:renderer", kind: "ui" as const },
         anchor: input.anchor,
+        ...(input.anchorOrigin === undefined ? {} : { anchorOrigin: input.anchorOrigin }),
         canvasId: active.canvasId,
         commandId: input.commandId,
         relation: input.relation,
@@ -978,8 +980,17 @@ function requireCanvasResourceMainRequest(value: unknown): CanvasResourceMainReq
   if (pending && (value.sources.length > 0 || externalFiles.length > 0)) {
     throw new Error("Pending Canvas resource cannot include admitted sources")
   }
+  const anchorOrigin: CanvasResourceMainRequest["anchorOrigin"] =
+    value.anchorOrigin === undefined
+      ? undefined
+      : value.anchorOrigin === "center" || value.anchorOrigin === "top-left"
+        ? value.anchorOrigin
+        : (() => {
+            throw new Error("Canvas resource anchor origin is invalid")
+          })()
   return {
     anchor: { x: value.anchor.x as number, y: value.anchor.y as number },
+    ...(anchorOrigin === undefined ? {} : { anchorOrigin }),
     canvasId,
     commandId,
     externalFiles,
