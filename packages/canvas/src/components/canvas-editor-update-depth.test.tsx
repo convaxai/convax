@@ -233,8 +233,10 @@ class TestCanvasSession implements CanvasRendererCollaborationClient {
   readonly authority = "project-collaboration-application" as const
   readonly commands: CanvasRendererCommand[] = []
   readonly undoModel = "project-yjs-semantic-history" as const
+  canUndoValue = false
   flushRequest: (signal?: AbortSignal) => Promise<void> = async () => undefined
   submitRequest: (command: CanvasRendererCommand) => Promise<void> = async () => undefined
+  undoRequest: () => Promise<void> = async () => undefined
   private readonly listeners = new Set<() => void>()
   private readonly nodeIncarnations = new Map<string, string>()
 
@@ -247,7 +249,7 @@ class TestCanvasSession implements CanvasRendererCollaborationClient {
   }
 
   canUndo() {
-    return false
+    return this.canUndoValue
   }
 
   flush(signal?: AbortSignal) {
@@ -289,7 +291,9 @@ class TestCanvasSession implements CanvasRendererCollaborationClient {
     return () => this.listeners.delete(listener)
   }
 
-  async undo() {}
+  undo() {
+    return this.undoRequest()
+  }
 }
 
 function installTestWindow() {
@@ -581,6 +585,58 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(canvas?.dataset.canvasTool).toBe("hand")
   } finally {
     EditorProbe = undefined
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("reclaims Canvas focus during node drag so undo uses session history", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+  observedReactFlowProps = undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const textNode = createTextNode({
+      id: "drag-focus-text",
+      metadata: {},
+      position: { x: 0, y: 0 },
+      resourceState: { status: "ready", text: "Draft remains unchanged" },
+    })
+    const session = new TestCanvasSession(createCanvasDocument({ id: "drag-focus", nodes: [textNode] }))
+    const undo = mock(async () => undefined)
+    session.canUndoValue = true
+    session.undoRequest = undo
+
+    await act(async () => {
+      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+    })
+
+    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
+    const textEditor = document.createElement("div")
+    textEditor.contentEditable = "true"
+    textEditor.textContent = "Draft remains unchanged"
+    canvas?.append(textEditor)
+    textEditor.focus()
+    expect(document.activeElement).toBe(textEditor)
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStart?.({ altKey: false, ctrlKey: false, metaKey: false }, textNode, [textNode])
+    })
+    expect(document.activeElement).toBe(canvas)
+
+    await act(async () => {
+      observedReactFlowProps?.onNodeDragStop?.()
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
+      await Promise.resolve()
+    })
+
+    expect(document.activeElement).toBe(canvas)
+    expect(undo).toHaveBeenCalledTimes(1)
+    expect(textEditor.textContent).toBe("Draft remains unchanged")
+  } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
   }
