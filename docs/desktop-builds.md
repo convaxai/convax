@@ -4,8 +4,11 @@ Convax Desktop releases are built by the `Manual desktop release` GitHub Actions
 workflow. The workflow has only a `workflow_dispatch` trigger and accepts an exact
 `prod`, `beta`, or `dev` channel, SemVer, release note, `main` commit SHA, and an
 explicit publish choice. It remains restricted to the `fearclear` actor and re-run
-actor. A version may be published once; a pre-existing GitHub Release tag fails the
-workflow instead of replacing bytes behind an existing update identity.
+actor. A version may publish only one byte identity. A failed feed upload can resume
+through the same retained workflow artifacts: a pre-existing GitHub Release is
+accepted only when its exact target SHA, channel metadata, asset names, and every
+asset byte match. Any mismatch fails instead of replacing bytes behind an existing
+update identity.
 
 The signed macOS arm64 and Windows x64 jobs must both pass before publication. The
 macOS job verifies the application and DMG signatures, stapled notarization ticket,

@@ -237,13 +237,32 @@ jobs:
           test "$(find release-assets -maxdepth 1 -name '*.zip' | wc -l)" -eq 1
           grep -F "version: $RELEASE_VERSION" release-assets/latest.yml
           grep -F "version: $RELEASE_VERSION" release-assets/latest-mac.yml
-      - name: Publish immutable GitHub Release
+      - name: Publish or verify immutable GitHub Release
         shell: bash
         run: |
           set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists; version reuse is forbidden" >&2
-            exit 1
+            existing_target="$(gh release view "$RELEASE_TAG" --json targetCommitish --jq .targetCommitish)"
+            existing_prerelease="$(gh release view "$RELEASE_TAG" --json isPrerelease --jq .isPrerelease)"
+            expected_prerelease=false
+            if [ "$RELEASE_CHANNEL" != "prod" ]; then expected_prerelease=true; fi
+            if [ "$existing_target" != "$RELEASE_COMMIT" ] || [ "$existing_prerelease" != "$expected_prerelease" ]; then
+              echo "Release $RELEASE_TAG exists with different target or channel metadata" >&2
+              exit 1
+            fi
+            existing_assets="$RUNNER_TEMP/existing-release-assets"
+            mkdir -p "$existing_assets"
+            gh release download "$RELEASE_TAG" --dir "$existing_assets"
+            find release-assets -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort > "$RUNNER_TEMP/expected-assets.txt"
+            find "$existing_assets" -maxdepth 1 -type f -exec basename {} \; | LC_ALL=C sort > "$RUNNER_TEMP/existing-assets.txt"
+            diff -u "$RUNNER_TEMP/expected-assets.txt" "$RUNNER_TEMP/existing-assets.txt"
+            while IFS= read -r asset; do
+              cmp -s "release-assets/$asset" "$existing_assets/$asset" || {
+                echo "Release $RELEASE_TAG asset $asset differs; version reuse is forbidden" >&2
+                exit 1
+              }
+            done < "$RUNNER_TEMP/expected-assets.txt"
+            exit 0
           fi
           notes="$RUNNER_TEMP/release-notes.md"
           printf '%s\n' "$RELEASE_NOTES" > "$notes"
