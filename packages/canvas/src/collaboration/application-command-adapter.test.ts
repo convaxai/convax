@@ -8,6 +8,7 @@ import { applyOk, context, createAgent, createPendingFile, digest, newCanvas, VA
 import { derivedNodeRef } from "./validation"
 import { validateCanvasYDoc } from "./ydoc"
 import { projectCanvas, projectCanvasDocument } from "./projection"
+import { materializeCanvasSemanticHistoryIntent } from "./reducer"
 import type { CanvasResourceProofRef, CanvasSnapshot } from "./types"
 import { parseUint32, parseUint64 } from "@convax/collaboration"
 
@@ -161,6 +162,86 @@ describe("Canvas v2 application command adapter", () => {
       kind: "group",
       title: "Group",
     })
+  })
+
+  test("unfolds a folded folder without an orphan Group across repeat, undo, redo, and projection restore", () => {
+    const document = newCanvas()
+    const first = createAgent(document, context(81, 1, 1), "First")
+    const second = createAgent(document, context(81, 2, 2), "Second")
+    const initialPositions = projectCanvas(validateCanvasYDoc(document)).nodes.map((node) => ({
+      id: node.ref.id,
+      position: node.position,
+    }))
+
+    const groupContext = context(81, 3, 3)
+    applyAdapted(
+      document,
+      groupContext,
+      requireAdaptation(document, groupContext, {
+        type: "nodes.group",
+        nodeIds: [first.id, second.id],
+        folded: true,
+      }).command,
+    )
+    const group = derivedNodeRef(groupContext, parseUint32("0"))
+    expect(projectCanvas(validateCanvasYDoc(document)).nodes.filter((node) => node.data.kind === "group")).toHaveLength(
+      1,
+    )
+
+    const unfoldContext = context(81, 4, 4)
+    const unfoldRoot = applyAdapted(
+      document,
+      unfoldContext,
+      requireAdaptation(document, unfoldContext, { type: "nodes.ungroup", nodeId: group.id }).command,
+    ).semanticHistoryRoot
+    if (!unfoldRoot) throw new Error("Unfold did not create semantic history")
+    expectUngroupedProjection(document, initialPositions)
+
+    const undoContext = context(81, 5, 5)
+    const undo = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
+      undoContext,
+      "undo",
+      unfoldRoot.rootOperationId,
+    )
+    if (undo === "rejected") throw new Error("Unfold undo did not materialize")
+    applyOk(document, undoContext, undo, VALID_FACTS)
+    expect(projectCanvas(validateCanvasYDoc(document)).nodes.filter((node) => node.data.kind === "group")).toHaveLength(
+      1,
+    )
+
+    const redoContext = context(81, 6, 6)
+    const redo = materializeCanvasSemanticHistoryIntent(
+      validateCanvasYDoc(document),
+      redoContext,
+      "redo",
+      unfoldRoot.rootOperationId,
+    )
+    if (redo === "rejected") throw new Error("Unfold redo did not materialize")
+    applyOk(document, redoContext, redo, VALID_FACTS)
+    expectUngroupedProjection(document, initialPositions)
+
+    const repeatedGroupContext = context(81, 7, 7)
+    applyAdapted(
+      document,
+      repeatedGroupContext,
+      requireAdaptation(document, repeatedGroupContext, {
+        type: "nodes.group",
+        nodeIds: [first.id, second.id],
+        folded: true,
+      }).command,
+    )
+    const repeatedGroup = derivedNodeRef(repeatedGroupContext, parseUint32("0"))
+    const repeatedUnfoldContext = context(81, 8, 8)
+    applyAdapted(
+      document,
+      repeatedUnfoldContext,
+      requireAdaptation(document, repeatedUnfoldContext, {
+        type: "nodes.ungroup",
+        nodeId: repeatedGroup.id,
+      }).command,
+    )
+    expectUngroupedProjection(document, initialPositions)
   })
 
   test("persists title, Group appearance, and generation preference through closed node-data intents", () => {
@@ -580,12 +661,16 @@ describe("Canvas v2 application command adapter", () => {
       expect(createCanvasGenerationTargetGuard(after)).toEqual(targetGuard)
     }
     const failureContext = context(31, 5, 5)
-    applyAdapted(document, failureContext, requireAdaptation(document, failureContext, {
-      type: "generation.run.finish",
-      failureMessage: "Service failed",
-      nodeId: first.id,
-      operationId: "generation-0",
-    }).command)
+    applyAdapted(
+      document,
+      failureContext,
+      requireAdaptation(document, failureContext, {
+        type: "generation.run.finish",
+        failureMessage: "Service failed",
+        nodeId: first.id,
+        operationId: "generation-0",
+      }).command,
+    )
     const interruptContext = context(31, 6, 6)
     const interrupted = requireAdaptation(document, interruptContext, {
       type: "generation.runs.interrupt-inactive",
@@ -676,6 +761,18 @@ function applyAdapted(
   })
   if (constructed === "rejected") throw new Error("Adapted Canvas command did not construct")
   return applyOk(document, operationContext, constructed.intent, VALID_FACTS)
+}
+
+function expectUngroupedProjection(
+  document: ReturnType<typeof newCanvas>,
+  expectedPositions: readonly Readonly<{ id: string; position: Readonly<{ x: number; y: number }> }>[],
+) {
+  const projection = projectCanvas(validateCanvasYDoc(document))
+  expect(projection.nodes).toHaveLength(expectedPositions.length)
+  expect(projection.nodes.some((node) => node.data.kind === "group")).toBe(false)
+  expect(projection.nodes.map((node) => ({ id: node.ref.id, parent: node.parent, position: node.position }))).toEqual(
+    expectedPositions.map((node) => ({ ...node, parent: null })),
+  )
 }
 
 function currentResourceProof(
