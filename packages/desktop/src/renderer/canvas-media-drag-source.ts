@@ -1,4 +1,5 @@
 import type { CanvasSelectionActionContext, CanvasSelectionDragSource } from "@convax/canvas"
+import { assertResourceRef, canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboration"
 import { getProjectResourceReference } from "@convax/project/canvas"
 import type { CanvasExternalMediaDragRendererClient } from "../canvas-external-drag-contracts"
 
@@ -28,11 +29,27 @@ export function isManagedCanvasMediaDragSelection(context: CanvasSelectionAction
       ) {
         return false
       }
+      const canonicalResource = hasCanonicalCanvasResource(node.data.metadata, node.data.kind)
+      if (canonicalResource !== null) return canonicalResource
       const reference = getProjectResourceReference(node.data.metadata)
       return reference !== null && reference.kind !== "project-directory"
     })
   )
 }
+
+function hasCanonicalCanvasResource(metadata: unknown, kind: ManagedCanvasMediaKind): boolean | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null
+  if (!Object.hasOwn(metadata, canvasProjectionResourceMetadataKey)) return null
+  try {
+    const resource = (metadata as Record<string, unknown>)[canvasProjectionResourceMetadataKey]
+    assertResourceRef(resource)
+    return resource.mediaClass === kind
+  } catch {
+    return false
+  }
+}
+
+type ManagedCanvasMediaKind = "audio" | "image" | "video"
 
 export function createCanvasMediaSelectionDragSource(
   options: CanvasMediaSelectionDragSourceOptions,

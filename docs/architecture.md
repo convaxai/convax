@@ -2268,8 +2268,11 @@ prepared immutable multi-selection. Preparation is asynchronous and abortable;
 `dragstart` only consumes an already prepared source synchronously.
 
 Renderer and preload never receive a native path. Main re-resolves the live active
-Canvas and exact selection, verifies exact semantic/resource guards and managed `.convax/assets` references,
-MIME/signature, regular-file identity and aggregate limits, then stages private
+Canvas and exact selection, verifies exact semantic/resource guards, resolves each
+current canonical Canvas resource through the live ProjectIndex projection (with
+legacy typed Project resource references retained only for compatibility), rechecks
+that owner projection, and validates MIME/signature, regular-file identity and
+aggregate limits before staging private
 copies below `userData/canvas-external-drags`. It returns a one-use, sender-scoped,
 short-lived opaque ticket. Before publication, Main derives a bounded native preview
 from the first staged material; multi-selection adds a count badge, while video and

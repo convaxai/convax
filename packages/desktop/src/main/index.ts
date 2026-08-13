@@ -1333,6 +1333,7 @@ function startApplication() {
     const managedCanvasMedia = new ManagedCanvasMediaResolver({
       assets: projectAssets,
       application: canvasApplication,
+      currentResources: collaborationFacade.projectIndexes,
       projects: projectManager,
     })
     const canvasExternalMediaDrag = new CanvasExternalMediaDragService({
