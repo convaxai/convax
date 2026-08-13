@@ -44,8 +44,8 @@ contract and its routed references.
 ## Process boundaries
 
 - Main owns Electron/native I/O, Project Node adapters, authoritative repositories,
-  ActiveSet and installed capability authority, Agent runtime composition, and
-  trusted IPC.
+  ActiveSet and installed capability authority, Agent runtime composition, trusted
+  IPC, and the signed packaged-application update lifecycle.
 - Preload exposes a narrow typed bridge. It owns no durable or business state.
 - Renderer owns presentation, controller composition, fallible projections, and
   user preferences. It never imports Node or Electron.
@@ -67,6 +67,11 @@ contract and its routed references.
   and label require a task-private userData profile; Main owns native/window
   branding and may project only the display identity to Renderer. Packaged runtime
   ignores the mode, and Renderer never chooses or receives the native profile path.
+- Packaged application updates are Main-owned native operations for signed macOS
+  and Windows builds. Renderer and Preload receive no updater bridge. The public
+  feed URL is build configuration; signing, notarization, object-storage, and
+  publication credentials live only in protected GitHub Actions settings. Main
+  must finish the shared write/task/runtime shutdown drain before installation.
 
 ## Shared composition rules
 

@@ -86,14 +86,21 @@ application and executable paths when it finishes.
 
 Local and pull-request packages are intentionally unsigned. `CONVAX_CHANNEL`
 selects the side-by-side `dev`, `beta`, or `prod` identity. A public release is
-built on each target platform with signing credentials and the release gate enabled:
+built on each target platform with signing credentials, an exact SemVer, and a
+public generic HTTPS update feed:
 
 ```bash
-CONVAX_CHANNEL=prod CONVAX_RELEASE=true bun run package
+CONVAX_CHANNEL=prod \
+CONVAX_RELEASE=true \
+CONVAX_RELEASE_VERSION=1.0.0 \
+CONVAX_UPDATE_BASE_URL=https://updates.example.com/desktop/prod \
+bun run package
 ```
 
 The release gate requires code signing where the platform supports it and enables
 macOS notarization. It is not required for source development or packaged smoke.
+Release credentials live only in GitHub; see [Desktop Releases and Client
+Updates](docs/desktop-builds.md).
 
 ### Build-time feature switches
 

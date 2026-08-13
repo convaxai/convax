@@ -44,6 +44,8 @@
     "@convax/ui": "workspace:*",
     "@convax/workbench": "workspace:*",
     "acorn": "8.17.0",
+    "builder-util-runtime": "9.7.0",
+    "electron-updater": "6.8.9",
     "i18next": "26.3.6",
     "lucide-react": "catalog:",
     "marked": "17.0.6",
