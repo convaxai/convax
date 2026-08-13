@@ -271,6 +271,7 @@ interface CachedPluginRuntime {
   plugin: InstalledWebPluginSummary
   pluginId: string
   sourceBinding: GenerationRecoveryExecutableBinding
+  toolsRequestRevision: number
 }
 
 interface PreparedPluginTool {
@@ -870,10 +871,7 @@ function openRouterLlmModelCatalog(value: unknown) {
   return models
 }
 
-function openAiLlmModelCatalog(
-  value: unknown,
-  fallback: ReadonlyMap<string, string>,
-) {
+function openAiLlmModelCatalog(value: unknown, fallback: ReadonlyMap<string, string>) {
   if (
     !isUnknownRecord(value) ||
     !Array.isArray(value.data) ||
@@ -891,7 +889,7 @@ function openAiLlmModelCatalog(
     ) {
       throw new Error(`OpenAI model catalog entry ${index} is invalid`)
     }
-    const name = typeof value.name === "string" ? value.name : fallback.get(value.id) ?? value.id
+    const name = typeof value.name === "string" ? value.name : (fallback.get(value.id) ?? value.id)
     if (name.length === 0 || name.length > 160 || name.includes("\0")) {
       throw new Error(`OpenAI model catalog entry ${index} is invalid`)
     }
@@ -1066,6 +1064,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       inspected = selectedModels.flatMap(({ expected, selected }) => {
         const definition = availableTools.get(selected.tool.id)
         if (!definition) {
+          if (selected.plugin.manifest.contributes.service !== undefined) return []
           throw new Error(`Generation Plugin ${pluginId} did not expose its declared MCP tool: ${selected.tool.id}`)
         }
         const projection = projectGenerationToolInputSchema(expected.id, definition.inputSchema)
@@ -1091,12 +1090,14 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
       selectedModels.some(({ expected, selected }) => {
         const currentTool = current.manifest.contributes.generation?.tools.find(({ id }) => id === selected.tool.id)
         const currentDefinition = runtime.availableTools?.get(selected.tool.id)
+        const observedDefinition = availableTools.get(selected.tool.id)
+        if (!currentTool) return true
+        if (!currentDefinition || !observedDefinition) {
+          return currentDefinition !== observedDefinition || current.manifest.contributes.service === undefined
+        }
         return (
-          !currentTool ||
-          !currentDefinition ||
           toolContractFingerprint(toolSummary(current.manifest, currentTool)) !== toolContractFingerprint(expected) ||
-          toolDefinitionFingerprint(currentDefinition) !==
-            toolDefinitionFingerprint(availableTools.get(selected.tool.id)!)
+          toolDefinitionFingerprint(currentDefinition) !== toolDefinitionFingerprint(observedDefinition)
         )
       })
     ) {
@@ -1164,10 +1165,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         const models =
           contribution.provider.protocol === "openrouter"
             ? openRouterLlmModelCatalog(catalog)
-            : openAiLlmModelCatalog(
-                catalog,
-                new Map(contribution.models.map((model) => [model.id, model.name])),
-              )
+            : openAiLlmModelCatalog(catalog, new Map(contribution.models.map((model) => [model.id, model.name])))
         const latest = (await this.#discover()).get(selected.manifest.id)
         if (
           !latest ||
@@ -1864,6 +1862,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         plugin: structuredClone(record.plugin),
         pluginId: record.plugin.id,
         sourceBinding: structuredClone(record.sourceBinding),
+        toolsRequestRevision: 0,
       }
       this.#recoveryRuntimes.set(record.executionBindingDigest, runtime)
       const availableTools = await this.#availableTools(runtime, signal, true)
@@ -2362,6 +2361,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           sha256: companion.sha256,
           size: companion.size,
         },
+        toolsRequestRevision: 0,
       }
       if (currentFingerprint !== null) {
         const prior = this.#cache.get(provider.pluginId)
@@ -2601,6 +2601,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           plugin: structuredClone(plugin.manifest),
           pluginId: plugin.manifest.id,
           sourceBinding,
+          toolsRequestRevision: 0,
         }
         const prior = this.#cache.get(plugin.manifest.id)
         if (prior) this.#closeRuntime(prior)
@@ -2639,12 +2640,13 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
 
   async #availableTools(runtime: CachedPluginRuntime, signal?: AbortSignal, refresh = false) {
     if (runtime.availableTools && !refresh) return runtime.availableTools
+    const requestRevision = ++runtime.toolsRequestRevision
     const tools = await runtime.client.listTools(signal)
     const names = tools.map((tool) => tool.name)
     if (new Set(names).size !== names.length) throw new Error("Generation Plugin MCP server exposed duplicate tool ids")
     const available = new Map(tools.map((tool) => [tool.name, tool])) as ReadonlyMap<string, McpToolDefinition>
-    runtime.availableTools = available
-    return runtime.availableTools
+    if (runtime.toolsRequestRevision === requestRevision) runtime.availableTools = available
+    return available
   }
 
   async #reconcileRecoveryPins() {

@@ -1461,7 +1461,16 @@ function startApplication() {
     const pluginServiceBrowserAuthorization = createElectronPluginServiceBrowserAuthorizationBroker(
       pluginServiceAuthorizationCheckpoints,
     )
-    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker()
+    const pluginServiceExternalAuthorization = createElectronPluginServiceExternalAuthorizationBroker(
+      packagedSmoke
+        ? {
+            packagedSmoke: {
+              socketPath: join(userDataDirectory, "auth.sock"),
+              userDataDirectory,
+            },
+          }
+        : undefined,
+    )
     let refreshAgentConfiguration: (() => Promise<void>) | undefined
     let refreshGenerationCatalogAfterServiceMutation: (() => void) | undefined
     const pluginServices = new PluginServiceHost(
@@ -1579,10 +1588,7 @@ function startApplication() {
                 {
                   models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
                   name: provider.name,
-                  npm:
-                    provider.protocol === "openrouter"
-                      ? "@openrouter/ai-sdk-provider"
-                      : "@ai-sdk/openai",
+                  npm: provider.protocol === "openrouter" ? "@openrouter/ai-sdk-provider" : "@ai-sdk/openai",
                   options: {
                     apiKey: provider.apiKey,
                     baseURL: provider.baseUrl,

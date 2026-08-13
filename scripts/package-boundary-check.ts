@@ -25,6 +25,7 @@ type WorkspacePackage = {
 const repositoryRoot = join(import.meta.dir, "..")
 const hostChangeGovernancePath = join(repositoryRoot, "docs", "plugin-host-change-governance.md")
 const architectureContractPath = join(repositoryRoot, "docs", "architecture.md")
+const nexusServiceIntegrationPath = join(repositoryRoot, "docs", "nexus-service-integration.md")
 const desktopCompositionPath = join(repositoryRoot, "packages", "desktop", "src", "main", "index.ts")
 const archivedAuthorityTokens = [
   ["docs/superpowers/specs/", "authorities"].join(""),
@@ -145,6 +146,13 @@ function requireContractMarkers(path: string, source: string, markers: readonly 
   }
 }
 
+function requireDocumentMarkers(path: string, source: string, markers: readonly string[], contract: string): void {
+  const missing = markers.filter((marker) => !source.includes(marker))
+  if (missing.length > 0) {
+    throw new Error(`${path}: ${contract} markers are missing: ${missing.join(", ")}`)
+  }
+}
+
 function isTestSource(sourcePath: string): boolean {
   const normalized = normalizedSourcePath(sourcePath)
   return normalized.startsWith("test/") || /(?:^|\/)[^/]+\.(?:spec|test)\.[cm]?[jt]sx?$/.test(normalized)
@@ -226,6 +234,7 @@ const packages: WorkspacePackage[] = []
 const rootContract = await Bun.file(join(repositoryRoot, "AGENTS.md")).text()
 const architectureContract = await Bun.file(architectureContractPath).text()
 const hostChangeGovernance = await Bun.file(hostChangeGovernancePath).text()
+const nexusServiceIntegration = await Bun.file(nexusServiceIntegrationPath).text()
 const desktopComposition = await Bun.file(desktopCompositionPath).text()
 if (
   !rootContract.includes("## Plugin-to-Host change gate") ||
@@ -238,6 +247,64 @@ if (
   !hostChangeGovernance.includes("Approval prose committed by an Agent or Plugin author is not an approval")
 ) {
   throw new Error("Plugin-to-Host human review gate is missing from the architecture contract")
+}
+requireDocumentMarkers(
+  "docs/nexus-service-integration.md",
+  nexusServiceIntegration,
+  [
+    "# Convax × AuthX × Nexus 本地集成执行契约",
+    "AuthX 是唯一身份 Owner",
+    "AuthX Convax Application Access Token",
+    "不执行 Token",
+    "aud === Convax client_id",
+    "同一枚 AuthX Convax Application Access",
+    "nexus:access",
+    "AuthX Console 是唯一启用入口",
+    "AuthX integration backend",
+    "## 7. 自动创建 Nexus Convax Application",
+    "PUT /api/v1/integrations/authx/{authx_integration_id}/applications/convax",
+    'product_profile_key: "convax-default"',
+    "nexus_application_id",
+    "重新启用必须重新激活同一个",
+    "ensureApplicationSubjectAccess",
+    "没有客户端 bootstrap/connect 步骤",
+    "GET  /api/v1/application-access/status",
+    "POST /api/v1/application-access/checkout",
+    "Authorization: Bearer <AuthX Convax Application Access Token>",
+    "OS credential store",
+    "DELETE /v1/videos/{providerTaskId}",
+    "convax/generation/operations/get",
+    "convax/generation/operations/wait",
+    "convax/generation/operations/cancel",
+    "convax/generation/operations/result",
+    "convax/generation/operations/acknowledge",
+    "CONVAX_GENERATION_LRO_DIRECTORY",
+    "authx:convax:interactive-login",
+    "marketplace:local-product-lock-input",
+    "convax.nexus-public-profile/1",
+    "external_provider_calls",
+    "本方案不需要 Convax Host change",
+    "**未完成**",
+  ],
+  "AuthX and Nexus integration",
+)
+const retiredNexusIntegrationAssertions = [
+  "状态：MVP 核心链路已实现",
+  "MVP 已实现并完成本地真实验收",
+  "Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权",
+  "https://nexus.microvoid.io/workspace/convax/auth/sign-in",
+  "deepseek/deepseek-v4-flash",
+  "GET  /user/v1/me/access",
+  "POST /user/v1/data-tokens",
+  "Nexus Gateway 继续只接受 Nexus Inference Key",
+  "-> one-time Nexus Inference Key",
+  "Authorization: Bearer <Nexus Inference Key>",
+  "Nexus Console 是推荐的配置主入口",
+]
+for (const assertion of retiredNexusIntegrationAssertions) {
+  if (nexusServiceIntegration.includes(assertion)) {
+    throw new Error(`docs/nexus-service-integration.md: retired Nexus integration assertion remains: ${assertion}`)
+  }
 }
 await verifyCurrentProtocolDescriptorFile(repositoryRoot)
 requireContractMarkers("AGENTS.md", rootContract, [
@@ -325,8 +392,7 @@ requireContractMarkers("apps/api/AGENTS.md", collaborationGovernanceContracts[7]
   "registered-scope service registry is bounded advisory anti-rollback/discovery",
   "both a content certificate",
 ])
-if (!(await Bun.file(apiManifestPath).exists()))
-  throw new Error("apps/api/package.json is required")
+if (!(await Bun.file(apiManifestPath).exists())) throw new Error("apps/api/package.json is required")
 if (
   desktopComposition.includes("RemoteCapabilityRegistryClient") ||
   desktopComposition.includes("registry/v1/index.json") ||

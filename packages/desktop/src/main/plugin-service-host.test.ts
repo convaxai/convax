@@ -133,7 +133,7 @@ describe("PluginServiceHost", () => {
 
   test("maps host methods to fixed actions and never accepts an action payload", async () => {
     const calls: Array<{ call: "status" | "usage" | WebPluginServiceAction; pluginId: string }> = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const runtime: PluginServiceToolRuntime = {
       async callService(pluginId, call) {
         calls.push({ call, pluginId })
@@ -150,6 +150,7 @@ describe("PluginServiceHost", () => {
       { call: "sign_out", pluginId: "account-tools" },
     ])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("does not report a completed service mutation as failed when Agent refresh fails", async () => {
@@ -174,7 +175,7 @@ describe("PluginServiceHost", () => {
   })
 
   test("refreshes host projections after a potentially mutating service call fails", async () => {
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const host = new PluginServiceHost(
       {
         callService: async () => {
@@ -190,6 +191,7 @@ describe("PluginServiceHost", () => {
 
     await expect(host.signOut("account-tools")).rejects.toThrow("response was lost")
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("does not delay a completed service mutation while Agent refresh is busy", async () => {

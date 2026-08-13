@@ -124,7 +124,12 @@ function requireResultMode(value: unknown): GenerationResultMode {
     return { type: "return" }
   }
   if (mode.type === "replace-node") {
-    requireExactKeys(mode, ["expectedTarget", "nodeId", "type"], ["expectedTarget", "nodeId", "type"], "Generation result mode")
+    requireExactKeys(
+      mode,
+      ["expectedTarget", "nodeId", "type"],
+      ["expectedTarget", "nodeId", "type"],
+      "Generation result mode",
+    )
     return {
       expectedTarget: requireGenerationTargetGuard(mode.expectedTarget),
       nodeId: requireOpaqueId(mode.nodeId, "Generation replacement node id"),
@@ -147,9 +152,13 @@ function requireGenerationTargetGuard(value: unknown): CanvasGenerationTargetGua
   }
   const dataRecord = data as Record<string, unknown>
   if (
-    typeof dataRecord.kind !== "string" || !dataRecord.kind || dataRecord.kind.length > 256 ||
-    typeof dataRecord.label !== "string" || dataRecord.label.length > 4_096
-  ) throw new Error("Generation replacement target data is invalid")
+    typeof dataRecord.kind !== "string" ||
+    !dataRecord.kind ||
+    dataRecord.kind.length > 256 ||
+    typeof dataRecord.label !== "string" ||
+    dataRecord.label.length > 4_096
+  )
+    throw new Error("Generation replacement target data is invalid")
   if (new TextEncoder().encode(JSON.stringify(data)).byteLength > 256 * 1024) {
     throw new Error("Generation replacement target data is invalid")
   }
@@ -179,10 +188,12 @@ function cloneBoundedJson(
   const input = requireRecord(value, label)
   const entries = Object.entries(input)
   if (entries.length > 256) throw new Error(`${label} is invalid`)
-  return Object.fromEntries(entries.map(([key, item]) => {
-    if (!key || new TextEncoder().encode(key).byteLength > 1_024) throw new Error(`${label} is invalid`)
-    return [key, cloneBoundedJson(item, depth + 1, budget, label)]
-  }))
+  return Object.fromEntries(
+    entries.map(([key, item]) => {
+      if (!key || new TextEncoder().encode(key).byteLength > 1_024) throw new Error(`${label} is invalid`)
+      return [key, cloneBoundedJson(item, depth + 1, budget, label)]
+    }),
+  )
 }
 
 export function parseGenerationListToolsRequest(input: unknown): GenerationListToolsRequest {
@@ -344,9 +355,7 @@ export function parseGenerationCanvasRequest(input: unknown): GenerationCanvasRe
     ...(expectedOutputCount === undefined ? {} : { expectedOutputCount }),
     operationId,
     ...(value.output === undefined ? {} : { output: requireOutput(value.output, "Generation output modality") }),
-    ...(value.parentId === undefined
-      ? {}
-      : { parentId: requireOpaqueId(value.parentId, "Generation parent node id") }),
+    ...(value.parentId === undefined ? {} : { parentId: requireOpaqueId(value.parentId, "Generation parent node id") }),
     prompt,
     ...(promptContextNodeIds === undefined ? {} : { promptContextNodeIds }),
     ref: {
@@ -400,9 +409,14 @@ export function registerGenerationIpc(executor: GenerationExecutor, options: Gen
     if (!options.isTrustedSender(event)) throw new Error("Generation IPC request came from an untrusted renderer")
     if (disposed) throw new Error("Generation IPC is disposed")
     const operationId = requireOperationId(input)
-    const controller = senders.get(event.sender.id)?.controllers.get(operationId)
+    const ownerState = senders.get(event.sender.id)
+    const controller = ownerState?.controllers.get(operationId)
     if (controller) {
+      const anotherSenderOwnsWait = [...senders.values()].some(
+        (state) => state !== ownerState && state.controllers.has(operationId),
+      )
       controller.abort(abortError("The generation operation was canceled"))
+      if (!anotherSenderOwnsWait) await executor.cancel?.({ operationId })
       return
     }
     if ([...senders.values()].some((state) => state.controllers.has(operationId))) return

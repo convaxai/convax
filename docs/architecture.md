@@ -1630,6 +1630,38 @@ and dispatch boundary.
 An authorization action may request the one fixed main-only browser-cookie exchange
 in a fresh non-persistent sandboxed Electron session.
 
+An external public-client service may instead complete Authorization Code with PKCE
+in the system browser and use the authorization server's Access Token directly at
+an external Resource Server only when the token audience identifies either that
+exact resource or an explicitly managed first-party Application trust domain that
+contains it. An arbitrary or unbound client-audience Access Token, ID Token, Cookie,
+Refresh Credential, or Management credential is never a resource credential. The
+verified companion owns the loopback callback, PKCE transaction, token validation,
+refresh rotation and OS credential-store adapter; only the rotating Refresh
+Credential may be durable and short-lived Access Tokens remain in companion memory.
+The Resource Server validates exact issuer/JWKS, audience, Application/client,
+subject, environment, token use, capability scope, time claims and the live
+server-side integration binding, then resolves its product authorization and
+provider secrets server-side. Direct use does not add a second token exchange,
+static service key, renderer field or Host credential store.
+
+For a first-party resource preconfigured on the upstream Application, the
+authorization server's Application-integration control plane may idempotently create
+one corresponding Resource Server Application aggregate before any end-user login.
+The integration id is the external uniqueness key: retry and response loss return
+the same Resource Server Application id, conflicting identity fails closed, disable
+retains history, and re-enable reactivates the same aggregate. The Resource Server
+resolves its own product template into Plan, Quota and provider state; the
+authorization server persists only the returned Application id/version, never those
+product facts. One system-browser Application login can then use the same short-lived
+Application Access Token at the bound first-party Resource Server when the
+integration-owned capability scope is present, without a second Resource Server
+login, consent, connect or bootstrap action. The Resource Server may idempotently
+create subject access inside its status or request authorization transaction.
+Desktop and the companion never call the integration Management API or select the
+Resource Server Application. This server-side composition changes no Convax package
+dependency, runtime route, persistence target or architecture-map node.
+
 Checkout is also a fixed host operation, not a generic Plugin link. Renderer may
 select only a bounded Plan key advertised by the current v2 status. Preload forwards
 that exact Plugin/Plan target, the sidecar receives only `{ plan_key }`, and Main
@@ -2239,6 +2271,26 @@ Renderer URL; Renderer may render it in application chrome and a fixed corner ba
 but receives no native path and cannot select the profile. Packaged Main ignores the
 solo-task identity and the ordinary development profile override before validation,
 so release builds cannot enable this mode through ambient environment variables.
+
+The explicit packaged-smoke mode may replace system-browser navigation with one
+private Unix socket located directly below its already validated isolated `userData`
+directory. Main sends only the validated external-authorization URL and requires one
+closed acceptance response; OAuth codes, tokens, credentials, Plugin identities,
+provider configuration, and native paths never cross that socket. Ordinary packaged
+and development runtimes continue to use the system browser and cannot select this
+adapter.
+
+A repository-ignored local acceptance supervisor may launch that packaged-smoke
+process tree as a detached operating-system session so final verification survives
+the invoking terminal. The supervisor is not shipped product behavior: it starts
+only the exact packaged verifier from an absolute path, passes a minimal allowlisted
+non-secret environment, redirects stdio to private files, records exact launcher and
+Main PIDs in a private marker, and retains the same private control socket as the only
+normal stop path. Verification must prove the launcher is reparented after its
+invoker exits, is its own process-group and session leader, has no controlling TTY,
+and still owns the exact packaged Main and immutable companion. This adds no Host
+API, Plugin-specific branch, persistence owner, dependency edge, or architecture-map
+node.
 
 Packaged Main and preload outputs are complete JavaScript dependency bundles. The
 build disables package dependency externalization and admits only Electron and Node

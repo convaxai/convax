@@ -1,653 +1,612 @@
-# Nexus Service 接入方案
+# Convax × AuthX × Nexus 本地集成执行契约
 
-状态：MVP 核心链路已实现，并已完成本地打包应用、全新用户注册和真实 OpenRouter
-推理的端到端验收。本方案同时记录当前实现基线和后续正式发布要求；Nexus 仍然不是
-Convax 的内置依赖。
+状态：目标架构与跨仓实施契约。本文描述尚待 AuthX、Nexus 和
+`convax-plugins` 共同完成的接口；计划、未提交代码、测试桩和历史验收都不是完成证据。
 
-关联文档：
+本文取代此前的 Nexus Hosted Auth、Hosted Product Session、Data Token、Nexus
+Inference Key 和客户端选择 ProviderConnection 方案。旧凭据不得迁移、兼容或回退。
 
-- `docs/architecture.md`
-- Nexus `docs/HOSTED_AUTH.md`
-- Nexus `docs/TECHNICAL_ARCHITECTURE.md`
-- Nexus `packages/contracts/data.openapi.yaml`
+规范关键词“必须”“不得”“应”具有约束力。关联契约：
 
-## 1. 核心决策
+- [`architecture.md`](architecture.md)；
+- [`generation-tool-plugins.md`](generation-tool-plugins.md)；
+- [`canvas-node-generation-state-persistence.md`](canvas-node-generation-state-persistence.md)；
+- [`plugin-host-change-governance.md`](plugin-host-change-governance.md)；
+- [`plugin-skill-platform.md`](plugin-skill-platform.md)。
 
-Convax 把该集成以 **Convax** 的名称展示为一个与内置 OpenCode Service 并列的已安装 Service；Nexus 只保留为后端和代码所有权名称。具体集成由 `convaxai/convax-plugins` 仓库中的官方 Plugin 和经过验证的 Companion 实现；Convax 主仓只提供任何 Service 都可以复用的通用宿主能力。
+## 1. 决策
 
-Nexus Service 负责：
-
-- 通过 Nexus Hosted Auth 登录用户；
-- 把 Nexus 支持的 LLM 模型目录接入现有 Agent 模型选择器；
-- 展示已连接账号、凭据状态、剩余额度和用量；
-- 展示 Nexus 返回的当前 Plan、订阅状态和允许购买的 Plan；
-- 通过宿主管理的固定 Checkout 操作在系统浏览器完成升级；
-- 运行一个仅 Main 进程可见的本地 OpenRouter 协议 Gateway；
-- 获取短期 Nexus Data Token，并将其附加到 Gateway 请求；
-- 确保 Nexus 凭据和上游 Provider 凭据不会暴露给 Renderer、OpenCode、Canvas 文档、Project 文件或日志。
-
-Nexus 始终是可选的已安装 Service。内置 OpenCode Service 继续独立工作。
-
-## 2. 产品体验
-
-现有的 Settings > Services 页面是该能力的唯一产品入口。安装 Plugin 后，Service 列表中新增一张 Convax 卡片。
-
-连接成功后的布局沿用现有卡片结构：
+采用下面这一条链路：
 
 ```text
-Convax                            Connected        Free
-通过 Convax 安全访问 OpenRouter 模型。
+AuthX Console / Convax Application
+  -> enable built-in Nexus integration
+  -> AuthX integration service automatically creates Nexus Convax Application
 
-ACCOUNT                         CREDENTIAL
-Convax                          Configured · verified
-
-PLAN                            SUBSCRIPTION
-Free · monthly                  No active subscription
-
-CREDITS                         USAGE
-剩余 0.9988 USD                 已用 0.0012 USD
-
-Capabilities
-LLM · Image · Video
-
-Models
-OpenRouter 当前可用模型…
-
-                         [Upgrade to Pro] [Sign out]
+Convax companion -> AuthX Authorization Code + PKCE S256
+  -> AuthX Convax Application Access Token
+  -> Nexus Gateway + invisible subject JIT access
 ```
 
-Plan、订阅和可升级目录全部来自 Nexus 的权威 User API。Convax 不通过额度单位、账号名称或模型名称
-推断套餐，也不持有价格、Provider Product ID 或支付凭据。
+核心决策：
 
-### 2.1 未连接状态
+1. AuthX 是唯一身份 Owner、Authorization Server，也是 **Convax Application 集成 Nexus 的
+   唯一管理入口**。
+2. 产品体验上，Nexus 是 AuthX Application 可启用的一项内置平台能力；用户只登录 AuthX，
+   不再执行“连接 Nexus”、Nexus 登录或 Nexus consent。
+3. AuthX Application Integration 负责启用/停用和持有 `nexus_application_id`；启用时自动创建或
+   复用 Nexus Convax Application，不要求管理员再进入 Nexus Console。
+4. Nexus Convax Application 本身就是产品绑定聚合，固定持有 Workspace、默认 Plan、Quota policy
+   和 ProviderConnection；不得再创建一套平行的 Application binding 对象。
+5. Convax OAuth Client 的 `aud` 定义为 Convax Application 的 first-party backend 信任域；
+   Nexus Convax Application 把 Nexus 明确加入这个信任域。
+6. Nexus Gateway 直接验证用户登录 AuthX 后拿到的同一枚 AuthX Convax Application Access
+   Token；不执行 Token Exchange，也不签发第二份 Nexus Token。
+7. Access Token 必须满足 `aud === Convax client_id`、active Application integration 和
+   `nexus:access` scope；其他 AuthX Application 的 Token、ID Token、Cookie、Refresh Credential
+   和 Management Key 不得进入 Gateway。
+8. AuthX Token 只证明身份、Convax Application 和 Nexus capability scope；Nexus 的 Plan、额度、
+   Provider 和密钥不得写入 Token，Gateway 必须读取 Nexus 当前事实。
+9. Nexus 在 status 或 Gateway 的首次合法请求中按 Nexus Convax Application 和 `sub` 无感 JIT 创建
+   WorkspaceAccess；没有客户端 bootstrap/connect 步骤。
+10. Companion 只持久化旋转的 AuthX Refresh Credential；短期 Access Token 只保存在内存。
+11. Convax Host 继续只使用通用 Service、LLM、Generation Tool、Checkout、managed
+    companion 和 `convax.generation-lro/1` 契约，不增加 AuthX 或 Nexus 分支。
 
-卡片展示：
+### 1.1 为什么可以直接复用 AuthX Token
 
-- Service 名称和说明；
-- `Disconnected` 或“需要登录”状态；
-- `LLM` 能力；
-- 一份有界的模型目录；未登录时可以禁用；
-- 一个 `Sign in with Convax` 操作。
-
-用户选择登录后，系统浏览器打开：
+这里可以直接复用，是因为 AuthX 明确把 Convax Application 定义成一个 first-party backend
+信任域，并由自动创建的 Nexus Convax Application 加入这个信任域：
 
 ```text
-https://nexus.microvoid.io/workspace/convax/auth/sign-in
+iss   = exact AuthX issuer
+aud   = exact Convax OAuth client_id
+scope includes nexus:access
+Application integration = ACTIVE
+Nexus Convax Application = exact and ACTIVE
 ```
 
-正式产品流程不提供 Renderer 内嵌登录表单，也不提供手工填写 API Key 的输入框。
+因此 Nexus 是这枚 Application Access Token 的预期 first-party 接收方。Nexus 仍必须拒绝任意
+其他 AuthX Application 的 Token、缺少 `nexus:access` 的 Token 和所有 ID Token。无感来自明确的
+服务端 Nexus Application 绑定，不是把 AuthX 的任意 Token 当成万能凭据。
 
-### 2.2 已连接状态
+### 1.2 什么时候才需要专用 audience 或 Token Exchange
 
-卡片只接受破坏性升级后的 `convax.plugin-service-status/2` 投影：
+当前 Nexus 已被定义为 AuthX Convax Application 的 first-party backend，因此不需要专用
+`nexus_resource` audience，也不需要 OAuth 2.0 Token Exchange。只有出现以下需求时再单独评审：
 
-- `account.displayName`：Nexus 账号邮箱或显示名称；
-- `credential.configured`：本地是否存在可用的 Refresh Grant；
-- `credential.verification`：最近一次有界的验证结果；
-- `credits.remaining`：当前剩余 AI Budget，以 USD 展示；
-- `usage.consumed`：当前周期已使用 AI Cost，以 USD 展示；
-- `plan`：Nexus 当前有效 Plan 的 Key、名称和月付/年付周期；
-- `billing.subscriptionStatus`：可选的权威订阅状态；
-- `billing.checkout.plans`：当前 Workspace 配置允许购买的有界 Plan 目录；
-- `billing.checkout.pending`：当前 Checkout 的有界状态；
-- `state`：`connected`、`attention`、`disconnected` 或 `unknown`。
+- Nexus 同时接入多个上游 IdP，需要统一成 Nexus 自己的 Token；
+- Nexus 从 AuthX Application 内部能力变成可被第三方 Client 独立调用的公共 Resource Server；
+- Nexus 必须拥有独立的 Token 生命周期、resource audience 或 sender constraint；
+- 上游 Token 不可本地验证，只能 introspect，且不适合直接暴露给 Gateway；
+- Nexus 的内部服务不得信任或理解任何 AuthX issuer。
 
-`service.status` v1 不再兼容；仍返回 v1 的旧插件会被宿主拒绝。Nexus Companion 从当前
-ProviderConnection 的 `/models` 读取 OpenRouter 运行时目录，模型 ID 保持不透明。Agent Runtime
-刷新配置后，同一目录同时出现在 Nexus Service 卡片和现有 Agent 模型选择器中。Manifest 中的
-`deepseek/deepseek-v4-flash` 仅作为运行时目录暂不可用时的静态回退项。
+Token Exchange 会新增签发端、刷新/撤销语义、故障点和凭据生命周期；在上述需求出现前，它没有
+提供足以抵消复杂度的收益。
 
-### 2.3 需要关注的状态
+标准依据：Native App 使用系统浏览器和 PKCE 见
+[RFC 8252](https://www.rfc-editor.org/rfc/rfc8252.html)，OAuth 安全基线见
+[RFC 9700](https://www.rfc-editor.org/rfc/rfc9700.html)，Token Exchange 仅作为未来可选模型见
+[RFC 8693](https://www.rfc-editor.org/rfc/rfc8693.html)。未来若拆出独立 Resource Server audience，
+再采用 [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707.html)。
 
-卡片至少需要区分以下场景，但不能直接向 Renderer 转发上游原始诊断信息：
+## 2. 简化时序图
 
-| 场景                       | Service 状态   | 用户操作           |
-| -------------------------- | -------------- | ------------------ |
-| Refresh Grant 过期或被撤销 | `attention`    | 重新登录           |
-| WorkspaceAccess 被暂停     | `attention`    | 联系支持或管理账号 |
-| Quota 耗尽                 | `attention`    | 等待重置或升级套餐 |
-| Nexus 暂时不可用           | `unknown`      | 重试               |
-| 用户已退出登录             | `disconnected` | 登录               |
+```mermaid
+sequenceDiagram
+  actor Admin as 管理员
+  actor User as 用户
+  participant AuthXConsole as AuthX Console
+  participant Convax as Convax
+  participant Companion as nexus companion
+  participant Browser as 系统浏览器
+  participant AuthX as AuthX
+  participant Nexus as Nexus API / Gateway
 
-首版可以使用固定错误类别关联的宿主本地化文案表达具体原因。不能把 Sidecar 返回的任意错误文本直接传给 Renderer。
+  Admin->>AuthXConsole: Convax Application / Enable Nexus
+  AuthXConsole->>Nexus: 幂等创建 Nexus Convax Application
+  Nexus-->>AuthXConsole: nexus_application_id + ACTIVE
+  User->>Convax: 登录 AuthX
+  Convax->>Companion: service.authorize
+  Companion->>Browser: 打开 AuthX authorize<br/>PKCE + nexus:access
+  Browser->>AuthX: 用户登录 Convax
+  AuthX-->>Companion: loopback code
+  Companion->>AuthX: code + verifier
+  AuthX-->>Companion: Convax Application Access Token<br/>+ rotating Refresh Credential
+  Companion->>Nexus: 调用 Gateway<br/>Bearer 同一 AuthX Access Token
+  Nexus->>Nexus: 校验 Nexus Convax Application<br/>JIT subject access + Quota / Provider
+  Nexus-->>Companion: 模型或生成结果
+```
 
-### 2.4 Plan 与 Hosted Checkout
+运行期间，Access Token 过期前由 companion 使用 Refresh Credential 向 AuthX 刷新；不经过
+Nexus 换 Token。用户侧没有 Nexus 登录页、Nexus connect API 或第二次授权确认。
 
-用户点击 `Upgrade to {Plan}` 后只把经过 v2 状态目录验证的 `planKey` 传给固定
-`service.checkout` Tool。Nexus 从 User Access Token 推导 Workspace、WorkspaceAccess、
-BillingConnection、Product Mapping 和固定 Success URL；客户端不能覆盖这些参数。
+## 3. Owner 与信任边界
 
-Sidecar 返回的 Checkout URL 仅进入 Desktop Main。Main 严格校验
-`convax.plugin-service-checkout/1`、Checkout ID 和规范 HTTPS URL，再用系统浏览器打开；
-Preload 和 Renderer 都看不到 URL。相同 Access/Plan 的未完成尝试持久化同一个
-Idempotency-Key，避免进程重启或网络重试产生重复 Checkout。
+| 事实或能力                                               | 唯一 Owner                | 禁止                                             |
+| -------------------------------------------------------- | ------------------------- | ------------------------------------------------ |
+| Account、MFA、OAuth Grant、pairwise `sub`                | AuthX                     | Nexus 复制登录 Session                           |
+| Public Client、Redirect URI、PKCE、Refresh family        | AuthX                     | Nexus 签发身份 Token                             |
+| Convax Application 的 Nexus integration 状态和 reference | AuthX                     | Companion/用户在运行时创建 Nexus Application     |
+| Convax Application audience 和 `nexus:access` scope      | AuthX 注册；Nexus 消费    | 接受未绑定 Application 或缺 scope 的 Token       |
+| Nexus Convax Application 及其 Workspace/Plan/Provider    | Nexus                     | AuthX 保存产品事实副本或另建 binding 对象        |
+| WorkspaceAccess、Plan、Quota、Billing                    | Nexus                     | 写入 AuthX Token                                 |
+| ProviderConnection、Provider Host、Provider Secret       | Nexus                     | Companion 或 Renderer 选择/读取                  |
+| AuthX → Nexus 管理面 provisioning                        | AuthX integration backend | 浏览器或 companion 持有管理 credential           |
+| OAuth transaction、Access Token 内存、Refresh Credential | verified companion        | Main、Renderer、Canvas、Project 或 OpenCode 持有 |
+| Service/LLM/Generation 适配                              | `convax-plugins`          | Convax Host 命名 Nexus 行为                      |
+| Generation executor 与 Host LRO ledger                   | Convax Desktop Main       | sidecar Map 成为恢复事实源                       |
+| Project 文件与 Canvas 结果提交                           | Convax domain owners      | Nexus 直接写产品私有状态                         |
 
-支付结果只能由 Nexus 的签名 Webhook 投影改变 Access/Plan。浏览器完成页和 Convax 返回前台后的
-刷新只读取状态，不能提前授予套餐。
-
-## 3. 目标与非目标
-
-### 3.1 目标
-
-- Convax 用户可以直接从 Desktop 通过 Nexus 完成认证。
-- 复用一个全局唯一的 Nexus Workspace Slug：`convax`。
-- 每个用户拥有独立授权的 `WorkspaceAccess` 和 Quota。
-- Agent LLM 流量通过 Nexus ProviderConnection 转发。
-- 保持流式传输、背压和取消语义。
-- 所有长期或短期 Nexus 凭据均不进入 Renderer 和 OpenCode。
-- 具体 Nexus 行为留在 Convax 主仓之外。
-- OpenCode 和 Nexus 两个 Service 可以同时存在。
-
-### 3.2 非目标
-
-- 在 Convax 中嵌入 Nexus Management Key。
-- 允许 Desktop 创建 Organization、Workspace、Plan 或 Provider Secret。
-- 为每个 Convax 用户创建一个 Nexus Workspace。
-- 允许 Desktop 向 Nexus 传入客户端选择的上游 Host。
-- 在 Convax 中实现模型映射、Fallback、定价或路由逻辑。
-- 将 Nexus Token 持久化到 Project、Canvas 文档或普通 Preferences。
-- 替换现有 OpenCode Service。
-- 在 Convax 内部实现 Nexus Hosted Auth。
-
-## 4. 职责归属
-
-### 4.1 Nexus 仓库
-
-Nexus 负责：
-
-- 全局唯一的 Workspace Slug `convax`；
-- Hosted Auth 页面和 Authorization Code + PKCE；
-- Redirect URI 的注册和校验；
-- Better Auth 用户身份；
-- `WorkspaceAccess`、Plan、QuotaPeriod 和 Billing 状态；
-- User Access Token、轮换的 Desktop Refresh Token 和 Data Token；
-- ProviderConnection 的 Workspace 归属校验；
-- Gateway 授权、Quota Reserve 和 Usage Settlement；
-- Hosted Checkout 和签名 Billing Webhook 投影。
-
-Nexus 是“用户身份到 Access 绑定关系”和 Quota 的事实来源。Convax 不能根据本地状态重建这些授权事实。
-
-### 4.2 Convax 仓库
-
-Convax 只负责通用平台能力：
-
-- 已安装 Service 和 LLM Contribution 的校验与生命周期；
-- 适用于 OAuth Loopback 的通用外部浏览器授权 Broker；
-- Plugin 级安全凭据库；
-- 固定、Renderer-safe 的 Service 操作和有界状态投影；
-- Service 凭据变化后刷新存活的 Agent 配置；
-- Services 页面和 Agent 模型选择器。
-
-任何 Convax 核心模块都不能根据 Nexus Plugin ID、Nexus 域名、Nexus 错误码或 Nexus 模型名称进行分支。
-
-### 4.3 Convax Plugins 仓库
-
-`convaxai/convax-plugins` 仓库负责：
-
-- Nexus Service Plugin Manifest 和资源；
-- 经过验证的 Nexus Companion 可执行文件；
-- PKCE 生成和 OAuth Transaction 状态；
-- Nexus Token Exchange 和 Refresh 编排；
-- Data Token 获取；
-- 本地 OpenAI-compatible Gateway；
-- 将 Nexus 特有错误收敛为固定 Service 状态；
-- OpenRouter 运行时模型目录与静态回退模型。
-- Service Status v2 的 Plan/Checkout 投影与可重试 Checkout 尝试。
-
-建议的包结构：
+允许的依赖方向：
 
 ```text
-packages/plugins/nexus-service/
-packages/tools/nexus-mcp/
+AuthX Console -> AuthX integration backend -> Nexus Management contract
+
+AuthX Convax Application OAuth contract <- verified nexus companion -> Nexus Gateway contract
+
+Convax public Plugin contracts
+  <- nexus-service manifest + companion
 ```
 
-这些名称仅作为方案建议，创建包时仍需单独评审。
+AuthX 只有 Nexus integration adapter 依赖 Nexus 的公开 Management contract；OAuth core 不导入
+Nexus 业务源码。Nexus 不依赖 Convax Host。Companion 只能使用 AuthX OAuth 和 Nexus runtime 的
+公开 HTTP 契约，不能调用 Management API 或导入私有源码。Convax Host 不依赖 AuthX 或 Nexus。
 
-## 5. 身份与配置
+## 4. Console 最佳实践
 
-接入涉及以下标识和凭据：
+### 4.1 主入口选 AuthX Console
 
-| 值                           | 所有者                | 敏感性         | 首版来源           |
-| ---------------------------- | --------------------- | -------------- | ------------------ |
-| Workspace Slug `convax`      | Nexus                 | 公开           | Plugin 配置        |
-| Hosted Auth Origin           | Nexus                 | 公开           | Plugin 配置        |
-| Gateway Origin               | Nexus                 | 公开           | Plugin 配置        |
-| ProviderConnection ID        | Nexus Workspace       | 公开但有作用域 | Plugin 配置        |
-| OAuth State 和 PKCE Verifier | Companion             | 敏感、临时     | 进程内存           |
-| Authorization Code           | Nexus/Companion       | 敏感、一次性   | Loopback Callback  |
-| User Access Token            | Companion             | 敏感、短期     | 进程内存           |
-| Desktop Refresh Token        | Nexus 用户授权        | 敏感、长期     | Companion 凭据文件 |
-| Data Token                   | Nexus WorkspaceAccess | 敏感、短期     | 进程内存           |
-| 本地 Gateway Key             | Companion             | 敏感、进程级   | 进程内存           |
-| Provider API Key             | Nexus Workspace       | 敏感           | 仅 Nexus 保存      |
-| Management Key               | Nexus Control Plane   | 敏感           | 永不进入 Convax    |
-
-MVP 不在 Plugin 中硬编码 ProviderConnection ID。Companion 在登录后通过
-`GET /user/v1/provider-connections` 读取当前 `convax` Workspace 中可用的连接，并选择服务端返回的
-OpenRouter 连接。ProviderConnection ID 只负责在 Token 所属 Workspace 内选择上游；它不能替代授权，
-也不能允许客户端指定任意上游 URL。
-
-当前本地 MVP 将 Refresh Token 保存到
-`~/.config/convax/service-credentials/nexus-service.json`（目录权限 `0700`、文件权限 `0600`，原子替换）。
-文件不包含 Provider API Key、Management Key、Data Token 或本地 Gateway Key。正式发布前仍应迁移到
-操作系统 Credential Vault。
-
-## 6. 认证与 Token 流程
-
-### 6.1 依赖的 Nexus 契约
-
-当前实现使用以下 Nexus Hosted Auth 与 User API 契约：
+**AuthX Console 是唯一启用入口。** 管理员进入：
 
 ```text
-GET  /workspace/{workspaceSlug}/auth/sign-in
-GET  /workspace/{workspaceSlug}/auth/sign-up
-POST /workspace/{workspaceSlug}/auth/authorize
-POST /workspace/{workspaceSlug}/auth/token
-POST /workspace/{workspaceSlug}/auth/revoke
-
-GET  /user/v1/me/access
-GET  /user/v1/me/quota
-GET  /user/v1/provider-connections
-POST /user/v1/data-tokens
-POST /user/v1/billing-checkouts
-GET  /user/v1/billing-checkouts/{checkoutId}
+Applications -> Convax -> Integrations -> Nexus
 ```
 
-Desktop 使用带 PKCE `S256` 的 Authorization Code。Callback 必须是精确注册的 Loopback Redirect，例如：
+管理员只执行 `Enable Nexus`，不填写 Nexus Workspace、Plan、Provider 或 credential。AuthX
+integration backend 使用固定的 `convax-default` 产品模板键调用 Nexus Management API；Nexus
+自己把模板解析成 Workspace、默认 Plan、Quota policy 和 ProviderConnection，并自动创建 Nexus
+Convax Application。模板键只是 Nexus 产品配置选择器，不包含产品事实或 Secret。
+
+Nexus 管理 credential、原始 Management response 和 Provider Secret 不得进入浏览器。AuthX
+backend 以 `authx_integration_id` 为幂等外部键创建或读取 Nexus Application，只在 Nexus 返回同一个
+durable `nexus_application_id` 且状态为 `ACTIVE` 后，才把 AuthX integration 标记为 `ACTIVE`。
+
+AuthX Application integration 保存：
 
 ```text
-http://127.0.0.1:{ephemeralPort}/oauth/callback
+integration_id
+application_id / oauth_client_id / environment
+nexus_application_id + application_version
+desired state: ENABLED | DISABLED
+observed state: PENDING | ACTIVE | ATTENTION
 ```
 
-Nexus 必须根据 Desktop Public Client 策略校验完整 Redirect URI。Companion 必须校验 `state`、只兑换一次 Code，并在完成后关闭 Listener。
+它不保存 WorkspaceAccess、Plan、Quota、ProviderConnection 或 Provider Secret 的权威副本；
+这些始终由 `nexus_application_id` 指向的 Nexus Convax Application 决定。失败和跨服务超时保持
+`PENDING` 或 `ATTENTION` 并由后台幂等 reconcile，不得在未确认 Nexus Application active 时授予
+`nexus:access`。
 
-### 6.2 登录时序
+### 4.2 Nexus Console 的定位
+
+Nexus Console 管理 `convax-default` 产品模板、Provider/Plan、自动创建的 Nexus Convax Application、
+只读 AuthX linkage 和审计，但不是集成启用入口。Nexus 可以提供一键紧急停用；它是安全撤销而
+不是重新绑定，并使 AuthX integration 收敛到 `ATTENTION`。恢复由 AuthX reconcile 重新激活同一个
+`nexus_application_id`，不得偷偷新建第二个 Application。
+
+AuthX Console 同时负责：
+
+- 创建 Native/Public OAuth Client，不创建 Client Secret；
+- 注册精确 loopback Redirect URI；
+- 把该 Client 的 audience 定义为 Convax Application first-party backend trust domain；
+- 允许 Authorization Code、Refresh Token、PKCE S256，并在 active integration 下自动授予
+  `nexus:access`；
+- 配置用户登录、MFA、Token TTL 和撤销策略；
+- 以管理员对 Application integration 的启用作为 Nexus capability 的预授权。
+
+AuthX Console 可以组合展示 Nexus 配置，但不得把展示副本或 Token claim 变成 Nexus 产品授权。
+
+## 5. AuthX Native OAuth 契约
+
+### 5.1 Authorization Code + PKCE
+
+Companion 必须：
+
+1. 先绑定一次性 `127.0.0.1` loopback listener；
+2. 生成至少 256 bit 随机 `state`、`nonce` 和 PKCE verifier；
+3. 使用 `code_challenge_method=S256`；
+4. 通过系统浏览器打开 AuthX，不嵌入 WebView；
+5. 在 authorize 请求中携带 `nexus:access` scope；
+6. 使用精确 `redirect_uri`、`client_id` 和 verifier 兑换 code；
+7. 校验 callback 路径、方法、`state`、issuer 和单次使用；
+8. AuthX 只在 Convax Application 的 Nexus integration 为 `ACTIVE` 时把 `nexus:access` 授予
+   Convax Application Access Token；
+9. 成功后原子替换 Refresh Credential，失败则保留原有可用凭据。
+
+建议请求：
 
 ```text
-用户
-  -> Convax Services：选择 Sign in with Nexus
-  -> Nexus Companion：创建 State、Verifier、Challenge 和 Loopback Listener
-  -> Convax Main：校验 Hosted Auth URL，并使用系统浏览器打开
-  -> Nexus Hosted Auth：认证用户并授权 convax Workspace
-  -> Companion Loopback：接收 Code 并校验 State
-  -> Nexus Token Endpoint：使用 Code + Verifier 换取 Token
-  -> Companion 凭据库：只持久化轮换的 Refresh Token
-  -> Nexus User API：读取 Access 和 Quota
-  -> Convax Service 卡片：进入 Connected 状态
-  -> Agent Runtime：刷新配置并连接 Nexus LLM Provider
+response_type=code
+client_id=<convax-public-client-id>
+redirect_uri=http://127.0.0.1:<registered-port>/oauth/callback
+scope=openid profile email offline_access nexus:access
+code_challenge=<base64url-sha256-verifier>
+code_challenge_method=S256
+state=<single-use-random>
+nonce=<single-use-random>
 ```
 
-如果用户取消、超时、Plugin 发生变化或应用退出，Main 必须取消授权，Companion 必须关闭 Callback Listener。中断的授权不能留下部分凭据。
+AuthX 可使用一个精确固定端口，或按 Native App 规范注册/支持 loopback 动态端口；一次 transaction
+选定后，authorize 与 token 请求必须使用完全相同的 Redirect URI。生产 issuer 必须是 HTTPS；
+只有本地开发可使用 loopback HTTP。
 
-### 6.3 Token 使用
+管理员启用 Nexus integration 已完成 first-party resource 预授权。用户登录页只表达“登录
+Convax”，不得再出现“连接 Nexus”步骤；AuthX 仍可按统一安全策略展示 Convax 将使用 Nexus
+能力的说明，但这不是第二个 Nexus Session 或由 Nexus 托管的 consent。
 
-- 只有在需要刷新 User Access Token 时，才从 Companion 凭据库读取 Refresh Token。
-- User Access Token 和 Data Token 只保存在 Companion 内存中。
-- Companion 对并发 Refresh 执行 Single-flight。
-- Nexus 在签发或刷新 Data Token 前，重新校验 WorkspaceAccess 和当前 Quota 策略。
-- Companion 可以在收到认证过期响应后最多重试一次；不能重试 Quota 失败或任意 Provider 错误。
+### 5.2 Refresh
 
-### 6.4 退出登录
+Refresh grant 必须绑定原始 Convax client、subject 和 scope，不得借刷新扩大 audience 或 scope。
+每次刷新都重新检查 Nexus integration 仍为 `ACTIVE`；成功返回新的 Refresh Credential，companion
+先原子写入 OS credential store，再使旧值不可达。并发刷新 single-flight。
+
+Refresh Credential 重用导致 AuthX 撤销整个 family。Companion 随后清空本地凭据并投影
+`attention`，要求重新登录。
+
+### 5.3 当前 AuthX 的必要改造
+
+当前 Authorization Code Access Token 使用 `aud === client_id` 可以保留；本方案把这个 audience
+正式定义成 Convax Application 的 first-party backend trust domain。AuthX 必须增加 Application
+Integration owner、Nexus Management adapter、`nexus:access` scope admission 和幂等 reconcile。
+只有 `ACTIVE` integration 可以在登录或刷新时获得该 scope；停用时先停止授予/刷新，再把 Nexus
+Convax Application 置为 `DISABLED`，使尚未过期的 Token 也无法发起新请求。
+
+## 6. AuthX Convax Application Access Token
+
+推荐 Access Token 为短期 JWT，基线 TTL 为 5–15 分钟。Gateway 必须固定验证：
+
+- 签名算法在 Nexus 配置的 allowlist 内，`kid` 可从精确 issuer 的 JWKS 解析；
+- `iss === configuredAuthXIssuer`；
+- `aud` 是单一值且 `aud === configuredConvaxClientId`；
+- `oauth_client_id` 或规范化的 `client_id === configuredConvaxClientId`；
+- `application_id === configuredAuthXApplicationId`；
+- `project_id === configuredAuthXProjectId`；
+- `environment === configuredAuthXEnvironment`；
+- `token_use === "access"`；
+- `scope` 包含 `nexus:access`；
+- `sub` 是有界、非空、稳定的 pairwise subject；
+- `iat`、`nbf`、`exp`、`jti` 有效，clock skew 有界。
+
+Nexus 身份键为：
 
 ```text
-用户
-  -> Convax Services：选择 Sign out
-  -> Companion：撤销 Nexus Refresh Grant
-  -> Companion 凭据库：删除 Plugin 凭据
-  -> Companion：清除内存中的 User Access Token 和 Data Token
-  -> Companion：停止本地 Gateway
-  -> Agent Runtime：刷新配置
-  -> Convax Service 卡片：进入 Disconnected 状态
+{ iss, application_id, client_id, project_id, environment, sub }
 ```
 
-即使远端撤销暂时不可用，本地删除也必须完成；但状态不能错误地声称远端撤销已经成功。
+`aud` 同时标识 Convax Application trust domain 和 OAuth client；active Nexus Convax Application
+必须进一步证明 Nexus 已被管理员加入该信任域。`email` 和 `name` 只能显示，不能作为账号合并、
+WorkspaceAccess 或授权依据。
 
-## 7. Convax 通用宿主扩展
-
-### 7.1 现有浏览器授权流程为什么不能复用
-
-当前 `convax.plugin-service-browser-authorization/1` 流程被有意限制为：在隔离的 Electron Session 中，从一个规范 HTTPS Origin 捕获明确 Allowlist 的 Cookie。
-
-Nexus Hosted Auth 使用系统浏览器、Authorization Code、PKCE 和 Loopback Callback。强行复用 Cookie 契约会混淆两种不同的信任模型，并削弱双方的安全约束。
-
-### 7.2 外部浏览器授权
-
-新增一个独立版本的通用授权请求，暂定为：
+Token 不得携带或授权下列 Nexus 产品事实：
 
 ```text
-convax.plugin-service-external-authorization/1
+workspace_id
+workspace_access_id
+plan_id
+provider_connection_id
+provider_host
+quota
+billing
+checkout
+provider_secret
 ```
 
-Sidecar 只能返回以下有界字段：
+Companion 只能向 AuthX Application integration 配置的精确 Nexus HTTPS origin 发送该 Token。
+不得跟随跨 origin redirect，
+不得写入 URL、日志、trace、错误、Canvas、Project、browser storage、manifest 或 durable LRO journal。
 
-```json
-{
-  "schema": "convax.plugin-service-external-authorization/1",
-  "authorization_id": "opaque-bounded-id",
-  "authorization_url": "https://nexus.microvoid.io/workspace/convax/auth/sign-in?...",
-  "timeout_seconds": 300
+## 7. 自动创建 Nexus Convax Application
+
+### 7.1 唯一创建接口
+
+AuthX integration backend 使用自己的服务身份调用 Nexus Management API：
+
+```text
+PUT /api/v1/integrations/authx/{authx_integration_id}/applications/convax
+```
+
+请求是闭合的幂等 desired-state 命令：
+
+```ts
+type EnsureNexusConvaxApplication = {
+  schema: "nexus.authx-application-integration/1"
+  desired_state: "ACTIVE"
+  authx_issuer: string
+  authx_application_id: string
+  authx_client_id: string
+  authx_project_id: string
+  authx_environment: string
+  product_profile_key: "convax-default"
 }
 ```
 
-必须满足以下约束：
+它不得携带 Workspace、Plan、Quota、ProviderConnection、Provider Host 或 Secret。Nexus 解析当前
+`convax-default` 模板并原子创建或读取下面这一个聚合：
 
-- 已安装 Manifest 显式声明允许的 HTTPS Authorization Origin；
-- Main 在打开 URL 前校验规范 URL 和精确 Origin；
-- Renderer 永远不会收到该 URL；
-- Sidecar 返回请求前必须已经启动 Loopback Listener；
-- PKCE Verifier、State、Callback Code 和 Token 都不能跨过 Preload；
-- Completion Method 必须是进程内的一次性 Closure，并绑定到精确的 Plugin Manifest、可执行文件快照和 MCP Client；
-- 取消操作固定且由宿主管理；
-- Plugin 被替换、更新或卸载时，当前 Transaction 立即失效。
-
-Completion 调用只携带 Authorization Transaction ID。Loopback Response 和 Code Exchange 都由 Sidecar 负责，Main 和 Renderer 不接触 Authorization Code。
-
-这是一项通用扩展。其他经过验证的 Service 也可以使用它，不需要增加 Provider 特有的宿主逻辑。
-
-### 7.3 Plugin 级 Credential Vault
-
-Desktop Main 应提供一个由操作系统 Credential Store 支持的通用凭据库端口。
-
-每条记录的作用域包括：
-
-- 当前应用；
-- 精确的已安装 Plugin Principal；
-- 有界、由宿主管理的 Record Name；
-- 当前本地用户。
-
-该能力只提供固定的 `get`、`set` 和 `delete` 操作，并限制 Value 大小。Value 永远不能跨过 Preload，也不能被其他 Plugin 读取。
-
-Plugin 发布内容变化时，不能未经显式兼容策略和重新授权，就把旧凭据静默交给新的可执行代码。
-
-明文 JSON 文件、Project Storage、`localStorage` 和普通 Preferences 都不能用于保存 Refresh Token。
-
-### 7.4 Agent 配置刷新
-
-Plugin 安装变化已经会调用 `agentRuntime.refreshConfiguration()`。以下凭据生命周期变化也必须调用：
-
-- `authorize` 成功；
-- `reauthorize` 成功；
-- `signOut` 完成；
-- Service Host 检测到凭据失效。
-
-刷新行为属于通用 Service 生命周期组合，不能通过检查 Nexus Plugin ID 实现。
-
-## 8. Nexus Companion
-
-### 8.1 Contribution
-
-Plugin 同时贡献一个 Service 和一个 LLM Provider：
-
-```text
-service:
-  actions: authorize, reauthorize, authorization.cancel, checkout, sign_out
-
-llm:
-  provider:
-    name: Convax
-    protocol: openrouter
-  models:
-    - id: deepseek/deepseek-v4-flash
-      name: DeepSeek V4 Flash
+```ts
+type NexusConvaxApplication = {
+  nexus_application_id: string
+  authx_integration_id: string
+  application_version: number
+  state: "ACTIVE" | "DISABLED"
+  display_name: "Convax"
+  authx_issuer: string
+  authx_application_id: string
+  authx_client_id: string
+  authx_project_id: string
+  authx_environment: string
+  product_profile_key: "convax-default"
+  workspace_id: string
+  default_plan_id: string
+  quota_policy_id: string
+  provider_connection_id: string
+}
 ```
 
-`models` 只提供安装期的有界展示元数据。Host 根据显式 `openrouter` 协议启动
-Main-only Loopback Gateway，并主动请求 `/models?output_modalities=text`；这不是
-Nexus Plugin ID 特判。模型 ID 仍保持不透明，Host 只做数量、长度、字符、输出模态
-和重复项边界校验，不做价格解析、路由或 fallback。
+`authx_integration_id` 是外部幂等键；AuthX issuer/application/client/project/environment 是不可变
+身份约束，`display_name` 不是身份。首次调用创建，响应丢失后的重试必须返回同一个
+`nexus_application_id`。同一个 integration id 携带不同身份返回 `409 integration_conflict`，不得
+创建第二个 Application。并发调用也只能提交一个 Application。
 
-### 8.2 固定 MCP Tool
+Nexus 返回 `nexus_application_id`、`application_version` 和 `ACTIVE` 后，AuthX 才以 CAS 将 observed
+state 从 `PENDING` 改为 `ACTIVE` 并允许 `nexus:access`。HTTP 超时或响应丢失保留 `PENDING`；outbox
+reconciler 使用同一命令重试，不能猜测创建成功，也不能生成新幂等键。
 
-Companion 实现现有固定 Service Tool 和 LLM Gateway 启动 Tool：
+### 7.2 停用、重启用与删除
+
+- `Disable Nexus` 先让 AuthX 停止授予和刷新 `nexus:access`，再以同一个
+  `authx_integration_id` 把 Nexus Application 置为 `DISABLED`。
+- 停用不得删除 Nexus Application、WorkspaceAccess、Quota/Usage/Billing 或审计记录。
+- 重新启用必须重新激活同一个 `nexus_application_id`；模板兼容性或身份不匹配则进入
+  `ATTENTION`，不得自动新建替代对象。
+- 删除 AuthX Convax Application 采用相同停用流程并保留 Nexus 历史；物理删除是独立的 Nexus
+  数据保留策略，不属于集成事务。
+- AuthX 崩溃在任一跨服务阶段后都由 desired/observed state reconcile；没有分布式事务，也不允许
+  两边分别成为启用状态的权威。
+
+只有 AuthX integration backend 可以创建、重新激活和停用这个 Nexus Application。Companion、
+Convax Host 和普通用户 Token 不得访问 Management API，也不得提交 Workspace、Plan、Provider 或
+`nexus_application_id` 来影响运行时选择。
+
+### 7.3 无感运行时接口
+
+所有接口和 Gateway 请求都使用：
+
+```http
+Authorization: Bearer <AuthX Convax Application Access Token>
+```
+
+这些 Application Access 路由和 Gateway 都是 Nexus Convax Application 中声明的
+first-party backend。若未来某个接口脱离这个受控 trust domain、向第三方 Client 开放，则它必须
+改用独立 resource audience；不得继续接受 Convax Application Token。
+
+用户运行时的最小 Application Access surface：
+
+```text
+GET  /api/v1/application-access/status
+POST /api/v1/application-access/checkout
+```
+
+`status` 和 Gateway 共用一个 Nexus 内部的 `ensureApplicationSubjectAccess` 事务：按验证后的
+Application + subject 身份键解析唯一 active Nexus Application，并幂等创建或读取
+WorkspaceAccess。JIT 是 Nexus 服务端内部实现，不是客户端可见的 connect/bootstrap API；创建
+冲突、Application version 变化或产品授权失败都 fail closed。
+
+`status` 只返回有界 account/plan/status/checkout 显示数据，不返回任何 Token、Key、Provider Host
+或 Provider Secret，并在每次读取时重新解析当前 Application、WorkspaceAccess、Plan 和 Billing。
+`checkout` 只能接受当前 status 广告的有界 `plan_key`，返回
+`convax.plugin-service-checkout/1` 的 HTTPS URL；URL 只进入 Main 并由系统浏览器打开。Checkout
+会话由 Nexus 根据当前 AuthX subject 创建，不要求用户再次登录 Nexus。
+
+不再存在：
+
+```text
+POST /api/v1/application-access/connect
+POST /api/v1/application-access/bootstrap
+POST /api/v1/application-access/inference-key/rotate
+nexus.application-access-bootstrap/1
+nexus.application-inference-key/1
+Nexus Inference Key
+```
+
+## 8. Gateway 授权
+
+Gateway 只接受 AuthX Convax Application Access Token。每个潜在计费请求开始前必须：
+
+1. 完整验证第 6 节 Token；
+2. 用 Application + subject 身份键解析唯一启用的 Nexus Convax Application；
+3. 通过同一个 `ensureApplicationSubjectAccess` 事务 JIT 创建或读取 WorkspaceAccess，再读取当前
+   Plan、Quota 和 Billing 状态；
+4. 在 Nexus 内部解析固定 ProviderConnection、Host 和 Secret；
+5. reserve quota，调用 Provider，按实际结果 settle；
+6. 写入审计和 `external_provider_calls` 计量事实。
+
+Token 中即使出现 Plan、Quota 或 Provider claim，Gateway 也必须忽略。应用停用、WorkspaceAccess
+撤销或 Quota 耗尽必须阻止新请求，不等待 AuthX Access Token 过期。Nexus 可以用带单调
+authorization epoch 的有界缓存优化读取，但不得用普通 TTL cache 延迟明确撤销。
+
+文本、图片、视频均走同一 Gateway 授权和计量边界。本地端到端只允许
+`nexus/tests/fake-provider`；不得调用真实或付费 Provider。
+
+## 9. Companion 与 Convax Service
+
+`convax-plugins` 的 Nexus Plugin 使用 `convax.plugin/8` 和当前通用贡献。固定动作至少包括：
 
 ```text
 service.status
-service.authorize
-service.reauthorize
-service.authorization.complete
-service.authorization.cancel
+service.authorize        # 仅在 AuthX 未登录或 Refresh family 失效时登录 AuthX
+service.reauthorize      # 仅修复 AuthX credential
+service.signout
 service.checkout
-service.sign_out
 llm.gateway.start
+generation tools
+convax/generation/operations/get
+convax/generation/operations/wait
+convax/generation/operations/cancel
+convax/generation/operations/result
+convax/generation/operations/acknowledge
 ```
 
-不能把任意 OAuth Method、Token Payload 或 Checkout URL 暴露为 Renderer 操作。
+登录动作稳定标识为 `authx:convax:interactive-login`，不是 Nexus connect。Companion 通过当前
+`convax.plugin-service-external-authorization/1` 请求 Host 打开系统浏览器；Host 不解析 Token。
+如果有效 AuthX credential 已存在，Service 启动直接刷新 Convax Application Token 并读取 status，
+不得再打开浏览器或要求用户确认 Nexus。
 
-`service.checkout` 只接受 `{ "plan_key": "..." }`，且该 Key 必须存在于最近一次 v2 Status
-公布的可购买 Plan 中。返回值固定为：
+Credential 边界：
 
-```json
-{
-  "schema": "convax.plugin-service-checkout/1",
-  "checkout_id": "opaque-bounded-id",
-  "checkout_url": "https://checkout-provider.example/session/..."
-}
+| 数据                           | 持久化位置                       | 可见方                      |
+| ------------------------------ | -------------------------------- | --------------------------- |
+| AuthX Refresh Credential       | companion 的 OS credential store | companion                   |
+| AuthX Convax Application Token | companion 内存                   | companion、Nexus HTTPS 请求 |
+| PKCE verifier/state/nonce/code | 单次 transaction 内存            | companion、精确 callback    |
+| Main-only local gateway bearer | 内存                             | Main、companion loopback    |
+| Service status / plan / usage  | 有界 disposable display cache    | Renderer                    |
+| Provider Secret                | Nexus server secret store        | Nexus Gateway               |
+
+Refresh Credential 不得进入环境变量或明文配置文件。Access Token 不得进入 Main、Renderer、
+Preload、OpenCode、Canvas 或 Project。Local LLM Gateway 继续返回 Main-only、ephemeral
+`127.0.0.1` base URL 和随机 bearer；这个 bearer 不是 Nexus credential。
+
+`service.status` 只映射当前 `convax.plugin-service-status/2`。Disconnected 状态仍可展示安装的模型；
+真正执行前，companion 和 Nexus Gateway 都重新验证实时状态。
+
+## 10. Generation 与 LRO
+
+Generation、pending node、文件发布、`operationId`/`taskId` 分离、取消和恢复继续遵守：
+
+- [`generation-tool-plugins.md`](generation-tool-plugins.md)；
+- [`canvas-node-generation-state-persistence.md`](canvas-node-generation-state-persistence.md)。
+
+视频恢复继续使用 `convax.generation-lro/1` 和 Host 注入的
+`CONVAX_GENERATION_LRO_DIRECTORY`。Private sidecar journal 可以保存 opaque provider task
+receipt、请求 digest 和状态，但不得保存 AuthX Access/Refresh Token；恢复时必须从 OS credential
+store 刷新出新的短期 Access Token，再调用 Nexus。
+
+取消支持下游时，companion 调用：
+
+```text
+DELETE /v1/videos/{providerTaskId}
 ```
 
-结果只由 Main 校验和消费。Main 打开系统浏览器后立即刷新 Status；应用重新获得焦点时再次刷新，
-从而观察 Webhook 投影后的当前 Plan。
+取消结果、未知结果和 billable 边界仍按通用 LRO 契约处理，不因 Nexus 集成产生特例。
 
-Companion 的 Loopback Gateway 使用当前短期 Data Token 原样代理
-`{gatewayBaseUrl}/{providerPath...}`。Nexus 继续按普通 Provider Path 代理到 OpenRouter，
-目录响应不携带 Provider Key。Convax Main 主动拉取目录、限制为最多 2048 个模型，并把
-验证后的结果同时提供给 OpenCode 内存配置和 Nexus Service 卡片；Renderer 不接收
-Gateway URL、Data Token 或上游凭据。
+## 11. 过期、撤销与退出
 
-图片和视频目录不从通用模型列表推导。Companion 分别请求 OpenRouter 官方
-`/images/models` 与 `/videos/models`，并分别通过 `/images` 与异步 `/videos`
-提交、轮询和下载协议执行。任一专用端点不可用时只隐藏对应能力，不尝试旧协议或其他端点兜底。
+- Access Token 临近过期：companion single-flight refresh，然后重试一次尚未越过 billable
+  boundary 的请求。
+- `401 invalid_token`：刷新一次；再次失败则清除凭据并进入 `attention`。
+- `403 integration_disabled` / `application_disabled` / `access_revoked`：不得刷新重试，立即停止新请求；
+  UI 指向 AuthX Convax Application 的管理员配置，而不是提供“连接 Nexus”。
+- `429 quota_exhausted`：不重试潜在计费调用，刷新 status。
+- 显式 sign-out：先尽力撤销 AuthX Refresh family，再清除 OS credential、内存 Access Token、
+  local gateway 和 display authority。
+- 管理员在 AuthX Console 停用 Nexus integration：AuthX 先停止授予/刷新 `nexus:access`，
+  再由 integration backend 幂等停用同一个 Nexus Convax Application；Nexus 立即阻止新
+  Gateway 请求。普通用户没有 Nexus disconnect 动作。
 
-### 8.3 本地 OpenRouter Gateway
+本地 JWT 验证无法仅凭 Refresh family 已撤销就瞬时识别一枚尚未过期的 Access Token。基线用
+5–15 分钟短 TTL 限制窗口；若业务要求 AuthX 侧“立即全局登出”，必须增加 AuthX cutoff/
+introspection 或 sender-constrained Token 的独立设计，不能假装 Token Exchange 自动解决该问题。
 
-`llm.gateway.start` 返回一个仅 Main 可见的 Descriptor，其中包含：
+## 12. 破坏性迁移
 
-- 随进程生成的随机 Bearer Key；
-- 一个 `127.0.0.1` OpenRouter 协议 Base URL。
+这是凭据协议替换，不做静默迁移：
 
-本地 Server 必须：
+1. 删除旧 Hosted Auth / Data Token / Nexus Inference Key 读取与回退代码；
+2. 首次启动只识别并安全删除旧 secret，不把它兑换成新凭据；
+3. AuthX 管理员为 Convax Application 启用 Nexus integration；
+4. Service 仅在没有有效 AuthX credential 时显示“登录 AuthX”；
+5. 用户完成一次新的 AuthX 登录后，同一枚 Convax Application Token 即可无感访问 Nexus；
+6. Plugin major、schema 和 fixture 必须拒绝旧字段及旧响应；
+7. 更新/卸载清除 Refresh Credential 和中断的 OAuth transaction。
 
-- 只绑定 Loopback；
-- 使用 Constant-time Comparison 校验随机本地 Key；
-- 接受 Host 声明并绑定的 OpenRouter Path；
-- 将不透明的 Method、Query 和 Request Body 转发到：
+不得让旧方案和新方案并行工作，也不得让 Gateway 临时同时接受未绑定的 AuthX Application
+Token、Nexus Inference Key 和新的 Convax Application Token 规则。
 
-  ```text
-  https://gateway.nexus.microvoid.io/providers/{providerConnectionId}/{providerPath...}
-  ```
+## 13. 验收矩阵
 
-- 使用短期 Data Token 替换本地 Authorization Header；
-- 保留支持的响应状态、Content-Type 和 Streaming 行为；
-- 将取消信号传播到上游；
-- 移除 Hop-by-hop Header 和内部 Header；
-- 对 Header 和 Body 设置上限；
-- 不记录 Prompt、Completion、Cookie 或 Token。
+| 场景                                             | 必须结果                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------ |
+| AuthX Application 未启用 Nexus integration       | 不授予 `nexus:access`；无 Gateway call                       |
+| 管理面 provisioning 尚未 active                  | 登录/刷新 fail closed；不暴露半完成 Application              |
+| Enable 请求响应丢失后重试                        | 返回同一 `nexus_application_id`，总数仍为 1                  |
+| 同一 integration id 携带不同身份                 | 409；不创建第二个 Nexus Application                          |
+| 登录已有 active integration 的 Convax            | 只登录一次 AuthX，无 Nexus 页面或 connect 请求               |
+| 其他 AuthX Application Token                     | Nexus 401，零 Provider call                                  |
+| Convax Token 缺少 `nexus:access`                 | Nexus 403，零 Provider call                                  |
+| AuthX ID Token                                   | Nexus 401，零 Provider call                                  |
+| 正确 Convax Application Token，首次 subject 请求 | Nexus 内部 JIT access，status/Gateway 成功                   |
+| issuer/client/project/environment/scope 任一错误 | 401/403，零 Provider call                                    |
+| Nexus Application 缺失、重复或 disabled          | fail closed                                                  |
+| WorkspaceAccess 被撤销但 Token 尚有效            | 新请求立即失败                                               |
+| 客户端伪造 Workspace/Plan/Provider               | schema 拒绝或完全忽略                                        |
+| Refresh rotation/reuse                           | 原子替换；reuse 撤销 family 并要求重登                       |
+| Access Token 过期                                | 单次刷新，不重复 billable 调用                               |
+| Quota 耗尽                                       | 429，reserve/settlement 一致                                 |
+| 文本/图片/视频                                   | 均经过 Usage Inspector 和 fake-provider                      |
+| sidecar/Host crash                               | LRO 恢复，不持久化 Token，不重复提交                         |
+| sign-out/update/uninstall                        | 清凭据、关 gateway、终止授权 transaction                     |
+| AuthX 管理员停用 integration                     | 停止 scope 刷新；同一 Application disabled；历史保留         |
+| 重新启用 integration                             | 复用同一 `nexus_application_id`，不得新建                    |
+| 泄漏扫描                                         | 日志、trace、Canvas、Project、缓存和 journal 无 Token/Secret |
 
-OpenCode 只能得到本地 Base URL 和随机本地 Key，不能得到 Nexus Token 或上游 Provider Secret。
+本地最终验收必须使用打包 Convax、真实本地 AuthX/Nexus 进程、实际安装的不可变
+Plugin/companion 和 `nexus/tests/fake-provider`。测试桩或单元测试通过不能替代整链路证据。
 
-## 9. 错误收敛
+## 14. 跨仓交付
 
-Companion 在向 Convax 返回状态前，将 Nexus 响应映射为固定内部类别：
+### AuthX
 
-| Nexus 场景                 | Companion 类别              | Convax 行为                |
-| -------------------------- | --------------------------- | -------------------------- |
-| Refresh Token 无效或被重用 | `reauthentication_required` | 停止 Gateway，提示重新登录 |
-| Access 被暂停或过期        | `access_unavailable`        | 停止新推理，展示 Attention |
-| Quota 耗尽                 | `quota_exhausted`           | 不重试，展示 Attention     |
-| ProviderConnection 不可用  | `provider_unavailable`      | 展示服务不可用             |
-| Nexus Timeout/5xx          | `temporarily_unavailable`   | 有界重试或由用户重试       |
-| Provider 4xx/5xx           | `provider_response`         | 保留安全的 API 语义        |
+- 为 Convax Application 增加 `Integrations -> Nexus` owner、Console 页面和状态机；
+- 用 AuthX 后端持有的服务身份调用 Nexus Management API，支持幂等 create/update/disable 与 reconcile；
+- 保留 Native/Public Authorization Code + Refresh flow 的 `aud === Convax client_id`；
+- 只有 active Nexus integration 可以给该 grant 授予 `nexus:access`；
+- 签发第 6 节闭合 claim（包括 `application_id` 和 `environment`）的短期 Access Token；
+- 支持 Refresh rotation/reuse detection、撤销和精确 loopback Redirect URI；
+- 停用顺序为停止 scope 授予/刷新、停用同一个 Nexus Application、更新 observed state；失败进入
+  可重放 reconcile。
 
-未知错误默认关闭能力。上游原始响应 Body 不能作为 Service Status 诊断信息，也不能跨过 Preload。
+### Nexus
 
-## 10. 分阶段实施
+- 为 AuthX integration backend 发布自动创建 Nexus Convax Application 的最小 Management API、
+  服务身份、外部幂等键、Application version 和审计；
+- Nexus Console 管理 `convax-default` 模板、产品事实和只读 linkage，AuthX Console 是唯一启用入口；
+- 保证一个 `authx_integration_id` 永远映射同一个 `nexus_application_id`，并实现
+  `ensureApplicationSubjectAccess` 原子 JIT；
+- 实现 `status/checkout` 与 Gateway 的同一 Token verifier 和 JIT 事务；
+- 删除 bootstrap、Inference Key 签发/轮换和多凭据 Gateway 路径；
+- Gateway 实时解析 WorkspaceAccess、Plan、Quota、Billing 和 ProviderConnection；
+- 完成 fake-provider 的文本、图片、视频、取消、计量和泄漏验收。
 
-### Phase 0：内部 Gateway 验证（已完成代码）
+### `convax-plugins`
 
-目标：验证传输兼容性，但不声称已经具备正式登录流程。
+- companion 实现系统浏览器、PKCE、loopback callback、`nexus:access` request 和 Refresh rotation；
+- 已有有效 AuthX credential 时直接进入 Nexus status/Gateway，不调用 connect、不弹第二个登录页；
+- Refresh Credential 只入 OS credential store，Access Token 只驻内存；
+- 实现固定 Service/LLM/Generation/LRO surface 和旧凭据破坏性迁移；
+- 本地产品锁验收输入继续使用 `marketplace:local-product-lock-input`；
+- 对外显示 profile 使用 `convax.nexus-public-profile/1`，且不含 credential。
 
-- 配置 `convax` Workspace、Plan 和一个 ProviderConnection。
-- 在可信 Admin 环境为测试用户创建专用 WorkspaceAccess。
-- 在生产 UI 之外，将其 Inference Key 写入测试机器的 OS Credential Store。
-- 使用一个固定 ProviderConnection 和静态模型目录实现 Nexus Plugin 本地 Gateway。
-- 验证 Streaming、取消、Quota Header 和错误传播。
+## 15. Convax Host change 与完成状态
 
-Plugin 永远不使用 Management Key。该阶段只用于内部验证，正式发布前必须删除 Inference Key Bootstrap。
+本方案不需要 Convax Host change。当前通用 external authorization、Service、Checkout、managed
+companion、loopback LLM Gateway、Generation Tool 和 LRO 边界足以承载具体集成。AuthX
+Application Integration 与 Nexus Management provisioning 位于服务端控制面；AuthX OAuth、
+Nexus runtime HTTP 协议和 OS credential store 由 verified companion 消费或拥有。不得为 Nexus
+增加 Host IPC、Plugin id 分支、Token 存储或 Renderer 字段。
 
-### Phase 1：Nexus Hosted Auth（已完成代码）
+本次文档修改不改变 Convax package owner、依赖图、持久化 owner、Electron IPC 或架构图节点；
+它只收紧已有外部 public-client authorization 的 credential、预配置 Application integration 与
+Application-token 规则。
 
-- 实现并发布 Hosted Auth 和 User API 契约。
-- 配置 `convax` Workspace、Redirect Policy 和默认 Free Plan。
-- 实现轮换的 Desktop Refresh Token 和短期 Data Token。
-- 验证 Access 暂停、Quota 耗尽、退出登录和 Token 重用检测。
-
-### Phase 2：Convax 通用授权支持（已完成代码）
-
-- 增加 External-browser Authorization 契约和 Electron Adapter。
-- 增加 Companion 隔离凭据存储；正式发布前迁移到 Plugin 级 OS Credential Vault。
-- 在凭据生命周期变化后刷新 Agent 配置。
-- 补充契约、Main、Preload 隔离和生命周期测试。
-
-### Phase 3：正式 Nexus Service（MVP 已实现并完成本地真实验收）
-
-- 使用 Hosted Auth 替换内部 Key Bootstrap。
-- 发布 Nexus Service Plugin 和经过验证的 Companion。
-- 接入 Status、Quota 和 Account 展示。
-- 已完成 Packaged Desktop 和真实 Provider 验证；跨平台 Credential Store 验证仍属于正式发布要求。
-
-### Phase 4：Billing 和动态目录（已完成代码）
-
-- Service Status 破坏性升级到 v2，所有 Service 插件必须显式返回 `plan` 和 `billing`。
-- 增加固定、由宿主管理的 `checkout` 操作；URL 只在 Main 中校验和打开。
-- Nexus Hosted Auth 配置选择 BillingConnection 和允许购买的 Plan。
-- User Checkout 只接受 Plan Key 和 Idempotency-Key，其他支付参数由 Nexus 推导。
-- Nexus Companion 动态读取当前 OpenRouter 模型目录。
-
-正式发布前仍需补充支付 Provider Test Mode 的完整人工验收、Webhook 延迟/乱序场景和跨平台
-系统浏览器回跳验证。
-
-## 11. 验证
-
-### 11.1 Convax Core
-
-- 如果 External Authorization URL 的精确 HTTPS Origin 未被已安装 Plugin 声明，则拒绝打开。
-- URL、Callback Code、Verifier 和 Token 不会进入 Preload 或 Renderer。
-- Authorization Completion 绑定到精确的已安装 Plugin 快照。
-- 取消、超时、Plugin 更新和应用退出都会关闭 Transaction。
-- 不同 Plugin 的 Credential Record 相互隔离。
-- `authorize`、`reauthorize` 和 `signOut` 会刷新 Agent 配置。
-- OpenCode 和 Nexus 是两个相互独立的 Service Catalog Entry。
-- Core Source 不根据 Nexus Plugin ID 进行分支。
-- Status v1 被明确拒绝；Status v2 缺少 Plan/Billing 或包含额外字段时失败关闭。
-- Renderer 只能选择 Status v2 公布的 Plan Key，不能传入 Checkout URL 或支付参数。
-- Checkout URL 只在 Main 中按固定 Schema 和规范 HTTPS 规则校验并打开。
-
-### 11.2 Nexus Companion
-
-- 本地 Gateway 只绑定 `127.0.0.1`，并要求随机 Key。
-- PKCE 使用 `S256`；State 不匹配和重放默认失败。
-- Refresh 和 Data Token 请求执行 Single-flight。
-- 只有 Refresh Token 可以持久化。
-- Data Token 不会返回给 OpenCode 或 Renderer。
-- Streaming、背压和取消可以端到端工作。
-- 认证过期最多重试一次。
-- Quota 和 Provider 失败不会被错误重试。
-- 日志中不包含 Prompt、Completion、Token、Cookie 或 Provider Secret。
-- Checkout 重试复用同一 Idempotency-Key，持久化记录不包含 Access Token 或 Checkout URL。
-- 当前 Plan 与可购买 Plan 只来自 Nexus 的复合 Access 响应。
-- AI Budget 优先读取 Nexus 的 `availableUsd`/`consumedUsd`；滚动升级期间仅将旧
-  micro-USD Units 字段换算为 USD，不直接展示原始整数。
-
-### 11.3 Nexus
-
-- 两个 Convax 用户在同一个 `convax` Workspace 中获得不同的 WorkspaceAccess 和 Quota 状态。
-- Authorization Code 一次性使用，并绑定 Client、Redirect URI 和 PKCE。
-- Refresh Token 轮换和重用检测会撤销 Grant。
-- Data Token 生命周期短，并绑定预期 WorkspaceAccess。
-- Hosted Auth 被禁用或 Access 被暂停后，不能继续签发新 Token。
-- ProviderConnection 必须属于 Token 对应的 Workspace。
-- Gateway Reserve 和 Settlement 继续以 PostgreSQL 为权威来源。
-- Hosted Auth 配置中的 BillingConnection 和 Checkout Plan 必须属于同一 Workspace。
-- User Checkout 不能接收 WorkspaceAccess、BillingConnection、Product、金额或 Success URL。
-- Checkout 状态只能读取当前 User Access Token 所属 Access 的 Session。
-
-### 11.4 端到端验收
-
-- 新用户不需要输入 API Key，即可从 Convax 完成登录。
-- Nexus 卡片进入 Connected 状态，并显示有界的账号和 Quota 状态。
-- 不重启 Convax，Nexus 模型即可出现在 Agent 模型选择器中。
-- 用户可以完成一次 Streaming Agent 请求，也可以中途取消。
-- 第二个用户不能消耗第一个用户的 Quota 或读取其凭据。
-- Quota 耗尽后拒绝新推理，并显示可操作的 Service 状态。
-- Free 用户可以看到 Nexus 返回的 Pro Plan，点击 Upgrade 后由系统浏览器打开 Hosted Checkout。
-- 浏览器先返回时仍显示 Processing；只有签名 Webhook 投影完成后当前 Plan 才变更。
-- Checkout 失败、取消、过期或重复点击不破坏现有 Access，也不创建重复支付会话。
-- 退出登录会删除本地凭据，并使 Nexus 模型不可用。
-- 重启 Convax 后，可以恢复仍有效的登录状态，且凭据不会暴露给 Renderer；正式发布包还要验证
-  OS Credential Vault 迁移。
-
-## 12. 首版建议决策
-
-如果产品需求没有变化，首版实现采用：
-
-- Workspace Slug：`convax`；
-- 一个 Nexus OpenRouter ProviderConnection；
-- OpenRouter 运行时模型目录，`deepseek/deepseek-v4-flash` 仅作为静态回退；
-- 系统浏览器 + Loopback Callback；
-- Service Status v2 是唯一受支持的状态契约，不兼容 v1；
-- Nexus User API 返回当前 Plan、Quota、订阅状态和允许购买的 Plan；
-- Checkout 由固定宿主操作打开系统浏览器，支付结果由 Nexus Webhook 投影；
-- 客户端不包含 Management Key，也不提供生产环境手工 API Key 输入框；
-- ProviderConnection 由 Nexus User API 按 Workspace 授权返回。
-
-Nexus Hosted Auth、User API、Data Token、Convax 通用外部浏览器授权、Service Status v2、
-Hosted User Checkout 和 Nexus Companion 的核心代码均已实现。真实 OpenRouter 请求、全新用户注册
-和打包桌面环境已经完成此前本地验收。Hosted Checkout 的支付 Provider Test Mode 人工流程、
-OS Credential Vault、跨平台构建，以及 Webhook 延迟/乱序、多用户隔离等逆向场景仍是正式发布前的验收项。
-
-## 13. 当前实现落点
-
-三个仓库的职责和代码落点如下：
-
-| 仓库             | 实现                                                                                                  |
-| ---------------- | ----------------------------------------------------------------------------------------------------- |
-| `nexus`          | Hosted Auth、复合 Access/Plan API、User Checkout、配置 Allowlist、Data Token、Billing 投影            |
-| `convax`         | 通用 Status v2/Checkout Host、External-browser Broker、Electron Adapter、Service UI、Agent 配置刷新   |
-| `convax-plugins` | Nexus Manifest/Companion、PKCE/Loopback、Token 轮换、Plan 投影、Checkout 重试、本地 Gateway、模型目录 |
-
-本地联调时，由 Nexus Bootstrap 从标准输入读取 OpenRouter Provider Key，通过既有 Provider Secret
-加密路径保存，并创建或轮换 `convax` Workspace 的 OpenRouter ProviderConnection。Key 不写入命令行、
-源码、Git、日志、Plugin、Convax Preferences 或 Companion 凭据文件。
-
-端到端验收顺序：
-
-1. 启动空的本地 Nexus PostgreSQL/PGlite，并按顺序执行所有 Migration。
-2. 启动 Nexus API 与 Gateway。
-3. 通过标准输入运行本地 Bootstrap，创建 `convax` Workspace、Free/Pro Plan、Hosted Auth 配置、
-   Hosted BillingConnection、Plan Mapping 和 OpenRouter ProviderConnection。
-4. 构建、校验并打包 `nexus-service` Plugin 与 `nexus-mcp` Companion。
-5. 启动 Convax，安装 `Convax` Plugin，在 Settings > Services 选择 `Convax`。
-6. 使用系统浏览器完成一个全新用户注册和 PKCE Loopback 回调。
-7. 确认 Service 为 Connected，显示当前 Free Plan、可升级 Pro Plan，并列出 OpenRouter 运行时模型。
-8. 选择该模型发起对话，确认请求路径为
-   `Convax → 本地 Companion Gateway → Nexus Gateway → OpenRouter`，并收到流式响应。
-9. 检查 Nexus Invocation/Usage 记录中的模型 ID 保持
-   `deepseek/deepseek-v4-flash`，且任何日志和仓库文件都不包含 Provider Key。
-10. 点击 Upgrade，确认系统浏览器打开 Hosted Checkout；完成支付后等待签名 Webhook 投影，
-    返回 Convax 确认当前 Plan 和 Quota 已刷新。
-
-### 13.1 本地端到端验收结果
-
-本地验收已经证明以下链路：
-
-- 打包后的 Convax 可以安装 Nexus Service，并在重启后恢复登录状态；
-- 全新用户可以通过系统浏览器完成注册、PKCE 回调和 Token Exchange；
-- Services 页面显示 `Convax` 为 Connected；此前真实验收使用
-  `DeepSeek V4 Flash`，当前实现会优先列出 OpenRouter 运行时目录；
-- Agent 模型选择器可以明确选择该 Nexus 模型；
-- 一次真实 Agent 对话通过 Nexus Gateway 调用
-  `deepseek/deepseek-v4-flash`，Nexus Invocation 结果为 `SUCCEEDED`；
-- 对应 Quota Reservation 为 `SETTLED`，Usage Event 已写入 PostgreSQL；
-- Provider Key 只存在于 Nexus 加密存储，三个仓库的凭据模式扫描均无命中。
-
-本次 Status v2 与 Hosted Checkout 变更完成自动化验证，但尚未声明已经完成真实支付 Provider 的
-人工购买；该步骤必须在 Test Mode 使用专门测试凭据执行。
+在 AuthX、Nexus、`convax-plugins` 三仓实现、测试和打包本地验收全部完成前，整体状态是 **未完成**。

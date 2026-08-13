@@ -1884,11 +1884,7 @@ describe("GenerationCanvasService", () => {
 
       await harness.service.reconcileCanvas({ canvasId: "canvas-one", scopeId: "project-one" }, actor)
 
-      expect(harness.runRequests.interruptInactive).toHaveLength(1)
-      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
-        nodeId: harness.pendingNodeId,
-        operationId: "operation-one",
-      })
+      expect(harness.runRequests.interruptInactive).toHaveLength(0)
       expect(harness.runRequests.finish).toEqual([])
       expect(harness.calls).toEqual([])
       expect(await operations.list()).toEqual([expect.objectContaining({ phase: "prepared" })])
@@ -2078,11 +2074,7 @@ describe("GenerationCanvasService", () => {
 
     try {
       await expect(reconciliation).resolves.toMatchObject({ failedNodeIds: [] })
-      expect(harness.runRequests.interruptInactive).toHaveLength(1)
-      expect(harness.runRequests.interruptInactive[0]?.liveRuns).toContainEqual({
-        nodeId: owner.id,
-        operationId: "operation-one",
-      })
+      expect(harness.runRequests.interruptInactive).toHaveLength(0)
     } finally {
       controller.abort("Test cleanup")
       releaseRunStart()

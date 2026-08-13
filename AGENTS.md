@@ -322,6 +322,22 @@ user directory.
   optional usage history. It renders that projection immediately, refreshes status
   and usage independently in the background, and never treats it as authorization,
   execution availability, Checkout, or billing authority.
+- External public-client authorization is companion-owned. Direct Resource Server
+  access requires an Access Token whose audience is that exact resource or an
+  explicitly bound first-party Application trust domain. An arbitrary or unbound
+  client-audience Access Token, ID Token, Cookie, Refresh Credential, or Management
+  credential is never accepted. Only a rotating Refresh Credential may be durable
+  in the companion's OS credential store, while Access Tokens remain in memory and
+  never cross Main, Preload or Renderer.
+- A first-party Resource Server integration may be preconfigured on the upstream
+  Application so one Application login uses the same Application Access Token with
+  an integration-owned capability scope. Its binding and subject JIT access remain
+  server-side; Host, Renderer and companion never expose a second resource
+  login/connect step or call the integration Management API.
+- Enabling that integration may idempotently create one corresponding Resource
+  Server Application. The integration id is its external uniqueness key; retries
+  reuse the same aggregate, disable retains history, re-enable retains identity, and
+  the upstream Application stores no Resource Server Plan, Quota or provider facts.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,

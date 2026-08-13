@@ -1440,19 +1440,28 @@ export class GenerationCanvasService {
     if (!activeNodes.length) {
       return { failedNodeIds: [], operationReceipt: null, projection: structuredClone(snapshot.projection) }
     }
-    const liveRuns = [...this.#executions.values()].flatMap((execution) => {
+    const observedLiveRuns = [...this.#executions.values()].flatMap((execution) => {
       const target = execution.state.target
       return !execution.state.settled && target?.scopeId === ref.scopeId && target.canvasId === ref.canvasId
         ? [{ nodeId: target.nodeId, operationId: target.operationId }]
         : []
     })
-    liveRuns.push(
+    observedLiveRuns.push(
       ...[...this.#supervisions.values()].flatMap(({ target }) =>
         target.scopeId === ref.scopeId && target.canvasId === ref.canvasId
           ? [{ nodeId: target.nodeId, operationId: target.operationId }]
           : [],
       ),
     )
+    const liveRuns = [...new Map(observedLiveRuns.map((run) => [`${run.nodeId}\0${run.operationId}`, run])).values()]
+    const liveRunKeys = new Set(liveRuns.map((run) => `${run.nodeId}\0${run.operationId}`))
+    const hasInactiveRun = activeNodes.some((node) => {
+      const run = getCanvasNodeGenerationRun(node)!
+      return !liveRunKeys.has(`${node.id}\0${run.operationId}`)
+    })
+    if (!hasInactiveRun) {
+      return { failedNodeIds: [], operationReceipt: null, projection: structuredClone(snapshot.projection) }
+    }
     const result = await this.#runs.interruptInactive({
       actor,
       canvasId: ref.canvasId,
