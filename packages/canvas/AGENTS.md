@@ -79,8 +79,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   refresh/restore, or intervening user navigation cancels it. View failure never
   reverses the mutation, and reduced motion uses zero duration while retaining the
   required final position. Eligible flows are batch picker import and new pending
-  generation. Pointer drops, ordinary paste, duplicate, and duplicate-drag do not
-  move the viewport unless a separate explicit view command requests it.
+  generation. A user-launched pending-generation path may also request Canvas's
+  existing scoped `nodes.reveal` command with selection and centered fit so the new
+  result becomes the active focus; the same scope, navigation, failure, and reduced
+  motion rules apply. Pointer drops, ordinary paste, duplicate, and duplicate-drag
+  do not move the viewport unless a separate explicit view command requests it.
 - Duplicate accepts only live source node ids plus a bounded offset. Canvas resolves
   source content against the latest snapshot, derives clone node/edge identities,
   preserves Group containment, and commits one guarded `canvas.nodes.duplicate`
@@ -97,6 +100,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   renderer ghosts may use independently decoded hints through that same policy but
   those hints never enter an intent. Normal media load must not create a second
   geometry write when the committed size already matches the intrinsic fit.
+- A pointer drop carries one explicit center-origin anchor already projected into
+  Canvas coordinates. Canvas uses the first prepared resource's final presentation
+  size to normalize it once to the durable top-left placement; non-pointer callers
+  retain the top-left default and Renderer never guesses the authoritative size.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply
@@ -113,7 +120,9 @@ Canvas owns document and editor semantics independently of Project and Agent.
   parser and legal transitions. Keep the next-run preference separate from the
   resolved historical tool, admit only bounded host-authored terminal failure text,
   never persist raw diagnostics or vendor state, and mark generated resource
-  replacement plus `succeeded` in one guarded Canvas command.
+  replacement plus `succeeded` in one guarded Canvas command. Every terminal
+  failure projects as the same read-only modality icon plus `生成失败`; selecting a
+  failed card must not restore its prompt or expose upload, retry, or detail actions.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.

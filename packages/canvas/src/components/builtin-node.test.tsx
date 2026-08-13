@@ -742,7 +742,6 @@ describe("built-in node toolbar visibility", () => {
 
     expect(imageMarkup).toContain("convax-node__surface--media")
     expect(imageMarkup).toContain("convax-node__surface--image")
-    expect(imageMarkup).toContain("convax-cutout-media__ambient")
     expect(imageMarkup).not.toContain("convax-node__surface--video")
     expect(imageMarkup).toContain('src="asset://portrait"')
     expect(videoMarkup).toContain("convax-node__surface--media")
@@ -826,7 +825,9 @@ describe("built-in node toolbar visibility", () => {
     )
     expect(runningMarkup).toContain('data-canvas-cutout-presentation="scanning"')
     expect(runningMarkup).toContain('src="convax-asset://cutout-source"')
+    expect(runningMarkup).toContain("convax-cutout-media__dissolve-source")
     expect(runningMarkup).toContain("convax-cutout-media__scan-beam")
+    expect(runningMarkup).not.toContain('data-slot="loading-spinner"')
 
     const awaitingHydration = succeedCanvasNodeGenerationRun(
       {
@@ -880,6 +881,7 @@ describe("built-in node toolbar visibility", () => {
     expect(succeededMarkup).toContain('src="convax-asset://cutout-result"')
     expect(succeededMarkup).toContain('src="convax-asset://cutout-source"')
     expect(succeededMarkup).toContain('crossorigin="anonymous"')
+    expect(succeededMarkup).toContain('loading="eager"')
   })
 
   test("does not resize the pending cutout node from its source-image scan preview", () => {
@@ -1058,21 +1060,21 @@ describe("built-in node toolbar visibility", () => {
     expect(pending).toContain('aria-busy="true"')
     expect(pending).toContain("正在生成…")
     expect(pending).toContain('data-slot="loading-spinner"')
+    expect(pending.match(/data-slot="loading-spinner"/g)).toHaveLength(1)
     expect(pending).toContain('aria-hidden="true"')
     expect(pending).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(pending, 'data-canvas-persisted-resource-status="pending"')).not.toContain("nodrag")
 
-    const failed = renderWithEditor(selection([]), false, (props) => (
-      <BuiltinCanvasNode
-        {...props}
-        data={{ ...props.data, error: "Generation could not be completed", status: "error" }}
-      />
+    const failed = renderWithEditor(selection([node.id]), false, (props) => (
+      <BuiltinCanvasNode {...props} data={{ ...props.data, error: "Creative Tools 服务不可用", status: "error" }} />
     ))
     expect(failed).toContain('data-canvas-persisted-resource-status="error"')
     expect(failed).toContain('role="alert"')
     expect(failed).toContain(">生成失败<")
-    expect(failed).not.toContain("Generation could not be completed")
+    expect(failed).not.toContain("Creative Tools 服务不可用")
     expect(failed).not.toContain("修改并重试")
+    expect(failed).not.toContain('aria-label="Upload image"')
+    expect(failed).not.toContain('aria-label="Generate image"')
     expect(failed).not.toContain("data-assistant-toolbar")
     expect(openingTagContaining(failed, 'data-canvas-persisted-resource-status="error"')).not.toContain("nodrag")
   })
@@ -1804,11 +1806,14 @@ describe("built-in node toolbar visibility", () => {
       node: failed.nodes[0],
     })
     expect(failedMarkup).toContain('data-canvas-file-generation-activity="failed"')
-    expect(failedMarkup).toContain("Creative Tools 服务不可用")
+    expect(failedMarkup).toContain(">生成失败<")
+    expect(failedMarkup).not.toContain("Creative Tools 服务不可用")
     expect(failedMarkup).toContain("lucide-image")
     expect(failedMarkup).toContain("convax-generation-status-overlay--media")
     expect(failedMarkup).not.toContain("修改并重试")
     expect(failedMarkup).not.toContain("使用原提示词新建任务")
+    expect(failedMarkup).not.toContain('aria-label="Upload image"')
+    expect(failedMarkup).not.toContain('aria-label="Generate image"')
     expect(openingTagContaining(failedMarkup, 'data-canvas-file-generation-activity="failed"')).toContain(
       "pointer-events-none",
     )
@@ -1861,7 +1866,8 @@ describe("built-in node toolbar visibility", () => {
         node: succeeded.nodes[0],
       },
     )
-    expect(succeededMarkup).toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(succeededMarkup).not.toContain('data-canvas-file-generation-activity="succeeded"')
+    expect(succeededMarkup).not.toContain("已生成")
     expect(succeededMarkup).not.toContain("Generated with")
     expect(request?.generation?.initialPrompt).toBe("Persisted prompt")
     expect(request?.generation?.ownerToolId).toBeUndefined()

@@ -1377,6 +1377,8 @@ describe("CanvasEditor resource mutation", () => {
 
     expect(additions).toHaveLength(1)
     expect(additions[0]).toMatchObject({
+      anchor: { x: 400, y: 260 },
+      anchorOrigin: "center",
       files: [expect.objectContaining({ name: "brief.txt" })],
       sources: [],
       transfer: { data: { Files: "" }, types: ["Files"] },

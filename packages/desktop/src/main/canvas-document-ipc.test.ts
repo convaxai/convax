@@ -186,6 +186,7 @@ describe("Canvas resource IPC", () => {
     )
     const input = {
       anchor: { x: 10, y: 20 },
+      anchorOrigin: "center" as const,
       canvasId: "canvas-main",
       commandId: "renderer-add",
       externalFiles: [],
@@ -203,6 +204,7 @@ describe("Canvas resource IPC", () => {
     expect(addResources).toHaveBeenCalledWith({
       actor: { id: "desktop:renderer", kind: "ui" },
       anchor: { x: 10, y: 20 },
+      anchorOrigin: "center",
       canvasId: "canvas-main",
       commandId: "renderer-add",
       relation: undefined,
@@ -213,6 +215,34 @@ describe("Canvas resource IPC", () => {
       { byteLength: 5, callCount: 1, stage: "canvas-submit" },
       { byteLength: 0, callCount: 1, stage: "response-projection-invalidation" },
     ])
+  })
+
+  test("rejects an unknown resource anchor origin before invoking the typed Canvas application", async () => {
+    const addResources = mock(async () => commandResult())
+    registerCanvasResourceIpc(
+      { addPreparedResources: mock(), addResources },
+      { withAdmittedLocalFiles: mock() },
+      {
+        application: { query: mock() },
+        isTrustedSender: () => true,
+        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: "project-one" }),
+        sessions: resourceSessions,
+      },
+    )
+
+    await expect(
+      handlers.get(canvasResourceIpcChannel)!(event, {
+        anchor: { x: 0, y: 0 },
+        anchorOrigin: "bottom-right",
+        canvasId: "canvas-main",
+        commandId: "invalid-anchor-origin",
+        externalFiles: [],
+        projectId: "project-one",
+        sessionId,
+        sources: [{ kind: "new-text", sourceId: "note", text: "hello" }],
+      }),
+    ).rejects.toThrow("anchor origin is invalid")
+    expect(addResources).not.toHaveBeenCalled()
   })
 
   test("retains strict relation validation before invoking the typed Canvas application", async () => {

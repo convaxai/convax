@@ -1526,9 +1526,10 @@ describe("GenerationCanvasService", () => {
     expect(harness.viewRequests).toHaveLength(1)
     expect(harness.viewRequests[0]).toMatchObject({
       command: {
-        fit: "none",
+        animation: "smooth",
+        fit: "center",
         nodeIds: [harness.pendingNodeId],
-        select: false,
+        select: true,
         type: "nodes.reveal",
       },
     })

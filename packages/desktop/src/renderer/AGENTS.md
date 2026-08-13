@@ -96,6 +96,10 @@ or durable domain authority.
   close it while clearing the media source on preview exit or unmount. Admit the
   preview protocol in Renderer CSP only for `img-src` and `media-src`, never
   `connect-src`.
+- A Canvas pointer drop projects the screen point through React Flow exactly once
+  and forwards only that Canvas point plus the closed `center` anchor origin.
+  Renderer may size an optimistic ghost but never converts the authoritative card
+  geometry or supplies intrinsic dimensions to Main.
 - Selection actions render only host-projected actions for an immutable selection
   snapshot. Abort their live Canvas signal when the snapshot or surface is replaced
   and forward cancellation through the explicit Preload protocol.

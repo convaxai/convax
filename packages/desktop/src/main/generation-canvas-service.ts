@@ -2389,7 +2389,7 @@ export class GenerationCanvasService {
           ? generationReferenceSnapshot(workingDocument, workingRequest, promptContexts)
           : undefined
 
-        this.#refreshRendererProjection(request.ref, [nodeId])
+        this.#refreshRendererProjection(request.ref, [nodeId], { focus: true })
       } else if (replacementTarget && resultMode.type === "replace-node") {
         onRunStarted({
           canvasId: request.ref.canvasId,
@@ -2944,17 +2944,29 @@ export class GenerationCanvasService {
     }
   }
 
-  #refreshRendererProjection(ref: GenerationCanvasRequest["ref"], nodeIds: readonly string[]) {
+  #refreshRendererProjection(
+    ref: GenerationCanvasRequest["ref"],
+    nodeIds: readonly string[],
+    options: { focus?: boolean } = {},
+  ) {
     void (async () => {
       const reloaded = await this.#renderer.reloadDocument(ref)
       if (!reloaded || nodeIds.length === 0) return
       await this.#renderer.executeView({
-        command: {
-          fit: "none",
-          nodeIds: [...nodeIds],
-          select: false,
-          type: "nodes.reveal",
-        },
+        command: options.focus
+          ? {
+              animation: "smooth",
+              fit: "center",
+              nodeIds: [...nodeIds],
+              select: true,
+              type: "nodes.reveal",
+            }
+          : {
+              fit: "none",
+              nodeIds: [...nodeIds],
+              select: false,
+              type: "nodes.reveal",
+            },
         expectedDocumentId: ref.canvasId,
         expectedScopeId: ref.scopeId,
         viewId: "desktop-main",

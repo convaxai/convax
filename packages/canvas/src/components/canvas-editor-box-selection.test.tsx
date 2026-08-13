@@ -950,7 +950,7 @@ test("isolates card-assistant wheel gestures only while its input owns focus", a
   }
 })
 
-test("keeps active controls interactive and lets a failed card reopen its persisted prompt", async () => {
+test("keeps active controls interactive while a failed card stays selectable without reopening generation", async () => {
   for (const [name, value] of Object.entries(globals)) {
     Object.defineProperty(globalThis, name, { configurable: true, value, writable: true })
   }
@@ -1133,14 +1133,9 @@ test("keeps active controls interactive and lets a failed card reopen its persis
       failedOverlay?.closest<HTMLElement>(".react-flow__node")?.click()
       await Promise.resolve()
     })
-    expect(assistantRequest?.ownerNodeId).toBe(blockedNode.id)
-    expect(assistantRequest?.generation).toMatchObject({
-      initialPrompt: "Generate",
-      output: "image",
-    })
-    expect(
-      container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Recovered generation prompt"]')?.value,
-    ).toBe("Generate")
+    expect(failedOverlay?.closest<HTMLElement>(".react-flow__node")?.classList.contains("selected")).toBe(true)
+    expect(assistantRequest).toBeUndefined()
+    expect(container.querySelector('textarea[aria-label="Recovered generation prompt"]')).toBeNull()
     expect(getCanvasNodeGenerationRun(latestDocument.nodes.find((node) => node.id === blockedNode.id)!)).toMatchObject({
       operationId: "blocked-operation",
       status: "failed",

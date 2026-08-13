@@ -1561,10 +1561,12 @@ state machine as an existing card; a restart cannot leave a placeholder permanen
 pending.
 
 A failed run remains attached to its original card and retains its normalized
-prompt. The card renders one simple icon-and-message error surface. Selecting the
-card opens the normal composer with that prompt; pressing Send creates a fresh
-`operationId` and may reuse the guarded card through the ordinary replacement
-boundary. No recovery phase automatically submits a new operation.
+prompt as portable history. Every file-card modality renders the same read-only
+terminal surface: its modality icon and the fixed `生成失败` title. The stored
+failure message, technical recovery phase, and old prompt are not projected as
+card actions. Selecting the card still permits ordinary Canvas selection and
+dragging, but never opens a composer or exposes upload, retry, details, or a new
+`operationId` path. No recovery phase or failed-card UI submits another operation.
 
 The distributed execution uses the standard Scheduler–Agent–Supervisor pattern.
 Desktop Main is the Scheduler/Process Manager, the verified Tool Plugin sidecar is
@@ -1718,12 +1720,15 @@ remain explicitly scoped to the mounted view and cannot rewrite domain history.
 Canvas may apply one post-mutation safe reveal after an eligible foreground mutation
 when the newly affected nodes are outside the host-provided safe viewport. The
 current eligible flows are batch picker import and creation of a pending generation;
-the effect runs only for the current mounted document/scope/view and is canceled by
-stale results, remount, background refresh/restore, or intervening user navigation.
-Its failure cannot reverse a successful domain commit. Reduced motion sets its
-duration to zero but retains necessary positioning. Pointer drops, ordinary paste,
-duplicate, and duplicate-drag preserve the camera by default; broader Fit, Reveal,
-and Zoom remain explicit view operations.
+the user-launched pending-generation path may additionally request the existing
+scoped `nodes.reveal` operation with selection and centered fit so its new result
+card becomes the active focus. Both effects run only for the current mounted
+document/scope/view and are canceled by stale results, remount, background
+refresh/restore, or intervening user navigation. Their failure cannot reverse a
+successful domain commit. Reduced motion sets their duration to zero but retains
+necessary positioning. Pointer drops, ordinary paste, duplicate, and duplicate-drag
+preserve the camera by default; broader Fit, Reveal, and Zoom remain explicit view
+operations.
 
 Mounted Desktop Canvas UI commands use one session lease for application execute,
 undo, redo, resource delivery and projection query. A local mutation response
@@ -1824,6 +1829,13 @@ waits for this presentation probe before showing a full card. The first durable 
 therefore already has its final fitted geometry, and ordinary media load does not
 issue a second geometry mutation. Inspection failure or an oversized/unsupported
 format falls back to the Canvas default size without trusting renderer dimensions.
+For a pointer drop, Renderer projects the screen point into Canvas coordinates once
+and labels that anchor with the closed `center` origin. After Main preparation,
+Canvas uses the first resource's final presentation size to normalize the point to
+the durable top-left placement. Toolbar, Agent, and other non-pointer insertion
+paths retain the top-left default. The optimistic ghost follows the same origin
+semantics using only its non-authoritative size hint, so the committed card does not
+jump away from the pointer when the authoritative projection arrives.
 
 ### Creating a generic Plugin Canvas surface
 

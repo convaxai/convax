@@ -238,11 +238,11 @@ Only the most recent run is retained. Canvas has one terminal failure state. Mai
 and recovery-capable sidecars may keep more detailed technical phases in their
 private ledgers, but those phases never become portable Canvas state or retry UI.
 
-`prompt` is the normalized user-editable draft, not Main's effective model prompt.
+`prompt` is the normalized historical user-editable draft, not Main's effective model prompt.
 It may be empty when selected Canvas text nodes provide the complete prompt context.
 Main composes the exact effective prompt transiently and, when recovery is admitted,
-retains it only inside its private digest-bound recovery snapshot. Editing and
-retrying a run therefore cannot append the same Canvas text twice.
+retains it only inside its private digest-bound recovery snapshot. A failed card
+does not restore this draft into a composer or expose a retry action.
 
 Portable bounds:
 
@@ -290,8 +290,8 @@ terminal(same operation)
 
 A different task id for the same operation fails closed. Duplicate lifecycle
 events with identical values are idempotent. A new operation cannot replace an
-active operation. After failure, pressing Send creates a fresh operation id; Main
-never automatically turns a failed operation into a new submission.
+active operation. Failure is terminal for the card surface: it exposes no Send,
+upload, retry, or detail action, and Main never turns it into a new submission.
 
 The generated content guard omits only the Canvas-owned run and preference
 namespaces. It still protects node type, resource kind, Project reference, MIME,
@@ -580,9 +580,12 @@ Canvas CAS. Toolbar, Canvas-generating Agent tools, and Canvas-generating Plugin
 operations all use this owner-creating path; they do not add an ownerless generated
 node after the external call. Main may attach an authoritative presentation size
 only when exactly one same-modality visual reference supplies it; the pending
-creation intent persists that size and generated replacement retains it. For
-existing-node replacement, failure or cancellation
-never alters the prior resource. A declarative text operation with `delivery:
+creation intent persists that size and generated replacement retains it. After the
+pending creation commits, a mounted user-launched flow may request Canvas's scoped
+`nodes.reveal` view operation to select and center-fit that new result; projection or
+view failure remains non-authoritative and never reverses the creation. For
+existing-node replacement, failure or cancellation never alters the prior resource.
+A declarative text operation with `delivery:
 "return"` creates no Canvas node and therefore has no node run namespace; it retains
 the same live at-most-once executor and explicit Agent cancellation boundary, but is
 outside node-result persistence and Canvas result replay.
@@ -739,10 +742,9 @@ UI behavior:
 - `submitting`/`running`: active display; after restart Main may project
   `recovering`;
 - `succeeded`: historical resolved tool and committed result;
-- `failed`: one simple icon-and-message error surface; selecting the card restores
-  its persisted prompt, and pressing Send manually starts a fresh operation id;
-- a recognized service outage may replace the generic terminal title only with a
-  bounded host-authored message derived from the validated service display name;
+- `failed`: one read-only modality icon plus fixed `生成失败`; selection and dragging
+  remain available, but no stored prompt, failure detail, upload, retry, or detail
+  action is shown;
 - model preference remains independent from the run’s resolved tool.
 
 ## 19. Crash-window proof matrix
@@ -802,7 +804,8 @@ Canvas:
 - complete string and JSON bounds;
 - generated guard stability and atomic success replacement;
 - clone/delete/stale revision behavior;
-- manual retry after failure creates a fresh operation id.
+- one fixed failure title across stored failure messages and no failed-card
+  composer, upload, retry, or detail action.
 
 Desktop private storage:
 

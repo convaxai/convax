@@ -3,7 +3,7 @@ import { resolve } from "node:path"
 
 import type { MarketplaceProductPolicy } from "./marketplace-product-lock"
 
-export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 5
+export const CURRENT_MARKETPLACE_PRODUCT_POLICY_REVISION = 6
 
 export function configureMarketplaceProductPolicy(revision: number): MarketplaceProductPolicy {
   if (!Number.isSafeInteger(revision) || revision < 1) {
@@ -44,7 +44,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.2.1",
         },
         targets: ["darwin-arm64"],
-        version: "0.3.1",
+        version: "0.3.2",
       },
       {
         id: "nexus-service",
@@ -61,7 +61,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.3.14",
         },
         targets: ["darwin-arm64"],
-        version: "0.4.1",
+        version: "0.5.1",
       },
       {
         id: "storyai-3d-director-desk",
@@ -78,7 +78,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.1.3",
         },
         targets: [],
-        version: "0.3.2",
+        version: "0.3.3",
       },
       {
         id: "storyboard-studio",
@@ -95,7 +95,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.1.1",
         },
         targets: [],
-        version: "0.2.2",
+        version: "0.2.3",
       },
       {
         id: "video-timeline",
@@ -112,7 +112,7 @@ export function configureMarketplaceProductPolicy(revision: number): Marketplace
           version: "0.1.5",
         },
         targets: [],
-        version: "0.2.1",
+        version: "0.2.2",
       },
     ],
     revision,
