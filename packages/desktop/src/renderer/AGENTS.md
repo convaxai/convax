@@ -129,8 +129,8 @@ or durable domain authority.
 - Native media drag-out starts only from an explicit held export gesture. Renderer
   publishes a complete immutable selection and may hold a short-lived opaque ticket;
   it never stages files or sees the native drag payload. Convax Desktop exposes both
-  the persistent drag-out mode and a `Command-Shift` compatibility chord; the chord
-  activates only while keyboard focus remains inside Canvas.
+  the persistent drag-out mode and an exact unmodified `Command` compatibility
+  gesture; it activates only while keyboard focus remains inside Canvas.
 
 ## UI behavior
 

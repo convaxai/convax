@@ -57,7 +57,7 @@ export function isCanvasExternalDragChordHeld(
   shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
 ) {
   if (!shortcutModifier) return false
-  if (event.altKey || !event.shiftKey) return false
+  if (event.altKey || event.shiftKey) return false
   if (shortcutModifier === "meta") return event.metaKey && !event.ctrlKey
   if (shortcutModifier === "control") return event.ctrlKey && !event.metaKey
   return false
@@ -68,7 +68,6 @@ export function isCanvasExternalDragChordKey(
   shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
 ) {
   if (!shortcutModifier) return false
-  if (key === "Shift") return true
   if (shortcutModifier === "meta") return key === "Meta"
   if (shortcutModifier === "control") return key === "Control"
   return false
@@ -100,11 +99,14 @@ export function createCanvasShortcutHandler(
 
     if (event.defaultPrevented || event.nativeEvent?.isComposing) return
     if (event.key === "Escape" && options.externalDragArmed) return run(actions.cancelExternalDrag)
-    if (options.externalDragArmed && !["Meta", "Control", "Shift"].includes(event.key)) {
+    if (
+      options.externalDragArmed &&
+      !isCanvasExternalDragChordKey(event.key, options.externalDragShortcutModifier)
+    ) {
       actions.cancelExternalDrag()
     }
     // This is an application gesture: Canvas clicks can intentionally leave a nested composer focused.
-    // Either key order works, and key-up immediately ends the held gesture.
+    // The exact host-selected modifier arms it, and key-up immediately ends the held gesture.
     if (
       options.canArmExternalDrag &&
       isCanvasExternalDragChordHeld(event, options.externalDragShortcutModifier) &&
@@ -137,7 +139,7 @@ export function createCanvasShortcutHandler(
   }
 }
 
-/** Ends the native export gesture as soon as either required modifier is released. */
+/** Ends the native export gesture as soon as the required modifier is released. */
 export function createCanvasShortcutReleaseHandler(
   actions: Pick<CanvasShortcutActions, "cancelExternalDrag">,
   options: CanvasShortcutOptions = {},

@@ -23,7 +23,7 @@ export interface CanvasSelectionDragSource {
   }
   readonly prepare: (context: CanvasSelectionActionContext) => Promise<CanvasPreparedSelectionDrag>
   readonly preparingLabel?: string
-  /** Explicit host opt-in for a transient modifier chord scoped to focused Canvas descendants. */
+  /** Explicit host opt-in for a transient exact modifier gesture scoped to focused Canvas descendants. */
   readonly shortcutModifier?: "control" | "meta"
   readonly visible: (context: CanvasSelectionActionContext) => boolean
 }

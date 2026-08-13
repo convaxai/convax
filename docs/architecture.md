@@ -2252,7 +2252,7 @@ Canvas exposes a host-neutral selection drag-source lifecycle next to its existi
 selection actions. Desktop contributes that source only when the complete selection
 contains managed image, video or audio file nodes and no edges. Preparation begins
 only after an explicit drag-out intent. The primary UI is the persistent **Drag to
-Other Apps** Canvas mode; `Command-Shift` on macOS (`Control-Shift` reserved for
+Other Apps** Canvas mode; exact unmodified `Command` on macOS (`Control` reserved for
 Windows) remains a transient compatibility gesture while keyboard focus is within
 the Canvas root or one of its descendants. Activation never listens at window scope.
 Leaving Canvas focus, releasing a required modifier, window focus loss, or document

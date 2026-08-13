@@ -1514,20 +1514,22 @@ describe("built-in node toolbar visibility", () => {
       ...overrides,
     })
 
-    const notReady = dragEvent({ metaKey: true, shiftKey: true })
+    const notReady = dragEvent({ metaKey: true })
     expect(startCanvasSelectionDragFromNode(notReady, false, false, "meta", start)).toBeFalse()
-    const released = dragEvent({ metaKey: true })
+    const released = dragEvent()
     expect(startCanvasSelectionDragFromNode(released, true, false, "meta", start)).toBeFalse()
-    const otherPlatform = dragEvent({ ctrlKey: true, shiftKey: true })
+    const otherPlatform = dragEvent({ ctrlKey: true })
     expect(startCanvasSelectionDragFromNode(otherPlatform, true, false, "meta", start)).toBeFalse()
-    const held = dragEvent({ metaKey: true, shiftKey: true })
+    const modified = dragEvent({ metaKey: true, shiftKey: true })
+    expect(startCanvasSelectionDragFromNode(modified, true, false, "meta", start)).toBeFalse()
+    const held = dragEvent({ metaKey: true })
     expect(startCanvasSelectionDragFromNode(held, true, false, "meta", start)).toBeTrue()
 
     const modeDrag = dragEvent()
     expect(startCanvasSelectionDragFromNode(modeDrag, true, true, "meta", start)).toBeTrue()
 
     expect(start).toHaveBeenCalledTimes(2)
-    for (const event of [notReady, released, otherPlatform, held, modeDrag]) {
+    for (const event of [notReady, released, otherPlatform, modified, held, modeDrag]) {
       expect(event.preventDefault).toHaveBeenCalledTimes(1)
       expect(event.stopPropagation).toHaveBeenCalledTimes(1)
     }

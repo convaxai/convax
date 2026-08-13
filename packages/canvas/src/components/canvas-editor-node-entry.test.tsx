@@ -1446,7 +1446,7 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
         <CanvasEditor
           selectionDragSource={{
             id: "native-files",
-            label: "Keep holding Command-Shift",
+            label: "Keep holding Command",
             prepare,
             shortcutModifier: "meta",
             visible: () => true,
@@ -1490,9 +1490,9 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     const chordDown = () => {
       const event = new Event("keydown", { bubbles: true })
       Object.defineProperties(event, {
-        key: { value: "Shift" },
+        key: { value: "Meta" },
         metaKey: { value: true },
-        shiftKey: { value: true },
+        shiftKey: { value: false },
       })
       return event
     }
