@@ -3296,6 +3296,7 @@ function CanvasEditorContent(
             optimisticFiles.length > 0
               ? createOptimisticResourceGhosts({
                   anchor: input.anchor,
+                  ...(input.anchorOrigin === undefined ? {} : { anchorOrigin: input.anchorOrigin }),
                   document: documentRef.current,
                   files: optimisticFiles,
                   intrinsicSizes,
@@ -4341,11 +4342,12 @@ function CanvasEditorContent(
       files: readonly File[],
       position?: CanvasPoint,
       transfer?: { data: Readonly<Record<string, string>>; types: readonly string[] },
+      anchorOrigin?: CanvasResourceMutationRequest["anchorOrigin"],
     ) => {
       if (!mutationService || (files.length === 0 && !transfer) || readOnly) return
       const anchor = position ?? pointerRef.current ?? pointAtCenter()
       runResourceMutation(
-        { anchor, files, sources: [], transfer },
+        { anchor, ...(anchorOrigin === undefined ? {} : { anchorOrigin }), files, sources: [], transfer },
         {
           focusCreatedNodes: position === undefined,
           parentGroupId: groupFocus.focusedGroupId,
@@ -5210,6 +5212,7 @@ function CanvasEditorContent(
                         data: Object.fromEntries(types.map((type) => [type, event.dataTransfer.getData(type)])),
                         types,
                       },
+                      "center",
                     )
                   }}
                   onDoubleClick={(event) => {

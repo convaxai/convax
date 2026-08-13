@@ -6,7 +6,7 @@ import type { Digest, Id128 } from "@convax/collaboration"
 import type { CanvasSessionProjectionDto } from "./canvas-session-contracts"
 
 export const desktopProtocolChannel = "desktop:protocol-version"
-export const desktopProtocolVersion = "convax.desktop-ipc/38"
+export const desktopProtocolVersion = "convax.desktop-ipc/39"
 export const canvasResourceIpcChannel = "canvas:resource-add"
 export const canvasResourceHydrateStaleIpcChannel = "canvas:resource-hydrate-stale"
 export const canvasResourceLocalFileRegisterIpcChannel = "canvas:resource-local-file-register"
@@ -34,6 +34,7 @@ export interface CanvasResourceAddResult {
 
 export interface CanvasResourceAddInput {
   anchor: CanvasPoint
+  anchorOrigin?: "center" | "top-left"
   canvasId: string
   commandId: string
   localFiles?: readonly {

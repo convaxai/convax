@@ -283,6 +283,7 @@ describe("preload Canvas resource client", () => {
 
     const result = await client.add(
       request({
+        anchorOrigin: "center",
         localFiles: [{ mediaType: file.type, name: file.name, sourceId: "outside", sourceToken }],
         parentId: "focused-group",
       }),
@@ -290,6 +291,7 @@ describe("preload Canvas resource client", () => {
 
     expect(invoke).toHaveBeenCalledWith("canvas:resource-add", {
       anchor: { x: 20, y: 40 },
+      anchorOrigin: "center",
       canvasId: "canvas-main",
       commandId: "add-resources",
       externalFiles: [
@@ -315,6 +317,15 @@ describe("preload Canvas resource client", () => {
         }),
       ),
     ).rejects.toThrow("authorization")
+  })
+
+  test("rejects an unknown resource anchor origin before invoking Main", async () => {
+    const { client, invoke } = setup()
+
+    await expect(client.add(request({ anchorOrigin: "bottom-right" }))).rejects.toThrow(
+      "Canvas resource anchor origin is invalid",
+    )
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   test("rejects duplicate tokens and cross-array source ids without partially consuming the batch", async () => {

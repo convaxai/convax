@@ -1,6 +1,6 @@
 import { createContext, type ReactNode, useContext, useSyncExternalStore } from "react"
 import type { ToolInputField, ToolInputValue } from "@convax/ui"
-import type { CanvasGenerationTargetGuard, CanvasResourceSource } from "./application"
+import type { CanvasGenerationTargetGuard, CanvasResourceAnchorOrigin, CanvasResourceSource } from "./application"
 import type { CanvasDocument, CanvasNode, CanvasPoint } from "./types"
 
 export { CanvasTextResourceConflictError } from "./application/errors"
@@ -18,6 +18,7 @@ export interface CanvasResourceMutationTransfer {
 
 export interface CanvasResourceMutationRequest {
   anchor: CanvasPoint
+  anchorOrigin?: CanvasResourceAnchorOrigin
   files?: readonly File[]
   pending?: { kind: "image" | "video"; label: string }
   /** Structural Group that owns newly created nodes; `anchor` is local to this Group. */

@@ -100,6 +100,10 @@ Canvas owns document and editor semantics independently of Project and Agent.
   renderer ghosts may use independently decoded hints through that same policy but
   those hints never enter an intent. Normal media load must not create a second
   geometry write when the committed size already matches the intrinsic fit.
+- A pointer drop carries one explicit center-origin anchor already projected into
+  Canvas coordinates. Canvas uses the first prepared resource's final presentation
+  size to normalize it once to the durable top-left placement; non-pointer callers
+  retain the top-left default and Renderer never guesses the authoritative size.
 - Pending generated resources are a persisted resource business lifecycle, not
   renderer-only state. Canvas owns node-id creation, pending/error validation and
   guarded in-place replacement semantics; hosts own external execution and supply

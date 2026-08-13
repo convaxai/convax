@@ -55,6 +55,9 @@ invalidations carry their frame digest. Resource mutation
 requests carry the current session id and responses use a strict
 `accepted | unavailable` projection-delivery union. Preload does not synthesize a
 projection or downgrade malformed markers into a refresh.
+Pointer-originated resource adds may carry only the closed `center | top-left`
+anchor-origin marker. Preload validates and forwards it without calculating card
+geometry; Main and Canvas remain authoritative for final resource size and placement.
 
 ## Validation
 
