@@ -265,6 +265,7 @@ interface CachedPluginRuntime {
   capabilityOperations: Map<string, PluginCapabilityNestedOperation>
   capabilityReferences: number
   capabilityRetired: boolean
+  closed: boolean
   executableSnapshot: GenerationPluginExecutableSnapshot
   fingerprint: string
   plugin: InstalledWebPluginSummary
@@ -1852,6 +1853,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         capabilityOperations: new Map(),
         capabilityReferences: 0,
         capabilityRetired: false,
+        closed: false,
         client,
         executableSnapshot: {
           dispose() {},
@@ -1935,7 +1937,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     }
   }
 
-  disposePlugin(pluginId: string) {
+  disposePlugin(pluginId: string, options: { force?: boolean } = {}) {
     let disposed = false
     const starting = this.#starting.get(pluginId)
     if (starting) {
@@ -1951,9 +1953,18 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
     const runtime = this.#cache.get(pluginId)
     if (runtime) {
       this.#cache.delete(pluginId)
-      this.#retireRuntime(runtime)
+      if (options.force) this.#closeRuntime(runtime, true)
+      else this.#retireRuntime(runtime)
       disposed = true
     }
+    return disposed
+  }
+
+  async disposePluginAndWait(pluginId: string) {
+    const priorClosures = new Set(this.#closingRuntimes)
+    const disposed = this.disposePlugin(pluginId, { force: true })
+    const closures = [...this.#closingRuntimes].filter((closing) => !priorClosures.has(closing))
+    if (closures.length > 0) await Promise.allSettled(closures)
     return disposed
   }
 
@@ -2325,6 +2336,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
         capabilityOperations,
         capabilityReferences: 0,
         capabilityRetired: currentFingerprint === null,
+        closed: false,
         client,
         executableSnapshot: {
           dispose() {},
@@ -2581,6 +2593,7 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
           capabilityOperations,
           capabilityReferences: 0,
           capabilityRetired: false,
+          closed: false,
           ...(canvasCapabilities ? { canvasCapabilities } : {}),
           client,
           executableSnapshot,
@@ -2683,10 +2696,13 @@ export class GenerationPluginRuntime implements PluginCapabilityRuntimeInspectio
   }
 
   #closeRuntime(runtime: CachedPluginRuntime, force = false) {
+    if (runtime.closed) return
     if (!force && runtime.capabilityReferences > 0) {
       runtime.capabilityRetired = true
       return
     }
+    runtime.closed = true
+    runtime.capabilityRetired = true
     if (this.#cache.get(runtime.pluginId) === runtime) this.#cache.delete(runtime.pluginId)
     if (
       runtime.activeHandle &&

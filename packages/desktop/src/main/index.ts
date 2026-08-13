@@ -1469,7 +1469,8 @@ function startApplication() {
       pluginServiceBrowserAuthorization,
       pluginServiceExternalAuthorization,
       createElectronPluginServiceCheckoutNavigation(),
-      async () => {
+      async (pluginId) => {
+        await generationRuntime.disposePluginAndWait(pluginId)
         refreshGenerationCatalogAfterServiceMutation?.()
         await refreshAgentConfiguration?.()
       },

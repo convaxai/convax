@@ -2141,9 +2141,15 @@ describe("GenerationPluginRuntime", () => {
     expect(runtime.disposePlugin("image-tools")).toBe(false)
 
     await runtime.callTool("image-tools/generate.image", {})
-    runtime.dispose()
+    clients[1].closeAndWait = async (force) => clients[1].close(force)
+    expect(await runtime.disposePluginAndWait("image-tools")).toBe(true)
     expect(clients[1].closed).toBe(1)
     expect(clients[1].forcedCloses).toEqual([true])
+
+    await runtime.callTool("image-tools/generate.image", {})
+    runtime.dispose()
+    expect(clients[2].closed).toBe(1)
+    expect(clients[2].forcedCloses).toEqual([true])
     runtime.dispose()
     expect((await rejection(runtime.listTools())).message).toContain("disposed")
   })
