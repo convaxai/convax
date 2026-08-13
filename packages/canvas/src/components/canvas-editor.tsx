@@ -254,10 +254,7 @@ import type {
 import {
   createCanvasShortcutHandler,
   isCanvasEditableShortcutTarget,
-  isCanvasExternalDragChordHeld,
-  isCanvasExternalDragChordKey,
   resolveCanvasTidyShortcutScope,
-  type CanvasShortcutOptions,
 } from "../use-canvas-shortcuts"
 import { useSpacePanning } from "../use-space-panning"
 import {
@@ -656,6 +653,8 @@ export interface CanvasEditorHandle {
   resumeAfterLeaveCanceled: () => void
   /** Selects existing nodes after a host-owned mutation has been reloaded. */
   selectNodes: (nodeIds: readonly string[]) => void
+  /** Applies a host-routed transient native-drag shortcut state. Persistent mode is unaffected by release. */
+  setExternalDragShortcutHeld: (held: boolean) => boolean
   /** @deprecated Prefer CanvasEditorHandle.openGenerate and the Canvas-owned composer. */
   submitGeneration: (submission: CanvasGenerationComposerSubmission) => void
 }
@@ -2932,7 +2931,6 @@ function CanvasEditorContent(
     [props.selectionDragSource, selectionActionContext],
   )
   const [selectionDragStateVersion, refreshSelectionDragState] = useReducer((version: number) => version + 1, 0)
-  const selectionDragShortcutModifierRef = useRef<CanvasShortcutOptions["externalDragShortcutModifier"]>(undefined)
   const selectionDragMountedRef = useRef(false)
   const selectionDragErrorRef = useRef(notifyError)
   const selectionDragGestureRef = useRef<CanvasSelectionDragGestureController | null>(null)
@@ -2947,7 +2945,6 @@ function CanvasEditorContent(
   }
   const selectionDragGesture = selectionDragGestureRef.current
   selectionDragModeActiveRef.current = selectionDragModeActive
-  selectionDragShortcutModifierRef.current = props.selectionDragSource?.shortcutModifier
   const selectionDragChordHeld = selectionDragGesture.held
   const interactionPolicy = resolveCanvasInteractionPolicy({
     readOnly,
@@ -3120,59 +3117,6 @@ function CanvasEditorContent(
     if (!selectionDragModeActive) return
     if (!props.selectionDragSource?.mode || readOnly) exitSelectionDragMode()
   }, [exitSelectionDragMode, props.selectionDragSource, readOnly, selectionDragModeActive])
-  useEffect(() => {
-    const cancelActiveDrag = () => {
-      if (selectionDragGesture.held && !selectionDragModeActiveRef.current) cancelSelectionDrag()
-    }
-    const canvasHasKeyboardFocus = () => {
-      const canvasRoot = rootRef.current
-      const activeElement = document.activeElement
-      return Boolean(canvasRoot && activeElement && canvasRoot.contains(activeElement))
-    }
-    // Electron may deliver a modifier-only keydown at window capture without the
-    // React root observing it. Keep this fallback bounded to the focused Canvas.
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (!canvasHasKeyboardFocus() || event.defaultPrevented || event.isComposing) return
-      if (
-        !selectionDragModeActiveRef.current &&
-        isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current) &&
-        isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current)
-      ) {
-        armSelectionDrag()
-        return
-      }
-      if (
-        selectionDragGesture.held &&
-        !selectionDragModeActiveRef.current &&
-        !isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current)
-      ) {
-        cancelSelectionDrag()
-      }
-    }
-    const cancelOnKeyUp = (event: globalThis.KeyboardEvent) => {
-      if (
-        selectionDragGesture.held &&
-        !selectionDragModeActiveRef.current &&
-        isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current) &&
-        !isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current)
-      ) {
-        cancelSelectionDrag()
-      }
-    }
-    const cancelWhenHidden = () => {
-      if (document.hidden) cancelActiveDrag()
-    }
-    window.addEventListener("blur", cancelActiveDrag)
-    window.addEventListener("keydown", handleKeyDown, true)
-    window.addEventListener("keyup", cancelOnKeyUp, true)
-    document.addEventListener("visibilitychange", cancelWhenHidden)
-    return () => {
-      window.removeEventListener("blur", cancelActiveDrag)
-      window.removeEventListener("keydown", handleKeyDown, true)
-      window.removeEventListener("keyup", cancelOnKeyUp, true)
-      document.removeEventListener("visibilitychange", cancelWhenHidden)
-    }
-  }, [armSelectionDrag, cancelSelectionDrag, selectionDragGesture])
   const startSelectionDrag = useCallback(() => {
     if (!selectionDragGesture.held || selectionDragGesture.consumed || !selectionDragContextIsCurrent()) {
       cancelSelectionDrag()
@@ -3689,6 +3633,10 @@ function CanvasEditorContent(
       selectNodes(nodeIds) {
         selectNodes(nodeIds)
       },
+      setExternalDragShortcutHeld(held) {
+        if (held) return selectionDragModeActiveRef.current ? false : armSelectionDrag()
+        return selectionDragModeActiveRef.current ? false : cancelSelectionDrag()
+      },
       submitGeneration(submission) {
         submitGenerationRef.current(submission)
       },
@@ -3696,6 +3644,8 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       addNode,
+      armSelectionDrag,
+      cancelSelectionDrag,
       draftDecisionService,
       finalizeGestureAndSave,
       props.editorRef,
@@ -4562,13 +4512,6 @@ function CanvasEditorContent(
   const shortcutHandler = createCanvasShortcutHandler(
     {
       addNode: () => setNodeMenuOpen(true),
-      armExternalDrag: () => {
-        if (!selectionDragModeActiveRef.current) armSelectionDrag()
-      },
-      cancelExternalDrag: () => {
-        if (selectionDragModeActiveRef.current) exitSelectionDragMode()
-        else cancelSelectionDrag()
-      },
       clearSelection: clearOverlays,
       copy,
       delete: remove,
@@ -4611,11 +4554,6 @@ function CanvasEditorContent(
       },
     },
     readOnly,
-    {
-      canArmExternalDrag: Boolean(props.selectionDragSource) && !readOnly && !selectionDragModeActive,
-      externalDragShortcutModifier: props.selectionDragSource?.shortcutModifier,
-      externalDragArmed: selectionDragChordHeld,
-    },
   )
   const handleCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const interactiveTarget =

@@ -1421,7 +1421,7 @@ test("focuses a text node created after dragging a connection to empty canvas", 
   }
 })
 
-test("arms external drag only with Canvas focus and clears it before picker-created image entry", async () => {
+test("applies the host-routed external drag hold and clears it before picker-created image entry", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({ id: "picker-create-entry" })
   let authoritative = initial
@@ -1431,6 +1431,7 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     resolveCamera = resolve
   })
   const prepare = mock(async () => ({ dispose: () => undefined, start: () => undefined }))
+  const editorRef = createRef<CanvasEditorHandle>()
   let root: Root | undefined
   renderNodes = true
   setViewport.mockImplementation(async (_viewport, options) => {
@@ -1444,11 +1445,11 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     await act(async () => {
       root?.render(
         <CanvasEditor
+          ref={editorRef}
           selectionDragSource={{
             id: "native-files",
             label: "Keep holding Command-Shift",
             prepare,
-            shortcutModifier: "meta",
             visible: () => true,
           }}
           services={createCanvasServices({
@@ -1511,10 +1512,8 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     canvas.append(noDragSurface)
     outsideCanvas.focus()
     await act(async () => {
-      image.dispatchEvent(
-        new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
-      )
-      window.dispatchEvent(chordDown())
+      image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }))
+      editorRef.current?.setExternalDragShortcutHeld(true)
       await Promise.resolve()
     })
     expect(document.activeElement).toBe(canvas)
@@ -1525,6 +1524,7 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
       Object.defineProperty(focusOut, "relatedTarget", { value: outsideCanvas })
       canvas.dispatchEvent(focusOut)
       outsideCanvas.focus()
+      editorRef.current?.setExternalDragShortcutHeld(false)
       await Promise.resolve()
     })
     expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
@@ -1537,7 +1537,7 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
 
     await act(async () => {
       canvas.focus()
-      window.dispatchEvent(chordDown())
+      editorRef.current?.setExternalDragShortcutHeld(true)
       await Promise.resolve()
     })
     expect(prepare).toHaveBeenCalledTimes(2)

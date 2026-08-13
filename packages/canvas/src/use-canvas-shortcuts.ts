@@ -2,8 +2,6 @@ import type { KeyboardEvent } from "react"
 
 export interface CanvasShortcutActions {
   addNode: () => void
-  armExternalDrag: () => void
-  cancelExternalDrag: () => void
   clearSelection: () => void
   copy: () => void
   delete: () => void
@@ -24,20 +22,12 @@ export interface CanvasShortcutActions {
   zoomOut: () => void
 }
 
-export interface CanvasShortcutOptions {
-  canArmExternalDrag?: boolean
-  externalDragShortcutModifier?: "control" | "meta"
-  externalDragArmed?: boolean
-}
-
 export function resolveCanvasTidyShortcutScope(
   canArrangeSelection: boolean,
   selectedNodeCount: number,
 ): "canvas" | "selection" {
   return canArrangeSelection || selectedNodeCount >= 2 ? "selection" : "canvas"
 }
-
-type CanvasExternalDragChordEvent = Pick<KeyboardEvent<HTMLElement>, "altKey" | "ctrlKey" | "metaKey" | "shiftKey">
 
 export function isCanvasEditableShortcutTarget(target: EventTarget | null) {
   if (typeof HTMLElement === "undefined" || !(target instanceof HTMLElement)) return false
@@ -52,28 +42,6 @@ export function ignoresCanvasShortcuts(target: EventTarget | null) {
     : false
 }
 
-export function isCanvasExternalDragChordHeld(
-  event: CanvasExternalDragChordEvent,
-  shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
-) {
-  if (!shortcutModifier) return false
-  if (event.altKey || !event.shiftKey) return false
-  if (shortcutModifier === "meta") return event.metaKey && !event.ctrlKey
-  if (shortcutModifier === "control") return event.ctrlKey && !event.metaKey
-  return false
-}
-
-export function isCanvasExternalDragChordKey(
-  key: string,
-  shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
-) {
-  if (!shortcutModifier) return false
-  if (key === "Shift") return true
-  if (shortcutModifier === "meta") return key === "Meta"
-  if (shortcutModifier === "control") return key === "Control"
-  return false
-}
-
 export function resolveCanvasHistoryShortcut(
   event: Pick<globalThis.KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">,
 ): "redo" | "undo" | null {
@@ -84,11 +52,7 @@ export function resolveCanvasHistoryShortcut(
   return null
 }
 
-export function createCanvasShortcutHandler(
-  actions: CanvasShortcutActions,
-  readOnly: boolean,
-  options: CanvasShortcutOptions = {},
-) {
+export function createCanvasShortcutHandler(actions: CanvasShortcutActions, readOnly: boolean) {
   return (event: KeyboardEvent<HTMLElement>) => {
     const key = event.key.toLowerCase()
     const mod = event.metaKey || event.ctrlKey
@@ -99,20 +63,6 @@ export function createCanvasShortcutHandler(
     }
 
     if (event.defaultPrevented || event.nativeEvent?.isComposing) return
-    if (event.key === "Escape" && options.externalDragArmed) return run(actions.cancelExternalDrag)
-    if (options.externalDragArmed && !["Meta", "Control", "Shift"].includes(event.key)) {
-      actions.cancelExternalDrag()
-    }
-    // This is an application gesture: Canvas clicks can intentionally leave a nested composer focused.
-    // Either key order works, and key-up immediately ends the held gesture.
-    if (
-      options.canArmExternalDrag &&
-      isCanvasExternalDragChordHeld(event, options.externalDragShortcutModifier) &&
-      isCanvasExternalDragChordKey(event.key, options.externalDragShortcutModifier)
-    ) {
-      actions.armExternalDrag()
-      return
-    }
     if (ignoresCanvasShortcuts(event.target)) return
     if (mod && !event.altKey && !event.shiftKey && key === "0") return run(actions.fitView)
     if (mod && !event.altKey && ["=", "+"].includes(event.key)) return run(actions.zoomIn)
@@ -134,21 +84,5 @@ export function createCanvasShortcutHandler(
     if (!mod && event.altKey && event.shiftKey && key === "f") return run(actions.layout)
     if (!mod && !event.altKey && ["Backspace", "Delete"].includes(event.key)) return run(actions.delete)
     if (!mod && !event.altKey && !event.shiftKey && event.key === "Tab") return run(actions.addNode)
-  }
-}
-
-/** Ends the native export gesture as soon as either required modifier is released. */
-export function createCanvasShortcutReleaseHandler(
-  actions: Pick<CanvasShortcutActions, "cancelExternalDrag">,
-  options: CanvasShortcutOptions = {},
-) {
-  return (event: KeyboardEvent<HTMLElement>) => {
-    if (
-      !options.externalDragArmed ||
-      !isCanvasExternalDragChordKey(event.key, options.externalDragShortcutModifier) ||
-      isCanvasExternalDragChordHeld(event, options.externalDragShortcutModifier)
-    )
-      return
-    actions.cancelExternalDrag()
   }
 }

@@ -1719,7 +1719,7 @@ describe("CanvasEditor external drag mode", () => {
     expect(buttonActions.get("Drag to Other Apps")).toBeUndefined()
   })
 
-  test("does not prepare until command-shift is held for a visible drag source", () => {
+  test("leaves command-shift activation to the host shortcut scope", () => {
     const prepare = mock(
       () =>
         new Promise<{
@@ -1732,7 +1732,6 @@ describe("CanvasEditor external drag mode", () => {
         id: "native-files",
         label: "Drag outside Convax",
         prepare,
-        shortcutModifier: "meta",
         visible: () => true,
       },
     })
@@ -1752,7 +1751,7 @@ describe("CanvasEditor external drag mode", () => {
       target: null,
     })
 
-    expect(prepare).toHaveBeenCalledTimes(1)
+    expect(prepare).not.toHaveBeenCalled()
     expect(preventDefault).not.toHaveBeenCalled()
     expect(stopPropagation).not.toHaveBeenCalled()
   })

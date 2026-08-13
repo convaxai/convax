@@ -89,6 +89,13 @@ contract and its routed references.
   Preload never receive or choose the default native creation path.
 - Workbench owns generic resize/collapse transactions. Desktop owns concrete pixels,
   viewport constraints, pointer/keyboard wiring, animation, and browser persistence.
+- Desktop Renderer owns one explicitly composed scoped shortcut service for window
+  keyboard routing. Focus scopes register DOM roots and feature/chord bindings;
+  the deepest focus scope wins, application features alone may fall back, and one
+  deterministic priority/registration-order winner handles a conflict within a
+  scope. Scope changes, blur, visibility loss, and disposal release all held
+  features. Do not add parallel global listeners for application/workspace/Canvas
+  command routing or move DOM focus into Workbench.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
   commands through its originating session lease, installs the returned projection
   and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,

@@ -684,6 +684,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                     |
 | Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                         |
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                       |
+| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient focus projection only; no Workbench, Canvas document, or browser-storage mirror                        |
 | Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                             |
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                               |
 | Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                                        |
@@ -2253,11 +2254,14 @@ selection actions. Desktop contributes that source only when the complete select
 contains managed image, video or audio file nodes and no edges. Preparation begins
 only after an explicit drag-out intent. The primary UI is the persistent **Drag to
 Other Apps** Canvas mode; `Command-Shift` on macOS (`Control-Shift` reserved for
-Windows) remains a transient compatibility gesture while keyboard focus is within
-the Canvas root or one of its descendants. A window-capture fallback may observe
-modifier delivery, but it admits activation only when the current active element is
-inside that Canvas. Leaving Canvas focus, releasing a required modifier, window focus
-loss, or document visibility loss cancels the transient gesture. The persistent mode
+Windows) remains a transient compatibility gesture while the Desktop Renderer
+shortcut service projects Canvas as the exact active focus scope. The service owns
+the one window-capture listener, deterministic feature conflict arbitration, and
+held-key release. It forwards only the held/released transition through Canvas's
+host-neutral editor handle; Canvas never infers activation from a window listener.
+Entering a nested conversation or node-input scope, leaving Canvas focus, releasing
+a required modifier, pressing an unrelated key, window focus loss, document
+visibility loss, scope disposal, or service disposal cancels the transient gesture. The persistent mode
 preserves normal selection, box selection, pan and zoom, but disables in-Canvas node movement:
 dragging a ready selected media node publishes the complete selection to the operating
 system instead. Canvas keeps a top reminder and explicit exit action while the mode
@@ -2298,6 +2302,19 @@ without learning which Desktop utility produced the occlusion.
 
 This distinction applies to future panels: add generic state only when it is reusable
 window coordination; keep the product's visual implementation in the host.
+
+Desktop Renderer also owns the scoped shortcut service because focus routing is a
+window/DOM composition concern. A scope registers one DOM root and any number of
+feature registrations. Exactly the deepest focused scope is active; application
+scope features are the only fallback and do not make inactive Canvas, conversation,
+or node-input features reachable. Within one scope and chord, highest explicit
+priority wins and equal priority keeps first-registration order; disposing the
+winner reveals the next registration. Editable descendants reject focus-scope
+features unless that feature explicitly opts in. Scope changes and window/document
+focus loss synchronously release every held feature. The service is instantiated and
+injected by Renderer composition, never discovered through a global/service locator,
+persisted, or moved into DOM-free Workbench. Domain packages may expose a narrow
+host-neutral held/released port but do not own the window listeners or arbitration.
 
 ## 10. Electron boundary
 

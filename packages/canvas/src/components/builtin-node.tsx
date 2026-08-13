@@ -72,9 +72,7 @@ import {
   useState,
 } from "react"
 import { createPortal } from "react-dom"
-import {
-  normalizeCanvasTextNodeTitle,
-} from "../commands"
+import { normalizeCanvasTextNodeTitle } from "../commands"
 import { isCanvasEmptyImageNodeData } from "../document"
 import { useCanvasOverlayPresence } from "./use-overlay-presence"
 import { scheduleCutoutTransitionAfterPaint } from "./cutout-transition"
@@ -117,7 +115,6 @@ import type {
   CanvasResourceRuntimeState,
   CanvasTextNodeData,
 } from "../types"
-import { isCanvasExternalDragChordHeld } from "../use-canvas-shortcuts"
 import { ConnectionNodeMenu } from "./connection-node-menu"
 import {
   projectCanvasConnectionHandlePointer,
@@ -3262,15 +3259,7 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
       )}
       data-canvas-selection-drag-state={armed ? editor.selectionDragStatus : undefined}
       draggable={ready}
-      onDragStart={(event) =>
-        startCanvasSelectionDragFromNode(
-          event,
-          ready,
-          editor.selectionDragModeActive,
-          source?.shortcutModifier,
-          editor.startSelectionDrag,
-        )
-      }
+      onDragStart={(event) => startCanvasSelectionDragFromNode(event, ready, editor.startSelectionDrag)}
       onDragEnd={editor.finishSelectionDrag}
       onPointerEnter={() => editor.setSelectionDragCandidateNode(props.node.id)}
       onPointerLeave={() => editor.setSelectionDragCandidateNode(null)}
@@ -3293,18 +3282,13 @@ function CanvasSelectionDragNodeSurface(props: { children: ReactNode; node: Node
 }
 
 export function startCanvasSelectionDragFromNode(
-  event: Pick<
-    DragEvent<HTMLElement>,
-    "altKey" | "ctrlKey" | "metaKey" | "preventDefault" | "shiftKey" | "stopPropagation"
-  >,
+  event: Pick<DragEvent<HTMLElement>, "preventDefault" | "stopPropagation">,
   ready: boolean,
-  modeActive: boolean,
-  shortcutModifier: "control" | "meta" | undefined,
   start: () => boolean,
 ) {
   event.preventDefault()
   event.stopPropagation()
-  if (!ready || (!modeActive && !isCanvasExternalDragChordHeld(event, shortcutModifier))) return false
+  if (!ready) return false
   return start()
 }
 

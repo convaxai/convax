@@ -1500,7 +1500,7 @@ describe("built-in node toolbar visibility", () => {
     expect(render(selection(["node-b"]), "ready", false, false)).not.toContain("data-canvas-selection-drag-state")
   })
 
-  test("starts the whole prepared selection only while the exact drag chord remains held", () => {
+  test("starts the whole selection only from a host-prepared ready drag", () => {
     const start = mock(() => true)
     const dragEvent = (
       overrides: Partial<{ altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }> = {},
@@ -1515,19 +1515,12 @@ describe("built-in node toolbar visibility", () => {
     })
 
     const notReady = dragEvent({ metaKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(notReady, false, false, "meta", start)).toBeFalse()
+    expect(startCanvasSelectionDragFromNode(notReady, false, start)).toBeFalse()
     const released = dragEvent({ metaKey: true })
-    expect(startCanvasSelectionDragFromNode(released, true, false, "meta", start)).toBeFalse()
-    const otherPlatform = dragEvent({ ctrlKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(otherPlatform, true, false, "meta", start)).toBeFalse()
-    const held = dragEvent({ metaKey: true, shiftKey: true })
-    expect(startCanvasSelectionDragFromNode(held, true, false, "meta", start)).toBeTrue()
+    expect(startCanvasSelectionDragFromNode(released, true, start)).toBeTrue()
 
-    const modeDrag = dragEvent()
-    expect(startCanvasSelectionDragFromNode(modeDrag, true, true, "meta", start)).toBeTrue()
-
-    expect(start).toHaveBeenCalledTimes(2)
-    for (const event of [notReady, released, otherPlatform, held, modeDrag]) {
+    expect(start).toHaveBeenCalledTimes(1)
+    for (const event of [notReady, released]) {
       expect(event.preventDefault).toHaveBeenCalledTimes(1)
       expect(event.stopPropagation).toHaveBeenCalledTimes(1)
     }
@@ -1693,7 +1686,9 @@ describe("built-in node toolbar visibility", () => {
         request = next
         return <div data-assistant-toolbar />
       },
-      executeCommand: (next) => { command = next },
+      executeCommand: (next) => {
+        command = next
+      },
       document: stored,
       node: imageNode,
     })

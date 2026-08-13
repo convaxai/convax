@@ -48,6 +48,13 @@ or durable domain authority.
   native path from it, accept it through Plugin/UI input, or use it as authority.
 - Workbench owns generic layout transitions. Renderer owns pointer/keyboard wiring,
   concrete viewport budgets, CSS animation, and persistence of user preferences.
+- Compose the scoped shortcut service explicitly in the Renderer root. Surfaces
+  register focus roots and feature bindings through the injected instance; do not
+  create global shortcut singletons or independent global command listeners. The exact
+  focused scope switches the active feature set, application scope is the only
+  fallback, and nested conversation/node-input scopes isolate Canvas commands.
+  Conflicts use explicit priority then first registration, while scope change,
+  window blur, document hiding, and unmount release every held feature.
 
 ## Capability surfaces
 
@@ -130,7 +137,9 @@ or durable domain authority.
   publishes a complete immutable selection and may hold a short-lived opaque ticket;
   it never stages files or sees the native drag payload. Convax Desktop exposes both
   the persistent drag-out mode and a `Command-Shift` compatibility chord; the chord
-  activates only while keyboard focus remains inside Canvas.
+  is registered in the Canvas focus scope and forwards only held/released state to
+  the Canvas editor handle. It cannot activate from a conversation, node input,
+  inactive scope, or parallel Canvas-owned window listener.
 
 ## UI behavior
 
