@@ -88,7 +88,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   source content against the latest snapshot, derives clone node/edge identities,
   preserves Group containment, and commits one guarded `canvas.nodes.duplicate`
   typed intent atomically. Same-Canvas paste uses internal-edge scope.
-- Group fold state is canonical optional Group node data; UI Fold/Unfold and all
+- Group fold state is canonical optional Group node data; UI Fold creates or marks a
+  compact Group, while UI Unfold atomically ungroups that folded container. All
   grouping/layout actions submit owner-defined application commands. Optional Fit
   runs only after the authoritative layout commit succeeds.
 - Group drop/reparent atomically commits parentage with local geometry, and Alt-drag
@@ -153,8 +154,8 @@ Canvas owns document and editor semantics independently of Project and Agent.
   focus projection hides cross-scope Group edges without rewriting them. Focused
   resource creation and parentage are one application command/CAS. Groups remain
   expanded unless an explicit persisted Fold state projects them as compact folders;
-  Unfold restores the durable child-container presentation without moving children
-  or rewriting relationships. File-input
+  Unfold removes the folded Group through the existing atomic Ungroup command while
+  preserving child world positions and removing Group relationships. File-input
   inference remains direct and file-only.
 - Plugins are disposable, deterministic and failure-isolated.
 - Canvas owns only host-neutral renderer and toolbar contracts. Installed Web

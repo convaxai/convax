@@ -4064,8 +4064,8 @@ function CanvasEditorContent(
     if (!groupMenuCapabilities.canUnfold || selectionContext.kind !== "single-node") return
     if (!props.executeCommand) return rejectUnmappedCanvasMutation()
     void props
-      .executeCommand({ type: "nodes.setFolded", nodeId: selectionContext.nodeId, folded: false })
-      .catch((error) => notifyError("Could not unfold Canvas group", error))
+      .executeCommand({ type: "nodes.ungroup", nodeId: selectionContext.nodeId })
+      .catch((error) => notifyError("Could not unfold Canvas folder", error))
   }, [
     groupMenuCapabilities.canUnfold,
     notifyError,

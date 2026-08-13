@@ -302,8 +302,8 @@ without being rewritten. A resource created while a Group is focused is placed a
 parented by one Main-owned Canvas command; the renderer never follows a successful
 root insertion with a second reparent save. Group is the expanded structural
 container by default. Fold is a persisted presentation state that projects the same
-Group as a compact folder; Unfold restores the expanded container without moving
-children or rewriting relationships. Camera, placement, snapping, and layout use
+Group as a compact folder; Unfold atomically removes that folded Group and restores
+its children to the containing scope without moving them in world space. Camera, placement, snapping, and layout use
 the active presentation geometry while durable expanded bounds continue to describe
 the child coordinate container. File-input inference remains direct and file-only, so a
 Group relation does not implicitly contribute child resources.
@@ -1780,6 +1780,8 @@ identities or persists a cloned snapshot.
 Group, Fold, Unfold, Ungroup, Align, Distribute, Layout, and Tidy UI actions use the
 same Canvas application-command bridge as Agent callers. Fold is canonical Group
 node data (`folded: true`, with absence meaning expanded), not renderer metadata.
+Unfold reuses the atomic Ungroup operation for a folded Group so it cannot leave or
+create an orphan container; expanded Groups continue to expose Ungroup explicitly.
 Group drop/reparent commits the parent and local geometry atomically; Alt-drag
 duplicate commits owner-derived clones only after its transient drag preview ends.
 Node title, Group appearance, file-card generation-tool preference, text-resource

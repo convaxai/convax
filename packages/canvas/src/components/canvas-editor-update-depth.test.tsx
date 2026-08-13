@@ -218,6 +218,7 @@ mock.module("@xyflow/react", () => ({
 const { createCanvasDocument, createFolderNode, createGroupNode, createMediaNode, createTextNode } = await import(
   "../document"
 )
+const { applyCanvasApplicationCommand } = await import("../application")
 const { getCanvasFolderFocusEntry } = await import("../directory-focus")
 const { setCanvasGroupFolded } = await import("../group-fold")
 const { createCanvasFileRendererRegistry } = await import("../file-renderer-registry")
@@ -900,13 +901,7 @@ test("keeps expanded Group measurements transient and protects folded presentati
     )
 
     await act(async () => {
-      root?.render(
-        <CanvasEditor
-          key="expanded-group"
-          services={createCanvasServices()}
-          session={expandedSession}
-        />,
-      )
+      root?.render(<CanvasEditor key="expanded-group" services={createCanvasServices()} session={expandedSession} />)
     })
     await act(async () => {
       observedReactFlowProps?.onNodesChange?.([
@@ -925,9 +920,7 @@ test("keeps expanded Group measurements transient and protects folded presentati
     )
     const foldedSession = new TestCanvasSession(foldedDocument)
     await act(async () => {
-      root?.render(
-        <CanvasEditor key="folded-group" services={createCanvasServices()} session={foldedSession} />,
-      )
+      root?.render(<CanvasEditor key="folded-group" services={createCanvasServices()} session={foldedSession} />)
     })
     await act(async () => {
       observedReactFlowProps?.onNodesChange?.([
@@ -996,6 +989,74 @@ test("treats a folded Group as one node and hides child arrangement controls", a
     expect(container.querySelector('button[aria-label="Unfold"]')).not.toBeNull()
     expect(container.querySelector('button[aria-label="Align and arrange"]')).toBeNull()
     expect(container.querySelector('button[aria-label="Tidy up"]')).toBeNull()
+  } finally {
+    if (root) await act(async () => root?.unmount())
+    await restoreWindow()
+  }
+})
+
+test("unfolds a folded folder without leaving or creating a Group", async () => {
+  const restoreWindow = installTestWindow()
+  let root: Root | undefined
+
+  try {
+    const container = document.createElement("div")
+    document.body.append(container)
+    root = createRoot(container)
+    const group = createGroupNode({
+      height: 360,
+      id: "folded-group",
+      position: { x: 40, y: 60 },
+      width: 520,
+    })
+    const first = {
+      ...createTextNode({
+        id: "first-child",
+        metadata: {},
+        position: { x: 40, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const second = {
+      ...createTextNode({
+        id: "second-child",
+        metadata: {},
+        position: { x: 300, y: 50 },
+        resourceState: { status: "ready" },
+      }),
+      parentId: group.id,
+    }
+    const foldedDocument = setCanvasGroupFolded(
+      createCanvasDocument({ id: "folded-group-unfold", nodes: [group, first, second] }),
+      group.id,
+      true,
+    )
+    const session = new TestCanvasSession(foldedDocument)
+    const executeCommand = mock(async (command: Parameters<typeof applyCanvasApplicationCommand>[1]) => {
+      const result = applyCanvasApplicationCommand(session.getProjection(), command)
+      session.publish(result.document)
+      return result
+    })
+
+    await act(async () => {
+      root?.render(<CanvasEditor executeCommand={executeCommand} services={createCanvasServices()} session={session} />)
+    })
+    await act(async () => {
+      observedReactFlowProps?.onNodesChange?.([{ id: group.id, selected: true, type: "select" }])
+    })
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[aria-label="Unfold"]')?.click()
+      await Promise.resolve()
+    })
+
+    expect(executeCommand).toHaveBeenCalledTimes(1)
+    expect(executeCommand).toHaveBeenCalledWith({ type: "nodes.ungroup", nodeId: group.id })
+    expect(session.getProjection().nodes).toEqual([
+      expect.objectContaining({ id: first.id, parentId: undefined, position: { x: 80, y: 110 } }),
+      expect.objectContaining({ id: second.id, parentId: undefined, position: { x: 340, y: 110 } }),
+    ])
+    expect(session.getProjection().nodes.some((node) => node.data.kind === "group")).toBe(false)
   } finally {
     if (root) await act(async () => root?.unmount())
     await restoreWindow()
