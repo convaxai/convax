@@ -3135,37 +3135,18 @@ function CanvasEditorContent(
         cancelSelectionDrag()
       }
     }
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (
-        !selectionDragModeActiveRef.current &&
-        isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current) &&
-        isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current)
-      ) {
-        armSelectionDrag()
-        return
-      }
-      if (
-        selectionDragGesture.held &&
-        !selectionDragModeActiveRef.current &&
-        !["Meta", "Control", "Shift"].includes(event.key)
-      ) {
-        cancelSelectionDrag()
-      }
-    }
     const cancelWhenHidden = () => {
       if (document.hidden) cancelActiveDrag()
     }
     window.addEventListener("blur", cancelActiveDrag)
-    window.addEventListener("keydown", handleKeyDown, true)
     window.addEventListener("keyup", cancelOnKeyUp, true)
     document.addEventListener("visibilitychange", cancelWhenHidden)
     return () => {
       window.removeEventListener("blur", cancelActiveDrag)
-      window.removeEventListener("keydown", handleKeyDown, true)
       window.removeEventListener("keyup", cancelOnKeyUp, true)
       document.removeEventListener("visibilitychange", cancelWhenHidden)
     }
-  }, [armSelectionDrag, cancelSelectionDrag, selectionDragGesture])
+  }, [cancelSelectionDrag, selectionDragGesture])
   const startSelectionDrag = useCallback(() => {
     if (!selectionDragGesture.held || selectionDragGesture.consumed || !selectionDragContextIsCurrent()) {
       cancelSelectionDrag()
@@ -5223,6 +5204,11 @@ function CanvasEditorContent(
                   data-canvas-color-scheme={appearance.colorScheme}
                   data-canvas-reduced-motion={String(prefersReducedMotion)}
                   data-canvas-tool={interactionTool}
+                  onBlurCapture={(event) => {
+                    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+                    clearPointerMultiSelection()
+                    if (!selectionDragModeActiveRef.current) cancelSelectionDrag()
+                  }}
                   onCopy={onCanvasCopy}
                   onDragOver={(event) => {
                     if (!mutationService || !canvasPointerMutationEnabled) return

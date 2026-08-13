@@ -164,7 +164,7 @@ describe("Canvas media external drag lifecycle", () => {
     })
 
     const prepared = await source.prepare(context([audio.id, image.id]))
-    expect(source.shortcutModifier).toBeUndefined()
+    expect(source.shortcutModifier).toBe("meta")
     expect(source.mode?.label).toBe("Drag to Other Apps")
     expect(calls).toEqual(["flush", "prepare"])
     expect(adapter.prepared).toEqual([

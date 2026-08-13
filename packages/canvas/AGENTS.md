@@ -233,10 +233,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
   owns its top-level mode UI and interaction semantics: selection, pan and zoom stay
   available, in-Canvas node movement is disabled, and each completed native drag
   rearms the current immutable selection. Modifier-only compatibility gestures must
-  be explicit host opt-ins; the Convax Desktop source uses only the persistent mode.
-  React Flow modifier behavior is derived from the initiating pointer event, and
-  Space panning is scoped to a focused Canvas with an exact unmodified key. Host/native
-  paths and ticket publication remain outside Canvas.
+  be explicit host opt-ins and activate only from a key event routed through the
+  focused Canvas root or its descendants; window/document listeners may release but
+  never activate them. React Flow modifier behavior is derived from the initiating
+  pointer event, and Space panning is scoped to a focused Canvas with an exact
+  unmodified key. Host/native paths and ticket publication remain outside Canvas.
 
 Run `bun typecheck && bun test`. For public command, plugin or export changes also
 run root `bun run pack:check`.

@@ -43,6 +43,7 @@ export function createCanvasMediaSelectionDragSource(
     label: options.label,
     mode: options.mode,
     preparingLabel: options.preparingLabel,
+    shortcutModifier: "meta",
     visible: isManagedCanvasMediaDragSelection,
     async prepare(context) {
       throwIfAborted(context.signal)
