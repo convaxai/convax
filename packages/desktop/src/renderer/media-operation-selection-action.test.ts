@@ -11,7 +11,6 @@ import { canvasProjectionResourceMetadataKey } from "@convax/canvas/collaboratio
 import { projectResourceReferenceKey } from "@convax/project/canvas"
 import type { InstalledWebPluginSummary } from "../plugin-contracts"
 import {
-  canResumeMediaOperation,
   canRunMediaOperation,
   createMediaOperationGenerateRequest,
   createMediaOperationGenerateRequests,
@@ -435,6 +434,7 @@ describe("manifest-driven media operation requests", () => {
       },
       output: "video",
       references: [{ nodeId: managedVideo.id, role: "reference_video" }],
+      resultMode: { type: "create-pending-node" },
       toolId: "acme-media/video.trim",
       toolInput: { duration_seconds: 3, start_seconds: 1 },
     })
@@ -468,8 +468,16 @@ describe("manifest-driven media operation requests", () => {
       {},
     )
     expect(requests).toHaveLength(2)
-    expect(requests[0]).toMatchObject({ output: "video", toolId: "acme-media/video.silent" })
-    expect(requests[1]).toMatchObject({ output: "audio", toolId: "acme-media/audio.extract" })
+    expect(requests[0]).toMatchObject({
+      output: "video",
+      resultMode: { type: "create-pending-node" },
+      toolId: "acme-media/video.silent",
+    })
+    expect(requests[1]).toMatchObject({
+      output: "audio",
+      resultMode: { type: "create-pending-node" },
+      toolId: "acme-media/audio.extract",
+    })
     expect(requests[0].toolInput).toBeUndefined()
     expect(requests[1].anchor).toEqual({ x: requests[0].anchor.x, y: requests[0].anchor.y + 224 })
     expect(() =>
@@ -522,33 +530,11 @@ describe("manifest-driven media operation requests", () => {
     })
   })
 
-  test("binds a dialog to its original scope and verifies resumable partial output", () => {
+  test("binds a dialog to its original scope", () => {
     const context = selection([managedVideo.id])
     const split = listInstalledMediaOperationActions([operationPlugin()]).find((action) => action.id === "split")!
     const request = { action: split, canvasId: "canvas", context, projectId: "project" }
     expect(isMediaOperationDialogInScope(request, "project", "canvas")).toBe(true)
     expect(isMediaOperationDialogInScope(request, "project", "other")).toBe(false)
-
-    const completedVideo = createMediaNode({
-      id: "silent-video",
-      position: { x: 400, y: 60 },
-      resource: {
-        id: "silent-video-resource",
-        kind: "video",
-        metadata: {
-          [projectResourceReferenceKey]: { kind: "project-file", path: "Generated/silent-video.mp4" },
-        },
-        mimeType: "video/mp4",
-        state: { status: "ready", url: "convax-asset://project/silent-video.mp4" },
-      },
-    })
-    const current = {
-      ...context.document,
-      edges: [{ id: "source-result", source: managedVideo.id, target: completedVideo.id, type: "canvas" as const }],
-      nodes: [...context.document.nodes, completedVideo],
-      revision: 9,
-    }
-    expect(canResumeMediaOperation(request, current, [completedVideo.id])).toBe(true)
-    expect(canResumeMediaOperation(request, { ...current, edges: [] }, [completedVideo.id])).toBe(false)
   })
 })

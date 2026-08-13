@@ -44,6 +44,8 @@ import {
   type ProjectResourceReference,
 } from "@convax/project/canvas"
 import {
+  type GenerationCanvasAdmissionRequest,
+  type GenerationCanvasAdmissionResult,
   type GenerationCanvasRequest,
   type GenerationCanvasReconcileResult,
   type GenerationCanvasResult,
@@ -241,9 +243,26 @@ interface GenerationExecution {
   operationId: string
   result: Promise<GenerationCanvasResult>
   state: {
+    admissionListeners: Set<(target: GenerationExecutionTarget) => void>
     mustRetain: boolean
     settled: boolean
-    target?: { canvasId: string; nodeId: string; operationId: string; scopeId: string }
+    target?: GenerationExecutionTarget
+  }
+}
+
+interface GenerationExecutionTarget {
+  canvasId: string
+  nodeId: string
+  operationId: string
+  scopeId: string
+}
+
+interface GenerationCanvasServiceHooks {
+  beforeExternalCall?: () => Promise<void>
+  onRunStarted?: (target: GenerationExecutionTarget) => void
+  preparedTool?: {
+    execution: PreparedGenerationToolExecution
+    toolId: string
   }
 }
 
@@ -902,6 +921,47 @@ function validateRequest(request: GenerationCanvasRequest) {
     }
     if (request.relationAnchorNodeIds !== undefined) {
       throw new Error("Constrained generation cannot include relation anchors")
+    }
+  }
+}
+
+function validateAdmissionRequest(input: GenerationCanvasAdmissionRequest) {
+  if (!Array.isArray(input.steps) || input.steps.length < 1 || input.steps.length > 16) {
+    throw new Error("Generation Canvas admission must contain between 1 and 16 steps")
+  }
+  const operationIds = new Set<string>()
+  let expectedRef: GenerationCanvasRequest["ref"] | undefined
+  for (const [stepIndex, step] of input.steps.entries()) {
+    validateRequest(step.request)
+    if (step.request.resultMode?.type !== "create-pending-node" || step.request.expectedOutputCount !== 1) {
+      throw new Error("Generation Canvas admission steps must create exactly one pending node")
+    }
+    if (operationIds.has(step.request.operationId)) {
+      throw new Error("Generation Canvas admission contains a duplicate operation id")
+    }
+    operationIds.add(step.request.operationId)
+    if (
+      expectedRef &&
+      (expectedRef.canvasId !== step.request.ref.canvasId || expectedRef.scopeId !== step.request.ref.scopeId)
+    ) {
+      throw new Error("Generation Canvas admission steps must target one Canvas")
+    }
+    expectedRef ??= step.request.ref
+    const relationIndexes = step.relationAnchorStepIndexes ?? []
+    if (!Array.isArray(relationIndexes) || relationIndexes.length > 16) {
+      throw new Error("Generation Canvas admission relation indexes are invalid")
+    }
+    if (
+      relationIndexes.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= stepIndex) ||
+      new Set(relationIndexes).size !== relationIndexes.length
+    ) {
+      throw new Error("Generation Canvas admission relation indexes must uniquely reference prior steps")
+    }
+    if (step.request.referenceConstraint && relationIndexes.length > 0) {
+      throw new Error("Constrained generation cannot include admission relation indexes")
+    }
+    if ((step.request.relationAnchorNodeIds?.length ?? 0) + relationIndexes.length > 32) {
+      throw new Error("Generation Canvas admission relation anchors exceed the limit")
     }
   }
 }
@@ -2181,11 +2241,93 @@ export class GenerationCanvasService {
     }
   }
 
+  async admitCanvas(
+    input: GenerationCanvasAdmissionRequest,
+    actor: CanvasCommandActor,
+    signal?: AbortSignal,
+  ): Promise<GenerationCanvasAdmissionResult> {
+    validateAdmissionRequest(input)
+    requireIdentifier(actor.id, "Generation actor id")
+    requireIdentifier(actor.kind, "Generation actor kind")
+    assertNotAborted(signal)
+
+    let releaseDispatch!: () => void
+    let rejectDispatch!: (failure: unknown) => void
+    const dispatchGate = new Promise<void>((resolve, reject) => {
+      releaseDispatch = resolve
+      rejectDispatch = reject
+    })
+    // A failed admission may reject the gate before any execution reaches it.
+    // Keep that bounded failure observed while admitted runs converge on it.
+    void dispatchGate.catch(() => undefined)
+    const admitted: GenerationExecutionTarget[] = []
+
+    try {
+      const preparedTools: NonNullable<GenerationCanvasServiceHooks["preparedTool"]>[] = []
+      for (const step of input.steps) {
+        preparedTools.push(await this.#preflightPendingAdmission(step.request, signal))
+      }
+      for (const [stepIndex, step] of input.steps.entries()) {
+        assertNotAborted(signal)
+        const relationAnchorNodeIds = [
+          ...(step.request.relationAnchorNodeIds ?? []),
+          ...(step.relationAnchorStepIndexes ?? []).map((index) => admitted[index]!.nodeId),
+        ]
+        const request: GenerationCanvasRequest = {
+          ...step.request,
+          ...(relationAnchorNodeIds.length === 0 ? {} : { relationAnchorNodeIds }),
+        }
+        let resolveAdmission!: (target: GenerationExecutionTarget) => void
+        let rejectAdmission!: (failure: unknown) => void
+        const admission = new Promise<GenerationExecutionTarget>((resolve, reject) => {
+          resolveAdmission = resolve
+          rejectAdmission = reject
+        })
+        const terminal = this.generate(request, actor, signal, {
+          beforeExternalCall: () => dispatchGate,
+          onRunStarted: resolveAdmission,
+          preparedTool: preparedTools[stepIndex],
+        })
+        // Main owns terminal execution after admission. The admission caller
+        // observes only pre-admission failure and never becomes task owner.
+        void terminal.catch((failure) => {
+          rejectAdmission(failure)
+        })
+        admitted.push(await waitForCaller(admission, signal))
+      }
+      assertNotAborted(signal)
+      releaseDispatch()
+      return {
+        operations: admitted.map(({ nodeId, operationId }) => ({ nodeId, operationId })),
+      }
+    } catch (failure) {
+      rejectDispatch(failure)
+      throw failure
+    }
+  }
+
+  async #preflightPendingAdmission(
+    request: GenerationCanvasRequest,
+    signal?: AbortSignal,
+  ): Promise<NonNullable<GenerationCanvasServiceHooks["preparedTool"]>> {
+    assertNotAborted(signal)
+    const tool = selectTool(await this.#tools.listTools(request.output ? { output: request.output } : {}), request)
+    const snapshot = await this.#application.query(request.ref)
+    assertToolResultMode(tool, request.resultMode ?? { type: "add" })
+    assertToolInputBinding(tool, request.referenceConstraint)
+    const promptContexts = await this.#stagePromptContexts(snapshot.projection, request, signal)
+    generationReferenceSnapshot(snapshot.projection, request, promptContexts)
+    const execution = await this.#tools.prepareTool(tool, signal)
+    execution.validateInput(request.toolInput)
+    assertNotAborted(signal)
+    return { execution, toolId: tool.id }
+  }
+
   async generate(
     request: GenerationCanvasRequest,
     actor: CanvasCommandActor,
     signal?: AbortSignal,
-    hooks?: { beforeExternalCall?: () => Promise<void> },
+    hooks?: GenerationCanvasServiceHooks,
   ): Promise<GenerationCanvasResult> {
     validateRequest(request)
     requireIdentifier(actor.id, "Generation actor id")
@@ -2211,6 +2353,10 @@ export class GenerationCanvasService {
       if (existing.fingerprint !== fingerprint) {
         throw new Error("Generation operation id was reused with a different request")
       }
+      if (hooks?.onRunStarted) {
+        if (existing.state.target) hooks.onRunStarted(existing.state.target)
+        else existing.state.admissionListeners.add(hooks.onRunStarted)
+      }
       return waitForCaller(existing.result, signal)
     }
     if (this.#executions.size >= maxGenerationExecutions) {
@@ -2220,7 +2366,11 @@ export class GenerationCanvasService {
     }
 
     const controller = new AbortController()
-    const state: GenerationExecution["state"] = { mustRetain: false, settled: false }
+    const state: GenerationExecution["state"] = {
+      admissionListeners: new Set(hooks?.onRunStarted ? [hooks.onRunStarted] : []),
+      mustRetain: false,
+      settled: false,
+    }
     const result = this.#generateOnce(
       request,
       actor,
@@ -2230,6 +2380,8 @@ export class GenerationCanvasService {
       },
       (target) => {
         state.target = target
+        for (const listener of state.admissionListeners) listener(target)
+        state.admissionListeners.clear()
       },
       hooks,
     )
@@ -2279,7 +2431,7 @@ export class GenerationCanvasService {
     signal: AbortSignal | undefined,
     retainOperation: () => void,
     onRunStarted: (target: NonNullable<GenerationExecution["state"]["target"]>) => void,
-    hooks?: { beforeExternalCall?: () => Promise<void> },
+    hooks?: GenerationCanvasServiceHooks,
   ): Promise<GenerationCanvasResult> {
     assertNotAborted(signal)
     const tool = selectTool(await this.#tools.listTools(request.output ? { output: request.output } : {}), request)
@@ -2334,6 +2486,17 @@ export class GenerationCanvasService {
     let releaseRecoveryStore: (() => void) | undefined
 
     try {
+      // Tool availability, lease preparation, and schema validation are
+      // admission preflight. A failure here must not leave a pending node.
+      if (resultMode.type === "create-pending-node") {
+        if (hooks?.preparedTool && hooks.preparedTool.toolId !== tool.id) {
+          throw new Error("Generation tool changed during Canvas admission")
+        }
+        preparedTool = hooks?.preparedTool?.execution ?? (await this.#tools.prepareTool(tool, signal))
+        preparedTool.validateInput(workingRequest.toolInput)
+        assertNotAborted(signal)
+      }
+
       if (resultMode.type === "create-pending-node") {
         const pendingSize = matchingVisualReferenceSize(workingDocument, workingRequest, tool.output)
         const pendingResult = await this.#resources.createPendingGenerationResource({
@@ -2417,9 +2580,11 @@ export class GenerationCanvasService {
       if (tool.recovery && this.#operations && this.#inputSnapshots) {
         releaseRecoveryStore = await this.#acquireRecoveryStoreLock()
       }
-      preparedTool = await this.#tools.prepareTool(tool, signal)
-      preparedTool.validateInput(workingRequest.toolInput)
-      assertNotAborted(signal)
+      if (!preparedTool) {
+        preparedTool = await this.#tools.prepareTool(tool, signal)
+        preparedTool.validateInput(workingRequest.toolInput)
+        assertNotAborted(signal)
+      }
 
       temporaryDirectory = await fs.mkdtemp(path.join(this.#temporaryRoot, "convax-generation-"))
       const inputDirectory = path.join(temporaryDirectory, "inputs")

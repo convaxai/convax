@@ -79,6 +79,11 @@ authority and lifecycle coordination, not reusable domain semantics.
 - Do not impose an absolute deadline on accepted long-running generation work.
   Bound control-plane requests and inactivity, propagate progress/cancellation, and
   leave terminal execution state to the admitted LRO contract.
+- Canvas-delivery selection actions use one bounded Main admission operation. Run
+  tool lease/schema preflight before pending creation, resolve prior-step relations
+  only from committed Canvas-owned ids, and keep every external call behind one
+  gate until all independent pending nodes/runs are durable. The admission receipt
+  is not a terminal result; sender teardown after it must not cancel retained work.
 - Host-authored portable failures may use only bounded validated display data. Raw
   sidecar, native, filesystem, network, credential, and recovery diagnostics never
   enter Canvas state or renderer-safe projections.

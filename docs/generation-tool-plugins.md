@@ -62,6 +62,15 @@ cancellation and exact Plugin identity immediately before the external side
 effect and before every Canvas persistence call. Renderer state is never a
 correctness prerequisite.
 
+Canvas-delivery selection actions enter the same executor through a bounded
+admission request. Each declared step has an independent `operationId` and must
+create exactly one host-owned pending node. A later step may refer to prior step
+indexes for relation semantics; Main resolves those indexes to Canvas-owned ids
+after the earlier pending commits. Main withholds every `tools/call` behind a shared
+dispatch gate until all step nodes/runs are durable. The admission response is not a
+generation result: it proves only that all pending nodes exist and Main owns their
+executions.
+
 ## Tool contract
 
 `tools/list` is authoritative for the current runtime generation. The Host accepts
@@ -117,11 +126,25 @@ For a pending result with exactly one same-modality visual reference, Main may
 derive that reference's presentation size; Canvas commits the size with the pending
 node and preserves the frame when the generated resource replaces it.
 
+For a Host-rendered media operation, all step tool leases and current scalar
+input-schema validations complete before any pending creation. A pending-commit failure starts no
+external step; any earlier committed step is marked failed through the same bounded
+Canvas run transition. After a successful multi-step admission, every step executes
+and settles independently. One failed or canceled step neither discards another
+step's published result nor converts the whole action into a synthetic batch
+terminal state.
+
 ## Long-running work
 
 Accepted queued or running work has no arbitrary overall timeout. Sidecars bound
 individual network requests and keep non-terminal work alive until success,
 explicit terminal failure or caller cancellation.
+
+Renderer owns an admission wait only. Once Main returns the durable admission
+receipt, dialog close, selection changes, Canvas remount and Renderer teardown do
+not cancel the retained executions. Explicit cancellation remains operation-scoped
+through the pending Canvas card. Repeating the same admitted operation ids joins the
+single-flight executions and cannot create duplicate pending nodes or paid calls.
 
 Restart recovery requires the complete Scheduler–Agent–Supervisor/LRO contract.
 `operationId` is the durable idempotency identity; downstream `taskId` is opaque.

@@ -8,6 +8,7 @@ export type GenerationToolDelivery = "canvas" | "return"
 export type GenerationToolInputBinding = "direct-incoming"
 
 export const generationIpcChannels = {
+  admitCanvas: "generation:admit-canvas",
   cancel: "generation:cancel",
   describeTool: "generation:describe-tool",
   generate: "generation:generate",
@@ -167,6 +168,30 @@ export interface GenerationCanvasResult {
   warnings: readonly string[]
 }
 
+/**
+ * One independently durable Canvas generation admitted as part of a bounded
+ * submission. Relation indexes are resolved by Main after prior pending nodes
+ * exist; Renderer never supplies the resulting Canvas node ids.
+ */
+export interface GenerationCanvasAdmissionStep {
+  relationAnchorStepIndexes?: readonly number[]
+  request: GenerationCanvasRequest
+}
+
+export interface GenerationCanvasAdmissionRequest {
+  steps: readonly GenerationCanvasAdmissionStep[]
+}
+
+export interface GenerationCanvasAdmissionOperation {
+  nodeId: string
+  operationId: string
+}
+
+/** Returned only after every pending node is durable and Main owns every task. */
+export interface GenerationCanvasAdmissionResult {
+  operations: readonly GenerationCanvasAdmissionOperation[]
+}
+
 export interface GenerationCanvasReconcileRequest {
   ref: {
     canvasId: string
@@ -196,6 +221,7 @@ export interface GenerationCancelRequest {
 }
 
 export interface GenerationClient {
+  admitCanvas(input: GenerationCanvasAdmissionRequest): Promise<GenerationCanvasAdmissionResult>
   cancel(input: GenerationCancelRequest): Promise<void>
   describeTool(input: GenerationDescribeToolRequest): Promise<GenerationToolDescription>
   generate(input: GenerationCanvasRequest): Promise<GenerationCanvasResult>

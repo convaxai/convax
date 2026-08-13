@@ -1578,10 +1578,7 @@ function startApplication() {
                 {
                   models: Object.fromEntries(provider.models.map((model) => [model.id, { name: model.name }])),
                   name: provider.name,
-                  npm:
-                    provider.protocol === "openrouter"
-                      ? "@openrouter/ai-sdk-provider"
-                      : "@ai-sdk/openai",
+                  npm: provider.protocol === "openrouter" ? "@openrouter/ai-sdk-provider" : "@ai-sdk/openai",
                   options: {
                     apiKey: provider.apiKey,
                     baseURL: provider.baseUrl,
@@ -2505,6 +2502,8 @@ function startApplication() {
     })
     const disposeGenerationIpc = registerGenerationIpc(
       {
+        admitCanvas: (request, signal) =>
+          generation.admitCanvas(request, { id: "desktop:renderer", kind: "ui" }, signal),
         cancel: (request) => generation.cancel(request.operationId, { id: "desktop:renderer", kind: "ui" }),
         describeTool: (request) => generation.describeTool(request.toolId),
         generate: (request, signal) => generation.generate(request, { id: "desktop:renderer", kind: "ui" }, signal),

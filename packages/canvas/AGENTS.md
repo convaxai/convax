@@ -126,6 +126,11 @@ Canvas owns document and editor semantics independently of Project and Agent.
 - A host-created pending generation node and its `submitting` run are one Canvas
   business command/CAS. Pending owners use the same transitions, target guard,
   terminal presentation and restart interruption as existing replacement targets.
+- Multi-result admission remains a Host scheduler concern: Canvas commits one
+  independent pending node/run command per step and does not own a batch terminal
+  state. Host-resolved prior-result relations may name only already committed
+  Canvas-owned ids, and no external step starts until the Host's admission gate has
+  observed every required pending commit.
 - The collaboration application adapter must close pending creation, start,
   running/task receipt, failure/interruption, and proof-backed generated replacement.
   Portable run-only transitions use the non-undoable

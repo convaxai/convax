@@ -1,194 +1,84 @@
 import { describe, expect, test } from "bun:test"
-import { createCanvasDocument, type CanvasGenerateRequest, type CanvasGenerateResult } from "@convax/canvas"
-import type { GenerationCanvasRequest, GenerationCanvasResult } from "../generation-contracts"
-import {
-  mediaOperationCancellationNotice,
-  MediaOperationPartialError,
-  type MediaOperationProgress,
-  runMediaOperationSequence,
-  runMediaOperationReturn,
-} from "./media-operation-runner"
+import { createCanvasDocument } from "@convax/canvas"
+import type {
+  GenerationCanvasAdmissionRequest,
+  GenerationCanvasResult,
+  GenerationCanvasRequest,
+} from "../generation-contracts"
+import { runMediaOperationAdmission, runMediaOperationReturn } from "./media-operation-runner"
 
 const signal = new AbortController().signal
 
-function request(output: "audio" | "video"): CanvasGenerateRequest {
-  return {
-    anchor: { x: 0, y: 0 },
-    context: { documentId: "canvas", selectedNodeIds: ["source"], source: "test" },
-    output,
-    prompt: output,
-    references: [{ nodeId: "source", role: "reference_video" }],
-    signal,
-    toolId: `media/run.${output}`,
-  }
-}
+const admissionRequest = {
+  steps: [
+    {
+      request: {
+        anchor: { x: 0, y: 0 },
+        expectedOutputCount: 1,
+        operationId: "video-operation",
+        output: "video",
+        prompt: "video",
+        ref: { canvasId: "canvas", scopeId: "project" },
+        references: [{ nodeId: "source", role: "reference_video" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "media/run.video",
+      },
+    },
+    {
+      relationAnchorStepIndexes: [0],
+      request: {
+        anchor: { x: 0, y: 224 },
+        expectedOutputCount: 1,
+        operationId: "audio-operation",
+        output: "audio",
+        prompt: "audio",
+        ref: { canvasId: "canvas", scopeId: "project" },
+        references: [{ nodeId: "source", role: "reference_video" }],
+        resultMode: { type: "create-pending-node" },
+        toolId: "media/run.audio",
+      },
+    },
+  ],
+} satisfies GenerationCanvasAdmissionRequest
 
-function initialProgress(): MediaOperationProgress {
-  return { createdNodeIds: [], nextRequestIndex: 0, warnings: [] }
-}
-
-function result(nodeId: string): CanvasGenerateResult {
-  return { createdNodeIds: [nodeId], toolId: "media", warnings: [] }
-}
-
-describe("runMediaOperationSequence", () => {
-  test("uses an honest cancellation notice even before the first result is confirmed", () => {
-    expect(mediaOperationCancellationNotice("zh-CN", undefined)).toEqual({
-      description: "操作已取消或结果状态未确认，插件可能已创建部分结果，请查看画布。",
-      title: "媒体操作状态未确认",
-    })
-    expect(
-      mediaOperationCancellationNotice("en", {
-        createdNodeIds: ["silent-video"],
-        nextRequestIndex: 1,
-        warnings: [],
-      }).title,
-    ).toBe("Media operation partially completed")
+describe("runMediaOperationAdmission", () => {
+  test("returns only Main's durable admission receipt", async () => {
+    const receipt = {
+      operations: [
+        { nodeId: "pending-video", operationId: "video-operation" },
+        { nodeId: "pending-audio", operationId: "audio-operation" },
+      ],
+    }
+    await expect(
+      runMediaOperationAdmission({
+        admit: async () => receipt,
+        cancel: async () => undefined,
+        request: admissionRequest,
+        signal,
+      }),
+    ).resolves.toEqual(receipt)
   })
 
-  test("runs video then audio and carries semantic relation anchors forward", async () => {
-    const calls: CanvasGenerateRequest[] = []
-    const snapshots: MediaOperationProgress[] = []
-    const progress = await runMediaOperationSequence({
-      generate: async (current) => {
-        calls.push(current)
-        return calls.length === 1 ? result("silent-video") : result("audio")
-      },
-      initialProgress: initialProgress(),
-      onProgress: (current) => snapshots.push(current),
-      partialFailureMessage: () => "partial",
-      requests: [request("video"), request("audio")],
-      signal,
-    })
-
-    expect(calls).toHaveLength(2)
-    expect(calls[0].relationAnchorNodeIds).toBeUndefined()
-    expect(calls[1]).toMatchObject({ relationAnchorNodeIds: ["silent-video"] })
-    expect(snapshots.map((current) => current.nextRequestIndex)).toEqual([1, 2])
-    expect(progress).toEqual({
-      createdNodeIds: ["silent-video", "audio"],
-      nextRequestIndex: 2,
-      warnings: [],
-    })
-  })
-
-  test("revalidates semantic Canvas inputs before each later step", async () => {
-    const calls: CanvasGenerateRequest[] = []
-    const refreshed: MediaOperationProgress[] = []
-    const progress = await runMediaOperationSequence({
-      generate: async (current) => {
-        calls.push(current)
-        return calls.length === 1 ? result("silent-video") : result("audio")
-      },
-      initialProgress: initialProgress(),
-      onProgress: () => undefined,
-      partialFailureMessage: () => "partial",
-      refreshProgress: async (current) => {
-        refreshed.push(current)
-        return current
-      },
-      requests: [request("video"), request("audio")],
-      signal,
-    })
-
-    expect(refreshed).toEqual([
-      {
-        createdNodeIds: ["silent-video"],
-        nextRequestIndex: 1,
-        warnings: [],
-      },
-    ])
-    expect(calls[1]).toMatchObject({
-      relationAnchorNodeIds: ["silent-video"],
-    })
-    expect(progress.createdNodeIds).toEqual(["silent-video", "audio"])
-  })
-
-  test("does not run audio or report partial progress when video fails", async () => {
-    const failure = new Error("video failed")
-    let calls = 0
-    const operation = runMediaOperationSequence({
-      generate: async () => {
-        calls += 1
-        throw failure
-      },
-      initialProgress: initialProgress(),
-      onProgress: () => undefined,
-      partialFailureMessage: () => "partial",
-      requests: [request("video"), request("audio")],
-      signal,
-    })
-
-    expect(operation).rejects.toBe(failure)
-    await operation.catch(() => undefined)
-    expect(calls).toBe(1)
-  })
-
-  test("reports a typed partial failure and retries only audio", async () => {
-    const saved: MediaOperationProgress[] = []
-    let calls = 0
-    const requests = [request("video"), request("audio")]
-    const firstAttempt = runMediaOperationSequence({
-      generate: async () => {
-        calls += 1
-        if (calls === 1) return result("silent-video")
-        throw new Error("audio failed")
-      },
-      initialProgress: initialProgress(),
-      onProgress: (current) => saved.push(current),
-      partialFailureMessage: (failure) => `partial: ${failure instanceof Error ? failure.message : String(failure)}`,
-      requests,
-      signal,
-    })
-
-    const failure = await firstAttempt.catch((caught: unknown) => caught)
-    expect(failure).toBeInstanceOf(MediaOperationPartialError)
-    if (!(failure instanceof MediaOperationPartialError)) throw failure
-    expect(failure.message).toBe("partial: audio failed")
-    expect(failure.progress.nextRequestIndex).toBe(1)
-
-    const retryCalls: CanvasGenerateRequest[] = []
-    const retried = await runMediaOperationSequence({
-      generate: async (current) => {
-        retryCalls.push(current)
-        return result("audio")
-      },
-      initialProgress: saved.at(-1)!,
-      onProgress: (current) => saved.push(current),
-      partialFailureMessage: () => "partial",
-      requests,
-      signal,
-    })
-
-    expect(retryCalls).toHaveLength(1)
-    expect(retryCalls[0]).toMatchObject({
-      output: "audio",
-      relationAnchorNodeIds: ["silent-video"],
-    })
-    expect(retried.createdNodeIds).toEqual(["silent-video", "audio"])
-  })
-
-  test("preserves completed progress when cancellation happens before audio", async () => {
+  test("crosses cancellation only while admission is pending", async () => {
     const controller = new AbortController()
-    const saved: MediaOperationProgress[] = []
-    let calls = 0
-    const operation = runMediaOperationSequence({
-      generate: async () => {
-        calls += 1
-        controller.abort(new DOMException("Canceled", "AbortError"))
-        return result("silent-video")
+    let rejectAdmission!: (failure: unknown) => void
+    const pending = new Promise<never>((_resolve, reject) => {
+      rejectAdmission = reject
+    })
+    const canceled: string[] = []
+    const operation = runMediaOperationAdmission({
+      admit: async () => pending,
+      cancel: async ({ operationId }) => {
+        canceled.push(operationId)
+        rejectAdmission(new DOMException("Canceled", "AbortError"))
       },
-      initialProgress: initialProgress(),
-      onProgress: (current) => saved.push(current),
-      partialFailureMessage: () => "partial",
-      requests: [request("video"), request("audio")],
+      request: admissionRequest,
       signal: controller.signal,
     })
 
-    expect(operation).rejects.toBeInstanceOf(DOMException)
-    await operation.catch(() => undefined)
-    expect(calls).toBe(1)
-    expect(saved.at(-1)).toMatchObject({ createdNodeIds: ["silent-video"], nextRequestIndex: 1 })
+    controller.abort(new DOMException("Canceled", "AbortError"))
+    await expect(operation).rejects.toBeInstanceOf(DOMException)
+    expect(canceled).toEqual(["video-operation"])
   })
 })
 
