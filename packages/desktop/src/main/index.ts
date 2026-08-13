@@ -54,6 +54,7 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  Menu,
   MessageChannelMain,
   nativeImage,
   Notification,
@@ -70,6 +71,7 @@ import {
   type IpcMainInvokeEvent,
   type OpenDialogOptions,
 } from "electron"
+import electronUpdater from "electron-updater"
 import { resolveMainWindowChrome, setNativeMainWindowControlsVisible } from "./main-window-chrome"
 import { registerMainWindowControlsIpc } from "./main-window-controls-ipc"
 import appIcon from "../../resources/icon.png?asset"
@@ -90,6 +92,9 @@ import {
   desktopUserDataDirectory,
 } from "./app-branding"
 import { createDevelopmentEnvironmentNativeBadge } from "./development-environment-native-badge"
+import { createDesktopUpdateController } from "./desktop-update-controller"
+import { installDesktopApplicationMenu } from "./desktop-update-menu"
+import { DesktopUpdateProgressWindow } from "./desktop-update-progress-window"
 import { createCanvasAgentToolProvider } from "./canvas-agent-tools"
 import { createCanvasTextResourceWriter } from "./canvas-text-resource-service"
 import { createCompositeAgentToolProvider } from "./composite-agent-tools"
@@ -518,6 +523,7 @@ const developmentCachePolicy = desktopDevelopmentCachePolicy({
   isPackaged: app.isPackaged,
   rendererUrl,
 })
+const { autoUpdater } = electronUpdater
 
 for (const commandLineSwitch of developmentCachePolicy.switches) {
   app.commandLine.appendSwitch(commandLineSwitch.name, commandLineSwitch.value)
@@ -2723,9 +2729,71 @@ function startApplication() {
         return new Response("Asset was not found", { status: 404 })
       }
     })
+    let shutdownPromise: Promise<void> | undefined
+    const drainForShutdown = () => {
+      shutdownPromise ??= (async () => {
+        await projectManager.flushPendingWrites()
+        await disposePetApplication()
+        await agentRuntime.dispose()
+        agentPluginConfigurations.dispose()
+        await managedMcpRuntimes.close()
+        await canvasExternalMediaDrag.dispose().catch((error) => {
+          console.warn("Could not dispose Canvas native drag media during shutdown", error)
+        })
+        disposeProjectTeamCollaborationIpc()
+        await projectTeamRuntimeGate?.dispose()
+        disposeCanvasSessionIpc()
+        await collaborationFacade?.dispose()
+        await collaborationCanvasComposition?.dispose()
+        await collaborationProjectIndexes?.dispose()
+        await collaborationProjects.dispose()
+        // Browser authorization may be between exact-origin Cookie capture,
+        // checkpoint fsync, and sidecar persistence. Drain that handoff before
+        // disposing the shared sidecar runtime or starting an installer.
+        await pluginServices.dispose()
+        await pluginServiceBrowserAuthorization.dispose()
+        // Accepted generation work is Main-owned and survives renderer unmount.
+        // An update install must wait for the same terminal drain as ordinary quit.
+        await generationRuntime.disposeAndWait()
+      })().catch((error) => {
+        shutdownPromise = undefined
+        throw error
+      })
+      return shutdownPromise
+    }
+    const prepareUpdateInstall = async () => {
+      if (quitGate === "approved") return
+      if (quitGate === "flushing") throw new Error("Convax shutdown preparation is already in progress")
+      quitGate = "flushing"
+      try {
+        await drainForShutdown()
+        quitGate = "approved"
+      } catch (error) {
+        quitGate = "idle"
+        throw error
+      }
+    }
+    const updateController = createDesktopUpdateController({
+      application: app,
+      dialog,
+      platform: process.platform,
+      prepareInstall: prepareUpdateInstall,
+      productName: applicationName,
+      progressWindow: new DesktopUpdateProgressWindow({ BrowserWindow, productName: applicationName }),
+      recoverCurrentVersionAfterInstallFailure: () => {
+        app.relaunch()
+        app.exit(0)
+      },
+      updater: autoUpdater,
+    })
+    let automaticUpdateCheck: ReturnType<typeof setTimeout> | undefined
     registerWillQuitCleanup(
       app,
       [
+        () => {
+          if (automaticUpdateCheck) clearTimeout(automaticUpdateCheck)
+          updateController.dispose()
+        },
         () => void disposePetApplication(),
         disposePetPluginProtocol,
         () => protocol.unhandle("convax-asset"),
@@ -2803,30 +2871,8 @@ function startApplication() {
       event.preventDefault()
       if (quitGate === "flushing") return
       quitGate = "flushing"
-      void projectManager
-        .flushPendingWrites()
-        .then(async () => {
-          await disposePetApplication()
-          await agentRuntime.dispose()
-          agentPluginConfigurations.dispose()
-          await managedMcpRuntimes.close()
-          await canvasExternalMediaDrag.dispose().catch((error) => {
-            console.warn("Could not dispose Canvas native drag media during shutdown", error)
-          })
-          disposeProjectTeamCollaborationIpc()
-          await projectTeamRuntimeGate?.dispose()
-          disposeCanvasSessionIpc()
-          await collaborationFacade?.dispose()
-          await collaborationCanvasComposition?.dispose()
-          await collaborationProjectIndexes?.dispose()
-          await collaborationProjects.dispose()
-          // Browser authorization may be between exact-origin Cookie capture,
-          // checkpoint fsync, and sidecar persistence. Electron's will-quit
-          // cleanup is synchronous, so drain that handoff before disposing the
-          // shared sidecar runtime or allowing the process to exit.
-          await pluginServices.dispose()
-          await pluginServiceBrowserAuthorization.dispose()
-          await generationRuntime.disposeAndWait()
+      void drainForShutdown()
+        .then(() => {
           quitGate = "approved"
           app.quit()
         })
@@ -2836,7 +2882,24 @@ function startApplication() {
         })
     })
 
-    createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
+    const window = createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
+    const resolveUpdateWindow = () =>
+      mainWindow && !mainWindow.isDestroyed()
+        ? mainWindow
+        : createWindow(projectManager, projectAssetGcScheduler, projectFilePreviews)
+    installDesktopApplicationMenu(Menu, {
+      isMac: process.platform === "darwin",
+      onCheckForUpdates: () => {
+        void updateController.checkManually(resolveUpdateWindow())
+      },
+      productName: applicationName,
+    })
+    if (app.isPackaged) {
+      automaticUpdateCheck = setTimeout(() => {
+        if (!window.isDestroyed()) void updateController.checkAutomatically(window)
+      }, 15_000)
+      automaticUpdateCheck.unref()
+    }
     await recordPackagedSmokeStartup("window-created")
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
