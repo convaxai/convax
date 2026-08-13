@@ -735,6 +735,80 @@ describe("project canvas resource preparation", () => {
     expect(publications).toEqual([{ bytes: [...bytes], path: "assets/characters/bear/hero.png" }])
   })
 
+  test("publishes a Project-root file without trying to create a dot directory", async () => {
+    const bytes = Uint8Array.from([0x89, 0x50, 0x4e, 0x47])
+    const reference = projectIndexReference(bytes, "image/png")
+    const directoryRequests: string[] = []
+    const publications: string[] = []
+    const indexFiles = {
+      async queryFileMaterializationPlan() {
+        return { projectId: parseProjectId("project_one"), entries: [] }
+      },
+      async createDirectory(input: { path: string }) {
+        directoryRequests.push(input.path)
+        throw new Error("Project-root files do not require a parent directory")
+      },
+      async publishFile(input: { path: string }) {
+        publications.push(input.path)
+        return {
+          status: "committed" as const,
+          entryId: reference.entryFileId as never,
+          versionId: reference.versionId,
+          reference,
+        }
+      },
+      async relocateEntry() {
+        throw new Error("not used")
+      },
+      async tombstoneEntry() {
+        throw new Error("not used")
+      },
+    } as unknown as ProjectIndexFileApplicationPort & ProjectIndexFileMaterializationProjectionPort
+    const assets = {
+      async withAdmittedLocalFiles(
+        _input: unknown,
+        commit: (value: readonly CanvasProjectResourceReference[]) => Promise<unknown>,
+      ) {
+        return commit([{ kind: "project-file", path: "hero.png" }])
+      },
+    } as unknown as ProjectManagedAssetStore
+    const preparation = new ProjectCanvasResourcePreparation(
+      host({
+        async readFileInfo(input) {
+          return { mimeType: "image/png", name: "hero.png", path: input.path, size: bytes.byteLength }
+        },
+        async readFile(input) {
+          return {
+            dataUrl: `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`,
+            mimeType: "image/png",
+            name: "hero.png",
+            path: input.path,
+            size: bytes.byteLength,
+          }
+        },
+      }),
+      unusedPublisher(),
+      assets,
+      undefined,
+      indexFiles,
+    )
+
+    await preparation.withAdmittedLocalFiles(
+      {
+        files: [{ mediaType: "image/png", name: "hero.png", sourceId: "root", sourcePath: "/native/project/hero.png" }],
+        projectId: "project_one",
+      },
+      async ({ items }) => {
+        expect(items[0]?.metadata).toMatchObject({
+          convaxProjectResource: { kind: "project-file", path: "hero.png" },
+        })
+      },
+    )
+
+    expect(directoryRequests).toEqual([])
+    expect(publications).toEqual(["hero.png"])
+  })
+
   test("streams an external managed asset into ProjectIndex before returning a current Canvas proof", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "convax-managed-proof-"))
     const projectRoot = path.join(root, "project")

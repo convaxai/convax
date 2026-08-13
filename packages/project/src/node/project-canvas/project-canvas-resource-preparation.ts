@@ -599,7 +599,9 @@ export class ProjectCanvasResourcePreparation implements CanvasResourcePreparati
     if (!this.indexFiles) return initialPlan
     let plan = initialPlan
     let current = ""
-    for (const segment of path.posix.dirname(filePath).split("/").filter(Boolean)) {
+    const parentPath = path.posix.dirname(filePath)
+    if (parentPath === ".") return plan
+    for (const segment of parentPath.split("/").filter(Boolean)) {
       current = current ? `${current}/${segment}` : segment
       const existing = plan.entries.find((entry) => entry.path === current)
       if (existing?.kind === "file") throw new Error("ProjectIndex parent path is a file")
