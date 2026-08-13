@@ -1,6 +1,6 @@
 ---
 name: solo-task
-description: Create and own an isolated Git worktree for a feature, bug fix, refactor, or other bounded implementation task; copy local `.env*` files, install lockfile-pinned dependencies, implement and validate only inside that worktree, launch repository-specific applications with an isolated runtime identity, then commit, push, and create or update a pull request without merging it. Use when a request asks Codex to implement or fix something independently, mentions a solo task or worktree, or otherwise benefits from protecting the current checkout; this repository skill may trigger implicitly. For Convax Desktop tasks, also use the bundled Convax adapter to isolate Electron userData and display the task label in application chrome.
+description: Create and own an isolated Git worktree for a feature, bug fix, refactor, or other bounded implementation task; for bug fixes, search the repository issue tracker and claim a matching unowned issue before implementation; copy local `.env*` files, install lockfile-pinned dependencies, implement and validate only inside that worktree, launch repository-specific applications with an isolated runtime identity, then commit, push, and create or update a pull request without merging it. Use when a request asks Codex to implement or fix something independently, mentions a solo task or worktree, or otherwise benefits from protecting the current checkout; this repository skill may trigger implicitly. For Convax Desktop tasks, also use the bundled Convax adapter to isolate Electron userData and display the task label in application chrome.
 ---
 
 # Solo Task
@@ -16,7 +16,21 @@ Own one task in one repository and one worktree from preparation through a revie
    - bug fix: `fix/`
    - maintenance or refactor: `chore/`
 4. Reuse an issue supplied by the user. Create an issue before implementation only when the user requests one.
-5. Keep one session bound to one Git repository. Coordinate multiple repositories as separate explicit sessions.
+5. For every bug fix, complete the issue claim gate below before creating a branch or worktree.
+6. Keep one session bound to one Git repository. Coordinate multiple repositories as separate explicit sessions.
+
+## Claim a matching bug issue
+
+Use the issue tracker attached to the repository's canonical remote and the current authenticated account.
+
+1. Inspect an issue supplied by the user. Otherwise, search open issues with several task-specific combinations of the symptom, failing behavior or error, affected component, and reproduction context.
+2. Read plausible issue bodies and linked pull requests. Confirm scope from concrete behavior and affected ownership; do not treat title or keyword overlap alone as a match.
+3. If no open issue clearly owns the bug, record the searches and continue without creating one. Closed issues are historical evidence, not claimable work; do not reopen one unless the user requests it.
+4. If exactly one open issue owns the bug and it is unassigned, assign the current authenticated account before implementation. If it is already assigned only to that account, reuse the existing claim.
+5. Immediately re-read the issue and verify that the current account is its sole assignee. Inspect linked active pull requests and remote repair branches; resume the current account's existing task instead of creating a second branch or worktree.
+6. Stop before creating the worktree when another assignee or active repair owns the issue, several issues plausibly own the bug, repository identity cannot be established, the search cannot be completed, the assignment fails, or post-assignment verification is inconclusive. Report the conflicting ownership or failed gate instead of starting duplicate work.
+
+Issue assignment is the ownership claim. Do not substitute a comment, label, local branch, or proposed pull request for a verified assignment.
 
 ## Prepare the isolated worktree
 
@@ -85,7 +99,7 @@ Before the first push:
 Report:
 
 ```text
-Issue: <url or not requested>
+Issue: <url and verified assignment, or no matching open issue plus search summary>
 Worktree: <absolute path>
 Environment: <id and label>
 Branch: <branch>

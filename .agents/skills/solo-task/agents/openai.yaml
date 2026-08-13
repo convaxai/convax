@@ -1,6 +1,6 @@
 interface:
   display_name: "Solo Task"
-  short_description: "隔离 worktree 开发、独立启动验证并自动提交 PR"
-  default_prompt: "使用 $solo-task 在独立 worktree 中实现并验证这个任务，然后推送分支并创建关联 PR。"
+  short_description: "隔离 worktree 开发，Bug 修复先查重认领，再验证并提交 PR"
+  default_prompt: "使用 $solo-task 在独立 worktree 中处理任务；Bug 修复先查重并认领匹配 Issue，再验证、推送分支并创建关联 PR。"
 policy:
   allow_implicit_invocation: true
