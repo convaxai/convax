@@ -12,7 +12,6 @@ import {
 } from "./media-operation-selection-action"
 import { MediaTrimTimeline } from "./media-trim-timeline"
 import { mediaTrimInputFromRange, normalizeMediaTimelineDuration } from "./media-trim-timeline-model"
-import { MediaOperationPartialError } from "./media-operation-runner"
 
 export interface MediaOperationDialogProps {
   locale: AppLocale
@@ -84,12 +83,8 @@ const chineseCopy: DialogCopy = {
   timeSeconds: "时间点（秒）",
 }
 
-export function shouldCloseMediaDialogAfterFailure(
-  contextSignal: AbortSignal,
-  operationSignal: AbortSignal,
-  failure?: unknown,
-) {
-  return operationSignal.aborted || (contextSignal.aborted && !(failure instanceof MediaOperationPartialError))
+export function shouldCloseMediaDialogAfterFailure(contextSignal: AbortSignal, operationSignal: AbortSignal) {
+  return operationSignal.aborted || contextSignal.aborted
 }
 
 export function MediaOperationDialog(props: MediaOperationDialogProps) {
@@ -121,7 +116,6 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
   const [cropSourceDimensions, setCropSourceDimensions] = useState({ height: sourceHeight, width: sourceWidth })
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
-  const [partialRetryAvailable, setPartialRetryAvailable] = useState(false)
   const operationControllerRef = useRef<AbortController | undefined>(undefined)
   const submittedRef = useRef(false)
   const previousFocusRef = useRef(
@@ -166,7 +160,7 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault()
-    if (busy) return
+    if (busy || submittedRef.current) return
     const input = parseInput(editor, { first, fourth, second, third })
     const validationError = validateMediaOperationInput(editor, input, {
       videoHeight: cropSourceDimensions.height,
@@ -177,7 +171,7 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
       setError(copy.errors[validationError] ?? validationError)
       return
     }
-    if (props.request.context.signal.aborted && !partialRetryAvailable) {
+    if (props.request.context.signal.aborted) {
       props.onClose()
       return
     }
@@ -190,13 +184,12 @@ export function MediaOperationDialog(props: MediaOperationDialogProps) {
       await props.onConfirm(input, operationController.signal)
       props.onClose()
     } catch (failure) {
-      if (shouldCloseMediaDialogAfterFailure(props.request.context.signal, operationController.signal, failure)) {
+      if (shouldCloseMediaDialogAfterFailure(props.request.context.signal, operationController.signal)) {
         props.onClose()
         return
       }
       operationControllerRef.current = undefined
       submittedRef.current = false
-      setPartialRetryAvailable(failure instanceof MediaOperationPartialError)
       setError(failure instanceof Error ? failure.message : String(failure))
       setBusy(false)
     }

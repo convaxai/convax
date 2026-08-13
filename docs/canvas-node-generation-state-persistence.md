@@ -155,6 +155,8 @@ Renderer:
 
 - creates a fresh `operationId` for a genuinely new user submission;
 - submits, explicitly cancels, and subscribes through narrow Desktop APIs;
+- treats a Canvas admission receipt as proof that pending nodes are durable and
+  Main owns execution, never as a terminal result;
 - hydrates prompt, resolved tool, and status from Canvas;
 - may display a transient Main-reported `recovering` projection.
 
@@ -585,6 +587,14 @@ pending creation commits, a mounted user-launched flow may request Canvas's scop
 `nodes.reveal` view operation to select and center-fit that new result; projection or
 view failure remains non-authoritative and never reverses the creation. For
 existing-node replacement, failure or cancellation never alters the prior resource.
+
+A Host-rendered multi-result selection action admits one independent owner-creating
+operation per declared step. Main resolves prior-step relation indexes after each
+earlier pending CAS, and a shared dispatch gate prevents every external call until
+all pending nodes/runs are durable. The admission receipt returns at that boundary;
+terminal success, failure and explicit cancellation remain per-node. If a later
+pending CAS fails, the gate starts no tool and any already committed step transitions
+to bounded failure instead of being deleted or retried under a new operation id.
 A declarative text operation with `delivery:
 "return"` creates no Canvas node and therefore has no node run namespace; it retains
 the same live at-most-once executor and explicit Agent cancellation boundary, but is
@@ -855,14 +865,14 @@ Validation commands:
 The proof is intentionally layered instead of forcing every crash point into one
 UI scenario:
 
-| Evidence layer                   | Owned proof                                                                                                                                                                                       |
-| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                         |
-| Desktop generation-service tests | durable ledger/input ordering, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication                         |
-| Renderer lifecycle tests         | an accepted Main-owned generation remains alive when switching Canvas unmounts the owning card; remount hydrates active and terminal state from Canvas metadata                                   |
-| LRO protocol/runtime tests       | v8 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and pre-v8 rejection                                              |
-| stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                          |
-| built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, terminal-state renderer remount, deleted-target late callback rejection and legacy restart interruption |
+| Evidence layer                   | Owned proof                                                                                                                                                                                                             |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canvas domain tests              | schema migration, transition invariants, bounds, clone/delete semantics, generation-specific guard and atomic replacement                                                                                               |
+| Desktop generation-service tests | durable ledger/input ordering, multi-step pending admission before dispatch, at-most-once dispatch, task receipt CAS, restart reattachment, result replay, cancellation, target/reference races and partial publication |
+| Renderer lifecycle tests         | dialogs wait only for admission, cancellation crosses only before the receipt, and an accepted Main-owned generation remains alive across selection change or Canvas unmount/remount                                    |
+| LRO protocol/runtime tests       | v8 all-or-nothing admission, fixed get/wait/cancel/result/acknowledge methods, pinned executable identity, safe opaque receipts and pre-v8 rejection                                                                    |
+| stdio MCP tests                  | structured lifecycle receipts, compatibility handshake, cancellation, bounded messages, no overall generation/wait timeout and diagnostic non-disclosure                                                                |
+| built Electron smoke             | real Main/IPC/Project persistence CAS race, unrelated edit preservation, guarded success, terminal-state renderer remount, deleted-target late callback rejection and legacy restart interruption                       |
 
 The built smoke is representative end-to-end evidence; the deterministic package
 tests own the exhaustive crash-window matrix because they can inject each boundary

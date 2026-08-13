@@ -14,11 +14,7 @@ import {
   type CanvasSelectionDragSource,
 } from "@convax/canvas"
 import { ProjectController, ProjectSidebar } from "@convax/project"
-import {
-  ProjectFilesController,
-  type ProjectEntry,
-  type ProjectFilePreviewPurpose,
-} from "@convax/project-files"
+import { ProjectFilesController, type ProjectEntry, type ProjectFilePreviewPurpose } from "@convax/project-files"
 import {
   markProjectCanvasResourcesStale,
   ProjectCanvasSidebar,
@@ -114,7 +110,6 @@ import {
 } from "./development-environment"
 import { MediaOperationActionIcon } from "./media-operation-action-icon"
 import {
-  canResumeMediaOperation,
   canRunMediaOperation,
   createMediaOperationGenerateRequests,
   createMediaOperationReturnRequest,
@@ -130,13 +125,7 @@ import {
   canRunPluginMaterialization,
   listInstalledPluginMaterializationActions,
 } from "./plugin-materialization-selection-action"
-import {
-  mediaOperationCancellationNotice,
-  MediaOperationPartialError,
-  type MediaOperationProgress,
-  runMediaOperationSequence,
-  runMediaOperationReturn,
-} from "./media-operation-runner"
+import { runMediaOperationAdmission, runMediaOperationReturn } from "./media-operation-runner"
 import { DesktopPluginFrameRegistry } from "./plugin-frame-registry"
 import { openPluginInAgent } from "./plugin-agent-entry"
 import { DesktopPluginLocaleStore } from "./plugin-locale-store"
@@ -241,7 +230,6 @@ function App() {
     missing: boolean
     rootPath: string
   } | null>(null)
-  const mediaOperationProgressRef = useRef(new WeakMap<MediaOperationDialogRequest, MediaOperationProgress>())
   const closeMediaOperationDialog = useCallback(() => setMediaOperationDialog(null), [])
   const settingsSurface = desktopSurface.kind === "settings" ? desktopSurface : null
   const settingsSection = settingsSurface?.initialSection
@@ -1169,20 +1157,21 @@ function App() {
             throw new Error("Open a Project Canvas before adding resources")
           }
           const delivery = await activeCanvasSession.runResourceMutation(
-            () => addCanvasUploadResources(
-              {
-                ...request,
-                canvasId: activeCanvasId,
-                projectId: activeProjectId,
-              },
-              {
-                add: (input) => window.convax.canvas.resources.add(input),
-                createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-                createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
-                createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
-                sessionId: activeCanvasSession.sessionId,
-              },
-            ),
+            () =>
+              addCanvasUploadResources(
+                {
+                  ...request,
+                  canvasId: activeCanvasId,
+                  projectId: activeProjectId,
+                },
+                {
+                  add: (input) => window.convax.canvas.resources.add(input),
+                  createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+                  createLocalFileToken: (file) => window.convax.canvas.resources.createLocalFileToken(file),
+                  createSourceId: () => `renderer_${globalThis.crypto.randomUUID()}`,
+                  sessionId: activeCanvasSession.sessionId,
+                },
+              ),
             request.signal,
           )
           return {
@@ -1194,15 +1183,16 @@ function App() {
         async relink(request) {
           if (!activeCanvasSession) throw new Error("Open a mounted Project Canvas before relinking resources")
           const delivery = await activeCanvasSession.runResourceMutation(
-            () => runProjectCanvasResourceRelink({
-              activeCanvasId,
-              activeProjectId,
-              createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
-              projectFiles: projectFilesController,
-              request,
-              resources: window.convax.canvas.resources,
-              sessionId: activeCanvasSession.sessionId,
-            }),
+            () =>
+              runProjectCanvasResourceRelink({
+                activeCanvasId,
+                activeProjectId,
+                createCommandId: () => `renderer:${globalThis.crypto.randomUUID()}`,
+                projectFiles: projectFilesController,
+                request,
+                resources: window.convax.canvas.resources,
+                sessionId: activeCanvasSession.sessionId,
+              }),
             request.signal,
           )
           return {
@@ -1216,13 +1206,14 @@ function App() {
             throw new Error("Open a mounted Project Canvas before saving an editable copy")
           }
           const delivery = await activeCanvasSession.runResourceMutation(
-            () => window.convax.canvas.resources.saveEditableCopy({
-              canvasId: activeCanvasId,
-              commandId: `renderer:${globalThis.crypto.randomUUID()}`,
-              nodeId: request.nodeId,
-              projectId: activeProjectId,
-              sessionId: activeCanvasSession.sessionId,
-            }),
+            () =>
+              window.convax.canvas.resources.saveEditableCopy({
+                canvasId: activeCanvasId,
+                commandId: `renderer:${globalThis.crypto.randomUUID()}`,
+                nodeId: request.nodeId,
+                projectId: activeProjectId,
+                sessionId: activeCanvasSession.sessionId,
+              }),
             request.signal,
           )
           return {
@@ -1263,132 +1254,61 @@ function App() {
 
   const runMediaOperation = useCallback(
     async (request: MediaOperationDialogRequest, input: MediaOperationInput, signal: AbortSignal) => {
-      const hasMultipleSteps = request.action.steps.length > 1
       if (signal.aborted) {
-        if (hasMultipleSteps) {
-          const notice = mediaOperationCancellationNotice(locale, undefined)
-          setNotification({ description: notice.description, kind: "warning", title: notice.title })
-        }
         throw signal.reason ?? new DOMException("Canceled", "AbortError")
       }
       const requests = createMediaOperationGenerateRequests(request, input, signal)
-      let initialProgress = mediaOperationProgressRef.current.get(request) ?? {
-        createdNodeIds: [],
-        nextRequestIndex: 0,
-        warnings: [],
+      const authoritativeDocument = await flushAuthoritativeCanvas()
+      if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
+      const live = pluginHostContextRef.current
+      if (
+        !authoritativeDocument ||
+        authoritativeDocument.id !== request.canvasId ||
+        live.activeProject?.id !== request.projectId ||
+        live.activeCanvas?.id !== request.canvasId
+      ) {
+        throw new Error("The active Canvas changed before the media operation could be admitted")
       }
-      if (initialProgress.nextRequestIndex > 0) {
-        let snapshot: Awaited<ReturnType<typeof window.convax.canvas.documents.load>>
-        try {
-          await flushCanvasForAgent()
-          if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
-          snapshot = await window.convax.canvas.documents.load({
-            canvasId: request.canvasId,
-            scopeId: request.projectId,
-          })
-          if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
-        } catch (failure) {
-          if (signal.aborted) {
-            mediaOperationProgressRef.current.delete(request)
-            const notice = mediaOperationCancellationNotice(locale, initialProgress)
-            setNotification({ description: notice.description, kind: "warning", title: notice.title })
-            throw failure
-          }
-          const message =
-            locale === "zh-CN"
-              ? "暂时无法确认画布中的部分结果。可重试验证，已经完成的步骤不会重复执行。"
-              : "The partial Canvas result could not be verified yet. Retry validation without repeating completed steps."
-          throw new MediaOperationPartialError(message, initialProgress, { cause: failure })
+
+      const steps = requests.map((generateRequest, index) => {
+        if (generateRequest.context.documentId !== request.canvasId) {
+          throw new Error("Media operation admission must target the active Canvas")
         }
-        if (
-          !snapshot.projection ||
-          !canResumeMediaOperation(request, snapshot.projection, initialProgress.createdNodeIds)
-        ) {
-          mediaOperationProgressRef.current.delete(request)
-          setMediaOperationDialog((current) => (current === request ? null : current))
-          setNotification({
-            description:
-              locale === "zh-CN"
-                ? "源视频或已创建的结果发生了变化，请重新选择源视频后再执行此操作。"
-                : "The source video or a completed result changed. Select the source video and start the operation again.",
-            kind: "warning",
-            title: locale === "zh-CN" ? "无法继续媒体操作" : "Media operation cannot continue",
-          })
-          throw new Error("The Plugin media operation cannot resume because its Canvas inputs changed")
-        }
-        mediaOperationProgressRef.current.set(request, initialProgress)
-      }
-      let progress: MediaOperationProgress
-      try {
-        progress = await runMediaOperationSequence({
-          generate: (generateRequest) => services.require("generate").generate(generateRequest),
-          initialProgress,
-          onProgress: (current) => mediaOperationProgressRef.current.set(request, current),
-          partialFailureMessage: (failure) => {
-            const detail = failure instanceof Error ? failure.message : String(failure)
-            return locale === "zh-CN"
-              ? `已完成部分结果，但后续步骤失败。可直接重试，已完成的步骤不会重复执行。\n${detail}`
-              : `Some results were created, but a later step failed. Retry without repeating completed steps.\n${detail}`
+        const referenceConstraint = canvasCardGenerationReferenceConstraint(generateRequest)
+        return {
+          ...(index === 0
+            ? {}
+            : { relationAnchorStepIndexes: Array.from({ length: index }, (_, relationIndex) => relationIndex) }),
+          request: {
+            anchor: generateRequest.anchor,
+            expectedOutputCount: 1,
+            operationId: generateRequest.operationId ?? globalThis.crypto.randomUUID(),
+            ...(generateRequest.output ? { output: generateRequest.output } : {}),
+            ...(generateRequest.parentId ? { parentId: generateRequest.parentId } : {}),
+            prompt: generateRequest.prompt,
+            ...(generateRequest.promptContextNodeIds?.length
+              ? { promptContextNodeIds: generateRequest.promptContextNodeIds }
+              : {}),
+            ref: { canvasId: request.canvasId, scopeId: request.projectId },
+            ...(referenceConstraint ? { referenceConstraint } : {}),
+            references: generateRequest.references,
+            ...(generateRequest.relationAnchorNodeIds
+              ? { relationAnchorNodeIds: generateRequest.relationAnchorNodeIds }
+              : {}),
+            resultMode: { type: "create-pending-node" as const },
+            ...(generateRequest.toolId ? { toolId: generateRequest.toolId } : {}),
+            ...(generateRequest.toolInput ? { toolInput: generateRequest.toolInput } : {}),
           },
-          refreshProgress: async (current) => {
-            await flushCanvasForAgent()
-            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
-            const snapshot = await window.convax.canvas.documents.load({
-              canvasId: request.canvasId,
-              scopeId: request.projectId,
-            })
-            if (signal.aborted) throw signal.reason ?? new DOMException("Canceled", "AbortError")
-            if (
-              !snapshot.projection ||
-              !canResumeMediaOperation(request, snapshot.projection, current.createdNodeIds)
-            ) {
-              mediaOperationProgressRef.current.delete(request)
-              setMediaOperationDialog((active) => (active === request ? null : active))
-              setNotification({
-                description:
-                  locale === "zh-CN"
-                    ? "源视频或已创建的结果发生了变化，请重新选择源视频后再执行此操作。"
-                    : "The source video or a completed result changed. Select the source video and start the operation again.",
-                kind: "warning",
-                title: locale === "zh-CN" ? "无法继续媒体操作" : "Media operation cannot continue",
-              })
-              throw new Error("The Plugin media operation cannot continue because its Canvas inputs changed")
-            }
-            return current
-          },
-          requests,
-          signal,
-        })
-      } catch (failure) {
-        const savedProgress = mediaOperationProgressRef.current.get(request)
-        if (signal.aborted && hasMultipleSteps) {
-          mediaOperationProgressRef.current.delete(request)
-          const notice = mediaOperationCancellationNotice(locale, savedProgress)
-          setNotification({
-            description: notice.description,
-            kind: "warning",
-            title: notice.title,
-          })
         }
-        throw failure
-      }
-      mediaOperationProgressRef.current.delete(request)
-      if (signal.aborted) return
-      setMediaOperationDialog((current) => (current === request ? null : current))
-      setNotification({
-        description: progress.warnings.length
-          ? progress.warnings.join("\n")
-          : locale === "zh-CN"
-            ? `已创建 ${progress.createdNodeIds.length} 个新节点。`
-            : `${progress.createdNodeIds.length} new node${progress.createdNodeIds.length === 1 ? "" : "s"} created.`,
-        kind: progress.warnings.length > 0 ? "warning" : "success",
-        title:
-          locale === "zh-CN"
-            ? `${localizedMediaOperationText(request.action.title, locale, request.action.i18n)}完成`
-            : `${localizedMediaOperationText(request.action.title, locale, request.action.i18n)} complete`,
+      })
+      await runMediaOperationAdmission({
+        admit: (admissionRequest) => window.convax.generation.admitCanvas(admissionRequest),
+        cancel: (cancelRequest) => window.convax.generation.cancel(cancelRequest),
+        request: { steps },
+        signal,
       })
     },
-    [flushCanvasForAgent, locale, services],
+    [flushAuthoritativeCanvas],
   )
 
   const selectionActions = useMemo<readonly CanvasSelectionAction[]>(
@@ -1937,15 +1857,7 @@ function App() {
     [],
   )
   const openProjectFilePreview = useCallback(
-    async ({
-      path,
-      projectId,
-      purpose,
-    }: {
-      path: string
-      projectId: string
-      purpose: ProjectFilePreviewPurpose
-    }) => {
+    async ({ path, projectId, purpose }: { path: string; projectId: string; purpose: ProjectFilePreviewPurpose }) => {
       const lease = await window.convax.projectFiles.openFilePreview({ path, projectId, purpose })
       let released = false
       return {

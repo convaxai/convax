@@ -1442,6 +1442,28 @@ cancellation keeps the node and marks it with a bounded host-authored error. If 
 node is removed, edited or otherwise no longer matches its exact content guard,
 Desktop fails closed and never recreates or writes through it.
 
+Host-rendered Canvas-delivery selection actions always use pending-result admission,
+including declared multi-step actions. Renderer supplies bounded step requests and
+prior-step relation indexes, never pending node ids or replacement guards. Main
+preflights the full batch's exact tool leases and current input schemas, then asks Canvas to commit
+one independent pending node/run per step in declaration order. Main resolves
+relation indexes only after the referenced pending nodes exist and holds every
+prepared execution behind one dispatch gate until all pending commits succeed. The
+gate prevents any step's external tool call from starting while a later result is
+still hidden. If admission fails, the gate rejects without starting a tool; any
+already committed pending step converges to its normal bounded failed state.
+
+The Canvas admission receipt contains only the admitted `operationId`/node-id pairs
+and returns after every pending node is durable and Main has registered every
+execution. It is distinct from all terminal generation results. Dialog close,
+selection replacement, Renderer unmount and sender teardown after that receipt stop
+waiting only; they do not cancel admitted work. Each pending card remains the
+reachable explicit cancellation surface and advances independently through
+submitting, running and its own terminal state, so a multi-result action may succeed
+partially without being collapsed into one batch outcome. Replaying the same
+operation ids joins the retained executions and cannot create another node or
+external call.
+
 When pending-result creation has exactly one same-modality visual reference, Main
 derives the reference node's authoritative presentation size and supplies it to the
 Canvas owner. Canvas commits that frame in the pending creation intent and retains
