@@ -128,7 +128,8 @@ or durable domain authority.
   unrelated Plugin documents and legacy schemas stay closed.
 - Native media drag-out starts only from an explicit held export gesture. Renderer
   publishes a complete immutable selection and may hold a short-lived opaque ticket;
-  it never stages files or sees the native drag payload.
+  it never stages files or sees the native drag payload. Convax Desktop exposes the
+  persistent drag-out mode and does not register a modifier-only compatibility chord.
 
 ## UI behavior
 

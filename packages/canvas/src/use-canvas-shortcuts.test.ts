@@ -198,14 +198,15 @@ describe("canvas shortcuts", () => {
   test("arms external drag while command/control-shift is held in either key order", () => {
     const armExternalDrag = mock(() => undefined)
 
-    for (const event of [
-      keyboardEvent("Shift", { metaKey: true, shiftKey: true }),
-      keyboardEvent("Meta", { metaKey: true, shiftKey: true }),
-      keyboardEvent("Shift", { ctrlKey: true, shiftKey: true }),
-      keyboardEvent("Control", { ctrlKey: true, shiftKey: true }),
-    ]) {
+    for (const [event, externalDragShortcutModifier] of [
+      [keyboardEvent("Shift", { metaKey: true, shiftKey: true }), "meta"],
+      [keyboardEvent("Meta", { metaKey: true, shiftKey: true }), "meta"],
+      [keyboardEvent("Shift", { ctrlKey: true, shiftKey: true }), "control"],
+      [keyboardEvent("Control", { ctrlKey: true, shiftKey: true }), "control"],
+    ] as const) {
       createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
         canArmExternalDrag: true,
+        externalDragShortcutModifier,
       })(event)
 
       expect(event.preventDefault).not.toHaveBeenCalled()
@@ -227,12 +228,23 @@ describe("canvas shortcuts", () => {
     expect(event.preventDefault).not.toHaveBeenCalled()
   })
 
+  test("does not infer a transient modifier chord when the host omits one", () => {
+    const armExternalDrag = mock(() => undefined)
+
+    createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
+      canArmExternalDrag: true,
+    })(keyboardEvent("Shift", { metaKey: true, shiftKey: true }))
+
+    expect(armExternalDrag).not.toHaveBeenCalled()
+  })
+
   test("does not arm command-option-shift", () => {
     const armExternalDrag = mock(() => undefined)
     const event = keyboardEvent("Shift", { altKey: true, metaKey: true, shiftKey: true })
 
     createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
       canArmExternalDrag: true,
+      externalDragShortcutModifier: "meta",
     })(event)
 
     expect(armExternalDrag).not.toHaveBeenCalled()
@@ -315,6 +327,7 @@ describe("canvas shortcuts", () => {
       const armExternalDrag = mock(() => undefined)
       const handler = createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
         canArmExternalDrag: true,
+        externalDragShortcutModifier: "meta",
       })
 
       for (const target of [new TestHTMLElement(true, false), new TestHTMLElement(false, true)]) {

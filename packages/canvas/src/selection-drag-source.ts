@@ -23,7 +23,7 @@ export interface CanvasSelectionDragSource {
   }
   readonly prepare: (context: CanvasSelectionActionContext) => Promise<CanvasPreparedSelectionDrag>
   readonly preparingLabel?: string
-  /** Host-selected primary modifier. Omit only for platform-neutral Canvas integrations. */
+  /** Explicit host opt-in for the transient modifier chord. Omit to expose only the persistent mode. */
   readonly shortcutModifier?: "control" | "meta"
   readonly visible: (context: CanvasSelectionActionContext) => boolean
 }

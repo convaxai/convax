@@ -1450,7 +1450,7 @@ function App() {
       client,
       flush: flushCanvasForAgent,
       icon: <FileOutput />,
-      label: locale === "zh-CN" ? "继续按住 ⌘⇧，拖到 Finder 或其他应用" : "Keep holding ⌘⇧ and drag outside Convax",
+      label: locale === "zh-CN" ? "拖到 Finder 或其他应用" : "Drag outside Convax",
       mode: {
         description:
           locale === "zh-CN"
@@ -1460,7 +1460,7 @@ function App() {
         label: locale === "zh-CN" ? "跨应用拖出" : "Drag to Other Apps",
         preparingLabel: locale === "zh-CN" ? "正在准备选中素材" : "Preparing selected media",
       },
-      preparingLabel: locale === "zh-CN" ? "正在准备素材，请继续按住 ⌘⇧" : "Preparing media — keep holding ⌘⇧",
+      preparingLabel: locale === "zh-CN" ? "正在准备选中素材" : "Preparing selected media",
       scopeId: activeProjectId,
     })
   }, [activeCanvasId, activeProjectId, flushCanvasForAgent, locale])

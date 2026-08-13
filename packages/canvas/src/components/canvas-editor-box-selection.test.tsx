@@ -238,6 +238,7 @@ function rect(left: number, top: number, width: number, height: number) {
 let observedSelection = { edgeIds: [] as string[], nodeIds: [] as string[] }
 let emitConnectedEdgeSelection: (() => void) | undefined
 let emitNodeDimensions: ((nodeId: string, width: number, height: number) => void) | undefined
+let readReactFlowMultiSelectionActive: (() => boolean) | undefined
 let readReactFlowProjection:
   | (() => {
       edgeIds: string[]
@@ -257,6 +258,7 @@ function SelectionProbeNode() {
     edgeIds: [...editor.selection.edgeIds],
     nodeIds: [...editor.selection.nodeIds],
   }
+  readReactFlowMultiSelectionActive = () => store.getState().multiSelectionActive
   emitConnectedEdgeSelection = () =>
     store.getState().triggerEdgeChanges([{ id: "connected", selected: true, type: "select" }])
   return <div />
@@ -359,7 +361,9 @@ test("box-selects connected nodes without feeding controlled selection back into
           <CanvasEditor
             fileRendererRegistry={createCanvasFileRendererRegistry()}
             nodeRegistry={nodeRegistry}
-            onDocumentChange={(next) => { observedDocument = next }}
+            onDocumentChange={(next) => {
+              observedDocument = next
+            }}
             onlyRenderVisibleElements={false}
             services={createCanvasServices()}
             session={session}
@@ -376,6 +380,32 @@ test("box-selects connected nodes without feeding controlled selection back into
     expect(pane).not.toBeNull()
     expect(firstNode).not.toBeNull()
     expect(emitConnectedEdgeSelection).toBeFunction()
+
+    await act(async () => {
+      canvasRoot?.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, key: "Shift", metaKey: true, shiftKey: true }),
+      )
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeFalse()
+    await act(async () => {
+      canvasRoot?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          isPrimary: true,
+          metaKey: true,
+          pointerId: 99,
+        }),
+      )
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeTrue()
+    await act(async () => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, button: 0, isPrimary: true, metaKey: true, pointerId: 99 }),
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    })
+    expect(readReactFlowMultiSelectionActive?.()).toBeFalse()
 
     focusProbe = document.createElement("input")
     document.body.append(focusProbe)

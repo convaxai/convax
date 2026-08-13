@@ -8,6 +8,7 @@ import {
   ReactFlowProvider,
   SelectionMode,
   useReactFlow,
+  useStoreApi,
   useViewport,
   type Connection,
   type EdgeChange,
@@ -171,8 +172,7 @@ import {
 } from "../motion"
 import {
   CANVAS_CONNECTION_RADIUS,
-  CANVAS_MULTI_SELECTION_KEYS,
-  CANVAS_ZOOM_ACTIVATION_KEYS,
+  isCanvasMultiSelectionPointerGesture,
   resolveCanvasInteractionPolicy,
   type CanvasInteractionTool,
 } from "../interaction"
@@ -1391,8 +1391,36 @@ function CanvasEditorContent(
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
   const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
+  const reactFlowStore = useStoreApi<CanvasNode>()
   const reactFlowRef = useRef(reactFlow)
+  const pointerMultiSelectionGenerationRef = useRef(0)
   reactFlowRef.current = reactFlow
+  const setPointerMultiSelection = useCallback(
+    (active: boolean) => {
+      pointerMultiSelectionGenerationRef.current += 1
+      reactFlowStore.setState({ multiSelectionActive: active })
+    },
+    [reactFlowStore],
+  )
+  const clearPointerMultiSelection = useCallback(() => setPointerMultiSelection(false), [setPointerMultiSelection])
+  const schedulePointerMultiSelectionClear = useCallback(() => {
+    const generation = pointerMultiSelectionGenerationRef.current
+    window.setTimeout(() => {
+      if (pointerMultiSelectionGenerationRef.current !== generation) return
+      clearPointerMultiSelection()
+    }, 0)
+  }, [clearPointerMultiSelection])
+  useEffect(() => {
+    window.addEventListener("blur", clearPointerMultiSelection)
+    window.addEventListener("pointercancel", clearPointerMultiSelection)
+    window.addEventListener("pointerup", schedulePointerMultiSelectionClear)
+    return () => {
+      window.removeEventListener("blur", clearPointerMultiSelection)
+      window.removeEventListener("pointercancel", clearPointerMultiSelection)
+      window.removeEventListener("pointerup", schedulePointerMultiSelectionClear)
+      clearPointerMultiSelection()
+    }
+  }, [clearPointerMultiSelection, schedulePointerMultiSelectionClear])
   const mutationService = useCanvasService("mutation")
   const folderBrowseService = useCanvasService("folderBrowse")
   const hydrationService = useCanvasService("hydration")
@@ -5243,6 +5271,7 @@ function CanvasEditorContent(
                   onKeyDown={handleCanvasKeyDown}
                   onPaste={onCanvasPaste}
                   onPointerCancelCapture={() => {
+                    clearPointerMultiSelection()
                     boxSelectionActiveRef.current = false
                     boxSelectionBaselineRef.current = null
                     altDragRef.current = null
@@ -5252,6 +5281,7 @@ function CanvasEditorContent(
                     dispatch({ type: "cancel-gesture" })
                   }}
                   onPointerDownCapture={(event) => {
+                    setPointerMultiSelection(isCanvasMultiSelectionPointerGesture(event))
                     const canvasRoot = rootRef.current
                     const interactiveTarget =
                       event.target instanceof Element
@@ -5310,7 +5340,7 @@ function CanvasEditorContent(
                     elementsSelectable={interactionProps.elementsSelectable}
                     maxZoom={CANVAS_MAX_ZOOM}
                     minZoom={CANVAS_MIN_ZOOM}
-                    multiSelectionKeyCode={[...CANVAS_MULTI_SELECTION_KEYS]}
+                    multiSelectionKeyCode={null}
                     nodeTypes={nodeTypes}
                     nodes={nodes}
                     nodesConnectable={interactionProps.nodesConnectable}
@@ -5319,7 +5349,7 @@ function CanvasEditorContent(
                     nodeDragThreshold={4}
                     onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                     autoPanOnNodeFocus={false}
-                    panActivationKeyCode="Space"
+                    panActivationKeyCode={null}
                     panOnDrag={interactionProps.panOnDrag}
                     panOnScroll
                     selectionKeyCode={null}
@@ -5327,7 +5357,7 @@ function CanvasEditorContent(
                     selectionMode={SelectionMode.Partial}
                     snapGrid={CANVAS_SNAP_GRID}
                     snapToGrid={snapEnabled}
-                    zoomActivationKeyCode={[...CANVAS_ZOOM_ACTIVATION_KEYS]}
+                    zoomActivationKeyCode={null}
                     zoomOnDoubleClick={false}
                     zoomOnPinch
                     zoomOnScroll={false}

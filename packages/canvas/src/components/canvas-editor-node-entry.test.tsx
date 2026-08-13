@@ -19,12 +19,8 @@ import type { CanvasEditorHandle } from "./canvas-editor"
 let renderedNodes: CanvasNode[] = []
 let renderNodes = true
 let connect: ((connection: Connection) => void) | undefined
-let connectStart:
-  | ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void)
-  | undefined
-let connectEnd:
-  | ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void)
-  | undefined
+let connectStart: ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void) | undefined
+let connectEnd: ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void) | undefined
 let nodesChange: ((changes: readonly { id: string; selected: boolean; type: "select" }[]) => void) | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
@@ -240,6 +236,11 @@ void mock.module("@xyflow/react", () => ({
     zoomIn: async () => undefined,
     zoomOut: async () => undefined,
     zoomTo: async () => undefined,
+  }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
   }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
@@ -1196,10 +1197,11 @@ test("hides a deleted node immediately and restores it when the authoritative co
   let resolveCommand: (() => void) | undefined
   let rejectCommand: ((error: Error) => void) | undefined
   const executeCommand = mock(
-    () => new Promise<void>((resolve, reject) => {
-      resolveCommand = resolve
-      rejectCommand = reject
-    }),
+    () =>
+      new Promise<void>((resolve, reject) => {
+        resolveCommand = resolve
+        rejectCommand = reject
+      }),
   )
   const notify = mock(() => undefined)
 
@@ -1223,8 +1225,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     expect(deleteButton).toBeDefined()
     await act(async () => {
@@ -1250,8 +1252,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     await act(async () => {
       retryDeleteButton?.click()
@@ -1295,12 +1297,12 @@ test("does not offer non-atomic Agent creation from click-to-connect", async () 
     const textOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Text"),
     )
-    const imageOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Image"),
-    )
-    const videoOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Video"),
-    )
+    const imageOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Image"))
+    const videoOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Video"))
     expect(connectionMenu).toBeDefined()
     expect(agentOption).toBeUndefined()
     expect(textOption).toBeDefined()
@@ -1389,8 +1391,8 @@ test("focuses a text node created after dragging a connection to empty canvas", 
       await Promise.resolve()
     })
 
-    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
-      (button) => button.textContent?.includes("Text"),
+    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find((button) =>
+      button.textContent?.includes("Text"),
     )
     expect(textOption).toBeDefined()
     await act(async () => {

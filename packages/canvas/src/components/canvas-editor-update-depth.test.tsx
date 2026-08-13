@@ -212,6 +212,11 @@ mock.module("@xyflow/react", () => ({
     zoomOut,
     zoomTo,
   }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
@@ -533,13 +538,14 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(canvas?.dataset.canvasTool).toBe("select")
 
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, code: "Space", key: " " }))
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
     expect(observedReactFlowProps).toMatchObject({
       elementsSelectable: false,
       nodesConnectable: false,
       nodesDraggable: false,
+      panOnDrag: true,
       selectionOnDrag: false,
     })
     await act(async () => {
@@ -565,7 +571,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     })
 
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, code: "Space", key: " " }))
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
     Object.defineProperty(document, "hidden", { configurable: true, value: true })

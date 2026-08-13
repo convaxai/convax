@@ -47,9 +47,11 @@ let renderedColorMode: string | undefined
 let renderedReactFlowOptions:
   | {
       connectionRadius?: number
-      multiSelectionKeyCode?: readonly string[]
+      multiSelectionKeyCode?: readonly string[] | null
+      panActivationKeyCode?: string | null
       snapGrid?: readonly [number, number]
       snapToGrid?: boolean
+      zoomActivationKeyCode?: readonly string[] | null
     }
   | undefined
 
@@ -97,10 +99,12 @@ function MockReactFlow(props: {
   colorMode?: string
   connectionRadius?: number
   edges?: CanvasEdge[]
-  multiSelectionKeyCode?: readonly string[]
+  multiSelectionKeyCode?: readonly string[] | null
+  panActivationKeyCode?: string | null
   nodes?: CanvasNode[]
   snapGrid?: readonly [number, number]
   snapToGrid?: boolean
+  zoomActivationKeyCode?: readonly string[] | null
 }) {
   renderedCanvasEdges = props.edges ?? []
   renderedCanvasNodes = props.nodes ?? []
@@ -108,8 +112,10 @@ function MockReactFlow(props: {
   renderedReactFlowOptions = {
     connectionRadius: props.connectionRadius,
     multiSelectionKeyCode: props.multiSelectionKeyCode,
+    panActivationKeyCode: props.panActivationKeyCode,
     snapGrid: props.snapGrid,
     snapToGrid: props.snapToGrid,
+    zoomActivationKeyCode: props.zoomActivationKeyCode,
   }
   return <>{props.children}</>
 }
@@ -232,6 +238,11 @@ mock.module("@xyflow/react", () => ({
     zoomOut,
     zoomTo,
   }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  }),
   useViewport: () => ({ x: 17, y: 29, zoom: 1.35 }),
 }))
 
@@ -352,13 +363,15 @@ function renderEditor(
 }
 
 describe("CanvasEditor edge port projection", () => {
-  test("uses one bounded connection radius and explicit multi-selection chord", () => {
+  test("uses event-scoped pointer and focus-scoped navigation modifiers", () => {
     renderEditor()
     expect(renderedReactFlowOptions).toMatchObject({
       connectionRadius: 120,
-      multiSelectionKeyCode: ["Meta", "Shift"],
+      multiSelectionKeyCode: null,
+      panActivationKeyCode: null,
       snapGrid: [8, 8],
       snapToGrid: true,
+      zoomActivationKeyCode: null,
     })
   })
 
@@ -1388,21 +1401,21 @@ describe("CanvasEditor resource mutation", () => {
 
   test("fits only after the authoritative tidy command commits", async () => {
     const initialDocument = createCanvasDocument({
-        edges: [{ id: "edge", source: "first", target: "second" }],
-        id: "canvas-layout",
-        nodes: [
-          createTextNode({
-            id: "first",
-            metadata: {},
-            position: { x: 400, y: 200 },
-            resourceState: { status: "ready" },
-          }),
-          createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
-        ],
-      })
+      edges: [{ id: "edge", source: "first", target: "second" }],
+      id: "canvas-layout",
+      nodes: [
+        createTextNode({
+          id: "first",
+          metadata: {},
+          position: { x: 400, y: 200 },
+          resourceState: { status: "ready" },
+        }),
+        createTextNode({ id: "second", metadata: {}, position: { x: 0, y: 0 }, resourceState: { status: "ready" } }),
+      ],
+    })
     renderEditor(createCanvasServices(), {
       initialDocument,
-      executeCommand: async () => ({ document: initialDocument } as never),
+      executeCommand: async () => ({ document: initialDocument }) as never,
     })
 
     expect(buttonActions.get("Tidy canvas")).toBeFunction()
@@ -1719,6 +1732,7 @@ describe("CanvasEditor external drag mode", () => {
         id: "native-files",
         label: "Drag outside Convax",
         prepare,
+        shortcutModifier: "meta",
         visible: () => true,
       },
     })

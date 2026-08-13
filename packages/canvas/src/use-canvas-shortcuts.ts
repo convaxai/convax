@@ -56,20 +56,22 @@ export function isCanvasExternalDragChordHeld(
   event: CanvasExternalDragChordEvent,
   shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
 ) {
+  if (!shortcutModifier) return false
   if (event.altKey || !event.shiftKey) return false
   if (shortcutModifier === "meta") return event.metaKey && !event.ctrlKey
   if (shortcutModifier === "control") return event.ctrlKey && !event.metaKey
-  return event.metaKey !== event.ctrlKey
+  return false
 }
 
 export function isCanvasExternalDragChordKey(
   key: string,
   shortcutModifier: CanvasShortcutOptions["externalDragShortcutModifier"],
 ) {
+  if (!shortcutModifier) return false
   if (key === "Shift") return true
   if (shortcutModifier === "meta") return key === "Meta"
   if (shortcutModifier === "control") return key === "Control"
-  return key === "Meta" || key === "Control"
+  return false
 }
 
 export function resolveCanvasHistoryShortcut(
