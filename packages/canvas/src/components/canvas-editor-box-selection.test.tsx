@@ -436,7 +436,6 @@ test("box-selects connected nodes without feeding controlled selection back into
       document.createElement("video"),
       document.createElement("iframe"),
       editableTarget,
-      noDragTarget,
       shortcutIgnoredTarget,
     ]
     for (const [index, target] of interactiveTargets.entries()) {
@@ -446,6 +445,11 @@ test("box-selects connected nodes without feeding controlled selection back into
       expect(document.activeElement).toBe(focusProbe)
       target.remove()
     }
+    canvasRoot?.append(noDragTarget)
+    focusProbe.focus()
+    pointerDown(noDragTarget, 39)
+    expect(document.activeElement).toBe(canvasRoot)
+    noDragTarget.remove()
     const passiveTarget = document.createElement("div")
     canvasRoot?.append(passiveTarget)
     focusProbe.focus()

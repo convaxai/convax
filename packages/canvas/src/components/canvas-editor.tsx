@@ -301,7 +301,6 @@ const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
   "video",
   "iframe",
   "[contenteditable]:not([contenteditable='false'])",
-  ".nodrag",
   "[data-canvas-shortcuts='ignore']",
 ].join(", ")
 function subscribeToCanvasMotionPreference(onChange: () => void) {

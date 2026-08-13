@@ -1502,14 +1502,22 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     })
     expect(prepare).not.toHaveBeenCalled()
 
-    await act(async () => {
-      canvas.dispatchEvent(chordDown())
-      await Promise.resolve()
-    })
-    expect(prepare).toHaveBeenCalledTimes(1)
-
     const outsideCanvas = document.createElement("button")
     document.body.append(outsideCanvas)
+    const noDragSurface = document.createElement("div")
+    noDragSurface.className = "nodrag"
+    canvas.append(noDragSurface)
+    outsideCanvas.focus()
+    await act(async () => {
+      noDragSurface.dispatchEvent(
+        new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
+      )
+      document.activeElement?.dispatchEvent(chordDown())
+      await Promise.resolve()
+    })
+    expect(document.activeElement).toBe(canvas)
+    expect(prepare).toHaveBeenCalledTimes(1)
+
     await act(async () => {
       const focusOut = new Event("focusout", { bubbles: true })
       Object.defineProperty(focusOut, "relatedTarget", { value: outsideCanvas })
