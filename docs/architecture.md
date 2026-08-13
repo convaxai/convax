@@ -155,6 +155,7 @@ flowchart TB
     MarketplaceCli["create-convax-marketplace"]
     MarketplaceKit["@convax/marketplace-kit"]
     Release["Registry / immutable Release artifacts"]
+    DesktopUpdateFeed["Signed Desktop release<br/>generic HTTPS metadata + immutable installers"]
     PluginSource --> MarketplaceKit
     MarketplaceCli --> MarketplaceKit
     MarketplaceKit --> Release
@@ -220,14 +221,17 @@ flowchart TB
   end
 
   Release --> Main
+  DesktopUpdateFeed -->|version, release notes, SHA-512 and signed package| Main
 
   subgraph State["State and persistence"]
     UserData["Electron userData<br/>bindings, Marketplace, grants, immutable Plugin closures<br/>isolated per identified development task"]
     ProjectRoot["Project root / .convax<br/>identity, final-frame objects/journals/heads, checkpoints/floors, managed assets"]
     LocalStorage["Browser localStorage<br/>preferences, recovery and disposable Marketplace / Service / model display caches"]
+    UpdaterCache["Electron updater cache<br/>verified partial/downloaded package · disposable"]
   end
 
   Main --> UserData
+  Main --> UpdaterCache
   Main -->|validated native I/O · range streams| ProjectRoot
   Renderer -. non-authoritative UI state only .-> LocalStorage
 
@@ -535,7 +539,7 @@ the Desktop-owned managed-stdio profile.
 | `@convax/plugin-api`        | Headless Plugin Host API catalog, availability contracts, compatibility history and deterministic generated reference inputs                                                                             |
 | `@convax/plugin-sdk`        | Headless Plugin manifest/contribution ABI, bounded localization resources/fallback, Plugin-to-Plugin contracts, pure validation and deterministic reference inputs                                       |
 | `create-convax-marketplace` | Authoring-time Marketplace scaffold CLI                                                                                                                                                                  |
-| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, coordinators and product shell; no React Flow document store                                                                                      |
+| `@convax/desktop`           | Electron composition root, PeerJS/native/IPC adapters, signed client-update lifecycle, coordinators and product shell; no React Flow document store                                                      |
 | `@convax/api`               | Private Web-standard membership, replica authorization, rendezvous, attestation, checkpoint/floor, registry and cutoff authority                                                                         |
 | `@convax/web`               | Public marketing site and responsive product storytelling                                                                                                                                                |
 | `@convax/deploy-cloudflare` | Cloudflare custom-domain, static-asset and future API gateway composition                                                                                                                                |
@@ -690,6 +694,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                     |
 | Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                               |
 | Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                              |
+| Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                   |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -752,6 +757,9 @@ Electron userData/
 
 Identified development task userData    the same schema under a task-private absolute
                                         profile; never the ordinary development or packaged profile
+
+Electron updater platform cache         verified partial or complete Desktop update artifacts;
+                                        disposable and never a source of Project, Plugin, or preference state
 
 Packaged app Resources/
   marketplaces/                         product-lock-verified Builtin, Official and retired-major recovery bytes
@@ -1114,6 +1122,38 @@ newer installed Plugin stamps its version reference only when it successfully wr
 the migrated node snapshot; installation itself never rewrites Canvas documents.
 
 ## 6. Core flows
+
+### Desktop application update
+
+```text
+Authorized release operator dispatches one exact commit and version
+  -> GitHub Actions builds a signed Windows installer and a signed, notarized macOS bundle
+  -> packaged artifacts and their SHA-512 metadata are verified before publication
+  -> immutable installers are uploaded before the channel's mutable latest metadata
+  -> packaged Desktop Main checks the generic HTTPS feed
+  -> Main rejects unsupported platforms and presents bounded version, release-note,
+     and minimum-system-version information through native UI
+  -> user accepts download, may cancel it, or retries a failed/canceled download
+  -> electron-updater verifies metadata hash and operating-system code signature
+  -> user accepts installation
+  -> Main closes the ordinary write/task/runtime shutdown barrier exactly once
+  -> quitAndInstall starts the platform installer
+```
+
+The updater is a packaged macOS/Windows Main-process capability. Renderer and
+Preload do not receive an update IPC surface, feed credentials, certificate bytes,
+native cache paths, or installer paths. The public feed base URL is build-time
+configuration, while every signing, notarization, and object-storage credential
+exists only as protected GitHub Actions configuration. Development builds never
+contact the release feed.
+
+Download cancellation is explicit and retry starts a fresh updater operation; the
+updater may reuse only its own verified disposable cache. Installation cannot begin
+until Project writes, Agent work, generation work, collaboration transports, and
+other Main runtimes have completed the shared shutdown drain. A preparation or
+installer-start failure keeps or relaunches the currently installed version and
+reports a bounded native error. Project data, installed Plugin closures, preferences,
+and user content remain outside the replaceable application bundle.
 
 ### Project creation and opening
 
@@ -2262,6 +2302,18 @@ window coordination; keep the product's visual implementation in the host.
 - Preload: the narrow typed `window.convax` bridge; no business state.
 - Renderer: React shell, controllers, coordinators, view adapters, and preferences;
   no Node/Electron imports.
+
+Desktop application update orchestration stays entirely in Main and native Electron
+UI. Only packaged `darwin` and `win32` applications check one build-configured
+generic HTTPS feed. Main displays the bounded release facts, owns the updater cache
+and cancellation token, and calls the platform installer only after the same
+shutdown drain used by an ordinary quit has durably flushed Project writes and
+disposed running host capabilities. Update metadata and package signatures are
+verified before install; failure or canceled work never mutates Project, Plugin,
+preference, or collaboration state. Release signing, notarization, object-storage,
+and feed publication credentials live in protected GitHub Actions settings and are
+never embedded in source, environment examples, Renderer, Preload, or the packaged
+application.
 
 An identified solo-task launch is a development-only Desktop composition mode.
 Main accepts only one bounded `CONVAX_SOLO_TASK_ID` and `CONVAX_SOLO_TASK_LABEL`
