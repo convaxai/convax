@@ -1446,7 +1446,7 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
         <CanvasEditor
           selectionDragSource={{
             id: "native-files",
-            label: "Keep holding Command",
+            label: "Keep holding Command-Shift",
             prepare,
             shortcutModifier: "meta",
             visible: () => true,
@@ -1490,9 +1490,9 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     const chordDown = () => {
       const event = new Event("keydown", { bubbles: true })
       Object.defineProperties(event, {
-        key: { value: "Meta" },
+        key: { value: "Shift" },
         metaKey: { value: true },
-        shiftKey: { value: false },
+        shiftKey: { value: true },
       })
       return event
     }
@@ -1506,13 +1506,15 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
     document.body.append(outsideCanvas)
     const noDragSurface = document.createElement("div")
     noDragSurface.className = "nodrag"
+    const image = document.createElement("img")
+    noDragSurface.append(image)
     canvas.append(noDragSurface)
     outsideCanvas.focus()
     await act(async () => {
-      noDragSurface.dispatchEvent(
+      image.dispatchEvent(
         new MouseEvent("pointerdown", { bubbles: true, button: 0 }),
       )
-      document.activeElement?.dispatchEvent(chordDown())
+      window.dispatchEvent(chordDown())
       await Promise.resolve()
     })
     expect(document.activeElement).toBe(canvas)
@@ -1522,12 +1524,20 @@ test("arms external drag only with Canvas focus and clears it before picker-crea
       const focusOut = new Event("focusout", { bubbles: true })
       Object.defineProperty(focusOut, "relatedTarget", { value: outsideCanvas })
       canvas.dispatchEvent(focusOut)
+      outsideCanvas.focus()
       await Promise.resolve()
     })
     expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
 
     await act(async () => {
-      canvas.dispatchEvent(chordDown())
+      window.dispatchEvent(chordDown())
+      await Promise.resolve()
+    })
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      canvas.focus()
+      window.dispatchEvent(chordDown())
       await Promise.resolve()
     })
     expect(prepare).toHaveBeenCalledTimes(2)

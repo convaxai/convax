@@ -219,7 +219,7 @@ describe("Canvas external media drag IPC", () => {
     expect(renderer.getViewSnapshot).toHaveBeenCalledWith("desktop-main")
     expect(renderer.executeView).toHaveBeenCalledWith({
       command: {
-        description: "The system could not start the file drag. Release Command, then try again.",
+        description: "The system could not start the file drag. Release Command-Shift, then try again.",
         kind: "error",
         title: "Could not drag media out",
         type: "notification.show",

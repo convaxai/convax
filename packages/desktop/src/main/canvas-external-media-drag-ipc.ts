@@ -33,7 +33,7 @@ export async function showCanvasExternalMediaDragStartFailure(
   if (!snapshot) return false
   await renderer.executeView({
     command: {
-      description: "The system could not start the file drag. Release Command, then try again.",
+      description: "The system could not start the file drag. Release Command-Shift, then try again.",
       kind: "error",
       title: "Could not drag media out",
       type: "notification.show",

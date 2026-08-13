@@ -195,12 +195,14 @@ describe("canvas shortcuts", () => {
     expect(layout).toHaveBeenCalledTimes(1)
   })
 
-  test("arms external drag only for the exact host-selected modifier", () => {
+  test("arms external drag while command/control-shift is held in either key order", () => {
     const armExternalDrag = mock(() => undefined)
 
     for (const [event, externalDragShortcutModifier] of [
-      [keyboardEvent("Meta", { metaKey: true }), "meta"],
-      [keyboardEvent("Control", { ctrlKey: true }), "control"],
+      [keyboardEvent("Shift", { metaKey: true, shiftKey: true }), "meta"],
+      [keyboardEvent("Meta", { metaKey: true, shiftKey: true }), "meta"],
+      [keyboardEvent("Shift", { ctrlKey: true, shiftKey: true }), "control"],
+      [keyboardEvent("Control", { ctrlKey: true, shiftKey: true }), "control"],
     ] as const) {
       createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
         canArmExternalDrag: true,
@@ -211,12 +213,12 @@ describe("canvas shortcuts", () => {
       expect(event.stopPropagation).not.toHaveBeenCalled()
     }
 
-    expect(armExternalDrag).toHaveBeenCalledTimes(2)
+    expect(armExternalDrag).toHaveBeenCalledTimes(4)
   })
 
   test("does not arm a held chord when no external drag source is visible", () => {
     const armExternalDrag = mock(() => undefined)
-    const event = keyboardEvent("Meta", { metaKey: true })
+    const event = keyboardEvent("Shift", { metaKey: true, shiftKey: true })
 
     createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
       canArmExternalDrag: false,
@@ -231,27 +233,22 @@ describe("canvas shortcuts", () => {
 
     createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
       canArmExternalDrag: true,
-    })(keyboardEvent("Meta", { metaKey: true }))
+    })(keyboardEvent("Shift", { metaKey: true, shiftKey: true }))
 
     expect(armExternalDrag).not.toHaveBeenCalled()
   })
 
-  test("does not arm command with any extra modifier", () => {
+  test("does not arm command-option-shift", () => {
     const armExternalDrag = mock(() => undefined)
-    const events = [
-      keyboardEvent("Meta", { altKey: true, metaKey: true }),
-      keyboardEvent("Meta", { metaKey: true, shiftKey: true }),
-      keyboardEvent("Meta", { ctrlKey: true, metaKey: true }),
-    ]
+    const event = keyboardEvent("Shift", { altKey: true, metaKey: true, shiftKey: true })
 
-    const handler = createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
+    createCanvasShortcutHandler(shortcutActions({ armExternalDrag }), false, {
       canArmExternalDrag: true,
       externalDragShortcutModifier: "meta",
-    })
-    for (const event of events) handler(event)
+    })(event)
 
     expect(armExternalDrag).not.toHaveBeenCalled()
-    for (const event of events) expect(event.preventDefault).not.toHaveBeenCalled()
+    expect(event.preventDefault).not.toHaveBeenCalled()
   })
 
   test("honors the host-selected primary modifier without claiming the other platform shortcut", () => {
@@ -261,9 +258,9 @@ describe("canvas shortcuts", () => {
       externalDragShortcutModifier: "meta",
     })
 
-    handler(keyboardEvent("Control", { ctrlKey: true }))
-    handler(keyboardEvent("Meta", { ctrlKey: true, metaKey: true }))
-    handler(keyboardEvent("Meta", { metaKey: true }))
+    handler(keyboardEvent("Shift", { ctrlKey: true, shiftKey: true }))
+    handler(keyboardEvent("Shift", { ctrlKey: true, metaKey: true, shiftKey: true }))
+    handler(keyboardEvent("Shift", { metaKey: true, shiftKey: true }))
 
     expect(armExternalDrag).toHaveBeenCalledTimes(1)
   })
@@ -280,20 +277,21 @@ describe("canvas shortcuts", () => {
     expect(clearSelection).not.toHaveBeenCalled()
   })
 
-  test("releases held external drag on the required modifier key-up", () => {
+  test("releases held external drag on either required modifier key-up", () => {
     const cancelExternalDrag = mock(() => undefined)
     const handler = createCanvasShortcutReleaseHandler(shortcutActions({ cancelExternalDrag }), {
       externalDragArmed: true,
       externalDragShortcutModifier: "meta",
     })
 
-    handler(keyboardEvent("x", { metaKey: true }))
-    handler(keyboardEvent("Control", { metaKey: true }))
-    handler(keyboardEvent("Shift", { metaKey: true }))
+    handler(keyboardEvent("x", { metaKey: true, shiftKey: true }))
+    handler(keyboardEvent("Control", { metaKey: true, shiftKey: true }))
+    handler(keyboardEvent("Shift", { metaKey: true, shiftKey: true }))
     expect(cancelExternalDrag).not.toHaveBeenCalled()
 
-    handler(keyboardEvent("Meta"))
-    expect(cancelExternalDrag).toHaveBeenCalledTimes(1)
+    handler(keyboardEvent("Shift", { metaKey: true }))
+    handler(keyboardEvent("Meta", { shiftKey: true }))
+    expect(cancelExternalDrag).toHaveBeenCalledTimes(2)
   })
 
   test("cancels held drag before preserving a normal command-shift shortcut", () => {
@@ -334,8 +332,9 @@ describe("canvas shortcuts", () => {
 
       for (const target of [new TestHTMLElement(true, false), new TestHTMLElement(false, true)]) {
         handler(
-          keyboardEvent("Meta", {
+          keyboardEvent("Shift", {
             metaKey: true,
+            shiftKey: true,
             target: target as unknown as EventTarget,
           }),
         )

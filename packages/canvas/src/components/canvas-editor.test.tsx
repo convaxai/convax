@@ -1703,7 +1703,7 @@ describe("CanvasEditor external drag mode", () => {
     renderEditor(createCanvasServices(), {
       selectionDragSource: {
         id: "native-files",
-        label: "Keep holding Command",
+        label: "Keep holding Command-Shift",
         mode: {
           description: "Drag selected media to another app.",
           exitLabel: "Exit",
@@ -1719,7 +1719,7 @@ describe("CanvasEditor external drag mode", () => {
     expect(buttonActions.get("Drag to Other Apps")).toBeUndefined()
   })
 
-  test("does not prepare until exact command is held for a visible drag source", () => {
+  test("does not prepare until command-shift is held for a visible drag source", () => {
     const prepare = mock(
       () =>
         new Promise<{
@@ -1744,10 +1744,10 @@ describe("CanvasEditor external drag mode", () => {
     keyDownOnCanvas?.({
       altKey: false,
       ctrlKey: false,
-      key: "Meta",
+      key: "Shift",
       metaKey: true,
       preventDefault,
-      shiftKey: false,
+      shiftKey: true,
       stopPropagation,
       target: null,
     })
@@ -1772,10 +1772,10 @@ describe("CanvasEditor external drag mode", () => {
     keyDownOnCanvas?.({
       altKey: false,
       ctrlKey: false,
-      key: "Meta",
+      key: "Shift",
       metaKey: true,
       preventDefault,
-      shiftKey: false,
+      shiftKey: true,
       stopPropagation: () => undefined,
       target: null,
     })
