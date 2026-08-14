@@ -9,48 +9,9 @@
 > [!WARNING]
 > **Convax is currently in _Developer Preview_ and evolving rapidly. Breaking changes will happen.** Project data, Plugin contracts, workflows, and other interfaces may change without compatibility guarantees. Keep backups of important work and expect frequent updates.
 
-[![Convax overview](docs/images/convax-overview.jpg)](https://convax.microvoid.io/)
+![Convax workspace with Project files, an infinite Canvas, and Agent context](docs/images/convax-workspace.jpg)
 
-## Keep the whole workflow visible
-
-Creative work usually gets split across folders, whiteboards, chat threads, and specialist tools. Convax keeps those pieces connected and editable in the same Project, so the result is more than the latest answer in a conversation.
-
-### 1. Start from real project files
-
-- Create a new Project or open an existing local folder.
-- Browse, preview, import, rename, move, delete, open, and reveal files without leaving the workspace.
-- Drag files and folders directly onto a Canvas or into Agent context.
-- Keep generated media and Canvas-created notes as ordinary, user-visible Project files.
-
-### 2. Turn the process into an editable Canvas
-
-- Use multiple infinite Canvases inside one Project.
-- Arrange and connect text, images, audio, video, files, folders, and interactive tools.
-- Move, resize, group, duplicate, organize, and reveal work without flattening it into a static export.
-- Reopen the Project and continue from the same persisted Canvas state.
-
-### 3. Give the Agent the context you mean
-
-- Attach selected nodes, files, folders, Skills, or a complete Canvas to a conversation.
-- Ask the Agent to inspect content, create resources, update relationships, organize nodes, or bring relevant work into view.
-- Keep context explicit: the Agent works with the Project and Canvas material you choose instead of relying on a detached chat history.
-- Use the built-in coding Agent powered by [OpenCode](https://opencode.ai/).
-
-### 4. Bring specialist tools into the workspace
-
-- Install Skills that add reusable Agent workflows.
-- Install Plugins that contribute generation tools, Canvas actions, custom cards, services, and interactive creative surfaces.
-- Keep Plugin work scoped to the Project and task that needs it.
-- Preserve portable Plugin node state with the Canvas when reopening a Project or duplicating a node.
-
-Examples presented on the Convax website include:
-
-- **Convax Account** for connected chat and live image generation.
-- **ChatCut** for authenticated, editable video workflows using connected Canvas media.
-- **FFmpeg Tools** for reviewed media transforms.
-- **3D Director Desk** for arranging characters, props, panoramas, and cameras in an interactive scene.
-
-## Interface at a glance
+## One workspace, three connected areas
 
 | Area                | What it is for                                                                                                |
 | ------------------- | ------------------------------------------------------------------------------------------------------------- |
@@ -60,7 +21,47 @@ Examples presented on the Convax website include:
 
 The Project and Agent sidebars can be resized or collapsed, and the Files and Canvases sections can be adjusted to fit the current task.
 
-## Example workflows
+## What you can do with Convax
+
+### Work directly with real project files
+
+- Create a new Project or open an existing local folder.
+- Browse, preview, import, rename, move, delete, open, and reveal files without leaving the workspace.
+- Drag files and folders onto a Canvas or attach them to Agent context.
+- Keep generated media and Canvas-created notes as ordinary, user-visible Project files.
+
+![Project files stay connected and can be moved onto the Canvas](docs/images/convax-projects.jpg)
+
+### Keep the whole process editable on an infinite Canvas
+
+- Use multiple independent Canvases inside one Project.
+- Arrange and connect text, images, audio, video, files, folders, and interactive tools.
+- Move, resize, group, duplicate, organize, and reveal work without flattening it into a static export.
+- Reopen the Project and continue from the same persisted Canvas state.
+
+![Connected briefs, references, directions, and results on a Canvas](docs/images/convax-canvas.jpg)
+
+### Collaborate with an Agent that sees the context you choose
+
+- Attach selected nodes, files, folders, Skills, or a complete Canvas to a conversation.
+- Ask the Agent to inspect content, create resources, update relationships, organize nodes, or bring relevant work into view.
+- Keep context explicit and scoped to the Project and Canvas material you select.
+- Use the built-in coding Agent powered by [OpenCode](https://opencode.ai/).
+
+![Agent working with selected Canvas context](docs/images/convax-agent.jpg)
+
+### Add specialist workflows with Skills and Plugins
+
+- Install Skills that give the Agent reusable workflows.
+- Install Plugins that add generation tools, Canvas actions, custom cards, services, and interactive creative surfaces.
+- Grant each Plugin only the Project, Canvas, or Agent capabilities it needs.
+- Preserve portable Plugin node state when reopening a Project or duplicating a node.
+
+![Skills and Plugins add scoped capabilities to Convax](docs/images/convax-extensions.jpg)
+
+Convax Account connects chat and live image generation, ChatCut provides an editable video workflow, FFmpeg Tools runs reviewed media transforms, and 3D Director Desk provides interactive scene blocking for characters, props, panoramas, and cameras.
+
+## Common workflows
 
 - **Creative direction:** connect briefs, references, shot ideas, and generated assets without losing the reasoning between them.
 - **Image workflows:** keep source material, generation, comparison, and review on the same Canvas.
