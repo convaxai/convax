@@ -2308,6 +2308,10 @@ export const AgentPanel = forwardRef<AgentPanelHandle, AgentPanelProps>(function
                       : "rounded-[24px] bg-surface-raised p-2 shadow-[var(--ui-shadow-low)] transition-[background-color,box-shadow] focus-within:shadow-[var(--ui-shadow-medium)]",
                     dropActive && "bg-primary/5 ring-2 ring-primary/40",
                   )}
+                  data-agent-composer-disabled={interactionDisabled || !props.projectId ? "true" : undefined}
+                  data-agent-composer-has-content={
+                    hasAgentComposerContent(composerDraft) || displayedResources.length > 0 ? "true" : undefined
+                  }
                   data-agent-composer-surface={compactEmbeddedChrome ? "flat" : "framed"}
                   data-agent-composer-state={
                     responseStopping
