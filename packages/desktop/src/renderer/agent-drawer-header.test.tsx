@@ -132,12 +132,15 @@ describe("Agent drawer header", () => {
     expect(markup).not.toContain("shadow")
   })
 
-  test("keeps the titlebar opener mounted but inert while the Agent dock is open", () => {
-    const markup = renderToStaticMarkup(<AgentDrawerTrigger hidden onOpen={() => undefined} status={idle} />)
+  test("stays visible as the close toggle while the Agent dock is open", () => {
+    const markup = renderToStaticMarkup(
+      <AgentDrawerTrigger onClose={() => undefined} onOpen={() => undefined} open status={idle} />,
+    )
 
-    expect(markup).toContain('data-agent-drawer-entry-state="hidden"')
-    expect(markup).toContain('aria-hidden="true"')
-    expect(markup).toContain("inert")
-    expect(markup).toContain("invisible opacity-0")
+    expect(markup).toContain('data-agent-drawer-entry-state="open"')
+    expect(markup).toContain('aria-label="Collapse agent panel"')
+    expect(markup).toContain("lucide-panel-right-close")
+    expect(markup).not.toContain("inert")
+    expect(markup).not.toContain("invisible opacity-0")
   })
 })

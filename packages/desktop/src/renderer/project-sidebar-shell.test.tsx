@@ -65,8 +65,8 @@ function ShellHarness({ initialOpen = true }: { initialOpen?: boolean }) {
   return (
     <ProjectSidebarShell entryLabel="Example" onOpenChange={setOpen} open={open} size={240}>
       <aside>
-        <button data-project-sidebar-close="" onClick={() => setOpen(false)} type="button">
-          Close
+        <button data-project-panel-action="" type="button">
+          Project action
         </button>
       </aside>
     </ProjectSidebarShell>
@@ -168,7 +168,7 @@ describe("Desktop Project sidebar Shell", () => {
     }
   })
 
-  test("hides the titlebar entry while pinned and stays closed after the sidebar close action", async () => {
+  test("keeps the titlebar toggle visible while pinned and stays closed after it collapses the sidebar", async () => {
     const testEnvironment = installTestWindow()
     const container = document.createElement("div")
     document.body.append(container)
@@ -180,7 +180,9 @@ describe("Desktop Project sidebar Shell", () => {
       const entry = container.querySelector<HTMLElement>(".project-sidebar-entry")!
       const close = container.querySelector<HTMLButtonElement>("[data-project-sidebar-close]")!
       const shell = container.querySelector<HTMLElement>(".project-sidebar-shell")!
-      expect(entry.querySelector("[data-project-sidebar-entry-state=hidden]")).not.toBeNull()
+      expect(entry.querySelector("[data-project-sidebar-entry-state=open]")).not.toBeNull()
+      expect(close.getAttribute("aria-label")).toBe("Collapse project sidebar")
+      expect(close.querySelector(".lucide-panel-left-close")).not.toBeNull()
 
       await act(async () =>
         entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
@@ -222,8 +224,8 @@ describe("Desktop Project sidebar Shell", () => {
       await act(async () =>
         entry.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })),
       )
-      const close = container.querySelector<HTMLButtonElement>("[data-project-sidebar-close]")!
-      close.focus()
+      const panelAction = container.querySelector<HTMLButtonElement>("[data-project-panel-action]")!
+      panelAction.focus()
       await act(async () =>
         document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Escape" })),
       )
