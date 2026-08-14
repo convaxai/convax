@@ -74,7 +74,6 @@ mock.module("@xyflow/react", () => ({
 }))
 
 const {
-  applyCanvasTextDraftBase,
   BuiltinCanvasNode,
   BuiltinFolderFileNode,
   BuiltinMediaFileNode,
@@ -85,26 +84,28 @@ const {
   canOpenCanvasTextLineMenu,
   ExpandedTextEditorDialog,
   TextEditorDrawer,
-  completeCanvasTextDraftSave,
-  createCanvasTextDraftSaveQueue,
-  createCanvasTextDraftState,
-  discardCanvasTextDraft,
-  failCanvasTextDraftSave,
   getCanvasTextMenuGeometry,
   isCanvasEmptyImageNodeData,
   isCanvasTextLineMenuSelectionValid,
   isCanvasTextResourceEditable,
   moveCanvasTextLineMenuIndex,
-  rebaseCanvasTextDraft,
   resolveCanvasTextHandleTarget,
   resolveCanvasGroupTitleEdit,
   runCanvasTextInlineCommand,
-  saveCanvasTextDraft,
   shouldUpdateCutoutMediaSize,
   shouldShowCanvasTextInlineMenu,
   startCanvasSelectionDragFromNode,
-  updateCanvasTextDraft,
 } = await import("./builtin-node")
+const {
+  applyCanvasTextDraftBase,
+  completeCanvasTextDraftSave,
+  createCanvasTextDraftState,
+  discardCanvasTextDraft,
+  failCanvasTextDraftSave,
+  rebaseCanvasTextDraft,
+  saveCanvasTextDraft,
+  updateCanvasTextDraft,
+} = await import("../services")
 const { CanvasMutationSurfaceProvider } = await import("./canvas-mutation-surface")
 
 const node: CanvasNode = {
@@ -270,27 +271,6 @@ function openingTagContaining(markup: string, marker: string) {
 }
 
 describe("built-in text file drafts", () => {
-  test("shares one in-flight file save with a simultaneous leave guard", async () => {
-    let release!: () => void
-    const pending = new Promise<void>((resolve) => {
-      release = resolve
-    })
-    const operation = mock(async () => pending)
-    const queue = createCanvasTextDraftSaveQueue()
-
-    const manualSave = queue.run(operation)
-    const leaveSave = queue.run(operation)
-
-    expect(queue.inFlight()).toBe(manualSave)
-    expect(leaveSave).toBe(manualSave)
-    expect(operation).toHaveBeenCalledTimes(1)
-    release()
-    await manualSave
-    expect(queue.inFlight()).toBeNull()
-    await queue.run(operation)
-    expect(operation).toHaveBeenCalledTimes(2)
-  })
-
   test("keeps edits local when late hydrated props arrive", () => {
     const initial = createCanvasTextDraftState({ contentRevision: "rev-before", text: "original" })
     const dirty = updateCanvasTextDraft(initial, "my draft")

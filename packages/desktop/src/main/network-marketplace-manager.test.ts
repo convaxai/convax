@@ -144,6 +144,53 @@ test("preserves Plugin ownership when projecting a Registry Skill into a source-
   })
 })
 
+test("resolves Showcase presentation only against the accepted Registry revision", async () => {
+  const directory = await root()
+  const remote = fixture("acme")
+  const showcaseUrl = "https://acme.github.io/market/showcase-v2.json"
+  const showcase = {
+    marketplaceId: "acme",
+    packages: [
+      {
+        id: "example",
+        kind: "skill",
+        presentation: {
+          description: "Example",
+          name: "Example",
+          poster: {
+            mime: "image/png",
+            sha256: "c".repeat(64),
+            size: 8,
+            url: `https://github.com/acme/market/releases/download/registry-v2-${remote.registry.revision}/example.png`,
+          },
+        },
+        version: "1.0.0",
+      },
+    ],
+    revision: remote.registry.revision,
+    schema: "convax.showcase/2",
+  }
+  const fetch = mock(async (url: string) =>
+    url === showcaseUrl ? new TextEncoder().encode(JSON.stringify(showcase)) : remote.fetch(url),
+  )
+  const manager = new NetworkMarketplaceManager({
+    fetcher: { fetch } as unknown as PinnedHttpsFetcher,
+    root: directory,
+  })
+  const preview = await manager.preview(remote.descriptorUrl, "renderer-1")
+  await manager.add(preview.previewToken, "renderer-1")
+  const item = (await manager.listCatalog())[0]!
+
+  await expect(manager.resolveShowcasePresentation(item)).resolves.toMatchObject({
+    poster: { mime: "image/png", size: 8 },
+  })
+  expect(fetch).toHaveBeenCalledWith(
+    showcaseUrl,
+    "showcase",
+    expect.objectContaining({ declaredUrl: showcaseUrl, maxBytes: 8 * 1024 * 1024 }),
+  )
+})
+
 test("rejects a persisted graph whose nested descriptor or computed SourceKey was altered", async () => {
   const directory = await root()
   const file = path.join(directory, "sources-v1.json")

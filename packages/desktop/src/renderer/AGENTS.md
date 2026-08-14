@@ -10,6 +10,11 @@ or durable domain authority.
 - `WorkbenchController` is the sole source of the active Input/Canvas/file.
   `ProjectCanvasController` owns catalog CRUD only. Do not mirror active selection
   into Project state, component-local state, or browser storage.
+- Keep Canvas's editable-text write-behind store alive across Canvas mounts. An
+  ordinary Canvas Input change starts or joins the old Canvas save and commits
+  navigation without a confirmation dialog or save wait; a Project change drains
+  the store before runtime quiescence. Bind persistence to the originating mounted
+  session rather than reading the later active Canvas from a mutable ref.
 - Keep domain behavior in the owning package's business/application service.
   Renderer coordinators compose public capabilities; React components handle user
   events, subscriptions, and rendering rather than recreating validation,
@@ -102,6 +107,21 @@ or durable domain authority.
   immediately across remounts and cold windows while revalidating it through Main
   at Renderer startup. Persist only bounded renderer-safe fields; never let the
   projection authorize a selection, install, update, setup, or runtime action.
+- Marketplace category filters consume only Main's bounded card projection.
+  `service`, `video`, and `image` select Plugins with those derived categories;
+  `skill` selects first-class Skill cards and must not select a Plugin merely because
+  it owns Skills. Catalog list cards do not repeat category chips. Text search over
+  bounded projected fields composes locally with these filters. Neither operation
+  changes the selected source or triggers capability work. A projection
+  shape change invalidates the disposable display cache and bumps the Desktop
+  protocol; Renderer must never expose current filters over older projected cards.
+- Marketplace details load on demand by capability `{kind,id}` and remain a
+  disposable presentation. Ignore stale responses after another card is selected
+  or the dialog closes; render Skill file previews read-only and render a Showcase
+  image only from Main-verified bytes. Renderer never chooses the representative
+  source or receives a native path, artifact URL, source repository URL, SourceKey,
+  or executable file. Render a GitHub icon only from Main's closed availability
+  marker and return only `{kind,id}` when it is clicked.
 - Keep the Agent generation model as the user-global renderer preference. A Canvas
   card may persist only its own opaque output-tool override through Canvas; card
   changes never update the Agent default in reverse or create a second catalog.

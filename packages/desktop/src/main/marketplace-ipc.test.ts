@@ -11,6 +11,7 @@ type Handler = (event: Event, input?: unknown) => unknown
 
 const handlers = new Map<string, Handler>()
 let dialogResult: { canceled: boolean; filePaths: string[] } = { canceled: true, filePaths: [] }
+const openedExternalUrls: string[] = []
 const sent = mock(() => undefined)
 
 beforeEach(() => {
@@ -26,12 +27,18 @@ beforeEach(() => {
       handle: (channel: string, handler: Handler) => handlers.set(channel, handler),
       removeHandler: (channel: string) => handlers.delete(channel),
     },
+    shell: {
+      openExternal: async (url: string) => {
+        openedExternalUrls.push(url)
+      },
+    },
   })
 })
 
 afterEach(() => {
   handlers.clear()
   dialogResult = { canceled: true, filePaths: [] }
+  openedExternalUrls.splice(0)
   sent.mockClear()
   resetElectronMock()
 })
@@ -45,6 +52,16 @@ function service() {
     confirmUpdate: mock(async () => ({ selectionToken: "u".repeat(24) })),
     disable: mock(async () => undefined),
     enable: mock(async () => undefined),
+    getCapabilityDetails: mock(async () => ({
+      description: "Details",
+      id: "example",
+      kind: "plugin" as const,
+      name: "Example",
+      runtimeScope: "agent" as const,
+      sourceLabel: "Official",
+      version: "1.0.0",
+    })),
+    getCapabilitySourceRepositoryUrl: mock(async () => "https://github.com/example/repository"),
     importDirectory: mock(async () => ({
       id: "imported",
       kind: "skill" as const,
@@ -124,6 +141,35 @@ test("Marketplace IPC exposes the dedicated descriptor URL exception and opaque 
   ).resolves.toMatchObject({ selectionToken: "s".repeat(24) })
   expect(application.confirmInstall).toHaveBeenCalledWith(productLockedConfirmationToken, "1")
   dispose()
+})
+
+test("Marketplace details accept only a capability identity and never renderer-selected source authority", async () => {
+  const application = service()
+  registerMarketplaceIpc(application, () => true)
+  await expect(
+    handlers.get(marketplaceIpcChannels.getCapabilityDetails)!(event, { id: "example", kind: "plugin" }),
+  ).resolves.toMatchObject({ id: "example", kind: "plugin" })
+  expect(application.getCapabilityDetails).toHaveBeenCalledWith({ id: "example", kind: "plugin" })
+  expect(() =>
+    handlers.get(marketplaceIpcChannels.getCapabilityDetails)!(event, {
+      id: "example",
+      kind: "plugin",
+      sourceKey: "renderer-must-not-choose",
+    }),
+  ).toThrow("Marketplace operation could not be completed")
+
+  await expect(
+    handlers.get(marketplaceIpcChannels.openCapabilitySource)!(event, { id: "example", kind: "plugin" }),
+  ).resolves.toBeUndefined()
+  expect(application.getCapabilitySourceRepositoryUrl).toHaveBeenCalledWith({ id: "example", kind: "plugin" })
+  expect(openedExternalUrls).toEqual(["https://github.com/example/repository"])
+  expect(() =>
+    handlers.get(marketplaceIpcChannels.openCapabilitySource)!(event, {
+      id: "example",
+      kind: "plugin",
+      url: "https://attacker.example",
+    }),
+  ).toThrow("Marketplace operation could not be completed")
 })
 
 test("Marketplace IPC rejects renderer-supplied source and native authority", async () => {

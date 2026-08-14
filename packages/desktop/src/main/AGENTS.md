@@ -41,9 +41,12 @@ authority and lifecycle coordination, not reusable domain semantics.
   Canvas can normalize a pointer center from the Main-authoritative final size.
   Main never computes viewport coordinates or accepts Renderer sizing authority.
 - Bind every IPC, MessagePort, tool, and external-operation request to its trusted
-  sender/principal and current Project/Canvas scope. Recheck permissions, identity,
-  catalog membership, revision, target, and cancellation after awaited preparation
-  and immediately before persistence or an external side effect.
+  sender/principal and either the current scope or one narrowly admitted original
+  mounted-Canvas lease. Recheck permissions, identity, catalog membership, revision,
+  target, and cancellation after awaited preparation and immediately before
+  persistence or an external side effect. An admitted editable-text background save
+  may outlive active Canvas selection only while its originating Project remains
+  active; it never accepts a caller-selected scope without validating that lease.
 - Treat the Web Plugin locale as bounded ephemeral connection presentation state.
   Accept it only from the trusted owning Renderer sender, emit changes only to that
   exact connection, and never persist it or use it for authorization/routing.
@@ -132,6 +135,10 @@ For any matching change, read the full routed reference before planning or editi
   Main text-resource writer: compare-and-replace the materialized Project file,
   publish its ProjectIndex version, relink the same Canvas node, then optionally
   reload the mounted view. Never report a direct shell write as a Canvas mutation.
+- Renderer text saves identify the original Project, Canvas, and renderer session.
+  Validate that exact mounted lease before the write and recheck the active Project
+  before relink; do not rebind the operation to whichever Canvas became active while
+  the save was running.
 - Project-directory focus resolves its root from the authoritative Canvas node,
   delegates bounded descendant listing to the existing scoped Project Files port,
   and rechecks Project/Canvas/node scope after awaits. Never persist projected
@@ -152,6 +159,20 @@ For any matching change, read the full routed reference before planning or editi
   never arbitrary URLs, paths, digests, SourceKeys, or transport configuration.
   Network access and immutable artifacts follow the accepted source identity and
   security high-water decisions.
+- Project Marketplace Plugin categories from the same exact validated manifest used
+  for runtime-surface presentation: Service contribution, image/video generation
+  output, and owned Skills. Keep the categories bound to the representative source
+  and expose only the bounded display enum; it is never runtime readiness or grant
+  evidence.
+- Project Marketplace details from the exact current Catalog representative selected
+  for the card. A detail request accepts only `{kind,id}`; derive SourceKey and
+  release authority in Main, revalidate immutable Skill package identity before
+  creating bounded file previews, and verify Showcase poster size, digest, and
+  media signature before returning bytes. Optional presentation failure must not
+  hide otherwise valid metadata or Skill files. For a source action, accept only
+  `{kind,id}`, repeat representative resolution, and open only the canonical GitHub
+  repository derived from the validated non-Local descriptor authority; never
+  return that URL through IPC.
 - Preserve Registry `ownerPluginId` through source qualification and remove
   Plugin-owned Skills from standalone choices before creating a transition. Managed
   Skill recovery never infers publication from a directory name: retry only the

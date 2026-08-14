@@ -102,10 +102,19 @@ import { CANVAS_FORCED_COLORS_QUERY, CANVAS_MOTION_DURATION, resolveCanvasRectEn
 import { partitionCanvasSelectionActions, type CanvasSelectionAction } from "../selection-actions"
 import { canShowNodeLocalMutationSurface, isSingleNodeSelectionContext } from "../selection-context"
 import {
+  applyCanvasTextDraftBase,
   CanvasTextResourceConflictError,
+  createCanvasTextDraftState,
+  createCanvasTextDraftStore,
+  discardCanvasTextDraft,
+  rebaseCanvasTextDraft,
+  saveCanvasTextDraft,
+  updateCanvasTextDraft,
   useCanvasService,
   type CanvasAssistantGenerationCapability,
-  type CanvasTextResourceService,
+  type CanvasTextDraftKey,
+  type CanvasTextDraftState,
+  type CanvasTextDraftStore,
 } from "../services"
 import type {
   CanvasFolderNodeData,
@@ -593,122 +602,27 @@ function textEditorValue(data: CanvasTextNodeData, editor: Editor) {
   return textFileFormat(data) === "markdown" ? editor.getMarkdown() : editor.getText({ blockSeparator: "\n" })
 }
 
-export interface CanvasTextDraftState {
-  baseContent: string
-  baseRevision: string
-  content: string
-  dirty: boolean
-  error: string | null
-}
-
-export function createCanvasTextDraftState(input: { contentRevision?: string; text?: string }): CanvasTextDraftState {
-  const content = input.text ?? ""
-  return {
-    baseContent: content,
-    baseRevision: input.contentRevision ?? "",
-    content,
-    dirty: false,
-    error: null,
-  }
-}
-
-export function updateCanvasTextDraft(state: CanvasTextDraftState, content: string): CanvasTextDraftState {
-  return { ...state, content, dirty: content !== state.baseContent, error: null }
-}
-
-export function applyCanvasTextDraftBase(
-  state: CanvasTextDraftState,
+function initialCanvasTextDraft(
+  retained: CanvasTextDraftState | undefined,
   input: { contentRevision?: string; text?: string },
-): CanvasTextDraftState {
-  return state.dirty ? state : createCanvasTextDraftState(input)
-}
-
-export function rebaseCanvasTextDraft(
-  state: CanvasTextDraftState,
-  input: { contentRevision?: string; text?: string },
-): CanvasTextDraftState {
-  const baseContent = input.text ?? ""
-  return {
-    baseContent,
-    baseRevision: input.contentRevision ?? "",
-    content: state.content,
-    dirty: state.content !== baseContent,
-    error: null,
-  }
-}
-
-export function failCanvasTextDraftSave(state: CanvasTextDraftState, error: string): CanvasTextDraftState {
-  return { ...state, dirty: true, error }
-}
-
-export function completeCanvasTextDraftSave(
-  state: CanvasTextDraftState,
-  contentRevision: string,
-): CanvasTextDraftState {
-  return {
-    baseContent: state.content,
-    baseRevision: contentRevision,
-    content: state.content,
-    dirty: false,
-    error: null,
-  }
-}
-
-export async function saveCanvasTextDraft(
-  state: CanvasTextDraftState,
-  nodeId: string,
-  service: CanvasTextResourceService,
-  signal: AbortSignal,
 ) {
-  if (!state.dirty) return state
-  if (!state.baseRevision) throw new Error("Canvas text resource revision is required")
-  const result = await service.save({ content: state.content, contentRevision: state.baseRevision, nodeId }, signal)
-  return completeCanvasTextDraftSave(state, result.contentRevision)
+  if (!retained) return createCanvasTextDraftState(input)
+  if (retained.baseRevision === (input.contentRevision ?? "") && retained.baseContent === (input.text ?? "")) {
+    return retained
+  }
+  return retained.dirty ? rebaseCanvasTextDraft(retained, input) : createCanvasTextDraftState(input)
 }
 
-export function discardCanvasTextDraft(state: CanvasTextDraftState): CanvasTextDraftState {
-  return {
-    baseContent: state.baseContent,
-    baseRevision: state.baseRevision,
-    content: state.baseContent,
-    dirty: false,
-    error: null,
-  }
+const canvasTextDraftAutosaveDelayMs = 500
+
+function canvasTextDraftSaveError(error: unknown) {
+  return error instanceof CanvasTextResourceConflictError
+    ? "This file changed outside Convax. Your draft was kept."
+    : "Could not save this text file. Your draft was kept."
 }
 
 export function isCanvasTextResourceEditable(state: CanvasResourceRuntimeState | undefined) {
   return state?.status === "ready" && state.editableText === true && Boolean(state.contentRevision)
-}
-
-export interface CanvasTextDraftSaveQueue {
-  inFlight(): Promise<void> | null
-  run(operation: () => Promise<void>): Promise<void>
-}
-
-export function createCanvasTextDraftSaveQueue(): CanvasTextDraftSaveQueue {
-  let pending: Promise<void> | null = null
-  return {
-    inFlight: () => pending,
-    run(operation) {
-      if (pending) return pending
-      let current: Promise<void>
-      try {
-        current = operation()
-      } catch (error) {
-        current = Promise.reject(error)
-      }
-      pending = current
-      void current.then(
-        () => {
-          if (pending === current) pending = null
-        },
-        () => {
-          if (pending === current) pending = null
-        },
-      )
-      return current
-    },
-  }
 }
 
 function createTextEditorExtensions(mentionExtension?: ReturnType<typeof createCanvasTextMentionExtension>) {
@@ -1600,12 +1514,31 @@ export const TextEditorDrawer = ExpandedTextEditorDialog
 export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const canvasEditor = useCanvasEditor()
   const textResources = useCanvasService("textResources")
+  const sharedTextDrafts = useCanvasService("textDrafts")
+  const fallbackTextDraftsRef = useRef<CanvasTextDraftStore | null>(null)
+  if (!fallbackTextDraftsRef.current) fallbackTextDraftsRef.current = createCanvasTextDraftStore()
+  const textDrafts = sharedTextDrafts ?? fallbackTextDraftsRef.current
   const ownsSingleNodeContext = isSingleNodeSelectionContext(canvasEditor.selectionContext, props.id)
   const data = props.data as CanvasTextNodeData
+  const draftKey: CanvasTextDraftKey = {
+    documentId: canvasEditor.document.id,
+    nodeId: props.id,
+    scopeId: canvasEditor.scopeId ?? "",
+  }
+  const initialDraftRef = useRef<CanvasTextDraftState | null>(null)
+  if (!initialDraftRef.current) {
+    initialDraftRef.current = initialCanvasTextDraft(textDrafts.get(draftKey), data.resourceState ?? {})
+  }
+  const initialDraft = initialDraftRef.current
   const dataRef = useRef(data)
   const canvasEditorRef = useRef(canvasEditor)
   const appliedFingerprintRef = useRef(textDataFingerprint(data))
-  const initialSourceRef = useRef(textEditorSource(data))
+  const initialSourceRef = useRef(
+    textEditorSource({
+      ...data,
+      resourceState: { ...(data.resourceState ?? { status: "ready" }), text: initialDraft.content },
+    } as CanvasTextNodeData),
+  )
   const [editing, setEditing] = useState(false)
   const [expandedOpen, setExpandedOpen] = useState(false)
   const [expandedSourceRect, setExpandedSourceRect] = useState<
@@ -1614,7 +1547,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const [saving, setSaving] = useState(false)
   const [reloading, setReloading] = useState(false)
   const [savingEditableCopy, setSavingEditableCopy] = useState(false)
-  const [draft, setDraft] = useState(() => createCanvasTextDraftState(data.resourceState ?? {}))
+  const [draft, setDraft] = useState(initialDraft)
   const [titleDraft, setTitleDraft] = useState(data.label)
   const draftRef = useRef(draft)
   const titleDraftRef = useRef(titleDraft)
@@ -1624,9 +1557,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const nodeFocusRef = useRef<HTMLDivElement>(null)
   const discardAfterReloadRef = useRef(false)
   const mountedRef = useRef(true)
-  const saveControllerRef = useRef<AbortController | null>(null)
   const saveGenerationRef = useRef(0)
-  const saveQueueRef = useRef(createCanvasTextDraftSaveQueue())
   const mentionExtensionRef = useRef<ReturnType<typeof createCanvasTextMentionExtension> | null>(null)
   if (!mentionExtensionRef.current) {
     mentionExtensionRef.current = createCanvasTextMentionExtension({
@@ -1655,6 +1586,14 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     readOnly: canvasEditor.readOnly,
   })
   editingScopeActiveRef.current = inlineEditingScopeActive
+  const persistTextDraft = useCallback(
+    async (state: CanvasTextDraftState) => {
+      if (!textResources || !state.baseRevision) throw new Error("Canvas text resource cannot be saved")
+      const saved = await saveCanvasTextDraft(state, props.id, textResources, new AbortController().signal)
+      return { contentRevision: saved.baseRevision }
+    },
+    [props.id, textResources],
+  )
 
   const textEditor = useEditor({
     content: initialSourceRef.current.content,
@@ -1682,6 +1621,29 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     }
   }, [data.label, expandedOpen])
 
+  useEffect(
+    () =>
+      textDrafts.subscribe(draftKey, () => {
+        const next = textDrafts.get(draftKey)
+        if (!next) return
+        draftRef.current = next
+        setDraft(next)
+        if (!textEditor || textEditorValue(dataRef.current, textEditor) === next.content) return
+        const source = textEditorSource({
+          ...dataRef.current,
+          resourceState: {
+            ...(dataRef.current.resourceState ?? { status: "ready" }),
+            text: next.content,
+          },
+        } as CanvasTextNodeData)
+        textEditor.commands.setContent(source.content, {
+          contentType: source.contentType,
+          emitUpdate: false,
+        })
+      }),
+    [draftKey.documentId, draftKey.nodeId, draftKey.scopeId, textDrafts, textEditor],
+  )
+
   useEffect(() => {
     if (!textEditor) return
     const nextFingerprint = textDataFingerprint(data)
@@ -1689,6 +1651,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     const incomingState = data.resourceState ?? {}
     if (discardAfterReloadRef.current) {
       discardAfterReloadRef.current = false
+      textDrafts.clear(draftKey)
       const authoritativeDraft = createCanvasTextDraftState(incomingState)
       appliedFingerprintRef.current = nextFingerprint
       draftRef.current = authoritativeDraft
@@ -1711,12 +1674,17 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       }
       return
     }
+    const retained = textDrafts.get(draftKey)
+    const incomingRevision = data.resourceState?.contentRevision ?? ""
+    const incomingText = data.resourceState?.text ?? ""
+    const retainedMatchesIncoming = retained?.baseRevision === incomingRevision && retained.baseContent === incomingText
     const nextDraft =
-      draftRef.current.dirty &&
-      draftRef.current.error === "This file changed outside Convax. Your draft was kept." &&
-      data.resourceState?.contentRevision !== draftRef.current.baseRevision
-        ? rebaseCanvasTextDraft(draftRef.current, incomingState)
-        : applyCanvasTextDraftBase(draftRef.current, incomingState)
+      retained && !retainedMatchesIncoming
+        ? retained
+        : draftRef.current.dirty && incomingRevision !== draftRef.current.baseRevision
+          ? rebaseCanvasTextDraft(draftRef.current, incomingState)
+          : applyCanvasTextDraftBase(draftRef.current, incomingState)
+    if (retainedMatchesIncoming && !retained.dirty) textDrafts.clear(draftKey)
     if (nextDraft === draftRef.current) return
     appliedFingerprintRef.current = nextFingerprint
     draftRef.current = nextDraft
@@ -1732,18 +1700,17 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
       contentType: source.contentType,
       emitUpdate: false,
     })
-  }, [data, draft.dirty, textEditor])
+  }, [data, draft.dirty, draftKey.documentId, draftKey.nodeId, draftKey.scopeId, textDrafts, textEditor])
 
   useEffect(() => {
-    textEditor?.setEditable(editing && editableResource && !canvasEditor.readOnly && !saving)
-  }, [canvasEditor.readOnly, editableResource, editing, saving, textEditor])
+    textEditor?.setEditable(editing && editableResource && !canvasEditor.readOnly)
+  }, [canvasEditor.readOnly, editableResource, editing, textEditor])
 
   useEffect(() => {
     mountedRef.current = true
     return () => {
       mountedRef.current = false
       saveGenerationRef.current += 1
-      saveControllerRef.current?.abort()
     }
   }, [])
 
@@ -1755,12 +1722,12 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
 
   const beginEditing = useCallback(
     (position: "start" | "end" = "end") => {
-      if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+      if (!textEditor || canvasEditor.readOnly || !editableResource) return
       if (!editing) setEditing(true)
       textEditor.setEditable(true)
       textEditor.commands.focus(position)
     },
-    [canvasEditor.readOnly, editableResource, editing, saving, textEditor],
+    [canvasEditor.readOnly, editableResource, editing, textEditor],
   )
 
   useEffect(() => {
@@ -1769,7 +1736,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   }, [beginEditing, editing, expandedOpen, inlineEditingScopeActive])
 
   const openExpandedEditor = (invoker?: HTMLElement) => {
-    if (!textEditor || canvasEditor.readOnly || !editableResource || saving) return
+    if (!textEditor || canvasEditor.readOnly || !editableResource) return
     titleDraftRef.current = dataRef.current.label
     setTitleDraft(dataRef.current.label)
     const source = nodeFocusRef.current ?? invoker
@@ -1813,6 +1780,7 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
   const discardDraft = useCallback(() => {
     if (!textEditor) return
     const next = discardCanvasTextDraft(draftRef.current)
+    textDrafts.clear(draftKey)
     draftRef.current = next
     setDraft(next)
     const baseData: CanvasTextNodeData = {
@@ -1826,59 +1794,63 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     })
     commitTitle()
     closeExpandedEditor()
-  }, [closeExpandedEditor, commitTitle, textEditor])
+  }, [closeExpandedEditor, commitTitle, draftKey.documentId, draftKey.nodeId, draftKey.scopeId, textDrafts, textEditor])
 
-  const saveDraft = useCallback(
-    () =>
-      saveQueueRef.current.run(async () => {
-        const current = draftRef.current
-        if (!current.dirty) {
-          textEditor?.setEditable(false)
-          setEditing(expandedOpen)
-          if (expandedOpen) textEditor?.setEditable(true)
-          return
+  const saveDraft = useCallback(async () => {
+    const current = draftRef.current
+    if (!current.dirty) return
+    textDrafts.stage(draftKey, current, { describeError: canvasTextDraftSaveError, save: persistTextDraft })
+    const generation = ++saveGenerationRef.current
+    if (mountedRef.current) setSaving(true)
+    try {
+      const next = await textDrafts.save(draftKey)
+      if (!mountedRef.current || generation !== saveGenerationRef.current) return
+      draftRef.current = next
+      setDraft(next)
+      const resourceState = {
+        ...(dataRef.current.resourceState ?? { status: "ready" as const }),
+        contentRevision: next.baseRevision,
+        text: next.baseContent,
+      }
+      const nextData = { ...dataRef.current, resourceState }
+      dataRef.current = nextData
+      appliedFingerprintRef.current = textDataFingerprint(nextData)
+      canvasEditorRef.current.replaceResourceState(props.id, resourceState)
+    } catch (error) {
+      if (mountedRef.current && generation === saveGenerationRef.current) {
+        const retained = textDrafts.get(draftKey)
+        if (retained) {
+          draftRef.current = retained
+          setDraft(retained)
         }
-        if (!textResources || !current.baseRevision) throw new Error("Canvas text resource cannot be saved")
-        const controller = new AbortController()
-        const generation = ++saveGenerationRef.current
-        saveControllerRef.current = controller
-        setSaving(true)
-        textEditor?.setEditable(false)
-        try {
-          const next = await saveCanvasTextDraft(current, props.id, textResources, controller.signal)
-          if (!mountedRef.current || controller.signal.aborted || generation !== saveGenerationRef.current) return
-          draftRef.current = next
-          setDraft(next)
-          const resourceState = {
-            ...(dataRef.current.resourceState ?? { status: "ready" as const }),
-            contentRevision: next.baseRevision,
-            text: next.baseContent,
-          }
-          const nextData = { ...dataRef.current, resourceState }
-          dataRef.current = nextData
-          appliedFingerprintRef.current = textDataFingerprint(nextData)
-          canvasEditorRef.current.replaceResourceState(props.id, resourceState)
-          setEditing(false)
-        } catch (error) {
-          if (!mountedRef.current || controller.signal.aborted || generation !== saveGenerationRef.current) throw error
-          const message =
-            error instanceof CanvasTextResourceConflictError
-              ? "This file changed outside Convax. Your draft was kept."
-              : "Could not save this text file. Your draft was kept."
-          const next = failCanvasTextDraftSave(draftRef.current, message)
-          draftRef.current = next
-          setDraft(next)
-          if (editing && editingScopeActiveRef.current) textEditor?.setEditable(true)
-          throw error
-        } finally {
-          if (mountedRef.current && generation === saveGenerationRef.current) {
-            saveControllerRef.current = null
-            setSaving(false)
-          }
-        }
-      }),
-    [editing, expandedOpen, props.id, textEditor, textResources],
-  )
+        if (editing && editingScopeActiveRef.current) textEditor?.setEditable(true)
+      }
+      throw error
+    } finally {
+      if (mountedRef.current && generation === saveGenerationRef.current) setSaving(false)
+    }
+  }, [
+    draftKey.documentId,
+    draftKey.nodeId,
+    draftKey.scopeId,
+    editing,
+    persistTextDraft,
+    props.id,
+    textDrafts,
+    textEditor,
+  ])
+
+  useEffect(() => {
+    if (!draft.dirty) return undefined
+    textDrafts.stage(draftKey, draft, { describeError: canvasTextDraftSaveError, save: persistTextDraft })
+    return undefined
+  }, [draft, draftKey.documentId, draftKey.nodeId, draftKey.scopeId, persistTextDraft, textDrafts])
+
+  useEffect(() => {
+    if (!draft.dirty || draft.error) return undefined
+    const handle = globalThis.setTimeout(() => void saveDraft().catch(() => undefined), canvasTextDraftAutosaveDelayMs)
+    return () => globalThis.clearTimeout(handle)
+  }, [draft.baseRevision, draft.content, draft.dirty, draft.error, saveDraft])
 
   const closeAndSaveTextEditor = useCallback(() => {
     commitTitle()
@@ -1929,11 +1901,20 @@ export function BuiltinTextFileNode(props: NodeProps<CanvasNode>) {
     if (!draft.dirty) return undefined
     return canvasEditor.registerPendingDraft({
       discard: discardDraft,
-      inFlightSave: () => saveQueueRef.current.inFlight(),
+      inFlightSave: () => textDrafts.inFlight(draftKey)?.then(() => undefined) ?? null,
       isDirty: () => draftRef.current.dirty,
       save: saveDraft,
     })
-  }, [canvasEditor, discardDraft, draft.dirty, saveDraft])
+  }, [
+    canvasEditor,
+    discardDraft,
+    draft.dirty,
+    draftKey.documentId,
+    draftKey.nodeId,
+    draftKey.scopeId,
+    saveDraft,
+    textDrafts,
+  ])
 
   const resourceActionToolbar =
     data.resourceState?.status === "missing" ? (

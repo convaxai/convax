@@ -456,6 +456,39 @@ fetch, install, or open releases from Registry v1. A package publication is admi
 only through a source-qualified Marketplace v2 candidate and the immutable ActiveSet
 installer.
 
+Plugin catalog categories are a bounded Host-derived display projection rather than
+another authoring field. Desktop reparses the exact source-qualified Plugin manifest
+through `@convax/plugin-sdk`, then projects `service` from a Service contribution,
+`video` and `image` from generation tool outputs, and `skill` from owned Skills.
+`@convax/marketplace` owns that four-value taxonomy and keeps it attached to the same
+representative source as the card's name and description. Renderer may cache and
+filter these values as presentation only: `service`, `video`, and `image` select
+Plugin cards with the derived category, while `skill` selects first-class Skill
+cards and never Plugins merely because they own Skills. Catalog list cards do not
+repeat the category chips. Renderer may also search the bounded card projection by
+name, description, id, kind, and installed source label; search composes with the
+category filter and never triggers a Main request. These controls never select a source, establish runtime
+readiness, grant authority, or authorize installation/execution. The
+Main-to-Renderer card projection is part of the Desktop IPC compatibility line:
+category support advanced it to `convax.desktop-ipc/40`, and Renderer uses display
+cache schema `convax.marketplace-display-cache/2` so an older category-free cache or
+Main cannot silently produce empty current filters.
+
+Marketplace card details are an on-demand projection from the same exact Catalog
+representative used for the visible card. Renderer submits only `{kind,id}`; Desktop
+Main resolves the SourceKey and immutable artifact. Skill details revalidate that
+artifact before producing the existing bounded, non-executable file preview, while
+optional Showcase posters cross IPC only after declared size, SHA-256, and media
+file-signature validation. A failed poster leaves metadata and Skill files visible.
+Detail bytes are not persisted in the disposable card cache, and no native path,
+source URL, artifact URL, or source-selection input crosses to Renderer. For a
+non-Local representative whose validated descriptor names a GitHub repository,
+details carry only the closed `github` availability marker. Clicking its Host icon
+sends `{kind,id}` back to Main; Main repeats representative resolution and opens the
+canonical repository page itself. This typed bridge advances the Desktop
+compatibility line to `convax.desktop-ipc/42` without a Marketplace display-cache
+schema change.
+
 Installed Plugin snapshots contain the complete contribution closure. One global
 ActivePluginSet selects exact snapshot digests and resolves global Skill names and
 other cross-Plugin constraints before a single compare-and-swap pointer change.
@@ -688,40 +721,41 @@ boundary checker fails closed until those admissions are complete.
 
 ## 4. Canonical state
 
-| State                                                                 | Canonical owner                                          | Notes                                                                                                            |
-| --------------------------------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                                           |
-| Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                                   |
-| Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                               |
-| Active Canvas/file                                                    | `WorkbenchController.activeInput/surface`                | Sole source for the displayed primary content                                                                    |
-| Canvas node selection                                                 | Workbench selection plus mounted Canvas view             | Always scoped to the corresponding Input/view                                                                    |
-| Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option                  |
-| Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                                    |
-| In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                              |
-| Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                              |
-| Final offline/online edit object                                      | Actor-signed causal frame                                | Signed only after candidate validation; identical bytes are durably committed and later replicated               |
-| Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                                     |
-| Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                                           |
-| Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                                            |
-| Project sharing activation                                            | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                              |
-| React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                                           |
-| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                                        |
-| Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                                             |
-| Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                     |
-| Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                         |
-| Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                       |
-| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient discriminated shortcut-kind projection only; no Workbench, Canvas document, or browser-storage mirror  |
-| Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                             |
-| OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                               |
-| Marketplace protocol and Catalog grouping                             | `@convax/marketplace`                                    | Headless validation and source-qualified projections only                                                        |
-| Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                                            |
-| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source |
-| MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                                             |
-| Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                                    |
-| Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                     |
-| Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                               |
-| Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                              |
-| Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                   |
+| State                                                                 | Canonical owner                                          | Notes                                                                                                              |
+| --------------------------------------------------------------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Active Project                                                        | `ProjectController`                                      | Project lifecycle only                                                                                             |
+| Project file tree, expansion, file selection and preview              | `ProjectFilesController`                                 | Scoped and reset by Project id                                                                                     |
+| Project catalog, Canvas route/tombstone, entry/blob refs, shard epoch | ProjectIndexYDoc in `@convax/project`                    | Controller is a projection/typed-intent adapter; service registry is advisory only                                 |
+| Active Canvas/file                                                    | `WorkbenchController.activeInput/surface`                | Sole source for the displayed primary content                                                                      |
+| Canvas node selection                                                 | Workbench selection plus mounted Canvas view             | Always scoped to the corresponding Input/view                                                                      |
+| Editable Canvas text draft                                            | Transient Canvas-owned write-behind store                | Keyed by scope/Canvas/node; autosaved and retained across Canvas remounts, never localStorage or durable authority |
+| Current collaboration protocol identity                               | Packaged descriptor from `@convax/collaboration`         | One generated descriptor and `protocolDigest`; never a pointer, release pair, or runtime option                    |
+| Current accepted local shard state                                    | Main-owned `replicaDoc`                                  | Rebuilt from a retained checkpoint set plus the accepted causal frame closure                                      |
+| In-flight Project/Canvas command                                      | Isolated `candidateDoc`                                  | Cloned after entering the shard commit mutex; one typed intent only                                                |
+| Per-Canvas logical state                                              | That CanvasYDoc in `@convax/canvas`                      | No JSON mirror or global revision-counter authority                                                                |
+| Final offline/online edit object                                      | Actor-signed causal frame                                | Signed only after candidate validation; identical bytes are durably committed and later replicated                 |
+| Replication delivery status                                           | Main-owned outbox/ACK reachability metadata              | Delivery bookkeeping only; never a second document authority                                                       |
+| Checkpoint pruning authority                                          | Content certificate plus all-active-editor causal floors | Both independent gates are required; either gate alone is insufficient                                             |
+| Collaboration membership and control proofs                           | Signed service records plus collaboration kernel         | Service stores proofs, not Project/Canvas payload bytes or edit order                                              |
+| Project sharing activation                                            | Explicit Project sharing capability and durable binding  | Optional and lazy; opening a local Project never implies Team/control-plane startup                                |
+| React Flow graph and gesture state                                    | Transient `@convax/canvas` projection                    | React Flow never owns or persists a competing document                                                             |
+| Focused Project-directory listing                                     | Transient Canvas view plus Project Files port            | Read-only bounded projection; never Canvas document state                                                          |
+| Node generation preference and latest run                             | Owning Canvas `file` node                                | Separate bounded Canvas-owned namespaces; Main coordinates live work                                               |
+| Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                       |
+| Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                           |
+| Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                         |
+| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient discriminated shortcut-kind projection only; no Workbench, Canvas document, or browser-storage mirror    |
+| Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                               |
+| OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                                 |
+| Marketplace protocol, Plugin category taxonomy and Catalog grouping   | `@convax/marketplace`                                    | Headless validation and source-qualified display projections only                                                  |
+| Marketplace sources and source security decisions                     | Desktop main                                             | Per-SourceKey isolation; cache is never authoritative                                                              |
+| Installed capability source binding                                   | Desktop main `InstallRecord` store                       | One exact SourceKey per `{kind,id}`; only an explicit product-locked retired Official lineage may migrate source   |
+| MCP metadata, setup grant and runtime preference                      | Desktop main                                             | Separate install/setup/enable decisions; Agent Runtime stays generic                                               |
+| Standalone Skill filesystem publication                               | `@convax/agent-runtime/node`                             | Generic reversible transaction; no Plugin ownership knowledge                                                      |
+| Plugin-owned Skill selection and provenance                           | Desktop main                                             | Immutable ActiveSet closure paths enter Agent Runtime through a generic port                                       |
+| Installed Plugin snapshots and ActiveSet                              | Desktop main                                             | One global CAS pointer; exact snapshot leases bind all runtime use                                                 |
+| Plugin Service status and usage display                               | Installed sidecar through Desktop main                   | Renderer may retain only a disposable last-complete safe projection                                                |
+| Available/downloaded Desktop application update                       | Desktop Main update controller plus signed remote feed   | Feed metadata and updater cache are not Project, Plugin, or renderer authority                                     |
 
 A recovery preference such as “last Canvas for Project X” is not canonical state.
 Desktop may read it to choose an initial Workbench Input, then Workbench becomes the
@@ -796,6 +830,9 @@ Packaged app Resources/
 browser localStorage                    per-user Workbench/renderer preferences plus bounded
                                         disposable Marketplace, Plugin Service and model catalog
                                         display projections
+
+renderer process memory                 Canvas-owned editable-text write-behind drafts; volatile,
+                                        scope-keyed, and drained before Project teardown
 
 <project root>/
   Notes/                                user-visible Canvas-created text files
@@ -1260,7 +1297,11 @@ This one-time confirmed reset is the only admitted cleanup path.
 ```text
 Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
-  -> @convax/marketplace display groups by {kind,id}
+  -> Desktop derives bounded Plugin categories from exact validated contributions
+  -> @convax/marketplace display groups by {kind,id} with one representative source
+  -> Renderer locally composes bounded text search with Plugin category or first-class Skill filtering
+  -> on demand, Desktop projects details from that same representative and verifies optional Showcase bytes
+  -> optional GitHub source action returns only {kind,id}; Main opens the representative repository
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
   -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
@@ -1275,6 +1316,19 @@ digests, native paths, commands, headers, source identities, and runtime methods
 derived in Main. A short-lived `SelectionToken` binds the exact source, Catalog
 revision, version, metadata, artifact, and current-target companion that the user
 reviewed; any change produces a stale-selection result.
+
+Opening a Marketplace detail is not installation or source selection. Main repeats
+Catalog aggregation for the requested `{kind,id}`, binds the result to the same
+installed-or-preferred representative used by the card, and lazily projects only
+safe metadata. For Skills it reads the exact immutable package and returns a bounded
+file tree/text preview; for supported entries it may also return digest-verified
+Showcase poster bytes. Renderer cannot request another source, path, URL, digest, or
+package revision, and a stale detail response cannot replace the currently selected
+dialog. A validated non-Local GitHub source adds only a closed availability marker
+to the detail. The source action accepts the same `{kind,id}`, re-resolves the current
+representative in Main, constructs a fixed `github.com` repository URL from its
+validated descriptor authority, and opens it through Electron. The URL itself never
+crosses Preload, and Local capabilities expose no source action.
 
 Import uses one Main-owned directory chooser and accepts exactly one root marker:
 `manifest.json`, `SKILL.md`, or `server.json`. Main performs a bounded no-follow
@@ -1963,7 +2017,15 @@ unknown-file fallback.
 ### Canvas navigation and deletion
 
 `ProjectCanvasWorkbenchCoordinator` is a Desktop coordinator because the flow spans
-catalog, document-save guard, Workbench navigation, user preference, and rollback.
+catalog, Canvas background-save handoff, Workbench navigation, user preference, and
+rollback. An ordinary Canvas-to-Canvas switch never prompts for or awaits an editable
+text draft: Canvas stages every edit in its scope/Canvas/node write-behind store,
+starts or joins the save, and lets Workbench commit the new Input. The save retains
+the originating mounted Canvas session lease, Main validates that lease at admission,
+and publication may finish after another Canvas becomes active while the Project
+remains current. A Project change drains these drafts before quiescing its runtime;
+failed saves retain the draft for retry instead of converting navigation into a
+discard decision.
 Neither Project nor Workbench imports the other to implement this flow.
 
 ## 7. Agent tools and skills

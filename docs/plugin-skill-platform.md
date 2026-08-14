@@ -37,6 +37,26 @@ Runtime behavior derives from validated contributions, grants, and exact immutab
 snapshot identity. A concrete Plugin id, vendor, model, field name, or catalog
 source never changes Host semantics.
 
+Marketplace presentation may derive four bounded Plugin categories from that same
+validated contribution set: `service` from `contributes.service`, `video` and
+`image` from generation tool outputs, and `skill` from owned Skills. These values
+are Host-derived display metadata, not a manifest/Registry authoring field, grant,
+runtime-readiness claim, or installation decision. Catalog aggregation keeps them
+on the same representative source as the displayed Plugin metadata, and Renderer
+filtering is local presentation only.
+
+Marketplace details remain a Host-owned presentation of the same source-qualified
+representative as the card. The Renderer identifies only the capability kind and id;
+Desktop Main derives and revalidates the immutable package. Skill file trees use the
+bounded, non-executable preview projection, and optional Showcase posters are
+returned only after size, digest, and media-signature validation. These details do
+not grant authority, select a source, expose a native path or release URL, or become
+part of the persisted Marketplace card cache. Local name/description/id search stays
+inside Renderer. A validated non-Local GitHub representative may project only a
+closed repository-availability marker; clicking it returns `{kind,id}` to Main,
+which re-resolves the representative and opens the canonical repository without
+exposing that URL through Preload.
+
 Desktop resolves a command against the current installed Plugin id and sends it
 only to the exact owning iframe generation through an opaque frame lease. A stale
 frame, remount, node ownership change, missing command, or missing Host icon token
@@ -52,12 +72,12 @@ cannot express a use case, the task must create a structured capability request 
 
 Only these breaking-cutover contracts are admitted:
 
-| Boundary | Contract | Owner |
-| --- | --- | --- |
-| Plugin manifest and contributions | `convax.plugin/8` | `@convax/plugin-sdk` |
-| Marketplace package envelope | `convax.package/2` | `@convax/marketplace` |
-| Web/capability transport | `convax.plugin-capability/3` | Desktop protocol adapter |
-| Host API catalog | independent SemVer catalog | `@convax/plugin-api` |
+| Boundary                          | Contract                     | Owner                    |
+| --------------------------------- | ---------------------------- | ------------------------ |
+| Plugin manifest and contributions | `convax.plugin/8`            | `@convax/plugin-sdk`     |
+| Marketplace package envelope      | `convax.package/2`           | `@convax/marketplace`    |
+| Web/capability transport          | `convax.plugin-capability/3` | Desktop protocol adapter |
+| Host API catalog                  | independent SemVer catalog   | `@convax/plugin-api`     |
 
 The Host API catalog evolves independently of the manifest and transport. A Plugin
 declares required and optional APIs. Required APIs block activation when the Host
@@ -176,14 +196,14 @@ are forbidden.
 
 ## Trust boundaries
 
-| Surface | Execution owner | Boundary |
-| --- | --- | --- |
-| Web node | sandboxed iframe | `sandbox="allow-scripts"`; no same-origin, Node, Electron, or generic bridge |
-| Host-rendered menu/Toolbar/action | Host UI + typed Main executor | declarative contribution and current scope |
-| Companion Tool | Desktop-owned child process | exact closure bytes, no shell, bounded environment and process-tree cancellation |
-| Skill | OpenCode instruction discovery | no implicit Plugin or Host authority |
-| Hook | OpenCode native Plugin runtime | separately authorized exact immutable self-contained module |
-| Remote MCP | OpenCode native MCP client | validated HTTPS declaration; OpenCode owns OAuth and protocol |
+| Surface                           | Execution owner                | Boundary                                                                         |
+| --------------------------------- | ------------------------------ | -------------------------------------------------------------------------------- |
+| Web node                          | sandboxed iframe               | `sandbox="allow-scripts"`; no same-origin, Node, Electron, or generic bridge     |
+| Host-rendered menu/Toolbar/action | Host UI + typed Main executor  | declarative contribution and current scope                                       |
+| Companion Tool                    | Desktop-owned child process    | exact closure bytes, no shell, bounded environment and process-tree cancellation |
+| Skill                             | OpenCode instruction discovery | no implicit Plugin or Host authority                                             |
+| Hook                              | OpenCode native Plugin runtime | separately authorized exact immutable self-contained module                      |
+| Remote MCP                        | OpenCode native MCP client     | validated HTTPS declaration; OpenCode owns OAuth and protocol                    |
 
 Canvas and Project domain invariants remain in their owning application services.
 UI, Agent, Host API, and Plugin-to-Plugin adapters are thin entry points into the

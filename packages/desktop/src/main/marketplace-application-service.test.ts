@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
 import {
   builtinSourceKey,
   canonicalJson,
@@ -99,11 +99,13 @@ function harness(options: {
   networkRefresh?: (id: string) => Promise<void>
   preinstalledPolicy?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["preinstalledPolicy"]
   prepareFixedArtifact?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["prepareFixedArtifact"]
+  projectDetails?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["projectDetails"]
   pluginRuntimeState?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["pluginRuntimeState"]
   pluginUpdateRecoveryBindings?: ConstructorParameters<
     typeof MarketplaceApplicationService
   >[0]["pluginUpdateRecoveryBindings"]
   refreshFixedSource?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["refreshFixedSource"]
+  repositoryAuthority?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["repositoryAuthority"]
   reservedBuiltinIdentities?: ConstructorParameters<
     typeof MarketplaceApplicationService
   >[0]["reservedBuiltinIdentities"]
@@ -185,12 +187,13 @@ function harness(options: {
       : {}),
     ...(options.preinstalledPolicy ? { preinstalledPolicy: options.preinstalledPolicy } : {}),
     ...(options.prepareFixedArtifact ? { prepareFixedArtifact: options.prepareFixedArtifact } : {}),
+    ...(options.projectDetails ? { projectDetails: options.projectDetails } : {}),
     ...(options.refreshFixedSource ? { refreshFixedSource: options.refreshFixedSource } : {}),
     readFixedArtifact: async (item) => {
       preparedOutsideMutation = true
       return new TextEncoder().encode(item.sourceKind === "builtin" ? "builtin-skill" : "unexpected")
     },
-    repositoryAuthority: async () => ({ owner: "acme", repository: "marketplace" }),
+    repositoryAuthority: options.repositoryAuthority ?? (async () => ({ owner: "acme", repository: "marketplace" })),
     ...(options.reservedBuiltinIdentities ? { reservedBuiltinIdentities: options.reservedBuiltinIdentities } : {}),
     state: options.state,
   })
@@ -472,6 +475,100 @@ test("keeps a missing packaged Builtin identity reserved and hides an impostor N
     ],
   })
   await expect(service.beginInstall({ id: "canvas-storyboard", kind: "skill" }, "renderer")).resolves.toEqual([])
+})
+
+test("projects only the representative Plugin source categories into catalog cards", async () => {
+  const state = await stateStore()
+  const plugin = skill({
+    id: "categorized-plugin",
+    kind: "plugin",
+    pluginCategories: ["service", "video", "skill"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const { service } = harness({ candidates: [plugin], state })
+
+  await expect(service.listCatalog()).resolves.toMatchObject({
+    cards: [
+      {
+        categories: ["service", "video", "skill"],
+        id: "categorized-plugin",
+        kind: "plugin",
+      },
+    ],
+  })
+})
+
+test("projects details from the same installed representative used by the catalog", async () => {
+  const state = await stateStore()
+  const builtin = skill({
+    id: "detail-plugin",
+    kind: "plugin",
+    pluginCategories: ["service"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const installedSource = skill({
+    id: builtin.id,
+    kind: "plugin",
+    marketplaceId: "installed-marketplace",
+    pluginCategories: ["image", "skill"],
+    runtimeSurface: "agent",
+    sourceKey: sourceB,
+    sourceKind: "network",
+    sourceOrder: 4,
+  })
+  await state.update((draft) => {
+    draft.installations.push({
+      artifactDigest: sha256Hex(canonicalJson(installedSource.delivery)),
+      id: installedSource.id,
+      kind: installedSource.kind,
+      revision: 1,
+      runtimeSurface: installedSource.runtimeSurface,
+      sourceKey: installedSource.sourceKey,
+      version: installedSource.version,
+    })
+  })
+  let projectedSource: SourceKey | undefined
+  let repositorySource: SourceKey | undefined
+  const { service } = harness({
+    candidates: [builtin, installedSource],
+    projectDetails: async (item) => {
+      projectedSource = item.sourceKey
+      return {}
+    },
+    repositoryAuthority: async (item) => {
+      repositorySource = item.sourceKey
+      return { owner: "installed-owner", repository: "installed-repository" }
+    },
+    state,
+  })
+
+  await expect(service.getCapabilityDetails({ id: builtin.id, kind: "plugin" })).resolves.toMatchObject({
+    categories: ["image", "skill"],
+    id: builtin.id,
+    runtimeScope: "agent",
+    sourceLabel: "installed-marketplace",
+    sourceRepository: "github",
+  })
+  expect(projectedSource).toBe(sourceB)
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: builtin.id, kind: "plugin" })).resolves.toBe(
+    "https://github.com/installed-owner/installed-repository",
+  )
+  expect(repositorySource).toBe(sourceB)
+})
+
+test("does not project or open a repository for a Local capability", async () => {
+  const state = await stateStore()
+  const local = skill({ marketplaceId: "local", sourceKey: sourceB, sourceKind: "local" })
+  const repositoryAuthority = mock(async () => ({ owner: "must-not", repository: "be-used" }))
+  const { service } = harness({ candidates: [local], repositoryAuthority, state })
+
+  await expect(service.getCapabilityDetails({ id: local.id, kind: local.kind })).resolves.not.toHaveProperty(
+    "sourceRepository",
+  )
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: local.id, kind: local.kind })).rejects.toThrow(
+    "no source repository",
+  )
+  expect(repositoryAuthority).not.toHaveBeenCalled()
 })
 
 test("isolates a corrupt Local authority while keeping unrelated Network catalog available", async () => {

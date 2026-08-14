@@ -168,6 +168,12 @@ contract and its routed references.
   Main-owned adapter over Project Files compare-and-replace, ProjectIndex version
   publication, and the Canvas resource relink operation. Filesystem notifications
   remain refresh hints and never substitute for that transaction path.
+- Renderer composes Canvas's transient editable-text write-behind store across
+  Canvas mounts. A Canvas-to-Canvas Workbench change starts or joins background save
+  and never prompts or waits; Project teardown drains the store. Each background
+  request carries the originating mounted Canvas session lease, Main validates that
+  exact lease at admission, and only the active Project must remain stable through
+  relink so a later active Canvas cannot retarget or cancel the admitted save.
 - Card conversations infer only direct incoming file nodes. Image/video replacement
   cards may persist one opaque output-tool override. Text cards isolate model and
   options by output for the mounted composer and create a separate pending media
@@ -216,6 +222,24 @@ contract and its routed references.
   Strictly reject malformed, oversized, unknown-field, or Main-authority-shaped
   cache data; never accept it as Marketplace, installation, grant, or ActiveSet
   authority.
+- Derive Plugin Marketplace categories only from the exact validated manifest:
+  `service`, image/video generation outputs, and owned Skills. Carry only that
+  bounded display enum through the source representative and Renderer cache.
+  Renderer uses `service`, `video`, and `image` to filter Plugin cards, but the
+  `skill` control selects first-class Skill cards rather than Plugins with owned
+  Skills. List cards do not render category chips. Bounded text search composes with
+  these filters and stays local to Renderer. Neither operation selects a source or
+  authorizes work.
+  Adding or changing this Main-to-Renderer card projection bumps both the Desktop
+  protocol and the disposable display-cache schema so a stale Main or cache cannot
+  make a current filter silently appear empty.
+- Resolve Marketplace details on demand from the same source-qualified
+  representative as the visible card. Renderer may identify only the capability
+  `{kind,id}`; Main derives the exact source, immutable artifact, bounded Skill file
+  previews, and optional Showcase poster. Never cache detail bytes, expose a native
+  path or source URL, or render active media before size, digest, and file-signature
+  validation. A GitHub source icon exposes only a closed availability marker and
+  returns `{kind,id}` to Main, which re-resolves and opens the canonical repository.
 - Plugin Services seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate inventory, status, and optional usage
   independently in the background. Keep old values visible during refresh; reject

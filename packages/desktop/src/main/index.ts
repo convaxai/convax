@@ -107,6 +107,7 @@ import { FileLocalMarketplaceImportTransition, LocalMarketplaceStore } from "./l
 import { CapabilityMutationCoordinator, FileMarketplaceStateStore } from "./marketplace-state"
 import { DesktopMarketplaceCapabilityInstaller } from "./marketplace-capability-installer"
 import { MarketplaceApplicationService } from "./marketplace-application-service"
+import { projectMarketplaceCapabilityDetails, unpackVerifiedMarketplaceArtifact } from "./marketplace-detail-projection"
 import {
   MarketplaceLegacyMigration,
   proveCurrentPluginExecutionAuthorizations,
@@ -1908,13 +1909,71 @@ function startApplication() {
       return fixed ?? networkMarketplaces.resolvePackage(item)
     }
     const repositoryAuthority = async (item: SourceQualifiedItem) => {
-      if (marketplaceProduct && item.marketplaceId === marketplaceProduct.descriptor.id) {
+      if (
+        marketplaceProduct &&
+        (item.sourceKind === "builtin" || item.marketplaceId === marketplaceProduct.descriptor.id)
+      ) {
         return {
           owner: marketplaceProduct.descriptor.repository.owner,
           repository: marketplaceProduct.descriptor.repository.name,
         }
       }
       return networkMarketplaces.repositoryAuthority(item.sourceKey)
+    }
+    const readMarketplaceSkillDetailFiles = async (item: SourceQualifiedItem) => {
+      if (item.kind !== "skill") throw new Error("Marketplace detail file projection requires a Skill")
+      if (item.sourceKind === "local") {
+        if (!localMarketplace) throw new Error("Local Marketplace is unavailable")
+        return localMarketplace.readSkillDetailFiles(item)
+      }
+      if (item.sourceKind === "builtin") {
+        if (!marketplaceProduct) throw new Error("Builtin Marketplace bundle is unavailable")
+        return unpackVerifiedMarketplaceArtifact(item, marketplaceProduct.readBuiltinArtifact(item))
+      }
+      if (item.delivery.kind !== "artifact") {
+        throw new Error("Marketplace Skill detail artifact is unavailable")
+      }
+      const fixedRegistryItem =
+        item.sourceKey === officialSourceKey
+          ? marketplaceProduct?.registry.packages.find(
+              (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version,
+            )
+          : undefined
+      const developmentBytes =
+        fixedRegistryItem && developmentOfficialArtifacts
+          ? (await developmentOfficialArtifacts.verifiedCandidate(fixedRegistryItem)).artifactBytes
+          : undefined
+      const bytes =
+        developmentBytes ??
+        (await marketplaceFetcher.fetch(item.delivery.url, "release", {
+          maxBytes: item.delivery.size,
+          repository: await repositoryAuthority(item),
+        }))
+      return unpackVerifiedMarketplaceArtifact(item, bytes)
+    }
+    const readMarketplaceShowcase = async (item: SourceQualifiedItem) => {
+      const fixedPresentation =
+        marketplaceProduct && (item.sourceKind === "builtin" || item.sourceKey === officialSourceKey)
+          ? marketplaceProduct.showcase.packages.find(
+              (entry) => entry.id === item.id && entry.kind === item.kind && entry.version === item.version,
+            )?.presentation
+          : undefined
+      const presentation = fixedPresentation ?? (await networkMarketplaces.resolveShowcasePresentation(item))
+      if (!presentation) return null
+      const asset = presentation.poster
+      const repository = fixedPresentation
+        ? {
+            owner: marketplaceProduct!.descriptor.repository.owner,
+            repository: marketplaceProduct!.descriptor.repository.name,
+          }
+        : await repositoryAuthority(item)
+      return {
+        asset,
+        bytes: await marketplaceFetcher.fetch(asset.url, "release", {
+          maxBytes: asset.size,
+          repository,
+        }),
+      }
     }
     const marketplaceInstaller = new DesktopMarketplaceCapabilityInstaller({
       authorizePlugin: async (id, mode) => {
@@ -2169,6 +2228,11 @@ function startApplication() {
           companionBytes: candidate.companionBytes ?? {},
         }
       },
+      projectDetails: (item) =>
+        projectMarketplaceCapabilityDetails(item, {
+          readShowcase: readMarketplaceShowcase,
+          readSkillFiles: readMarketplaceSkillDetailFiles,
+        }),
       refreshFixedSource: async (id) => {
         if (id !== "convax-official") return false
         const refreshedProduct = await PackagedMarketplaceProduct.load(marketplaceProductRoot)
@@ -2503,9 +2567,10 @@ function startApplication() {
     const disposeCanvasTextResourceIpc = registerCanvasTextResourceIpc(projectManager, canvasApplication, {
       ...ipcSecurity,
       currentResources: collaborationFacade.projectIndexes,
+      getActiveProjectId: () => activeCollaborationProjectId,
       preparation: canvasResourcePreparation,
-      resolveActiveCanvas,
       resources: canvasResources,
+      sessions: collaborationCanvasSessions,
     })
     const disposeGenerationIpc = registerGenerationIpc(
       {

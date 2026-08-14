@@ -16,4 +16,8 @@ strict validation, catalog aggregation, and source-conflict decisions.
   immutable Official replacement closure and derive its sole target SourceKey from
   the current fixed Official descriptor; an incomplete or ambiguous tuple fails.
 - Marketplace membership never grants execution authority.
+- Keep Plugin categories to the bounded `service`, `video`, `image`, and `skill`
+  source-qualified display taxonomy. Desktop derives them from an exact validated
+  manifest, and aggregation must keep them on the same representative source as the
+  card's name and description. They are not Registry author input or authority.
 - Add a failing boundary test before changing a contract.

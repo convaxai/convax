@@ -1,6 +1,10 @@
+import type { MarketplacePluginCategory as MarketplaceOwnerPluginCategory } from "@convax/marketplace"
+import type { DesktopSkillFilePreview, DesktopSkillShowcase } from "./skill-management-contracts"
+
 export type MarketplaceCapabilityKind = "mcp-server" | "plugin" | "skill"
 export type MarketplaceCapabilityState = "attention" | "disabled" | "ready" | "setup-required"
 export type MarketplacePluginRuntimeState = "available" | "unavailable-for-session"
+export type MarketplacePluginCategory = MarketplaceOwnerPluginCategory
 
 export interface MarketplaceCatalogSourceChoice {
   confirmationToken: string
@@ -13,6 +17,7 @@ export interface MarketplaceCatalogSourceChoice {
 }
 
 export interface MarketplaceCatalogCard {
+  categories?: MarketplacePluginCategory[]
   description: string
   id: string
   installed?: {
@@ -30,6 +35,20 @@ export interface MarketplaceCatalogCard {
 export interface MarketplaceCatalogSnapshot {
   cards: MarketplaceCatalogCard[]
   revision: number
+}
+
+export interface MarketplaceCapabilityDetails {
+  categories?: MarketplacePluginCategory[]
+  description: string
+  files?: DesktopSkillFilePreview[]
+  id: string
+  kind: MarketplaceCapabilityKind
+  name: string
+  runtimeScope?: "agent" | "agent-and-convax"
+  showcase?: DesktopSkillShowcase
+  sourceLabel: string
+  sourceRepository?: "github"
+  version: string
 }
 
 export interface MarketplaceSettingsSource {
@@ -77,12 +96,14 @@ export interface MarketplaceClient {
   confirmUpdate(input: { confirmationToken: string }): Promise<{ selectionToken: string }>
   disable(input: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   enable(input: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
+  getCapabilityDetails(input: { id: string; kind: MarketplaceCapabilityKind }): Promise<MarketplaceCapabilityDetails>
   importCapability(): Promise<MarketplaceInstalledCapability | null>
   install(input: { selectionToken: string }): Promise<MarketplaceInstalledCapability>
   listCatalog(): Promise<MarketplaceCatalogSnapshot>
   listInstalled(): Promise<MarketplaceInventory>
   listMarketplaces(): Promise<MarketplaceSettingsSource[]>
   onDidChange(listener: () => void): () => void
+  openCapabilitySource(input: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   previewMarketplace(input: { url: string }): Promise<MarketplaceAddPreview>
   refreshMarketplace(input: { id: string }): Promise<void>
   removeMarketplace(input: { id: string }): Promise<void>
@@ -100,11 +121,13 @@ export const marketplaceIpcChannels = {
   changed: "marketplace:changed",
   disable: "marketplace:disable",
   enable: "marketplace:enable",
+  getCapabilityDetails: "marketplace:capability-details",
   importCapability: "marketplace:import",
   install: "marketplace:install",
   listCatalog: "marketplace:catalog",
   listInstalled: "marketplace:installed",
   listMarketplaces: "marketplace:list",
+  openCapabilitySource: "marketplace:capability-open-source",
   previewMarketplace: "marketplace:preview",
   refreshMarketplace: "marketplace:refresh",
   removeMarketplace: "marketplace:remove",

@@ -103,6 +103,214 @@ export interface CanvasTextResourceService {
   ): Promise<{ contentRevision: string }>
 }
 
+export interface CanvasTextDraftState {
+  baseContent: string
+  baseRevision: string
+  content: string
+  dirty: boolean
+  error: string | null
+}
+
+export interface CanvasTextDraftKey {
+  documentId: string
+  nodeId: string
+  scopeId: string
+}
+
+export interface CanvasTextDraftPersistence {
+  describeError(error: unknown): string
+  save(state: CanvasTextDraftState): Promise<{ contentRevision: string }>
+}
+
+export interface CanvasTextDraftStore {
+  clear(key: CanvasTextDraftKey): void
+  flush(options?: { onError?: (error: unknown) => void; wait?: boolean }): Promise<void>
+  get(key: CanvasTextDraftKey): CanvasTextDraftState | undefined
+  hasPending(): boolean
+  inFlight(key: CanvasTextDraftKey): Promise<CanvasTextDraftState> | null
+  save(key: CanvasTextDraftKey): Promise<CanvasTextDraftState>
+  stage(key: CanvasTextDraftKey, state: CanvasTextDraftState, persistence: CanvasTextDraftPersistence): void
+  subscribe(key: CanvasTextDraftKey, listener: () => void): () => void
+}
+
+export function createCanvasTextDraftState(input: { contentRevision?: string; text?: string }): CanvasTextDraftState {
+  const content = input.text ?? ""
+  return {
+    baseContent: content,
+    baseRevision: input.contentRevision ?? "",
+    content,
+    dirty: false,
+    error: null,
+  }
+}
+
+export function updateCanvasTextDraft(state: CanvasTextDraftState, content: string): CanvasTextDraftState {
+  return { ...state, content, dirty: content !== state.baseContent, error: null }
+}
+
+export function applyCanvasTextDraftBase(
+  state: CanvasTextDraftState,
+  input: { contentRevision?: string; text?: string },
+): CanvasTextDraftState {
+  return state.dirty ? state : createCanvasTextDraftState(input)
+}
+
+export function rebaseCanvasTextDraft(
+  state: CanvasTextDraftState,
+  input: { contentRevision?: string; text?: string },
+): CanvasTextDraftState {
+  const baseContent = input.text ?? ""
+  return {
+    baseContent,
+    baseRevision: input.contentRevision ?? "",
+    content: state.content,
+    dirty: state.content !== baseContent,
+    error: null,
+  }
+}
+
+export function failCanvasTextDraftSave(state: CanvasTextDraftState, error: string): CanvasTextDraftState {
+  return { ...state, dirty: true, error }
+}
+
+export function completeCanvasTextDraftSave(
+  state: CanvasTextDraftState,
+  contentRevision: string,
+): CanvasTextDraftState {
+  return {
+    baseContent: state.content,
+    baseRevision: contentRevision,
+    content: state.content,
+    dirty: false,
+    error: null,
+  }
+}
+
+export function discardCanvasTextDraft(state: CanvasTextDraftState): CanvasTextDraftState {
+  return {
+    baseContent: state.baseContent,
+    baseRevision: state.baseRevision,
+    content: state.baseContent,
+    dirty: false,
+    error: null,
+  }
+}
+
+export async function saveCanvasTextDraft(
+  state: CanvasTextDraftState,
+  nodeId: string,
+  service: CanvasTextResourceService,
+  signal: AbortSignal,
+) {
+  if (!state.dirty) return state
+  if (!state.baseRevision) throw new Error("Canvas text resource revision is required")
+  const result = await service.save({ content: state.content, contentRevision: state.baseRevision, nodeId }, signal)
+  return completeCanvasTextDraftSave(state, result.contentRevision)
+}
+
+export function createCanvasTextDraftStore(): CanvasTextDraftStore {
+  type Entry = { persistence: CanvasTextDraftPersistence; state: CanvasTextDraftState }
+  const entries = new Map<string, Entry>()
+  const saves = new Map<string, Promise<CanvasTextDraftState>>()
+  const listeners = new Map<string, Set<() => void>>()
+  const encode = (key: CanvasTextDraftKey) => `${key.scopeId}\u0000${key.documentId}\u0000${key.nodeId}`
+  const emit = (encoded: string) => listeners.get(encoded)?.forEach((listener) => listener())
+
+  const store: CanvasTextDraftStore = {
+    clear(key) {
+      const encoded = encode(key)
+      if (!entries.delete(encoded)) return
+      emit(encoded)
+    },
+    async flush(options = {}) {
+      const pending = [...entries.entries()]
+        .filter(([, entry]) => entry.state.dirty)
+        .map(([encoded]) => store.save(decodeDraftKey(encoded)))
+      if (options.wait) {
+        const results = await Promise.allSettled(pending)
+        const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+        if (failure) throw failure.reason
+        return
+      }
+      for (const operation of pending) void operation.catch((error) => options.onError?.(error))
+    },
+    get(key) {
+      return entries.get(encode(key))?.state
+    },
+    hasPending() {
+      return saves.size > 0 || [...entries.values()].some((entry) => entry.state.dirty)
+    },
+    inFlight(key) {
+      return saves.get(encode(key)) ?? null
+    },
+    save(key) {
+      const encoded = encode(key)
+      const inFlight = saves.get(encoded)
+      if (inFlight) return inFlight
+      const entry = entries.get(encoded)
+      if (!entry || !entry.state.dirty) return Promise.resolve(entry?.state ?? createCanvasTextDraftState({}))
+      const persistUntilCurrent = async (): Promise<CanvasTextDraftState> => {
+        const current = entries.get(encoded) ?? entry
+        if (!current.state.dirty) return current.state
+        const captured = current.state
+        let contentRevision: string
+        try {
+          const result = await current.persistence.save(captured)
+          contentRevision = result.contentRevision
+        } catch (error) {
+          const latest = entries.get(encoded) ?? current
+          const next = failCanvasTextDraftSave(latest.state, latest.persistence.describeError(error))
+          entries.set(encoded, { persistence: latest.persistence, state: next })
+          emit(encoded)
+          throw error
+        }
+        const latest = entries.get(encoded) ?? current
+        const next: CanvasTextDraftState = {
+          baseContent: captured.content,
+          baseRevision: contentRevision,
+          content: latest.state.content,
+          dirty: latest.state.content !== captured.content,
+          error: null,
+        }
+        entries.set(encoded, { persistence: latest.persistence, state: next })
+        emit(encoded)
+        if (next.dirty) return persistUntilCurrent()
+        if (!listeners.has(encoded)) entries.delete(encoded)
+        return next
+      }
+      const operation = persistUntilCurrent().finally(() => {
+        if (saves.get(encoded) === operation) saves.delete(encoded)
+      })
+      saves.set(encoded, operation)
+      return operation
+    },
+    stage(key, state, persistence) {
+      const encoded = encode(key)
+      if (!state.dirty && !entries.has(encoded)) return
+      entries.set(encoded, { persistence, state })
+      emit(encoded)
+    },
+    subscribe(key, listener) {
+      const encoded = encode(key)
+      const current = listeners.get(encoded) ?? new Set()
+      current.add(listener)
+      listeners.set(encoded, current)
+      return () => {
+        current.delete(listener)
+        if (current.size > 0) return
+        listeners.delete(encoded)
+        if (!saves.has(encoded) && entries.get(encoded)?.state.dirty === false) entries.delete(encoded)
+      }
+    },
+  }
+  return store
+}
+
+function decodeDraftKey(encoded: string): CanvasTextDraftKey {
+  const [scopeId = "", documentId = "", nodeId = ""] = encoded.split("\u0000")
+  return { documentId, nodeId, scopeId }
+}
+
 export interface CanvasPendingDraft {
   discard(): void
   inFlightSave(): Promise<void> | null
@@ -110,16 +318,10 @@ export interface CanvasPendingDraft {
   save(): Promise<void>
 }
 
-export type CanvasPendingDraftDecision = "save" | "discard" | "cancel"
-
-export interface CanvasPendingDraftDecisionService {
-  decide(input: { count: number }): Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision
-}
-
 export interface CanvasPendingDraftRegistry {
   hasPending(): boolean
   pendingCount(): number
-  prepareToLeave(decide: () => Promise<CanvasPendingDraftDecision> | CanvasPendingDraftDecision): Promise<boolean>
+  savePending(options?: { onError?: (error: unknown) => void; wait?: boolean }): Promise<void>
   register(draft: CanvasPendingDraft): () => void
 }
 
@@ -139,25 +341,18 @@ export function createCanvasPendingDraftRegistry(): CanvasPendingDraftRegistry {
   return {
     hasPending: () => pendingDrafts().length > 0,
     pendingCount: () => pendingDrafts().length,
-    async prepareToLeave(decide) {
+    async savePending(options = {}) {
       const startedBeforeDecision = settleStartedSaves()
-      if (startedBeforeDecision) await startedBeforeDecision
-      let pending = pendingDrafts()
-      if (pending.length === 0) return true
-      const decision = await decide()
-      if (decision === "cancel") return false
-      const startedDuringDecision = settleStartedSaves()
-      if (startedDuringDecision) await startedDuringDecision
-      pending = pendingDrafts()
-      if (pending.length === 0) return true
-      if (decision === "discard") {
-        for (const draft of pending) draft.discard()
-        return true
+      const pending = pendingDrafts()
+      const saves = pending.map((draft) => draft.inFlightSave() ?? draft.save())
+      const operations = startedBeforeDecision ? [startedBeforeDecision, ...saves] : saves
+      if (!options.wait) {
+        for (const operation of operations) void operation.catch((error) => options.onError?.(error))
+        return
       }
-      const results = await Promise.allSettled(pending.map((draft) => draft.save()))
+      const results = await Promise.allSettled(operations)
       const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
       if (failure) throw failure.reason
-      return true
     },
     register(draft) {
       drafts.add(draft)
@@ -430,7 +625,7 @@ export interface CanvasServiceMap {
   notify: CanvasNotificationService
   telemetry: CanvasTelemetryService
   textResources: CanvasTextResourceService
-  draftDecision: CanvasPendingDraftDecisionService
+  textDrafts: CanvasTextDraftStore
 }
 
 export interface CanvasServices {

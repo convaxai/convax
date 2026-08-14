@@ -14,6 +14,12 @@ export type SourceKey = string & { readonly [sourceKeyBrand]: true }
 export type SelectionToken = string & { readonly [selectionTokenBrand]: true }
 
 /**
+ * Bounded display taxonomy derived by the Host from one validated Plugin manifest.
+ * These values describe contributed surfaces only; they grant no execution authority.
+ */
+export type MarketplacePluginCategory = "service" | "video" | "image" | "skill"
+
+/**
  * The one product-defined Builtin source identity. Bundle release ids, policy
  * revisions, and member lists are content state and must never enter SourceKey.
  */
@@ -56,6 +62,8 @@ export interface SourceQualifiedItem {
   runtimeSurface: "none" | "agent" | "agent-and-convax"
   compatibility: { convax: string }
   presentation: Presentation
+  /** Present only for Plugins whose validated contribution surface has classified display categories. */
+  pluginCategories?: readonly MarketplacePluginCategory[]
   delivery: MarketplaceDelivery
   /** Present only for a Skill published atomically inside its owner Plugin closure. */
   ownerPluginId?: string

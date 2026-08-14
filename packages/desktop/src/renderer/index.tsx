@@ -4,6 +4,7 @@ import {
   createDefaultCanvasNodeRegistry,
   createCanvasViewRegistry,
   createCanvasServices,
+  createCanvasTextDraftStore,
   type CanvasEditorHandle,
   type CanvasDocument,
   type CanvasGenerateService,
@@ -344,6 +345,7 @@ function App() {
   const canvasNodeRegistry = useMemo(() => createDefaultCanvasNodeRegistry(), [])
   const canvasFileRendererRegistry = useMemo(() => createDefaultCanvasFileRendererRegistry(), [])
   const canvasViewRegistry = useMemo(() => createCanvasViewRegistry(), [])
+  const canvasTextDraftStore = useMemo(() => createCanvasTextDraftStore(), [])
   const pluginFrameRegistry = useMemo(() => new DesktopPluginFrameRegistry(), [])
   const [installedPlugins, setInstalledPlugins] = useState<readonly ActiveInstalledWebPluginSummary[]>([])
   const [admittedOperationToolIds, setAdmittedOperationToolIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -370,7 +372,7 @@ function App() {
     () =>
       new ProjectController(window.convax.projects, {
         beforeActiveProjectChange: async () => {
-          const canLeave = await canvasEditorRef.current?.prepareToLeave()
+          const canLeave = await canvasEditorRef.current?.prepareToLeave({ waitForPendingDrafts: true })
           if (canLeave === false) return false
           await canvasEditorRef.current?.flush()
           return true
@@ -426,9 +428,8 @@ function App() {
       new WorkbenchController({
         beforeInputChange: async (currentInput) => {
           if (currentInput?.kind === "canvas") {
-            const canLeave = await canvasEditorRef.current?.prepareToLeave()
+            const canLeave = await canvasEditorRef.current?.prepareToLeave({ waitForPendingDrafts: false })
             if (canLeave === false) return false
-            await canvasEditorRef.current?.flush()
           }
           return true
         },
@@ -1138,14 +1139,7 @@ function App() {
         flush: flushAuthoritativeCanvas,
         projectFiles: window.convax.projectFiles,
       }),
-      draftDecision: {
-        decide({ count }) {
-          if (window.confirm(`Save ${count === 1 ? "the text draft" : `${count} text drafts`} before leaving?`)) {
-            return "save"
-          }
-          return window.confirm("Discard the pending text draft changes?") ? "discard" : "cancel"
-        },
-      },
+      textDrafts: canvasTextDraftStore,
       assistant: {
         render(request) {
           const host = assistantHostRef.current
@@ -1298,12 +1292,28 @@ function App() {
           console.info("[convax]", event.name, event.properties ?? {})
         },
       },
-      textResources: window.convax.canvas.textResources,
+      textResources: {
+        save(input, signal) {
+          if (!activeProjectId || !activeCanvasId || !activeCanvasSession) {
+            throw new Error("Open a mounted Project Canvas before saving text")
+          }
+          return window.convax.canvas.textResources.save(
+            {
+              ...input,
+              canvasId: activeCanvasId,
+              projectId: activeProjectId,
+              sessionId: activeCanvasSession.sessionId,
+            },
+            signal,
+          )
+        },
+      },
     })
   }, [
     activeCanvasId,
     activeCanvasSession,
     activeProjectId,
+    canvasTextDraftStore,
     flushAuthoritativeCanvas,
     generationModelCatalogController,
     generationToolCatalogVersion,
