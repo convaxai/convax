@@ -14,11 +14,9 @@ function artifacts(lock: MarketplaceProductLock) {
     lock.resolved.official.descriptor,
     lock.resolved.official.registry,
     lock.resolved.official.showcase,
-    ...[...lock.resolved.packages, ...lock.resolved.recoveryArtifacts].flatMap((entry) => [
-      entry.artifact,
-      ...entry.ownedSkills,
-      ...entry.companions,
-    ]),
+    ...lock.resolved.packages.flatMap((entry) =>
+      entry.kind === "plugin" ? [entry.artifact, ...entry.ownedSkills, ...entry.companions] : [entry.artifact],
+    ),
   ]
 }
 

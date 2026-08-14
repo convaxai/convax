@@ -392,44 +392,53 @@ export async function resolveMarketplaceProductLock(
     throw new Error("Official metadata does not match canonical Official metadata paths and locked revision")
   }
 
-  const selectInput = (
-    policyEntry:
-      | MarketplaceProductPolicy["preinstalledPackages"][number]
-      | MarketplaceProductPolicy["recoveryArtifacts"][number],
-    section: "packages" | "recoveryArtifacts",
-    sectionIndex: number,
-  ) => {
+  const selectInput = (policyEntry: MarketplaceProductPolicy["packages"][number]) => {
     const matches = input.packages.filter(
       (entry) =>
         entry.marketplaceId === policyEntry.marketplaceId &&
         entry.kind === policyEntry.kind &&
-        entry.id === policyEntry.id &&
-        (section === "packages" || entry.version === policyEntry.version),
+        entry.id === policyEntry.id,
     )
     if (matches.length !== 1) {
       throw new Error(
         `product-lock input must contain exactly one ${policyEntry.marketplaceId}/${policyEntry.kind}/${policyEntry.id}`,
       )
     }
-    const selected = matches[0]!
-    if (selected.setup !== "explicit") {
+    const selected = matches[0]
+    if ("version" in policyEntry && selected.version !== policyEntry.version) {
+      throw new Error(
+        `product-lock input version does not match retired recovery ${policyEntry.kind}/${policyEntry.id}`,
+      )
+    }
+    if (policyEntry.kind === "skill") {
+      if (
+        selected.setup !== "none" ||
+        selected.companions.length !== 0 ||
+        selected.ownedSkills.length !== 0 ||
+        policyEntry.targets.length !== 0
+      ) {
+        throw new Error(`product-lock input standalone Skill closure is invalid for ${policyEntry.id}`)
+      }
+      return { ...selected, companions: [], kind: "skill" as const, ownedSkills: [] }
+    }
+    if (selected.setup !== "explicit" || selected.kind !== "plugin") {
       throw new Error(`product-lock input must retain explicit catalog setup for ${policyEntry.kind}/${policyEntry.id}`)
     }
-    const companions = selected.companions.filter((companion) =>
-      policyEntry.targets.includes(`${companion.platform}-${companion.arch}` as never),
-    )
-    if (companions.length !== policyEntry.targets.length) {
-      throw new Error(`product-lock input does not close target companions for ${policyEntry.kind}/${policyEntry.id}`)
-    }
-    return { entry: { ...selected, companions }, policyEntry, section, sectionIndex }
+    const companions = policyEntry.targets.map((target) => {
+      const selectedTargets = selected.companions.filter(
+        (companion) => `${companion.platform}-${companion.arch}` === target,
+      )
+      if (selectedTargets.length !== 1) {
+        throw new Error(`product-lock input does not close target companions for ${policyEntry.kind}/${policyEntry.id}`)
+      }
+      return selectedTargets[0]
+    })
+    return { ...selected, companions, kind: "plugin" as const }
   }
-  const selectedInputs = [
-    ...policy.preinstalledPackages.map((entry, index) => selectInput(entry, "packages", index)),
-    ...policy.recoveryArtifacts.map((entry, index) => selectInput(entry, "recoveryArtifacts", index)),
-  ]
-  const lockedSelections = await Promise.all(
-    selectedInputs.map(async ({ entry, policyEntry, section, sectionIndex }) => {
-      const context = `resolved.${section}[${sectionIndex}]`
+  const packages = await Promise.all(
+    policy.packages.map(async (policyEntry, packageIndex) => {
+      const entry = selectInput(policyEntry)
+      const context = `resolved.packages[${packageIndex}]`
       const registryEntry = registry.packages.find(
         (candidate) => candidate.kind === entry.kind && candidate.id === entry.id,
       )
@@ -441,6 +450,33 @@ export async function resolveMarketplaceProductLock(
       }
       const artifact = (await lockArtifact(releaseRoot, entry.artifact, `${context}.artifact`)).artifact
       assertRegistryArtifact(artifact, registryEntry.delivery, `${context}.artifact`)
+
+      const releaseKind = entry.kind === "plugin" ? "plugin" : "skill"
+      if (
+        releaseAssetIdentity(entry.artifact, `${context}.artifact`).tag !==
+        `${releaseKind}-${entry.id}-v${entry.version}`
+      ) {
+        throw new Error(`${context}.artifact Release tag does not match the selected package identity`)
+      }
+
+      if (entry.kind === "skill") {
+        if (registryEntry.kind !== "skill" || registryEntry.ownerPluginId !== undefined) {
+          throw new Error(`${context} must identify a standalone Official Skill`)
+        }
+        return {
+          artifact,
+          id: entry.id,
+          kind: "skill" as const,
+          marketplaceId: policyEntry.marketplaceId,
+          purposes: policyEntry.purposes,
+          targets: policyEntry.targets,
+          version: entry.version,
+        }
+      }
+
+      if (registryEntry.kind !== "plugin") {
+        throw new Error(`${context} must identify an Official Plugin`)
+      }
 
       const ownedSkillNames = pluginOwnedSkillNames(registryEntry)
       const ownedByRegistry = registry.packages
@@ -467,9 +503,26 @@ export async function resolveMarketplaceProductLock(
         throw new Error(`${context}.ownedSkills does not close the Official Plugin manifest`)
       }
       const ownedSkills = await Promise.all(
-        entry.ownedSkills.map((skill, skillIndex) =>
-          lockArtifact(releaseRoot, skill, `${context}.ownedSkills[${skillIndex}]`).then(({ artifact }) => artifact),
-        ),
+        entry.ownedSkills.map(async (skill, skillIndex) => {
+          const locked = (await lockArtifact(releaseRoot, skill, `${context}.ownedSkills[${skillIndex}]`)).artifact
+          const ownedRegistryEntry = ownedRegistryEntries.find(
+            (candidate) =>
+              candidate.delivery.kind === "artifact" &&
+              candidate.delivery.url === locked.url &&
+              candidate.delivery.size === locked.size &&
+              candidate.delivery.sha256 === locked.sha256,
+          )
+          if (!ownedRegistryEntry) {
+            throw new Error(`${context}.ownedSkills does not match the Official Registry`)
+          }
+          if (
+            releaseAssetIdentity(skill, `${context}.ownedSkills[${skillIndex}]`).tag !==
+            `skill-${ownedRegistryEntry.id}-v${ownedRegistryEntry.version}`
+          ) {
+            throw new Error(`${context}.ownedSkills Release tag does not match its Official Skill identity`)
+          }
+          return locked
+        }),
       )
       const unmatchedOwned = [...ownedRegistryEntries]
       for (const owned of ownedSkills) {
@@ -494,18 +547,25 @@ export async function resolveMarketplaceProductLock(
             platform: target.platform,
           })),
         ) ?? []
-      const expectedSelectedTargets = expectedTargets.filter((target) =>
-        policyEntry.targets.includes(`${target.platform}-${target.arch}` as never),
-      )
-      if (expectedSelectedTargets.length !== entry.companions.length) {
-        throw new Error(`${context}.companions does not close every policy target`)
-      }
+      const expectedSelectedTargets = policyEntry.targets.map((target) => {
+        const matches = expectedTargets.filter(({ platform, arch }) => `${platform}-${arch}` === target)
+        if (matches.length !== 1) throw new Error(`${context}.companions does not close every policy target`)
+        return matches[0]
+      })
       const companions = await Promise.all(
-        entry.companions.map(async (companion, companionIndex) => ({
-          ...(await lockArtifact(releaseRoot, companion, `${context}.companions[${companionIndex}]`)).artifact,
-          arch: companion.arch,
-          platform: companion.platform,
-        })),
+        entry.companions.map(async (companion, companionIndex) => {
+          if (
+            releaseAssetIdentity(companion, `${context}.companions[${companionIndex}]`).tag !==
+            `plugin-${entry.id}-v${entry.version}`
+          ) {
+            throw new Error(`${context}.companions Release tag does not match the selected Plugin identity`)
+          }
+          return {
+            ...(await lockArtifact(releaseRoot, companion, `${context}.companions[${companionIndex}]`)).artifact,
+            arch: companion.arch,
+            platform: companion.platform,
+          }
+        }),
       )
       for (const companion of companions) {
         const expected = expectedSelectedTargets.find(
@@ -516,29 +576,20 @@ export async function resolveMarketplaceProductLock(
         }
         assertRegistryArtifact(companion, expected.delivery, `${context}.companions`)
       }
-      return {
-        locked: {
-          artifact,
-          companions,
-          id: entry.id,
-          kind: entry.kind,
-          marketplaceId: entry.marketplaceId,
-          ownedSkills: ownedSkills.sort((left, right) => (left.url < right.url ? -1 : left.url > right.url ? 1 : 0)),
-          setup: "explicit" as const,
-          version: entry.version,
-        },
-        policyEntry,
-        section,
+      const locked = {
+        artifact,
+        companions,
+        id: entry.id,
+        kind: "plugin" as const,
+        marketplaceId: policyEntry.marketplaceId,
+        ownedSkills: ownedSkills.sort((left, right) => (left.url < right.url ? -1 : left.url > right.url ? 1 : 0)),
+        purposes: policyEntry.purposes,
+        targets: policyEntry.targets,
+        version: entry.version,
       }
+      return "retired" in policyEntry ? { ...locked, retired: policyEntry.retired } : locked
     }),
   )
-  const packages = lockedSelections.filter((entry) => entry.section === "packages").map((entry) => entry.locked)
-  const recoveryArtifacts = lockedSelections
-    .filter((entry) => entry.section === "recoveryArtifacts")
-    .map((entry) => {
-      if (!("retired" in entry.policyEntry)) throw new Error("Recovery artifact policy binding is unavailable")
-      return { ...entry.locked, retired: entry.policyEntry.retired }
-    })
   return parseMarketplaceProductLock({
     policy,
     resolved: {
@@ -552,9 +603,8 @@ export async function resolveMarketplaceProductLock(
       },
       packages,
       policyDigest: canonicalProductPolicyDigest(policy),
-      recoveryArtifacts,
     },
-    schema: "convax.marketplace-product-lock/2",
+    schema: "convax.marketplace-product-lock/3",
   })
 }
 

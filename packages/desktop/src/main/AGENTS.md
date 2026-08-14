@@ -191,12 +191,19 @@ For any matching change, read the full routed reference before planning or editi
   archive SHA-256/size, snapshot digest, and retired Host API major, and the candidate
   matches the lock-derived current Official SourceKey. That exact one-way lineage is
   the only admitted `InstallRecord` source migration. Never expose it to
-  preinstall/fresh install, scan for it, or infer a match from a directory.
+  default/fresh install unless the same exact closure independently carries the
+  `default-install` purpose; never scan for it or infer a match from a directory.
 - Tool Plugin installation/update consent is part of the exact immutable closure and
   snapshot descriptor. Background refresh never expands execution authority.
-  Builtin/preinstalled are provisioning sources, not runtime privilege classes; the
-  product-lock automatic-setup exception remains exact, managed, credential-free,
-  and fail-closed.
+  Builtin and product-default are provisioning sources, not general runtime
+  privilege classes. The exact product policy may publish authorization for a
+  locked default Plugin through the normal install transition, but must reject Hook
+  modules and never infer authority from Catalog membership, packaged bytes, or a
+  recovery purpose.
+- Default provisioning must commit each immutable package transition before queuing
+  one non-blocking Main-owned runtime reconciliation. Startup Skill publication must
+  not list or launch OpenCode per entry, and shutdown must not wait for an active
+  Agent use to release that queued refresh.
 - A user-confirmed install/update or explicit Local import publishes its exact
   execution authorization in the same transition. Static Web Plugins bind that
   authorization to the capability contract, source, version, and artifact even

@@ -34,16 +34,15 @@ function validLock(): MarketplaceProductLock {
       marketplaceId: "convax-official",
       repository: "convaxai/convax-plugins",
     },
-    preinstalledPackages: [
+    packages: [
       {
         id: "automation-tools",
         kind: "plugin" as const,
         marketplaceId: "convax-official",
-        setup: "automatic" as const,
+        purposes: ["default-install"],
         targets: ["darwin-arm64"],
       },
     ],
-    recoveryArtifacts: [],
     revision: 2,
   }
   return {
@@ -71,14 +70,14 @@ function validLock(): MarketplaceProductLock {
           kind: "plugin",
           marketplaceId: "convax-official",
           ownedSkills: [artifact("skill-automation-workflow-v1.zip", "skill-automation-workflow-v1.0.0")],
-          setup: "explicit",
+          purposes: ["default-install"],
+          targets: ["darwin-arm64"],
           version: "1.0.0",
         },
       ],
       policyDigest: canonicalProductPolicyDigest(policy),
-      recoveryArtifacts: [],
     },
-    schema: "convax.marketplace-product-lock/2",
+    schema: "convax.marketplace-product-lock/3",
   }
 }
 
@@ -91,31 +90,55 @@ function recoveryLock(): MarketplaceProductLock {
     sourceKey: "e".repeat(64),
     version: "1.0.0",
   }
-  lock.policy.recoveryArtifacts.push({
+  lock.policy.packages.push({
     id: "legacy-tools",
     kind: "plugin",
     marketplaceId: "convax-official",
+    purposes: ["retired-recovery"],
     retired: { ...retired, artifact: { ...retired.artifact } },
     targets: [],
     version: "2.0.0",
   })
-  lock.resolved.recoveryArtifacts.push({
+  lock.resolved.packages.push({
     artifact: artifact("plugin-legacy-tools-2.0.0.zip", "plugin-legacy-tools-v2.0.0"),
     companions: [],
     id: "legacy-tools",
     kind: "plugin",
     marketplaceId: "convax-official",
     ownedSkills: [],
+    purposes: ["retired-recovery"],
     retired,
-    setup: "explicit",
+    targets: [],
     version: "2.0.0",
   })
   lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
   return lock
 }
 
+function standaloneSkillLock(): MarketplaceProductLock {
+  const lock = validLock()
+  lock.policy.packages.push({
+    id: "writing-workflow",
+    kind: "skill",
+    marketplaceId: "convax-official",
+    purposes: ["default-install"],
+    targets: [],
+  })
+  lock.resolved.packages.push({
+    artifact: artifact("skill-writing-workflow-v0.2.0.zip", "skill-writing-workflow-v0.2.0"),
+    id: "writing-workflow",
+    kind: "skill",
+    marketplaceId: "convax-official",
+    purposes: ["default-install"],
+    targets: [],
+    version: "0.2.0",
+  })
+  lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
+  return lock
+}
+
 describe("Marketplace product lock", () => {
-  test("accepts the exact v2 Builtin and Official policy closure", () => {
+  test("accepts the exact v3 Builtin and Official package closure", () => {
     expect(parseMarketplaceProductLock(validLock())).toEqual(validLock())
   })
 
@@ -123,28 +146,39 @@ describe("Marketplace product lock", () => {
     expect(parseMarketplaceProductLock(recoveryLock())).toEqual(recoveryLock())
 
     const changedSnapshot = recoveryLock()
-    changedSnapshot.resolved.recoveryArtifacts[0]!.retired.snapshotDigest = "e".repeat(64)
+    const changedSnapshotPackage = changedSnapshot.resolved.packages[1]
+    if (changedSnapshotPackage.kind !== "plugin" || !("retired" in changedSnapshotPackage)) {
+      throw new Error("expected retired Plugin closure")
+    }
+    changedSnapshotPackage.retired.snapshotDigest = "e".repeat(64)
     expect(() => parseMarketplaceProductLock(changedSnapshot)).toThrow("retired does not match")
 
     const changedMajor = recoveryLock()
-    changedMajor.resolved.recoveryArtifacts[0]!.retired.hostApiMajor = 1
+    const changedMajorPackage = changedMajor.resolved.packages[1]
+    if (changedMajorPackage.kind !== "plugin" || !("retired" in changedMajorPackage)) {
+      throw new Error("expected retired Plugin closure")
+    }
+    changedMajorPackage.retired.hostApiMajor = 1
     expect(() => parseMarketplaceProductLock(changedMajor)).toThrow("retired does not match")
   })
 
-  test("keeps recovery artifacts disjoint from automatic preinstall and rejects incomplete byte identities", () => {
-    const preinstallAlias = recoveryLock()
-    preinstallAlias.policy.recoveryArtifacts[0]!.id = "automation-tools"
-    preinstallAlias.resolved.policyDigest = canonicalProductPolicyDigest(preinstallAlias.policy)
-    expect(() => parseMarketplaceProductLock(preinstallAlias)).toThrow("disjoint")
+  test("accepts a portable standalone Skill with no Plugin closure fields", () => {
+    expect(parseMarketplaceProductLock(standaloneSkillLock())).toEqual(standaloneSkillLock())
+  })
 
+  test("keeps one closure per identity and rejects incomplete retired byte identities", () => {
     const ambiguous = recoveryLock()
-    ambiguous.policy.recoveryArtifacts.push(structuredClone(ambiguous.policy.recoveryArtifacts[0]!))
-    ambiguous.resolved.recoveryArtifacts.push(structuredClone(ambiguous.resolved.recoveryArtifacts[0]!))
+    ambiguous.policy.packages.push(structuredClone(ambiguous.policy.packages[1]))
+    ambiguous.resolved.packages.push(structuredClone(ambiguous.resolved.packages[1]))
     ambiguous.resolved.policyDigest = canonicalProductPolicyDigest(ambiguous.policy)
     expect(() => parseMarketplaceProductLock(ambiguous)).toThrow("identities must be unique")
 
     const invalidArchive = recoveryLock()
-    invalidArchive.policy.recoveryArtifacts[0]!.retired.artifact.sha256 = "not-a-digest"
+    const invalidPolicy = invalidArchive.policy.packages[1]
+    if (invalidPolicy.kind !== "plugin" || !("retired" in invalidPolicy)) {
+      throw new Error("expected retired Plugin policy")
+    }
+    invalidPolicy.retired.artifact.sha256 = "not-a-digest"
     invalidArchive.resolved.policyDigest = canonicalProductPolicyDigest(invalidArchive.policy)
     expect(() => parseMarketplaceProductLock(invalidArchive)).toThrow("exact retired Plugin")
   })
@@ -157,16 +191,25 @@ describe("Marketplace product lock", () => {
 
   test("rejects a declared target without an exact resolved companion", () => {
     const lock = validLock()
-    lock.policy.preinstalledPackages[0]!.targets.push("linux-x64" as never)
+    lock.policy.packages[0].targets.push("linux-x64")
+    lock.resolved.packages[0].targets.push("linux-x64")
     lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
-    expect(() => parseMarketplaceProductLock(lock)).toThrow("policy targets")
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("companions must exactly close")
   })
 
-  test("rejects weakening the product-locked automatic setup policy back to an interactive grant", () => {
+  test("rejects the removed setup field and the obsolete v2 schema", () => {
     const lock = validLock()
-    lock.policy.preinstalledPackages[0]!.setup = "explicit" as never
-    lock.resolved.policyDigest = canonicalProductPolicyDigest(lock.policy)
-    expect(() => parseMarketplaceProductLock(lock)).toThrow("preinstalledPackages")
+    const setup = {
+      ...lock,
+      policy: {
+        ...lock.policy,
+        packages: lock.policy.packages.map((entry, index) => (index === 0 ? { ...entry, setup: "automatic" } : entry)),
+      },
+    }
+    expect(() => parseMarketplaceProductLock(setup)).toThrow("unsupported or missing fields")
+
+    const v2 = { ...validLock(), schema: "convax.marketplace-product-lock/2" }
+    expect(() => parseMarketplaceProductLock(v2)).toThrow("unsupported Marketplace product lock schema")
   })
 
   test("rejects mutable URLs and malformed immutable byte identities", () => {
@@ -184,10 +227,14 @@ describe("Marketplace product lock", () => {
 
   test("rejects a missing target companion or duplicate owned closure", () => {
     const lock = validLock()
-    lock.resolved.packages[0]!.companions = []
-    expect(() => parseMarketplaceProductLock(lock)).toThrow("policy targets")
+    const lockedPlugin = lock.resolved.packages[0]
+    if (lockedPlugin.kind !== "plugin") throw new Error("expected Plugin closure")
+    lockedPlugin.companions = []
+    expect(() => parseMarketplaceProductLock(lock)).toThrow("companions must exactly close")
     const duplicateSkill = validLock()
-    duplicateSkill.resolved.packages[0]!.ownedSkills.push(duplicateSkill.resolved.packages[0]!.ownedSkills[0]!)
+    const duplicateSkillPlugin = duplicateSkill.resolved.packages[0]
+    if (duplicateSkillPlugin.kind !== "plugin") throw new Error("expected Plugin closure")
+    duplicateSkillPlugin.ownedSkills.push(duplicateSkillPlugin.ownedSkills[0])
     expect(() => parseMarketplaceProductLock(duplicateSkill)).toThrow("ownedSkills must be unique")
   })
 

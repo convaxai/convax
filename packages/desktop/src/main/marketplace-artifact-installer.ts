@@ -70,6 +70,7 @@ export class MarketplaceArtifactInstaller {
       deferExecutionAuthorization?: boolean
       expectedInstalledVersion?: string
       startup?: boolean
+      productDefaultAuthorization?: boolean
       recoverExistingSkillOnly?: boolean
       replaceExistingSkill?: boolean
     } = {},
@@ -108,6 +109,13 @@ export class MarketplaceArtifactInstaller {
       throw new Error("Verified Marketplace Plugin metadata does not match its manifest")
     }
     decodePluginManifest(manifest, files)
+    const deferExecutionAuthorization = options.deferExecutionAuthorization ?? this.#deferExecutionAuthorization
+    if (options.productDefaultAuthorization && deferExecutionAuthorization) {
+      throw new Error("Product-default Plugin installation must publish exact execution authorization")
+    }
+    if (options.productDefaultAuthorization && manifest.hooks !== undefined) {
+      throw new Error("Product-default Plugin installation cannot authorize executable Hook modules")
+    }
     const companionArtifacts = (item.companions ?? []).map((companion) => {
       const target = companion.targets.find(
         (candidate) => candidate.platform === this.#platform && candidate.arch === this.#arch,
@@ -130,7 +138,7 @@ export class MarketplaceArtifactInstaller {
       files,
       companionArtifacts,
       candidate.sourceIdentity,
-      options.deferExecutionAuthorization,
+      deferExecutionAuthorization,
       options.expectedInstalledVersion,
     )
   }

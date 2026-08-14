@@ -129,16 +129,19 @@ describe("Desktop platform artifacts", () => {
       CONVAX_RELEASE: "true",
       CONVAX_RELEASE_VERSION: "1.2.3",
       CONVAX_UPDATE_BASE_URL: "https://updates.example.com/desktop/prod",
+      CONVAX_WINDOWS_PUBLISHER_NAME: "Convax Test Publisher",
     })
 
     expect(local.forceCodeSigning).toBe(false)
     expect(local.mac?.notarize).toBe(false)
     expect(local.dmg?.sign).toBe(false)
+    expect(local.win).not.toHaveProperty("publisherName")
     expect(release.forceCodeSigning).toBe(true)
     expect(release.mac?.notarize).toBe(true)
     expect(release.dmg?.sign).toBe(true)
     expect(release.extraMetadata?.version).toBe("1.2.3")
     expect(release.publish).toEqual([{ provider: "generic", url: "https://updates.example.com/desktop/prod" }])
+    expect(release.win?.publisherName).toBe("Convax Test Publisher")
     expect(release.electronUpdaterCompatibility).toBe(">=2.16")
   })
 

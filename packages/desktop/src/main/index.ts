@@ -9,6 +9,7 @@ import {
   canonicalJson,
   computeSourceKey,
   sha256Hex,
+  type MarketplaceProductTarget,
   type SourceKey,
   type SourceQualifiedItem,
 } from "@convax/marketplace"
@@ -114,7 +115,7 @@ import {
   type MarketplaceInstallationProof,
 } from "./marketplace-legacy-migration"
 import { registerMarketplaceIpc } from "./marketplace-ipc"
-import { provisionMarketplaceForStartup } from "./marketplace-startup-provisioning"
+import { createMarketplaceStartupProvisioning } from "./marketplace-startup-provisioning"
 import { builtinMarketplaceReservation } from "./builtin-marketplace-bundle"
 import { isMarketplacePluginRuntimeAdmitted } from "./marketplace-plugin-runtime-gate"
 import { unpackSafeZip } from "./safe-zip"
@@ -1806,6 +1807,10 @@ function startApplication() {
       root: join(userDataDirectory, "marketplaces", "network"),
     })
     const officialSourceKey = officialMarketplaceSourceKey
+    const builtinMarketplaceSourceKey = builtinSourceKey()
+    const currentMarketplaceTarget = `${process.platform}-${process.arch}` as MarketplaceProductTarget
+    const supportsCurrentMarketplaceTarget = (targets: readonly MarketplaceProductTarget[]) =>
+      targets.length === 0 || targets.includes(currentMarketplaceTarget)
     let localMarketplaceSourceKey: SourceKey | undefined
     let localMarketplace: LocalMarketplaceStore | undefined
     const localCandidate = new LocalMarketplaceStore({
@@ -1813,7 +1818,7 @@ function startApplication() {
         const state = await marketplaceState.read()
         if (!localMarketplaceSourceKey) {
           const knownNonLocal = new Set<SourceKey>([
-            builtinSourceKey(),
+            builtinMarketplaceSourceKey,
             officialSourceKey,
             ...(await networkMarketplaces.listSources()).map((entry) => entry.sourceKey),
           ])
@@ -1975,6 +1980,30 @@ function startApplication() {
         }),
       }
     }
+    const refreshMarketplaceCapabilities = async (
+      identities: readonly { id: string; kind: "plugin" | "skill" }[],
+      reason: string,
+    ) => {
+      if (retiredHostApiRecovery) return
+      pluginRuntimeSession.assertMutable()
+      const pluginIds = [
+        ...new Set(identities.flatMap((identity) => (identity.kind === "plugin" ? [identity.id] : []))),
+      ]
+      if (pluginIds.length > 0) {
+        availableGenerationTools.invalidate()
+        for (const pluginId of pluginIds) {
+          generationRuntime.disposePlugin(pluginId)
+          await pluginServices.discardPlugin(pluginId)
+        }
+      }
+      skillManager.notifyInventoryChanged()
+      await agentRuntime.refreshConfiguration()
+      if (pluginIds.length > 0) {
+        scheduleGenerationCatalogRefresh(reason)
+        for (const pluginId of pluginIds) await reconcileToolPluginExecutionStateForPlugin(pluginId)
+        publishPluginServiceChange()
+      }
+    }
     const marketplaceInstaller = new DesktopMarketplaceCapabilityInstaller({
       authorizePlugin: async (id, mode) => {
         pluginRuntimeSession.assertMutable()
@@ -2016,22 +2045,28 @@ function startApplication() {
         pluginRuntimeSession.assertMutable()
         // The durable RuntimePreference is committed before the hard refresh.
       },
-      hardRefreshPlugin: async (pluginId) => {
-        if (retiredHostApiRecovery) return
-        pluginRuntimeSession.assertMutable()
-        availableGenerationTools.invalidate()
-        generationRuntime.disposePlugin(pluginId)
-        await pluginServices.discardPlugin(pluginId)
-        skillManager.notifyInventoryChanged()
-        await agentRuntime.refreshConfiguration()
-        scheduleGenerationCatalogRefresh("a Marketplace Plugin change")
-        await reconcileToolPluginExecutionStateForPlugin(pluginId)
-        publishPluginServiceChange()
-      },
+      hardRefreshPlugin: (pluginId) =>
+        refreshMarketplaceCapabilities([{ id: pluginId, kind: "plugin" }], "a Marketplace Plugin change"),
       refreshPetProvider: () => {
         if (retiredHostApiRecovery) return Promise.resolve()
         pluginRuntimeSession.assertMutable()
         return pets.refresh()
+      },
+      scheduleStartupRefresh: (identities) => {
+        void (async () => {
+          await refreshMarketplaceCapabilities(identities, "Marketplace startup provisioning")
+          if (!retiredHostApiRecovery && identities.some((identity) => identity.kind === "plugin")) {
+            await pets.refresh()
+          }
+        })().catch((error) => {
+          console.warn("Marketplace startup runtime refresh failed closed", {
+            errorType: error instanceof Error ? error.name : "UnknownError",
+          })
+          void recordPackagedSmokeStartup(
+            "marketplace-refresh-failed",
+            error instanceof Error ? error.name : "UnknownError",
+          ).catch(() => undefined)
+        })
       },
       fetchArtifact: async (item, artifact) => {
         const repository = await repositoryAuthority(item)
@@ -2214,13 +2249,15 @@ function startApplication() {
             entry.id === item.id &&
             entry.kind === item.kind &&
             entry.version === item.version &&
-            entry.marketplaceId === item.marketplaceId,
+            entry.marketplaceId === item.marketplaceId &&
+            entry.purposes.some((purpose) => purpose === "default-install") &&
+            supportsCurrentMarketplaceTarget(entry.targets),
         )
         const recoveryBinding = retiredHostApiRecovery?.plugins.find((entry) => entry.pluginId === item.id)
-        const candidate = selected
-          ? await marketplaceProduct!.verifiedCandidate(registryItem)
-          : recoveryBinding
-            ? await marketplaceProduct?.verifiedRecoveryCandidate(registryItem, recoveryBinding)
+        const candidate = recoveryBinding
+          ? await marketplaceProduct?.verifiedRecoveryCandidate(registryItem, recoveryBinding)
+          : selected
+            ? await marketplaceProduct!.verifiedCandidate(registryItem)
             : await developmentOfficialArtifacts?.verifiedCandidate(registryItem)
         if (!candidate) return null
         return {
@@ -2249,20 +2286,56 @@ function startApplication() {
         developmentOfficialArtifacts = refreshedDevelopmentArtifacts
         return true
       },
-      preinstalledPolicy: (identity) => {
-        const entry = marketplaceProduct?.lock.policy.preinstalledPackages.find(
-          (candidate) => candidate.id === identity.id && candidate.kind === identity.kind,
+      defaultInstallPolicy: (identity) => {
+        if (identity.sourceKey === builtinMarketplaceSourceKey) {
+          const item = marketplaceProduct
+            ?.catalog()
+            .find(
+              (candidate) =>
+                candidate.sourceKind === "builtin" &&
+                candidate.sourceKey === builtinMarketplaceSourceKey &&
+                candidate.id === identity.id &&
+                candidate.kind === identity.kind &&
+                candidate.version === identity.version,
+            )
+          const reservation = marketplaceProduct?.lock.resolved.builtinReservations.find(
+            (candidate) => candidate.id === identity.id && candidate.kind === identity.kind,
+          )
+          if (!item || !reservation || !marketplaceProduct) return undefined
+          return {
+            marketplaceId: marketplaceProduct.lock.policy.builtin.marketplaceId,
+            observedPolicyRevision: marketplaceProduct.lock.policy.revision,
+            policyEntryDigest: sha256Hex(
+              canonicalJson({
+                bundle: marketplaceProduct.lock.resolved.builtinBundle,
+                policy: marketplaceProduct.lock.policy.builtin,
+                reservation,
+                version: identity.version,
+              }),
+            ),
+            version: identity.version,
+          }
+        }
+        const entry = marketplaceProduct?.lock.policy.packages.find(
+          (candidate) =>
+            candidate.id === identity.id &&
+            candidate.kind === identity.kind &&
+            candidate.purposes.some((purpose) => purpose === "default-install") &&
+            supportsCurrentMarketplaceTarget(candidate.targets),
         )
         const resolved = marketplaceProduct?.lock.resolved.packages.find(
-          (candidate) => candidate.id === identity.id && candidate.kind === identity.kind,
+          (candidate) =>
+            candidate.id === identity.id &&
+            candidate.kind === identity.kind &&
+            candidate.purposes.some((purpose) => purpose === "default-install") &&
+            supportsCurrentMarketplaceTarget(candidate.targets),
         )
-        if (!entry || !resolved || identity.sourceKey !== officialSourceKey || identity.version !== resolved.version)
-          return undefined
+        if (!entry || !resolved || identity.sourceKey !== officialSourceKey) return undefined
         return {
           marketplaceId: entry.marketplaceId,
           observedPolicyRevision: marketplaceProduct!.lock.policy.revision,
           policyEntryDigest: sha256Hex(canonicalJson({ entry, resolved })),
-          setup: entry.setup,
+          version: resolved.version,
         }
       },
       readFixedArtifact: (item) => {
@@ -2276,12 +2349,20 @@ function startApplication() {
     const legacyMigration = new MarketplaceLegacyMigration({
       defaultCapabilitiesFile: join(userDataDirectory, "default-capabilities.json"),
       preinstalledPolicies:
-        marketplaceProduct?.lock.policy.preinstalledPackages.flatMap((entry) => {
+        marketplaceProduct?.lock.policy.packages.flatMap((entry) => {
+          if (
+            !entry.purposes.some((purpose) => purpose === "default-install") ||
+            !supportsCurrentMarketplaceTarget(entry.targets)
+          ) {
+            return []
+          }
           const resolved = marketplaceProduct?.lock.resolved.packages.find(
             (candidate) =>
               candidate.id === entry.id &&
               candidate.kind === entry.kind &&
-              candidate.marketplaceId === entry.marketplaceId,
+              candidate.marketplaceId === entry.marketplaceId &&
+              candidate.purposes.some((purpose) => purpose === "default-install") &&
+              supportsCurrentMarketplaceTarget(candidate.targets),
           )
           return resolved
             ? [
@@ -2316,76 +2397,122 @@ function startApplication() {
           activePluginAuthorizations,
         )
         if (!marketplaceProduct) return proofs
-        const storyboard = marketplaceProduct
-          .catalog()
-          .find((item) => item.kind === "skill" && item.id === "canvas-storyboard" && item.sourceKind === "builtin")
-        const installedStoryboard = storyboard
-          ? (await skillManager.listManaged()).find(
-              (skill) => skill.name === storyboard.id && skill.management.kind === "standalone",
-            )
-          : undefined
-        if (storyboard && installedStoryboard) {
-          const archive = marketplaceProduct.readBuiltinArtifact(storyboard)
+        const productCatalog = marketplaceProduct.catalog()
+        const managedSkills = await skillManager.listManaged()
+        for (const builtinSkill of productCatalog.filter(
+          (item) => item.kind === "skill" && item.sourceKind === "builtin",
+        )) {
+          const installed = managedSkills.find(
+            (skill) => skill.name === builtinSkill.id && skill.management.kind === "standalone",
+          )
+          if (!installed) continue
+          const archive = marketplaceProduct.readBuiltinArtifact(builtinSkill)
           const expectedFiles = Object.entries(unpackSafeZip(archive)).map(([filePath, content]) => ({
             content,
             path: filePath,
           }))
-          const [actualDigest, expectedDigest] = await Promise.all([
-            skillManager.exactManagedTreeDigest(storyboard.id),
-            Promise.resolve(exactSkillTreeDigest(expectedFiles)),
-          ])
-          if (actualDigest === expectedDigest) {
+          if ((await skillManager.exactManagedTreeDigest(builtinSkill.id)) !== exactSkillTreeDigest(expectedFiles)) {
+            continue
+          }
+          proofs.push({
+            record: {
+              artifactDigest: sha256Hex(canonicalJson(builtinSkill.delivery)),
+              id: builtinSkill.id,
+              kind: builtinSkill.kind,
+              revision: 1,
+              runtimeSurface: builtinSkill.runtimeSurface,
+              sourceKey: builtinSkill.sourceKey,
+              version: builtinSkill.version,
+            },
+          })
+        }
+        const defaultPackages = marketplaceProduct.lock.resolved.packages.filter(
+          (entry) =>
+            entry.purposes.some((purpose) => purpose === "default-install") &&
+            supportsCurrentMarketplaceTarget(entry.targets),
+        )
+        const installedPlugins = await pluginInstallations.list()
+        for (const locked of defaultPackages) {
+          const registryItem = marketplaceProduct.registry.packages.find(
+            (item) =>
+              item.kind === locked.kind &&
+              item.id === locked.id &&
+              item.version === locked.version &&
+              item.delivery.kind === "artifact",
+          )
+          const catalogItem = productCatalog.find(
+            (item) =>
+              item.kind === locked.kind &&
+              item.id === locked.id &&
+              item.version === locked.version &&
+              item.sourceKey === officialSourceKey,
+          )
+          if (!registryItem || !catalogItem) continue
+          if (locked.kind === "skill") {
+            const installed = managedSkills.find(
+              (skill) => skill.name === locked.id && skill.management.kind === "standalone",
+            )
+            if (!installed) continue
+            const verified = await marketplaceProduct.verifiedCandidate(registryItem)
+            const expectedFiles = Object.entries(unpackSafeZip(verified.artifactBytes)).map(([filePath, content]) => ({
+              content,
+              path: filePath,
+            }))
+            if ((await skillManager.exactManagedTreeDigest(locked.id)) !== exactSkillTreeDigest(expectedFiles)) {
+              continue
+            }
             proofs.push({
               record: {
-                artifactDigest: sha256Hex(canonicalJson(storyboard.delivery)),
-                id: storyboard.id,
-                kind: storyboard.kind,
+                artifactDigest: sha256Hex(canonicalJson(catalogItem.delivery)),
+                id: catalogItem.id,
+                kind: catalogItem.kind,
                 revision: 1,
-                runtimeSurface: storyboard.runtimeSurface,
-                sourceKey: storyboard.sourceKey,
-                version: storyboard.version,
+                runtimeSurface: catalogItem.runtimeSurface,
+                sourceKey: catalogItem.sourceKey,
+                version: catalogItem.version,
               },
             })
+            continue
           }
-        }
-        const ffmpegRegistry = marketplaceProduct.registry.packages.find(
-          (item) => item.kind === "plugin" && item.id === "ffmpeg-tools" && item.delivery.kind === "artifact",
-        )
-        const ffmpegCatalog = marketplaceProduct
-          .catalog()
-          .find(
-            (item) =>
-              item.kind === "plugin" &&
-              item.id === "ffmpeg-tools" &&
-              item.sourceKey === officialSourceKey &&
-              item.version === ffmpegRegistry?.version,
+          const installed = installedPlugins.find(
+            (plugin) => plugin.id === locked.id && plugin.version === locked.version,
           )
-        const installedFfmpeg = (await pluginInstallations.list()).find(
-          (plugin) => plugin.id === "ffmpeg-tools" && plugin.version === ffmpegRegistry?.version,
-        )
-        if (ffmpegRegistry && ffmpegCatalog && installedFfmpeg) {
-          const verified = await marketplaceProduct.verifiedCandidate(ffmpegRegistry)
-          const handle = await pluginInstallations.acquireActivePlugin(installedFfmpeg.id)
+          if (
+            !installed ||
+            catalogItem.delivery.kind !== "artifact" ||
+            catalogItem.delivery.sha256 !== locked.artifact.sha256 ||
+            catalogItem.delivery.size !== locked.artifact.size
+          ) {
+            continue
+          }
+          const handle = await pluginInstallations.acquireActivePlugin(installed.id)
           try {
             if (
-              handle.descriptor.package.artifact.sha256 === sha256Hex(verified.artifactBytes) &&
-              handle.descriptor.package.artifact.size === verified.artifactBytes.byteLength
+              handle.descriptor.sourceIdentity !== officialSourceKey ||
+              handle.descriptor.sourceIdentity !== catalogItem.sourceKey
             ) {
-              const authorizationContractDigest =
-                (await pluginInstallations.executionAuthorizationIdentity(installedFfmpeg.id)) ?? undefined
-              proofs.push({
-                ...(authorizationContractDigest ? { authorizationContractDigest } : {}),
-                record: {
-                  artifactDigest: sha256Hex(canonicalJson(ffmpegCatalog.delivery)),
-                  id: ffmpegCatalog.id,
-                  kind: ffmpegCatalog.kind,
-                  revision: 1,
-                  runtimeSurface: ffmpegCatalog.runtimeSurface,
-                  sourceKey: ffmpegCatalog.sourceKey,
-                  version: ffmpegCatalog.version,
-                },
-              })
+              continue
             }
+            if (
+              handle.descriptor.package.artifact.sha256 !== locked.artifact.sha256 ||
+              handle.descriptor.package.artifact.size !== locked.artifact.size
+            ) {
+              continue
+            }
+            const authorizationContractDigest =
+              (await pluginInstallations.executionAuthorizationIdentity(installed.id)) ?? undefined
+            proofs.push({
+              ...(authorizationContractDigest ? { authorizationContractDigest } : {}),
+              record: {
+                artifactDigest: sha256Hex(canonicalJson(catalogItem.delivery)),
+                id: catalogItem.id,
+                kind: catalogItem.kind,
+                revision: 1,
+                runtimeSurface: catalogItem.runtimeSurface,
+                sourceKey: catalogItem.sourceKey,
+                version: catalogItem.version,
+              },
+            })
           } finally {
             handle.release()
           }
@@ -2394,15 +2521,14 @@ function startApplication() {
       },
       state: marketplaceState,
     })
+    let marketplaceStartupProvisioning: ReturnType<typeof createMarketplaceStartupProvisioning> | null = null
     if (pluginRuntimeSession.state.state === "ready") {
       await legacyMigration.run()
       await marketplace.recoverTransitions()
-      await provisionMarketplaceForStartup({
+      marketplaceStartupProvisioning = createMarketplaceStartupProvisioning({
         provision: () => marketplace.provisionDefaults(),
-        report: (diagnostic) => console.warn("Marketplace preinstalled provisioning failed closed", diagnostic),
+        report: (diagnostic) => console.warn("Marketplace default provisioning failed closed", diagnostic),
       })
-      await recordPackagedSmokeStartup("marketplace-provisioned")
-      scheduleGenerationCatalogRefresh("startup provisioning")
     } else {
       console.warn("Marketplace Plugin migration and provisioning skipped while the Plugin runtime is quarantined")
     }
@@ -2798,6 +2924,7 @@ function startApplication() {
     let shutdownPromise: Promise<void> | undefined
     const drainForShutdown = () => {
       shutdownPromise ??= (async () => {
+        if (marketplaceStartupProvisioning) await marketplaceStartupProvisioning.closeAndDrainStarted()
         await projectManager.flushPendingWrites()
         await disposePetApplication()
         await agentRuntime.dispose()
@@ -2967,6 +3094,22 @@ function startApplication() {
       automaticUpdateCheck.unref()
     }
     await recordPackagedSmokeStartup("window-created")
+    if (marketplaceStartupProvisioning) {
+      void marketplaceStartupProvisioning
+        .start()
+        .then(async (result) => {
+          if (!result.ok) {
+            await recordPackagedSmokeStartup("marketplace-provision-failed", result.errorType)
+            return
+          }
+          await recordPackagedSmokeStartup("marketplace-provisioned")
+        })
+        .catch((error) => {
+          console.warn("Could not finish Marketplace startup provisioning diagnostics", {
+            errorType: error instanceof Error ? error.name : "UnknownError",
+          })
+        })
+    }
     if (developmentCachePolicy.legacyDirectoryNames.length > 0) {
       setTimeout(() => {
         void removeQuarantinedDevelopmentCaches(userDataDirectory).catch((error) => {

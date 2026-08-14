@@ -791,7 +791,7 @@ Electron userData/
   marketplace-installations/index-v1.json
                                         exact installed identity and SourceKey bindings
   marketplace-provisioning-decisions/index-v1.json
-                                        explicit preinstall removal decisions
+                                        explicit product-default removal decisions
   marketplace-runtime-preferences/index-v1.json
                                         durable runtime enable/disable intent
   marketplace-transitions/<transition-id>.json
@@ -823,7 +823,7 @@ Electron updater platform cache         verified partial or complete Desktop upd
                                         disposable and never a source of Project, Plugin, or preference state
 
 Packaged app Resources/
-  marketplaces/                         product-lock-verified Builtin, Official and retired-major recovery bytes
+  marketplaces/                         product-lock-verified Builtin and purpose-gated Official package bytes
   default-capabilities/                 build-verified remote first-install seed;
                                         never built-in provenance or executable-in-place
 
@@ -955,50 +955,76 @@ and now records this additional disposable projection; no dependency or trust ro
 changes.
 
 `marketplaces.lock.json` is the sole product input for packaged Marketplace bytes.
-Its `convax.marketplace-product-lock/2` policy declares Builtin/Official sources,
-`preinstalledPackages`, and a bounded `recoveryArtifacts` set; its resolved closure
-pins the Builtin bundle, Official descriptor/Registry/Showcase, package, owned-Skill,
-presentation, and target companion URLs, sizes, and SHA-256 values. Packaging
-consumes and verifies this closure without resolving “latest.” Startup installs
-every verified member of the Builtin bundle from its offline bytes, then applies the
-product preinstall policy. The current policy contains only
-`convax-official/plugin/ffmpeg-tools` on `darwin-arm64`, with automatic setup. Its
-recovery closure admits five exact retired Host API v1 snapshot bindings with their
-current Official Host API v3 Release bytes: `cutout-studio`, `nexus-service`,
-`storyai-3d-director-desk`, `storyboard-studio`, and `video-timeline`. Retired
-bindings without a current Official Registry replacement remain preserved and
-inactive; they are never recovered from source checkouts or mutable install files.
+Its strict `convax.marketplace-product-lock/3` policy and resolved state each use one
+bounded `packages` collection keyed by exact Official `{kind,id}` identity. An entry
+declares canonical `default-install`, `retired-recovery`, or both purposes, while
+the resolved entry pins one immutable package closure: Official
+descriptor/Registry/Showcase, package, owned-Skill, presentation, and target
+companion URLs, sizes, and SHA-256 values. Packaging verifies those bytes without
+resolving “latest.” Purpose is policy, not another copy of the artifact: one Plugin
+closure may serve both default installation and retired recovery, but each runtime
+path must independently prove the matching purpose before consuming it.
 
-A recovery artifact is not catalog membership, a preinstall, or execution authority.
-It binds one Official Plugin replacement closure to one exact already-installed
-retired binding: Plugin id, retired Official SourceKey, old version, old archive
-SHA-256/size, old immutable snapshot digest, and old Host API major. The product
-lock also derives the one target SourceKey from its current fixed Official
-descriptor. Only the existing explicit retired-major update path may read those
-packaged bytes, and only after the startup quarantine inspection reproduces the
-complete retired binding and the candidate matches that exact old-to-current source
-lineage.
-Fresh install/default provisioning cannot select the recovery byte path. A mismatch
-or absent entry falls back to the ordinary exact-source network update; while
-offline it changes neither the Marketplace install record nor the quarantined
-ActiveSet. A successful offline update uses the existing one-shot CAS, changes the
-matching `InstallRecord` from the locked retired SourceKey to the current Official
-SourceKey in the same durable transition, keeps the current process quarantined,
-and becomes executable only after restart validates the new ActiveSet. Every other
-cross-source install or update remains rejected. Recovery never scans installation
-directories, rewrites a major, chooses the first provider, or treats package
-presence as authority.
+Desktop creates the first application window before starting one process-wide
+background provisioning single-flight. That job installs verified Builtin members,
+then sends each current-target `default-install` entry through the ordinary
+Marketplace installer and, for Plugins, the immutable closure and global ActiveSet
+CAS. It presents no approval dialog and never blocks Canvas switching or first-window
+use; one entry failure is diagnosed without aborting the window or preventing later
+entries and retries. Startup Skill publication writes the managed store without
+listing, launching, or refreshing OpenCode per entry. After every successful
+package transition has converged, Main queues one process-local runtime
+reconciliation for the final ActiveSet and Skill inventory; an active Agent use may
+delay that refresh, but neither the provisioning success marker nor shutdown drains
+it. A user uninstall records a per-entry `ProvisioningDecision`;
+later startup jobs preserve that decision instead of silently reinstalling the
+entry.
 
-Automatic setup remains an independent durable `CapabilityTransition` that
-publishes an `ExecutionGrant`; it does not execute the companion. It is admitted
-only for the exact product-locked source, id, version, and target, and only for a
-verified managed Tool companion with no PATH fallback, Hook, Service, extra Plugin
-capability, credential, or secret input. User removal of a policy preinstall
-creates a per-entry `ProvisioningDecision` that startup cannot silently clear or
-override. Refreshing the fixed Official source reopens and verifies the packaged
-product closure; it never routes the reserved Official identity through the
-user-added Network source manager, resolves a runtime “latest,” or grants a changed
-candidate.
+The current defaults are the Builtin `canvas-storyboard` Skill; the Official
+`ffmpeg-tools`, `jianying-editor`, and `nexus-service` Plugins on
+`darwin-arm64`; and ten portable
+Official standalone Skills: `ad-idea`, `audiobook`,
+`convax-plugin-authoring`, `ecommerce-image`, `film-shot`, `image-remix`,
+`short-drama-screenwriter`, `skill-creator`, `skill-reviewer`, and
+`video-prompting`. Standalone Skills use the same product-lock and ordinary
+installer path, retain Official provenance, and enter their independent managed
+Skill lifecycle. Plugin-owned Skills remain members of their owner Plugin closure
+and are never independently default-installed.
+
+`retired-recovery` is not catalog membership, fresh-install authority, or a second
+artifact source. It binds one Official Plugin replacement to one exact
+already-installed retired tuple: Plugin id, retired Official SourceKey, old version,
+old archive SHA-256/size, old immutable snapshot digest, and old Host API major.
+Only the explicit retired-major update path may consume that purpose after startup
+quarantine reproduces the complete binding and the candidate matches the exact
+old-to-current Official lineage. `nexus-service` shares one closure between
+`default-install` and recovery; `cutout-studio`, `storyai-3d-director-desk`,
+`storyboard-studio`, and `video-timeline` are recovery-only. Retired bindings
+without a current Official Registry replacement remain preserved and inactive;
+they are never recovered from source checkouts or mutable install files.
+
+Fresh provisioning may use a dual-purpose closure only through its independent
+`default-install` purpose; it can never satisfy the retired binding by package
+presence. A recovery mismatch or absent entry falls back to the ordinary
+exact-source network update and changes neither the Marketplace install record nor
+the quarantined ActiveSet while offline. A successful offline update uses the
+existing one-shot CAS, changes the matching `InstallRecord` from the locked retired
+SourceKey to the current Official SourceKey in the same durable transition, keeps
+the current process quarantined, and becomes executable only after restart validates
+the new ActiveSet. Every other cross-source install or update remains rejected.
+
+An exact product `default-install` Plugin entry is the product authorization event
+for that exact source, id, version, artifact, current target, parsed manifest, and
+complete closure. It uses the normal installer and ActiveSet publication and writes
+the ordinary exact `ExecutionGrant` in that same install transition, not an
+independent setup transition or a special product-only grant class. Default
+provisioning fails closed for a Plugin Hook because background work cannot authorize
+new Hook bytes; it also fails on identity, target, manifest, companion, credential,
+or closure drift without replacing a working installation. Packaged bytes, Official
+membership, and purpose labels alone grant nothing. Refreshing the fixed Official
+source reopens and verifies the packaged product closure; it never routes the
+reserved Official identity through the user-added Network source manager, resolves
+a runtime “latest,” or grants a changed candidate.
 
 The current collaboration protocol is an explicitly approved breaking cutover from
 both the legacy JSON catalog/document plus global revision-counter model and the
@@ -1304,7 +1330,8 @@ Builtin + Official + user Network + Host Local adapters
   -> optional GitHub source action returns only {kind,id}; Main opens the representative repository
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
-  -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
+  -> after the first window, one background product-default single-flight may enter the same installer with exact product authorization
+  -> MCP setup may independently publish an ExecutionGrant
   -> InstalledCapability projects setup-required, ready, disabled or attention
 ```
 
@@ -1348,7 +1375,9 @@ A user-confirmed Plugin install/update, or an explicit Local Plugin import, is t
 execution-consent event and publishes its exact snapshot authorization and
 Marketplace grant in that same durable transition. It never projects a second
 Marketplace setup step. Independent setup remains for MCP endpoint/local-executable
-configuration and the narrowly admitted automatic product-lock preinstall. An
+configuration. An exact product-lock `default-install` purpose is the separate
+product authorization event for background Plugin provisioning; it enters the same
+ordinary installer and ActiveSet transition without a setup detour. An
 integrity/authorization mismatch is not setup-required: the Installed projection
 routes it to an exact-source update/reinstall and never offers setup as a repair for
 missing or changed immutable Plugin bytes.
@@ -1357,8 +1386,10 @@ When startup quarantine proves the narrow retired-Host-API case, the same explic
 source-bound update may consume a product-locked offline recovery artifact only if
 its old source/package/version/archive/snapshot/Host-major binding is byte-exact and
 the candidate SourceKey is the current fixed Official source selected by that same
-product lock. The recovery artifact is never projected as a preinstall and cannot
-make a fresh Plugin installation happen in the background. Without an exact
+product lock. The recovery purpose is never reinterpreted as `default-install` and
+cannot make a fresh Plugin installation happen in the background. A closure that
+also has `default-install` remains eligible for a fresh install only through that
+independent purpose and normal product authorization checks. Without an exact
 packaged match, the normal network update path remains the only candidate and
 offline failure leaves quarantine unchanged.
 
@@ -1449,19 +1480,22 @@ Release URL, bounded size and SHA-256, then publishes the exact bytes inside the
 Plugin's immutable complete closure before an ActiveSet compare-and-swap. Runtime
 never resolves a mutable companion directory or silently falls back after the
 snapshot is active. Choosing install or update is normally the execution consent
-event. The sole product exception is an exact
-`setup: automatic` preinstall, which runs the independent setup transition only
-after installation and admits only its product-locked managed Tool companion; it
-rejects PATH fallback, Hooks, Services, extra Plugin capabilities, credentials, and
-identity or target drift. Before package publication, Desktop resolves the exact
+event. Background product provisioning has one separate exact authorization mode:
+the candidate must carry the current-target `default-install` purpose and must match
+the locked Official source, id, version, artifact, parsed manifest, and complete
+closure. It uses the ordinary Plugin installer and ActiveSet CAS, admits declared
+Services and verified managed companions under their existing generic contracts,
+and rejects Hooks, PATH fallback, credentials, and every identity, target, manifest,
+or closure drift. It never runs an independent setup transition. Before
+package publication, Desktop resolves the exact
 managed or PATH binding and transactionally coordinates a private receipt keyed by
 the normalized manifest fingerprint, binding kind, real path, size and SHA-256 with
 the package switch. The old and new receipts may coexist during an update; any
 crash-partial or orphaned state is non-executable and startup reconciliation removes
 it. A Registry install that declares a managed companion cannot fall back to a
 same-named PATH command. Missing and changed bindings fail installation without
-replacing a working version. Listing, installing, and automatic setup never start
-the command.
+replacing a working version. Listing, installing, and background provisioning never
+start the command.
 Desktop stages bounded typed Canvas references by resolving their canonical owner proof
 through the ProjectIndex current-resource projection, rechecks live scope plus exact
 resource/semantic guards before the external call, admits only bounded
@@ -2119,18 +2153,20 @@ Neither Project nor Workbench imports the other to implement this flow.
   Main verifies the accepted source identity, monotonic sequence, compatibility,
   immutable artifact metadata, bounded size, SHA-256 and safe package inventory
   before a package can reach an installation owner.
-- Packaged first-install content is an exact product-lock closure over Marketplace
-  v2 descriptor, Registry, Showcase, Builtin bundle and selected immutable Release
-  bytes. Runtime revalidates that closure and passes one already verified,
-  source-qualified candidate through `MarketplaceArtifactInstaller` to the Plugin,
-  Skill, or MCP installation owner. That adapter owns no discovery, network fetch,
-  Registry cache or presentation policy. Missing/corrupt locked data fails closed;
-  it is never a checked-in source package, executable search path or second
-  publication mechanism.
-- Product-lock recovery bytes are a separate bounded closure, not first-install
-  content. Main releases them only to an explicit retired-major update whose
-  inspected source, id, old version, archive identity, snapshot digest and Host API
-  major all match; absent/mismatched entries never bypass fetch or quarantine.
+- Packaged content is one exact product-lock `/3` closure over the Marketplace v2
+  descriptor, Registry, Showcase, Builtin bundle and selected immutable Release
+  bytes. Runtime revalidates that closure and the requested purpose, then passes one
+  already verified source-qualified candidate through `MarketplaceArtifactInstaller`
+  to the ordinary Plugin or standalone-Skill installation owner. That adapter owns
+  no discovery, network fetch, Registry cache or presentation policy.
+  Missing/corrupt locked data fails closed; it is never a checked-in source package,
+  executable search path or second publication mechanism.
+- Product purposes are separate gates over those physical bytes. Main releases
+  `retired-recovery` only to an explicit retired-major update whose inspected
+  source, id, old version, archive identity, snapshot digest and Host API major all
+  match. `default-install` never weakens that recovery proof, even when both
+  purposes share one closure; absent or mismatched entries never bypass fetch or
+  quarantine.
 - A Plugin `hooks` path names one self-contained JavaScript ESM OpenCode Plugin
   module. Explicit install/update snapshots and fingerprints the exact bytes in the
   private Hook authorization store before package publication. OpenCode receives
@@ -2141,8 +2177,9 @@ Neither Project nor Workbench imports the other to implement this flow.
   OpenCode Plugin entry. Static `node:`/`bun:` built-ins are the only imports that
   may remain, except runtime module-loader APIs such as `node:module`. CommonJS
   globals and every other dependency must be bundled out of the declared file.
-  Default/background provisioning may check metadata but must recheck the parsed
-  candidate and cannot authorize new Hook bytes.
+  Default/background provisioning must recheck the exact parsed product candidate
+  and fails closed before publication when it declares a Hook; only an explicit
+  user-authorized installation may authorize new Hook bytes.
   Post-publication Agent invalidation runs outside the per-Plugin mutation lock so
   an in-flight Agent startup can finish Hook resolution. Desktop then reacquires
   that lock, reads the latest installed identity, reconciles execution state, and

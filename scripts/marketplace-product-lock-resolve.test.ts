@@ -19,20 +19,26 @@ const policy: MarketplaceProductPolicy = {
     marketplaceId: "convax-official",
     repository: "convaxai/convax-plugins",
   },
-  preinstalledPackages: [
+  packages: [
     {
       id: "ffmpeg-tools",
       kind: "plugin",
       marketplaceId: "convax-official",
-      setup: "automatic",
+      purposes: ["default-install"],
       targets: ["darwin-arm64"],
     },
-  ],
-  recoveryArtifacts: [
+    {
+      id: "canvas-storyboard-workflow",
+      kind: "skill",
+      marketplaceId: "convax-official",
+      purposes: ["default-install"],
+      targets: [],
+    },
     {
       id: "legacy-tools",
       kind: "plugin",
       marketplaceId: "convax-official",
+      purposes: ["default-install", "retired-recovery"],
       retired: {
         artifact: { sha256: "c".repeat(64), size: 2_048 },
         hostApiMajor: 2,
@@ -116,6 +122,15 @@ describe("Marketplace product lock resolution", () => {
     const pluginBytes = Buffer.from("plugin")
     const recoveryBytes = Buffer.from("recovery-plugin")
     const ownedSkillBytes = Buffer.from("owned-skill")
+    const standaloneSkillBytes = createDeterministicZip([
+      {
+        bytes: Buffer.from(
+          "---\nname: canvas-storyboard-workflow\ndescription: Create a storyboard from a Canvas.\n---\n\n# Storyboard workflow\n",
+        ),
+        mode: 0o644,
+        path: "SKILL.md",
+      },
+    ])
     const companionBytes = Buffer.from("companion")
     const descriptor = {
       compatibility: { convax: ">=0.1.0" },
@@ -167,6 +182,19 @@ describe("Marketplace product lock resolution", () => {
         },
         presentation: { description: "FFmpeg tools", name: "FFmpeg Tools" },
         version: "1.0.0",
+      },
+      {
+        compatibility: { convax: ">=0.1.0" },
+        delivery: {
+          kind: "artifact",
+          sha256: sha256(standaloneSkillBytes),
+          size: standaloneSkillBytes.byteLength,
+          url: release("canvas-storyboard-workflow.zip", "skill-canvas-storyboard-workflow-v0.2.0"),
+        },
+        id: "canvas-storyboard-workflow",
+        kind: "skill",
+        presentation: { description: "Canvas Storyboard workflow", name: "Canvas Storyboard Workflow" },
+        version: "0.2.0",
       },
       {
         compatibility: { convax: ">=0.1.0" },
@@ -227,6 +255,7 @@ describe("Marketplace product lock resolution", () => {
       ["ffmpeg.zip", pluginBytes],
       ["legacy-tools.zip", recoveryBytes],
       ["ffmpeg-skill.zip", ownedSkillBytes],
+      ["canvas-storyboard-workflow.zip", standaloneSkillBytes],
       ["ffmpeg-darwin-arm64", companionBytes],
       ["other.zip", "not-preinstalled"],
     ] as const) {
@@ -265,6 +294,19 @@ describe("Marketplace product lock resolution", () => {
         },
         {
           artifact: {
+            path: "canvas-storyboard-workflow.zip",
+            url: release("canvas-storyboard-workflow.zip", "skill-canvas-storyboard-workflow-v0.2.0"),
+          },
+          companions: [],
+          id: "canvas-storyboard-workflow",
+          kind: "skill",
+          marketplaceId: "convax-official",
+          ownedSkills: [],
+          setup: "none",
+          version: "0.2.0",
+        },
+        {
+          artifact: {
             path: "legacy-tools.zip",
             url: release("legacy-tools.zip", "plugin-legacy-tools-v2.0.0"),
           },
@@ -293,17 +335,44 @@ describe("Marketplace product lock resolution", () => {
     expect(lock.resolved.policyDigest).toBe(canonicalProductPolicyDigest(policy))
     expect(lock.resolved.builtinBundle.size).toBe(builtin.archive.byteLength)
     expect(lock.resolved.builtinReservations).toEqual([{ id: "canvas-storyboard", kind: "skill" }])
-    expect(lock.resolved.packages[0]!.companions[0]).toMatchObject({ arch: "arm64", platform: "darwin", size: 9 })
-    expect(lock.policy.preinstalledPackages[0]!.setup).toBe("automatic")
-    expect(lock.resolved.packages[0]!.setup).toBe("explicit")
-    expect(lock.resolved.packages.map(({ id }) => id)).toEqual(["ffmpeg-tools"])
-    expect(lock.resolved.recoveryArtifacts).toEqual([
+    const ffmpeg = lock.resolved.packages.find((entry) => entry.id === "ffmpeg-tools")
+    expect(ffmpeg?.kind).toBe("plugin")
+    if (ffmpeg?.kind !== "plugin") throw new Error("expected locked FFmpeg Plugin")
+    expect(ffmpeg.companions[0]).toMatchObject({ arch: "arm64", platform: "darwin", size: 9 })
+    expect(ffmpeg.purposes).toEqual(["default-install"])
+    const standaloneSkill = lock.resolved.packages.find((entry) => entry.id === "canvas-storyboard-workflow")
+    expect(standaloneSkill).toEqual(
+      expect.objectContaining({
+        artifact: expect.objectContaining({
+          sha256: sha256(standaloneSkillBytes),
+          size: standaloneSkillBytes.byteLength,
+        }),
+        kind: "skill",
+        purposes: ["default-install"],
+        targets: [],
+        version: "0.2.0",
+      }),
+    )
+    expect(standaloneSkill).not.toHaveProperty("companions")
+    expect(standaloneSkill).not.toHaveProperty("ownedSkills")
+    const legacy = lock.resolved.packages.find((entry) => entry.id === "legacy-tools")
+    const legacyPolicy = policy.packages[2]
+    if (legacyPolicy.kind !== "plugin" || !("retired" in legacyPolicy)) {
+      throw new Error("expected retired legacy policy")
+    }
+    expect(legacy).toEqual(
       expect.objectContaining({
         artifact: expect.objectContaining({ sha256: sha256(recoveryBytes), size: recoveryBytes.byteLength }),
         id: "legacy-tools",
-        retired: policy.recoveryArtifacts[0]!.retired,
+        purposes: ["default-install", "retired-recovery"],
+        retired: legacyPolicy.retired,
         version: "2.0.0",
       }),
+    )
+    expect(lock.resolved.packages.map(({ id }) => id)).toEqual([
+      "ffmpeg-tools",
+      "canvas-storyboard-workflow",
+      "legacy-tools",
     ])
     expect(() => parseMarketplaceProductLock(lock)).not.toThrow()
 
@@ -341,7 +410,7 @@ describe("Marketplace product lock resolution", () => {
     )
     await writeFile(join(root, "marketplace.json"), `${JSON.stringify(descriptor)}\n`)
 
-    const expectYankedRejection = async (packages: typeof registryPackages) => {
+    const expectRegistryRejection = async (packages: typeof registryPackages, message: string) => {
       const revision = sha256(Buffer.from(canonicalJson(packages)))
       await writeFile(join(root, "registry.json"), `${JSON.stringify({ ...registry, packages, revision })}\n`)
       await writeFile(join(root, "showcase.json"), `${JSON.stringify({ ...showcase, revision })}\n`)
@@ -364,16 +433,53 @@ describe("Marketplace product lock resolution", () => {
             },
           },
         }),
-      ).rejects.toThrow("yanked")
+      ).rejects.toThrow(message)
     }
-    await expectYankedRejection(
-      registryPackages.map((entry) => (entry.kind === "plugin" ? { ...entry, yanked: true } : entry)),
+    await expectRegistryRejection(
+      registryPackages.map((entry) => (entry.id === "ffmpeg-tools" ? { ...entry, yanked: true } : entry)),
+      "yanked",
     )
-    await expectYankedRejection(
-      registryPackages.map((entry) => (entry.kind === "skill" ? { ...entry, yanked: true } : entry)),
+    await expectRegistryRejection(
+      registryPackages.map((entry) => (entry.id === "canvas-storyboard-workflow" ? { ...entry, yanked: true } : entry)),
+      "yanked",
+    )
+    await expectRegistryRejection(
+      registryPackages.map((entry) =>
+        entry.id === "canvas-storyboard-workflow" ? { ...entry, ownerPluginId: "unselected-plugin" } : entry,
+      ),
+      "standalone Official Skill",
     )
     await writeFile(join(root, "registry.json"), `${JSON.stringify(registry)}\n`)
     await writeFile(join(root, "showcase.json"), `${JSON.stringify(showcase)}\n`)
+
+    const selectedStandaloneSkill = input.packages.find((entry) => entry.id === "canvas-storyboard-workflow")!
+    await expect(
+      resolveMarketplaceProductLock(policy, root, {
+        ...input,
+        packages: input.packages.map((entry) =>
+          entry.id === "canvas-storyboard-workflow"
+            ? {
+                ...selectedStandaloneSkill,
+                artifact: {
+                  ...selectedStandaloneSkill.artifact,
+                  url: release("canvas-storyboard-workflow.zip", "skill-wrong-v0.2.0"),
+                },
+              }
+            : entry,
+        ),
+      }),
+    ).rejects.toThrow("does not match the locked Official Registry")
+
+    await expect(
+      resolveMarketplaceProductLock(policy, root, {
+        ...input,
+        packages: input.packages.map((entry) =>
+          entry.id === "canvas-storyboard-workflow"
+            ? { ...selectedStandaloneSkill, companions: [input.packages[0].companions[0]] }
+            : entry,
+        ),
+      }),
+    ).rejects.toThrow("standalone Skill closure is invalid")
 
     await expect(
       resolveMarketplaceProductLock(policy, root, {
@@ -391,6 +497,11 @@ describe("Marketplace product lock resolution", () => {
       } as never),
     ).rejects.toThrow("unsupported or missing fields")
 
+    await writeFile(join(root, "canvas-storyboard-workflow.zip"), "tampered")
+    await expect(resolveMarketplaceProductLock(policy, root, input)).rejects.toThrow(
+      "does not match the locked Official Registry",
+    )
+    await writeFile(join(root, "canvas-storyboard-workflow.zip"), standaloneSkillBytes)
     await writeFile(join(root, "ffmpeg.zip"), "tampered")
     await expect(resolveMarketplaceProductLock(policy, root, input)).rejects.toThrow(
       "does not match the locked Official Registry",

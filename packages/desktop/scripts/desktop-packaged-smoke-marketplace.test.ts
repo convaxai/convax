@@ -10,6 +10,7 @@ import {
   assertLocalMarketplaceIdentity,
   assertMarketplaceSmokeSnapshot,
   assertNoLegacyDefaultCapabilityReceipt,
+  packagedStartupStageReached,
 } from "./desktop-packaged-smoke-marketplace"
 
 const roots: string[] = []
@@ -19,16 +20,58 @@ afterEach(async () => {
 })
 
 describe("packaged smoke automatic preinstall assertions", () => {
+  test("distinguishes successful and failed background provisioning markers", () => {
+    expect(packagedStartupStageReached("2026-08-14T00:00:00.000Z window-created\n", "marketplace-provisioned")).toBe(
+      false,
+    )
+    expect(
+      packagedStartupStageReached(
+        "2026-08-14T00:00:00.000Z window-created\n2026-08-14T00:00:01.000Z marketplace-provisioned\n",
+        "marketplace-provisioned",
+      ),
+    ).toBe(true)
+    expect(() =>
+      packagedStartupStageReached(
+        "2026-08-14T00:00:01.000Z marketplace-provision-failed AggregateError\n",
+        "marketplace-provisioned",
+      ),
+    ).toThrow("provisioning failed")
+  })
+
   test("requires the InstalledCapability projection to be ready", () => {
     expect(() =>
       assertAutomaticPreinstalledCapability(
-        { id: "ffmpeg-tools", kind: "plugin", state: "ready", version: "0.3.1" },
+        {
+          id: "ffmpeg-tools",
+          kind: "plugin",
+          sourceLabel: "convax-official",
+          state: "ready",
+          version: "0.3.1",
+        },
         { id: "ffmpeg-tools", version: "0.3.1" },
       ),
     ).not.toThrow()
     expect(() =>
       assertAutomaticPreinstalledCapability(
-        { id: "ffmpeg-tools", kind: "plugin", state: "setup-required", version: "0.3.1" },
+        {
+          id: "ffmpeg-tools",
+          kind: "plugin",
+          sourceLabel: "convax-official",
+          state: "setup-required",
+          version: "0.3.1",
+        },
+        { id: "ffmpeg-tools", version: "0.3.1" },
+      ),
+    ).toThrow("must be ready")
+    expect(() =>
+      assertAutomaticPreinstalledCapability(
+        {
+          id: "ffmpeg-tools",
+          kind: "plugin",
+          sourceLabel: "another-source",
+          state: "ready",
+          version: "0.3.1",
+        },
         { id: "ffmpeg-tools", version: "0.3.1" },
       ),
     ).toThrow("must be ready")
@@ -39,6 +82,7 @@ describe("packaged smoke automatic preinstall assertions", () => {
     roots.push(userDataRoot)
     const authorizationContractDigest = "a".repeat(64)
     const sourceKey = "b".repeat(64)
+    const artifactDigest = "c".repeat(64)
     await fs.mkdir(path.join(userDataRoot, "marketplaces"), { recursive: true })
     await fs.writeFile(
       path.join(userDataRoot, "marketplaces", "state-v1.json"),
@@ -53,6 +97,7 @@ describe("packaged smoke automatic preinstall assertions", () => {
         ],
         installations: [
           {
+            artifactDigest,
             id: "ffmpeg-tools",
             kind: "plugin",
             sourceKey,
@@ -64,23 +109,45 @@ describe("packaged smoke automatic preinstall assertions", () => {
     )
     await expect(
       assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        artifactDigest,
         authorizationContractDigest,
         id: "ffmpeg-tools",
+        sourceKey,
         version: "0.3.1",
       }),
     ).resolves.toBeUndefined()
+    await expect(
+      assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        artifactDigest: "d".repeat(64),
+        authorizationContractDigest,
+        id: "ffmpeg-tools",
+        sourceKey,
+        version: "0.3.1",
+      }),
+    ).rejects.toThrow("installation is missing")
+    await expect(
+      assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        artifactDigest,
+        authorizationContractDigest,
+        id: "ffmpeg-tools",
+        sourceKey: "e".repeat(64),
+        version: "0.3.1",
+      }),
+    ).rejects.toThrow("installation is missing")
     await fs.writeFile(
       path.join(userDataRoot, "marketplaces", "state-v1.json"),
       JSON.stringify({
         executionGrants: [],
-        installations: [{ id: "ffmpeg-tools", kind: "plugin", sourceKey, version: "0.3.1" }],
+        installations: [{ artifactDigest, id: "ffmpeg-tools", kind: "plugin", sourceKey, version: "0.3.1" }],
         schema: "convax.marketplace-state/1",
       }),
     )
     await expect(
       assertAutomaticPreinstalledAuthorization(userDataRoot, {
+        artifactDigest,
         authorizationContractDigest,
         id: "ffmpeg-tools",
+        sourceKey,
         version: "0.3.1",
       }),
     ).rejects.toThrow("ExecutionGrant")

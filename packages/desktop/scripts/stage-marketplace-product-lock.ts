@@ -15,12 +15,35 @@ import { parseAgentSkillMarkdown } from "@convax/agent-runtime/node"
 
 import { readMarketplaceProductLock } from "../../../scripts/marketplace-product-lock"
 import { parseWebPluginManifest } from "../src/plugin-contracts"
+import { assertCanonicalOfficialMarketplaceDescriptor } from "../src/main/marketplace-product-source-identity"
 import { unpackSafeZip } from "../src/main/safe-zip"
 
 const maxArtifactBytes = 128 * 1024 * 1024
 
 function digest(bytes: Uint8Array) {
   return createHash("sha256").update(bytes).digest("hex")
+}
+
+function artifactKey(artifact: { sha256: string; size: number }) {
+  return `${artifact.sha256}\0${artifact.size}`
+}
+
+type StagedMarketplaceArtifact = {
+  bytes: Uint8Array
+  lock: MarketplaceArtifactLock
+  path: string
+}
+
+export function deduplicateStagedMarketplaceArtifacts(
+  entries: readonly StagedMarketplaceArtifact[],
+): StagedMarketplaceArtifact[] {
+  const byArtifact = new Map<string, StagedMarketplaceArtifact>()
+  for (const entry of entries) {
+    const key = artifactKey(entry.lock)
+    const current = byArtifact.get(key)
+    if (!current || entry.path < current.path) byArtifact.set(key, entry)
+  }
+  return [...byArtifact.values()].sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0))
 }
 
 async function lockedBytes(root: string, lock: MarketplaceArtifactLock) {
@@ -100,6 +123,16 @@ export function validateLockedPluginManifest(
   return parsed
 }
 
+export function validateLockedSkillArchive(files: Readonly<Record<string, Uint8Array>>, identity: { id: string }) {
+  const skillMarkdownPaths = Object.keys(files).filter((entry) => entry.toLowerCase() === "skill.md")
+  if (skillMarkdownPaths.length !== 1 || skillMarkdownPaths[0] !== "SKILL.md") {
+    throw new Error("Locked Skill must contain exactly one root SKILL.md")
+  }
+  const parsed = parseAgentSkillMarkdown(new TextDecoder("utf-8", { fatal: true }).decode(files["SKILL.md"]))
+  if (parsed.name !== identity.id) throw new Error("Locked Skill identity changed")
+  return parsed
+}
+
 export async function stageMarketplaceProductLock(options: {
   lockPath: string
   outputDirectory: string
@@ -107,7 +140,7 @@ export async function stageMarketplaceProductLock(options: {
 }) {
   const lock = await readMarketplaceProductLock(options.lockPath)
   const releaseRoot = await fs.realpath(options.releaseRoot)
-  const staged: Array<{ bytes: Uint8Array; lock: MarketplaceArtifactLock; path: string }> = []
+  const staged: StagedMarketplaceArtifact[] = []
   const add = async (entry: MarketplaceArtifactLock, relativePath: string) => {
     const bytes = await lockedBytes(releaseRoot, entry)
     staged.push({ bytes, lock: entry, path: relativePath })
@@ -129,20 +162,11 @@ export async function stageMarketplaceProductLock(options: {
   const descriptor = parseMarketplaceDescriptor(json(descriptorBytes, "Official descriptor"))
   const registry = parseRegistryV2(json(registryBytes, "Official Registry"))
   parseShowcaseV2(json(showcaseBytes, "Official Showcase"), registry, descriptor)
-  if (
-    descriptor.id !== lock.policy.official.marketplaceId ||
-    descriptor.registry.v2.url !== "https://convaxai.github.io/convax-plugins/registry/v2/index.json" ||
-    descriptor.registry.v1 !== undefined ||
-    descriptor.showcase.v2.url !== "https://convaxai.github.io/convax-plugins/showcase/v2/index.json" ||
-    registry.revision !== lock.resolved.official.revision
-  ) {
+  assertCanonicalOfficialMarketplaceDescriptor(descriptor, lock.policy.official)
+  if (descriptor.registry.v1 !== undefined || registry.revision !== lock.resolved.official.revision) {
     throw new Error("Official locked metadata does not close its descriptor and policy")
   }
-  const lockedPluginPackages = [
-    ...lock.resolved.packages.map((entry) => ({ entry, prefix: "packages" })),
-    ...lock.resolved.recoveryArtifacts.map((entry) => ({ entry, prefix: "recovery-artifacts" })),
-  ]
-  for (const { entry, prefix } of lockedPluginPackages) {
+  for (const entry of lock.resolved.packages) {
     const registryEntry = registry.packages.find(
       (candidate) => candidate.kind === entry.kind && candidate.id === entry.id && candidate.version === entry.version,
     )
@@ -151,45 +175,51 @@ export async function stageMarketplaceProductLock(options: {
       registryEntry.delivery.kind !== "artifact" ||
       registryEntry.delivery.url !== entry.artifact.url ||
       registryEntry.delivery.size !== entry.artifact.size ||
-      registryEntry.delivery.sha256 !== entry.artifact.sha256
+      registryEntry.delivery.sha256 !== entry.artifact.sha256 ||
+      registryEntry.yanked === true
     ) {
       throw new Error("Locked product package does not match the Official Registry")
     }
-    const packageBytes = await add(entry.artifact, `${prefix}/${entry.id}/${entry.artifact.name}`)
+    const packageBytes = await add(entry.artifact, `packages/${entry.kind}/${entry.id}/${entry.artifact.name}`)
     const files = unpackSafeZip(packageBytes)
-    if (entry.kind === "plugin") {
-      const manifest = files["manifest.json"]
-      if (!manifest) throw new Error("Locked Plugin is missing manifest.json")
-      const rawManifest = json(manifest, "Locked Plugin manifest")
-      const parsed = validateLockedPluginManifest(rawManifest, registryEntry.manifest, entry)
-      const declaredSkillNames = new Set(parsed.contributes.skills?.map((skill) => skill.name) ?? [])
-      const registryOwnedSkills = registry.packages.filter(
-        (candidate) => candidate.kind === "skill" && candidate.ownerPluginId === entry.id,
-      )
-      if (
-        declaredSkillNames.size !== registryOwnedSkills.length ||
-        registryOwnedSkills.some((skill) => !declaredSkillNames.has(skill.id)) ||
-        entry.ownedSkills.length !== registryOwnedSkills.length
-      ) {
-        throw new Error("Locked Plugin owned Skills do not close its manifest and Registry")
+    if (entry.kind === "skill") {
+      if (registryEntry.kind !== "skill" || registryEntry.ownerPluginId !== undefined) {
+        throw new Error("Locked standalone Skill does not match the Official Registry")
       }
+      validateLockedSkillArchive(files, entry)
+      continue
+    }
+
+    const manifest = files["manifest.json"]
+    if (!manifest) throw new Error("Locked Plugin is missing manifest.json")
+    const rawManifest = json(manifest, "Locked Plugin manifest")
+    const parsed = validateLockedPluginManifest(rawManifest, registryEntry.manifest, entry)
+    const declaredSkillNames = new Set(parsed.contributes.skills?.map((skill) => skill.name) ?? [])
+    const registryOwnedSkills = registry.packages.filter(
+      (candidate) => candidate.kind === "skill" && candidate.ownerPluginId === entry.id,
+    )
+    if (
+      declaredSkillNames.size !== registryOwnedSkills.length ||
+      registryOwnedSkills.some((skill) => !declaredSkillNames.has(skill.id)) ||
+      entry.ownedSkills.length !== registryOwnedSkills.length
+    ) {
+      throw new Error("Locked Plugin owned Skills do not close its manifest and Registry")
     }
     for (const skill of entry.ownedSkills) {
       const ownedSkill = registry.packages.find(
         (candidate) =>
           candidate.kind === "skill" &&
           candidate.ownerPluginId === entry.id &&
+          candidate.yanked !== true &&
           candidate.delivery.kind === "artifact" &&
           candidate.delivery.url === skill.url &&
           candidate.delivery.size === skill.size &&
           candidate.delivery.sha256 === skill.sha256,
       )
       if (!ownedSkill) throw new Error("Locked owned Skill does not match the Official Registry")
-      const bytes = await add(skill, `${prefix}/${entry.id}/skills/${skill.name}`)
+      const bytes = await add(skill, `packages/plugin/${entry.id}/skills/${skill.name}`)
       const skillFiles = unpackSafeZip(bytes)
-      const markdown = skillFiles["SKILL.md"]
-      if (!markdown) throw new Error("Locked owned Skill is missing SKILL.md")
-      parseAgentSkillMarkdown(new TextDecoder("utf-8", { fatal: true }).decode(markdown))
+      validateLockedSkillArchive(skillFiles, ownedSkill)
     }
     for (const companion of entry.companions) {
       const matched = registryEntry.companions?.some((declaration) =>
@@ -203,7 +233,10 @@ export async function stageMarketplaceProductLock(options: {
         ),
       )
       if (!matched) throw new Error("Locked companion does not match the Official Registry")
-      await add(companion, `${prefix}/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`)
+      await add(
+        companion,
+        `packages/plugin/${entry.id}/companions/${companion.platform}-${companion.arch}/${companion.name}`,
+      )
     }
   }
   const reservation = {
@@ -223,16 +256,17 @@ export async function stageMarketplaceProductLock(options: {
   const temporary = path.join(parent, `.${path.basename(options.outputDirectory)}.${randomUUID()}`)
   const backup = path.join(parent, `.${path.basename(options.outputDirectory)}.backup.${randomUUID()}`)
   await fs.mkdir(temporary, { mode: 0o700 })
+  const packagedArtifacts = deduplicateStagedMarketplaceArtifacts(staged)
   let hasBackup = false
   try {
-    for (const entry of staged) {
+    for (const entry of packagedArtifacts) {
       const target = path.join(temporary, entry.path)
       await fs.mkdir(path.dirname(target), { recursive: true })
       await fs.writeFile(target, entry.bytes, { flag: "wx", mode: 0o600 })
     }
     await fs.writeFile(
       path.join(temporary, "manifest.json"),
-      `${JSON.stringify({ lock, paths: staged.map(({ lock, path }) => ({ sha256: lock.sha256, size: lock.size, path })), reservation, schema: "convax.packaged-marketplace-product/1" })}\n`,
+      `${JSON.stringify({ lock, paths: packagedArtifacts.map(({ lock, path }) => ({ sha256: lock.sha256, size: lock.size, path })), reservation, schema: "convax.packaged-marketplace-product/1" })}\n`,
       { flag: "wx", mode: 0o600 },
     )
     try {
