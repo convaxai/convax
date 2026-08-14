@@ -67,7 +67,7 @@ describe("PluginServiceHost", () => {
       listServices: async () => [checkoutSummary],
     }
     const opened: string[] = []
-    const onServiceMutation = mock(async () => undefined)
+    const onServiceMutation = mock(async (_pluginId: string) => undefined)
     const host = new PluginServiceHost(
       runtime,
       undefined,
@@ -84,6 +84,7 @@ describe("PluginServiceHost", () => {
     expect(calls).toEqual([{ call: "checkout", input: { planKey: "pro" } }, { call: "status" }])
     expect(opened).toEqual(["https://checkout.example.test/session/123?provider=secure"])
     expect(onServiceMutation).toHaveBeenCalledTimes(1)
+    expect(onServiceMutation).toHaveBeenCalledWith("account-tools")
   })
 
   test("returns only a validated structured status and ignores raw MCP text", async () => {
