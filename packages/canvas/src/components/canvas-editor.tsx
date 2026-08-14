@@ -8,6 +8,7 @@ import {
   ReactFlowProvider,
   SelectionMode,
   useReactFlow,
+  useStoreApi,
   useViewport,
   type Connection,
   type EdgeChange,
@@ -171,8 +172,7 @@ import {
 } from "../motion"
 import {
   CANVAS_CONNECTION_RADIUS,
-  CANVAS_MULTI_SELECTION_KEYS,
-  CANVAS_ZOOM_ACTIVATION_KEYS,
+  isCanvasMultiSelectionPointerGesture,
   resolveCanvasInteractionPolicy,
   type CanvasInteractionTool,
 } from "../interaction"
@@ -252,14 +252,13 @@ import type {
   CanvasSize,
 } from "../types"
 import {
-  createCanvasShortcutHandler,
+  canRunCanvasShortcutCommand,
   isCanvasEditableShortcutTarget,
-  isCanvasExternalDragChordHeld,
-  isCanvasExternalDragChordKey,
   resolveCanvasTidyShortcutScope,
-  type CanvasShortcutOptions,
+  runCanvasShortcutCommand,
+  type CanvasShortcutActions,
+  type CanvasShortcutCommand,
 } from "../use-canvas-shortcuts"
-import { useSpacePanning } from "../use-space-panning"
 import {
   assertCanvasViewGuard,
   CANVAS_VIEW_MAX_ZOOM,
@@ -301,7 +300,6 @@ const CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR = [
   "video",
   "iframe",
   "[contenteditable]:not([contenteditable='false'])",
-  ".nodrag",
   "[data-canvas-shortcuts='ignore']",
 ].join(", ")
 function subscribeToCanvasMotionPreference(onChange: () => void) {
@@ -641,6 +639,8 @@ type CanvasEditorTransientAction = {
 }
 
 export interface CanvasEditorHandle {
+  /** Reports whether Canvas can currently accept one host-routed shortcut command. */
+  canRunShortcut: (command: CanvasShortcutCommand) => boolean
   /** Persists pending commands and returns Main's authoritative document projection. */
   flush: () => Promise<CanvasDocument>
   /** Inserts one registered node type through the ordinary editor flow and returns its id when accepted. */
@@ -654,9 +654,15 @@ export interface CanvasEditorHandle {
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
+  /** Executes one host-routed shortcut command through Canvas's existing editor operations. */
+  runShortcut: (command: CanvasShortcutCommand) => boolean
   resumeAfterLeaveCanceled: () => void
   /** Selects existing nodes after a host-owned mutation has been reloaded. */
   selectNodes: (nodeIds: readonly string[]) => void
+  /** Applies a host-routed transient native-drag shortcut state. Persistent mode is unaffected by release. */
+  setExternalDragShortcutHeld: (held: boolean) => boolean
+  /** Applies the host-routed Space panning hold without installing a Canvas-owned global listener. */
+  setSpacePanningShortcutHeld: (held: boolean) => boolean
   /** @deprecated Prefer CanvasEditorHandle.openGenerate and the Canvas-owned composer. */
   submitGeneration: (submission: CanvasGenerationComposerSubmission) => void
 }
@@ -1301,7 +1307,10 @@ function CanvasEditorContent(
     guard: CanvasPostMutationRevealGuard
     nodeIds: readonly string[]
   } | null>(null)
-  const spacePanning = useSpacePanning()
+  const [spacePanning, setSpacePanning] = useState(false)
+  const spacePanningRef = useRef(false)
+  const shortcutCanRunRef = useRef<(command: CanvasShortcutCommand) => boolean>(() => false)
+  const shortcutRunRef = useRef<(command: CanvasShortcutCommand) => boolean>(() => false)
   const osPrefersReducedMotion = useCanvasReducedMotion()
   const prefersReducedMotion = resolveCanvasReducedMotion(props.reducedMotion, osPrefersReducedMotion)
   const nodeEntryScopeKey = `${props.viewScopeId ?? ""}:${history.document.id}`
@@ -1391,8 +1400,36 @@ function CanvasEditorContent(
   const submitGenerationRef = useRef<(submission: CanvasGenerationComposerSubmission) => void>(() => undefined)
   const pendingDraftsRef = useRef(createCanvasPendingDraftRegistry())
   const reactFlow = useReactFlow<CanvasNode>()
+  const reactFlowStore = useStoreApi<CanvasNode>()
   const reactFlowRef = useRef(reactFlow)
+  const pointerMultiSelectionGenerationRef = useRef(0)
   reactFlowRef.current = reactFlow
+  const setPointerMultiSelection = useCallback(
+    (active: boolean) => {
+      pointerMultiSelectionGenerationRef.current += 1
+      reactFlowStore.setState({ multiSelectionActive: active })
+    },
+    [reactFlowStore],
+  )
+  const clearPointerMultiSelection = useCallback(() => setPointerMultiSelection(false), [setPointerMultiSelection])
+  const schedulePointerMultiSelectionClear = useCallback(() => {
+    const generation = pointerMultiSelectionGenerationRef.current
+    window.setTimeout(() => {
+      if (pointerMultiSelectionGenerationRef.current !== generation) return
+      clearPointerMultiSelection()
+    }, 0)
+  }, [clearPointerMultiSelection])
+  useEffect(() => {
+    window.addEventListener("blur", clearPointerMultiSelection)
+    window.addEventListener("pointercancel", clearPointerMultiSelection)
+    window.addEventListener("pointerup", schedulePointerMultiSelectionClear)
+    return () => {
+      window.removeEventListener("blur", clearPointerMultiSelection)
+      window.removeEventListener("pointercancel", clearPointerMultiSelection)
+      window.removeEventListener("pointerup", schedulePointerMultiSelectionClear)
+      clearPointerMultiSelection()
+    }
+  }, [clearPointerMultiSelection, schedulePointerMultiSelectionClear])
   const mutationService = useCanvasService("mutation")
   const folderBrowseService = useCanvasService("folderBrowse")
   const hydrationService = useCanvasService("hydration")
@@ -2905,7 +2942,6 @@ function CanvasEditorContent(
     [props.selectionDragSource, selectionActionContext],
   )
   const [selectionDragStateVersion, refreshSelectionDragState] = useReducer((version: number) => version + 1, 0)
-  const selectionDragShortcutModifierRef = useRef<CanvasShortcutOptions["externalDragShortcutModifier"]>(undefined)
   const selectionDragMountedRef = useRef(false)
   const selectionDragErrorRef = useRef(notifyError)
   const selectionDragGestureRef = useRef<CanvasSelectionDragGestureController | null>(null)
@@ -2920,7 +2956,6 @@ function CanvasEditorContent(
   }
   const selectionDragGesture = selectionDragGestureRef.current
   selectionDragModeActiveRef.current = selectionDragModeActive
-  selectionDragShortcutModifierRef.current = props.selectionDragSource?.shortcutModifier
   const selectionDragChordHeld = selectionDragGesture.held
   const interactionPolicy = resolveCanvasInteractionPolicy({
     readOnly,
@@ -3093,51 +3128,6 @@ function CanvasEditorContent(
     if (!selectionDragModeActive) return
     if (!props.selectionDragSource?.mode || readOnly) exitSelectionDragMode()
   }, [exitSelectionDragMode, props.selectionDragSource, readOnly, selectionDragModeActive])
-  useEffect(() => {
-    const cancelActiveDrag = () => {
-      if (selectionDragGesture.held && !selectionDragModeActiveRef.current) cancelSelectionDrag()
-    }
-    const cancelOnKeyUp = (event: globalThis.KeyboardEvent) => {
-      if (
-        selectionDragGesture.held &&
-        !selectionDragModeActiveRef.current &&
-        isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current) &&
-        !isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current)
-      ) {
-        cancelSelectionDrag()
-      }
-    }
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (
-        !selectionDragModeActiveRef.current &&
-        isCanvasExternalDragChordHeld(event, selectionDragShortcutModifierRef.current) &&
-        isCanvasExternalDragChordKey(event.key, selectionDragShortcutModifierRef.current)
-      ) {
-        armSelectionDrag()
-        return
-      }
-      if (
-        selectionDragGesture.held &&
-        !selectionDragModeActiveRef.current &&
-        !["Meta", "Control", "Shift"].includes(event.key)
-      ) {
-        cancelSelectionDrag()
-      }
-    }
-    const cancelWhenHidden = () => {
-      if (document.hidden) cancelActiveDrag()
-    }
-    window.addEventListener("blur", cancelActiveDrag)
-    window.addEventListener("keydown", handleKeyDown, true)
-    window.addEventListener("keyup", cancelOnKeyUp, true)
-    document.addEventListener("visibilitychange", cancelWhenHidden)
-    return () => {
-      window.removeEventListener("blur", cancelActiveDrag)
-      window.removeEventListener("keydown", handleKeyDown, true)
-      window.removeEventListener("keyup", cancelOnKeyUp, true)
-      document.removeEventListener("visibilitychange", cancelWhenHidden)
-    }
-  }, [armSelectionDrag, cancelSelectionDrag, selectionDragGesture])
   const startSelectionDrag = useCallback(() => {
     if (!selectionDragGesture.held || selectionDragGesture.consumed || !selectionDragContextIsCurrent()) {
       cancelSelectionDrag()
@@ -3614,6 +3604,9 @@ function CanvasEditorContent(
   useImperativeHandle(
     props.editorRef,
     () => ({
+      canRunShortcut(command) {
+        return shortcutCanRunRef.current(command)
+      },
       async flush() {
         await waitForStableLoad()
         return startSave(historyRef.current.document)
@@ -3669,12 +3662,25 @@ function CanvasEditorContent(
       async reloadAuthoritative() {
         await reloadAuthoritativeDocument()
       },
+      runShortcut(command) {
+        return shortcutRunRef.current(command)
+      },
       resumeAfterLeaveCanceled() {
         leavingRef.current = false
         setLeaving(false)
       },
       selectNodes(nodeIds) {
         selectNodes(nodeIds)
+      },
+      setExternalDragShortcutHeld(held) {
+        if (held) return selectionDragModeActiveRef.current ? false : armSelectionDrag()
+        return selectionDragModeActiveRef.current ? false : cancelSelectionDrag()
+      },
+      setSpacePanningShortcutHeld(held) {
+        if (spacePanningRef.current === held) return false
+        spacePanningRef.current = held
+        setSpacePanning(held)
+        return true
       },
       submitGeneration(submission) {
         submitGenerationRef.current(submission)
@@ -3683,6 +3689,8 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       addNode,
+      armSelectionDrag,
+      cancelSelectionDrag,
       finalizeGestureAndSave,
       notificationService,
       props.editorRef,
@@ -4547,99 +4555,68 @@ function CanvasEditorContent(
     },
     [updateConnectionTargetNode],
   )
-  const shortcutHandler = createCanvasShortcutHandler(
-    {
-      addNode: () => setNodeMenuOpen(true),
-      armExternalDrag: () => {
-        if (!selectionDragModeActiveRef.current) armSelectionDrag()
-      },
-      cancelExternalDrag: () => {
-        if (selectionDragModeActiveRef.current) exitSelectionDragMode()
-        else cancelSelectionDrag()
-      },
-      clearSelection: clearOverlays,
-      copy,
-      delete: remove,
-      duplicate,
-      fitView: fitCanvas,
-      generate: () => {
-        requestGenerate()
-      },
-      group,
-      hand: () => activateInteractionTool("hand"),
-      layout: () =>
-        resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
-          ? tidySelection()
-          : layoutCanvas(),
-      openSearch: () => setSearchOpen(true),
-      paste,
-      redo: () => dispatch({ type: "redo" }),
-      select: () => activateInteractionTool("select"),
-      selectAll: () => selectNodes(canvasNodeIds),
-      undo: () => dispatch({ type: "undo" }),
-      ungroup: () => {
-        if (groupMenuCapabilities.canUnfold) unfold()
-        else ungroup()
-      },
-      zoomIn: () => {
-        markUserNavigation()
-        void reactFlow.zoomIn({
-          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-          ease: canvasViewportEase,
-          interpolate: "smooth",
-        })
-      },
-      zoomOut: () => {
-        markUserNavigation()
-        void reactFlow.zoomOut({
-          duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
-          ease: canvasViewportEase,
-          interpolate: "smooth",
-        })
-      },
-    },
-    readOnly,
-    {
-      canArmExternalDrag: Boolean(props.selectionDragSource) && !readOnly && !selectionDragModeActive,
-      externalDragShortcutModifier: props.selectionDragSource?.shortcutModifier,
-      externalDragArmed: selectionDragChordHeld,
-    },
-  )
-  const handleCanvasKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const interactiveTarget =
-      typeof Element !== "undefined" && event.target instanceof Element
-        ? event.target.closest(CANVAS_POINTER_FOCUS_INTERACTIVE_SELECTOR)
-        : null
-    if (!interactiveTarget && event.key === "Escape" && folderFocus) {
-      event.preventDefault()
-      event.stopPropagation()
-      const parent = folderFocus.path.at(-2)
-      if (parent) {
-        void navigateFolderFocus(folderFocus.ownerNodeId, parent.id, {
-          path: folderFocus.path.slice(0, -1),
-        })
-      } else {
-        void leaveFolderFocus()
-      }
-      return
-    }
-    if (!interactiveTarget && event.key === "Escape" && groupFocus.focusedGroupId) {
-      event.preventDefault()
-      event.stopPropagation()
-      void navigateGroupFocus(groupFocus.parentGroupId)
-      return
-    }
-    if (!interactiveTarget && event.key === "Enter" && hasSingleGroupSelection) {
-      const groupId = selectionContext.kind === "single-node" ? selectionContext.nodeId : null
-      if (groupId) {
-        event.preventDefault()
-        event.stopPropagation()
-        focusGroup(groupId)
+  const shortcutActions: CanvasShortcutActions = {
+    addNode: () => setNodeMenuOpen(true),
+    clearSelection: () => {
+      if (folderFocus) {
+        const parent = folderFocus.path.at(-2)
+        if (parent) {
+          void navigateFolderFocus(folderFocus.ownerNodeId, parent.id, {
+            path: folderFocus.path.slice(0, -1),
+          })
+        } else {
+          void leaveFolderFocus()
+        }
         return
       }
-    }
-    shortcutHandler(event)
+      if (groupFocus.focusedGroupId) {
+        void navigateGroupFocus(groupFocus.parentGroupId)
+        return
+      }
+      clearOverlays()
+    },
+    delete: remove,
+    duplicate,
+    enterGroup:
+      hasSingleGroupSelection && selectionContext.kind === "single-node"
+        ? () => focusGroup(selectionContext.nodeId)
+        : undefined,
+    fitView: fitCanvas,
+    generate: () => {
+      requestGenerate()
+    },
+    group,
+    hand: () => activateInteractionTool("hand"),
+    layout: () =>
+      resolveCanvasTidyShortcutScope(canArrangeSelection, selectedNodeIds.length) === "selection"
+        ? tidySelection()
+        : layoutCanvas(),
+    openSearch: () => setSearchOpen(true),
+    select: () => activateInteractionTool("select"),
+    selectAll: () => selectNodes(canvasNodeIds),
+    ungroup: () => {
+      if (groupMenuCapabilities.canUnfold) unfold()
+      else ungroup()
+    },
+    zoomIn: () => {
+      markUserNavigation()
+      void reactFlow.zoomIn({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+      })
+    },
+    zoomOut: () => {
+      markUserNavigation()
+      void reactFlow.zoomOut({
+        duration: resolveCanvasMotionDuration(CANVAS_MOTION_DURATION.stepZoom, prefersReducedMotion),
+        ease: canvasViewportEase,
+        interpolate: "smooth",
+      })
+    },
   }
+  shortcutCanRunRef.current = (command) => canRunCanvasShortcutCommand(command, shortcutActions, readOnly)
+  shortcutRunRef.current = (command) => runCanvasShortcutCommand(command, shortcutActions, readOnly)
   const controller = useMemo(
     () => ({
       document: history.document,
@@ -5220,6 +5197,11 @@ function CanvasEditorContent(
                   data-canvas-color-scheme={appearance.colorScheme}
                   data-canvas-reduced-motion={String(prefersReducedMotion)}
                   data-canvas-tool={interactionTool}
+                  onBlurCapture={(event) => {
+                    if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return
+                    clearPointerMultiSelection()
+                    if (!selectionDragModeActiveRef.current) cancelSelectionDrag()
+                  }}
                   onCopy={onCanvasCopy}
                   onDragOver={(event) => {
                     if (!mutationService || !canvasPointerMutationEnabled) return
@@ -5265,9 +5247,9 @@ function CanvasEditorContent(
                       interpolate: "smooth",
                     })
                   }}
-                  onKeyDown={handleCanvasKeyDown}
                   onPaste={onCanvasPaste}
                   onPointerCancelCapture={() => {
+                    clearPointerMultiSelection()
                     boxSelectionActiveRef.current = false
                     boxSelectionBaselineRef.current = null
                     altDragRef.current = null
@@ -5277,6 +5259,7 @@ function CanvasEditorContent(
                     dispatch({ type: "cancel-gesture" })
                   }}
                   onPointerDownCapture={(event) => {
+                    setPointerMultiSelection(isCanvasMultiSelectionPointerGesture(event))
                     const canvasRoot = rootRef.current
                     const interactiveTarget =
                       event.target instanceof Element
@@ -5335,7 +5318,7 @@ function CanvasEditorContent(
                     elementsSelectable={interactionProps.elementsSelectable}
                     maxZoom={CANVAS_MAX_ZOOM}
                     minZoom={CANVAS_MIN_ZOOM}
-                    multiSelectionKeyCode={[...CANVAS_MULTI_SELECTION_KEYS]}
+                    multiSelectionKeyCode={null}
                     nodeTypes={nodeTypes}
                     nodes={nodes}
                     nodesConnectable={interactionProps.nodesConnectable}
@@ -5344,7 +5327,7 @@ function CanvasEditorContent(
                     nodeDragThreshold={4}
                     onlyRenderVisibleElements={props.onlyRenderVisibleElements ?? true}
                     autoPanOnNodeFocus={false}
-                    panActivationKeyCode="Space"
+                    panActivationKeyCode={null}
                     panOnDrag={interactionProps.panOnDrag}
                     panOnScroll
                     selectionKeyCode={null}
@@ -5352,7 +5335,7 @@ function CanvasEditorContent(
                     selectionMode={SelectionMode.Partial}
                     snapGrid={CANVAS_SNAP_GRID}
                     snapToGrid={snapEnabled}
-                    zoomActivationKeyCode={[...CANVAS_ZOOM_ACTIVATION_KEYS]}
+                    zoomActivationKeyCode={null}
                     zoomOnDoubleClick={false}
                     zoomOnPinch
                     zoomOnScroll={false}

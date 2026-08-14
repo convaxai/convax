@@ -212,6 +212,11 @@ mock.module("@xyflow/react", () => ({
     zoomOut,
     zoomTo,
   }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
+  }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
 
@@ -425,6 +430,7 @@ test("does not feed a selection-action refresh back into Canvas document updates
 test("switches Select and Hand modes through canvas shortcuts", async () => {
   const restoreWindow = installTestWindow()
   let root: Root | undefined
+  const editorRef = createRef<CanvasEditorHandle>()
   EditorProbe = EditorStateProbe
   observedEditor = undefined
   observedReactFlowProps = undefined
@@ -441,7 +447,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     })
     const session = new TestCanvasSession(createCanvasDocument({ id: "interaction-tools", nodes: [interactionNode] }))
     await act(async () => {
-      root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
+      root?.render(<CanvasEditor ref={editorRef} services={createCanvasServices()} session={session} />)
     })
 
     const canvas = container.querySelector<HTMLElement>(".convax-canvas")
@@ -505,7 +511,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     await act(async () => getObservedEditor()?.selectNodes([]))
 
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
+      editorRef.current?.runShortcut("hand-tool")
     })
     expect(canvas?.dataset.canvasTool).toBe("hand")
     expect(observedReactFlowProps).toMatchObject({
@@ -528,18 +534,19 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(session.commands).toHaveLength(1)
 
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "v" }))
+      editorRef.current?.runShortcut("select-tool")
     })
     expect(canvas?.dataset.canvasTool).toBe("select")
 
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+      editorRef.current?.setSpacePanningShortcutHeld(true)
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
     expect(observedReactFlowProps).toMatchObject({
       elementsSelectable: false,
       nodesConnectable: false,
       nodesDraggable: false,
+      panOnDrag: true,
       selectionOnDrag: false,
     })
     await act(async () => {
@@ -554,7 +561,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     expect(getObservedEditor()?.selection.nodeIds.size).toBe(0)
     expect(session.commands).toHaveLength(1)
     await act(async () => {
-      window.dispatchEvent(new Event("blur"))
+      editorRef.current?.setSpacePanningShortcutHeld(false)
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeFalse()
     expect(observedReactFlowProps).toMatchObject({
@@ -565,12 +572,11 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     })
 
     await act(async () => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { code: "Space" }))
+      editorRef.current?.setSpacePanningShortcutHeld(true)
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeTrue()
-    Object.defineProperty(document, "hidden", { configurable: true, value: true })
     await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"))
+      editorRef.current?.setSpacePanningShortcutHeld(false)
     })
     expect(canvas?.classList.contains("is-space-panning")).toBeFalse()
 
@@ -583,7 +589,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
     await act(async () => {
       canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "h" }))
     })
-    expect(canvas?.dataset.canvasTool).toBe("hand")
+    expect(canvas?.dataset.canvasTool).toBe("select")
   } finally {
     EditorProbe = undefined
     if (root) await act(async () => root?.unmount())
@@ -591,7 +597,7 @@ test("switches Select and Hand modes through canvas shortcuts", async () => {
   }
 })
 
-test("reclaims Canvas focus during node drag so undo uses session history", async () => {
+test("reclaims Canvas focus during node drag without changing an editor draft", async () => {
   const restoreWindow = installTestWindow()
   let root: Root | undefined
   observedReactFlowProps = undefined
@@ -607,9 +613,6 @@ test("reclaims Canvas focus during node drag so undo uses session history", asyn
       resourceState: { status: "ready", text: "Draft remains unchanged" },
     })
     const session = new TestCanvasSession(createCanvasDocument({ id: "drag-focus", nodes: [textNode] }))
-    const undo = mock(async () => undefined)
-    session.canUndoValue = true
-    session.undoRequest = undo
 
     await act(async () => {
       root?.render(<CanvasEditor services={createCanvasServices()} session={session} />)
@@ -630,12 +633,10 @@ test("reclaims Canvas focus during node drag so undo uses session history", asyn
 
     await act(async () => {
       observedReactFlowProps?.onNodeDragStop?.()
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "z", metaKey: true }))
       await Promise.resolve()
     })
 
     expect(document.activeElement).toBe(canvas)
-    expect(undo).toHaveBeenCalledTimes(1)
     expect(textEditor.textContent).toBe("Draft remains unchanged")
   } finally {
     if (root) await act(async () => root?.unmount())
@@ -1066,6 +1067,7 @@ test("unfolds a folded folder without leaving or creating a Group", async () => 
 test("double-clicks a Project folder into a read-only transient Canvas focus", async () => {
   const restoreWindow = installTestWindow()
   let root: Root | undefined
+  const editorRef = createRef<CanvasEditorHandle>()
   EditorProbe = EditorStateProbe
   fitView.mockClear()
 
@@ -1127,6 +1129,7 @@ test("double-clicks a Project folder into a read-only transient Canvas focus", a
     await act(async () => {
       root?.render(
         <CanvasEditor
+          ref={editorRef}
           initialDocument={createCanvasDocument({ id: "folder-focus", nodes: [folder] })}
           services={createCanvasServices({ folderBrowse: { list } })}
         />,
@@ -1163,15 +1166,14 @@ test("double-clicks a Project folder into a read-only transient Canvas focus", a
     expect(container.querySelector('[aria-label="Canvas path"]')?.textContent).toContain("CanvasDesignReferences")
     expect(container.querySelector('[data-canvas-folder-focus-state="empty"]')).not.toBeNull()
 
-    const canvas = container.querySelector<HTMLElement>(".convax-canvas")
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+      editorRef.current?.runShortcut("clear-selection")
       await Promise.resolve()
       await Promise.resolve()
     })
     expect(observedReactFlowProps?.nodes).toHaveLength(2)
     await act(async () => {
-      canvas?.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" }))
+      editorRef.current?.runShortcut("clear-selection")
       await Promise.resolve()
       await Promise.resolve()
     })

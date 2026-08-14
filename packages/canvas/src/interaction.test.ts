@@ -1,14 +1,31 @@
 import { describe, expect, test } from "bun:test"
 import {
   CANVAS_CONNECTION_RADIUS,
-  CANVAS_MULTI_SELECTION_KEYS,
+  isCanvasMultiSelectionPointerGesture,
   resolveCanvasInteractionPolicy,
 } from "./interaction"
 
 describe("Canvas interaction policy", () => {
-  test("keeps the connection target and multi-selection gesture explicit", () => {
+  test("keeps the connection target explicit", () => {
     expect(CANVAS_CONNECTION_RADIUS).toBe(120)
-    expect(CANVAS_MULTI_SELECTION_KEYS).toEqual(["Meta", "Shift"])
+  })
+
+  test("admits only exact primary-button pointer modifiers for additive selection", () => {
+    const event = (overrides: Partial<PointerEvent> = {}) =>
+      ({
+        altKey: false,
+        button: 0,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        ...overrides,
+      }) as PointerEvent
+
+    expect(isCanvasMultiSelectionPointerGesture(event({ metaKey: true }))).toBeTrue()
+    expect(isCanvasMultiSelectionPointerGesture(event({ shiftKey: true }))).toBeTrue()
+    expect(isCanvasMultiSelectionPointerGesture(event({ metaKey: true, shiftKey: true }))).toBeFalse()
+    expect(isCanvasMultiSelectionPointerGesture(event({ altKey: true, metaKey: true }))).toBeFalse()
+    expect(isCanvasMultiSelectionPointerGesture(event({ button: 1, metaKey: true }))).toBeFalse()
   })
 
   test.each([
@@ -23,6 +40,7 @@ describe("Canvas interaction policy", () => {
     expect(policy.nodesConnectable).toBeFalse()
     expect(policy.nodesDraggable).toBeFalse()
     expect(policy.selectionOnDrag).toBeFalse()
+    if (input.spacePanning || input.tool === "hand") expect(policy.panOnDrag).toBeTrue()
   })
 
   test("allows Select gestures while reserving the external-drag chord", () => {

@@ -176,6 +176,28 @@ flowchart TB
       Composition --> Main
     end
 
+    subgraph ShortcutRouting["Renderer shortcut routing · transient only"]
+      ShortcutRegistry["Scoped Shortcut Registry<br/>feature registrations"]
+      ShortcutScope["Scope router + conflict arbitration<br/>application · conversation · Canvas · node input"]
+      CommandShortcut["CommandShortcut<br/>consuming one-shot"]
+      HoldShortcut["HoldShortcut<br/>consuming held lifecycle"]
+      GestureModifier["GestureModifier<br/>non-consuming pointer modifier"]
+      ShortcutRelease["Release coordinator<br/>keyup · scope/focus · blur · visibility · dispose"]
+      GestureAdapter["Renderer Canvas gesture adapter<br/>Space pan · later dragstart"]
+
+      ShortcutRegistry --> ShortcutScope
+      ShortcutScope --> CommandShortcut
+      ShortcutScope --> HoldShortcut
+      ShortcutScope --> GestureModifier
+      ShortcutRelease -->|clears| HoldShortcut
+      ShortcutRelease -->|clears| GestureModifier
+      HoldShortcut -->|typed held-state port| GestureAdapter
+      GestureModifier -->|typed held-state port| GestureAdapter
+    end
+
+    Renderer --> ShortcutRegistry
+    Renderer --> ShortcutRelease
+
     subgraph Packages["Headless and publishable packages"]
       Workbench["@convax/workbench"]
       Project["@convax/project"]
@@ -199,6 +221,10 @@ flowchart TB
       Project --> UI
       PluginSdk --> PluginApi
     end
+
+    CommandShortcut -->|typed canRunShortcut / runShortcut port| Canvas
+    GestureAdapter -->|host-neutral gesture semantics| Canvas
+    GestureAdapter -->|opaque native drag request| Preload
 
     ProtocolDescriptor["Packaged current protocol descriptor<br/>generated from owner schemas · exact protocolDigest"]
     Collaboration --> ProtocolDescriptor
@@ -718,6 +744,7 @@ boundary checker fails closed until those admissions are complete.
 | Plugin surface node, Plugin requirement and initial state             | Canvas plugin-surface creation intent                    | Main derives every Plugin-bound fact from one exact ActiveSet lease; Renderer sends only ids                       |
 | Plugin node instance state                                            | Owning Canvas `file` node                                | Bounded namespaced JSON inside the Canvas document; never iframe storage                                           |
 | Top-level sidebar size/visibility/resize transaction                  | `WorkbenchLayoutController`                              | Desktop supplies pixels, events, animation and persistence                                                         |
+| Active keyboard shortcut scope and held-key lifecycle                 | Desktop Renderer scoped shortcut service                 | Transient discriminated shortcut-kind projection only; no Workbench, Canvas document, or browser-storage mirror    |
 | Agent sessions                                                        | `@convax/agent-runtime` scoped by the host               | Never stored in Project Canvas state                                                                               |
 | OpenCode Skill discovery                                              | `@convax/agent-runtime`                                  | Runtime sees generic directories, never Desktop ownership metadata                                                 |
 | Marketplace protocol, Plugin category taxonomy and Catalog grouping   | `@convax/marketplace`                                    | Headless validation and source-qualified display projections only                                                  |
@@ -2315,20 +2342,59 @@ selection actions. Desktop contributes that source only when the complete select
 contains managed image, video or audio file nodes and no edges. Preparation begins
 only after an explicit drag-out intent. The primary UI is the persistent **Drag to
 Other Apps** Canvas mode; `Command-Shift` on macOS (`Control-Shift` reserved for
-Windows) remains a transient compatibility gesture. The persistent mode preserves
-normal selection, box selection, pan and zoom, but disables in-Canvas node movement:
+Windows) remains a transient compatibility gesture while the Desktop Renderer
+shortcut service projects Canvas as the exact active focus scope. The service owns
+the one window-capture listener, the complete Desktop Canvas shortcut inventory,
+deterministic feature conflict arbitration, and held-key release. Ordinary Canvas
+commands cross one typed host-neutral `canRunShortcut`/`runShortcut` editor port;
+Space panning is a consuming `HoldShortcut`, while native drag is a non-consuming
+`GestureModifier`, and both cross narrow held/released ports. `CommandShortcut`,
+`HoldShortcut`, and `GestureModifier` form one closed discriminated registration
+union: a command runs once and consumes its winning keydown, a hold owns a consuming
+active/release lifecycle, and a gesture modifier only projects transient state for a
+later pointer gesture without calling `preventDefault` or stopping native event
+delivery. Renderer synchronously commits hold and gesture activation before the
+activating `keydown` returns, so pointer input from the same physical gesture cannot
+observe a stale Canvas presentation. Release remains teardown-safe and is not a
+forced nested React commit. Canvas installs no
+parallel command or Space Window listener and never infers activation from one.
+Entering a nested conversation or node-input scope, leaving Canvas focus, releasing
+a required modifier, pressing an unrelated key, window focus loss, document
+visibility loss, scope disposal, or service disposal cancels the transient gesture.
+Only top-level Window blur is focus loss; descendant DOM blur inside the active
+Canvas scope must not release the gesture. A pointer press may transiently leave
+`document.activeElement` on `body` while Canvas restores focus; the shortcut service
+rechecks that ambiguous exit on the next animation frame. Explicit transitions to
+another registered scope remain immediate, and a sustained outside-root focus
+releases the gesture. The persistent mode
+preserves normal selection, box selection, pan and zoom, but disables in-Canvas node movement:
 dragging a ready selected media node publishes the complete selection to the operating
 system instead. Canvas keeps a top reminder and explicit exit action while the mode
 is active, and prepares a fresh one-use source after each completed native drag.
 Escape, explicit exit, scope changes and read-only transitions leave the mode.
-Modifier release and window focus loss cancel only the transient chord gesture.
 Selection changes synchronously update the live view snapshot and replace the
 prepared immutable multi-selection. Preparation is asynchronous and abortable;
-`dragstart` only consumes an already prepared source synchronously.
+the synchronously armed Canvas presentation disables in-Canvas movement and exposes
+its waiting state while preparation is pending, and `dragstart` only consumes an
+already prepared source synchronously. A pointerdown during preparation must not
+fall through to React Flow node movement. Renderer does
+not depend solely on macOS redelivering the
+preceding `keyup`: if a hold remains logically active and a fresh non-repeat
+matching `keydown` arrives, the scoped shortcut service releases the stale hold and
+routes the new physical hold. Key repeat never restarts a held feature. Main and
+preload remain outside that keyboard state and expose no native-drag completion
+event. The modifier state is transient Renderer/Canvas interaction state and is
+never persisted in Canvas, Workbench, browser storage, or native drag tickets. The
+same `HoldShortcut`/`GestureModifier` lifecycle is required for future Space-style
+temporary tools, Alt-drag duplication modifiers, and other operations begun by a
+later pointer gesture.
 
 Renderer and preload never receive a native path. Main re-resolves the live active
-Canvas and exact selection, verifies exact semantic/resource guards and managed `.convax/assets` references,
-MIME/signature, regular-file identity and aggregate limits, then stages private
+Canvas and exact selection, verifies exact semantic/resource guards, resolves each
+current canonical Canvas resource through the live ProjectIndex projection (with
+legacy typed Project resource references retained only for compatibility), rechecks
+that owner projection, and validates MIME/signature, regular-file identity and
+aggregate limits before staging private
 copies below `userData/canvas-external-drags`. It returns a one-use, sender-scoped,
 short-lived opaque ticket. Before publication, Main derives a bounded native preview
 from the first staged material; multi-selection adds a count badge, while video and
@@ -2354,6 +2420,32 @@ without learning which Desktop utility produced the occlusion.
 
 This distinction applies to future panels: add generic state only when it is reusable
 window coordination; keep the product's visual implementation in the host.
+
+Desktop Renderer also owns the scoped shortcut service because focus routing is a
+window/DOM composition concern. A scope registers one DOM root and any number of
+feature registrations from the closed
+`CommandShortcut | HoldShortcut | GestureModifier` union. Commands are one-shot and
+consuming; holds are consuming and own active/release state; gesture modifiers are
+non-consuming transient inputs observed by a later pointer gesture. A root may also
+register prioritized target matchers for logical descendants such as node inputs or
+Canvas interaction surfaces. Exactly the deepest focused scope is active; application
+scope features are the only fallback and do not make inactive Canvas, conversation,
+or node-input features reachable. Within one scope and chord, highest explicit
+priority wins and equal priority keeps first-registration order; disposing the
+winner reveals the next registration. Editable descendants reject focus-scope
+features unless that feature explicitly opts in. Scope changes and top-level
+Window/document focus loss synchronously release every held feature; descendant DOM
+blur inside the active scope does not. A transient pointer-created body focus gap is
+rechecked on the next animation frame, while an explicit registered-scope transition
+remains synchronous and a sustained outside-root focus releases. The document body
+is an additional application root so app-owned portals retain application fallback,
+but direct `body`/`documentElement` focus remains an ambiguous transition and a
+portal never inherits stale Canvas scope. The service is instantiated and
+injected by Renderer composition, never discovered through a global/service locator,
+persisted, or moved into DOM-free Workbench. Domain packages may expose a narrow
+host-neutral command or held/released port but do not own the window listeners or
+arbitration. Held and gesture-modifier state is never durable domain state. Native
+copy/paste remains on the browser clipboard-event path.
 
 ## 10. Electron boundary
 

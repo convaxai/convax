@@ -5,6 +5,7 @@ import {
   createMediaNode,
   createTextNode,
 } from "@convax/canvas"
+import { canvasProjectionResourceMetadataKey, type CanvasResourceRef } from "@convax/canvas/collaboration"
 import { projectResourceReferenceKey, type ProjectResourceReference } from "@convax/project/canvas"
 import type {
   CanvasExternalMediaDragPrepareRequest,
@@ -20,6 +21,16 @@ const projectFileVideo = media("project-file-video", "video", {
   kind: "project-file",
   path: "Media/project-file-video.mp4",
 })
+const canonicalImage = createMediaNode({
+  id: "canonical-image",
+  position: { x: 0, y: 0 },
+  resource: {
+    id: "canonical-image-resource",
+    kind: "image",
+    metadata: { [canvasProjectionResourceMetadataKey]: canonicalImageResource() },
+    state: { status: "ready", url: "convax-asset://project/canonical-image" },
+  },
+})
 const text = createTextNode({
   id: "text",
   metadata: { [projectResourceReferenceKey]: { kind: "project-file", path: "Notes/no.md" } },
@@ -33,6 +44,19 @@ function managedReference(name: string, mediaType: string, digestCharacter: stri
     mediaType,
     name,
     sha256: digestCharacter.repeat(64),
+  }
+}
+
+function canonicalImageResource(): CanvasResourceRef {
+  const digest = "d".repeat(64)
+  return {
+    byteLength: "1" as never,
+    contentDigest: digest as never,
+    format: "convax.canvas-resource-ref",
+    mediaClass: "image",
+    mime: "image/png",
+    ownerProofDigest: "e".repeat(64) as never,
+    uri: `convax-project://project-one/epochs/AQEBAQEBAQEBAQEBAQEBAQ/entries/pf_${"a".repeat(64)}?blob=sha256%3A${digest}`,
   }
 }
 
@@ -102,6 +126,7 @@ describe("Canvas media external drag visibility", () => {
     expect(isManagedCanvasMediaDragSelection(context([image.id]))).toBe(true)
     expect(isManagedCanvasMediaDragSelection(context([video.id, audio.id, image.id]))).toBe(true)
     expect(isManagedCanvasMediaDragSelection(context([projectFileVideo.id], { nodes: [projectFileVideo] }))).toBe(true)
+    expect(isManagedCanvasMediaDragSelection(context([canonicalImage.id], { nodes: [canonicalImage] }))).toBe(true)
   })
 
   test("rejects empty, mixed, incomplete, edge, remote, private, and aborted selections", () => {
@@ -164,7 +189,6 @@ describe("Canvas media external drag lifecycle", () => {
     })
 
     const prepared = await source.prepare(context([audio.id, image.id]))
-    expect(source.shortcutModifier).toBe("meta")
     expect(source.mode?.label).toBe("Drag to Other Apps")
     expect(calls).toEqual(["flush", "prepare"])
     expect(adapter.prepared).toEqual([

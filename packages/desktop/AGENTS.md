@@ -89,6 +89,32 @@ contract and its routed references.
   Preload never receive or choose the default native creation path.
 - Workbench owns generic resize/collapse transactions. Desktop owns concrete pixels,
   viewport constraints, pointer/keyboard wiring, animation, and browser persistence.
+- Desktop Renderer owns one explicitly composed scoped shortcut service for window
+  keyboard routing. Registrations are the closed discriminated union
+  `CommandShortcut | HoldShortcut | GestureModifier`: commands consume one winning
+  keydown, holds consume and own active/release state, and gesture modifiers never
+  consume native key handling because a later pointer gesture observes their
+  transient state. The React binding must synchronously commit hold and gesture
+  activation before the activating `keydown` returns, so a pointer event from the
+  same physical gesture cannot observe the previous presentation state; release
+  remains safe across scope and component teardown. Focus scopes register DOM roots and feature/chord bindings;
+  the deepest focus scope wins, application features alone may fall back, and one
+  deterministic priority/registration-order winner handles a conflict within a
+  scope. Scope changes, top-level Window blur, visibility loss, and disposal release
+  all held features; descendant DOM blur inside the active scope must not impersonate
+  Window focus loss. A transient pointer-created `activeElement === body` gap is
+  rechecked on the next frame; explicit registered-scope transitions stay immediate,
+  and a sustained outside-root focus releases the held feature. A fresh non-repeat matching keydown releases and replaces a stale held
+  feature when a native operating-system loop swallowed keyup; repeat events never
+  restart it. Do not add parallel global listeners for application/workspace/Canvas
+  command routing or move DOM focus into Workbench. Register the complete product
+  Canvas chord inventory in Renderer and invoke only Canvas's typed shortcut-command
+  or held-state ports. Prioritized target-matched scopes isolate node inputs and
+  Canvas interaction surfaces. Gesture/hold state is never persisted to Canvas,
+  Workbench, browser storage, or native tickets. Register `document.body` only as an
+  additional application Portal root; direct body/document-element focus remains
+  ambiguous and never preserves Canvas scope. Native copy/paste stays on browser
+  clipboard events.
 - Main's Canvas application service is authoritative. Mounted UI submits closed
   commands through its originating session lease, installs the returned projection
   and accepted frame marker, and queries only for unknown/remote invalidation; it never saves a complete snapshot,

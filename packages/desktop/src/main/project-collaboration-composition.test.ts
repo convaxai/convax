@@ -33,20 +33,21 @@ describe("Project collaboration composition", () => {
       .toBe(harness.queryResult)
     expect(await harness.composition.canvasSessions.submit(harness.commandRequest)).toBe(harness.commandResult)
     expect(harness.canvasRoutes.switchProject).toHaveBeenCalledWith(PROJECT_A)
-    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(1)
+    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(2)
     expect(harness.resume).toHaveBeenCalledWith(PROJECT_A)
-    expect(harness.events).toEqual(["route:switch", "canvas:resume"])
+    expect(harness.events).toEqual(["route:switch", "route:switch", "canvas:resume"])
     await harness.composition.dispose()
   })
 
-  test("selects the Project route once per Project and never negotiates a protocol", async () => {
+  test("reselects the explicit Project after background runtimes change the Canvas route", async () => {
     const harness = composition()
 
-    await harness.composition.prepareProject(PROJECT_A)
-    await harness.composition.prepareProject(PROJECT_B)
+    await harness.composition.projectIndexes.queryCatalog({ projectId: PROJECT_A })
+    await harness.composition.projectIndexes.queryCatalog({ projectId: PROJECT_B })
     await harness.composition.prepareProject(PROJECT_A)
 
-    expect(harness.canvasRoutes.switchProject.mock.calls).toEqual([[PROJECT_A], [PROJECT_B]])
+    expect(harness.canvasRoutes.switchProject.mock.calls).toEqual([[PROJECT_A], [PROJECT_B], [PROJECT_A]])
+    expect(harness.events.slice(-2)).toEqual(["route:switch", "canvas:resume"])
     await harness.composition.dispose()
   })
 
@@ -89,7 +90,7 @@ describe("Project collaboration composition", () => {
     expect(() => harness.composition.canvasSessions.close({ ref, sessionId: opened.sessionId })).toThrow("stale")
 
     await harness.composition.prepareProject(PROJECT_A)
-    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(2)
+    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(3)
     await harness.composition.dispose()
   })
 
@@ -100,7 +101,7 @@ describe("Project collaboration composition", () => {
     await harness.composition.dispose()
 
     await expect(harness.composition.prepareProject(PROJECT_A)).rejects.toThrow("disposed")
-    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(1)
+    expect(harness.canvasRoutes.switchProject).toHaveBeenCalledTimes(2)
   })
 })
 

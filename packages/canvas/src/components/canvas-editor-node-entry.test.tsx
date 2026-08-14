@@ -19,12 +19,8 @@ import type { CanvasEditorHandle } from "./canvas-editor"
 let renderedNodes: CanvasNode[] = []
 let renderNodes = true
 let connect: ((connection: Connection) => void) | undefined
-let connectStart:
-  | ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void)
-  | undefined
-let connectEnd:
-  | ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void)
-  | undefined
+let connectStart: ((event: MouseEvent, params: { handleId: string | null; nodeId: string | null }) => void) | undefined
+let connectEnd: ((event: MouseEvent, state: { fromNode?: { id: string }; isValid: boolean }) => void) | undefined
 let nodesChange: ((changes: readonly { id: string; selected: boolean; type: "select" }[]) => void) | undefined
 const setViewport = mock(async (_viewport: unknown, _options?: { duration?: number }) => undefined)
 
@@ -240,6 +236,11 @@ void mock.module("@xyflow/react", () => ({
     zoomIn: async () => undefined,
     zoomOut: async () => undefined,
     zoomTo: async () => undefined,
+  }),
+  useStoreApi: () => ({
+    getState: () => ({}),
+    setState: () => undefined,
+    subscribe: () => () => undefined,
   }),
   useViewport: () => ({ x: 0, y: 0, zoom: 1 }),
 }))
@@ -1196,10 +1197,11 @@ test("hides a deleted node immediately and restores it when the authoritative co
   let resolveCommand: (() => void) | undefined
   let rejectCommand: ((error: Error) => void) | undefined
   const executeCommand = mock(
-    () => new Promise<void>((resolve, reject) => {
-      resolveCommand = resolve
-      rejectCommand = reject
-    }),
+    () =>
+      new Promise<void>((resolve, reject) => {
+        resolveCommand = resolve
+        rejectCommand = reject
+      }),
   )
   const notify = mock(() => undefined)
 
@@ -1223,8 +1225,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const deleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     expect(deleteButton).toBeDefined()
     await act(async () => {
@@ -1250,8 +1252,8 @@ test("hides a deleted node immediately and restores it when the authoritative co
       nodesChange?.([{ id: node.id, selected: true, type: "select" }])
       await Promise.resolve()
     })
-    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
-      (button) => button.textContent?.includes("Delete"),
+    const retryDeleteButton = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("Delete"),
     )
     await act(async () => {
       retryDeleteButton?.click()
@@ -1295,12 +1297,12 @@ test("does not offer non-atomic Agent creation from click-to-connect", async () 
     const textOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
       (button) => button.textContent?.includes("Text"),
     )
-    const imageOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Image"),
-    )
-    const videoOption = [...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? [])].find(
-      (button) => button.textContent?.includes("Video"),
-    )
+    const imageOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Image"))
+    const videoOption = [
+      ...(connectionMenu?.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]') ?? []),
+    ].find((button) => button.textContent?.includes("Video"))
     expect(connectionMenu).toBeDefined()
     expect(agentOption).toBeUndefined()
     expect(textOption).toBeDefined()
@@ -1389,8 +1391,8 @@ test("focuses a text node created after dragging a connection to empty canvas", 
       await Promise.resolve()
     })
 
-    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find(
-      (button) => button.textContent?.includes("Text"),
+    const textOption = [...container.querySelectorAll<HTMLButtonElement>('button[role="menuitem"]')].find((button) =>
+      button.textContent?.includes("Text"),
     )
     expect(textOption).toBeDefined()
     await act(async () => {
@@ -1419,7 +1421,7 @@ test("focuses a text node created after dragging a connection to empty canvas", 
   }
 })
 
-test("focuses a picker-created image before entry and clears a held external-drag hint", async () => {
+test("applies the host-routed external drag hold and clears it before picker-created image entry", async () => {
   const restoreWindow = installTestWindow()
   const initial = createCanvasDocument({ id: "picker-create-entry" })
   let authoritative = initial
@@ -1429,6 +1431,7 @@ test("focuses a picker-created image before entry and clears a held external-dra
     resolveCamera = resolve
   })
   const prepare = mock(async () => ({ dispose: () => undefined, start: () => undefined }))
+  const editorRef = createRef<CanvasEditorHandle>()
   let root: Root | undefined
   renderNodes = true
   setViewport.mockImplementation(async (_viewport, options) => {
@@ -1442,11 +1445,11 @@ test("focuses a picker-created image before entry and clears a held external-dra
     await act(async () => {
       root?.render(
         <CanvasEditor
+          ref={editorRef}
           selectionDragSource={{
             id: "native-files",
             label: "Keep holding Command-Shift",
             prepare,
-            shortcutModifier: "meta",
             visible: () => true,
           }}
           services={createCanvasServices({
@@ -1485,17 +1488,59 @@ test("focuses a picker-created image before entry and clears a held external-dra
       value: () => ({ bottom: 800, height: 800, left: 0, right: 1_200, top: 0, width: 1_200 }),
     })
 
-    const chordDown = new Event("keydown", { bubbles: true })
-    Object.defineProperties(chordDown, {
-      key: { value: "Shift" },
-      metaKey: { value: true },
-      shiftKey: { value: true },
-    })
+    const chordDown = () => {
+      const event = new Event("keydown", { bubbles: true })
+      Object.defineProperties(event, {
+        key: { value: "Shift" },
+        metaKey: { value: true },
+        shiftKey: { value: true },
+      })
+      return event
+    }
     await act(async () => {
-      window.dispatchEvent(chordDown)
+      window.dispatchEvent(chordDown())
+      await Promise.resolve()
+    })
+    expect(prepare).not.toHaveBeenCalled()
+
+    const outsideCanvas = document.createElement("button")
+    document.body.append(outsideCanvas)
+    const noDragSurface = document.createElement("div")
+    noDragSurface.className = "nodrag"
+    const image = document.createElement("img")
+    noDragSurface.append(image)
+    canvas.append(noDragSurface)
+    outsideCanvas.focus()
+    await act(async () => {
+      image.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 }))
+      editorRef.current?.setExternalDragShortcutHeld(true)
+      await Promise.resolve()
+    })
+    expect(document.activeElement).toBe(canvas)
+    expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      const focusOut = new Event("focusout", { bubbles: true })
+      Object.defineProperty(focusOut, "relatedTarget", { value: outsideCanvas })
+      canvas.dispatchEvent(focusOut)
+      outsideCanvas.focus()
+      editorRef.current?.setExternalDragShortcutHeld(false)
+      await Promise.resolve()
+    })
+    expect(container.querySelector("[data-canvas-selection-drag-hint]")).toBeNull()
+
+    await act(async () => {
+      window.dispatchEvent(chordDown())
       await Promise.resolve()
     })
     expect(prepare).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      canvas.focus()
+      editorRef.current?.setExternalDragShortcutHeld(true)
+      await Promise.resolve()
+    })
+    expect(prepare).toHaveBeenCalledTimes(2)
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('button[aria-label="Add node"]')?.click()
