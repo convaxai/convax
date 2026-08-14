@@ -1,5 +1,5 @@
 import { Button, Dialog, DialogContent, DialogDescription, DialogTitle, Input, LoadingSpinner, cn } from "@convax/ui"
-import { Download, PackagePlus, Pause, Play, RefreshCw, Store, Trash2, Wrench, X } from "lucide-react"
+import { Download, PackagePlus, Pause, Play, RefreshCw, Search, Store, Trash2, Wrench, X } from "lucide-react"
 import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
@@ -17,6 +17,7 @@ import {
   preloadMarketplaceProjection,
   refreshMarketplaceProjection,
 } from "./marketplace-projection-cache"
+import { GitHubIcon } from "./github-icon"
 import { SkillDetailDialog, SkillShowcaseMedia } from "./skill-catalog-preview"
 
 export interface MarketplaceSurfaceProps {
@@ -33,10 +34,31 @@ const pluginCategoryOrder: readonly MarketplacePluginCategory[] = ["service", "v
 function filterCatalog(
   catalog: readonly MarketplaceCatalogCard[],
   category: PluginCategoryFilter,
+  searchQuery: string,
 ): readonly MarketplaceCatalogCard[] {
-  if (category === "all") return catalog
-  if (category === "skill") return catalog.filter((card) => card.kind === "skill")
-  return catalog.filter((card) => card.kind === "plugin" && card.categories?.includes(category))
+  const categoryMatches =
+    category === "all"
+      ? catalog
+      : category === "skill"
+        ? catalog.filter((card) => card.kind === "skill")
+        : catalog.filter((card) => card.kind === "plugin" && card.categories?.includes(category))
+  return categoryMatches.filter((card) =>
+    matchesMarketplaceSearch(searchQuery, [card.name, card.description, card.id, card.kind]),
+  )
+}
+
+function filterInstalled(
+  installed: readonly MarketplaceInstalledCapability[],
+  searchQuery: string,
+): readonly MarketplaceInstalledCapability[] {
+  return installed.filter((capability) =>
+    matchesMarketplaceSearch(searchQuery, [capability.name, capability.id, capability.kind, capability.sourceLabel]),
+  )
+}
+
+function matchesMarketplaceSearch(searchQuery: string, values: readonly string[]) {
+  const query = searchQuery.trim().toLowerCase()
+  return query === "" || values.some((value) => value.toLowerCase().includes(query))
 }
 
 interface SourceChoiceRequest {
@@ -67,6 +89,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   const initialProjection = getMarketplaceProjection(client)
   const [page, setPage] = useState<Page>("catalog")
   const [pluginCategoryFilter, setPluginCategoryFilter] = useState<PluginCategoryFilter>("all")
+  const [searchQuery, setSearchQuery] = useState("")
   const [projection, setProjection] = useState(initialProjection ?? null)
   const [loading, setLoading] = useState(initialProjection === null)
   const [sourceChoices, setSourceChoices] = useState<MarketplaceCatalogSourceChoice[]>([])
@@ -123,8 +146,9 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   )
 
   const catalog = projection?.catalog ?? []
-  const visibleCatalog = filterCatalog(catalog, pluginCategoryFilter)
+  const visibleCatalog = filterCatalog(catalog, pluginCategoryFilter, searchQuery)
   const installed = projection?.installed ?? []
+  const visibleInstalled = filterInstalled(installed, searchQuery)
   const pluginRuntimeState = projection?.pluginRuntimeState ?? "available"
   const sources = projection?.sources ?? []
 
@@ -204,6 +228,10 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplace",
           noCategoryMatches: "没有符合此分类的扩展。",
+          noInstalled: "暂无已安装扩展。",
+          noInstalledMatches: "没有符合搜索条件的已安装扩展。",
+          noSearchMatches: "没有符合搜索条件的扩展。",
+          openSource: "在 GitHub 查看源码",
           preview: "预览",
           progressDisable: "正在停用…",
           progressEnable: "正在启用…",
@@ -213,6 +241,8 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           progressSetup: "正在完成设置…",
           progressUninstall: "正在卸载…",
           progressUpdate: "正在更新…",
+          search: "搜索扩展",
+          searchPlaceholder: "按名称、描述或 ID 搜索…",
           update: "更新",
           viewDetails: "查看详情",
         }
@@ -230,6 +260,10 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplaces",
           noCategoryMatches: "No extensions match this category.",
+          noInstalled: "No installed extensions.",
+          noInstalledMatches: "No installed extensions match this search.",
+          noSearchMatches: "No extensions match this search.",
+          openSource: "View source on GitHub",
           preview: "Preview",
           progressDisable: "Disabling…",
           progressEnable: "Enabling…",
@@ -239,6 +273,8 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           progressSetup: "Completing setup…",
           progressUninstall: "Uninstalling…",
           progressUpdate: "Updating…",
+          search: "Search extensions",
+          searchPlaceholder: "Search by name, description, or ID…",
           update: "Update",
           viewDetails: "View details",
         }
@@ -268,6 +304,12 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
     setCapabilityDetailsError(null)
     setCapabilityDetailsLoading(false)
   }, [])
+  const openSelectedCapabilitySource = useCallback(() => {
+    if (!selectedDetails || capabilityDetails?.sourceRepository !== "github") return
+    void client
+      .openCapabilitySource({ id: selectedDetails.id, kind: selectedDetails.kind })
+      .catch(() => setError(safeFailure))
+  }, [capabilityDetails?.sourceRepository, client, safeFailure, selectedDetails])
   const loadSelectedShowcase = useCallback(
     (media: "animation" | "poster") =>
       Promise.resolve(media === "poster" ? (capabilityDetails?.showcase ?? null) : null),
@@ -419,6 +461,25 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         </p>
       ) : null}
 
+      {!loading && (page === "catalog" || page === "installed") ? (
+        <label className="relative block max-w-xl">
+          <Search
+            aria-hidden="true"
+            className="pointer-events-none absolute left-3 top-1/2 z-10 size-4 -translate-y-1/2 text-text-tertiary"
+          />
+          <span className="sr-only">{text.search}</span>
+          <Input
+            aria-label={text.search}
+            className="border-border-subtle bg-control-background pl-9 shadow-none"
+            data-marketplace-search="true"
+            onInput={(event) => setSearchQuery(event.currentTarget.value)}
+            placeholder={text.searchPlaceholder}
+            type="search"
+            value={searchQuery}
+          />
+        </label>
+      ) : null}
+
       {!loading && page === "catalog" ? (
         <div className="space-y-3">
           <div aria-label={text.filterByCategory} className="flex flex-wrap items-center gap-2" role="group">
@@ -440,7 +501,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
               data-marketplace-category-empty="true"
               role="status"
             >
-              {text.noCategoryMatches}
+              {searchQuery.trim() ? text.noSearchMatches : text.noCategoryMatches}
             </p>
           ) : (
             <div className="grid gap-3">
@@ -603,192 +664,210 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
       ) : null}
 
       {!loading && page === "installed" ? (
-        <div className="grid gap-3">
-          {installed.map((capability) => {
-            const pendingKey = capabilityPendingKey(capability.kind, capability.id)
-            const pendingOperation = capabilityOperations.get(pendingKey)
-            const capabilityError = capabilityErrors.get(pendingKey)
-            const pluginUnavailable = capability.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
-            return (
-              <article
-                className="group relative cursor-pointer rounded-xl border border-border-subtle bg-surface-panel p-4 transition-colors hover:border-border hover:bg-interactive-hover/40 active:bg-interactive-pressed/40"
-                key={`${capability.kind}:${capability.id}`}
-              >
-                <button
-                  aria-label={`${text.viewDetails}: ${capability.name}`}
-                  className="absolute inset-0 z-0 cursor-pointer rounded-xl border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-                  data-marketplace-card-details-target="true"
-                  onClick={() =>
-                    void openCapabilityDetails({
-                      description: "",
-                      id: capability.id,
-                      installed: true,
-                      kind: capability.kind,
-                      name: capability.name,
-                    })
-                  }
-                  type="button"
-                />
-                <div className="pointer-events-none relative z-[1] flex items-stretch justify-between gap-4">
-                  <div className="min-w-0 self-center">
-                    <h3 className="font-semibold">{capability.name}</h3>
-                    <p className="text-xs text-text-tertiary">
-                      {capability.sourceLabel} · {capability.version} · {installedStateLabel(capability)}
-                    </p>
-                  </div>
-                  <div
-                    className="pointer-events-auto relative z-10 flex shrink-0 gap-2"
-                    data-marketplace-card-controls="true"
-                  >
-                    {capability.updateAvailable ? (
+        visibleInstalled.length === 0 ? (
+          <p
+            className="rounded-xl border border-border-subtle bg-surface-panel px-4 py-8 text-center text-sm text-text-secondary"
+            data-marketplace-installed-empty="true"
+            role="status"
+          >
+            {searchQuery.trim() ? text.noInstalledMatches : text.noInstalled}
+          </p>
+        ) : (
+          <div className="grid gap-3">
+            {visibleInstalled.map((capability) => {
+              const pendingKey = capabilityPendingKey(capability.kind, capability.id)
+              const pendingOperation = capabilityOperations.get(pendingKey)
+              const capabilityError = capabilityErrors.get(pendingKey)
+              const pluginUnavailable = capability.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
+              return (
+                <article
+                  className="group relative cursor-pointer rounded-xl border border-border-subtle bg-surface-panel p-4 transition-colors hover:border-border hover:bg-interactive-hover/40 active:bg-interactive-pressed/40"
+                  key={`${capability.kind}:${capability.id}`}
+                >
+                  <button
+                    aria-label={`${text.viewDetails}: ${capability.name}`}
+                    className="absolute inset-0 z-0 cursor-pointer rounded-xl border-0 bg-transparent p-0 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+                    data-marketplace-card-details-target="true"
+                    onClick={() =>
+                      void openCapabilityDetails({
+                        description: "",
+                        id: capability.id,
+                        installed: true,
+                        kind: capability.kind,
+                        name: capability.name,
+                      })
+                    }
+                    type="button"
+                  />
+                  <div className="pointer-events-none relative z-[1] flex items-stretch justify-between gap-4">
+                    <div className="min-w-0 self-center">
+                      <h3 className="font-semibold">{capability.name}</h3>
+                      <p className="text-xs text-text-tertiary">
+                        {capability.sourceLabel} · {capability.version} · {installedStateLabel(capability)}
+                      </p>
+                    </div>
+                    <div
+                      className="pointer-events-auto relative z-10 flex shrink-0 gap-2"
+                      data-marketplace-card-controls="true"
+                    >
+                      {capability.updateAvailable ? (
+                        <Button
+                          aria-busy={pendingOperation?.action === "update"}
+                          aria-label={`${text.update} ${capability.name}`}
+                          disabled={
+                            Boolean(pendingOperation) || (pluginUnavailable && !capability.updateRecoveryAvailable)
+                          }
+                          onClick={() => {
+                            void mutate(
+                              pendingKey,
+                              async () => {
+                                const choices = await client.beginUpdate({
+                                  id: capability.id,
+                                  kind: capability.kind,
+                                })
+                                if (choices.length === 0) throw new Error("No update source is available")
+                                setSourceChoiceRequest({ mode: "update", pendingKey })
+                                setSourceChoices(choices)
+                                setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                              },
+                              { action: "update", label: text.progressPrepareUpdate },
+                            )
+                          }}
+                          size="icon"
+                          variant="outline"
+                        >
+                          {pendingOperation?.action === "update" ? (
+                            <LoadingSpinner className="text-current" size="sm" />
+                          ) : (
+                            <RefreshCw />
+                          )}
+                        </Button>
+                      ) : null}
+                      {!pluginUnavailable &&
+                      capability.kind !== "plugin" &&
+                      capability.runtimeScope &&
+                      capability.attention !== "plugin-runtime-inactive" &&
+                      (capability.state === "setup-required" ||
+                        capability.attention === "setup-required-before-enable") ? (
+                        <Button
+                          aria-busy={pendingOperation?.action === "setup"}
+                          aria-label={`${locale === "zh-CN" ? "完成设置" : "Complete setup"} ${capability.name}`}
+                          disabled={Boolean(pendingOperation)}
+                          onClick={() =>
+                            void mutate(pendingKey, () => client.setup({ id: capability.id, kind: capability.kind }), {
+                              action: "setup",
+                              label: text.progressSetup,
+                            })
+                          }
+                          size="icon"
+                          variant="outline"
+                        >
+                          {pendingOperation?.action === "setup" ? (
+                            <LoadingSpinner className="text-current" size="sm" />
+                          ) : (
+                            <Wrench />
+                          )}
+                        </Button>
+                      ) : null}
+                      {capability.state === "disabled" ? (
+                        <Button
+                          aria-busy={pendingOperation?.action === "enable"}
+                          aria-label={`${locale === "zh-CN" ? "启用" : "Enable"} ${capability.name}`}
+                          disabled={Boolean(pendingOperation) || pluginUnavailable}
+                          onClick={() =>
+                            void mutate(pendingKey, () => client.enable({ id: capability.id, kind: capability.kind }), {
+                              action: "enable",
+                              label: text.progressEnable,
+                            })
+                          }
+                          size="icon"
+                          variant="outline"
+                        >
+                          {pendingOperation?.action === "enable" ? (
+                            <LoadingSpinner className="text-current" size="sm" />
+                          ) : (
+                            <Play />
+                          )}
+                        </Button>
+                      ) : capability.runtimeScope ? (
+                        <Button
+                          aria-busy={pendingOperation?.action === "disable"}
+                          aria-label={`${locale === "zh-CN" ? "停用" : "Disable"} ${capability.name}`}
+                          disabled={Boolean(pendingOperation) || pluginUnavailable}
+                          onClick={() =>
+                            void mutate(
+                              pendingKey,
+                              () => client.disable({ id: capability.id, kind: capability.kind }),
+                              {
+                                action: "disable",
+                                label: text.progressDisable,
+                              },
+                            )
+                          }
+                          size="icon"
+                          variant="outline"
+                        >
+                          {pendingOperation?.action === "disable" ? (
+                            <LoadingSpinner className="text-current" size="sm" />
+                          ) : (
+                            <Pause />
+                          )}
+                        </Button>
+                      ) : null}
                       <Button
-                        aria-busy={pendingOperation?.action === "update"}
-                        aria-label={`${text.update} ${capability.name}`}
-                        disabled={
-                          Boolean(pendingOperation) || (pluginUnavailable && !capability.updateRecoveryAvailable)
-                        }
-                        onClick={() => {
+                        aria-busy={pendingOperation?.action === "uninstall"}
+                        aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${capability.name}`}
+                        disabled={Boolean(pendingOperation) || pluginUnavailable}
+                        onClick={() =>
                           void mutate(
                             pendingKey,
-                            async () => {
-                              const choices = await client.beginUpdate({
-                                id: capability.id,
-                                kind: capability.kind,
-                              })
-                              if (choices.length === 0) throw new Error("No update source is available")
-                              setSourceChoiceRequest({ mode: "update", pendingKey })
-                              setSourceChoices(choices)
-                              setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                            () => client.uninstall({ id: capability.id, kind: capability.kind }),
+                            {
+                              action: "uninstall",
+                              label: text.progressUninstall,
                             },
-                            { action: "update", label: text.progressPrepareUpdate },
                           )
-                        }}
-                        size="icon"
-                        variant="outline"
-                      >
-                        {pendingOperation?.action === "update" ? (
-                          <LoadingSpinner className="text-current" size="sm" />
-                        ) : (
-                          <RefreshCw />
-                        )}
-                      </Button>
-                    ) : null}
-                    {!pluginUnavailable &&
-                    capability.kind !== "plugin" &&
-                    capability.runtimeScope &&
-                    capability.attention !== "plugin-runtime-inactive" &&
-                    (capability.state === "setup-required" ||
-                      capability.attention === "setup-required-before-enable") ? (
-                      <Button
-                        aria-busy={pendingOperation?.action === "setup"}
-                        aria-label={`${locale === "zh-CN" ? "完成设置" : "Complete setup"} ${capability.name}`}
-                        disabled={Boolean(pendingOperation)}
-                        onClick={() =>
-                          void mutate(pendingKey, () => client.setup({ id: capability.id, kind: capability.kind }), {
-                            action: "setup",
-                            label: text.progressSetup,
-                          })
                         }
                         size="icon"
                         variant="outline"
                       >
-                        {pendingOperation?.action === "setup" ? (
+                        {pendingOperation?.action === "uninstall" ? (
                           <LoadingSpinner className="text-current" size="sm" />
                         ) : (
-                          <Wrench />
+                          <Trash2 />
                         )}
                       </Button>
-                    ) : null}
-                    {capability.state === "disabled" ? (
-                      <Button
-                        aria-busy={pendingOperation?.action === "enable"}
-                        aria-label={`${locale === "zh-CN" ? "启用" : "Enable"} ${capability.name}`}
-                        disabled={Boolean(pendingOperation) || pluginUnavailable}
-                        onClick={() =>
-                          void mutate(pendingKey, () => client.enable({ id: capability.id, kind: capability.kind }), {
-                            action: "enable",
-                            label: text.progressEnable,
-                          })
-                        }
-                        size="icon"
-                        variant="outline"
-                      >
-                        {pendingOperation?.action === "enable" ? (
-                          <LoadingSpinner className="text-current" size="sm" />
-                        ) : (
-                          <Play />
-                        )}
-                      </Button>
-                    ) : capability.runtimeScope ? (
-                      <Button
-                        aria-busy={pendingOperation?.action === "disable"}
-                        aria-label={`${locale === "zh-CN" ? "停用" : "Disable"} ${capability.name}`}
-                        disabled={Boolean(pendingOperation) || pluginUnavailable}
-                        onClick={() =>
-                          void mutate(pendingKey, () => client.disable({ id: capability.id, kind: capability.kind }), {
-                            action: "disable",
-                            label: text.progressDisable,
-                          })
-                        }
-                        size="icon"
-                        variant="outline"
-                      >
-                        {pendingOperation?.action === "disable" ? (
-                          <LoadingSpinner className="text-current" size="sm" />
-                        ) : (
-                          <Pause />
-                        )}
-                      </Button>
-                    ) : null}
-                    <Button
-                      aria-busy={pendingOperation?.action === "uninstall"}
-                      aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${capability.name}`}
-                      disabled={Boolean(pendingOperation) || pluginUnavailable}
-                      onClick={() =>
-                        void mutate(pendingKey, () => client.uninstall({ id: capability.id, kind: capability.kind }), {
-                          action: "uninstall",
-                          label: text.progressUninstall,
-                        })
-                      }
-                      size="icon"
-                      variant="outline"
-                    >
-                      {pendingOperation?.action === "uninstall" ? (
-                        <LoadingSpinner className="text-current" size="sm" />
-                      ) : (
-                        <Trash2 />
-                      )}
-                    </Button>
+                    </div>
                   </div>
-                </div>
-                {pendingOperation ? (
-                  <p
-                    aria-live="polite"
-                    className="pointer-events-none relative z-[1] mt-3 text-xs text-text-secondary"
-                    data-capability-progress={`${capability.kind}:${capability.id}`}
-                    role="status"
-                  >
-                    {pendingOperation.label}
-                  </p>
-                ) : null}
-                {capabilityError ? (
-                  <p
-                    className="pointer-events-none relative z-[1] mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
-                    data-capability-error={`${capability.kind}:${capability.id}`}
-                    ref={(element) => {
-                      if (element) capabilityErrorRefs.current.set(pendingKey, element)
-                      else capabilityErrorRefs.current.delete(pendingKey)
-                    }}
-                    role="alert"
-                    tabIndex={-1}
-                  >
-                    {capabilityError}
-                  </p>
-                ) : null}
-              </article>
-            )
-          })}
-        </div>
+                  {pendingOperation ? (
+                    <p
+                      aria-live="polite"
+                      className="pointer-events-none relative z-[1] mt-3 text-xs text-text-secondary"
+                      data-capability-progress={`${capability.kind}:${capability.id}`}
+                      role="status"
+                    >
+                      {pendingOperation.label}
+                    </p>
+                  ) : null}
+                  {capabilityError ? (
+                    <p
+                      className="pointer-events-none relative z-[1] mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
+                      data-capability-error={`${capability.kind}:${capability.id}`}
+                      ref={(element) => {
+                        if (element) capabilityErrorRefs.current.set(pendingKey, element)
+                        else capabilityErrorRefs.current.delete(pendingKey)
+                      }}
+                      role="alert"
+                      tabIndex={-1}
+                    >
+                      {capabilityError}
+                    </p>
+                  ) : null}
+                </article>
+              )
+            })}
+          </div>
+        )
       ) : null}
 
       {!loading && page === "marketplaces" ? (
@@ -902,6 +981,7 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
           loading={capabilityDetailsLoading}
           onClose={closeCapabilityDetails}
           onInstall={() => undefined}
+          onOpenSource={capabilityDetails?.sourceRepository === "github" ? openSelectedCapabilitySource : undefined}
           onRetry={() => void openCapabilityDetails(selectedDetails)}
           onUninstall={() => undefined}
           readOnly
@@ -941,14 +1021,26 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
                   {capabilityDetails?.description ?? selectedDetails.description}
                 </DialogDescription>
               </div>
-              <Button
-                aria-label={locale === "zh-CN" ? "关闭详情" : "Close details"}
-                onClick={closeCapabilityDetails}
-                size="icon-sm"
-                variant="ghost"
-              >
-                <X />
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                {capabilityDetails?.sourceRepository === "github" ? (
+                  <Button
+                    aria-label={text.openSource}
+                    onClick={openSelectedCapabilitySource}
+                    size="icon-sm"
+                    variant="ghost"
+                  >
+                    <GitHubIcon />
+                  </Button>
+                ) : null}
+                <Button
+                  aria-label={locale === "zh-CN" ? "关闭详情" : "Close details"}
+                  onClick={closeCapabilityDetails}
+                  size="icon-sm"
+                  variant="ghost"
+                >
+                  <X />
+                </Button>
+              </div>
             </header>
             {capabilityDetailsLoading ? (
               <div className="grid min-h-72 place-items-center" role="status">

@@ -418,6 +418,19 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     return (await this.#catalog()).filter(isStandaloneMarketplaceCandidate)
   }
 
+  async #capabilityRepresentative(identity: { id: string; kind: MarketplaceCapabilityKind }) {
+    const [state, catalog] = await Promise.all([this.#options.state.read(), this.#standaloneCatalog()])
+    const candidates = catalog.filter((item) => item.id === identity.id && item.kind === identity.kind)
+    if (candidates.length === 0) throw new Error("Marketplace capability is unavailable")
+    const installed = state.installations.filter((record) => record.id === identity.id && record.kind === identity.kind)
+    const group = aggregateCatalog(
+      candidates,
+      installed.map(({ id, kind, sourceKey, version }) => ({ id, kind, sourceKey, version })),
+    )[0]
+    if (!group) throw new Error("Marketplace capability is unavailable")
+    return group.representative
+  }
+
   async #activePluginBindings() {
     if (!this.#options.activePluginBindings) {
       return { available: false as const, bindings: [] as readonly ActivePluginBinding[] }
@@ -576,17 +589,15 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
     id: string
     kind: MarketplaceCapabilityKind
   }): Promise<MarketplaceCapabilityDetails> {
-    const [state, catalog] = await Promise.all([this.#options.state.read(), this.#standaloneCatalog()])
-    const candidates = catalog.filter((item) => item.id === identity.id && item.kind === identity.kind)
-    if (candidates.length === 0) throw new Error("Marketplace capability details are unavailable")
-    const installed = state.installations.filter((record) => record.id === identity.id && record.kind === identity.kind)
-    const group = aggregateCatalog(
-      candidates,
-      installed.map(({ id, kind, sourceKey, version }) => ({ id, kind, sourceKey, version })),
-    )[0]
-    if (!group) throw new Error("Marketplace capability details are unavailable")
-    const item = group.representative
+    const item = await this.#capabilityRepresentative(identity)
     const projected = (await this.#options.projectDetails?.(item)) ?? {}
+    const sourceRepository =
+      item.sourceKind === "local"
+        ? undefined
+        : await this.#options
+            .repositoryAuthority(item)
+            .then(() => "github" as const)
+            .catch(() => undefined)
     return {
       ...(item.pluginCategories?.length ? { categories: [...item.pluginCategories] } : {}),
       description: item.presentation.description ?? "",
@@ -596,8 +607,16 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       name: item.presentation.name,
       ...(item.kind === "skill" ? {} : { runtimeScope: runtimeSurface(item) as "agent" | "agent-and-convax" }),
       sourceLabel: item.marketplaceId,
+      ...(sourceRepository ? { sourceRepository } : {}),
       version: item.version,
     }
+  }
+
+  async getCapabilitySourceRepositoryUrl(identity: { id: string; kind: MarketplaceCapabilityKind }) {
+    const item = await this.#capabilityRepresentative(identity)
+    if (item.sourceKind === "local") throw new Error("Local Marketplace capabilities have no source repository")
+    const repository = await this.#options.repositoryAuthority(item)
+    return `https://github.com/${encodeURIComponent(repository.owner)}/${encodeURIComponent(repository.repository)}`
   }
 
   async listInstalled(): Promise<MarketplaceInventory> {

@@ -51,7 +51,11 @@ Desktop Main derives and revalidates the immutable package. Skill file trees use
 bounded, non-executable preview projection, and optional Showcase posters are
 returned only after size, digest, and media-signature validation. These details do
 not grant authority, select a source, expose a native path or release URL, or become
-part of the persisted Marketplace card cache.
+part of the persisted Marketplace card cache. Local name/description/id search stays
+inside Renderer. A validated non-Local GitHub representative may project only a
+closed repository-availability marker; clicking it returns `{kind,id}` to Main,
+which re-resolves the representative and opens the canonical repository without
+exposing that URL through Preload.
 
 Desktop resolves a command against the current installed Plugin id and sends it
 only to the exact owning iframe generation through an opaque frame lease. A stale

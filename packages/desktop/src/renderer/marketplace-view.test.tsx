@@ -91,6 +91,7 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
       name: "Example",
       ...(kind === "skill" ? {} : { runtimeScope: "agent" as const }),
       sourceLabel: "Convax Official",
+      sourceRepository: "github" as const,
       version: "1.0.0",
     })),
     importCapability: mock(async () => null),
@@ -128,6 +129,7 @@ function client(overrides: Partial<MarketplaceClient> = {}): MarketplaceClient {
       },
     ]),
     onDidChange: mock(() => () => undefined),
+    openCapabilitySource: mock(async () => undefined),
     previewMarketplace: mock(async () => ({
       label: "Example Marketplace",
       packageCount: 2,
@@ -411,6 +413,79 @@ test("keeps category tags out of list items and filters Skill as a first-class c
   expect(listCatalog).toHaveBeenCalledTimes(1)
 })
 
+test("searches projected catalog and installed fields locally while composing with category filters", async () => {
+  await render(
+    client({
+      listCatalog: mock(async () => ({
+        cards: [
+          {
+            categories: ["image" as const],
+            description: "Removes photo backgrounds",
+            id: "image-workbench",
+            kind: "plugin" as const,
+            name: "Image Workbench",
+            otherSourceCount: 0,
+          },
+          {
+            categories: ["service" as const],
+            description: "Connects a creative account",
+            id: "creative-service",
+            kind: "plugin" as const,
+            name: "Creative Service",
+            otherSourceCount: 0,
+          },
+        ],
+        revision: 1,
+      })),
+      listInstalled: mock(async () => ({
+        capabilities: [
+          {
+            id: "installed-image",
+            kind: "plugin" as const,
+            name: "Installed Image",
+            sourceLabel: "Community Forge",
+            state: "ready" as const,
+            updateAvailable: false,
+            version: "1.0.0",
+          },
+          {
+            id: "installed-skill",
+            kind: "skill" as const,
+            name: "Installed Skill",
+            sourceLabel: "Convax Official",
+            state: "ready" as const,
+            updateAvailable: false,
+            version: "1.0.0",
+          },
+        ],
+        pluginRuntimeState: "available" as const,
+        revision: 1,
+      })),
+    }),
+  )
+  const search = document.querySelector<HTMLInputElement>("[data-marketplace-search]")!
+  const setSearch = async (value: string) => {
+    await act(async () => {
+      search.value = value
+      search.dispatchEvent(new Event("input", { bubbles: true }))
+    })
+  }
+
+  await setSearch("creative account")
+  expect(document.body.textContent).toContain("Creative Service")
+  expect(document.body.textContent).not.toContain("Image Workbench")
+
+  await act(async () => button("Image").click())
+  expect(document.body.textContent).toContain("No extensions match this search.")
+  await setSearch("image-workbench")
+  expect(document.body.textContent).toContain("Image Workbench")
+
+  await act(async () => button("Installed").click())
+  await setSearch("Community Forge")
+  expect(document.body.textContent).toContain("Installed Image")
+  expect(document.body.textContent).not.toContain("Installed Skill")
+})
+
 test("opens details from the card while keeping capability actions independent", async () => {
   const getCapabilityDetails = mock(client().getCapabilityDetails)
   const beginInstall = mock(client().beginInstall)
@@ -432,6 +507,7 @@ test("opens details from the card while keeping capability actions independent",
 })
 
 test("opens Plugin Showcase details and restores the Skill file tree", async () => {
+  const openCapabilitySource = mock(async () => undefined)
   const getCapabilityDetails = mock(async ({ id }: { id: string; kind: "mcp-server" | "plugin" | "skill" }) =>
     id === "detail-plugin"
       ? {
@@ -448,6 +524,7 @@ test("opens Plugin Showcase details and restores the Skill file tree", async () 
             size: 4,
           },
           sourceLabel: "Convax Official",
+          sourceRepository: "github" as const,
           version: "2.0.0",
         }
       : {
@@ -460,12 +537,14 @@ test("opens Plugin Showcase details and restores the Skill file tree", async () 
           kind: "skill" as const,
           name: "Detail Skill",
           sourceLabel: "Convax Official",
+          sourceRepository: "github" as const,
           version: "1.0.0",
         },
   )
   await render(
     client({
       getCapabilityDetails,
+      openCapabilitySource,
       listCatalog: mock(async () => ({
         cards: [
           {
@@ -498,6 +577,8 @@ test("opens Plugin Showcase details and restores the Skill file tree", async () 
   expect(document.body.textContent).toContain("Plugin detail description")
   expect(document.body.textContent).toContain("Convax Official")
   expect(document.body.textContent).toContain("Agent + Convax")
+  await act(async () => button("View source on GitHub").click())
+  expect(openCapabilitySource).toHaveBeenCalledWith({ id: "detail-plugin", kind: "plugin" })
   await act(async () => button("Close details").click())
 
   await act(async () =>
@@ -507,6 +588,8 @@ test("opens Plugin Showcase details and restores the Skill file tree", async () 
   expect(document.body.textContent).toContain("SKILL.md")
   expect(document.body.textContent).toContain("references")
   expect(document.body.textContent).toContain("# Detail Skill")
+  await act(async () => button("View source on GitHub").click())
+  expect(openCapabilitySource).toHaveBeenCalledWith({ id: "detail-skill", kind: "skill" })
 })
 
 test("ignores a stale detail response after another capability is opened", async () => {

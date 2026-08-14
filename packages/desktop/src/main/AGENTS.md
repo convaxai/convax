@@ -169,7 +169,10 @@ For any matching change, read the full routed reference before planning or editi
   release authority in Main, revalidate immutable Skill package identity before
   creating bounded file previews, and verify Showcase poster size, digest, and
   media signature before returning bytes. Optional presentation failure must not
-  hide otherwise valid metadata or Skill files.
+  hide otherwise valid metadata or Skill files. For a source action, accept only
+  `{kind,id}`, repeat representative resolution, and open only the canonical GitHub
+  repository derived from the validated non-Local descriptor authority; never
+  return that URL through IPC.
 - Preserve Registry `ownerPluginId` through source qualification and remove
   Plugin-owned Skills from standalone choices before creating a transition. Managed
   Skill recovery never infers publication from a directory name: retry only the

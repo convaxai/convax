@@ -439,7 +439,9 @@ representative source as the card's name and description. Renderer may cache and
 filter these values as presentation only: `service`, `video`, and `image` select
 Plugin cards with the derived category, while `skill` selects first-class Skill
 cards and never Plugins merely because they own Skills. Catalog list cards do not
-repeat the category chips. These controls never select a source, establish runtime
+repeat the category chips. Renderer may also search the bounded card projection by
+name, description, id, kind, and installed source label; search composes with the
+category filter and never triggers a Main request. These controls never select a source, establish runtime
 readiness, grant authority, or authorize installation/execution. The
 Main-to-Renderer card projection is part of the Desktop IPC compatibility line:
 category support advanced it to `convax.desktop-ipc/40`, and Renderer uses display
@@ -453,9 +455,13 @@ artifact before producing the existing bounded, non-executable file preview, whi
 optional Showcase posters cross IPC only after declared size, SHA-256, and media
 file-signature validation. A failed poster leaves metadata and Skill files visible.
 Detail bytes are not persisted in the disposable card cache, and no native path,
-source URL, artifact URL, or source-selection input crosses to Renderer. This typed
-bridge advances the Desktop compatibility line to `convax.desktop-ipc/41` without a
-Marketplace display-cache schema change.
+source URL, artifact URL, or source-selection input crosses to Renderer. For a
+non-Local representative whose validated descriptor names a GitHub repository,
+details carry only the closed `github` availability marker. Clicking its Host icon
+sends `{kind,id}` back to Main; Main repeats representative resolution and opens the
+canonical repository page itself. This typed bridge advances the Desktop
+compatibility line to `convax.desktop-ipc/42` without a Marketplace display-cache
+schema change.
 
 Installed Plugin snapshots contain the complete contribution closure. One global
 ActivePluginSet selects exact snapshot digests and resolves global Skill names and
@@ -1266,8 +1272,9 @@ Builtin + Official + user Network + Host Local adapters
   -> source-qualified validated entries
   -> Desktop derives bounded Plugin categories from exact validated contributions
   -> @convax/marketplace display groups by {kind,id} with one representative source
-  -> Renderer filters Plugin categories by service/video/image or selects first-class Skills
+  -> Renderer locally composes bounded text search with Plugin category or first-class Skill filtering
   -> on demand, Desktop projects details from that same representative and verifies optional Showcase bytes
+  -> optional GitHub source action returns only {kind,id}; Main opens the representative repository
   -> explicit exact-source confirmation and sender-scoped SelectionToken
   -> Desktop Plugin install transition publishes static bytes, exact execution authorization and InstallRecord
   -> MCP or narrowly admitted product-lock setup may independently publish an ExecutionGrant
@@ -1290,7 +1297,11 @@ safe metadata. For Skills it reads the exact immutable package and returns a bou
 file tree/text preview; for supported entries it may also return digest-verified
 Showcase poster bytes. Renderer cannot request another source, path, URL, digest, or
 package revision, and a stale detail response cannot replace the currently selected
-dialog.
+dialog. A validated non-Local GitHub source adds only a closed availability marker
+to the detail. The source action accepts the same `{kind,id}`, re-resolves the current
+representative in Main, constructs a fixed `github.com` repository URL from its
+validated descriptor authority, and opens it through Electron. The URL itself never
+crosses Preload, and Local capabilities expose no source action.
 
 Import uses one Main-owned directory chooser and accepts exactly one root marker:
 `manifest.json`, `SKILL.md`, or `server.json`. Main performs a bounded no-follow

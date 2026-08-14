@@ -83,15 +83,18 @@ or durable domain authority.
 - Marketplace category filters consume only Main's bounded card projection.
   `service`, `video`, and `image` select Plugins with those derived categories;
   `skill` selects first-class Skill cards and must not select a Plugin merely because
-  it owns Skills. Catalog list cards do not repeat category chips. Filtering is local
-  and never changes the selected source or triggers capability work. A projection
+  it owns Skills. Catalog list cards do not repeat category chips. Text search over
+  bounded projected fields composes locally with these filters. Neither operation
+  changes the selected source or triggers capability work. A projection
   shape change invalidates the disposable display cache and bumps the Desktop
   protocol; Renderer must never expose current filters over older projected cards.
 - Marketplace details load on demand by capability `{kind,id}` and remain a
   disposable presentation. Ignore stale responses after another card is selected
   or the dialog closes; render Skill file previews read-only and render a Showcase
   image only from Main-verified bytes. Renderer never chooses the representative
-  source or receives a native path, artifact URL, SourceKey, or executable file.
+  source or receives a native path, artifact URL, source repository URL, SourceKey,
+  or executable file. Render a GitHub icon only from Main's closed availability
+  marker and return only `{kind,id}` when it is clicked.
 - Keep the Agent generation model as the user-global renderer preference. A Canvas
   card may persist only its own opaque output-tool override through Canvas; card
   changes never update the Agent default in reverse or create a second catalog.

@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
+import { BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent, type OpenDialogOptions } from "electron"
 
 import {
   marketplaceIpcChannels,
@@ -27,6 +27,7 @@ export interface MarketplaceApplicationPort {
   disable(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   enable(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   getCapabilityDetails(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<MarketplaceCapabilityDetails>
+  getCapabilitySourceRepositoryUrl(identity: { id: string; kind: MarketplaceCapabilityKind }): Promise<string>
   importDirectory(directory: string): Promise<MarketplaceInstalledCapability>
   install(selectionToken: string, senderId: string): Promise<MarketplaceInstalledCapability>
   listCatalog(): Promise<MarketplaceCatalogSnapshot>
@@ -153,6 +154,9 @@ export function registerMarketplaceIpc(
     register(marketplaceIpcChannels.getCapabilityDetails, (_event, input) =>
       service.getCapabilityDetails(identity(input)),
     ),
+    register(marketplaceIpcChannels.openCapabilitySource, async (_event, input) => {
+      await shell.openExternal(await service.getCapabilitySourceRepositoryUrl(identity(input)), { activate: true })
+    }),
     register(marketplaceIpcChannels.previewMarketplace, (event, input) =>
       service.previewMarketplace(descriptorUrl(input), String(event.sender.id)),
     ),
