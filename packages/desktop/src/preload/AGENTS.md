@@ -24,6 +24,9 @@ between trusted Main and untrusted Renderer code. It owns no business state.
   renderer-safe projection, not authority. Main revalidates the real request.
 - Keep Project and Canvas references portable and scoped. Never translate them into
   native paths in Preload.
+- Editable-text save forwards only the bounded content update plus its original
+  Project, Canvas, and renderer session lease. It never derives or rewrites that
+  scope, and Main remains responsible for validating the lease and active Project.
 - Keep bounded Project file thumbnail results separate from purpose-tagged opaque
   media leases. Video-cover leases and full-preview leases carry only Project scope,
   purpose, or an opaque lease id; media bytes remain on Main's range protocol rather

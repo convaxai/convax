@@ -21,6 +21,8 @@ export interface CanvasNodeEntryPresentation {
 
 export interface CanvasEditorController {
   document: CanvasDocument
+  /** Host scope that owns the document; empty for independent Canvas consumers. */
+  scopeId?: string
   /** @deprecated Use useCanvasNodeEntryPresentation for reactive node-local presentation. */
   enteringNodeIds: ReadonlySet<string>
   hydrating: boolean

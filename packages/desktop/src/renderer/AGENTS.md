@@ -10,6 +10,11 @@ or durable domain authority.
 - `WorkbenchController` is the sole source of the active Input/Canvas/file.
   `ProjectCanvasController` owns catalog CRUD only. Do not mirror active selection
   into Project state, component-local state, or browser storage.
+- Keep Canvas's editable-text write-behind store alive across Canvas mounts. An
+  ordinary Canvas Input change starts or joins the old Canvas save and commits
+  navigation without a confirmation dialog or save wait; a Project change drains
+  the store before runtime quiescence. Bind persistence to the originating mounted
+  session rather than reading the later active Canvas from a mutable ref.
 - Keep domain behavior in the owning package's business/application service.
   Renderer coordinators compose public capabilities; React components handle user
   events, subscriptions, and rendering rather than recreating validation,

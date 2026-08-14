@@ -55,6 +55,18 @@ const resourceSessions = {
       }),
     }),
   ),
+  queryRenderer: mock(async () =>
+    Object.freeze({
+      format: "convax.canvas-session-projection" as const,
+      ref: { canvasId: "canvas-main", scopeId: "project-one" },
+      sessionId,
+      document,
+      edgeEntities: [],
+      nodeEntities: [],
+      canUndo: true,
+      canRedo: false,
+    }),
+  ),
 }
 
 beforeEach(() => {
@@ -301,7 +313,7 @@ describe("Canvas resource IPC", () => {
 })
 
 describe("Canvas text resource IPC", () => {
-  test("resolves the canonical Canvas resource, publishes its new Project version, and relinks the same node", async () => {
+  test("keeps the original session-bound Canvas target while publishing a background save", async () => {
     const fixture = canonicalTextResource("before")
     const textDocument = createCanvasDocument({
       id: "canvas-main",
@@ -345,17 +357,21 @@ describe("Canvas text resource IPC", () => {
             },
           ],
         },
+        getActiveProjectId: () => fixture.projectId,
         isTrustedSender: () => true,
         preparation: { prepare },
-        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
         resources: { relinkPreparedResource },
+        sessions: resourceSessions,
       },
     )
     await expect(
       handlers.get(canvasTextResourceIpcChannel)!(event, {
+        canvasId: "canvas-main",
         content: nextContent,
         contentRevision: fixture.reference.blob.digest,
         nodeId: "text-node",
+        projectId: fixture.projectId,
+        sessionId,
       }),
     ).resolves.toEqual({ contentRevision: nextRevision })
     expect(compareAndReplaceTextFile).toHaveBeenCalledWith({
@@ -380,6 +396,45 @@ describe("Canvas text resource IPC", () => {
       },
       prepared,
     )
+    expect(resourceSessions.queryRenderer).toHaveBeenCalledWith(
+      { canvasId: "canvas-main", scopeId: fixture.projectId },
+      sessionId,
+    )
+  })
+
+  test("rejects a background text save that cannot prove its originating mounted Canvas lease", async () => {
+    const fixture = canonicalTextResource("before")
+    const query = mock()
+    const compareAndReplaceTextFile = mock()
+    const queryRenderer = mock(async () => {
+      throw new Error("stale renderer lease")
+    })
+    registerCanvasTextResourceIpc(
+      { compareAndReplaceTextFile },
+      { query },
+      {
+        currentResources: { queryCurrentResources: mock() },
+        getActiveProjectId: () => fixture.projectId,
+        isTrustedSender: () => true,
+        preparation: { prepare: mock() },
+        resources: { relinkPreparedResource: mock() },
+        sessions: { queryRenderer },
+      },
+    )
+
+    await expect(
+      handlers.get(canvasTextResourceIpcChannel)!(event, {
+        canvasId: "canvas-main",
+        content: "after",
+        contentRevision: fixture.reference.blob.digest,
+        nodeId: "text-node",
+        projectId: fixture.projectId,
+        sessionId,
+      }),
+    ).rejects.toThrow("Could not save the Canvas text resource")
+    expect(queryRenderer).toHaveBeenCalledWith({ canvasId: "canvas-main", scopeId: fixture.projectId }, sessionId)
+    expect(query).not.toHaveBeenCalled()
+    expect(compareAndReplaceTextFile).not.toHaveBeenCalled()
   })
 
   test("returns only the typed text conflict without leaking native errors", async () => {
@@ -415,17 +470,21 @@ describe("Canvas text resource IPC", () => {
             },
           ],
         },
+        getActiveProjectId: () => fixture.projectId,
         isTrustedSender: () => true,
         preparation: { prepare },
-        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
         resources: { relinkPreparedResource },
+        sessions: resourceSessions,
       },
     )
     await expect(
       handlers.get(canvasTextResourceIpcChannel)!(event, {
+        canvasId: "canvas-main",
         content: "new",
         contentRevision: fixture.reference.blob.digest,
         nodeId: "text-node",
+        projectId: fixture.projectId,
+        sessionId,
       }),
     ).resolves.toEqual({ actualRevision: "c".repeat(64), kind: canvasTextResourceConflictKind })
     expect(prepare).not.toHaveBeenCalled()
@@ -478,18 +537,22 @@ describe("Canvas text resource IPC", () => {
             },
           ],
         },
+        getActiveProjectId: () => fixture.projectId,
         isTrustedSender: () => true,
         preparation: { prepare: async () => prepared },
-        resolveActiveCanvas: async () => ({ canvasId: "canvas-main", projectId: fixture.projectId }),
         resources: { relinkPreparedResource },
+        sessions: resourceSessions,
       },
     )
 
     await expect(
       handlers.get(canvasTextResourceIpcChannel)!(event, {
+        canvasId: "canvas-main",
         content: nextContent,
         contentRevision: fixture.reference.blob.digest,
         nodeId: "text-node",
+        projectId: fixture.projectId,
+        sessionId,
       }),
     ).resolves.toEqual({ contentRevision: nextRevision })
     expect(relinkPreparedResource).toHaveBeenCalledTimes(1)

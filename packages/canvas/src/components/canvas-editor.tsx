@@ -650,7 +650,7 @@ export interface CanvasEditorHandle {
   openGenerate: () => void
   /** Opens Canvas's existing search surface without exposing its internal query state. */
   openSearch: () => void
-  prepareToLeave: () => Promise<boolean>
+  prepareToLeave: (options?: { waitForPendingDrafts?: boolean }) => Promise<boolean>
   reload: () => Promise<void>
   /** Reloads Main's authoritative projection and resolves after the renderer controller publishes it. */
   reloadAuthoritative: () => Promise<void>
@@ -1400,7 +1400,7 @@ function CanvasEditorContent(
   const exportService = useCanvasService("export")
   const notificationService = useCanvasService("notify")
   const telemetryService = useCanvasService("telemetry")
-  const draftDecisionService = useCanvasService("draftDecision")
+  const textDraftStore = useCanvasService("textDrafts")
   const requestGenerate = useCallback(() => {
     if (!generateService) return
     if (props.onGenerateRequest) {
@@ -3214,6 +3214,7 @@ function CanvasEditorContent(
     const preventUnsavedClose = (event: BeforeUnloadEvent) => {
       if (
         !pendingDraftsRef.current.hasPending() &&
+        !textDraftStore?.hasPending() &&
         !saveErrorRef.current &&
         !saveControllerRef.current &&
         !historyRef.current.gestureStart
@@ -3224,7 +3225,7 @@ function CanvasEditorContent(
     }
     window.addEventListener("beforeunload", preventUnsavedClose)
     return () => window.removeEventListener("beforeunload", preventUnsavedClose)
-  }, [])
+  }, [textDraftStore])
   useEffect(
     () => () => {
       leavingRef.current = true
@@ -3629,16 +3630,37 @@ function CanvasEditorContent(
       openSearch() {
         setSearchOpen(true)
       },
-      async prepareToLeave() {
-        await waitForStableLoad()
+      async prepareToLeave(options = {}) {
+        const waitForPendingDrafts = options.waitForPendingDrafts ?? true
         leavingRef.current = true
         setLeaving(true)
-        const canLeave = await pendingDraftsRef.current.prepareToLeave(
-          () => draftDecisionService?.decide({ count: pendingDraftsRef.current.pendingCount() }) ?? "cancel",
-        )
-        if (!canLeave) return false
+        const reportBackgroundSaveError = () =>
+          notificationService?.show({
+            description: "Your draft was kept and will be retried when you return to this Canvas.",
+            kind: "error",
+            title: "Could not save text draft",
+          })
+        const reportBackgroundFlushError = () =>
+          notificationService?.show({
+            description: "The durable Canvas state remains authoritative and can be refreshed when you return.",
+            kind: "warning",
+            title: "Could not finish Canvas synchronization",
+          })
+        if (waitForPendingDrafts) {
+          await waitForStableLoad()
+          const results = await Promise.allSettled([
+            pendingDraftsRef.current.savePending({ wait: true }),
+            textDraftStore?.flush({ wait: true }) ?? Promise.resolve(),
+          ])
+          const failure = results.find((result): result is PromiseRejectedResult => result.status === "rejected")
+          if (failure) throw failure.reason
+        } else {
+          void pendingDraftsRef.current.savePending({ wait: false })
+          void textDraftStore?.flush({ onError: reportBackgroundSaveError, wait: false })
+        }
         abortPendingOperations()
-        await finalizeGestureAndSave()
+        if (waitForPendingDrafts) await finalizeGestureAndSave()
+        else void finalizeGestureAndSave().catch(reportBackgroundFlushError)
         return true
       },
       async reload() {
@@ -3661,8 +3683,8 @@ function CanvasEditorContent(
     [
       abortPendingOperations,
       addNode,
-      draftDecisionService,
       finalizeGestureAndSave,
+      notificationService,
       props.editorRef,
       reloadDocument,
       reloadAuthoritativeDocument,
@@ -3670,6 +3692,7 @@ function CanvasEditorContent(
       selectNodes,
       requestGenerate,
       startSave,
+      textDraftStore,
       waitForStableLoad,
     ],
   )
@@ -4620,6 +4643,7 @@ function CanvasEditorContent(
   const controller = useMemo(
     () => ({
       document: history.document,
+      scopeId: currentViewScopeId,
       enteringNodeIds,
       hydrating,
       reducedMotion: prefersReducedMotion,
@@ -4685,6 +4709,7 @@ function CanvasEditorContent(
       hydrating,
       isSelectionActionPending,
       props.fileRendererRegistry,
+      currentViewScopeId,
       quickConnect,
       readOnly,
       finishSelectionDrag,

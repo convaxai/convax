@@ -330,6 +330,10 @@ user directory.
   execution availability, Checkout, or billing authority.
 - `WorkbenchController` is the sole active Input/Canvas source.
   `ProjectCanvasController` owns catalog CRUD, never active selection.
+- Editable Canvas text drafts are transient Canvas-owned write-behind state keyed by
+  scope/Canvas/node. Ordinary Canvas navigation starts background save without a
+  prompt or wait; Desktop drains the store before Project teardown and validates the
+  originating renderer lease rather than retargeting the later active Canvas.
 - Only `@convax/project/node` may read or write private Project metadata. Renderer,
   Preload, Agent tools, and general file operations use typed capabilities and never
   edit `.convax` JSON.
