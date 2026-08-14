@@ -98,7 +98,6 @@ import {
   canvasCardGenerationReferenceConstraint,
 } from "./canvas-card-conversation-panel"
 import { createCanvasMediaSelectionDragSource } from "./canvas-media-drag-source"
-import { createWorkspaceCanvasHistoryShortcutHandler } from "./canvas-history-shortcuts"
 import { openDesktopCanvasRendererSession, type DesktopCanvasRendererSession } from "./canvas-collaboration-client"
 import { mountCanvasSessionWithBackgroundReconcile } from "./canvas-session-mount"
 import { createCanvasRendererRequestHandler } from "./canvas-renderer-request-handler"
@@ -1512,34 +1511,24 @@ function App() {
     },
     [activeCanvasSession, reportCanvasHistoryFailure],
   )
-  const workspaceHistoryHandler = useMemo(
-    () =>
-      activeCanvasSession
-        ? createWorkspaceCanvasHistoryShortcutHandler({
-            onError: reportCanvasHistoryFailure,
-            session: activeCanvasSession,
-          })
-        : null,
-    [activeCanvasSession, reportCanvasHistoryFailure],
-  )
   useShortcutFeature(
     shortcutService,
-    canvasShortcutsEnabled && workspaceHistoryHandler
+    canvasShortcutsEnabled
       ? {
           chords: [primaryShortcutChord("z")],
           id: "workspace.canvas.undo",
-          onTrigger: workspaceHistoryHandler,
+          onTrigger: () => runCanvasHistory("undo"),
           scopeId: workspaceShortcutScopeId,
         }
       : null,
   )
   useShortcutFeature(
     shortcutService,
-    canvasShortcutsEnabled && workspaceHistoryHandler
+    canvasShortcutsEnabled
       ? {
           chords: [primaryShortcutChord("z", true), { ctrl: true, key: "y" }],
           id: "workspace.canvas.redo",
-          onTrigger: workspaceHistoryHandler,
+          onTrigger: () => runCanvasHistory("redo"),
           scopeId: workspaceShortcutScopeId,
         }
       : null,
