@@ -1908,7 +1908,10 @@ function startApplication() {
       return fixed ?? networkMarketplaces.resolvePackage(item)
     }
     const repositoryAuthority = async (item: SourceQualifiedItem) => {
-      if (marketplaceProduct && item.marketplaceId === marketplaceProduct.descriptor.id) {
+      if (
+        marketplaceProduct &&
+        (item.sourceKind === "builtin" || item.marketplaceId === marketplaceProduct.descriptor.id)
+      ) {
         return {
           owner: marketplaceProduct.descriptor.repository.owner,
           repository: marketplaceProduct.descriptor.repository.name,

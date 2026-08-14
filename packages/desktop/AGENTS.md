@@ -201,8 +201,9 @@ contract and its routed references.
   bounded display enum through the source representative and Renderer cache.
   Renderer uses `service`, `video`, and `image` to filter Plugin cards, but the
   `skill` control selects first-class Skill cards rather than Plugins with owned
-  Skills. List cards do not render category chips. Filtering stays local to Renderer
-  and never selects a source or authorizes work.
+  Skills. List cards do not render category chips. Bounded text search composes with
+  these filters and stays local to Renderer. Neither operation selects a source or
+  authorizes work.
   Adding or changing this Main-to-Renderer card projection bumps both the Desktop
   protocol and the disposable display-cache schema so a stale Main or cache cannot
   make a current filter silently appear empty.
@@ -211,7 +212,8 @@ contract and its routed references.
   `{kind,id}`; Main derives the exact source, immutable artifact, bounded Skill file
   previews, and optional Showcase poster. Never cache detail bytes, expose a native
   path or source URL, or render active media before size, digest, and file-signature
-  validation.
+  validation. A GitHub source icon exposes only a closed availability marker and
+  returns `{kind,id}` to Main, which re-resolves and opens the canonical repository.
 - Plugin Services seed from the last complete safe Renderer projection across
   remounts and cold windows, then revalidate inventory, status, and optional usage
   independently in the background. Keep old values visible during refresh; reject

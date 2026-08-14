@@ -491,6 +491,7 @@ const marketplaceClient = {
     ipcRenderer.on(marketplaceIpcChannels.changed, handleChange)
     return () => ipcRenderer.removeListener(marketplaceIpcChannels.changed, handleChange)
   },
+  openCapabilitySource: (input) => ipcRenderer.invoke(marketplaceIpcChannels.openCapabilitySource, input),
   previewMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.previewMarketplace, input),
   refreshMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.refreshMarketplace, input),
   removeMarketplace: (input) => ipcRenderer.invoke(marketplaceIpcChannels.removeMarketplace, input),

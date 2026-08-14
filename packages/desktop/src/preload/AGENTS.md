@@ -25,7 +25,9 @@ between trusted Main and untrusted Renderer code. It owns no business state.
 - Marketplace detail lookup forwards only a bounded capability `{kind,id}` and
   returns Main-projected metadata, bounded Skill file previews, and optional
   verified Showcase bytes. Never add SourceKey, artifact URL, digest, or native
-  path parameters to this bridge.
+  path parameters to this bridge. The optional source action likewise forwards only
+  `{kind,id}`; Main opens the canonical GitHub repository and no URL returns through
+  Preload.
 - Keep Project and Canvas references portable and scoped. Never translate them into
   native paths in Preload.
 - Editable-text save forwards only the bounded content update plus its original

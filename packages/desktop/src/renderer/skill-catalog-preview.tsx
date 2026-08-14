@@ -24,6 +24,7 @@ import type {
   DesktopSkillShowcaseMedia,
 } from "../skill-management-contracts"
 import { appMessage, type AppLocale } from "./app-language"
+import { GitHubIcon } from "./github-icon"
 
 interface SkillFileTreeNode {
   children: SkillFileTreeNode[]
@@ -353,6 +354,7 @@ export interface SkillDetailDialogProps {
   managedName?: string
   onClose(): void
   onInstall(): void
+  onOpenSource?(): void
   onRetry(): void
   onUninstall(): void
   readOnly?: boolean
@@ -372,6 +374,7 @@ export function SkillDetailDialog({
   managedName,
   onClose,
   onInstall,
+  onOpenSource,
   onRetry,
   onUninstall,
   readOnly = false,
@@ -506,16 +509,28 @@ export function SkillDetailDialog({
               {details?.description ?? skill.description}
             </p>
           </div>
-          <Button
-            aria-label={appMessage(locale, "capabilities.closeSkillDetails")}
-            disabled={busy}
-            onClick={onClose}
-            ref={closeButton}
-            size="icon-sm"
-            variant="ghost"
-          >
-            <X />
-          </Button>
+          <div className="flex shrink-0 items-center gap-1">
+            {onOpenSource ? (
+              <Button
+                aria-label={locale === "zh-CN" ? "在 GitHub 查看源码" : "View source on GitHub"}
+                onClick={onOpenSource}
+                size="icon-sm"
+                variant="ghost"
+              >
+                <GitHubIcon />
+              </Button>
+            ) : null}
+            <Button
+              aria-label={appMessage(locale, "capabilities.closeSkillDetails")}
+              disabled={busy}
+              onClick={onClose}
+              ref={closeButton}
+              size="icon-sm"
+              variant="ghost"
+            >
+              <X />
+            </Button>
+          </div>
         </header>
 
         {loading ? (

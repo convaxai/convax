@@ -47,6 +47,7 @@ export interface MarketplaceCapabilityDetails {
   runtimeScope?: "agent" | "agent-and-convax"
   showcase?: DesktopSkillShowcase
   sourceLabel: string
+  sourceRepository?: "github"
   version: string
 }
 
@@ -102,6 +103,7 @@ export interface MarketplaceClient {
   listInstalled(): Promise<MarketplaceInventory>
   listMarketplaces(): Promise<MarketplaceSettingsSource[]>
   onDidChange(listener: () => void): () => void
+  openCapabilitySource(input: { id: string; kind: MarketplaceCapabilityKind }): Promise<void>
   previewMarketplace(input: { url: string }): Promise<MarketplaceAddPreview>
   refreshMarketplace(input: { id: string }): Promise<void>
   removeMarketplace(input: { id: string }): Promise<void>
@@ -125,6 +127,7 @@ export const marketplaceIpcChannels = {
   listCatalog: "marketplace:catalog",
   listInstalled: "marketplace:installed",
   listMarketplaces: "marketplace:list",
+  openCapabilitySource: "marketplace:capability-open-source",
   previewMarketplace: "marketplace:preview",
   refreshMarketplace: "marketplace:refresh",
   removeMarketplace: "marketplace:remove",

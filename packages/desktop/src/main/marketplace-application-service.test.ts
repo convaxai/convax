@@ -2,7 +2,7 @@ import fs from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, mock, test } from "bun:test"
 import {
   builtinSourceKey,
   canonicalJson,
@@ -105,6 +105,7 @@ function harness(options: {
     typeof MarketplaceApplicationService
   >[0]["pluginUpdateRecoveryBindings"]
   refreshFixedSource?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["refreshFixedSource"]
+  repositoryAuthority?: ConstructorParameters<typeof MarketplaceApplicationService>[0]["repositoryAuthority"]
   reservedBuiltinIdentities?: ConstructorParameters<
     typeof MarketplaceApplicationService
   >[0]["reservedBuiltinIdentities"]
@@ -192,7 +193,7 @@ function harness(options: {
       preparedOutsideMutation = true
       return new TextEncoder().encode(item.sourceKind === "builtin" ? "builtin-skill" : "unexpected")
     },
-    repositoryAuthority: async () => ({ owner: "acme", repository: "marketplace" }),
+    repositoryAuthority: options.repositoryAuthority ?? (async () => ({ owner: "acme", repository: "marketplace" })),
     ...(options.reservedBuiltinIdentities ? { reservedBuiltinIdentities: options.reservedBuiltinIdentities } : {}),
     state: options.state,
   })
@@ -527,11 +528,16 @@ test("projects details from the same installed representative used by the catalo
     })
   })
   let projectedSource: SourceKey | undefined
+  let repositorySource: SourceKey | undefined
   const { service } = harness({
     candidates: [builtin, installedSource],
     projectDetails: async (item) => {
       projectedSource = item.sourceKey
       return {}
+    },
+    repositoryAuthority: async (item) => {
+      repositorySource = item.sourceKey
+      return { owner: "installed-owner", repository: "installed-repository" }
     },
     state,
   })
@@ -541,8 +547,28 @@ test("projects details from the same installed representative used by the catalo
     id: builtin.id,
     runtimeScope: "agent",
     sourceLabel: "installed-marketplace",
+    sourceRepository: "github",
   })
   expect(projectedSource).toBe(sourceB)
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: builtin.id, kind: "plugin" })).resolves.toBe(
+    "https://github.com/installed-owner/installed-repository",
+  )
+  expect(repositorySource).toBe(sourceB)
+})
+
+test("does not project or open a repository for a Local capability", async () => {
+  const state = await stateStore()
+  const local = skill({ marketplaceId: "local", sourceKey: sourceB, sourceKind: "local" })
+  const repositoryAuthority = mock(async () => ({ owner: "must-not", repository: "be-used" }))
+  const { service } = harness({ candidates: [local], repositoryAuthority, state })
+
+  await expect(service.getCapabilityDetails({ id: local.id, kind: local.kind })).resolves.not.toHaveProperty(
+    "sourceRepository",
+  )
+  await expect(service.getCapabilitySourceRepositoryUrl({ id: local.id, kind: local.kind })).rejects.toThrow(
+    "no source repository",
+  )
+  expect(repositoryAuthority).not.toHaveBeenCalled()
 })
 
 test("isolates a corrupt Local authority while keeping unrelated Network catalog available", async () => {

@@ -11,6 +11,7 @@ type Handler = (event: Event, input?: unknown) => unknown
 
 const handlers = new Map<string, Handler>()
 let dialogResult: { canceled: boolean; filePaths: string[] } = { canceled: true, filePaths: [] }
+const openedExternalUrls: string[] = []
 const sent = mock(() => undefined)
 
 beforeEach(() => {
@@ -26,12 +27,18 @@ beforeEach(() => {
       handle: (channel: string, handler: Handler) => handlers.set(channel, handler),
       removeHandler: (channel: string) => handlers.delete(channel),
     },
+    shell: {
+      openExternal: async (url: string) => {
+        openedExternalUrls.push(url)
+      },
+    },
   })
 })
 
 afterEach(() => {
   handlers.clear()
   dialogResult = { canceled: true, filePaths: [] }
+  openedExternalUrls.splice(0)
   sent.mockClear()
   resetElectronMock()
 })
@@ -54,6 +61,7 @@ function service() {
       sourceLabel: "Official",
       version: "1.0.0",
     })),
+    getCapabilitySourceRepositoryUrl: mock(async () => "https://github.com/example/repository"),
     importDirectory: mock(async () => ({
       id: "imported",
       kind: "skill" as const,
@@ -147,6 +155,19 @@ test("Marketplace details accept only a capability identity and never renderer-s
       id: "example",
       kind: "plugin",
       sourceKey: "renderer-must-not-choose",
+    }),
+  ).toThrow("Marketplace operation could not be completed")
+
+  await expect(
+    handlers.get(marketplaceIpcChannels.openCapabilitySource)!(event, { id: "example", kind: "plugin" }),
+  ).resolves.toBeUndefined()
+  expect(application.getCapabilitySourceRepositoryUrl).toHaveBeenCalledWith({ id: "example", kind: "plugin" })
+  expect(openedExternalUrls).toEqual(["https://github.com/example/repository"])
+  expect(() =>
+    handlers.get(marketplaceIpcChannels.openCapabilitySource)!(event, {
+      id: "example",
+      kind: "plugin",
+      url: "https://attacker.example",
     }),
   ).toThrow("Marketplace operation could not be completed")
 })
