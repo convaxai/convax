@@ -512,6 +512,9 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
                 .catch(() => false)
             : false
         return {
+          ...(group.representative.pluginCategories?.length
+            ? { categories: [...group.representative.pluginCategories] }
+            : {}),
           description: group.representative.presentation.description ?? "",
           id: group.identity.id,
           ...(installed
@@ -576,8 +579,8 @@ export class MarketplaceApplicationService implements MarketplaceApplicationPort
       state.installations.map(async (record) => {
         const sourceItem =
           catalog.find(
-          (candidate) =>
-            candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
+            (candidate) =>
+              candidate.kind === record.kind && candidate.id === record.id && candidate.sourceKey === record.sourceKey,
           ) ?? catalog.find((candidate) => this.#isPluginUpdateSourceMigration(record, candidate))
         const grant = state.executionGrants.find(
           (candidate) =>

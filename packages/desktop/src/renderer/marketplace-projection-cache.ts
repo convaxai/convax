@@ -2,6 +2,7 @@ import type {
   MarketplaceCatalogCard,
   MarketplaceClient,
   MarketplaceInstalledCapability,
+  MarketplacePluginCategory,
   MarketplacePluginRuntimeState,
   MarketplaceSettingsSource,
 } from "../marketplace-contracts"
@@ -24,15 +25,16 @@ interface MarketplaceProjectionCacheEntry {
   request?: Promise<MarketplaceViewProjection>
 }
 
-export const marketplaceProjectionStorageKey = "convax.desktop.marketplace-display.v1"
+export const marketplaceProjectionStorageKey = "convax.desktop.marketplace-display.v2"
 
-const marketplaceProjectionSchema = "convax.marketplace-display-cache/1"
+const marketplaceProjectionSchema = "convax.marketplace-display-cache/2"
 const maxCacheBytes = 2 * 1024 * 1024
 const maxCapabilities = 4_096
 const maxSources = 64
 const entries = new WeakMap<MarketplaceClient, MarketplaceProjectionCacheEntry>()
 
 const capabilityKinds = new Set(["mcp-server", "plugin", "skill"])
+const pluginCategories = new Set<MarketplacePluginCategory>(["service", "video", "image", "skill"])
 const capabilityStates = new Set(["attention", "disabled", "ready", "setup-required"])
 const pluginRuntimeStates = new Set(["available", "unavailable-for-session"])
 const runtimeScopes = new Set(["agent", "agent-and-convax"])
@@ -65,7 +67,13 @@ function isOneOf(value: unknown, values: ReadonlySet<string>): value is string {
 }
 
 function isCatalogCard(value: unknown): value is MarketplaceCatalogCard {
-  if (!hasExactKeys(value, ["description", "id", "kind", "name", "otherSourceCount"], ["installed", "runtimeScope"])) {
+  if (
+    !hasExactKeys(
+      value,
+      ["description", "id", "kind", "name", "otherSourceCount"],
+      ["categories", "installed", "runtimeScope"],
+    )
+  ) {
     return false
   }
   if (
@@ -74,7 +82,14 @@ function isCatalogCard(value: unknown): value is MarketplaceCatalogCard {
     !isOneOf(value.kind, capabilityKinds) ||
     !isBoundedString(value.name, 1_024) ||
     !isNaturalNumber(value.otherSourceCount) ||
-    (value.runtimeScope !== undefined && !isOneOf(value.runtimeScope, runtimeScopes))
+    (value.runtimeScope !== undefined && !isOneOf(value.runtimeScope, runtimeScopes)) ||
+    (value.categories !== undefined &&
+      (value.kind !== "plugin" ||
+        !Array.isArray(value.categories) ||
+        value.categories.length < 1 ||
+        value.categories.length > pluginCategories.size ||
+        new Set(value.categories).size !== value.categories.length ||
+        !value.categories.every((category) => isOneOf(category, pluginCategories))))
   ) {
     return false
   }

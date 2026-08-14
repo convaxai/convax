@@ -20,6 +20,7 @@ function projection(): MarketplaceViewProjection {
   return {
     catalog: [
       {
+        categories: ["service", "image", "skill"],
         description: "A safe renderer projection",
         id: "example",
         kind: "plugin",
@@ -59,6 +60,22 @@ test("round-trips only the bounded renderer-safe Marketplace projection", () => 
   expect(readMarketplaceProjection(target)).toEqual(projection())
 })
 
+test("invalidates the pre-category display cache instead of exposing empty filters", () => {
+  expect(
+    readMarketplaceProjection(
+      storage(
+        JSON.stringify({
+          projection: {
+            ...projection(),
+            catalog: projection().catalog.map(({ categories: _categories, ...card }) => card),
+          },
+          schema: "convax.marketplace-display-cache/1",
+        }),
+      ),
+    ),
+  ).toBeNull()
+})
+
 test("ignores malformed, oversized, and authority-shaped Marketplace cache entries", () => {
   expect(readMarketplaceProjection(storage("{"))).toBeNull()
   expect(readMarketplaceProjection(storage("x".repeat(2 * 1024 * 1024 + 1)))).toBeNull()
@@ -70,7 +87,33 @@ test("ignores malformed, oversized, and authority-shaped Marketplace cache entri
             ...projection(),
             sources: [{ ...projection().sources[0], sourceKey: "renderer-must-not-cache" }],
           },
-          schema: "convax.marketplace-display-cache/1",
+          schema: "convax.marketplace-display-cache/2",
+        }),
+      ),
+    ),
+  ).toBeNull()
+  expect(
+    readMarketplaceProjection(
+      storage(
+        JSON.stringify({
+          projection: {
+            ...projection(),
+            catalog: [{ ...projection().catalog[0], categories: ["image", "image"] }],
+          },
+          schema: "convax.marketplace-display-cache/2",
+        }),
+      ),
+    ),
+  ).toBeNull()
+  expect(
+    readMarketplaceProjection(
+      storage(
+        JSON.stringify({
+          projection: {
+            ...projection(),
+            catalog: [{ ...projection().catalog[0], categories: ["unknown"] }],
+          },
+          schema: "convax.marketplace-display-cache/2",
         }),
       ),
     ),

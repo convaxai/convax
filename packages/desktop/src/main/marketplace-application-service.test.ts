@@ -474,6 +474,27 @@ test("keeps a missing packaged Builtin identity reserved and hides an impostor N
   await expect(service.beginInstall({ id: "canvas-storyboard", kind: "skill" }, "renderer")).resolves.toEqual([])
 })
 
+test("projects only the representative Plugin source categories into catalog cards", async () => {
+  const state = await stateStore()
+  const plugin = skill({
+    id: "categorized-plugin",
+    kind: "plugin",
+    pluginCategories: ["service", "video", "skill"],
+    runtimeSurface: "agent-and-convax",
+  })
+  const { service } = harness({ candidates: [plugin], state })
+
+  await expect(service.listCatalog()).resolves.toMatchObject({
+    cards: [
+      {
+        categories: ["service", "video", "skill"],
+        id: "categorized-plugin",
+        kind: "plugin",
+      },
+    ],
+  })
+})
+
 test("isolates a corrupt Local authority while keeping unrelated Network catalog available", async () => {
   const state = await stateStore()
   const network = skill({

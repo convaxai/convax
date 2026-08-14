@@ -349,12 +349,17 @@ describe("@convax/marketplace strict contracts", () => {
     const group = aggregateCatalog([
       item("third", "plugin", "shared"),
       item("official", "plugin", "shared"),
-      item("builtin", "plugin", "shared"),
+      {
+        ...item("builtin", "plugin", "shared"),
+        pluginCategories: ["image", "skill"] as const,
+      },
     ])[0]
     expect(group?.representative.marketplaceId).toBe("builtin")
+    expect(group?.representative.pluginCategories).toEqual(["image", "skill"])
     expect(group?.representative).toMatchObject({
       catalogSequence: 1,
       catalogRevision: "a".repeat(64),
+      pluginCategories: ["image", "skill"],
       runtimeSurface: "none",
     })
     expect(group?.requiresSourceSelection).toBe(true)

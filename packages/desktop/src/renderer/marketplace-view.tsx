@@ -8,6 +8,7 @@ import type {
   MarketplaceCatalogSourceChoice,
   MarketplaceClient,
   MarketplaceInstalledCapability,
+  MarketplacePluginCategory,
   MarketplaceSettingsSource,
 } from "../marketplace-contracts"
 import {
@@ -23,6 +24,9 @@ export interface MarketplaceSurfaceProps {
 }
 
 type Page = "catalog" | "installed" | "marketplaces"
+type PluginCategoryFilter = "all" | MarketplacePluginCategory
+
+const pluginCategoryOrder: readonly MarketplacePluginCategory[] = ["service", "video", "image", "skill"]
 
 interface SourceChoiceRequest {
   mode: "install" | "update"
@@ -43,6 +47,7 @@ function capabilityPendingKey(kind: MarketplaceCatalogCard["kind"], id: string) 
 export function MarketplaceSurface({ className, client, locale }: MarketplaceSurfaceProps) {
   const initialProjection = getMarketplaceProjection(client)
   const [page, setPage] = useState<Page>("catalog")
+  const [pluginCategoryFilter, setPluginCategoryFilter] = useState<PluginCategoryFilter>("all")
   const [projection, setProjection] = useState(initialProjection ?? null)
   const [loading, setLoading] = useState(initialProjection === null)
   const [sourceChoices, setSourceChoices] = useState<MarketplaceCatalogSourceChoice[]>([])
@@ -94,6 +99,10 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
   )
 
   const catalog = projection?.catalog ?? []
+  const visibleCatalog =
+    pluginCategoryFilter === "all"
+      ? catalog
+      : catalog.filter((card) => card.kind === "plugin" && card.categories?.includes(pluginCategoryFilter))
   const installed = projection?.installed ?? []
   const pluginRuntimeState = projection?.pluginRuntimeState ?? "available"
   const sources = projection?.sources ?? []
@@ -162,14 +171,17 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
     locale === "zh-CN"
       ? {
           add: "添加 Marketplace",
+          allCategories: "全部",
           catalog: "扩展",
           choose: "选择来源",
+          filterByCategory: "按插件分类筛选",
           import: "导入…",
           install: "安装",
           installed: "已安装",
           loading: "正在加载扩展…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplace",
+          noCategoryMatches: "没有符合此分类的插件。",
           preview: "预览",
           progressDisable: "正在停用…",
           progressEnable: "正在启用…",
@@ -183,14 +195,17 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         }
       : {
           add: "Add Marketplace",
+          allCategories: "All",
           catalog: "Extensions",
           choose: "Choose a source",
+          filterByCategory: "Filter by Plugin category",
           import: "Import…",
           install: "Install",
           installed: "Installed",
           loading: "Loading extensions…",
           marketplaceUrl: "Marketplace URL",
           marketplaces: "Marketplaces",
+          noCategoryMatches: "No Plugins match this category.",
           preview: "Preview",
           progressDisable: "Disabling…",
           progressEnable: "Enabling…",
@@ -204,6 +219,22 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
         }
   const kindLabel = (kind: MarketplaceCatalogCard["kind"]) =>
     kind === "plugin" ? "Plugin" : kind === "skill" ? "Skill" : "MCP Server"
+  const pluginCategoryLabel = (category: MarketplacePluginCategory) =>
+    locale === "zh-CN"
+      ? category === "service"
+        ? "服务"
+        : category === "video"
+          ? "视频"
+          : category === "image"
+            ? "图片"
+            : "技能"
+      : category === "service"
+        ? "Service"
+        : category === "video"
+          ? "Video"
+          : category === "image"
+            ? "Image"
+            : "Skill"
   const installedStateLabel = (capability: MarketplaceInstalledCapability) =>
     capability.updateRecoveryAvailable
       ? locale === "zh-CN"
@@ -333,143 +364,180 @@ export function MarketplaceSurface({ className, client, locale }: MarketplaceSur
       ) : null}
 
       {!loading && page === "catalog" ? (
-        <div className="grid gap-3">
-          {catalog.map((card) => {
-            const pendingKey = capabilityPendingKey(card.kind, card.id)
-            const pendingOperation = capabilityOperations.get(pendingKey)
-            const installing = pendingOperation?.action === "install"
-            const capabilityError = capabilityErrors.get(pendingKey)
-            const pluginUnavailable = card.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
-            return (
-              <article
-                className="rounded-xl border border-border-subtle bg-surface-panel p-4"
-                key={`${card.kind}:${card.id}`}
+        <div className="space-y-3">
+          <div aria-label={text.filterByCategory} className="flex flex-wrap items-center gap-2" role="group">
+            {(["all", ...pluginCategoryOrder] as const).map((category) => (
+              <Button
+                aria-pressed={pluginCategoryFilter === category}
+                key={category}
+                onClick={() => setPluginCategoryFilter(category)}
+                size="sm"
+                variant={pluginCategoryFilter === category ? "secondary" : "outline"}
               >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-semibold">{card.name}</h3>
-                      <span className="rounded bg-control-background px-1.5 py-0.5 text-[10px] uppercase text-text-tertiary">
-                        {kindLabel(card.kind)}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm text-text-secondary">{card.description}</p>
-                    {card.otherSourceCount > 0 ? (
-                      <p className="mt-2 text-xs text-text-tertiary">
-                        {locale === "zh-CN"
-                          ? `另有 ${card.otherSourceCount} 个来源`
-                          : `${card.otherSourceCount} other source${card.otherSourceCount === 1 ? "" : "s"}`}
-                      </p>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {card.installed ? (
-                      <>
-                        {card.updateAvailable ? (
+                {category === "all" ? text.allCategories : pluginCategoryLabel(category)}
+              </Button>
+            ))}
+          </div>
+          {visibleCatalog.length === 0 ? (
+            <p
+              className="rounded-xl border border-border-subtle bg-surface-panel px-4 py-8 text-center text-sm text-text-secondary"
+              data-marketplace-category-empty="true"
+              role="status"
+            >
+              {text.noCategoryMatches}
+            </p>
+          ) : (
+            <div className="grid gap-3">
+              {visibleCatalog.map((card) => {
+                const pendingKey = capabilityPendingKey(card.kind, card.id)
+                const pendingOperation = capabilityOperations.get(pendingKey)
+                const installing = pendingOperation?.action === "install"
+                const capabilityError = capabilityErrors.get(pendingKey)
+                const pluginUnavailable = card.kind === "plugin" && pluginRuntimeState === "unavailable-for-session"
+                return (
+                  <article
+                    className="rounded-xl border border-border-subtle bg-surface-panel p-4"
+                    key={`${card.kind}:${card.id}`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <h3 className="font-semibold">{card.name}</h3>
+                          <span className="rounded bg-control-background px-1.5 py-0.5 text-[10px] uppercase text-text-tertiary">
+                            {kindLabel(card.kind)}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-sm text-text-secondary">{card.description}</p>
+                        {card.categories?.length ? (
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {card.categories.map((category) => (
+                              <span
+                                className="rounded-full bg-control-background px-2 py-0.5 text-xs text-text-secondary"
+                                data-plugin-category={category}
+                                key={category}
+                              >
+                                {pluginCategoryLabel(category)}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {card.otherSourceCount > 0 ? (
+                          <p className="mt-2 text-xs text-text-tertiary">
+                            {locale === "zh-CN"
+                              ? `另有 ${card.otherSourceCount} 个来源`
+                              : `${card.otherSourceCount} other source${card.otherSourceCount === 1 ? "" : "s"}`}
+                          </p>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {card.installed ? (
+                          <>
+                            {card.updateAvailable ? (
+                              <Button
+                                aria-busy={pendingOperation?.action === "update"}
+                                aria-label={`${text.update} ${card.name}`}
+                                disabled={Boolean(pendingOperation) || pluginUnavailable}
+                                onClick={() =>
+                                  void mutate(
+                                    pendingKey,
+                                    async () => {
+                                      const choices = await client.beginUpdate({
+                                        id: card.id,
+                                        kind: card.kind,
+                                      })
+                                      if (choices.length === 0) throw new Error("No update source is available")
+                                      setSourceChoiceRequest({ mode: "update", pendingKey })
+                                      setSourceChoices(choices)
+                                      setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
+                                    },
+                                    { action: "update", label: text.progressPrepareUpdate },
+                                  )
+                                }
+                                size="icon"
+                                variant="outline"
+                              >
+                                {pendingOperation?.action === "update" ? (
+                                  <LoadingSpinner className="text-current" size="sm" />
+                                ) : (
+                                  <RefreshCw />
+                                )}
+                              </Button>
+                            ) : null}
+                            <Button
+                              aria-busy={pendingOperation?.action === "uninstall"}
+                              aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${card.name}`}
+                              disabled={Boolean(pendingOperation) || pluginUnavailable}
+                              onClick={() =>
+                                void mutate(pendingKey, () => client.uninstall({ id: card.id, kind: card.kind }), {
+                                  action: "uninstall",
+                                  label: text.progressUninstall,
+                                })
+                              }
+                              size="icon"
+                              variant="outline"
+                            >
+                              {pendingOperation?.action === "uninstall" ? (
+                                <LoadingSpinner className="text-current" size="sm" />
+                              ) : (
+                                <Trash2 />
+                              )}
+                            </Button>
+                          </>
+                        ) : (
                           <Button
-                            aria-busy={pendingOperation?.action === "update"}
-                            aria-label={`${text.update} ${card.name}`}
-                            disabled={Boolean(pendingOperation) || pluginUnavailable}
+                            aria-busy={installing}
+                            aria-label={`${text.install} ${card.name}`}
+                            disabled={installing || pluginUnavailable}
                             onClick={() =>
                               void mutate(
                                 pendingKey,
                                 async () => {
-                                  const choices = await client.beginUpdate({
-                                    id: card.id,
-                                    kind: card.kind,
-                                  })
-                                  if (choices.length === 0) throw new Error("No update source is available")
-                                  setSourceChoiceRequest({ mode: "update", pendingKey })
+                                  const choices = await client.beginInstall({ id: card.id, kind: card.kind })
+                                  if (choices.length === 0) throw new Error("No installable source is available")
+                                  setSourceChoiceRequest({ mode: "install", pendingKey })
                                   setSourceChoices(choices)
                                   setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
                                 },
-                                { action: "update", label: text.progressPrepareUpdate },
+                                { action: "install", label: text.progressPrepareInstall },
                               )
                             }
                             size="icon"
                             variant="outline"
                           >
-                            {pendingOperation?.action === "update" ? (
-                              <LoadingSpinner className="text-current" size="sm" />
-                            ) : (
-                              <RefreshCw />
-                            )}
+                            {installing ? <LoadingSpinner className="text-current" size="sm" /> : <Download />}
                           </Button>
-                        ) : null}
-                        <Button
-                          aria-busy={pendingOperation?.action === "uninstall"}
-                          aria-label={`${locale === "zh-CN" ? "卸载" : "Uninstall"} ${card.name}`}
-                          disabled={Boolean(pendingOperation) || pluginUnavailable}
-                          onClick={() =>
-                            void mutate(
-                              pendingKey,
-                              () => client.uninstall({ id: card.id, kind: card.kind }),
-                              { action: "uninstall", label: text.progressUninstall },
-                            )
-                          }
-                          size="icon"
-                          variant="outline"
-                        >
-                          {pendingOperation?.action === "uninstall" ? (
-                            <LoadingSpinner className="text-current" size="sm" />
-                          ) : (
-                            <Trash2 />
-                          )}
-                        </Button>
-                      </>
-                    ) : (
-                      <Button
-                        aria-busy={installing}
-                        aria-label={`${text.install} ${card.name}`}
-                        disabled={installing || pluginUnavailable}
-                        onClick={() =>
-                          void mutate(
-                            pendingKey,
-                            async () => {
-                              const choices = await client.beginInstall({ id: card.id, kind: card.kind })
-                              if (choices.length === 0) throw new Error("No installable source is available")
-                              setSourceChoiceRequest({ mode: "install", pendingKey })
-                              setSourceChoices(choices)
-                              setSelectedChoice(choices.length === 1 ? choices[0] : undefined)
-                            },
-                            { action: "install", label: text.progressPrepareInstall },
-                          )
-                        }
-                        size="icon"
-                        variant="outline"
+                        )}
+                      </div>
+                    </div>
+                    {pendingOperation ? (
+                      <p
+                        aria-live="polite"
+                        className="mt-3 text-xs text-text-secondary"
+                        data-capability-progress={`${card.kind}:${card.id}`}
+                        role="status"
                       >
-                        {installing ? <LoadingSpinner className="text-current" size="sm" /> : <Download />}
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                {pendingOperation ? (
-                  <p
-                    aria-live="polite"
-                    className="mt-3 text-xs text-text-secondary"
-                    data-capability-progress={`${card.kind}:${card.id}`}
-                    role="status"
-                  >
-                    {pendingOperation.label}
-                  </p>
-                ) : null}
-                {capabilityError ? (
-                  <p
-                    className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
-                    data-capability-error={`${card.kind}:${card.id}`}
-                    ref={(element) => {
-                      if (element) capabilityErrorRefs.current.set(pendingKey, element)
-                      else capabilityErrorRefs.current.delete(pendingKey)
-                    }}
-                    role="alert"
-                    tabIndex={-1}
-                  >
-                    {capabilityError}
-                  </p>
-                ) : null}
-              </article>
-            )
-          })}
+                        {pendingOperation.label}
+                      </p>
+                    ) : null}
+                    {capabilityError ? (
+                      <p
+                        className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive outline-none"
+                        data-capability-error={`${card.kind}:${card.id}`}
+                        ref={(element) => {
+                          if (element) capabilityErrorRefs.current.set(pendingKey, element)
+                          else capabilityErrorRefs.current.delete(pendingKey)
+                        }}
+                        role="alert"
+                        tabIndex={-1}
+                      >
+                        {capabilityError}
+                      </p>
+                    ) : null}
+                  </article>
+                )
+              })}
+            </div>
+          )}
         </div>
       ) : null}
 
